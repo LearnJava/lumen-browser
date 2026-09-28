@@ -8570,12 +8570,16 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // CSSOM View §Extensions to the Element interface: scrollWidth/scrollHeight
         // are defined for EVERY element, not just designated scroll containers
         // (`overflow: scroll`/`auto`) — they must return at least the element's
-        // padding-box size. `_lumen_get_scroll_state` only has an entry for actual
-        // scroll containers (BUG-475); everything else falls back to the border-box
-        // size from `_lumen_get_bounding_rect` (border box ⊇ padding box, so this
-        // still satisfies the "at least padding-box" floor, same relationship
-        // `content_width`/`content_height` already use as the scroll-container
-        // minimum in `lumen_layout::collect_scroll_containers`).
+        // padding-box size, and the exact scrollable-overflow-area magnitude when
+        // it exceeds that floor (BUG-960). `_lumen_get_scroll_state` has an entry
+        // for actual scroll containers (BUG-475) AND for `overflow: visible`
+        // elements whose content overflows their own padding box
+        // (`collect_scroll_containers_for_js_state`, BUG-960); everything else
+        // falls back to the border-box size from `_lumen_get_bounding_rect`
+        // (border box ⊇ padding box, so this still satisfies the "at least
+        // padding-box" floor, same relationship `content_width`/`content_height`
+        // already use as the scroll-container minimum in
+        // `lumen_layout::collect_scroll_containers`).
         get scrollWidth()  { var nid = this.__nid__;
             var s = _lumen_get_scroll_state(nid); if (s) return s[2];
             var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0;

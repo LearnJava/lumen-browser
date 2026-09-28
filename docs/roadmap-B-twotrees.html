@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-28",
+ "generated": "2026-09-29",
  "counts": {
-  "open": 209,
-  "fixed": 945,
+  "open": 207,
+  "fixed": 948,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1154,
+ "total_bugs": 1155,
  "phases": [
   {
    "id": "P0",
@@ -4361,7 +4361,7 @@
        "title": "WPT: вендорить + прогнать категорию `trusted-types`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root trusted-types --recursive`, ~24 мин, 339 файлов, 232 отобранных id) — **98/230 harness OK, 576/2465 сабтестов**. Заведён [BUG-689](bugs/BUG-689-OPEN.md): весь `Attr`/`NamedNodeMap`-подраздел DOM §4.9 отсутствует вовсе — `Element.attributes` не `NamedNodeMap`, `document.createAttribute()`/`createAttributeNS()` и `getAttributeNode(NS)`/`setAttributeNode(NS)` бросают `TypeError`; известный по формулировке BUG-309 («no Attr node objects») пробел, ранее нигде не заведённый отдельно — 447× `Cannot read properties of undefined (reading 'length')` + 324× `createAttributeNS is not a function` доминируют в сигнале прогона. Второстепенный сигнал — реконфирмация уже открытого [BUG-568](bugs/BUG-568-FIXED.md) (`document.write`/`.writeln` отсутствуют), TLS `UnknownIssuer` на `.https.`-файлах (тот же гэп, что `top-level-storage-access-api`). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root trusted-types --recursive`, ~24 мин, 339 файлов, 232 отобранных id) — **98/230 harness OK, 576/2465 сабтестов**. Заведён [BUG-689](bugs/BUG-689-FIXED.md): весь `Attr`/`NamedNodeMap`-подраздел DOM §4.9 отсутствует вовсе — `Element.attributes` не `NamedNodeMap`, `document.createAttribute()`/`createAttributeNS()` и `getAttributeNode(NS)`/`setAttributeNode(NS)` бросают `TypeError`; известный по формулировке BUG-309 («no Attr node objects») пробел, ранее нигде не заведённый отдельно — 447× `Cannot read properties of undefined (reading 'length')` + 324× `createAttributeNS is not a function` доминируют в сигнале прогона. Второстепенный сигнал — реконфирмация уже открытого [BUG-568](bugs/BUG-568-FIXED.md) (`document.write`/`.writeln` отсутствуют), TLS `UnknownIssuer` на `.https.`-файлах (тот же гэп, что `top-level-storage-access-api`). Один новый номер бага",
        "bugs": [
         "BUG-689"
        ]
@@ -7545,13 +7545,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-689": {
-   "status": "open",
-   "title": "The whole `Attr`/`NamedNodeMap` half of DOM §4.9 is missing: `Element.attributes` is `undefined` (not a `NamedNodeMap`), `document.createAttribute()`/`createAtt…",
-   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, `_lumen_build_element` `dom.rs:2607-2707`, `createElement`/`createElementNS` `dom.rs:4310-4341`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-690": {
    "status": "open",
    "title": "`NavigatorUAData` is a plain `function NavigatorUAData() {}` with no `new.target` guard and no `[Symbol.toStringTag]` — `new NavigatorUAData()` succeeds from pa…",
@@ -7948,13 +7941,6 @@
    "status": "open",
    "title": "`iframe.contentWindow`/`window.parent`/`.top`/`.frameElement` — фасад окна фрейма (`winFacade`) собран как голый `{}` без `addEventListener`/`removeEventListene…",
    "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-960": {
-   "status": "open",
-   "title": "Остаток [BUG-475](bugs/BUG-475-FIXED.md): `scrollWidth`/`scrollHeight` для элемента, который не является designated scroll container (`overflow: scroll`/`auto`)…",
-   "component": "layout/js (`_lumen_get_scroll_state` fallback, `web_api_shim_mid.js`)",
    "date": null,
    "debtor": false
   },
@@ -8721,13 +8707,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1210": {
-   "status": "open",
-   "title": "Флаг `--proxy` молча не действует — трафик идёт напрямую; работает только `proxy =` в `fingerprint.toml`. `--tor` по коду тот же no-op (не проверено опытом) — в…",
-   "component": "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорируется)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1211": {
    "status": "open",
    "title": "cnn, udemy, dailymail: движковый поток занят минутами (~150 % CPU), MCP не отвечает, `--dump-layout` не завершается за 200 с; повторено дважды в прогоне и headl…",
@@ -8739,6 +8718,13 @@
    "status": "open",
    "title": "Два `window.open()` подряд в одном скрипте: опенер не получает `postMessage` ни от одного попапа, хотя одиночный попап доставляет (`e.source === w` верно). TIME…",
    "component": "shell/js (`crates/shell/src/lumen/tabs_cmd.rs` — `open_new_tab`; `lumen_js::window_messaging` — доставка попап → опенер)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1213": {
+   "status": "open",
+   "title": "Trusted Types не считает `href`/`xlink:href` SVG-`<script>` sink'ом `TrustedScriptURL`: таблица знает только `on*`, `iframe srcdoc`, `script src` и не получает…",
+   "component": "js (`crates/js/src/trusted_types.rs` — `getAttributeType`, `_lumen_tt_get_compliant_attribute_value`)",
    "date": null,
    "debtor": false
   },
@@ -15349,6 +15335,27 @@
    "component": "network (`crates/network/src/lib.rs::fetch_single` — `pool_key_for_fetch`)",
    "date": "2026-09-28",
    "debtor": false
+  },
+  "BUG-689": {
+   "status": "fixed",
+   "title": "The whole `Attr`/`NamedNodeMap` half of DOM §4.9 is missing: `Element.attributes` is `undefined` (not a `NamedNodeMap`), `document.createAttribute()`/`createAtt…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, `_lumen_build_element` `dom.rs:2607-2707`, `createElement`/`createElementNS` `dom.rs:4310-4341`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1210": {
+   "status": "fixed",
+   "title": "Флаг `--proxy` молча не действовал — трафик шёл напрямую; работал только `proxy =` в `fingerprint.toml`. `--tor` по коду тот же no-op. **Фикс:** `--proxy`/`--to…",
+   "component": "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорировался)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-960": {
+   "status": "fixed",
+   "title": "Остаток [BUG-475](bugs/BUG-475-FIXED.md): `scrollWidth`/`scrollHeight` теперь считают точную CSS Overflow «scrollable overflow area», а не только border-box flo…",
+   "component": "layout (`crates/engine/layout/src/lib.rs::scrollable_extent_x`/`scrollable_extent_y`/`collect_scroll_containers_inner`)",
+   "date": "2026-09-28",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -16149,6 +16156,9 @@
   "js (`crates/js/src/trusted_types.rs` — `TRUSTED_TYPES_SHIM`, `var factory = { … }`)": [
    "BUG-1087"
   ],
+  "js (`crates/js/src/trusted_types.rs` — `getAttributeType`, `_lumen_tt_get_compliant_attribute_value`)": [
+   "BUG-1213"
+  ],
   "js (`crates/js/src/v8_esm.rs::resolve`/`document_base_url` — читает живой `_lumen_document_base_url()`, но не «замороженную» на момент подготовки скрипта базу)": [
    "BUG-910"
   ],
@@ -16561,6 +16571,9 @@
   "layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)": [
    "BUG-504"
   ],
+  "layout (`crates/engine/layout/src/lib.rs::scrollable_extent_x`/`scrollable_extent_y`/`collect_scroll_containers_inner`)": [
+   "BUG-960"
+  ],
   "layout (`crates/engine/layout/src/selector_query.rs:1591` — `computed_style_to_map` сериализует `transform` как задан)": [
    "BUG-1157"
   ],
@@ -16630,9 +16643,6 @@
   "layout+paint": [
    "BUG-005",
    "BUG-023"
-  ],
-  "layout/js (`_lumen_get_scroll_state` fallback, `web_api_shim_mid.js`)": [
-   "BUG-960"
   ],
   "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)": [
    "BUG-499"
@@ -16978,7 +16988,7 @@
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
   ],
-  "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорируется)": [
+  "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорировался)": [
    "BUG-1210"
   ],
   "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)": [

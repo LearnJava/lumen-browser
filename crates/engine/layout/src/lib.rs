@@ -1337,6 +1337,33 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
             overscroll_behavior_x: s.overscroll_behavior_x,
             overscroll_behavior_y: s.overscroll_behavior_y,
         });
+    } else if include_non_wheel
+        && matches!(s.overflow_x, Overflow::Visible)
+        && matches!(s.overflow_y, Overflow::Visible)
+    {
+        // BUG-960: `overflow: visible` doesn't clip and isn't a scroll
+        // container, but CSSOM View still defines `scrollWidth`/
+        // `scrollHeight` for it as the exact scrollable-overflow-area
+        // magnitude (not just "at least padding-box", the BUG-475 floor).
+        // Publish an entry only when the box actually overflows its own
+        // padding box on some axis — the common non-overflowing case stays
+        // off this list and keeps using the (identical, cheaper) border-box
+        // fallback in the JS shim.
+        let clip = padding_box(b);
+        let scroll_width = content_width(b);
+        let scroll_height = content_height(b);
+        if scroll_width > clip.width + 0.01 || scroll_height > clip.height + 0.01 {
+            out.push(ScrollContainer {
+                node: b.node,
+                clip_rect: clip,
+                scroll_width,
+                scroll_height,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                overscroll_behavior_x: s.overscroll_behavior_x,
+                overscroll_behavior_y: s.overscroll_behavior_y,
+            });
+        }
     }
     for child in &b.children {
         collect_scroll_containers_inner(child, out, include_non_wheel);
@@ -1465,6 +1492,19 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
     }
 }
 
+/// Whether a box establishes its own scroll/clip boundary for the purposes
+/// of scrollable-overflow rollup (CSS Overflow L3 §3.3/§3.4, BUG-960): any
+/// value of `overflow-x`/`overflow-y` other than `visible` clips its own
+/// content, so a box's *own* border box still contributes to its
+/// container's scrollable-overflow region, but that box's *descendants* do
+/// not — their overflow is contained (and separately reported by that box's
+/// own `scrollWidth`/`scrollHeight`), not folded further into the ancestor
+/// chain.
+fn box_clips_own_overflow(b: &LayoutBox) -> bool {
+    !matches!(b.style.overflow_x, style::Overflow::Visible)
+        || !matches!(b.style.overflow_y, style::Overflow::Visible)
+}
+
 /// The horizontal scrollable-overflow span of a box, as `(min_x, max_x)`
 /// relative to the padding edge (`pb.x` = 0).
 ///
@@ -1484,15 +1524,26 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
 fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_x, mut max_x) = (0.0_f32, pb.width);
+    scrollable_extent_x_rec(b, &pb, &mut min_x, &mut max_x);
+    (min_x, max_x)
+}
+
+/// Recursive worker for [`scrollable_extent_x`] (BUG-960): folds in every
+/// descendant that isn't behind a clipping ancestor (per
+/// [`box_clips_own_overflow`]), not just direct children, so overflow from
+/// e.g. a doubly-nested negative-margin box still reaches the outer scroll
+/// container's `scrollWidth`.
+fn scrollable_extent_x_rec(b: &LayoutBox, pb: &lumen_core::geom::Rect, min_x: &mut f32, max_x: &mut f32) {
     for c in &b.children {
         let bounds = child_scrollable_bounds(c);
-        if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
-            continue;
+        if contributes_to_scrollable_overflow(c, &bounds, pb) {
+            *min_x = min_x.min(bounds.x - pb.x);
+            *max_x = max_x.max(bounds.x + bounds.width - pb.x);
         }
-        min_x = min_x.min(bounds.x - pb.x);
-        max_x = max_x.max(bounds.x + bounds.width - pb.x);
+        if !box_clips_own_overflow(c) {
+            scrollable_extent_x_rec(c, pb, min_x, max_x);
+        }
     }
-    (min_x, max_x)
 }
 
 /// The vertical counterpart of [`scrollable_extent_x`] — `(min_y, max_y)`
@@ -1500,15 +1551,23 @@ fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
 fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_y, mut max_y) = (0.0_f32, pb.height);
+    scrollable_extent_y_rec(b, &pb, &mut min_y, &mut max_y);
+    (min_y, max_y)
+}
+
+/// Recursive worker for [`scrollable_extent_y`] — vertical counterpart of
+/// [`scrollable_extent_x_rec`] (BUG-960).
+fn scrollable_extent_y_rec(b: &LayoutBox, pb: &lumen_core::geom::Rect, min_y: &mut f32, max_y: &mut f32) {
     for c in &b.children {
         let bounds = child_scrollable_bounds(c);
-        if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
-            continue;
+        if contributes_to_scrollable_overflow(c, &bounds, pb) {
+            *min_y = min_y.min(bounds.y - pb.y);
+            *max_y = max_y.max(bounds.y + bounds.height - pb.y);
         }
-        min_y = min_y.min(bounds.y - pb.y);
-        max_y = max_y.max(bounds.y + bounds.height - pb.y);
+        if !box_clips_own_overflow(c) {
+            scrollable_extent_y_rec(c, pb, min_y, max_y);
+        }
     }
-    (min_y, max_y)
 }
 
 /// Compute the content scroll-width of a box (`scrollWidth`'s magnitude):
