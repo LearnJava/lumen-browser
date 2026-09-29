@@ -1316,6 +1316,18 @@ pub fn collect_scroll_containers_for_js_state(root: &LayoutBox) -> Vec<ScrollCon
     out
 }
 
+/// BUG-1211 (post-collectors): [`collect_scroll_containers_for_js_state`],
+/// scoped to a handful of subtrees. Self-contained per box (no ancestor
+/// dependency), so a plain per-root re-walk is correct without threading any
+/// context down, unlike [`collect_computed_styles_scoped`].
+pub fn collect_scroll_containers_for_js_state_scoped(roots: &[&LayoutBox]) -> Vec<ScrollContainer> {
+    let mut out = Vec::new();
+    for root in roots {
+        collect_scroll_containers_inner(root, &mut out, true);
+    }
+    out
+}
+
 fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     use style::Overflow;
     let s = &b.style;
@@ -1633,7 +1645,7 @@ pub fn collect_computed_styles(
     viewport: lumen_core::geom::Size,
 ) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    collect_computed_styles_rec(doc, root, viewport, &mut out);
+    collect_computed_styles_rec(doc, root, resolved_geometry::GeomCtx::root(viewport), viewport, &mut out);
     if let Some(counters) = counters {
         for i in 0..doc.len() {
             let idx = i as u32;
@@ -1649,6 +1661,54 @@ pub fn collect_computed_styles(
         }
     }
     out
+}
+
+/// BUG-1211 (post-collectors): [`collect_computed_styles`], scoped to a
+/// handful of subtrees instead of the whole document.
+///
+/// Unlike [`collect_layout_rects_scoped`]/[`collect_client_rects_scoped`],
+/// this walk *does* depend on ancestor geometry (`GeomCtx`'s containing
+/// blocks, used to resolve `auto` margins from used values) — a bare
+/// re-walk from each dirty-root box with `GeomCtx::root` would be wrong
+/// whenever that box is not a direct child of the document root. This
+/// function first descends from the real `root` to locate each of `roots`
+/// (an `O(depth)` walk per root, not `O(size)`), accumulating the correct
+/// `GeomCtx` along the way exactly as the full walk would have, then runs
+/// the ordinary scoped recursion from there.
+///
+/// The `Display::Contents` backfill loop `collect_computed_styles` runs
+/// after its walk is intentionally NOT replicated here: it exists only to
+/// give `display: contents` nodes (which own no `LayoutBox` and so are
+/// invisible to any tree walk) an entry keyed off the *whole-document*
+/// cascade — the caller (`FlushHandles::maybe_flush`'s incremental branch)
+/// runs this against an existing, previously-complete map and only needs to
+/// refresh the touched subtrees' real boxes, not re-derive every
+/// `display: contents` node in the document on each incremental flush.
+pub fn collect_computed_styles_scoped(
+    doc: &lumen_dom::Document,
+    root: &LayoutBox,
+    roots: &std::collections::HashSet<lumen_dom::NodeId>,
+    viewport: lumen_core::geom::Size,
+    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+) {
+    if roots.is_empty() {
+        return;
+    }
+    // Pre-order walk from the real root, carrying `GeomCtx` down — same
+    // traversal shape `collect_computed_styles_rec` uses, but stops
+    // descending into a subtree the moment it reaches one of `roots` (its
+    // whole subtree is then handled by the scoped recursion instead), same
+    // "stop at the topmost member" rule `find_dirty_root_boxes` documents.
+    let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> =
+        vec![(root, resolved_geometry::GeomCtx::root(viewport))];
+    while let Some((b, ctx)) = stack.pop() {
+        if roots.contains(&b.node) {
+            collect_computed_styles_rec(doc, b, ctx, viewport, out);
+            continue;
+        }
+        let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
+        stack.extend(b.children.iter().rev().map(|c| (c, child_ctx)));
+    }
 }
 
 /// The properties published for a text node that ended up inside an inline run.
@@ -1677,11 +1737,11 @@ pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "
 fn collect_computed_styles_rec(
     doc: &lumen_dom::Document,
     root: &LayoutBox,
+    root_ctx: resolved_geometry::GeomCtx,
     viewport: lumen_core::geom::Size,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> =
-        vec![(root, resolved_geometry::GeomCtx::root(viewport))];
+    let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> = vec![(root, root_ctx)];
     while let Some((b, ctx)) = stack.pop() {
         // First box in tree order wins — see `collect_layout_rects_rec` for why
         // several boxes can carry the same `NodeId`.
@@ -1953,6 +2013,27 @@ pub fn collect_layout_rects(
     out
 }
 
+/// BUG-1211 (post-collectors): [`collect_layout_rects`], scoped to a handful
+/// of subtrees instead of the whole document — merges into `out` rather than
+/// returning a fresh map, so a same-tick incremental flush can evict the
+/// stale entries for `roots`' previous-tree node ids first (see
+/// `FlushHandles::maybe_flush`'s incremental branch) and then re-populate
+/// only what actually changed, instead of re-walking every node on every
+/// same-tick accessor read after a mutation (the quadratic-over-reads cost
+/// this bug is about). Correct to scope: unlike [`collect_computed_styles`],
+/// this walk never resolves a value against ancestor geometry, so a subtree
+/// in isolation produces exactly the entries a full-tree walk would have for
+/// the same nodes.
+pub fn collect_layout_rects_scoped(
+    doc: &lumen_dom::Document,
+    roots: &[&LayoutBox],
+    out: &mut std::collections::HashMap<u32, [f32; 4]>,
+) {
+    for root in roots {
+        collect_layout_rects_rec(doc, root, out);
+    }
+}
+
 /// GAP-LAYOUTSHIFT срез 5 (BUG-809): geometry snapshot for
 /// `compute_layout_shift_score`, deliberately *not* [`collect_layout_rects`].
 ///
@@ -2146,6 +2227,26 @@ pub fn collect_client_rects(
     out
 }
 
+/// BUG-1211 (post-collectors): [`collect_client_rects`], scoped to a handful
+/// of subtrees — see [`collect_layout_rects_scoped`]'s doc comment for the
+/// rationale and the scoping correctness argument (this walk has the same
+/// "no ancestor-geometry dependency" property). `boxed` is rebuilt per
+/// subtree rather than shared across `roots` — an inline element's owning
+/// box is always inside the same subtree as its own fragments (a descendant
+/// relationship), never a sibling subtree, so this loses nothing a
+/// whole-tree `boxed` set would have caught for these roots.
+pub fn collect_client_rects_scoped(
+    doc: &lumen_dom::Document,
+    roots: &[&LayoutBox],
+    out: &mut std::collections::HashMap<u32, Vec<[f32; 4]>>,
+) {
+    for root in roots {
+        let mut boxed = std::collections::HashSet::new();
+        collect_boxed_node_ids(root, &mut boxed);
+        collect_client_rects_rec(doc, root, &boxed, out);
+    }
+}
+
 // LAYOUT-1 срез 3: явный стек вместо рекурсии — `getClientRects`/`getBoxQuads`
 // пересчитываются на каждый relayout (BUG-987). Pre-order без пост-обработки
 // после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет
@@ -2245,6 +2346,79 @@ pub fn find_box_by_node(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&La
         return Some(root);
     }
     root.children.iter().find_map(|c| find_box_by_node(c, node))
+}
+
+/// BUG-1211: locate every box in `root`'s tree whose `NodeId` is a member of
+/// `roots`, without descending further once one is found — its whole subtree
+/// is the caller's unit of work, same "stop at the topmost member" rule
+/// [`crate::incremental::extract_clean_subtrees`] already uses for the same
+/// reason. A single combined pass shared across every same-tick collector
+/// that needs to visit exactly the touched subtrees (`FlushHandles::
+/// maybe_flush`'s incremental branch) — cheaper than one [`find_box_by_node`]
+/// call per root (each of which independently re-walks from the document
+/// root), and, more importantly, the search cost is paid once instead of
+/// once per collector.
+///
+/// Same first-match-in-pre-order ambiguity as [`find_box_by_node`] when a
+/// `NodeId` labels more than one box (an anonymous wrapper and the element's
+/// own box) — pre-order visits the outer/element box first, matching
+/// `collect_layout_rects_rec`'s BUG-382 "first box in tree order wins" rule.
+pub fn find_dirty_root_boxes<'a>(
+    root: &'a LayoutBox,
+    roots: &std::collections::HashSet<lumen_dom::NodeId>,
+) -> Vec<&'a LayoutBox> {
+    let mut out = Vec::new();
+    if roots.is_empty() {
+        return out;
+    }
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if roots.contains(&b.node) {
+            out.push(b);
+            continue;
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
+}
+
+/// BUG-1211: every `NodeId` (as the `u32` index the JS-visible caches key
+/// on) owning a box anywhere in `root`'s subtree — the eviction-side twin of
+/// [`find_dirty_root_boxes`]: taken against the *previous* flush's tree
+/// before an incremental restyle discards it, so a same-tick collector can
+/// remove exactly the entries a touched subtree owned (including ones for
+/// nodes since removed from the DOM, which own no box in the *fresh* tree
+/// and so would otherwise never be evicted) before re-inserting from the
+/// fresh subtree.
+pub fn collect_subtree_node_indices(root: &LayoutBox) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        out.insert(b.node.index() as u32);
+        stack.extend(b.children.iter());
+    }
+    out
+}
+
+/// [`collect_subtree_node_indices`], keyed by [`lumen_dom::NodeId::raw`]
+/// (index + generation) instead of [`lumen_dom::NodeId::index`] alone.
+///
+/// `FlushHandles::scroll_states` (unlike `layout_rects`/`client_rects`/
+/// `computed_styles`) is keyed by `.raw()`, not `.index()` — a pre-existing
+/// asymmetry in the JS-visible cache maps this function's caller must match
+/// exactly, not "fix": using an `.index()`-keyed eviction set against a
+/// `.raw()`-keyed map would silently fail to evict a stale entry whenever a
+/// node's generation byte is nonzero (its arena slot was reused at least
+/// once — GAP-P3GCJSDOM), leaving a removed-then-regenerated node's old
+/// scroll offset in the cache forever.
+pub fn collect_subtree_node_raw_ids(root: &LayoutBox) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        out.insert(b.node.raw());
+        stack.extend(b.children.iter());
+    }
+    out
 }
 
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {

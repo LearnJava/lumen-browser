@@ -47,6 +47,23 @@ use std::sync::{Arc, Mutex};
 use super::named_access::lock_document_bounded;
 use super::runtime::{CustomPropertySnapshot, PseudoComputedStyles};
 
+/// [`FlushHandles::try_incremental_flush`]'s success payload: the fresh
+/// layout tree + counters from the incremental cascade+layout path, the
+/// `dirty_roots` set it restyled (BUG-1211 post-collectors then scope their
+/// walk to just those subtrees instead of the whole document), and two
+/// eviction sets computed against the tree *before* this restyle — by
+/// `NodeId::index()` for the `.index()`-keyed caches (`layout_rects`,
+/// `client_rects`, `computed_styles`) and by `NodeId::raw()` for the
+/// `.raw()`-keyed `scroll_states` — so a node the mutation removed from the
+/// DOM doesn't linger in any of the four caches with stale data forever.
+type IncrFlushResult = (
+    lumen_layout::LayoutBox,
+    lumen_layout::CounterMap,
+    std::collections::HashSet<lumen_dom::NodeId>,
+    std::collections::HashSet<u32>,
+    std::collections::HashSet<u32>,
+);
+
 /// Bundled embedder-pushed state a same-tick accessor native needs to force
 /// a synchronous flush — one `Clone` (every field is an `Arc`) instead of
 /// threading eight separate parameters through each `install_*` call site.
@@ -332,10 +349,24 @@ impl FlushHandles {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let incr = self.try_incremental_flush(&doc_guard, &sheet, viewport, &measurer, current_focus, &touched);
-        let (mut layout_root, counters) = match incr {
-            Some(result) => result,
+        // BUG-1211 (post-collectors): `incr_scope` is `Some((dirty_roots,
+        // prev_node_ids))` only when the incremental cascade+layout path
+        // above actually ran — `dirty_roots` is where the fresh tree changed
+        // (used to find the subtrees the four post-layout collectors below
+        // need to re-walk), `prev_node_ids` is every node id those same
+        // subtrees owned in the *previous* flush's tree (used to evict their
+        // stale cache entries first, including ones for nodes removed from
+        // the DOM since — see `try_incremental_flush`'s doc comment). `None`
+        // means the full path ran and every collector below must rebuild its
+        // whole-document map from scratch, same as before this slice.
+        let (mut layout_root, counters, incr_scope) = match incr {
+            Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids)) => {
+                (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids)))
+            }
             None => {
-                lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer)
+                let (lr, c) =
+                    lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
+                (lr, c, None)
             }
         };
         lumen_layout::clear_interactive_state();
@@ -375,32 +406,96 @@ impl FlushHandles {
                 s[1],
             );
         }
-        *self
-            .layout_rects
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_layout_rects(&layout_root, &doc_guard);
-        *self
-            .client_rects
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_client_rects(&layout_root, &doc_guard);
-        // BUG-935 S44: skip while the page has never read `computed_styles`
-        // (via `getComputedStyle`/`computedStyleMap()`/`_lumen_request_scroll`)
-        // — same rationale as the two collectors below. The setting native
-        // calls `maybe_flush` right after, so a page's very first read still
-        // forces a real collect here rather than serving a stale/empty map.
-        if self.computed_styles_needed.load(Ordering::Relaxed) {
-            *self
-                .computed_styles
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) =
-                lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters), viewport);
-            self.computed_styles_collected.store(true, Ordering::Relaxed);
+        // BUG-1211 (post-collectors): when the incremental cascade+layout
+        // path ran, re-walk only the subtrees `dirty_roots` names instead of
+        // the whole document — the four collectors below were, until this
+        // slice, always O(whole document) regardless of how small the
+        // incremental delta was, which is what left BUG-1211 open even
+        // after the cascade+layout part went incremental (see the bug
+        // file's "Частичный фикс" entry: ~90-120ms per flush here, vs.
+        // 2-12µs for cascade+layout, on N=1500). `find_dirty_root_boxes`
+        // locates each root's *fresh* box (present in `layout_root` even
+        // when reused wholesale by the graft — reused subtrees keep their
+        // node ids); the collectors below then only touch those subtrees'
+        // nodes, and `prev_node_ids` (computed against the tree *before*
+        // this restyle, back in `try_incremental_flush`) is evicted first
+        // so a node the mutation removed from the DOM does not linger in
+        // the caches with stale geometry/style forever.
+        if let Some((dirty_roots, prev_node_ids, _)) = &incr_scope {
+            let scoped_roots = lumen_layout::find_dirty_root_boxes(&layout_root, dirty_roots);
+            {
+                let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
+                for nid in prev_node_ids {
+                    lr.remove(nid);
+                }
+                lumen_layout::collect_layout_rects_scoped(&doc_guard, &scoped_roots, &mut lr);
+            }
+            {
+                let mut cr = self.client_rects.lock().unwrap_or_else(|e| e.into_inner());
+                for nid in prev_node_ids {
+                    cr.remove(nid);
+                }
+                lumen_layout::collect_client_rects_scoped(&doc_guard, &scoped_roots, &mut cr);
+            }
+            if self.computed_styles_needed.load(Ordering::Relaxed) {
+                let mut cs = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
+                // BUG-1211 (post-collectors) regression: `computed_styles`
+                // is collected lazily (first read only, guarded by
+                // `computed_styles_collected`) — the flush that FIRST turns
+                // `computed_styles_needed` on is not necessarily the same
+                // flush that has a non-empty `dirty_roots` (BUG-935 S44's
+                // "a different native consumed the real-flush pass first"
+                // already means it usually isn't: e.g. `.focus()`'s
+                // scroll-into-view read runs the real flush, THEN
+                // `getComputedStyle` sets `computed_styles_needed` on the
+                // NEXT flush, whose `dirty_roots` is empty because nothing
+                // changed since). Scoping to `dirty_roots` in that case
+                // would leave the entire map empty forever — fall back to
+                // one full collect exactly when this is that first-ever
+                // collect, same as the always-on `layout_rects`/
+                // `client_rects` above got for free by never being gated.
+                if self.computed_styles_collected.load(Ordering::Relaxed) {
+                    for nid in prev_node_ids {
+                        cs.remove(nid);
+                    }
+                    lumen_layout::collect_computed_styles_scoped(
+                        &doc_guard, &layout_root, dirty_roots, viewport, &mut cs,
+                    );
+                } else {
+                    *cs = lumen_layout::collect_computed_styles(
+                        &layout_root, &doc_guard, Some(&counters), viewport,
+                    );
+                }
+                self.computed_styles_collected.store(true, Ordering::Relaxed);
+            }
+        } else {
+            *self.layout_rects.lock().unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_layout_rects(&layout_root, &doc_guard);
+            *self.client_rects.lock().unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_client_rects(&layout_root, &doc_guard);
+            // BUG-935 S44: skip while the page has never read `computed_styles`
+            // (via `getComputedStyle`/`computedStyleMap()`/`_lumen_request_scroll`)
+            // — same rationale as the two collectors below. The setting native
+            // calls `maybe_flush` right after, so a page's very first read still
+            // forces a real collect here rather than serving a stale/empty map.
+            if self.computed_styles_needed.load(Ordering::Relaxed) {
+                *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) =
+                    lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters), viewport);
+                self.computed_styles_collected.store(true, Ordering::Relaxed);
+            }
         }
         // BUG-935 S43: skip while the page has never read the corresponding
         // cache — see the fields' doc comments. Each of the two natives that
         // can set the flag calls `maybe_flush` right after, so a page's very
         // first read still forces a real collect here rather than serving a
         // stale/empty map.
+        //
+        // BUG-1211: pseudo styles/custom properties/text frags are NOT
+        // scoped to `incr_scope` — they are far rarer reads (most pages
+        // never touch `::before`/`::after` computed style, CSS custom
+        // properties or `CSS.highlights`), so they stay full-document,
+        // gated only by their existing `_needed` flags, matching the
+        // pre-BUG-1211 behaviour exactly.
         if self.pseudo_styles_needed.load(Ordering::Relaxed) {
             *self
                 .pseudo_computed_styles
@@ -425,13 +520,27 @@ impl FlushHandles {
                 lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard);
             self.text_frags_collected.store(true, Ordering::Relaxed);
         }
-        *self
-            .scroll_states
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_scroll_containers_for_js_state(&layout_root)
-            .iter()
-            .map(|c| (c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
-            .collect();
+        // BUG-1211: scroll containers ARE scoped — cheap per box (a handful
+        // of field reads, no ancestor context needed) but still an
+        // O(document) walk pre-scoping, and every same-tick flush refreshes
+        // this cache unconditionally (no `_needed` gate), so it was paying
+        // the full-document cost on every single incremental flush.
+        if let Some((dirty_roots, _, prev_node_raw_ids)) = &incr_scope {
+            let scoped_roots = lumen_layout::find_dirty_root_boxes(&layout_root, dirty_roots);
+            let mut ss = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
+            for nid in prev_node_raw_ids {
+                ss.remove(nid);
+            }
+            for c in lumen_layout::collect_scroll_containers_for_js_state_scoped(&scoped_roots) {
+                ss.insert(c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]);
+            }
+        } else {
+            *self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_scroll_containers_for_js_state(&layout_root)
+                    .iter()
+                    .map(|c| (c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                    .collect();
+        }
         self.never_flushed.store(false, Ordering::Relaxed);
         *self
             .last_flushed_focus
@@ -482,7 +591,7 @@ impl FlushHandles {
         measurer: &lumen_paint::FontMeasurer<'_>,
         current_focus: Option<u32>,
         touched: &super::runtime::DomTouched,
-    ) -> Option<(lumen_layout::LayoutBox, lumen_layout::CounterMap)> {
+    ) -> Option<IncrFlushResult> {
         if touched.unattributed {
             return None;
         }
@@ -538,6 +647,25 @@ impl FlushHandles {
         } else {
             lumen_layout::counters::ContentDirty::Untracked
         };
+        // BUG-1211 (post-collectors): snapshot which nodes the touched
+        // subtrees owned in the *previous* (`basis.layout`) tree before it
+        // is moved into `layout_mutation_incremental_restyle` below — the
+        // caller needs this to evict stale cache entries (including ones
+        // for a node removed from the DOM by this same mutation, which the
+        // *fresh* tree's subtree scan below can never see) before
+        // re-inserting from the fresh subtree. Taken against `dirty_roots`
+        // before it moves into `delta`.
+        let prev_node_ids: std::collections::HashSet<u32> =
+            lumen_layout::find_dirty_root_boxes(&basis.layout, &dirty_roots)
+                .into_iter()
+                .flat_map(lumen_layout::collect_subtree_node_indices)
+                .collect();
+        let prev_node_raw_ids: std::collections::HashSet<u32> =
+            lumen_layout::find_dirty_root_boxes(&basis.layout, &dirty_roots)
+                .into_iter()
+                .flat_map(lumen_layout::collect_subtree_node_raw_ids)
+                .collect();
+        let dirty_roots_for_return = dirty_roots.clone();
         let delta = lumen_layout::counters::RestyleDelta {
             prev_styles: basis.cascade,
             dirty_roots,
@@ -551,7 +679,7 @@ impl FlushHandles {
         );
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
-        Some(result)
+        Some((result.0, result.1, dirty_roots_for_return, prev_node_ids, prev_node_raw_ids))
     }
 
     /// CSSOM-8 вариант C: replay every recorded CSSOM write onto a throwaway
