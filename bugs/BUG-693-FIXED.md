@@ -154,7 +154,7 @@ call it unconditionally at load time.
 Setters (`.protocol =`, etc.) and `URLSearchParams` iteration are unchanged
 by this fix — those are [BUG-375](BUG-375-FIXED.md) and
 [BUG-694](BUG-694-FIXED.md) respectively, filed and fixed separately.
-`URLPattern`'s own from-scratch matcher ([BUG-695](BUG-695-OPEN.md)) does
+`URLPattern`'s own from-scratch matcher ([BUG-695](BUG-695-FIXED.md)) does
 not consume this parser and remains open.
 
 Verified: `cargo test -p lumen-core --lib url::` (42/42),

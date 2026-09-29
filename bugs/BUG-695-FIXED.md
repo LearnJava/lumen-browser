@@ -1,6 +1,6 @@
 # BUG-695 — `URLPattern` is a hand-rolled mini pattern-matcher, not the WHATWG URLPattern spec algorithm
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** js (`crates/js/src/url_pattern.rs` — `install_url_pattern_api_v8`/`URL_PATTERN_SHIM`)
 **Найден:** P2, WPT-VENDOR-urlpattern, 2026-08-09
 
@@ -126,3 +126,32 @@ component, `baseURL` inheritance, `URLPatternResult` shape, static
 `compareComponent`, `.hasRegExpGroups`, tentative `.generate()`) — an
 architecture decision (pure-JS rewrite vs. a native Rust binding) for
 whoever picks this up, not decided here.
+
+## Исправлено (P3, 2026-09-29)
+
+Решение по архитектуре («чистый JS vs нативная привязка») — чистый JS: алгоритм строковый,
+`RegExp` движка V8 нужен и так, а нативного URLPattern в `crates/network` нет. Реализация —
+[`crates/js/src/shim/url_pattern_shim.js`](../crates/js/src/shim/url_pattern_shim.js), ставится на
+страницу (`install_url_pattern_api_v8`) и во все воркеры (`worker_exposed_shim`, IDL
+`[Exposed=(Window,Worker)]`).
+
+Что есть: токенайзер (strict для паттернов, lenient для constructor-string), парсер паттерна,
+генерация regexp (`v`-флаг, как в спеке — нужен `[[a-z]--a]`) и канонической строки компонента,
+constructor-string парсер, `processInit` (`type` = `pattern`/`url`, наследование от `baseURL`
+с экранированием `+*?:{}()\\`, снятие порта по умолчанию), `URLPatternResult`,
+`hasRegExpGroups`, `generate()`, `URLPattern.compareComponent()`, валидация (`TypeError`),
+USVString-приведение (одиночные суррогаты → U+FFFD).
+
+Ловушка: канонизация **не** идёт через сеттеры `URL` из `url_shim.js` — они не повторяют
+state-override-парсеры спеки (`pathname = "/- "` обрезает хвостовой пробел, `hostname = "[::1]"`
+молча игнорируется). Percent-encode-наборы собраны в шиме; хост и путь разбирает конструктор `URL`.
+
+Проверка (`run_report.py --all --root urlpattern --recursive`, 30 файлов): **2447/2451
+сабтестов**, 23/30 harness OK. Остаток вне этого бага:
+
+- `urlpattern-detached-frame-regexp.html` (4) — `contentWindow.URLPattern` отдаётся фасадом
+  фрейма как обёртка над кросс-изолятным вызовом глобала (`frame_bridge.rs`,
+  `wrapWinFacadeGlobals`), вызов идёт без `new` — корень [BUG-480](BUG-480-OPEN.md).
+- 7 `*.serviceworker.html` — TIMEOUT 0/0: [BUG-1226](BUG-1226-OPEN.md).
+
+Юнит-тесты: `cargo test -p lumen-js --features v8-backend --lib url_pattern` (6).
