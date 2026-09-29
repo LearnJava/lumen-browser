@@ -1,6 +1,7 @@
 # BUG-1224 — `preventDefault()` в обработчике `click` не отменяет переход по `<a href>`: каждый клик по ссылке SPA — полная перезагрузка
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
+**Исправление:** `click.rs` — результат диспетчеризации `click` читается через `route_query_js`/`eval_js_value` (`false` = `preventDefault`), при отмене нативная активация (ссылка, форма, флажок, details) пропускается; навигацию, поставленную самим обработчиком, по-прежнему забирает `take_navigate_request`.
 **Компонент:** shell (`crates/shell/src/lumen/click.rs:578-611` — отправка JS-`click`; ветка `FormClickAction::Nothing` `:809+` — нативный переход по ссылке)
 **Найден:** 2026-09-29, разбор видео пользователя и живой стенд bankruptcy-platform (Next.js `next/link`), сборка `main` 22a782d55
 
