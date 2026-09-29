@@ -52,12 +52,9 @@ are actually executed; every other action fails cleanly (rejects the test's
 promise, logged on the runner side too since BUG-810) rather than hanging
 forever — the DoD is "not silently SKIPped", not "every `test_driver.*`
 method works". `set_permission` (`permissions.setPermission`, BUG-1014) is
-executed too. Left unimplemented for want of a matching engine/BiDi surface
-rather than tooling effort: `get_computed_role`/`get_computed_label` (an accessibility tree does exist —
-`crates/engine/a11y`, `AutomationCommand::A11yTree` — but nothing correlates
-one of its `AXNode`s back to the DOM element `params["selectors"]` resolves
-to; that correlation, not the tree itself, is the missing piece, and it's
-sized like its own task rather than a payload translation).
+executed too, as are `get_computed_role`/`get_computed_label` (Lumen's own
+`lumen.getComputedA11y` BiDi extension: the selector chain is resolved against
+the live DOM and role/name read off the accessibility tree, BUG-1014).
 """
 
 import asyncio
@@ -373,6 +370,8 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 result = await self._action_delete_all_cookies(session, context, params)
             elif action in ("set_permission", "bidi.permissions.set_permission"):
                 result = await self._action_set_permission(session, context, params)
+            elif action in ("get_computed_role", "get_computed_label"):
+                result = await self._action_get_computed_a11y(session, action, params)
             else:
                 # BUG-810/WPT-RUN-12: the rejection itself already reaches the
                 # page fine (BUG-716 fixed unhandled-rejection visibility) —
@@ -526,6 +525,18 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         except BidiException as e:
             raise ActionError(f"permissions.setPermission failed: {e}") from e
         return None
+
+    async def _action_get_computed_a11y(self, session, action, params):
+        """`test_driver.get_computed_role` / `get_computed_label` — Lumen's
+        `lumen.getComputedA11y` BiDi extension (BUG-1014) resolves the selector
+        chain against the live DOM and reads role/name off the accessibility
+        tree, so no DOM-element ↔ `AXNode` correlation is needed on this side."""
+        try:
+            value = await session.send_command(
+                "lumen.getComputedA11y", {"selectors": params["selectors"]})
+        except BidiException as e:
+            raise ActionError(f"lumen.getComputedA11y failed: {e}") from e
+        return value["role" if action == "get_computed_role" else "name"]
 
     async def _resolve_element_center(self, session, context, selectors):
         expression = f"""(() => {{

@@ -1018,6 +1018,15 @@ impl Lumen {
                         let _ = reply_tx.send(AutomationReply::Error("no page loaded".to_string()));
                     }
                 },
+                AutomationCommand::ComputedA11y { selectors } => {
+                    // BUG-1014: `null` (no page / no match) makes the BiDi layer
+                    // answer `no such element`.
+                    let json = match self.automation_computed_a11y(&selectors) {
+                        Some((role, name)) => serde_json::json!({ "role": role, "name": name }).to_string(),
+                        None => "null".to_owned(),
+                    };
+                    let _ = reply_tx.send(AutomationReply::Eval(json));
+                }
                 AutomationCommand::ConsoleLog => {
                     // Drain any messages the JS runtime queued this tick before the
                     // periodic DevTools drain below would (same pattern, just eager

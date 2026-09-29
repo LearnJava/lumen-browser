@@ -16,6 +16,17 @@
 им не разделяется (живёт один origin страницы). Executor: `_action_set_permission`
 (`set_permission` и `bidi.permissions.set_permission`). **Остаётся** `get_computed_role`/`get_computed_label`.
 
+## Срез 2 (2026-09-30, P6): `get_computed_role`/`get_computed_label` реализованы
+
+Корреляция не понадобилась: `AXNode.node_id` — это id DOM-узла. Расширение Lumen
+`lumen.getComputedA11y {selectors}` (`protocol.rs::lumen_get_computed_a11y`) →
+`BrowserSession::computed_a11y` → `AutomationCommand::ComputedA11y` → shell
+(`automation_computed_a11y`: цепочка селекторов через `query_all_within` + `shadow_root_of`)
+→ `lumen_a11y::computed_role_and_name` (узел ищется в построенном дереве; вне дерева, напр.
+под `aria-hidden`, роль/имя считаются отдельно). Executor: `_action_get_computed_a11y`.
+Проверено: юнит-тест a11y, clippy. **Не проверено** сквозным прогоном WPT (`accname`) на живом
+окне — без него баг не закрыт.
+
 ## Почему это доработка, а не остаток той же починки
 
 `probe-method.md §8`: доработка требует функциональности, которой нет вовсе

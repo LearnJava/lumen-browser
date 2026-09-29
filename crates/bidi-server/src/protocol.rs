@@ -704,6 +704,7 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "browsingContext.handleUserPrompt" => bc_handle_user_prompt(id, &params, state),
         "browsingContext.setViewport" => bc_set_viewport(id, &params, state),
         "permissions.setPermission" => permissions_set_permission(id, &params, state),
+        "lumen.getComputedA11y" => lumen_get_computed_a11y(id, &params, state),
         "storage.getCookies" => storage_get_cookies(id, &params, state),
         "storage.setCookie" => storage_set_cookie(id, &params, state),
         "storage.deleteCookies" => storage_delete_cookies(id, &params, state),
@@ -1559,6 +1560,46 @@ fn permissions_set_permission(id: i64, params: &JsonValue, state: &mut BidiState
     }
     state.permission_states.insert(name.to_owned(), perm_state.to_owned());
     DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `lumen.getComputedA11y` — расширение Lumen (не часть BiDi): роль и
+/// accessible name элемента по цепочке селекторов `params.selectors`
+/// (внешний документ → вниз через shadow root). Нужен WPT-экшенам
+/// `get_computed_role` / `get_computed_label` (BUG-1014). Без живого окна
+/// дерева доступности нет — `no such element`.
+fn lumen_get_computed_a11y(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let selectors: Vec<String> = params
+        .get("selectors")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+    if selectors.is_empty() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "getComputedA11y: selectors must be a non-empty array of strings",
+        ));
+    }
+    let found = match &mut state.live {
+        Some(live) => match live.computed_a11y(&selectors) {
+            Ok(v) => v,
+            Err(e) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "unknown error",
+                    &format!("getComputedA11y: {e}"),
+                ));
+            }
+        },
+        None => None,
+    };
+    let Some((role, name)) = found else {
+        return DispatchResult::single(make_error(Some(id), "no such element", "getComputedA11y: no such element"));
+    };
+    let mut result = BTreeMap::new();
+    result.insert("role".into(), JsonValue::String(role));
+    result.insert("name".into(), JsonValue::String(name));
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
 }
 
 /// `network.setOfflineStatus` — переключить симуляцию offline-режима сети.
