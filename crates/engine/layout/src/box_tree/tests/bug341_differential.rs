@@ -1113,6 +1113,7 @@ fn layout_result_cache_key_distinguishes_used_size_override_from_plain_probe() {
             height: None,
             box_sizing: None,
             clear_intrinsic_hint: false,
+            percentage_base: None,
         },
     );
     let stats = super::super::take_layout_result_cache_stats();

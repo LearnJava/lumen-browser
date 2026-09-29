@@ -618,7 +618,12 @@ pub(super) fn dispatch_box(
         }
     };
     let em = s.font_size;
-    let cb = available_width;
+    // BUG-974: the percentage base can differ from the free space
+    // `available_width` otherwise represents (auto-margin/auto-width space) —
+    // see `UsedSizeOverride::percentage_base`'s doc comment.
+    let cb = used_size_override
+        .and_then(|ov| ov.percentage_base)
+        .unwrap_or(available_width);
 
     // CSS Box Sizing L4 §5 — the box is subject to size containment (its size is
     // computed as if it had no contents) when `contain: size` is set, when

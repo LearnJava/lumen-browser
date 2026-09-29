@@ -77,6 +77,40 @@ fn flex_row_item_padding_applied_once() {
 }
 
 #[test]
+fn flex_row_item_percent_padding_resolves_against_container() {
+    // BUG-974: a row flex item's percentage padding/margin must resolve
+    // against the flex container's content width, not the item's own
+    // resolved main-axis size — `dispatch_box`'s `available_width` doubles as
+    // that percentage base, and the row arm used to hand it the item's own
+    // border-box size instead. #a: width:100px; padding-left:10% of the
+    // container's 400px content width = 40px → border-box width 140px
+    // (Chrome). The old base (the item's own ~140px resolved size) gave 114.
+    let html = r#"<div id="flex"><div id="a"></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;width:400px;height:100px} #a{width:100px;height:40px;padding-left:10%}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let a = super::find_by_id_all(&root, &doc, "a").expect("a");
+    assert_eq!(a.rect.width, 140.0, "a.width {} (expected 100 + 10% of 400 = 140)", a.rect.width);
+}
+
+#[test]
+fn flex_row_item_percent_max_width_resolves_against_container() {
+    // BUG-974: same double-resolution bug as the padding case above, but for
+    // `max-width`. `width:800px; max-width:50%` in a 1000px-wide container
+    // must clamp to 500px (50% of the *container's* content width) — the old
+    // code clamped `width` first to the item's own already-resolved size and
+    // then took 50% of *that* on top, landing on 400px instead.
+    let html = r#"<div id="flex"><div id="a"></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;width:1000px;height:100px} #a{width:800px;max-width:50%;height:40px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(1200.0, 600.0));
+    let a = super::find_by_id_all(&root, &doc, "a").expect("a");
+    assert_eq!(a.rect.width, 500.0, "a.width {} (expected max-width:50% of 1000 = 500)", a.rect.width);
+}
+
+#[test]
 fn min_content_width_of_nowrap_text_is_max_content() {
     // BUG-427: whitespace is a soft-wrap opportunity only where wrapping is
     // allowed. Under `white-space: nowrap` the text cannot break at all, so its

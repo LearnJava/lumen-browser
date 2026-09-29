@@ -42,6 +42,23 @@ pub(crate) struct UsedSizeOverride {
     /// pinning it to the raw intrinsic pixel size the hint baked in for the
     /// ordinary (non-flex) block/inline layout it originally targeted.
     pub(crate) clear_intrinsic_hint: bool,
+    /// BUG-974: overrides the percentage base (`layout_dispatch::dispatch_box`'s
+    /// `cb`) used to resolve the item's own `padding`/`margin`/`width`/
+    /// `max-width` percentages, independent of `available_width`.
+    ///
+    /// `dispatch_box`'s `available_width` plays two roles: the percentage base
+    /// (CSS 2.1 §8.1 — resolves against the *containing block*, which for a
+    /// flex item is the container's content box) and the free space auto
+    /// margins/auto-width distribute into (which for a row flex item is the
+    /// space the flexbox algorithm assigned *this item* in the line, i.e. its
+    /// own resolved main size). Those are different quantities for a flex
+    /// item, so the row arm hands `available_width` the item's own space (so
+    /// auto-margin centering/justify-content still work, see
+    /// `flex_item_auto_main_margins_center` and neighbors) and this field the
+    /// container's content width, so a `padding-left: 10%` item resolves 10%
+    /// of the container instead of 10% of its own already-resolved size.
+    /// `None` falls back to `available_width`, matching every other caller.
+    pub(crate) percentage_base: Option<f32>,
 }
 
 /// The **margin-box** cross width a column flex item is laid out at — the value

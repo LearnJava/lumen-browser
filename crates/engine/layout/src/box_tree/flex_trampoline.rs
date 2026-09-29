@@ -290,6 +290,7 @@ fn step_item(
                 width: width_hinted.then_some(item_avail_cross),
                 box_sizing: Some(BoxSizing::BorderBox),
                 clear_intrinsic_hint: width_hinted || height_hinted,
+                percentage_base: None,
             }),
         ) {
             DispatchOutcome::Done => {
@@ -360,10 +361,30 @@ fn step_item(
         // pinning the item to its raw intrinsic height regardless of the
         // main-axis (width) size this override just resolved. Clearing is a
         // no-op for a style that was never hinted.
+        //
+        // BUG-974: `dispatch_box`'s `available_width` doubles as the free
+        // space auto margins/auto-width distribute into — row items keep
+        // `inner_main` (the space the flexbox algorithm assigned this item
+        // in the line) here so `justify-content`/auto-margin centering on the
+        // main axis is unaffected (see `flex_item_auto_main_margins_center`
+        // and neighbors in `flow_modes.rs`). The item's own padding/margin/
+        // max-width percentages resolve against a *different* base — the
+        // container's content width, per CSS 2.1 §8.1/Flexbox §4 — so that
+        // base goes through `UsedSizeOverride::percentage_base` instead of
+        // `available_width`. Conflating the two (handing `available_width`
+        // itself the container's content width) silently produced a
+        // narrower box (114px instead of 140px for `width:100px;
+        // padding-left:10%` in a 400px container) *and* broke every main-axis
+        // auto-margin test, since those read free space off `available_width`.
         match dispatch_box(
             &mut frame.b.children[pos.i], content_x + main_cursor, content_y + cross_cursor, inner_main,
             explicit_cross, measurer, viewport, pcb, hp, false, None, AlignValue::Auto,
-            Some(UsedSizeOverride { width: Some(used_main), clear_intrinsic_hint: true, ..Default::default() }),
+            Some(UsedSizeOverride {
+                width: Some(used_main),
+                clear_intrinsic_hint: true,
+                percentage_base: Some(content_width),
+                ..Default::default()
+            }),
         ) {
             DispatchOutcome::Done => {
                 post_item_place(frame, li, &pos, viewport);
