@@ -53,3 +53,18 @@ LUMEN_PROFILE=dev-release python tests/wpt/run_report.py \
 сбрасывается на каждую навигацию), результат конкретного теста зависит от порядка/тайминга
 соседних тестов в той же категории. Не подтверждено — не проверялось, действительно ли
 `document.hasBeenActive`/эквивалент компонент сбрасывается на `browsingContext.navigate`.
+
+## Срез 1 (P6, 2026-09-29)
+
+Найдена причина **части** нестабильности: wptrunner для `test_driver.click`/`send_keys`
+строит селектор вида `:root > *|body:nth-child(2)`, а парсер селекторов не знал префикс
+пространства имён `*|` / `|` → `SyntaxError: ... is not a valid selector`, тест уходил в
+`ERROR`. Починено в `parse_simple_selector` (префикс отбрасывается, `@namespace` не
+поддержан); юнит-тест `namespace_prefix_any_or_none_is_accepted`. После фикса
+`--check` по `close-watcher/user-activation` — 0 регрессий; убран устаревший
+`nnn-popovers.html.ini` (UNEXPECTED-PASS).
+
+**Остаток (bug остаётся OPEN):** в одном из ~4 массовых `--check`-прогонов 1–2 теста
+(`y.html?dialog`, `ny-activate-preventDefault.html?CloseWatcher`) дают `CRASH`, тогда как
+по отдельности проходят стабильно (4/4). Гипотеза: падение/перезапуск окна между тестами
+одного процесса, а не user activation. Не локализовано.

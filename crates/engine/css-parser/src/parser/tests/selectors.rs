@@ -1786,3 +1786,14 @@ use super::*;
         );
     }
 
+    #[test]
+    fn namespace_prefix_any_or_none_is_accepted() {
+        // wptrunner: `:root > *|body:nth-child(2)`; префикс отбрасывается.
+        for raw in [":root > *|body:nth-child(2)", "*|*", "|div", "*|div.a"] {
+            assert!(
+                Parser::new(raw).parse_selector_list_strict().is_some(),
+                "{raw}"
+            );
+        }
+        assert_eq!(parse_selector_list("*|div"), parse_selector_list("div"));
+    }
