@@ -29,7 +29,7 @@ tests/wpt/metadata/soft-navigation-heuristics/` до исходного (отс�
 
 ## Почему это важно
 
-Тот же класс находки, что [BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-OPEN.md)/
+Тот же класс находки, что [BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-CANNOT-REPRODUCE.md)/
 [BUG-1005](BUG-1005-OPEN.md)/[BUG-1011](BUG-1011-OPEN.md)/[BUG-1022](BUG-1022-FIXED.md)/
 [BUG-1024](BUG-1024-FIXED.md) («N `--check` подряд без изменений между ними дают N разных
 наборов регрессий»), теперь на маленькой (94 id) и в основном не проходящей категории —
@@ -185,7 +185,7 @@ Navigate`/`NewTab` → `navigate_to`).
 ### Не проверено / дальше
 
 Тот же класс «N `--check` подряд дают N разных наборов» открыт ещё на нескольких категориях —
-[BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-OPEN.md)/[BUG-1005](BUG-1005-OPEN.md)/
+[BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-CANNOT-REPRODUCE.md)/[BUG-1005](BUG-1005-OPEN.md)/
 [BUG-1011](BUG-1011-OPEN.md)/[BUG-1022](BUG-1022-FIXED.md). Этот срез объясняет и чинит один
 конкретный механизм (застрявшая навигация после интерцепта чужого `navigate`-эвента) — он
 правдоподобный кандидат и для части их регрессий (`html/rendering`/`html/semantics`/

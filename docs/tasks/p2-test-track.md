@@ -632,7 +632,7 @@ WPT-VENDOR − 199), из них 11 покрыть нечем, ещё 21 (дол
 - `resize-observer` — [BUG-1003](../../bugs/BUG-1003-FIXED.md): подтест `Removing 2nd
   fragment` (`fragments.html`) дал FAIL в 3 из 4 наблюдений, PASS — только в том прогоне,
   что попал бы в baseline; `notify.html` один раз дал `ERROR` вместо `OK`.
-- `close-watcher` — [BUG-1004](../../bugs/BUG-1004-OPEN.md): два `--check`-прогона подряд
+- `close-watcher` — [BUG-1004](../../bugs/BUG-1004-CANNOT-REPRODUCE.md): два `--check`-прогона подряд
   без изменений между ними дали РАЗНЫЕ наборы регрессий внутри `user-activation/*`.
 - `input-events` — [BUG-1005](../../bugs/BUG-1005-OPEN.md): перегенерация прошла штатно, но
   немедленный повторный `--check` дал 159 регрессий, почти все в одном файле
