@@ -634,7 +634,7 @@ WPT-VENDOR − 199), из них 11 покрыть нечем, ещё 21 (дол
   что попал бы в baseline; `notify.html` один раз дал `ERROR` вместо `OK`.
 - `close-watcher` — [BUG-1004](../../bugs/BUG-1004-CANNOT-REPRODUCE.md): два `--check`-прогона подряд
   без изменений между ними дали РАЗНЫЕ наборы регрессий внутри `user-activation/*`.
-- `input-events` — [BUG-1005](../../bugs/BUG-1005-OPEN.md): перегенерация прошла штатно, но
+- `input-events` — [BUG-1005](../../bugs/BUG-1005-FIXED.md): перегенерация прошла штатно, но
   немедленный повторный `--check` дал 159 регрессий, почти все в одном файле
   (`input-events-get-target-ranges-deleting-in-list-items.tentative.html`, десятки
   `<ol>`/`<li>`-вложенных query-вариантов) — масштаб больше единичной гонки, похоже на
