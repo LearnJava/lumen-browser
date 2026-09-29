@@ -42,6 +42,8 @@ pub(super) fn v8_thread_main(
         // for anything else — this is the baseline `suspend()` diffs against.
         let baseline = {
             let ctx_scope = &mut v8::ContextScope::new(scope, ctx);
+            // BUG-753 срез 2: every context owns an internal container from birth.
+            let _ = crate::internal_globals::install_container(ctx_scope, ctx);
             let global = ctx.global(ctx_scope);
             let mut names = std::collections::HashSet::new();
             if let Some(own_props) = global.get_own_property_names(ctx_scope, Default::default())

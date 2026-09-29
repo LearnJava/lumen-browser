@@ -109,13 +109,13 @@ pub fn timezone_override_script(timezone_id: &str) -> String {
     let escaped = timezone_id.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
     format!(
         r#"(function() {{
-  globalThis.__lumen_timezone_override = "{escaped}";
+  __lumen_C.__lumen_timezone_override = "{escaped}";
   if (typeof Intl !== 'undefined' && Intl.DateTimeFormat && !Intl.DateTimeFormat.__lumenPatched) {{
     var _Orig = Intl.DateTimeFormat;
     function LumenDateTimeFormat(locales, options) {{
       var opts = options ? Object.assign({{}}, options) : {{}};
-      if (!('timeZone' in opts) && globalThis.__lumen_timezone_override) {{
-        opts.timeZone = globalThis.__lumen_timezone_override;
+      if (!('timeZone' in opts) && __lumen_C.__lumen_timezone_override) {{
+        opts.timeZone = __lumen_C.__lumen_timezone_override;
       }}
       if (!(this instanceof LumenDateTimeFormat)) return new LumenDateTimeFormat(locales, opts);
       return new _Orig(locales, opts);

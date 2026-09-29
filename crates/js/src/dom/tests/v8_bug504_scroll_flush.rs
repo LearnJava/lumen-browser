@@ -58,7 +58,7 @@ fn make_scroll_doc() -> (Arc<Mutex<Document>>, u32) {
 
 fn v8_runtime_with_scroll_flush(doc: Arc<Mutex<Document>>, main_nid: u32) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(

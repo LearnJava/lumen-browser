@@ -51,10 +51,10 @@ const SCHEDULER_SHIM: &str = r#"(function() {
   var PRIORITIES = ['user-blocking', 'user-visible', 'background'];
   var TOKEN = {};
 
-  var cpedGet = globalThis._lumen_sched_cped_get;
-  var cpedSet = globalThis._lumen_sched_cped_set;
-  delete globalThis._lumen_sched_cped_get;
-  delete globalThis._lumen_sched_cped_set;
+  var cpedGet = __lumen_C._lumen_sched_cped_get;
+  var cpedSet = __lumen_C._lumen_sched_cped_set;
+  delete __lumen_C._lumen_sched_cped_get;
+  delete __lumen_C._lumen_sched_cped_set;
   if (typeof cpedGet !== 'function' || typeof cpedSet !== 'function') {
     var plainState;
     cpedGet = function() { return plainState; };
@@ -420,14 +420,11 @@ const SCHEDULER_SHIM: &str = r#"(function() {
   // HTML «invoke idle callbacks»: they run with a background scheduling state,
   // so a `yield()` inside one continues at background priority.
   var IDLE_STATE = { abortSource: null, prioritySource: FIXED['background'] };
-  Object.defineProperty(globalThis, '_lumen_sched_idle_invoke', {
-    value: function(fn, deadline) {
-      var outer = cpedGet();
-      cpedSet(IDLE_STATE);
-      try { fn(deadline); } finally { cpedSet(outer); }
-    },
-    writable: false, enumerable: false, configurable: false
-  });
+  __lumen_C._lumen_sched_idle_invoke = function(fn, deadline) {
+    var outer = cpedGet();
+    cpedSet(IDLE_STATE);
+    try { fn(deadline); } finally { cpedSet(outer); }
+  };
 })();
 "#;
 

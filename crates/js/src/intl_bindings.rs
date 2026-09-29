@@ -210,7 +210,7 @@ const INTL_SHIM: &str = r#"(function(global) {
     // BUG-295 (`browser.setTimezoneOverride`): an explicit `options.timeZone`
     // always wins (spec behaviour); otherwise fall back to the BiDi-set
     // global marker (`v8_runtime::timezone_override_script`), then 'UTC'.
-    this._tz = (options && options.timeZone) || global.__lumen_timezone_override || 'UTC';
+    this._tz = (options && options.timeZone) || __lumen_C.__lumen_timezone_override || 'UTC';
   }
   DateTimeFormat.prototype.format = function(date) {
     var d = (date == null) ? new Date() : (date instanceof Date ? date : new Date(date));

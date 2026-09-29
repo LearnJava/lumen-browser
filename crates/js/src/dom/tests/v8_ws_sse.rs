@@ -15,7 +15,7 @@ use crate::v8_runtime::V8JsRuntime;
 /// `install_dom` argument list, same `_LUMEN_EXTENSION_ACTIVE` pre-eval.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
@@ -87,7 +87,7 @@ fn dispatch_composition_without_target_does_not_crash() {
 fn window_has_dispatch_composition() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt
-        .eval("typeof window._lumen_dispatch_composition === 'function'")
+        .eval("typeof __lumen_C._lumen_dispatch_composition === 'function'")
         .unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
@@ -178,7 +178,7 @@ fn lumen_bfcache_persisted_default_false() {
 #[test]
 fn lumen_fire_page_lifecycle_exported_on_window() {
     let rt = v8_runtime_with_dom(make_doc());
-    let result = rt.eval("typeof window._lumen_fire_page_lifecycle === 'function'").unwrap();
+    let result = rt.eval("typeof __lumen_C._lumen_fire_page_lifecycle === 'function'").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 

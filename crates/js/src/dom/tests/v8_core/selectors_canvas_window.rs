@@ -665,9 +665,9 @@ fn canvas_css_resize_scales_pixels() {
                 var ctx = c.getContext('2d');
                 ctx.fillStyle = '#ff0000';
                 ctx.fillRect(0, 0, 4, 4);
-                window.__test_canvas_nid = c.__nid__;
+                globalThis.__test_canvas_nid = c.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_canvas_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     // First delivery at 4×4 — records baseline.
     rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
@@ -694,9 +694,9 @@ fn canvas_css_resize_fires_resize_event() {
                 c2.getContext('2d');
                 var _css_resize_fired = false;
                 c2.addEventListener('resize', function() { _css_resize_fired = true; });
-                window.__test_c2_nid = c2.__nid__;
+                globalThis.__test_c2_nid = c2.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_c2_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_c2_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     // First delivery at 10×10 — records baseline, no event.
     rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
@@ -719,9 +719,9 @@ fn canvas_css_resize_no_event_when_size_unchanged() {
                 c3.getContext('2d');
                 var _css_cnt = 0;
                 c3.addEventListener('resize', function() { _css_cnt++; });
-                window.__test_c3_nid = c3.__nid__;
+                globalThis.__test_c3_nid = c3.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_c3_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_c3_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
     rt.update_layout_rects(rect);
@@ -742,9 +742,9 @@ fn canvas_css_resize_not_triggered_without_context() {
                 // intentionally no getContext('2d')
                 var _no_ctx_fired = false;
                 c4.addEventListener('resize', function() { _no_ctx_fired = true; });
-                window.__test_c4_nid = c4.__nid__;
+                globalThis.__test_c4_nid = c4.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_c4_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_c4_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
     rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();

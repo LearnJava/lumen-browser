@@ -8,7 +8,7 @@
   var _nesting = 0;
 
   function _report(e) {
-    var r = globalThis._lumen_worker_exception_reporter;
+    var r = __lumen_C._lumen_worker_exception_reporter;
     if (typeof r === 'function') { try { r(e); } catch (_e) {} }
   }
 
@@ -104,9 +104,9 @@
   // `WritableStream` whose sink awaits `setTimeout` stalled after one write).
   // `limit` bounds the turn, so a self-rearming zero-delay timer cannot keep
   // the thread from ever reading its message channel.
-  globalThis._lumen_worker_run_one_task = function(limit) {
+  __lumen_C._lumen_worker_run_one_task = function(limit) {
     _drainMicrotasks();
-    if (globalThis._lumen_worker_closed === true) return false;
+    if (__lumen_C._lumen_worker_closed === true) return false;
     var i = _nextDue(Math.min(Date.now(), limit));
     if (i === -1) return false;
     var task = _timers[i];
@@ -133,7 +133,7 @@
   // -1 when nothing is pending. Asked in an `eval` of its own, after the one
   // that ran the tasks, so the promise reactions those tasks queued have
   // already run and armed whatever timers they arm.
-  globalThis._lumen_worker_next_wait = function() {
+  __lumen_C._lumen_worker_next_wait = function() {
     if (_micro.length) return 0;
     if (!_timers.length) return -1;
     var soonest = Infinity;
@@ -147,13 +147,13 @@
   // Everything due in one call — for the message-loop eval strings below,
   // which already run inside a larger eval. The task loop itself goes through
   // `run_worker_tasks` on the Rust side instead.
-  globalThis._lumen_worker_run_tasks = function() {
+  __lumen_C._lumen_worker_run_tasks = function() {
     var limit = Date.now();
-    while (globalThis._lumen_worker_run_one_task(limit)) {}
-    return globalThis._lumen_worker_next_wait();
+    while (__lumen_C._lumen_worker_run_one_task(limit)) {}
+    return __lumen_C._lumen_worker_next_wait();
   };
 
   // The name the message-loop eval strings have called since before the queue
   // had deadlines; kept so the dispatch path still flushes what is due.
-  globalThis._lumen_flush_timers = function() { globalThis._lumen_worker_run_tasks(); };
+  __lumen_C._lumen_flush_timers = function() { __lumen_C._lumen_worker_run_tasks(); };
 })();

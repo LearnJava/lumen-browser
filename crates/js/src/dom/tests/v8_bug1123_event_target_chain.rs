@@ -11,7 +11,7 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
@@ -101,8 +101,8 @@ fn descriptors_copied_onto_event_target_prototype_reach_nodes() {
          var hits = [], el = document.getElementById('main'); \
          el.__native_addEventListener('x-a', function(e) { hits.push('el:' + e.type); }); \
          el.__native_dispatchEvent(new Event('x-a')); \
-         window.__native_addEventListener('x-b', function(e) { hits.push('win:' + e.type); }); \
-         window.__native_dispatchEvent(new Event('x-b'));",
+         globalThis.__native_addEventListener('x-b', function(e) { hits.push('win:' + e.type); }); \
+         globalThis.__native_dispatchEvent(new Event('x-b'));",
     )
     .unwrap();
     assert_eq!(s(&rt, "hits.join('|')"), "el:x-a|win:x-b");

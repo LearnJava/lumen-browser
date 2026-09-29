@@ -450,7 +450,7 @@ mod tests {
             rt.eval(
                 r#"
                 // Override native binding: simulate 2 minutes of idle.
-                globalThis.__lumen_idle_get_idle_ms = function() { return 120000; };
+                __lumen_C.__lumen_idle_get_idle_ms = function() { return 120000; };
 
                 var d = new IdleDetector();
                 var changeCount = 0;
@@ -474,7 +474,7 @@ mod tests {
             rt.eval(
                 r#"
                 var idleMs = 120000;
-                globalThis.__lumen_idle_get_idle_ms = function() { return idleMs; };
+                __lumen_C.__lumen_idle_get_idle_ms = function() { return idleMs; };
 
                 var d = new IdleDetector();
                 var changes = [];
@@ -504,7 +504,7 @@ mod tests {
         with_idle_api(|rt| {
             rt.eval(
                 r#"
-                globalThis.__lumen_idle_get_idle_ms = function() { return 0; };
+                __lumen_C.__lumen_idle_get_idle_ms = function() { return 0; };
 
                 var d = new IdleDetector();
                 var changeCount = 0;

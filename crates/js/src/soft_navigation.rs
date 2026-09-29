@@ -63,7 +63,7 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
   //   startTime  — navigation start timestamp (ms, same epoch as performance.now())
   //   durationMs — time until largest contentful paint or DOMContentLoaded (Phase 0: 0)
 
-  globalThis._lumen_deliver_soft_nav = function(url, startTime, durationMs) {
+  __lumen_C._lumen_deliver_soft_nav = function(url, startTime, durationMs) {
     var entry = new PerformanceSoftNavigationEntry({
       name:         url || '',
       startTime:    startTime  || 0,

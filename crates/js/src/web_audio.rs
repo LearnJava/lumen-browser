@@ -1873,7 +1873,7 @@ mod tests_v8 {
             .eval(
                 r#"
                 var seen = null;
-                globalThis._lumen_report_exception = function(e) { seen = e.message; };
+                __lumen_C._lumen_report_exception = function(e) { seen = e.message; };
                 var oc = new OfflineAudioContext(1, 128, 44100);
                 oc.oncomplete = function() { throw new Error('oncomplete-boom'); };
                 oc.startRendering();

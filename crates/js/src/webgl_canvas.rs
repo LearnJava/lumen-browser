@@ -539,7 +539,7 @@ pub(crate) fn install_webgl_canvas_v8(
     let vendor = fingerprint.vendor().replace('\\', "\\\\").replace('\'', "\\'");
     let renderer = fingerprint.renderer().replace('\\', "\\\\").replace('\'', "\\'");
     rt.eval(&format!(
-        "globalThis._LUMEN_GPU_VENDOR = '{vendor}'; globalThis._LUMEN_GPU_RENDERER = '{renderer}';"
+        "__lumen_C._LUMEN_GPU_VENDOR = '{vendor}'; __lumen_C._LUMEN_GPU_RENDERER = '{renderer}';"
     ))?;
 
     rt.register_native(

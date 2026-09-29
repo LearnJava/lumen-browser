@@ -728,7 +728,7 @@ fn worker_global_shim(worker_id: u32) -> String {
     }}
     // Read by `run_worker_thread_v8` to tell "the scope reported this" from a
     // module *load* failure, which never reaches this function at all.
-    globalThis._lumen_worker_error_reported = true;
+    __lumen_C._lumen_worker_error_reported = true;
 
     if (_reportingError) {{ _lumen_worker_report_error(message, file, line, col); return; }}
     _reportingError = true;
@@ -760,7 +760,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   }}
   // The top-level script is evaluated by Rust (`eval_and_report_via`), which
   // can only reach a global.
-  globalThis._lumen_report_worker_exception = _lumen_report_worker_exception;
+  __lumen_C._lumen_report_worker_exception = _lumen_report_worker_exception;
 
   // postMessage(data[, transfer]) — send data back to the main thread.
   // BUG-868 GAP-WORKERSCOPE срез 2: when transfer contains MessagePort
@@ -831,7 +831,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // see `Worker.prototype.postMessage` (worker.rs, page side). `ports`
   // reifies to `ev.ports` in transfer order; a port reference embedded
   // inside `data` itself resolves to the same objects.
-  globalThis._lumen_worker_dispatch_message = function(data) {{
+  __lumen_C._lumen_worker_dispatch_message = function(data) {{
     var payload = data, ports = [];
     if (data && typeof data === 'object' && data.__lumen_msg__ === true) {{
       payload = data.data;
@@ -858,7 +858,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // message addressed to a `MessagePort` transferred into this worker
   // (BUG-868 GAP-WORKERSCOPE срез 2), not to the worker's own `onmessage` —
   // `json` is the raw JSON text of the cloned payload.
-  globalThis._lumen_worker_deliver_port_message = function(portId, json) {{
+  __lumen_C._lumen_worker_deliver_port_message = function(portId, json) {{
     if (typeof _lumenPortRegistry === 'undefined') return;
     var p = _lumenPortRegistry[portId];
     if (!p) return;
@@ -915,7 +915,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // Exposed so the shared net shim (`worker_net::WORKER_NET_SHIM`, evaluated
   // after this one) can route a throwing fetch/XHR
   // listener through the same reporting path (BUG-591 shape, BUG-778 scope).
-  globalThis._lumen_worker_exception_reporter = _lumen_report_worker_exception;
+  __lumen_C._lumen_worker_exception_reporter = _lumen_report_worker_exception;
 
   // close() — HTML LS §10.2.3 "close a worker" (BUG-778): discard further
   // queued tasks. `_lumen_worker_self_close` flips a shared flag that
@@ -925,7 +925,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // `WORKER_TIMERS_SHIM`'s task loop so a `close()` from inside a timer stops
   // the remaining due timers of that very flush rather than only the next one.
   globalThis.close = function() {{
-    globalThis._lumen_worker_closed = true;
+    __lumen_C._lumen_worker_closed = true;
     _lumen_worker_self_close();
   }};
 
@@ -991,7 +991,7 @@ const WORKER_RAF_SHIM: &str = include_str!("shim/worker_raf_shim.js");
 /// asserts exactly that, twice).
 #[cfg(feature = "v8-backend")]
 pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
-  if (typeof globalThis._lumen_parse_worker_options === 'function') return;
+  if (typeof __lumen_C._lumen_parse_worker_options === 'function') return;
 
   // `enum WorkerType` (HTML LS §10.2.6.1) and `enum RequestCredentials`
   // (Fetch §5.4) — an out-of-list value is a TypeError, not a fallback to the
@@ -1014,7 +1014,7 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
   // the all-defaults dictionary, a non-object is a TypeError, and a member
   // explicitly set to `undefined` counts as absent (so it takes the default
   // rather than failing the enum check).
-  globalThis._lumen_parse_worker_options = function(options) {
+  __lumen_C._lumen_parse_worker_options = function(options) {
     var out = { type: 'classic', credentials: 'same-origin', name: '' };
     if (options === undefined || options === null) return out;
     if (typeof options !== 'object' && typeof options !== 'function') {
@@ -1032,12 +1032,12 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
   // the union sends null/undefined and every object to the dictionary, and
   // anything else (a string, a number, a boolean) to DOMString — i.e. the
   // legacy `new SharedWorker(url, 'my name')` spelling stays a name.
-  globalThis._lumen_parse_shared_worker_options = function(options) {
+  __lumen_C._lumen_parse_shared_worker_options = function(options) {
     if (options !== undefined && options !== null &&
         typeof options !== 'object' && typeof options !== 'function') {
       return { type: 'classic', credentials: 'same-origin', name: String(options) };
     }
-    return globalThis._lumen_parse_worker_options(options);
+    return __lumen_C._lumen_parse_worker_options(options);
   };
 })();
 "#;
@@ -1384,7 +1384,7 @@ const WORKER_SHIM: &str = r#"(function() {
   // the whole-runtime park for a page with a live Worker mirrors the existing
   // WebSocket/EventSource treatment, so such a page falls back to the
   // fresh-runtime-on-restore path, which does tear the old Worker down.
-  globalThis._lumen_has_active_worker = function() {
+  __lumen_C._lumen_has_active_worker = function() {
     for (var k in _workerRegistry) {
       if (Object.prototype.hasOwnProperty.call(_workerRegistry, k)) return true;
     }
@@ -1392,11 +1392,11 @@ const WORKER_SHIM: &str = r#"(function() {
   };
 
   // Also expose the serialization helper for use in tests and advanced callers.
-  globalThis._lumenSerializeWithTransfers = _lumenSerializeWithTransfers;
+  __lumen_C._lumenSerializeWithTransfers = _lumenSerializeWithTransfers;
 
   // Called by QuickJsRuntime::pump_workers() with an array of
   // { id: u32, json: String } objects representing messages from worker threads.
-  globalThis._lumen_deliver_worker_messages = function(msgs) {
+  __lumen_C._lumen_deliver_worker_messages = function(msgs) {
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
       var w = _workerRegistry[m.id];
@@ -1410,7 +1410,7 @@ const WORKER_SHIM: &str = r#"(function() {
   // on this page (BUG-868 GAP-WORKERSCOPE срез 2) — `id` here is a port id
   // from `_lumen_port_prepare_transfer`, not a worker id, so it is routed
   // through `_lumenPortRegistry` rather than `_workerRegistry`.
-  globalThis._lumen_deliver_port_messages = function(msgs) {
+  __lumen_C._lumen_deliver_port_messages = function(msgs) {
     if (typeof _lumenPortRegistry === 'undefined') return;
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
@@ -1427,7 +1427,7 @@ const WORKER_SHIM: &str = r#"(function() {
   // Called by V8JsRuntime::pump_workers() with an array of
   // { id: u32, json: {message, filename, lineno, colno} } objects representing
   // uncaught-exception reports from worker threads (BUG-591).
-  globalThis._lumen_deliver_worker_errors = function(errs) {
+  __lumen_C._lumen_deliver_worker_errors = function(errs) {
     for (var i = 0; i < errs.length; i++) {
       var m = errs[i];
       var w = _workerRegistry[m.id];
@@ -1931,7 +1931,7 @@ fn run_worker_thread_v8(
         // uncaught top-level worker exception looked to the parent exactly like
         // a worker that never posts anything back).
         let reported = matches!(
-            rt.eval("!!globalThis._lumen_worker_error_reported"),
+            rt.eval("!!__lumen_C._lumen_worker_error_reported"),
             Ok(lumen_core::JsValue::Bool(true))
         );
         if !reported {
@@ -3166,7 +3166,9 @@ mod tests_v8 {
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].0, worker_id);
-        assert_eq!(msgs[0].1, "\"function,function\"");
+        // BUG-753 срез 2: the native is an engine internal — the worker's shims see it,
+        // the worker's own script no longer does.
+        assert_eq!(msgs[0].1, "\"function,undefined\"");
 
         terminate_worker(&reg, worker_id);
     }

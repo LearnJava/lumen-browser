@@ -33,7 +33,7 @@ fn runtime_with_css(markup: &[(&str, &[&str])], css: &str) -> V8JsRuntime {
         doc.append_child(body, el);
     }
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(Arc::new(Mutex::new(doc)), "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(css)));

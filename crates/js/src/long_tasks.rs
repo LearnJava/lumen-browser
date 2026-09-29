@@ -99,7 +99,7 @@ const LONGTASK_SHIM: &str = r#"(function() {
   //
   //   start_ms    — task start (performance.now() equivalent)
   //   duration_ms — task duration; should be >= 50 to qualify
-  globalThis._lumen_deliver_longtask_entry = function(start_ms, duration_ms) {
+  __lumen_C._lumen_deliver_longtask_entry = function(start_ms, duration_ms) {
     var entry = new PerformanceLongTaskTiming({
       startTime: Number(start_ms),
       duration:  Number(duration_ms)

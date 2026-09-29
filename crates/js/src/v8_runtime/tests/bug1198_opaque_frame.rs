@@ -38,7 +38,7 @@ fn opaque_frame_messages_have_null_origin_and_per_document_identity() {
     let parent = runtime_with_dom(Arc::clone(&parent_doc), PARENT_URL);
     parent
         .eval(
-            "window.__r = []; window.__o = []; \
+            "globalThis.__r = []; globalThis.__o = []; \
              window.addEventListener('message', function (e) { \
                  var o = Origin.from(e); \
                  __o.push(o); \
@@ -86,7 +86,7 @@ fn post_message_to_opaque_frame_needs_wildcard_target_origin() {
     let child_doc = make_doc();
     let child = opaque_child(&parent, &parent_doc, &child_doc);
     child
-        .eval("window.__got = []; window.addEventListener('message', function (e) { __got.push(e.data); });")
+        .eval("globalThis.__got = []; window.addEventListener('message', function (e) { __got.push(e.data); });")
         .unwrap();
     parent
         .eval(

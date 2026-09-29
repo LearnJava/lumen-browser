@@ -267,8 +267,8 @@ mod tests {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval(
             "globalThis.ServiceWorkerRegistration = function() {}; \
-             globalThis._lumen_cookie_store_set = function() {}; \
-             globalThis._lumen_cookie_store_delete = function() {};",
+             __lumen_C._lumen_cookie_store_set = function() {}; \
+             __lumen_C._lumen_cookie_store_delete = function() {};",
         )
         .unwrap();
         install_cookie_store_v8(&rt).unwrap();

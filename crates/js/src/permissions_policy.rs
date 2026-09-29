@@ -130,7 +130,7 @@ const PERMISSIONS_POLICY_SHIM: &str = r#"
   // Called by the Rust shell after HTTP response headers are received.
   // headerValue — raw Permissions-Policy header value (or Feature-Policy).
   // Phase 0: parses the header into _ppStore; Phase 1 shell enforces it.
-  window._lumen_set_permissions_policy = function(headerValue) {
+  __lumen_C._lumen_set_permissions_policy = function(headerValue) {
     _ppStore = {};
     if (!headerValue) { return; }
     var parts = headerValue.split(',');

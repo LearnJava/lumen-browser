@@ -17,7 +17,7 @@ use crate::v8_runtime::V8JsRuntime;
 /// entirely absent instead of exercising it.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
@@ -98,7 +98,7 @@ fn sensor_listeners_support_event_target_options() {
 #[test]
 fn sensors_absent_on_insecure_origin() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     assert!(bool_eval(

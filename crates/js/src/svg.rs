@@ -1047,7 +1047,7 @@ const SVG_SHIM: &str = r#"
   // can assert on it from a separate `rt.eval()` call — production code
   // only ever reaches it as the closed-over `_lumen_smil_overrides` above.
   var _lumen_smil_overrides = {};
-  window._lumen_smil_overrides = _lumen_smil_overrides;
+  __lumen_C._lumen_smil_overrides = _lumen_smil_overrides;
 
   // Minimal SMIL clock-value grammar: a plain number (seconds) or one with
   // an `s`/`ms` suffix. `min`/`h`/`:`-clock forms are out of scope.
@@ -1229,7 +1229,7 @@ const SVG_SHIM: &str = r#"
   // Called once per rendering frame from the Rust shell
   // (`PersistentJs::tick_smil`, `crates/shell/src/lumen/smil.rs`), in the
   // same spec step CSS transitions/animations tick, before rAF callbacks.
-  window._lumen_tick_smil = function(now_s) {
+  __lumen_C._lumen_tick_smil = function(now_s) {
     if (!_lumen_smil_seen) return;
     if (_lumen_smil_doc_epoch === null) _lumen_smil_doc_epoch = now_s;
     _lumen_smil_last_now = now_s;
@@ -1404,7 +1404,7 @@ const SVG_SHIM: &str = r#"
   // (web_api_shim_mid.js) below, so a parser-created `<rect>` gets the same
   // typed prototype as one from `createElementNS('rect')` — both fall back to
   // the bare `SVGElement` for a tag `SVG_TAG_MAP` does not know.
-  window._lumen_svg_ctor_for_local = function(local) {
+  __lumen_C._lumen_svg_ctor_for_local = function(local) {
     var ctor = SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
     // GAP-SMIL perf gate: flip once, the first time any SMIL element (of
     // either markup or `createElementNS` origin) is resolved, so
@@ -1769,17 +1769,17 @@ mod tests_v8 {
                 }}
             }}
             window.Event = Event;
-            window._lumen_smil_attrs = {{1: {{{attrs_js}}}}};
-            window._lumen_get_attr = function(nid, attr) {{
-                var a = window._lumen_smil_attrs[nid];
+            __lumen_C._lumen_smil_attrs = {{1: {{{attrs_js}}}}};
+            __lumen_C._lumen_get_attr = function(nid, attr) {{
+                var a = __lumen_C._lumen_smil_attrs[nid];
                 return (a && Object.prototype.hasOwnProperty.call(a, attr)) ? a[attr] : undefined;
             }};
-            window._lumen_u2n = function(v) {{ return v === undefined ? null : v; }};
-            window._lumen_dispatch_log = [];
-            window._lumen_dispatch = function(nid, event) {{ window._lumen_dispatch_log.push(event.type); return true; }};
+            __lumen_C._lumen_u2n = function(v) {{ return v === undefined ? null : v; }};
+            __lumen_C._lumen_dispatch_log = [];
+            __lumen_C._lumen_dispatch = function(nid, event) {{ __lumen_C._lumen_dispatch_log.push(event.type); return true; }};
             var node = new (_lumen_svg_ctor_for_local({local:?}))();
             node.__nid__ = 1;
-            window._lumen_smil_node = node;
+            __lumen_C._lumen_smil_node = node;
             var _allEls = [node];
             document.getElementsByTagName = function(tag) {{ return _allEls; }};
             "#
@@ -1836,7 +1836,7 @@ mod tests_v8 {
         rt.eval("_lumen_tick_smil(5.0);").unwrap();
         assert!(bool_eval(&rt, "_lumen_dispatch_log.length === 0"));
         assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === undefined"));
-        rt.eval("window._lumen_smil_node.beginElement(); _lumen_tick_smil(5.0);").unwrap();
+        rt.eval("__lumen_C._lumen_smil_node.beginElement(); _lumen_tick_smil(5.0);").unwrap();
         assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('beginEvent') !== -1"));
         assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === '100'"));
     }

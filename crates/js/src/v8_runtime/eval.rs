@@ -43,7 +43,10 @@ impl JsRuntime for V8JsRuntime {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn eval(&self, script: &str) -> JsResult<JsValue> {
         self.run(|inner| {
-            with_tc!(inner, |tc, _ctx| {
+            with_tc!(inner, |tc, ctx| {
+                // BUG-753 срез 2: internal evals see the internal container.
+                let wrapped = crate::internal_globals::wrap_for_container(tc, ctx, script);
+                let script = wrapped.as_deref().unwrap_or(script);
                 let src = v8::String::new(tc, script)
                     .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
 
@@ -126,7 +129,7 @@ impl JsRuntime for V8JsRuntime {
                     .ok_or_else(|| JsError::Runtime(format!("OOM: key '{name}'")))?;
                 let val = to_v8(tc, value)?;
                 // ctx is Local<Context> (Copy); use it to obtain the global object.
-                let global = ctx.global(tc);
+                let global = crate::internal_globals::holder_for(tc, ctx, name);
                 global.set(tc, key.into(), val);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
@@ -143,7 +146,7 @@ impl JsRuntime for V8JsRuntime {
             with_tc!(inner, |tc, ctx| {
                 let key = v8::String::new(tc, name)
                     .ok_or_else(|| JsError::Runtime(format!("OOM: key '{name}'")))?;
-                let global = ctx.global(tc);
+                let global = crate::internal_globals::holder_for(tc, ctx, name);
                 let val = global
                     .get(tc, key.into())
                     .ok_or_else(|| JsError::Runtime(format!("global '{name}' not found")))?;
@@ -162,7 +165,7 @@ impl JsRuntime for V8JsRuntime {
             with_tc!(inner, |tc, ctx| {
                 let key = v8::String::new(tc, name)
                     .ok_or_else(|| JsError::Runtime(format!("OOM: function '{name}'")))?;
-                let global = ctx.global(tc);
+                let global = crate::internal_globals::holder_for(tc, ctx, name);
                 let func_val = global
                     .get(tc, key.into())
                     .ok_or_else(|| JsError::Runtime(format!("'{name}' not found in globals")))?;
@@ -345,8 +348,9 @@ macro_rules! report_exception_via {
             v8::tc_scope!(rtc, $tc);
             let ctx = rtc.get_current_context();
             let global = ctx.global(rtc);
+            let holder = crate::internal_globals::holder_for(rtc, ctx, $reporter);
             if let Some(key) = v8::String::new(rtc, $reporter)
-                && let Some(report_fn) = global
+                && let Some(report_fn) = holder
                     .get(rtc, key.into())
                     .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
                 && let Some(filename_v) = v8::String::new(rtc, &filename)

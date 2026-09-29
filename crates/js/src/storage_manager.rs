@@ -71,20 +71,20 @@ const STORAGE_MANAGER_SHIM: &str = r#"
   // BUG-372: capture the OPFS-root native, then take it off the global object.
   // The file-API sealing pass (file_input::seal_file_natives_v8) has already run
   // by the time this module installs, so this native has to seal itself.
-  var NAT_GET_DIRECTORY = (typeof globalThis._lumen_storage_get_directory === 'function')
-    ? globalThis._lumen_storage_get_directory
+  var NAT_GET_DIRECTORY = (typeof __lumen_C._lumen_storage_get_directory === 'function')
+    ? __lumen_C._lumen_storage_get_directory
     : null;
-  try { delete globalThis._lumen_storage_get_directory; } catch (e) {}
+  try { delete __lumen_C._lumen_storage_get_directory; } catch (e) {}
 
   // BUG-374: `FileSystemDirectoryHandle` has no constructor any more (the spec
   // declares none, and the public one took the internal grant id as an
   // argument), so the OPFS root is built through the same private factory
   // `filesystem_access.rs` uses itself. Captured and unpublished here for the
   // same reason as the native above.
-  var FSA_INTERNAL = (typeof globalThis.__lumen_fsa_internal === 'object')
-    ? globalThis.__lumen_fsa_internal
+  var FSA_INTERNAL = (typeof __lumen_C.__lumen_fsa_internal === 'object')
+    ? __lumen_C.__lumen_fsa_internal
     : null;
-  try { delete globalThis.__lumen_fsa_internal; } catch (e) {}
+  try { delete __lumen_C.__lumen_fsa_internal; } catch (e) {}
 
   // ── StorageManager ─────────────────────────────────────────────────────────
 
@@ -192,13 +192,13 @@ mod tests {
              function _lumen_get_attr(nid, name) { return undefined; } \
              function _lumen_dispatch_bubble(nid, type) {} \
              function _lumen_make_element(nid) { return {__nid__: nid}; } \
-             window._lumen_make_element = _lumen_make_element;",
+             __lumen_C._lumen_make_element = _lumen_make_element;",
         )
         .unwrap();
         rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
         crate::file_input::install_file_input_bindings_v8(&rt, TEST_ORIGIN).unwrap();
         crate::filesystem_access::install_filesystem_access_v8(&rt, TEST_ORIGIN).unwrap();
-        rt.eval(&format!("globalThis._lumen_storage_get_directory = {native};"))
+        rt.eval(&format!("__lumen_C._lumen_storage_get_directory = {native};"))
             .unwrap();
         rt.eval(STORAGE_MANAGER_SHIM).unwrap();
         f(&rt);
@@ -342,7 +342,7 @@ mod tests {
             r#"function() { return '{"name":"","path_id":"root-id"}'; }"#,
             |rt| {
                 let ok = rt
-                    .eval("typeof globalThis.__lumen_fsa_internal === 'undefined'")
+                    .eval("typeof __lumen_C.__lumen_fsa_internal === 'undefined'")
                     .unwrap();
                 assert_eq!(ok, JsValue::Bool(true));
             },
@@ -382,7 +382,7 @@ mod tests {
     fn opfs_root_native_is_sealed_after_install() {
         with_storage_manager(|rt| {
             let ok = rt
-                .eval("typeof globalThis._lumen_storage_get_directory === 'undefined'")
+                .eval("typeof __lumen_C._lumen_storage_get_directory === 'undefined'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
