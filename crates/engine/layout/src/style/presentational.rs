@@ -35,8 +35,10 @@ pub(in crate::style) fn apply_image_presentational_hints(doc: &Document, node: N
         return;
     }
     let node_ref = doc.get(node);
-    if let Some(w) = node_ref.get_attr("width").and_then(parse_html_dimension) {
-        style.width = Some(Length::Px(w));
+    if let Some(w) = node_ref.get_attr("width").and_then(parse_html_length_attr) {
+        // HTML LS §15.4.3: a percentage dimension maps to the same property
+        // (BUG-1011: `<iframe width="50%">` fell back to the 300px default).
+        style.width = Some(w);
         // BUG-736: the `width`/`height` content attributes reach here
         // whether the author wrote them or the shell filled them in after
         // decode (`image_requests::apply_intrinsic_size` — the *only* signal
@@ -48,8 +50,8 @@ pub(in crate::style) fn apply_image_presentational_hints(doc: &Document, node: N
         // item to this raw pixel value.
         style.width_is_intrinsic_hint = true;
     }
-    if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
-        style.height = Some(Length::Px(h));
+    if let Some(h) = node_ref.get_attr("height").and_then(parse_html_length_attr) {
+        style.height = Some(h);
         style.height_is_intrinsic_hint = true;
     }
     // hspace/vspace/border are <img>-only presentational attributes (HTML5 §15.3.9).

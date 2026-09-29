@@ -385,3 +385,19 @@ iframe-src; вопрос архитектурный (P1-домен: можно �
 проценты и `auto` считаются от 300, а не от ожидаемых 400/200). Baseline не перегенерирован —
 его нельзя пересобирать, не поняв, при каком вьюпорте он записан. Следующий шаг: сравнить
 размер окна в момент записи baseline с текущим прогоном (`--log-raw` первого сабтеста).
+
+## Срез 28 (P6 2026-09-30): корень расхождения с baseline — `width="N%"` на replaced-элементах
+
+Гипотеза «размер окна под wptrunner» из среза 27 не подтвердилась: контейнер теста фиксирован
+(`#testContainer` 800×600), ожидаемые размеры от вьюпорта не зависят. Разбор первого падения
+(`svg-in-iframe-auto`, `placeholderWidthAttr: '50%'`, `expected 400 but got 300`) свёл всё к одному:
+`parse_html_dimension` в `style/presentational.rs` отбрасывал процентные значения, и
+`<iframe|img|object|embed|video width="50%">` откатывался на дефолтные 300px. Атрибуты `width`/`height`
+теперь идут через `parse_html_length_attr` (`Length::Percent`; HTML LS §15.4.3).
+
+Итог на `svg-embedded-sizing/`: `svg-in-iframe-auto` и `-fixed` — 216/216 PASS (было ~72 FAIL в каждом);
+остаток — `*-percentage.html` (`height: 100%` при auto-контейнере даёт 0 → [BUG-1227](BUG-1227-OPEN.md)),
+а также `svg-in-img-*`/`svg-in-object-*` (intrinsic-размер SVG без width/height, `<object data>` — BUG-798).
+`--check` против baseline: 1073 регрессии (было 1286–1290); baseline не перегенерирован — часть тестов
+вернётся в PASS только после BUG-1227 и должна быть пересобрана одним прогоном после него.
+Display-list A/B по 181 странице корпуса до/после — байт-в-байт (в корпусе нет `width="N%"` на replaced).
