@@ -2,7 +2,7 @@
 `@import` is never fetched when the element arrives via `cloneNode`+`appendChild`
 after the initial parse
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6)
 **Дата:** 2026-09-03
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` §4.14 "update a
 style block") + shell (`crates/shell/src/relayout.rs::refresh_dynamic_css`)
@@ -137,3 +137,43 @@ code worth removing once the JS side owns this fully).
 
 Attributed via `_exact_id_marker("/css/css-cascade/scope-implicit-external.html")`
 in `tests/wpt/timeout_audit.py` (marker `style-clone-import-not-fetched`).
+
+## Фикс (2026-09-29, P6)
+
+Taught the three `cloneNode`/`importNode` call sites that go through the
+native `_lumen_clone_subtree` (`web_api_shim_mid.js` — `DocumentFragment
+.cloneNode`, `Element.prototype.cloneNode`, `Document.importNode`) to walk the
+cloned subtree and register any `<style>` descendant in
+`_lumen_resource_pending` as `'style'`, the same bookkeeping
+`_lumen_resource_track` gives a `createElement`d one
+(`_lumen_track_cloned_style_blocks`, new function next to
+`_lumen_resource_track`). No native/Rust change: `_lumen_clone_subtree`
+returns only the new root, so the walk uses the existing `_lumen_get_children`
+binding recursively — the only thing missing was the JS-side "already
+started" flag a clone never got.
+
+Unlike `<script>`/`<link>`, `<style>` has no spec "already started" flag to
+preserve across a clone (§4.14 has no such state), so tracking every clone
+unconditionally is correct: each copy independently runs "update a style
+block" once inserted, exactly like one built with `createElement`. Scripts/
+links/tracks/etc. are deliberately NOT extended the same way — their
+"already started" semantics are why they stay out of `_lumen_resource_track`
+for parser/clone origins (see the comment above `_lumen_resource_pending`),
+and that is a separate question from this bug.
+
+Once a cloned `<style>`'s nid is pending, the existing insertion hook
+(`_lumen_resource_after_insert`'s ancestor fallback loop, `web_api_shim_mid.js`
+~14297-14301) picks it up on `appendChild`/`insertBefore` regardless of
+whether the fragment or one of its children is the literal argument passed to
+the native call — no change needed there.
+
+Verified live (`tests/wpt/verify_slice54_gaps.py --binary target/dev-release/lumen.exe
+--id /css/css-cascade/scope-implicit-external.html`, dev-release,
+`p6-bug-967-style-clone-import`): before the fix, `harness-complete status=2`
+(TIMEOUT) with the `@import` subtest marked `:2`. After: `harness-complete
+status=0 tests=2 @scope with external stylesheet through link element:1|@scope
+with external stylesheet through @import:1` — both subtests now complete (no
+more hang); both still FAIL the same assertion, which is the pre-existing
+`@scope` implicit-root leak noted above and now filed on its own as
+[BUG-1216](BUG-1216-OPEN.md) (previously masked by this bug's TIMEOUT for the
+`@import` subtest).
