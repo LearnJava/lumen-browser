@@ -532,8 +532,10 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         chain against the live DOM and reads role/name off the accessibility
         tree, so no DOM-element ↔ `AXNode` correlation is needed on this side."""
         try:
-            value = await session.send_command(
-                "lumen.getComputedA11y", {"selectors": params["selectors"]})
+            # `send_command` is `async def -> Awaitable`: the outer await only
+            # sends the command, the returned future carries the result.
+            value = await (await session.send_command(
+                "lumen.getComputedA11y", {"selectors": params["selectors"]}))
         except BidiException as e:
             raise ActionError(f"lumen.getComputedA11y failed: {e}") from e
         return value["role" if action == "get_computed_role" else "name"]
