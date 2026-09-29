@@ -99,7 +99,7 @@ NAT.hijack getAttribute via native =
 ## Что сделано (P3, 2026-08-10)
 
 Пункты 2-3 «Как чинить» — целиком; пункт 1 (перенос шима в IIFE) вынесен в
-[BUG-753](BUG-753-OPEN.md), см. «Остаток» ниже.
+[BUG-753](BUG-753-FIXED.md), см. «Остаток» ниже.
 
 1. **Точка регистрации нативов** (`crates/js/src/v8_compat.rs` —
    `register_v8_native` и `register_v8_native_scoped`, через которые проходят все
@@ -162,7 +162,7 @@ window._lumen_get_attr === 'function'`, `Object.getOwnPropertyNames(window)`
 через глобал, и требует пункта 1 — перенос `WEB_API_SHIM` в IIFE с передачей
 нативов аргументами и перестройкой границы «шим ↔ ~120 модульных шимов»,
 которые обращаются к внутренним именам напрямую. Заведено как
-[BUG-753](BUG-753-OPEN.md).
+[BUG-753](BUG-753-FIXED.md).
 
 ## Заметки
 

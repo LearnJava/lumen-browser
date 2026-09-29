@@ -47,10 +47,10 @@
 //! bare internal names against it. The page-script boundary
 //! (`eval_and_report*`, module entry points) is not wrapped, so page script sees
 //! neither `window._lumen_x` nor a bare `_lumen_x`. This sealing pass stays for
-//! what still lands on the global: an unmigrated module shim's own top-level
-//! declaration, and `_lumen_import_meta_resolve` (module code reaches it through
-//! the `import.meta` preamble; the census test pins that it is the only one).
-//! Срез 3 removes those two, plus the `with` cost on shims that never needed it.
+//! what could still land on the global (an unmigrated module shim's own top-level
+//! declaration); the census test pins that today nothing does. `import.meta` is
+//! filled by a host callback (`v8_esm::install_import_meta_hook`), so no name is
+//! needed for it.
 //!
 //! Precedent: [`crate::file_input::seal_file_natives_v8`] (BUG-371) does the
 //! stronger thing — outright `delete` — for the file-API natives, which is
@@ -782,11 +782,8 @@ mod tests {
         assert_eq!(num(&rt, "fired"), 1.0);
     }
 
-    /// BUG-753 census: the only engine-internal own property of the page's global
-    /// object is `_lumen_import_meta_resolve`, which module code reaches through
-    /// the `import.meta` preamble (`crate::import_meta`) and so cannot move onto
-    /// the container until `import.meta` is set up by a host callback (срез 3).
-    /// Any other name showing up here is a regression.
+    /// BUG-753 census: the page's global object carries no engine-internal own
+    /// property. Any name showing up here is a regression.
     #[test]
     fn only_known_internal_names_remain_on_the_global() {
         let rt = runtime();
@@ -794,7 +791,7 @@ mod tests {
             &rt,
             "Object.getOwnPropertyNames(globalThis).filter(function(n) {                return /^__|^_+lumen/i.test(n); }).sort().join(',')",
         );
-        assert_eq!(names, "_lumen_import_meta_resolve");
+        assert_eq!(names, "");
     }
 
     /// `WEB_API_SHIM` is evaluated through indirect eval so its top-level

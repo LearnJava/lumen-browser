@@ -453,10 +453,10 @@ the time — read dates.
   import maps / relative URLs / the virtual `lumen://inline-N` base cannot drift. Import
   attributes (`with { type: 'json' }`) and dynamic `import()` use V8's native machinery (the
   callback's `FixedArray`; `set_host_import_module_dynamically_callback`), so the Phase 0
-  `import_attributes.rs` preprocessor is rquickjs-only; `import.meta` keeps the shared
-  `import_meta.rs` transformer because its `.url`/`.resolve()`/`.env` shape is Lumen policy.
-  `.resolve()` itself delegates to the hidden native `_lumen_import_meta_resolve`
-  (`v8_esm::install_import_meta_resolve` → `esm::resolve_module_specifier`: WHATWG URL
+  `import_attributes.rs` preprocessor is rquickjs-only; `import.meta` is filled by a host callback
+  (`v8_esm::install_import_meta_hook`, BUG-753 срез 3; the source-level `import_meta.rs` transformer is gone) —
+  its `.url`/`.resolve()`/`.env` shape is Lumen policy.
+  `.resolve()` delegates to `esm::resolve_module_specifier` (WHATWG URL
   parsing, import map, `TypeError` for an unmapped bare name — BUG-1135); the loader's
   `resolve_specifier_with` stays lenient (bare name echoed back). 21 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
@@ -2284,7 +2284,7 @@ the time — read dates.
 ## Invariants
 
 - **Engine-internal names (`_lumen…`, `__…`, page-shim `_x`) live on a per-context container, not on the global**
-  ([BUG-753](../bugs/BUG-753-OPEN.md) срез 2, 2026-09-30). Shim / Rust-snippet / test code reaches them by bare name
+  ([BUG-753](../bugs/BUG-753-FIXED.md) срез 2, 2026-09-30). Shim / Rust-snippet / test code reaches them by bare name
   because every internal `JsRuntime::eval` runs under `with (container)`; the page-script boundary (`eval_and_report*`,
   module entry points) does not, so page script sees none of them. Traps: **never write `window._lumen_x` /
   `globalThis._lumen_x` / `Object.defineProperty(globalThis, '_lumen_x', …)` in a shim** — it lands on the page's
@@ -2292,7 +2292,7 @@ the time — read dates.
   (a plain assignment, not `defineProperty`, when the page shim also reads the name — it holds a local behind an
   accessor that only a `[[Set]]` reaches). `class X {}` at the top of an internal `eval` is re-published on the global
   by an accessor; top-level `let`/`const` make the script run *unwrapped* (no bare internal names). Module code and
-  worker/page scripts cannot use `__lumen_C`; `_lumen_import_meta_resolve` is the one internal still on the global.
+  worker/page scripts cannot use `__lumen_C`; no internal name is left on the global (`import.meta` is set up by a host callback).
 - **There is exactly ONE event dispatch, `_lumen_propagate`, and every entry point is a wrapper over it**
   ([BUG-873](../bugs/BUG-873-FIXED.md), 2026-09-10). `_lumen_dispatch` (script), `_lumen_dispatch_bubble`
   and `_lumen_dispatch_rich` (native input) all call it, so a fix to phases, ordering or `window` delivery
