@@ -1,6 +1,6 @@
 # BUG-697 — `FeaturePolicy.allowsFeature()` returns `true` for unrecognized feature names, not just unlisted-but-known ones
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)
 **Найден:** P3, BUG-361 fix (2026-08-09), while auditing the same file — pre-existing gap, not introduced by that fix
 
@@ -60,3 +60,10 @@ names (the full IANA-style registry, not just `_ppSupported`) so
 (→ true) from "not a real feature name" (→ false). Low priority — no WPT
 category is currently blocked purely on this (the two probes above were
 incidental, not the crux of a failing test).
+
+## Исправление (2026-09-29, P3)
+
+В shim добавлен реестр `_ppRecognized` — имена policy-controlled features, известные UA
+независимо от статуса реализации (camera, payment, local-fonts, …). `allowsFeature()`
+возвращает `false` для имени вне реестра; известные, но не упомянутые в политике —
+по-прежнему `true`. Тест: `allows_feature_false_for_unrecognized_name`.

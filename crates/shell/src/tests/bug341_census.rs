@@ -2034,3 +2034,63 @@ fn bug341_s4_incremental_box_build_share() {
         (1.0 - incr_summary.p50_ms as f64 / full_summary.p50_ms as f64) * 100.0,
     );
 }
+
+/// BUG-341 S45 diagnostic: *which* boxes a hover flip rebuilds (S43 counted
+/// 31 built / 11 reused; nothing named them). Prints the built list with each
+/// node's role in the cycle — dirty root, ancestor of one, recascaded — and
+/// the number of distinct nodes, which answers whether "31" is one box per
+/// node or the same node built more than once. Run: `cargo test -p lumen-shell
+/// --profile dev-release bug341_s45_hover_built_census -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual diagnostic (BUG-341 S45) — see doc comment for run command"]
+fn bug341_s45_hover_built_census() {
+    use std::collections::HashSet;
+
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1280.0, 800.0);
+    let model = cc12_bench_model("");
+    lumen_chrome::bind_model(&mut doc, &model);
+    let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+    let mut state = Cc12IncrementalState::default();
+    for i in 0..6 {
+        let hover = if i % 2 == 0 { sidebar } else { None };
+        let last = i >= 4;
+        let prev_hover = state.prev_interactive.0;
+        lumen_layout::box_tree::set_box_build_diagnostics(last);
+        let (_, bb) =
+            cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+        let built = lumen_layout::box_tree::take_box_build_log();
+        lumen_layout::box_tree::set_box_build_diagnostics(false);
+        if !last {
+            continue;
+        }
+        let distinct: HashSet<_> = built.iter().copied().collect();
+        eprintln!(
+            "[s45-census] built={} distinct_nodes={} reused={} hover_from={:?} hover_to={:?}",
+            bb.built,
+            distinct.len(),
+            bb.reused,
+            prev_hover.map(|n| census_describe(&doc, n)),
+            hover.map(|n| census_describe(&doc, n)),
+        );
+        for &n in &built {
+            let depth = {
+                let (mut d, mut c) = (0, doc.get(n).parent);
+                while let Some(p) = c {
+                    d += 1;
+                    c = doc.get(p).parent;
+                }
+                d
+            };
+            eprintln!(
+                "[s45-census]   depth={depth:2} {} ({} children)",
+                census_describe(&doc, n),
+                doc.get(n).children.len()
+            );
+        }
+    }
+}

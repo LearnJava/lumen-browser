@@ -45,6 +45,25 @@ const PERMISSIONS_POLICY_SHIM: &str = r#"
     'display-capture',
   ];
 
+  // BUG-697: names of policy-controlled features the UA recognizes at all
+  // (independent of implementation status). allowsFeature() returns false for
+  // anything outside this set; recognized-but-unlisted features default-allow.
+  var _ppRecognized = {};
+  [
+    'accelerometer', 'ambient-light-sensor', 'attribution-reporting',
+    'autoplay', 'bluetooth', 'browsing-topics', 'camera', 'ch-ua',
+    'clipboard-read', 'clipboard-write', 'compute-pressure',
+    'cross-origin-isolated', 'deferred-fetch', 'display-capture',
+    'encrypted-media', 'fullscreen', 'gamepad', 'geolocation', 'gyroscope',
+    'hid', 'identity-credentials-get', 'idle-detection',
+    'join-ad-interest-group', 'keyboard-map', 'local-fonts', 'magnetometer',
+    'microphone', 'midi', 'otp-credentials', 'payment', 'picture-in-picture',
+    'publickey-credentials-create', 'publickey-credentials-get',
+    'run-ad-auction', 'screen-wake-lock', 'serial', 'speaker-selection',
+    'storage-access', 'sync-xhr', 'usb', 'web-share', 'window-management',
+    'xr-spatial-tracking',
+  ].forEach(function(n) { _ppRecognized[n] = true; });
+
   // ── FeaturePolicy interface (W3C Permissions Policy §8) ─────────────────
   // Exposed as document.featurePolicy (and document.permissionsPolicy alias).
   function FeaturePolicy() {}
@@ -52,6 +71,8 @@ const PERMISSIONS_POLICY_SHIM: &str = r#"
   // Returns true if the feature is allowed for the given origin (default: 'self').
   // Phase 0: feature not in policy → true; policy entry '()' → false; else → true.
   FeaturePolicy.prototype.allowsFeature = function(feature, origin) {
+    feature = String(feature);
+    if (_ppRecognized[feature] !== true) { return false; }  // not a feature
     var entry = _ppStore[feature];
     if (entry === undefined) { return true; }  // default-allow for unlisted
     if (entry === 'none') { return false; }
@@ -183,6 +204,23 @@ mod tests {
         with_pp_api(|rt| {
             let ok = rt
                 .eval("document.featurePolicy.allowsFeature('camera')")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-697: a name that is not a policy-controlled feature is not allowed.
+    #[test]
+    fn allows_feature_false_for_unrecognized_name() {
+        with_pp_api(|rt| {
+            let ok = rt
+                .eval(
+                    "var p = document.permissionsPolicy; \
+                     p.allowsFeature('made-up-xyz') === false && \
+                     p.allowsFeature('constructor') === false && \
+                     p.allowsFeature('local-fonts') === true && \
+                     p.allowsFeature('camera') === true",
+                )
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
