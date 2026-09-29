@@ -1,6 +1,17 @@
 # BUG-711: WebGL context has no `WebGLRenderingContext`/`WebGL2RenderingContext` identity, `getContext('webgl2')` is byte-for-byte identical to `getContext('webgl')`, and several core WebGL1 methods (`compressedTexImage2D`/`compressedTexSubImage2D`, `uniformMatrix2fv`) plus every compressed-texture extension are entirely absent
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3) — пункты 1, 3 (как no-op), 4, 5 «Дальше»; 2 — частично.
+
+**Исправлено:** `WebGLRenderingContext`/`WebGL2RenderingContext` — реальные глобальные
+конструкторы (`new` → `TypeError: Illegal constructor`), `getContext('webgl'|'webgl2')`
+получает свой прототип; добавлены `uniformMatrix2fv`, `compressedTexImage2D`,
+`compressedTexSubImage2D` (принимаются, ничего не делают); 6-аргументный
+`texImage2D(…, source)` бросает `TypeError` для не-`TexImageSource`. Тесты:
+`context_has_webgl_prototype_identity`, `tex_image_2d_source_overload_rejects_non_source`.
+
+**Остаток (не сделано):** WebGL2-only поверхность методов (`uniformMatrix2x3fv` и др.),
+расширения `WEBGL_compressed_texture_*` (`getSupportedExtensions` по-прежнему два имени),
+`idlharness` (нужны вендорные `WebIDLParser.js`/`idlharness.js`).
 **Компонент:** js (`crates/js/src/webgl_canvas.rs` — `WEBGL_SHIM`)
 **Найден:** WPT-VENDOR-webgl (`ROADMAP.md`)
 

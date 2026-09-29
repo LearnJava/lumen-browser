@@ -48,7 +48,7 @@ pure Phase 0 JS shim per the module doc comment, `webgpu.rs:900`):
   Firefox/Chrome expose as `navigator.gpu` is an instance of `GPU`, per
   spec (`[Exposed=(Window, DedicatedWorker), SecureContext] interface GPU`);
   here it's a bare object literal, same class of defect as
-  [BUG-711](BUG-711-OPEN.md) (WebGL context has no
+  [BUG-711](BUG-711-FIXED.md) (WebGL context has no
   `WebGLRenderingContext` identity either) but on the entry point of a
   *different* subsystem, so not a duplicate.
 * By contrast, every other WebGPU interface *is* constructor/prototype-based

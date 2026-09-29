@@ -132,6 +132,20 @@ const WEBGL_SHIM: &str = r#"(function() {
     return o.__wid || 0;
   }
 
+  // BUG-711: the context needs a nameable identity - `gl instanceof
+  // WebGLRenderingContext` must evaluate, and `webgl2` must differ from `webgl`.
+  // Both constructors are non-constructible (WebIDL: no constructor operation).
+  function _defineCtxClass(name) {
+    var C = function() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(C, 'name', { value: name, configurable: true });
+    Object.defineProperty(C.prototype, Symbol.toStringTag, { value: name, configurable: true });
+    Object.defineProperty(C.prototype, 'constructor', { value: C, writable: true, configurable: true });
+    Object.defineProperty(globalThis, name, { value: C, writable: true, configurable: true });
+    return C;
+  }
+  var _GL1 = _defineCtxClass('WebGLRenderingContext');
+  var _GL2 = _defineCtxClass('WebGL2RenderingContext');
+
   function _makeContext(cid, isWebgl2) {
     var gl = {
       // ── Primitive modes ──
@@ -304,6 +318,11 @@ const WEBGL_SHIM: &str = r#"(function() {
     };
 
     // ── Draw ──
+    // mat2 is not tracked by the rasterizer: accepted, does nothing (like the
+    // other unimplemented GL calls of this shim), but it must exist.
+    gl.uniformMatrix2fv = function() {};
+    gl.compressedTexImage2D = function() {};
+    gl.compressedTexSubImage2D = function() {};
     gl.drawArrays = function(mode, first, count) { _lumen_webgl_draw_arrays(cid, mode>>>0, first|0, count|0); };
     gl.drawElements = function(mode, count, type, offset) {
       _lumen_webgl_draw_elements(cid, mode>>>0, count|0, type>>>0, offset|0);
@@ -379,6 +398,17 @@ const WEBGL_SHIM: &str = r#"(function() {
     gl.texParameteri = function() {};
     gl.generateMipmap = function() {};
     gl.texImage2D = function(target, level, internalformat, width, height, border, format, type, pixels) {
+      if (arguments.length === 6) {
+        // TexImageSource overload: a source that is not an object with numeric
+        // dimensions fails WebIDL conversion (getter exceptions propagate).
+        var src = arguments[5];
+        if (src === null || (typeof src !== 'object' && typeof src !== 'function')
+            || typeof src.width !== 'number' || typeof src.height !== 'number') {
+          throw new TypeError("Failed to execute 'texImage2D' on 'WebGLRenderingContext': "
+            + 'The provided value is not of type TexImageSource.');
+        }
+        return;
+      }
       if (pixels == null || _boundTex2D === 0) return;
       var w = width|0, h = height|0;
       var arr = [];
@@ -389,6 +419,7 @@ const WEBGL_SHIM: &str = r#"(function() {
       _lumen_webgl_tex_image_2d(cid, _boundTex2D, w, h, arr);
     };
 
+    Object.setPrototypeOf(gl, (isWebgl2 ? _GL2 : _GL1).prototype);
     return gl;
   }
 
@@ -1093,6 +1124,44 @@ gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
 px[0] === 255 && px[1] === 0 && px[2] === 0 && px[3] === 255"#,
         );
         assert!(ok);
+    }
+
+    /// BUG-711: the context has a nameable, distinct identity per context type,
+    /// and the previously missing WebGL1 methods exist.
+    #[test]
+    fn context_has_webgl_prototype_identity() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
+var g1 = c.getContext('webgl');
+var g2 = document.createElement('canvas').getContext('webgl2');
+var illegal = false;
+try { new WebGLRenderingContext(); } catch (e) { illegal = e instanceof TypeError; }
+g1 instanceof WebGLRenderingContext && !(g1 instanceof WebGL2RenderingContext)
+  && g2 instanceof WebGL2RenderingContext && !(g2 instanceof WebGLRenderingContext)
+  && g1.constructor.name === 'WebGLRenderingContext' && illegal
+  && typeof g1.uniformMatrix2fv === 'function'
+  && typeof g1.compressedTexImage2D === 'function'
+  && typeof g1.compressedTexSubImage2D === 'function'"#,
+        );
+        assert!(ok);
+    }
+
+    /// BUG-711: the 6-argument `texImage2D` overload rejects a non-`TexImageSource`.
+    #[test]
+    fn tex_image_2d_source_overload_rejects_non_source() {
+        let rt = with_webgl();
+        let ok = rt.eval(
+            r#"var gl = document.createElement('canvas').getContext('webgl');
+var threw = false;
+try { gl.texImage2D(0, 0, 0, 0, 0, globalThis); } catch (e) { threw = e instanceof TypeError; }
+var okSrc = true;
+try { gl.texImage2D(0, 0, 0, 0, 0, { width: 1, height: 1 }); } catch (e) { okSrc = false; }
+threw && okSrc"#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true), "{ok:?}");
     }
 
     #[test]
