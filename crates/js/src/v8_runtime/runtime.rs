@@ -38,6 +38,24 @@ pub struct DomTouched {
     /// листов (`sheet_sync::SheetSync`) понимает, что DOM сдвинулся с его
     /// последней сверки, не заводя собственного флага в двадцати трёх нативах.
     pub(crate) epoch: u64,
+    /// BUG-1211: per-node touch generation — `node → epoch` at the node's
+    /// most recent tracked mutation, populated alongside `nodes` but, like
+    /// `epoch` itself, **never cleared** by [`V8JsRuntime::take_dom_touched`]
+    /// (a `HashMap` rather than `HashSet` specifically so repeat touches to
+    /// the same node update its value instead of being no-ops against a set
+    /// that already contains it). Lets a consumer that keeps its own
+    /// "basis" watermark (the engine thread's same-tick flush,
+    /// `crates/js/src/v8_runtime/style_flush.rs`) ask "what changed since
+    /// epoch N" without needing to drain — the drain here is reserved for
+    /// the page pipeline's own per-rAF-cycle cadence and draining it a
+    /// second time from the flush thread would blind that cycle to
+    /// mutations the flush already folded in (see `FlushHandles::
+    /// dom_touched`'s doc comment). Without this, a same-tick flush that
+    /// only peeks at the ever-growing `nodes` set re-widens its dirty-root
+    /// set to everything touched since the page loaded on every single
+    /// flush, defeating the whole point of the incremental path for the
+    /// read-after-mutate-in-a-loop pattern BUG-1211 is about.
+    pub(crate) touch_gen: HashMap<NodeId, u64>,
 }
 
 /// Per-node snapshot of resolved CSS custom properties: node id → the map of

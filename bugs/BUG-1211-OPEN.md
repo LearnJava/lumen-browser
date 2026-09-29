@@ -112,4 +112,47 @@ nodes)`). При `N=300`/`50` та же страница укладываетс�
 BUG-1211 — сеть/CDN cnn.com не нужны, только большой DOM + скрипт, чередующий мутацию стиля и
 `getComputedStyle` в цикле (ровно то, что делает Optimizely `landingprod.js`).
 
+## Частичный фикс (P3, 2026-09-29) — инкрементальный cascade+layout в `maybe_flush`
+
+`FlushHandles::maybe_flush` теперь сначала пробует `try_incremental_flush` — тот же
+`RestyleDelta`/`restyle_root_set_for_node_change`/`layout_mutation_incremental_restyle`
+(`crates/engine/layout/src/counters.rs`, `box_tree/entry.rs`), которым уже пользуется
+`crates/shell/src/relayout.rs` для JS-мутаций на chrome-стороне. Базис для инкремента —
+`FlushHandles::incr_basis` (`IncrFlushBasis`: предыдущее дерево/каскад + viewport/sheet revision/
+focus в момент публикации), обновляется после каждого успешного флаша (и full, и incremental).
+`DomTouched` (`crates/js/src/v8_runtime/runtime.rs`) получил `touch_gen: HashMap<NodeId, u64>` —
+per-node генерацию последнего касания, потому что `touched.nodes`/`epoch` этот флаш **не
+дренирует** (дренаж — исключительно право `V8JsRuntime::take_dom_touched`, страничного
+rAF-конвейера; если бы same-tick flush тоже дренировал, следующий цикл `try_relayout_raf_
+incremental` не увидел бы уже обработанные мутации и форсил бы там полный cascade). Без
+`touch_gen` любой диф против уже накопленного (никогда не очищаемого) `touched.nodes` либо
+неверно схлопывает повторные мутации одного узла между двумя флашами (см. правку в этом же
+коммите — первая версия сравнивала со снапшотом `HashSet`, не с генерацией), либо вообще не
+сужает набор.
+
+**Измерено** (`--dump-layout` на локальном репро без сети, тот же паттерн, N=1500/READS=200):
+до фикса `[JS] loop took ms: 31054`, после — `33360` (в пределах шума). Инкрементальный путь
+реально включается (проверено отладочным `eprintln`, убран из финального коммита) и сокращает
+сам cascade+layout до микросекунд на каждый повторный флаш — но **общее время не улучшилось**,
+потому что доминирующей стоимостью оказались не cascade/layout, а четыре пост-layout коллектора
+`maybe_flush` всегда гоняет по всему дереву заново на **каждый** флаш вне зависимости от размера
+дельты: `collect_layout_rects`, `collect_client_rects`, `collect_computed_styles`,
+`collect_scroll_containers_for_js_state` (все — `crates/engine/layout/src/lib.rs`). Замер на
+N=1500/READS=5: `restyle+layout` — 2-12 мкс на повторный флаш (инкремент работает), но
+`post-collectors` — стабильно ~90-120 мс на каждый флаш (полный проход по всем узлам). Это и есть
+следующий шаг — сделать эти четыре коллектора инкрементальными (обновлять только записи для
+`dirty_roots`/задетых поддеревьев, а не пересобирать всю `HashMap`/`Vec` с нуля), иначе выигрыш от
+инкрементального cascade+layout полностью съедается этими проходами и на реальных сайтах
+(cnn/udemy/dailymail, десятки тысяч узлов) BUG-1211 не закрывается — цикл `read-after-mutate` всё
+ещё будет стоить `O(reads × nodes)` через эти четыре функции.
+
+Изменения этого среза: `crates/js/src/v8_runtime/style_flush.rs` (`FlushHandles::incr_basis`/
+`IncrFlushBasis`, `try_incremental_flush`), `crates/js/src/v8_runtime/runtime.rs`
+(`DomTouched::touch_gen`), `crates/js/src/v8_runtime/dom_helpers.rs` (`record_dom_touch` пишет
+`touch_gen`), `crates/js/src/v8_runtime.rs` (конструктор `FlushHandles` — новые поля). Полный
+набор тестов `lumen-js` (4599, `--features v8-backend`) и clippy (`-D warnings`) зелёные.
+Статус остаётся **OPEN** — квадратичность по факту не устранена, только частично (cascade/layout
+часть), реальный процент улучшения на настоящих сайтах не измерялся (эмулятор не воспроизводит
+без сети — см. §Локализация).
+
 

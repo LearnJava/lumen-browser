@@ -140,6 +140,43 @@ pub(crate) struct FlushHandles {
     /// additionally cleared by `update_client_rects`, because the table is
     /// never pushed by the embedder alongside its fresh geometry.
     pub(crate) text_frags_collected: Arc<AtomicBool>,
+    /// BUG-1211: page-side DOM-mutation tracker (BUG-341 S7), read-only here
+    /// — [`Self::maybe_flush`] only *peeks* at [`super::runtime::DomTouched`],
+    /// it never drains it. Draining is [`super::runtime::V8JsRuntime::
+    /// take_dom_touched`]'s job (the shell's rAF/relayout pipeline), and a
+    /// same-tick flush that also drained it would make the page pipeline's
+    /// own next `try_relayout_raf_incremental` blind to mutations this flush
+    /// already saw, forcing an unnecessary full cascade there instead.
+    pub(crate) dom_touched: Arc<Mutex<super::runtime::DomTouched>>,
+    /// BUG-1211: incremental same-tick flush basis — the previous flush's
+    /// laid-out tree, cascade cache and the inputs it was built against
+    /// (viewport, sheet revision, focus). `None` until the first successful
+    /// flush (mirrors [`Self::never_flushed`]) or whenever [`Self::
+    /// maybe_flush`] falls back to a full recompute for a reason the
+    /// incremental path cannot handle (sheet/viewport change, `unattributed`
+    /// mutation, `:hover`/`:active` change — this flush never tracks those,
+    /// see the module doc comment's \"Known remaining approximation\").
+    pub(crate) incr_basis: Arc<Mutex<Option<IncrFlushBasis>>>,
+}
+
+/// See [`FlushHandles::incr_basis`].
+pub(crate) struct IncrFlushBasis {
+    pub(crate) layout: lumen_layout::LayoutBox,
+    pub(crate) cascade: lumen_layout::CascadeStyles,
+    pub(crate) viewport: [f32; 2],
+    pub(crate) sheet_revision: lumen_css_parser::StylesheetRevision,
+    /// Focus baked into `layout`/`cascade` — mirrors [`FlushHandles::
+    /// last_flushed_focus`] at the moment this basis was produced, kept
+    /// alongside it so a focus-only transition since then can still be
+    /// expressed as a `RestyleDelta` instead of forcing a full recompute.
+    pub(crate) focus: Option<u32>,
+    /// BUG-1211: [`super::runtime::DomTouched::epoch`] at the moment this
+    /// basis was produced — the watermark [`FlushHandles::
+    /// try_incremental_flush`] diffs `touch_gen` against, since `touched.
+    /// nodes` itself is never drained (see [`FlushHandles::dom_touched`]'s
+    /// doc comment) and would otherwise re-widen `dirty_roots` to every
+    /// node touched since the page loaded on every single flush.
+    pub(crate) touch_epoch: u64,
 }
 
 /// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
@@ -280,9 +317,41 @@ impl FlushHandles {
         // `:hover`/`:active` stay unset — out of this bug's scope.
         let focus_node = current_focus.map(lumen_dom::NodeId::from_raw);
         lumen_layout::set_interactive_state(None, focus_node, None);
-        let (mut layout_root, counters) =
-            lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
+        // BUG-1211: try the incremental restyle path first — a full
+        // `layout_measured_with_counters` recomputes the *entire* tree's
+        // cascade+layout on every same-tick accessor read after a mutation,
+        // which is quadratic over a script that reads-after-writes N times in
+        // a loop on a large real-site DOM (cnn/udemy/dailymail — see
+        // `bugs/BUG-1211-OPEN.md`). Falls back to the full path whenever the
+        // incremental one's preconditions (see `try_incremental_flush`)
+        // don't hold — same-tick correctness (BUG-493) is identical either
+        // way, only the cost differs.
+        let touched = self
+            .dom_touched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let incr = self.try_incremental_flush(&doc_guard, &sheet, viewport, &measurer, current_focus, &touched);
+        let (mut layout_root, counters) = match incr {
+            Some(result) => result,
+            None => {
+                lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer)
+            }
+        };
         lumen_layout::clear_interactive_state();
+        // BUG-1211: publish this flush's tree/cascade as the next same-tick
+        // flush's incremental basis. This can be published even when the
+        // full path just ran (not only the incremental one) — the full
+        // recompute produced a fresh cascade+layout too, and either is a
+        // valid starting point for the next flush's incremental attempt.
+        *self.incr_basis.lock().unwrap_or_else(|e| e.into_inner()) = Some(IncrFlushBasis {
+            layout: layout_root.clone(),
+            cascade: counters.styles().clone(),
+            viewport: [vw, vh],
+            sheet_revision: sheet.revision(),
+            focus: current_focus,
+            touch_epoch: touched.epoch,
+        });
         // BUG-504 part 10: the fresh tree above starts every scroll container
         // at `scroll_x`/`scroll_y == 0.0` (box-tree construction default) —
         // unlike a real relayout, this one-off flush tree never goes through
@@ -376,6 +445,113 @@ impl FlushHandles {
         // BUG-935 S34: only `flush_stale` resets here — `dom_dirty` is the
         // scheduler's own signal and stays untouched by this flush.
         self.flush_stale.store(false, Ordering::Relaxed);
+    }
+
+    /// BUG-1211: attempt the incremental cascade+layout path instead of a
+    /// full [`lumen_layout::layout_measured_with_counters`] recompute.
+    ///
+    /// Mirrors `Lumen::try_relayout_raf_incremental` (`crates/shell/src/
+    /// relayout.rs`) — the JS-mutation branch of that function is the exact
+    /// precedent this reimplements for the engine thread's own same-tick
+    /// flush, using the same `RestyleDelta`/`layout_mutation_incremental_restyle`
+    /// primitives (BUG-341). Returns `None` whenever any precondition that
+    /// path also requires doesn't hold, so the caller falls back to the full
+    /// recompute — same-tick correctness (BUG-493) never depends on which
+    /// branch ran, only the cost does:
+    ///
+    /// * no previous basis yet ([`FlushHandles::incr_basis`] is `None` — the
+    ///   first flush after navigation/creation, or the last one fell back);
+    /// * the viewport or the stylesheet's [`lumen_css_parser::
+    ///   StylesheetRevision`] changed since the basis was taken — either can
+    ///   affect any node's cascade, so nothing in the old tree is safely
+    ///   reusable (mirrors BUG-743's rationale in `relayout.rs`);
+    /// * [`super::runtime::DomTouched::unattributed`] is set — an untracked
+    ///   mutation primitive (`execCommand`, contenteditable, Shadow DOM
+    ///   attach) whose reach `dirty_roots` cannot express.
+    ///
+    /// `:hover`/`:active` are never tracked by this flush (the module doc
+    /// comment's "Known remaining approximation") and stay unset in both
+    /// paths, so unlike `relayout.rs` there is no third interactive-state
+    /// axis to fold into `dirty_roots` here — only the focus transition.
+    #[allow(clippy::too_many_arguments)]
+    fn try_incremental_flush(
+        &self,
+        doc: &lumen_dom::Document,
+        sheet: &Arc<lumen_css_parser::Stylesheet>,
+        viewport: lumen_core::geom::Size,
+        measurer: &lumen_paint::FontMeasurer<'_>,
+        current_focus: Option<u32>,
+        touched: &super::runtime::DomTouched,
+    ) -> Option<(lumen_layout::LayoutBox, lumen_layout::CounterMap)> {
+        if touched.unattributed {
+            return None;
+        }
+        let mut basis_guard = self.incr_basis.lock().unwrap_or_else(|e| e.into_inner());
+        let basis = basis_guard.take()?;
+        if basis.viewport != [viewport.width, viewport.height] || basis.sheet_revision != sheet.revision() {
+            return None;
+        }
+        // BUG-1211: `touched.nodes`/`touched.touch_gen` are never drained by
+        // this flush (see `FlushHandles::dom_touched`'s doc comment) — they
+        // keep accruing every attributed mutation since the shell's own
+        // tracker last drained them, which can include nodes already folded
+        // into an earlier incremental basis. Diff against `basis.
+        // touch_epoch` (the `DomTouched::epoch` watermark this basis was
+        // taken at) rather than using the whole accrued set: a node whose
+        // last touch predates the basis is already reflected in `basis.
+        // cascade`/`basis.layout`, and recomputing its subtree again on
+        // every subsequent flush is exactly the quadratic-over-reads cost
+        // this incremental path exists to avoid. An earlier revision of
+        // this function diffed against a per-flush snapshot of `touched.
+        // nodes` itself (a plain `HashSet`, no per-node generation), which
+        // is unsound: a node touched again *after* being folded into a
+        // basis is indistinguishable from one touched only before it once
+        // both are just "present in the set", so a second same-tick
+        // mutation to an already-seen node silently dropped out of
+        // `dirty_roots`.
+        let new_touched: std::collections::HashSet<lumen_dom::NodeId> = touched
+            .nodes
+            .iter()
+            .copied()
+            .filter(|n| touched.touch_gen.get(n).copied().unwrap_or(0) > basis.touch_epoch)
+            .collect();
+        let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
+        let mut dirty_roots = std::collections::HashSet::new();
+        // BUG-341 S17: `DomTouched` records node ids without attribute names
+        // (same gap `relayout.rs` documents), so every page-side mutation
+        // stays `Unattributed` here too — the conservative widen-to-parent
+        // behaviour.
+        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+            doc,
+            new_touched.iter().map(|&n| (n, lumen_layout::style::NodeChange::Unattributed)),
+            &node_index,
+        ));
+        let focus_changed = basis.focus != current_focus;
+        if focus_changed {
+            let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                doc, basis.focus.map(lumen_dom::NodeId::from_raw), current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
+            ));
+        }
+        let content_dirty = if new_touched.is_empty() {
+            lumen_layout::counters::ContentDirty::Nothing
+        } else {
+            lumen_layout::counters::ContentDirty::Untracked
+        };
+        let delta = lumen_layout::counters::RestyleDelta {
+            prev_styles: basis.cascade,
+            dirty_roots,
+            content_dirty,
+        };
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        lumen_layout::counters::set_incremental_restyle(true);
+        lumen_layout::box_tree::set_incremental_box_build(true);
+        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+            doc, sheet, viewport, measurer, &null_hp, false, basis.layout, delta,
+        );
+        lumen_layout::box_tree::set_incremental_box_build(false);
+        lumen_layout::counters::set_incremental_restyle(false);
+        Some(result)
     }
 
     /// CSSOM-8 вариант C: replay every recorded CSSOM write onto a throwaway
