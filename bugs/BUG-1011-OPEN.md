@@ -91,7 +91,7 @@ LUMEN_PROFILE=dev-release <venv>/python tests/wpt/run_report.py \
 ## Локализация (2026-09-07, срез 22)
 
 Три независимых проверки на том же баннере («растущий/меняющийся счётчик регрессий»),
-общем с [BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-CANNOT-REPRODUCE.md)/[BUG-1005](BUG-1005-OPEN.md)/
+общем с [BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-CANNOT-REPRODUCE.md)/[BUG-1005](BUG-1005-FIXED.md)/
 [BUG-1022](BUG-1022-FIXED.md)/[BUG-1024](BUG-1024-FIXED.md):
 
 **1. Механическая находка в самом харнессе — `PYTHONHASHSEED` нигде не пинится.**
