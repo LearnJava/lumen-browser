@@ -1,8 +1,10 @@
 # BUG-705: legacy live `Document` collections missing entirely — `document.scripts`/`.images`/`.forms`/`.links`/`.anchors`/`.embeds`/`.plugins`
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-892](BUG-892-FIXED.md)
 **Компонент:** js (`crates/js/src/dom.rs` — none of these seven accessors exist on `document`; `WEB_API_SHIM`)
 **Найден:** P2, WPT-VENDOR-web-bundle, 2026-08-09
+
+**Ревизия P3 2026-09-29:** все семь коллекций уже реализованы в BUG-892 (`crates/js/src/shim/web_api_shim_mid.js`, тесты `v8_bug892_document_collections`, 4/4 зелёные). Симптом не воспроизводится; карточка — дубликат, файл оставлен для истории.
 
 ## Симптом
 
