@@ -496,8 +496,19 @@ impl Lumen {
                 |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
             );
 
+            // BUG-692: FFmpeg-путь `<video src>` — та же перезапись схемы
+            // (`upgrade-insecure-requests`, Fetch §4.1 шаг 5), что у GIF-пути
+            // выше; ключ `load_failures`/лог остаются на сыром `src`.
+            let upgraded = self.layout_source.as_ref().and_then(|ls| {
+                let doc = ls.document.lock().unwrap();
+                let root = doc.root();
+                let (policy, _) = crate::csp_enforce::document_csp_policy(&doc, root)?;
+                crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(&src))
+            });
+            let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
+
             let bytes = match crate::subresources::fetch_video_bytes(
-                &src,
+                fetch_url,
                 &base,
                 &self.event_sink,
                 Some(self.active_cookie_jar()),

@@ -139,3 +139,17 @@ scheme по spec §4.1) на non-loopback host, переписать схему 
 `fetch_url`). Проверено `cargo clippy -p lumen-shell --all-targets`.
 Остаток: `@font-face`, media/`<track>`, `<script src>` (пути shell),
 навигации.
+
+## Обновление 2026-09-29 (P3) — FFmpeg-путь `<video src>`; остаток по факту пуст
+
+Сверка с `bugs/BUG-811-FIXED.md` (срезы 43-55) показала, что предыдущий
+«остаток» (`@font-face`, media/`<track>`, `<script src>`, навигации) уже
+закрыт GAP-CSPENF: шрифты — срез 48, `<script>` — 45, стили/`@import` — 47,
+`fetch`/XHR/WebSocket — 49, `<track>`/`<audio>`/GIF-`<video>` — 50/51,
+навигации и заголовок — 52-55. Не хватало одного пути: FFmpeg-декод
+`<video src>` (`page_load.rs`, цикл `loads`) звал `fetch_video_bytes` по
+сырому `src`. Теперь он апгрейдит схему тем же `upgrade_insecure_url`.
+Путь под фичей `ffmpeg-video` (нужен `FFMPEG_DIR`) — в этой сессии
+собран только без неё (`cargo clippy -p lumen-shell --all-targets` чисто),
+ветка с фичей не компилировалась. Остаток: только проверка живой страницей;
+если она подтвердит — переводить в FIXED.
