@@ -447,7 +447,7 @@ mod tests {
     fn page() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false, None)
             .unwrap();
         rt
     }

@@ -143,6 +143,16 @@ impl V8JsRuntime {
         push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
         sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
         cross_origin_isolated: bool,
+        // BUG-1208: `window.origin`/`self.origin`/`Origin.from(globalThis)`
+        // (HTML LS §8.1.3.5, the realm's own origin, distinct from
+        // `location.origin` — a URL Standard origin) inherit the PARENT's
+        // origin for a non-sandboxed `about:blank`/`about:srcdoc` document
+        // (HTML LS §7.4.1). `Some(parent_url)` — this document's own
+        // `page_url` starts with `about:` and it is not opaque-sandboxed
+        // (`frames::spawn_frame` passes the host's own URL); `None` for every
+        // other caller (a real-URL document, an opaque-sandboxed one, or the
+        // top-level page, which has no parent to inherit from).
+        origin_inherit_from: Option<&str>,
     ) -> JsResult<()> {
         let ls_store =
             ls_store.unwrap_or_else(|| Arc::new(Mutex::new(lumen_core::WebStorage::default())));
@@ -182,6 +192,15 @@ impl V8JsRuntime {
         // Derived here, before `page_url` is moved into the `self.run` closure
         // below, and never taken from a JS argument.
         let page_origin = crate::file_input::origin_for_url(page_url);
+        // BUG-1208: `window.origin`/`self.origin` — the URL Standard origin
+        // serialization of `page_url`, EXCEPT for a non-sandboxed
+        // `about:blank`/`about:srcdoc` document, which inherits the parent's
+        // instead (HTML LS §7.4.1); `origin_inherit_from` carries that
+        // parent URL for exactly that case (`None` otherwise).
+        let realm_origin = origin_inherit_from.map_or_else(
+            || crate::origin::origin_serialization_for_url(page_url),
+            crate::origin::origin_serialization_for_url,
+        );
         let page_url = page_url.to_owned();
         // BUG-480 срез 4: ключ этого контекста в исходящем ящике кросс-
         // фреймовых postMessage — указатель Arc собственного документа. Тот
@@ -631,6 +650,17 @@ impl V8JsRuntime {
                     .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_PAGE_URL'".into()))?;
                 let val = v8::String::new(scope, &page_url)
                     .ok_or_else(|| JsError::Runtime("OOM: page_url value".into()))?;
+                ctx.global(scope).set(scope, key.into(), val.into());
+            }
+            // BUG-1208: `window.origin`/`self.origin`/`Origin.from(globalThis)`
+            // read this — the realm's own origin, computed above
+            // (`realm_origin`), distinct from `location.origin` (a plain URL
+            // Standard origin of `page_url`, no inheritance).
+            {
+                let key = v8::String::new(scope, "_LUMEN_ORIGIN")
+                    .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_ORIGIN'".into()))?;
+                let val = v8::String::new(scope, &realm_origin)
+                    .ok_or_else(|| JsError::Runtime("OOM: realm_origin value".into()))?;
                 ctx.global(scope).set(scope, key.into(), val.into());
             }
             {

@@ -26,7 +26,7 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt

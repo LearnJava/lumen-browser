@@ -598,7 +598,7 @@ mod tests {
             None,
             None,
             None,
-            false,
+            false, None,
         )
         .unwrap();
         r
@@ -993,7 +993,7 @@ mod tests {
             None, None,
             None,
             None,
-            false)
+            false, None)
         .unwrap();
         r
     }
@@ -1034,7 +1034,7 @@ mod tests {
             None, None,
             None,
             None,
-            false)
+            false, None)
         .unwrap();
         r
     }

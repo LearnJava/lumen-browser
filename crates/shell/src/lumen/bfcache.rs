@@ -109,6 +109,9 @@ impl Lumen {
                         push_backend,
                         None,
                         false,
+                        // BUG-1208: bfcache thaw is always the top-level page —
+                        // no parent to inherit an `about:` origin from.
+                        None,
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }

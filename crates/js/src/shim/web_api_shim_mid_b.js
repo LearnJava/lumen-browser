@@ -184,7 +184,18 @@ var _lumen_location = (function() {
     accessor('hash',
         function()  { return _lumen_loc_hash; },
         function(v) { _lumen_set_location_hash(v); });
-    accessor('origin', function() { return _lumen_loc_parts.origin; }); // readonly per spec
+    // BUG-1208: an opaque-origin address (`about:blank`/`about:srcdoc`, and
+    // any other URL with no authority — `data:`, `mailto:`, …) has NO tuple
+    // origin, so its serialization is the literal string `"null"` (HTML LS
+    // §7.1.1 «ascii serialization of an origin»), not the empty string
+    // `_lumen_parse_url`'s `origin` field falls back to for that case (its
+    // shape is shared with `URL.prototype.origin`, out of this bug's scope —
+    // see the bug file). `location.origin` never inherits a parent's origin
+    // the way `window.origin` does (`_LUMEN_ORIGIN` below): it is always the
+    // literal address's own origin, opaque or not.
+    accessor('origin', function() {
+        return _lumen_loc_parts.origin === '' ? 'null' : _lumen_loc_parts.origin;
+    }); // readonly per spec
     function method(name, fn) {
         Object.defineProperty(loc, name,
             { value: fn, writable: false, enumerable: true, configurable: false });

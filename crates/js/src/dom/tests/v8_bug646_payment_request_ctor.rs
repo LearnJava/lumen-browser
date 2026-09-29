@@ -12,7 +12,7 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn runtime() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt.eval(
         r#"

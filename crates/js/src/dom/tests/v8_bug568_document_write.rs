@@ -66,7 +66,7 @@ fn setup_with_policy(
     let doc = Arc::new(Mutex::new(lumen_html_parser::parse(html)));
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = server.clone();
-    rt.install_dom(doc, "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     (rt, server)
 }

@@ -24,6 +24,17 @@
     return loc;
   };
 
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — a worker has no
+  // `about:`-inheritance case (unlike a page's non-sandboxed `about:blank`/
+  // `about:srcdoc` document), so its realm origin is always its own script
+  // URL's origin, same as `location.origin` above; `''` (no authority — an
+  // opaque origin like `data:`/`blob:`) serializes as the literal `"null"`
+  // per HTML LS §7.1.1, matching `location.origin`'s own BUG-1208 fix.
+  globalThis._lumen_make_worker_origin = function(url) {
+    var p = _lumen_parse_url(String(url == null ? '' : url));
+    return p.origin === '' ? 'null' : p.origin;
+  };
+
   // BUG-766: `isSecureContext` (WindowOrWorkerGlobalScope mixin,
   // `[Exposed=(Window,Worker)]`). The page's own rule
   // (`_lumen_url_is_potentially_trustworthy`, Secure Contexts §3.1/§3.2)

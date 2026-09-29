@@ -7,7 +7,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -440,7 +440,7 @@ fn v8_runtime_with_dom_and_fetch(
         doc,
         "https://example.com/page.html",
         Some(provider),
-        None, None, None, None, None, None, None, None, false)
+        None, None, None, None, None, None, None, None, false, None)
     .unwrap();
     rt
 }
@@ -1131,7 +1131,7 @@ impl lumen_core::ext::JsFetchProvider for CspBlockedWorkerProvider {
 fn v8_runtime_with_csp_blocked_worker(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedWorkerProvider);
-    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 

@@ -40,7 +40,7 @@ fn make_rt() -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt
@@ -192,7 +192,7 @@ fn make_rt_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt

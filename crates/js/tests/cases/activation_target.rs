@@ -41,6 +41,7 @@ fn make_rt() -> V8JsRuntime {
         None,
         None,
         false,
+        None,
     )
     .unwrap();
     rt

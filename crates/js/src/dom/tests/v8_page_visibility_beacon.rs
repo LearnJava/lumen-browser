@@ -7,7 +7,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -38,7 +38,7 @@ impl lumen_core::ext::JsFetchProvider for CaptureFetch {
 fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -963,7 +963,7 @@ fn inserted_script_without_nonce_is_refused_by_script_src() {
     let provider = Arc::new(NonceScriptSrcProvider { fetches: std::sync::atomic::AtomicUsize::new(0) });
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider.clone();
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     let r = rt
         .eval(
             r#"globalThis.__b1175 = [];
@@ -993,7 +993,7 @@ fn inserted_script_nonce_reaches_script_src_check() {
     let provider = Arc::new(NonceScriptSrcProvider { fetches: std::sync::atomic::AtomicUsize::new(0) });
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider.clone();
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     let r = rt
         .eval(
             r#"globalThis.__b1175n = 0;
@@ -1014,7 +1014,7 @@ fn inserted_script_nonce_reaches_script_src_check() {
 fn v8_runtime_with_csp_blocked_beacon(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedBeaconProvider);
-    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 

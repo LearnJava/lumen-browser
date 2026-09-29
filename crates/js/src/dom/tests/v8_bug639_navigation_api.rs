@@ -20,7 +20,7 @@ fn runtime() -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt

@@ -6333,6 +6333,26 @@ Object.defineProperty(window, 'top', {
     configurable: false,
 });
 
+// BUG-1208: `WindowOrWorkerGlobalScope.origin` (HTML LS §8.1.3.5) — the
+// Unicode serialization of THIS REALM's own origin, distinct from
+// `location.origin` (a plain URL Standard origin of the document's address):
+// a non-sandboxed `about:blank`/`about:srcdoc` document's realm origin is
+// its PARENT's, while its `location.origin` still serializes the `about:`
+// address itself (`"null"`). Rust computes both cases into `_LUMEN_ORIGIN`
+// (`v8_runtime.rs::install_dom`'s `realm_origin`, `origin::origin_serialization_for_url`)
+// before this shim runs, mirroring `_LUMEN_PAGE_URL`'s injection just above
+// this file's `location` setup. `[Replaceable]` per WebIDL default for a
+// readonly attribute with no `[SameObject]`/`[LegacyUnforgeable]` — a plain
+// getter-only accessor already refuses assignment in strict mode and is
+// silently ignored in sloppy mode, matching that.
+Object.defineProperty(window, 'origin', {
+    get: function() {
+        return typeof _LUMEN_ORIGIN !== 'undefined' ? _LUMEN_ORIGIN : 'null';
+    },
+    enumerable: true,
+    configurable: true,
+});
+
 // BUG-589: `window` must be a proper WebIDL exotic object — instanceof
 // `EventTarget`, `Object.prototype.toString.call(window) === "[object
 // Window]"`, and a "global scope polluter" object in its prototype chain
