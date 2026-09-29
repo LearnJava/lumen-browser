@@ -245,10 +245,10 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
   // the fixed order elements registered — never independently of each other.
   // `video_element.js` shares this same registry (defined once, whichever
   // shim loads first).
-  if (!globalThis._lumen_media_pumps) {
-    globalThis._lumen_media_pumps = [];
-    globalThis._lumen_pump_media = function() {
-      var arr = globalThis._lumen_media_pumps;
+  if (!__lumen_C._lumen_media_pumps) {
+    __lumen_C._lumen_media_pumps = [];
+    __lumen_C._lumen_pump_media = function() {
+      var arr = __lumen_C._lumen_media_pumps;
       for (var i = arr.length - 1; i >= 0; i--) {
         var keep;
         try { keep = arr[i](); } catch (e) { keep = false; }
@@ -405,7 +405,7 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
         return true;
       }
       var _myLoadGen = _loadGen;
-      globalThis._lumen_media_pumps.push(function() {
+      __lumen_C._lumen_media_pumps.push(function() {
         if (_myLoadGen !== _loadGen) return false;
         return pollLoad();
       });
@@ -670,7 +670,7 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
         // often the host actually ticks the pump.
         return new Promise(function(resolve, reject) {
           var deadline = Date.now() + 10000;
-          globalThis._lumen_media_pumps.push(function() {
+          __lumen_C._lumen_media_pumps.push(function() {
             if (__lumen_audio_has_error(_handle)) {
               reject(new DOMException('Media load failed', 'NotSupportedError'));
               return false;

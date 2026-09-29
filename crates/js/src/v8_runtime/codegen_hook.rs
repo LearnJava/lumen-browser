@@ -191,7 +191,12 @@ unsafe fn codegen_result(
         let Some(key) = v8::String::new(scope, "_lumen_tt_get_compliant_script_for_codegen") else {
             return Outcome::NoShim;
         };
-        let Some(func) = global
+        let holder = crate::internal_globals::holder_for(
+            scope,
+            ctx,
+            "_lumen_tt_get_compliant_script_for_codegen",
+        );
+        let Some(func) = holder
             .get(scope, key.into())
             .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
         else {

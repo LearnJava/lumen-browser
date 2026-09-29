@@ -288,7 +288,7 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
     ISSUED = kept;
   }
 
-  globalThis._lumen_permission_state_changed = stateChanged;
+  __lumen_C._lumen_permission_state_changed = stateChanged;
 
   // -- Permissions (§5) -------------------------------------------------------
 
@@ -366,8 +366,8 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
   // the engine can do, which revoking cannot change (module docs, rule 2).
   // The hook is captured at install time, so page script cannot shadow it: the
   // Notifications shim installs before this one.
-  var RELINQUISH_NOTIFICATIONS = (typeof globalThis._lumen_notification_relinquish === 'function')
-    ? globalThis._lumen_notification_relinquish : null;
+  var RELINQUISH_NOTIFICATIONS = (typeof __lumen_C._lumen_notification_relinquish === 'function')
+    ? __lumen_C._lumen_notification_relinquish : null;
   var RELINQUISH = {
     'notifications': function() {
       if (RELINQUISH_NOTIFICATIONS) RELINQUISH_NOTIFICATIONS();

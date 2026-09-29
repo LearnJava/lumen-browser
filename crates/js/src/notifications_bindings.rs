@@ -289,7 +289,7 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
    * moves, and only back to `default`: a page must not be able to lift its own
    * `denied`. The next requestPermission() asks the shell again.
    */
-  globalThis._lumen_notification_relinquish = function() {
+  __lumen_C._lumen_notification_relinquish = function() {
     if (_permission !== 'granted') return;
     _permission = 'default';
     if (typeof _lumen_permission_state_changed === 'function') {
@@ -660,8 +660,8 @@ Notification.requestPermission().then(function(p) { result = p; });
         rt.eval(
             r#"
 var notified = [];
-globalThis._lumen_permission_state_changed = function(name) { notified.push(name); };
-globalThis._lumen_notification_request_permission = function() { return 'granted'; };
+__lumen_C._lumen_permission_state_changed = function(name) { notified.push(name); };
+__lumen_C._lumen_notification_request_permission = function() { return 'granted'; };
 Notification.requestPermission();
 "#,
         )
@@ -680,7 +680,7 @@ Notification.requestPermission();
         rt.eval(
             r#"
 var notified = [];
-globalThis._lumen_permission_state_changed = function(name) { notified.push(name); };
+__lumen_C._lumen_permission_state_changed = function(name) { notified.push(name); };
 Notification.requestPermission();
 Notification.requestPermission();
 "#,
@@ -697,7 +697,7 @@ Notification.requestPermission();
         rt.eval(
             r#"
 var notified = [];
-globalThis._lumen_permission_state_changed = function(name) { notified.push(name); };
+__lumen_C._lumen_permission_state_changed = function(name) { notified.push(name); };
 _lumen_notification_relinquish();
 _lumen_notification_relinquish();
 "#,

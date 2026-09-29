@@ -654,12 +654,12 @@ fn frame_post_message_self_delivery_through_install_dom() {
     // унаследованный origin (self_origin страницы).
     rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), None, true, None);
-    rt.eval("window.__got = null; window.onmessage = function(e) { window.__got = e; };")
+    rt.eval("globalThis.__got = null; window.onmessage = function(e) { globalThis.__got = e; };")
         .unwrap();
     rt.eval("_lumen_frame_content_window(1).postMessage({n: 5}, '*')").unwrap();
     // До пумпы доставки нет — postMessage асинхронен.
     assert_eq!(
-        rt.eval("window.__got === null").unwrap(),
+        rt.eval("globalThis.__got === null").unwrap(),
         JsValue::Bool(true)
     );
     rt.eval("_lumen_frame_pump_messages()").unwrap();
@@ -668,9 +668,9 @@ fn frame_post_message_self_delivery_through_install_dom() {
     // слота родителя.
     assert!(matches!(
         rt.eval(
-            "window.__got !== null && window.__got.data.n === 5 \
-                 && window.__got.origin === 'https://parent.example' \
-                 && window.__got.source !== null"
+            "globalThis.__got !== null && globalThis.__got.data.n === 5 \
+                 && globalThis.__got.origin === 'https://parent.example' \
+                 && globalThis.__got.source !== null"
         )
         .unwrap(),
         JsValue::Bool(true)
@@ -729,9 +729,9 @@ fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
     rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
-        "window.__got = null; \
+        "globalThis.__got = null; \
              document.getElementById('main').addEventListener('hello', function(e) { \
-                 window.__got = { type: e.type, bubbles: e.bubbles, detail: e.detail }; \
+                 globalThis.__got = { type: e.type, bubbles: e.bubbles, detail: e.detail }; \
              });",
     )
     .unwrap();
@@ -742,16 +742,16 @@ fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
     )
     .unwrap();
     assert_eq!(
-        rt.eval("window.__got === null").unwrap(),
+        rt.eval("globalThis.__got === null").unwrap(),
         JsValue::Bool(true),
         "до пумпы доставки нет"
     );
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(matches!(
         rt.eval(
-            "window.__got !== null && window.__got.type === 'hello' \
-                 && window.__got.bubbles === true \
-                 && window.__got.detail.n === 42"
+            "globalThis.__got !== null && globalThis.__got.type === 'hello' \
+                 && globalThis.__got.bubbles === true \
+                 && globalThis.__got.detail.n === 42"
         )
         .unwrap(),
         JsValue::Bool(true)
@@ -770,20 +770,20 @@ fn frame_facade_inserted_script_executes_on_pump_with_current_script() {
         "var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
              s.setAttribute('id', 'probe'); \
-             s.textContent = 'window.__ran = true; \
-                              window.__cs = document.currentScript \
+             s.textContent = 'globalThis.__ran = true; \
+                              globalThis.__cs = document.currentScript \
                                 && document.currentScript.id;'; \
              d.body.appendChild(s);",
     )
     .unwrap();
     // До пумпы скрипт не исполнялся — доставка через границу асинхронная.
     assert_eq!(
-        rt.eval("window.__ran === undefined").unwrap(),
+        rt.eval("globalThis.__ran === undefined").unwrap(),
         JsValue::Bool(true)
     );
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(matches!(
-        rt.eval("window.__ran === true && window.__cs === 'probe'")
+        rt.eval("globalThis.__ran === true && globalThis.__cs === 'probe'")
             .unwrap(),
         JsValue::Bool(true)
     ));
@@ -798,20 +798,20 @@ fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
     rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
-        "window.__count = 0; \
+        "globalThis.__count = 0; \
              var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
-             s.textContent = 'window.__count++;'; \
+             s.textContent = 'globalThis.__count++;'; \
              d.body.appendChild(s); \
              var j = d.createElement('script'); \
              j.setAttribute('type', 'application/json'); \
-             j.textContent = 'window.__count += 10;'; \
+             j.textContent = 'globalThis.__count += 10;'; \
              d.body.appendChild(j);",
     )
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        rt.eval("window.__count").unwrap(),
+        rt.eval("globalThis.__count").unwrap(),
         JsValue::Number(1.0),
         "классика исполнена один раз, JSON-блок — нет"
     );
@@ -825,7 +825,7 @@ fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        rt.eval("window.__count").unwrap(),
+        rt.eval("globalThis.__count").unwrap(),
         JsValue::Number(1.0),
         "повторная вставка не перезапускает исполненный скрипт"
     );
@@ -842,14 +842,14 @@ fn detached_before_delivery_script_runs_on_reinsertion() {
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
-             s.textContent = 'window.__ran = true;'; \
+             s.textContent = 'globalThis.__ran = true;'; \
              d.body.appendChild(s); \
              d.body.removeChild(s);",
     )
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        rt.eval("window.__ran === undefined").unwrap(),
+        rt.eval("globalThis.__ran === undefined").unwrap(),
         JsValue::Bool(true),
         "отсоединённый до доставки конверт не исполняется"
     );
@@ -860,7 +860,7 @@ fn detached_before_delivery_script_runs_on_reinsertion() {
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(matches!(
-        rt.eval("window.__ran === true").unwrap(),
+        rt.eval("globalThis.__ran === true").unwrap(),
         JsValue::Bool(true)
     ));
 }
@@ -876,13 +876,13 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
     rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
-        "window.__err = false; \
+        "globalThis.__err = false; \
              var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
              d.body.appendChild(s); \
-             window.__snid = s.__nid__; \
+             globalThis.__snid = s.__nid__; \
              _lumen_make_element(s.__nid__).addEventListener('error', function () { \
-                 window.__err = true; \
+                 globalThis.__err = true; \
              });",
     )
     .unwrap();
@@ -890,7 +890,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     assert!(
         matches!(
             rt.eval(
-                "_lumen_frame_scripts_started[__snid] === undefined && window.__err === false"
+                "_lumen_frame_scripts_started[__snid] === undefined && globalThis.__err === false"
             )
             .unwrap(),
             JsValue::Bool(true)
@@ -903,7 +903,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(
         matches!(
-            rt.eval("_lumen_frame_scripts_started[__snid] === 1 && window.__err === false")
+            rt.eval("_lumen_frame_scripts_started[__snid] === 1 && globalThis.__err === false")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -913,7 +913,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     // асинхронно (task hop таймера внутри _lumen_script_load_external).
     rt.eval("_lumen_tick_timers();").unwrap();
     assert_eq!(
-        rt.eval("window.__err").unwrap(),
+        rt.eval("globalThis.__err").unwrap(),
         JsValue::Bool(true),
         "неудавшаяся загрузка отстрелила error на элементе"
     );
@@ -921,7 +921,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     rt.eval("s.src = 'other.js';").unwrap();
     rt.eval("_lumen_frame_pump_messages(); _lumen_tick_timers();").unwrap();
     assert_eq!(
-        rt.eval("window.__err").unwrap(),
+        rt.eval("globalThis.__err").unwrap(),
         JsValue::Bool(true),
         "повторный src после already started — no-op"
     );
@@ -940,7 +940,7 @@ fn frame_data_block_stays_unmarked_after_delivery() {
              j.setAttribute('type', 'application/json'); \
              j.textContent = '{\"x\":1}'; \
              d.body.appendChild(j); \
-             window.__jnid = j.__nid__;",
+             globalThis.__jnid = j.__nid__;",
     )
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
@@ -998,13 +998,13 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     let (parent, child, parent_doc, _child_doc) = parent_child_pair();
     parent
         .eval(
-            "window.__order = []; \
+            "globalThis.__order = []; \
                  var d = _lumen_frame_content_document(1); \
                  var s = d.getElementById('main'); \
-                 window.__s = s; \
-                 s.addEventListener('load', function () { window.__order.push('l1'); }); \
+                 globalThis.__s = s; \
+                 s.addEventListener('load', function () { globalThis.__order.push('l1'); }); \
                  s.addEventListener('load', function () { \
-                     window.__order.push('l2'); \
+                     globalThis.__order.push('l2'); \
                  });",
         )
         .unwrap();
@@ -1018,7 +1018,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
         Arc::as_ptr(&parent_doc) as usize
     )));
     assert_eq!(
-        parent.eval("window.__order.length").unwrap(),
+        parent.eval("globalThis.__order.length").unwrap(),
         JsValue::Number(0.0),
         "до пумпы родителя доставок нет"
     );
@@ -1026,7 +1026,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     assert!(
         matches!(
             parent
-                .eval("window.__order.join(',') === 'l1,l2'")
+                .eval("globalThis.__order.join(',') === 'l1,l2'")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1035,8 +1035,8 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     // Теперь назначается свойство on<type>: тот же фасад, второй конверт.
     parent
         .eval(
-            "window.__s.onerror = function (ev) { \
-                     window.__order.push('prop:' + ev.type + ':' + (ev.target === __s) + ':' + \
+            "globalThis.__s.onerror = function (ev) { \
+                     globalThis.__order.push('prop:' + ev.type + ':' + (ev.target === __s) + ':' + \
                          (ev.currentTarget === ev.target) + ':' + ev.bubbles + ':' + ev.isTrusted); \
                  };",
         )
@@ -1050,7 +1050,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     assert!(
         matches!(
             parent
-                .eval("window.__order.join(',').split(',')[2] !== undefined && window.__order[2].indexOf('prop:error:') === 0")
+                .eval("globalThis.__order.join(',').split(',')[2] !== undefined && globalThis.__order[2].indexOf('prop:error:') === 0")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1059,7 +1059,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     assert!(
         matches!(
             parent
-                .eval("window.__order[2] === 'prop:error:true:true:false:true'")
+                .eval("globalThis.__order[2] === 'prop:error:true:true:false:true'")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1074,23 +1074,23 @@ fn facade_remove_listener_stops_delivery() {
     let (parent, child, _parent_doc, _child_doc) = parent_child_pair();
     parent
         .eval(
-            "window.__n = 0; \
+            "globalThis.__n = 0; \
                  var d = _lumen_frame_content_document(1); \
                  var s = d.getElementById('main'); \
-                 var fn = function () { window.__n++; }; \
+                 var fn = function () { globalThis.__n++; }; \
                  s.addEventListener('load', fn); \
-                 window.__fn = fn;",
+                 globalThis.__fn = fn;",
         )
         .unwrap();
     child
         .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
-    assert_eq!(parent.eval("window.__n").unwrap(), JsValue::Number(1.0));
+    assert_eq!(parent.eval("globalThis.__n").unwrap(), JsValue::Number(1.0));
     parent
         .eval(
             "var s2 = _lumen_frame_content_document(1).getElementById('main'); \
-                 s2.removeEventListener('load', window.__fn);",
+                 s2.removeEventListener('load', globalThis.__fn);",
         )
         .unwrap();
     child
@@ -1098,7 +1098,7 @@ fn facade_remove_listener_stops_delivery() {
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        parent.eval("window.__n").unwrap(),
+        parent.eval("globalThis.__n").unwrap(),
         JsValue::Number(1.0),
         "после removeEventListener доставок нет"
     );
@@ -1129,7 +1129,7 @@ fn mirror_gates_top_level_non_element_and_missing_native() {
         None,
     );
     // Текстовый узел — не элемент.
-    rt.eval("window.__tnid = document.createTextNode('x').__nid__;").unwrap();
+    rt.eval("globalThis.__tnid = document.createTextNode('x').__nid__;").unwrap();
     assert_eq!(
         rt.eval("_lumen_frame_mirror_resource(__tnid, 'load')").unwrap(),
         JsValue::Bool(false),
@@ -1177,14 +1177,14 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         None,
     );
     parent
-        .eval("window.__got = false;")
+        .eval("globalThis.__got = false;")
         .unwrap();
     child
         .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        parent.eval("window.__got").unwrap(),
+        parent.eval("globalThis.__got").unwrap(),
         JsValue::Bool(false),
         "неизвестный отправитель — тихая потеря конверта"
     );
@@ -1208,7 +1208,7 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        parent.eval("window.__got").unwrap(),
+        parent.eval("globalThis.__got").unwrap(),
         JsValue::Bool(false),
         "cross-origin отправитель не доставляется"
     );
@@ -1227,9 +1227,9 @@ fn external_script_failure_mirrors_error_to_facade_handler() {
             "var d = _lumen_frame_content_document(1); \
                  var s = d.createElement('script'); \
                  s.setAttribute('id', 'probe'); \
-                 window.__s = s; \
-                 window.__err = null; \
-                 s.onerror = function (ev) { window.__err = ev.type; }; \
+                 globalThis.__s = s; \
+                 globalThis.__err = null; \
+                 s.onerror = function (ev) { globalThis.__err = ev.type; }; \
                  s.src = 'missing.js'; \
                  d.body.appendChild(s);",
         )
@@ -1242,7 +1242,7 @@ fn external_script_failure_mirrors_error_to_facade_handler() {
     assert!(
         matches!(
             parent
-                .eval("window.__err === 'error' && window.__s.onerror !== null")
+                .eval("globalThis.__err === 'error' && globalThis.__s.onerror !== null")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1670,7 +1670,9 @@ fn capture_call_site_reports_source_char_position() {
     .unwrap();
     assert_eq!(
         rt.eval("__site.sourceCharPosition").unwrap(),
-        JsValue::Number(30.0)
+        // Internal evals compile `with (container) { … }` around the source, so
+        // every offset is shifted by the wrapper's prefix.
+        JsValue::Number(30.0 + crate::internal_globals::WITH_PREFIX.len() as f64)
     );
 }
 

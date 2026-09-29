@@ -489,7 +489,7 @@ if (typeof _lumen_idb_load === 'function') {
 // cannot read or drop anyone else's.
 (function() {
     var CLONERS = [];
-    Object.defineProperty(window, '__lumen_platform_cloners', {
+    Object.defineProperty(__lumen_C, '__lumen_platform_cloners', {
         value: Object.freeze({
             register: function(test, clone) { CLONERS.push([test, clone]); },
             find: function(v) {
@@ -685,7 +685,7 @@ function structuredClone(val, options) {
             return arr;
         }
         // A `[Serializable]` platform object serializes through its own shim.
-        var platformClone = window.__lumen_platform_cloners.find(v);
+        var platformClone = __lumen_C.__lumen_platform_cloners.find(v);
         if (platformClone) {
             var pc = platformClone(v);
             memory.set(v, pc);
@@ -818,9 +818,9 @@ function _lumen_apply_visibility(hidden) {
 function _lumen_mark_ready_state_restored() {
     _doc_ready_state = 'complete';
 }
-window._lumen_apply_ready_state = _lumen_apply_ready_state;
-window._lumen_apply_visibility  = _lumen_apply_visibility;
-window._lumen_mark_ready_state_restored = _lumen_mark_ready_state_restored;
+__lumen_C._lumen_apply_ready_state = _lumen_apply_ready_state;
+__lumen_C._lumen_apply_visibility  = _lumen_apply_visibility;
+__lumen_C._lumen_mark_ready_state_restored = _lumen_mark_ready_state_restored;
 
 // ── <dialog> modal stack (HTML5 §4.11.7) ─────────────────────────────────────
 // Tracks nids of dialogs opened via showModal(), in open order.
@@ -1089,7 +1089,7 @@ function _lumen_focus_update(newNid) {
     // (re)arms the interest delays.
     _lumen_interest_note_focus();
 }
-window._lumen_focus_update = _lumen_focus_update;
+__lumen_C._lumen_focus_update = _lumen_focus_update;
 
 // HTML LS §6.6.2 "focus fixup rule" (BUG-600): whenever the element holding
 // focus stops being a focusable area (gets `disabled`, `hidden`, loses its
@@ -1105,7 +1105,7 @@ function _lumen_focus_fixup() {
     if (nid === null || nid === undefined || nid === -1) return;
     if (!_lumen_is_focusable(nid)) _lumen_focus_update(-1);
 }
-window._lumen_focus_fixup = _lumen_focus_fixup;
+__lumen_C._lumen_focus_fixup = _lumen_focus_fixup;
 
 // HTML LS §6.6.3 — `HTMLElement.focus(options)` / `HTMLElement.blur()`. The
 // shell is notified through the very `_lumen_request_focus`/`_lumen_request_blur`
@@ -6137,7 +6137,7 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
 // Phase 1: shell wires up a real message bus between content scripts and extension background.
 // Guard: only install when _LUMEN_EXTENSION_ACTIVE is set (avoids CDP automation detection markers).
 (function() {
-    if (typeof globalThis === 'undefined' || !globalThis._LUMEN_EXTENSION_ACTIVE) { return; }
+    if (typeof globalThis === 'undefined' || !__lumen_C._LUMEN_EXTENSION_ACTIVE) { return; }
     var _rt = {
         id: 'lumen-extension',
         sendMessage: function(msg, callback) {
@@ -6279,7 +6279,12 @@ function _lumen_fire_window_resize_event() {
 //    exactly what non-configurable-but-writable globals still allow.
 (function() {
     var descs = Object.getOwnPropertyDescriptors(window);
+    // BUG-753 срез 2: engine internals listed on the `window` literal above
+    // (`_lumen_dispatch_*`, `_lumen_pump_*`, …) are already reachable through the
+    // internal container — copying them would put them back on the page's global.
+    var INTERNAL_KEY = /^__|^_+lumen/i;
     for (var k in descs) {
+        if (INTERNAL_KEY.test(k)) continue;
         var d = descs[k];
         if (d.get || d.set) {
             Object.defineProperty(globalThis, k, d);

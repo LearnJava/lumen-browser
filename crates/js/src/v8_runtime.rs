@@ -650,7 +650,7 @@ impl V8JsRuntime {
                     .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_PAGE_URL'".into()))?;
                 let val = v8::String::new(scope, &page_url)
                     .ok_or_else(|| JsError::Runtime("OOM: page_url value".into()))?;
-                ctx.global(scope).set(scope, key.into(), val.into());
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
             }
             // BUG-1208: `window.origin`/`self.origin`/`Origin.from(globalThis)`
             // read this — the realm's own origin, computed above
@@ -661,14 +661,14 @@ impl V8JsRuntime {
                     .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_ORIGIN'".into()))?;
                 let val = v8::String::new(scope, &realm_origin)
                     .ok_or_else(|| JsError::Runtime("OOM: realm_origin value".into()))?;
-                ctx.global(scope).set(scope, key.into(), val.into());
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
             }
             {
                 let key = v8::String::new(scope, "_LUMEN_CROSS_ORIGIN_ISOLATED").ok_or_else(
                     || JsError::Runtime("OOM: key '_LUMEN_CROSS_ORIGIN_ISOLATED'".into()),
                 )?;
                 let val = v8::Boolean::new(scope, cross_origin_isolated);
-                ctx.global(scope).set(scope, key.into(), val.into());
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
             }
 
             // GAP-DOCALLDDA / BUG-1057: `_lumen_make_html_all_collection(coll)`
@@ -769,12 +769,24 @@ impl V8JsRuntime {
             // future top-level `const` would silently vanish. Guarded by
             // `internal_globals`'s `shim_has_no_top_level_lexical_declarations`.
             {
+                let container = crate::internal_globals::container(scope, ctx)
+                    .ok_or_else(|| JsError::Runtime("internal container missing".into()))?;
+                let natives: Vec<String> = container
+                    .get_own_property_names(scope, Default::default())
+                    .map(|arr| {
+                        (0..arr.length())
+                            .filter_map(|i| arr.get_index(scope, i))
+                            .filter_map(|k| k.to_string(scope))
+                            .map(|s| s.to_rust_string_lossy(scope))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 v8::tc_scope!(tc, scope);
                 let shim = crate::dom::web_api_shim();
-                let shim = crate::internal_globals::wrap_page_shim(&shim);
+                let shim = crate::internal_globals::wrap_page_shim(&shim, &natives);
                 let src = v8::String::new(tc, &shim)
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM source".into()))?;
-                let wrapper_src = v8::String::new(tc, "(function(s) { (0, eval)(s); })")
+                let wrapper_src = v8::String::new(tc, "(function(s, c) { return (0, eval)(s)(c); })")
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM eval wrapper".into()))?;
                 let compiled = v8::Script::compile(tc, wrapper_src, None);
                 if tc.has_caught() {
@@ -795,7 +807,7 @@ impl V8JsRuntime {
                         JsError::Runtime("WEB_API_SHIM eval wrapper is not a function".into())
                     })?;
                 let recv = v8::undefined(tc).into();
-                let result = wrapper.call(tc, recv, &[src.into()]);
+                let result = wrapper.call(tc, recv, &[src.into(), container.into()]);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
@@ -806,8 +818,14 @@ impl V8JsRuntime {
             // Trusted Types API (W3C TT L2, Phase 0): plain JS, no rquickjs-specific API,
             // so the shared shim string is evaluated the same way as WEB_API_SHIM above.
             {
+                let tt_js = crate::internal_globals::wrap_for_container(
+                    scope,
+                    ctx,
+                    crate::trusted_types::TRUSTED_TYPES_SHIM,
+                )
+                .unwrap_or_else(|| crate::trusted_types::TRUSTED_TYPES_SHIM.to_owned());
                 v8::tc_scope!(tc, scope);
-                let src = v8::String::new(tc, crate::trusted_types::TRUSTED_TYPES_SHIM)
+                let src = v8::String::new(tc, &tt_js)
                     .ok_or_else(|| JsError::Runtime("OOM: TRUSTED_TYPES_SHIM source".into()))?;
                 let compiled = v8::Script::compile(tc, src, None);
                 if tc.has_caught() {
@@ -838,6 +856,7 @@ impl V8JsRuntime {
                 // advance in lockstep off one shared counter instead of Date.now()
                 // staying frozen at 0.
                 let js = crate::deterministic_patch_script(seed32, monotonic_clock);
+                let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
                 v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: deterministic seed script".into()))?;
@@ -864,8 +883,9 @@ impl V8JsRuntime {
             // even a synchronous top-level read of `navigator.userAgent` sees
             // the override from the very first script.
             if let Some(ua) = ua_override {
-                v8::tc_scope!(tc, scope);
                 let js = user_agent_override_script(&ua);
+                let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
+                v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: UA override script".into()))?;
                 let compiled = v8::Script::compile(tc, src, None);
@@ -889,8 +909,9 @@ impl V8JsRuntime {
             // call site) since the shim reads the marker lazily at
             // `DateTimeFormat` construction time, not at shim-install time.
             if let Some(tz) = timezone_override {
-                v8::tc_scope!(tc, scope);
                 let js = timezone_override_script(&tz);
+                let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
+                v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: timezone override script".into()))?;
                 let compiled = v8::Script::compile(tc, src, None);

@@ -1284,8 +1284,9 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
   // Used by `structuredClone(..., {transfer})` in `web_api_shim_tail_b.js` —
   // it cannot mint the class itself, the prototype slot shape lives here.
   // Returns null for anything that is not an ImageBitmap.
-  Object.defineProperty(globalThis, '_lumen_image_bitmap_transfer', {
-    value: function(orig) {
+  // A plain assignment: the page shim holds a local for this name (early
+  // binding) whose accessor on the container forwards the write.
+  __lumen_C._lumen_image_bitmap_transfer = function(orig) {
       if (!(orig instanceof ImageBitmap) || orig.__bitmap__ === undefined) return null;
       var s = orig.__bitmap__;
       if (s.detached || typeof s.cid !== 'number') {
@@ -1296,9 +1297,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       s.detached = true;
       s.cid = undefined;
       return moved;
-    },
-    writable: false, enumerable: false, configurable: false,
-  });
+  };
 
   function _offscreen_make_gradient(gid) {
     var g = Object.create(CanvasGradient.prototype);

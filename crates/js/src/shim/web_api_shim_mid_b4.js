@@ -2241,7 +2241,7 @@ for (var _wohi = 0; _wohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _wohi++) {
 // фреймов (frame_bridge::_lumen_frame_pump_messages). Данные уже разобраны,
 // source — фасад окна отправителя или null. Тот же порядок, что у локального
 // window.postMessage выше: сначала onmessage, затем addEventListener('message').
-globalThis._lumen_deliver_frame_message = function(data, origin, source, opaqueId) {
+__lumen_C._lumen_deliver_frame_message = function(data, origin, source, opaqueId) {
     var ev = new MessageEvent(data);
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
@@ -2260,7 +2260,7 @@ globalThis._lumen_deliver_frame_message = function(data, origin, source, opaqueI
 // документа; сама последовательность — та же бездоверительная семантика
 // click(), что у HTMLElement.prototype.click (общая _lumen_perform_click,
 // объявление поднимается хостингом в пределах одного скрипта шима).
-globalThis._lumen_deliver_frame_click = function(nid) {
+__lumen_C._lumen_deliver_frame_click = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     _lumen_perform_click(nid);
 };
@@ -2273,14 +2273,14 @@ globalThis._lumen_deliver_frame_click = function(nid) {
 // не дренируется (фреймы не рендерятся), запрос там только копился бы;
 // `preventScroll` переносится конвертом, но игнорируется — layout у фреймов
 // нулевой, скроллить нечего.
-globalThis._lumen_deliver_frame_focus = function(nid, preventScroll) {
+__lumen_C._lumen_deliver_frame_focus = function(nid, preventScroll) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (!_lumen_is_focusable(nid)) return;
     _lumen_focus_update(nid);
 };
 // Парный blur(): no-op для не сфокусированного элемента, как у
 // HTMLElement.prototype.blur; тоже без `_lumen_request_blur`.
-globalThis._lumen_deliver_frame_blur = function(nid) {
+__lumen_C._lumen_deliver_frame_blur = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (_lumen_last_focused_nid !== _lumen_nearest_element_nid(nid)) return;
     _lumen_focus_update(-1);
@@ -2290,7 +2290,7 @@ globalThis._lumen_deliver_frame_blur = function(nid) {
 // живых элементов): снимок Event строится заново в этом изоляте, диспатчится
 // через _lumen_dispatch (слушатели цели + on<type>), а недоверенный 'click'
 // без preventDefault запускает активационное поведение (BUG-439).
-globalThis._lumen_deliver_frame_dom_event = function(nid, env) {
+__lumen_C._lumen_deliver_frame_dom_event = function(nid, env) {
     if (typeof nid !== 'number' || nid < 0 || !env) return;
     var type = typeof env.type === 'string' ? env.type : '';
     if (!type) return;
@@ -2342,7 +2342,7 @@ function _lumen_frame_script_will_start(nid) {
     return body !== null && String(body).trim() !== '';
 }
 var _lumen_frame_scripts_started = {};
-globalThis._lumen_deliver_frame_run_script = function(nid) {
+__lumen_C._lumen_deliver_frame_run_script = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (!_lumen_resource_is_connected(nid)) return;
     // Уже начавшийся — спековый ранний выход №1; не начинающийся вовсе

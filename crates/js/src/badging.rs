@@ -23,7 +23,7 @@ const BADGING_SHIM: &str = r#"
   // W3C Badging API §3 — native hook for shell Phase 1 integration.
   // Phase 0: no-op; shell installs a real handler in Phase 1.
   if (typeof _lumen_set_app_badge === 'undefined') {
-    globalThis._lumen_set_app_badge = function(_count) {};
+    __lumen_C._lumen_set_app_badge = function(_count) {};
   }
 
   // W3C Badging API §4.1: navigator.setAppBadge(contents?)

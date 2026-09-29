@@ -216,7 +216,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     // function at all, so the global stays `undefined`) — see
     // `eval_and_report_via_runtime_only`. The value itself no longer gates
     // anything: cancelled or not, a runtime error stops at this scope.
-    globalThis._lumen_worker_error_cancelled = false;
+    __lumen_C._lumen_worker_error_cancelled = false;
     if (_reportingError) { _lumen_sw_console_log('[ERR]  ' + message); return; }
     _reportingError = true;
     var cancelled = false;
@@ -241,7 +241,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
         if (ev.defaultPrevented) cancelled = true;
       }
     } finally { _reportingError = false; }
-    globalThis._lumen_worker_error_cancelled = cancelled;
+    __lumen_C._lumen_worker_error_cancelled = cancelled;
     if (!cancelled) _lumen_sw_console_log('[ERR]  ' + message);
   }
 
@@ -308,7 +308,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   }
 
   // Called by the Rust loop when a new client connects.
-  globalThis._lumen_sw_dispatch_connect = function(pid) {
+  __lumen_C._lumen_sw_dispatch_connect = function(pid) {
     var port = _makePort(pid);
     _ports[pid] = port;
     var ev = { type: 'connect', target: globalThis, source: port,
@@ -320,13 +320,13 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   };
 
   // Called by the Rust loop for each client port.postMessage.
-  globalThis._lumen_sw_dispatch_port_message = function(pid, data) {
+  __lumen_C._lumen_sw_dispatch_port_message = function(pid, data) {
     var port = _ports[pid];
     if (port) port._deliver(data);
   };
 
   // Called by the Rust loop when a client closes its port.
-  globalThis._lumen_sw_dispatch_port_close = function(pid) {
+  __lumen_C._lumen_sw_dispatch_port_close = function(pid) {
     delete _ports[pid];
   };
 
@@ -376,7 +376,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // evaluated as a separate IIFE after this one) routes a throwing
   // fetch/XHR listener through the same reporting path (BUG-591 shape,
   // BUG-778 scope).
-  globalThis._lumen_worker_exception_reporter = _lumen_sw_report_exception;
+  __lumen_C._lumen_worker_exception_reporter = _lumen_sw_report_exception;
 
   // close() — HTML LS §10.2.4 "close a worker" for a shared worker
   // (BUG-778): discard further queued tasks, including a not-yet-delivered
@@ -386,7 +386,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // `WORKER_TIMERS_SHIM`'s task loop so a `close()` from inside a timer stops
   // the remaining due timers of that very flush (BUG-815).
   globalThis.close = function() {
-    globalThis._lumen_worker_closed = true;
+    __lumen_C._lumen_worker_closed = true;
     _lumen_worker_self_close();
   };
 })();
@@ -587,7 +587,7 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   if (typeof window !== 'undefined') window.SharedWorker = SharedWorker;
 
   // Called by the page runtime's pump_shared_workers() with [{ id, json }, …].
-  globalThis._lumen_deliver_shared_worker_messages = function(msgs) {
+  __lumen_C._lumen_deliver_shared_worker_messages = function(msgs) {
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
       var p = _clientPorts[m.id];
@@ -599,7 +599,7 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   // of uncaught-exception reports (BUG-591 SharedWorker parent-side
   // reporting) — `json` is the `{message, filename, lineno, colno}` object
   // literal `_lumen_sw_report_error` built on the worker side.
-  globalThis._lumen_deliver_shared_worker_errors = function(errs) {
+  __lumen_C._lumen_deliver_shared_worker_errors = function(errs) {
     for (var i = 0; i < errs.length; i++) {
       var m = errs[i];
       var w = _sharedWorkerInstances[m.id];
@@ -952,7 +952,7 @@ fn run_shared_worker_thread_v8(
         // never ran" (the global stays `undefined`, not a `bool`) is exactly a
         // parse/load failure, the only case that still reaches a client.
         let reporter_ran = matches!(
-            rt.eval("typeof globalThis._lumen_worker_error_cancelled === 'boolean'"),
+            rt.eval("typeof __lumen_C._lumen_worker_error_cancelled === 'boolean'"),
             Ok(lumen_core::JsValue::Bool(true))
         );
         if !reporter_ran {
@@ -1335,7 +1335,7 @@ mod tests_v8 {
             JsValue::String("h:boom@http://example.test/sw.js;l:true;".to_string())
         );
         assert_eq!(
-            rt.eval("globalThis._lumen_worker_error_cancelled").unwrap(),
+            rt.eval("__lumen_C._lumen_worker_error_cancelled").unwrap(),
             JsValue::Bool(false)
         );
 
@@ -1347,7 +1347,7 @@ mod tests_v8 {
         )
         .unwrap();
         assert_eq!(
-            rt.eval("globalThis._lumen_worker_error_cancelled").unwrap(),
+            rt.eval("__lumen_C._lumen_worker_error_cancelled").unwrap(),
             JsValue::Bool(true)
         );
     }
@@ -1867,7 +1867,7 @@ mod tests_v8 {
         // turn the (already absolute) URL into itself.
         rt.eval(
             "globalThis._url_resolve=function(u){return String(u);};\
-             globalThis._lumen_document_base_url=function(){return '';};",
+             __lumen_C._lumen_document_base_url=function(){return '';};",
         )
         .unwrap();
         rt.eval(

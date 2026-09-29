@@ -99,7 +99,7 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // §4.1), set by the shell from the document's `<meta>` CSP once per
   // navigation — see `crates/shell/src/scripts.rs`.
   var REQUIRE_TT_FOR_SCRIPT = false;
-  globalThis._lumen_tt_set_require_script = function (v) { REQUIRE_TT_FOR_SCRIPT = !!v; };
+  __lumen_C._lumen_tt_set_require_script = function (v) { REQUIRE_TT_FOR_SCRIPT = !!v; };
 
   // TT L2 §4.1.1 "Get Trusted Type compliant string", script subset: a
   // `TrustedScript` unwraps as-is; otherwise, under `require-trusted-types-for
@@ -108,7 +108,7 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // used by `createPolicy`) or the sink throws. Without the CSP directive the
   // value is used verbatim (TT Phase 0 behaviour, unchanged for pages that
   // never opt in).
-  globalThis._lumen_tt_get_compliant_script = function (input, sink) {
+  __lumen_C._lumen_tt_get_compliant_script = function (input, sink) {
     if (input instanceof TrustedScript && VALUES.has(input)) return VALUES.get(input);
     var stringified = String(input);
     if (!REQUIRE_TT_FOR_SCRIPT) return stringified;
@@ -131,7 +131,7 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // non-HTML-sink DOM API — both behaviours are asserted by the WPT fixtures
   // in tests/wpt/trusted-types/ (e.g. `HTMLElement-generic.html` vs.
   // `block-string-assignment-to-Element-insertAdjacentHTML.html`).
-  globalThis._lumen_tt_get_compliant_html = function (input, sink, nullToEmpty) {
+  __lumen_C._lumen_tt_get_compliant_html = function (input, sink, nullToEmpty) {
     if (input instanceof TrustedHTML && VALUES.has(input)) return VALUES.get(input);
     var stringified = (input === null && nullToEmpty) ? '' : String(input);
     if (!REQUIRE_TT_FOR_SCRIPT) return stringified;
@@ -145,7 +145,7 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // (TT L2 §4.1.1 "Get Trusted Type compliant string", expectedType =
   // TrustedScriptURL) — needed by the attribute-sink group below (`script.src`
   // as an attribute/property) and by any future navigational sink.
-  globalThis._lumen_tt_get_compliant_script_url = function (input, sink) {
+  __lumen_C._lumen_tt_get_compliant_script_url = function (input, sink) {
     if (input instanceof TrustedScriptURL && VALUES.has(input)) return VALUES.get(input);
     var stringified = String(input);
     if (!REQUIRE_TT_FOR_SCRIPT) return stringified;
@@ -174,7 +174,7 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // `innerHTML`/`setAttribute`/etc. but not for dynamic code, since there is
   // no later point to re-inject a modified script the way there is for
   // e.g. `<script src>`.
-  globalThis._lumen_tt_get_compliant_script_for_codegen = function (input, sink) {
+  __lumen_C._lumen_tt_get_compliant_script_for_codegen = function (input, sink) {
     if (input instanceof TrustedScript && VALUES.has(input)) return VALUES.get(input);
     if (typeof input !== 'string') return null;
     if (!REQUIRE_TT_FOR_SCRIPT) return input;
@@ -200,7 +200,7 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // GlobalEventHandlers) reports as the generic `Element <attrName>`, which
   // is what the WPT fixtures (`GlobalEventHandlers-onclick.html`,
   // `get-trusted-types-compliant-attribute-value.html`) assert for `onclick`.
-  globalThis._lumen_tt_get_compliant_attribute_value = function (tagLower, attrLower, value, elementNs, attrNs) {
+  __lumen_C._lumen_tt_get_compliant_attribute_value = function (tagLower, attrLower, value, elementNs, attrNs) {
     var type = factory.getAttributeType(tagLower, attrLower, elementNs, attrNs);
     if (type === null) return String(value);
     var sink;

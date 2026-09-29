@@ -9,7 +9,7 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn v8_runtime_with_canvas() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt.eval(

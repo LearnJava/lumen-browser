@@ -6,7 +6,7 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
@@ -353,13 +353,13 @@ fn snap_change_event_constructor_with_props() {
 #[test]
 fn lumen_fire_snap_changing_exists() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof globalThis._lumen_fire_snap_changing === 'function'"));
+    assert!(bool_eval(&rt, "typeof __lumen_C._lumen_fire_snap_changing === 'function'"));
 }
 
 #[test]
 fn lumen_fire_snap_changed_exists() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof globalThis._lumen_fire_snap_changed === 'function'"));
+    assert!(bool_eval(&rt, "typeof __lumen_C._lumen_fire_snap_changed === 'function'"));
 }
 
 #[test]

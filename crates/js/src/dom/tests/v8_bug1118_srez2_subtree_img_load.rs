@@ -30,7 +30,7 @@ fn runtime_with_hook(doc: Arc<Mutex<Document>>) -> (V8JsRuntime, Arc<RecordingHo
     let rt = V8JsRuntime::new()
         .unwrap()
         .with_image_load_hook(Arc::clone(&hook) as Arc<dyn ImageLoadHook>);
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     (rt, hook)

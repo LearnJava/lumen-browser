@@ -64,10 +64,10 @@ pub(crate) fn install_geolocation_bindings_v8(
 
     let init = match fake_coords {
         Some(c) => format!(
-            "globalThis._LUMEN_GEO_COORDS = {{lat:{},lon:{},acc:{}}};",
+            "__lumen_C._LUMEN_GEO_COORDS = {{lat:{},lon:{},acc:{}}};",
             c.latitude, c.longitude, c.accuracy
         ),
-        None => "globalThis._LUMEN_GEO_COORDS = null;".to_string(),
+        None => "__lumen_C._LUMEN_GEO_COORDS = null;".to_string(),
     };
     rt.eval(&init)?;
     rt.eval(GEO_SHIM)?;
@@ -82,7 +82,7 @@ const GEO_SHIM: &str = r#"(function() {
   var _coords = _LUMEN_GEO_COORDS;
 
   // Clean up injected global.
-  try { delete globalThis._LUMEN_GEO_COORDS; } catch(_) {}
+  try { delete __lumen_C._LUMEN_GEO_COORDS; } catch(_) {}
 
   var _watches = {};
   var _nextId = 1;

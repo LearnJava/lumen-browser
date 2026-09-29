@@ -63,7 +63,7 @@ fn dynamic_window_property_is_bare_reachable() {
     let rt = runtime_with_dom(make_doc(), "");
     let ok = rt
         .eval(
-            "window.__bug280_probe = function() { return 42; }; \
+            "globalThis.__bug280_probe = function() { return 42; }; \
                  typeof __bug280_probe === 'function' && __bug280_probe() === 42",
         )
         .unwrap();

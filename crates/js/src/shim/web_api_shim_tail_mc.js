@@ -339,7 +339,7 @@ window.open = function(url, target, features) {
 // path that runs at all for a popup document with no scripts (which never
 // reaches `run_scripts_with_dom`'s runtime creation). See
 // `crate::window_messaging` (Rust) for the tab-id addressing scheme this feeds.
-globalThis._lumen_install_opener = function(ownTabId, openerTabId) {
+__lumen_C._lumen_install_opener = function(ownTabId, openerTabId) {
   _lumen_own_tab_id = ownTabId;
   _lumen_opener_tab_id = openerTabId;
   window.opener = {
@@ -363,7 +363,7 @@ globalThis._lumen_install_opener = function(ownTabId, openerTabId) {
 // way `_lumen_frame_pump_messages` is). Reuses `_lumen_deliver_frame_message`
 // for the actual `MessageEvent` construction/dispatch (onmessage, then
 // `addEventListener('message', …)`), same as the cross-frame bridge.
-globalThis._lumen_window_pump_messages = function(tabId) {
+__lumen_C._lumen_window_pump_messages = function(tabId) {
   if (typeof _lumen_window_take_messages !== 'function') return;
   var raw = _lumen_window_take_messages(tabId);
   if (!raw) return;

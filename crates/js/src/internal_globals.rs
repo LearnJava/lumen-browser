@@ -36,14 +36,21 @@
 //! after this pass, and freezing them would make those writes fail silently in
 //! the shim's sloppy-mode code. They are only hidden from enumeration.
 //!
-//! What this pass deliberately does **not** do: it cannot stop a script that
-//! already *knows* a name from reading it (`typeof window._lumen_get_attr`),
-//! because the ~120 module shims still call the page shim's names through the
-//! global object. [BUG-753](../../../bugs/BUG-753-OPEN.md) removes the names in
-//! slices: срез 1 ([`wrap_page_shim`]) put `WEB_API_SHIM` in an IIFE, so its own
-//! calls bind to locals and only a re-export remains on the global; the
-//! module shims move onto an internal container in срез 2, and срез 3 drops
-//! the re-export.
+//! **BUG-753 срез 2 — the container.** Most of what the paragraph above describes
+//! is now moot: internal names no longer live on the global at all. Every context
+//! owns a null-prototype *container* object ([`install_container`]) hung off the
+//! global under a V8 private symbol. Natives registered from Rust
+//! (`register_v8_native`) go there, the page shim ([`wrap_page_shim`]) exports its
+//! `_`-prefixed / `__` / `_lumen…` bindings there (early-bound locals plus live
+//! accessors), and every *internal* `eval` runs as `with (container) { … }`
+//! ([`wrap_for_container`]) so module shims, Rust-side snippets and tests resolve
+//! bare internal names against it. The page-script boundary
+//! (`eval_and_report*`, module entry points) is not wrapped, so page script sees
+//! neither `window._lumen_x` nor a bare `_lumen_x`. This sealing pass stays for
+//! what still lands on the global: an unmigrated module shim's own top-level
+//! declaration, and `_lumen_import_meta_resolve` (module code reaches it through
+//! the `import.meta` preamble; the census test pins that it is the only one).
+//! Срез 3 removes those two, plus the `with` cost on shims that never needed it.
 //!
 //! Precedent: [`crate::file_input::seal_file_natives_v8`] (BUG-371) does the
 //! stronger thing — outright `delete` — for the file-API natives, which is
@@ -56,34 +63,36 @@
 /// The shim's ~1000 top-level `var`/`function` names stop being global-object
 /// properties: they become locals of one IIFE, so the shim's own calls bind
 /// early (to the local) instead of walking the scope chain to the global. The
-/// epilogue then re-exports each name to the global so the ~120 module shims
-/// and Rust-side `eval` snippets that still call them by bare name keep
-/// working (срез 2 moves those consumers onto an internal container; срез 3
-/// drops the re-export of internal names altogether):
+/// result is a function *expression*, called with the context's internal
+/// container as `__lumen_C` (срез 2) — the prologue/epilogue publish the names:
 ///
 /// * public names (`document`, `Element`, `fetch`, …) — a plain
-///   `writable`/`enumerable`/`configurable` data property, the attributes the
-///   old indirect-eval `var` binding had;
-/// * internal and `_`-prefixed names ([`is_accessor_export`]) — a non-enumerable accessor over the
-///   local binding, so late writes by module shims / Rust (`_lumen_x = …`)
-///   still reach the variable the shim itself reads. Sealing (freezing the
-///   function-valued ones) is done by the pass in this module.
+///   `writable`/`enumerable`/`configurable` data property on the global, the
+///   attributes the old indirect-eval `var` binding had;
+/// * internal and `_`-prefixed names ([`is_accessor_export`]) — a non-enumerable
+///   accessor **on the container** over the local binding, so late writes by
+///   module shims / Rust (`_lumen_x = …`, run under `with (container)`) still
+///   reach the variable the shim itself reads;
+/// * natives already on the container are bound to locals up front, and
+///   internal names the body only *references* get a local plus an accessor, so
+///   a native a later `install_*` registers reaches the local through the setter.
 ///
 /// The names are found by scanning column-0 `function NAME` / `var NAME[, …]`
 /// lines — the shim's formatting invariant, guarded by
 /// `shim_exports_every_old_global`.
 #[cfg(feature = "v8-backend")]
-pub(crate) fn wrap_page_shim(body: &str) -> String {
+pub(crate) fn wrap_page_shim(body: &str, natives: &[String]) -> String {
     let names = top_level_names(body);
-    let mut out = String::with_capacity(body.len() + names.len() * 160 + 1024);
-    out.push_str("(function() {\n");
+    let declared: std::collections::HashSet<&str> = names.iter().map(|(n, _)| n.as_str()).collect();
+    let mut out = String::with_capacity(body.len() + names.len() * 160 + natives.len() * 40 + 1024);
+    out.push_str("(function(__lumen_C) {\n");
     // Prologue: the global properties exist *before* the body runs, as they did
     // for eval-`var`s — the body itself calls `Object.defineProperty(globalThis,
     // 'X', { enumerable: false })` on its own names and reads `window.X` while
     // loading. Function declarations are hoisted, so their values are already
     // final here; `var`s start as `undefined` and are filled in by the epilogue.
     out.push_str(
-        "var __lumen_x = function(n, g, s) { try { Object.defineProperty(globalThis, n, \
+        "var __lumen_x = function(n, g, s) { try { Object.defineProperty(__lumen_C, n, \
          { get: g, set: s, enumerable: false, configurable: true }); } catch (e) {} };\n\
          var __lumen_p = function(n, v) { try { Object.defineProperty(globalThis, n, \
          { value: v, writable: true, enumerable: true, configurable: true }); } catch (e) {} };\n\
@@ -94,6 +103,30 @@ pub(crate) fn wrap_page_shim(body: &str) -> String {
          if (d && v !== undefined && 'value' in d) Object.defineProperty(globalThis, n, { value: v }); } \
          catch (e) {} };\n",
     );
+    // Early binding of the natives already on the container (срез 2): the shim
+    // reads them from a local instead of walking the scope chain.
+    let mut bound: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for n in natives {
+        if declared.contains(n.as_str()) || n == "__lumen_C" || !is_identifier(n) {
+            continue;
+        }
+        if bound.insert(n.as_str()) {
+            out.push_str(&format!("var {n} = __lumen_C.{n};\n"));
+        }
+    }
+    // Names the shim references but neither declares nor finds on the container
+    // yet — natives that a later `install_*` registers. A local plus a live
+    // accessor on the container: the later `container.name = fn` reaches the
+    // local through the setter.
+    for n in referenced_internal_names(body) {
+        if declared.contains(n.as_str()) || bound.contains(n.as_str()) || n == "__lumen_C" {
+            continue;
+        }
+        out.push_str(&format!("var {n};\n"));
+        out.push_str(&format!(
+            "__lumen_x(\"{n}\", function() {{ return {n}; }}, function(v) {{ {n} = v; }});\n"
+        ));
+    }
     for (n, is_fn) in &names {
         if is_accessor_export(n) {
             out.push_str(&format!(
@@ -113,22 +146,79 @@ pub(crate) fn wrap_page_shim(body: &str) -> String {
             out.push_str(&format!("__lumen_f(\"{n}\", typeof {n} === 'undefined' ? void 0 : {n});\n"));
         }
     }
-    out.push_str("})();\n");
+    out.push_str("})\n");
     out
+}
+
+#[cfg(feature = "v8-backend")]
+fn is_identifier(n: &str) -> bool {
+    let mut it = n.chars();
+    it.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Identifier tokens of `body` that are engine-internal names by
+/// [`is_internal_name`] and not member accesses (`x._lumen_name`).
+#[cfg(feature = "v8-backend")]
+fn referenced_names(body: &str) -> impl Iterator<Item = &str> {
+    let b = body.as_bytes();
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        while i < b.len() {
+            let c = b[i];
+            if c.is_ascii_alphabetic() || c == b'_' || c == b'$' {
+                let start = i;
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$') {
+                    i += 1;
+                }
+                let prev = start.checked_sub(1).map(|k| b[k]);
+                if prev != Some(b'.') {
+                    return Some(&body[start..i]);
+                }
+            } else {
+                i += 1;
+            }
+        }
+        None
+    })
+}
+
+#[cfg(feature = "v8-backend")]
+fn referenced_internal_names(body: &str) -> Vec<String> {
+    let b = body.as_bytes();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == b'_' || c == b'$' {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$') {
+                i += 1;
+            }
+            let tok = &body[start..i];
+            let prev = start.checked_sub(1).map(|k| b[k]);
+            if prev != Some(b'.') && is_internal_name(tok) {
+                seen.insert(tok.to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    seen.into_iter().collect()
 }
 
 /// Names re-exported as live accessors: the engine-internal ones plus every
 /// other single-underscore name (`_wa_current_time`, `_details_known_open`) —
 /// shim state that tests and module shims write to from outside the IIFE.
 #[cfg(feature = "v8-backend")]
-fn is_accessor_export(n: &str) -> bool {
+pub(crate) fn is_accessor_export(n: &str) -> bool {
     n.starts_with('_') || is_internal_name(n)
 }
 
 /// Same predicate as the `INTERNAL` regexp of [`SEAL_INTERNAL_GLOBALS`]:
 /// `^__` or `^_+lumen` (case-insensitive).
 #[cfg(feature = "v8-backend")]
-fn is_internal_name(n: &str) -> bool {
+pub(crate) fn is_internal_name(n: &str) -> bool {
     n.starts_with("__") || n.trim_start_matches('_').get(..5).is_some_and(|p| p.eq_ignore_ascii_case("lumen")) && n.starts_with('_')
 }
 
@@ -195,6 +285,241 @@ fn top_level_names(body: &str) -> Vec<(String, bool)> {
         }
     }
     names
+}
+
+/// The per-context internal container (BUG-753 срез 2): a null-prototype object
+/// that holds the engine's internal names — natives registered from Rust and the
+/// page shim's `_`-prefixed / `__` / `_lumen…` bindings — instead of the global
+/// object. It hangs off the global under a V8 *private* symbol, so no script can
+/// reach it by name; engine code reaches it through the scope-extension
+/// [`wrap_for_container`] puts around every internal `eval` (`with (container)`),
+/// and the page shim through its `__lumen_C` parameter.
+#[cfg(feature = "v8-backend")]
+fn container_private<'s>(scope: &v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Private>> {
+    let name = v8::String::new(scope, "lumen#internal-container")?;
+    Some(v8::Private::for_api(scope, Some(name)))
+}
+
+/// The container of `ctx`, if [`install_container`] has run for it.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn container<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    ctx: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let key = container_private(scope)?;
+    let value = ctx.global(scope).get_private(scope, key)?;
+    v8::Local::<v8::Object>::try_from(value).ok()
+}
+
+/// Create the container of `ctx` (idempotent). It carries a reference to itself
+/// as `__lumen_C`, so shim code running under `with (container)` can create
+/// *new* internal names (`__lumen_C._x = …`) without leaking them onto the global.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_container<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    ctx: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(c) = container(scope, ctx) {
+        return Some(c);
+    }
+    let key = container_private(scope)?;
+    let null = v8::null(scope).into();
+    let c = v8::Object::with_prototype_and_properties(scope, null, &[], &[]);
+    let self_key = v8::String::new(scope, "__lumen_C")?;
+    c.set(scope, self_key.into(), c.into());
+    ctx.global(scope).set_private(scope, key, c.into());
+    Some(c)
+}
+
+/// Object that owns `name` for reads/writes coming from Rust: the container for
+/// an internal name (when the context has one), the global object otherwise.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn holder_for<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    ctx: v8::Local<'s, v8::Context>,
+    name: &str,
+) -> v8::Local<'s, v8::Object> {
+    let global = ctx.global(scope);
+    if is_accessor_export(name)
+        && let Some(c) = container(scope, ctx)
+    {
+        // Names a shim still parks on the global (`globalThis._x = …`, an
+        // unmigrated module shim's top-level declaration) stay reachable there
+        // until срез 3 moves them; everything else is the container's.
+        let has = |o: v8::Local<'s, v8::Object>, own: bool| {
+            v8::String::new(scope, name)
+                .and_then(|k| if own { o.has_own_property(scope, k.into()) } else { o.has(scope, k.into()) })
+                .unwrap_or(false)
+        };
+        if has(c, false) || (is_internal_name(name) && !has(global, true)) {
+            return c;
+        }
+    }
+    global
+}
+
+/// Text prefix / suffix of an internal `eval`: `with (container) { … }`. The
+/// container is handed over through a one-shot global that the prefix reads and
+/// deletes before the script body runs, so the script never observes it.
+#[cfg(feature = "v8-backend")]
+pub(crate) const WITH_PREFIX: &str = "with ((function(){var c=globalThis.__lumen_c_tmp;delete globalThis.__lumen_c_tmp;return c})()) {";
+
+/// How [`wrap_for_container`] must treat a script. `None` — leave it alone:
+/// it opens with a `'use strict'` directive (the wrapper would silently drop it
+/// — `with` is illegal in strict code) or declares a top-level `let`/`const`
+/// (block-scoped inside the wrapper instead of living in the global lexical
+/// scope, so a later `eval` would no longer see it). `Some(classes)` — wrap it;
+/// the listed top-level `class` names are re-published on the global after the
+/// block (`class X {}` is block-scoped there too, and other scripts expect the
+/// name to stay reachable).
+#[cfg(feature = "v8-backend")]
+enum WrapPlan {
+    /// `with (container) { … }` around the source; top-level classes re-published.
+    Block(Vec<String>),
+    /// `with (container) { (function() { 'use strict'; … }).call(globalThis) }`.
+    StrictFn,
+}
+
+#[cfg(feature = "v8-backend")]
+fn wrap_plan(script: &str) -> Option<WrapPlan> {
+    let t = script.trim_start();
+    if t.starts_with("'use strict'") || t.starts_with("\"use strict\"") {
+        // A strict script cannot sit inside `with`; run its body in a strict
+        // function under the `with` instead — unless it declares top-level names
+        // that must stay global, which the function would swallow.
+        let declares = script.lines().any(|l| {
+            ["function ", "async function ", "var ", "class ", "let ", "const "]
+                .iter()
+                .any(|k| l.starts_with(k))
+        });
+        return (!declares).then_some(WrapPlan::StrictFn);
+    }
+    let b = script.as_bytes();
+    let mut classes = Vec::new();
+    let (mut depth, mut i, mut stmt_start) = (0i32, 0usize, true);
+    while i < b.len() {
+        let c = b[i];
+        match c {
+            b'\'' | b'"' | b'`' => {
+                i += 1;
+                while i < b.len() && b[i] != c {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                stmt_start = false;
+                continue;
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                continue;
+            }
+            b'{' | b'(' | b'[' => {
+                depth += 1;
+                stmt_start = false;
+            }
+            b'}' | b')' | b']' => {
+                depth -= 1;
+                stmt_start = c == b'}' && depth == 0;
+            }
+            b';' => stmt_start = depth == 0,
+            b'\n' => stmt_start = stmt_start || depth == 0,
+            c if c.is_ascii_whitespace() => {}
+            c if depth == 0 && stmt_start && c.is_ascii_alphabetic() => {
+                let start = i;
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$') {
+                    i += 1;
+                }
+                let word = &script[start..i];
+                if matches!(word, "let" | "const") && b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+                    return None;
+                }
+                if word == "class" && b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+                    let rest = script[i..].trim_start();
+                    let end = rest
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+                        .unwrap_or(rest.len());
+                    if end > 0 {
+                        classes.push(rest[..end].to_string());
+                    }
+                }
+                stmt_start = false;
+                continue;
+            }
+            _ => stmt_start = false,
+        }
+        i += 1;
+    }
+    Some(WrapPlan::Block(classes))
+}
+
+/// Wrap `script` so its bare identifiers resolve against the container first.
+/// `None` when the context has no container (the script then runs as-is).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn wrap_for_container<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    ctx: v8::Local<'s, v8::Context>,
+    script: &str,
+) -> Option<String> {
+    // Nothing in the script can resolve to the container: run it exactly as
+    // written (keeps `let`/`const`/strict semantics, columns and code-cache keys).
+    if !referenced_names(script).any(is_accessor_export) {
+        return None;
+    }
+    let plan = wrap_plan(script)?;
+    let c = container(scope, ctx)?;
+    let key = v8::String::new(scope, "__lumen_c_tmp")?;
+    ctx.global(scope).set(scope, key.into(), c.into());
+    Some(with_plan_text(script, &plan))
+}
+
+/// The wrapped source text [`wrap_for_container`] compiles.
+#[cfg(feature = "v8-backend")]
+fn with_plan_text(script: &str, plan: &WrapPlan) -> String {
+    match plan {
+        WrapPlan::Block(classes) => with_container_text(script, classes),
+        WrapPlan::StrictFn => {
+            let mut out = String::with_capacity(script.len() + WITH_PREFIX.len() + 40);
+            out.push_str(WITH_PREFIX);
+            out.push_str("(function() {");
+            out.push_str(script);
+            out.push_str("
+}).call(globalThis);}");
+            out
+        }
+    }
+}
+
+/// [`WrapPlan::Block`] text.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn with_container_text(script: &str, classes: &[String]) -> String {
+    let mut out = String::with_capacity(script.len() + WITH_PREFIX.len() + 4);
+    out.push_str(WITH_PREFIX);
+    // Re-publication of top-level classes goes *before* the body — a trailing
+    // statement would replace the script's completion value. A live accessor
+    // over the block binding: the global name resolves to the class once its
+    // declaration has run, exactly when a global lexical binding would.
+    for n in classes {
+        out.push_str(&format!(
+            "Object.defineProperty(globalThis,\"{n}\",{{get:function(){{return {n}}},             set:function(v){{Object.defineProperty(globalThis,\"{n}\",{{value:v,writable:true,             configurable:true}})}},enumerable:false,configurable:true}});"
+        ));
+    }
+    out.push_str(script);
+    out.push_str("
+}");
+    out
 }
 
 #[cfg(feature = "v8-backend")]
@@ -366,31 +691,33 @@ mod tests {
                              return /^__|^_+lumen/i.test(k); }).length"), 0.0);
     }
 
-    /// The registration choke point itself hides natives, without waiting for
-    /// the sealing pass: a runtime that only registered natives (no
-    /// `install_dom`, so no seal) must already keep them out of `for..in`,
-    /// while leaving them writable for the re-registrations and shim wrappers
-    /// that happen during install.
+    /// Page-script view: `eval_and_report` is the top-level `<script>` boundary and
+    /// runs without the internal container in scope.
+    fn page(rt: &V8JsRuntime, script: &str) -> JsValue {
+        rt.eval_and_report(script).unwrap()
+    }
+
+    fn page_truthy(rt: &V8JsRuntime, script: &str) -> bool {
+        page(rt, script) == JsValue::Bool(true)
+    }
+
+    /// Natives registered from Rust land on the internal container, not on the
+    /// global: a runtime that only registered natives (no `install_dom`) already
+    /// keeps them off the page-visible global, and the engine's own scope still
+    /// resolves them.
     #[test]
-    fn registered_native_is_hidden_but_still_patchable() {
+    fn registered_native_is_not_on_the_global() {
         let rt = V8JsRuntime::new().unwrap();
         rt.install_console_natives(Arc::new(Mutex::new(Vec::new()))).unwrap();
-        assert!(truthy(
+        assert!(page_truthy(
             &rt,
-            "(function() { var d = Object.getOwnPropertyDescriptor(globalThis, '_lumen_console_log'); \
-              return d.enumerable === false && d.writable === true && d.configurable === true; })()"
+            "Object.getOwnPropertyDescriptor(globalThis, '_lumen_console_log') === undefined              && typeof _lumen_console_log === 'undefined'"
         ));
-        assert_eq!(
-            num(
-                &rt,
-                "var n = 0; for (var k in globalThis) { if (k === '_lumen_console_log') n++; } n"
-            ),
-            0.0
-        );
+        assert!(truthy(&rt, "typeof _lumen_console_log === 'function'"));
     }
 
     /// Sealing must not make the names unreachable *for the engine* — the shim
-    /// resolves every native late, through the global object.
+    /// resolves every native through the container.
     #[test]
     fn natives_stay_callable_after_sealing() {
         let rt = runtime();
@@ -399,72 +726,75 @@ mod tests {
         assert_eq!(text(&rt, "document.getElementById('main').getAttribute('data-x')"), "orig");
     }
 
-    /// The hijack from the bug report: `window._lumen_get_attr = …` must no
-    /// longer re-point `Element.getAttribute`.
+    /// The headline of BUG-753: a page script that knows a name cannot read it —
+    /// neither as a member of `window` nor as a bare identifier.
+    #[test]
+    fn page_script_cannot_read_internal_names() {
+        let rt = runtime();
+        for name in [
+            "_lumen_get_attr",
+            "_lumen_set_attr",
+            "_lumen_query_selector_scoped",
+            "_lumen_timers",
+            "_lumen_loc_parts",
+            "_lumen_tick_timers",
+        ] {
+            let probe = format!(
+                "typeof window.{name} === 'undefined' && typeof {name} === 'undefined'                  && !('{name}' in window)                  && Object.getOwnPropertyNames(window).indexOf('{name}') < 0"
+            );
+            assert!(page_truthy(&rt, &probe), "{name} is visible to page script");
+        }
+    }
+
+    /// The hijack from the bug report: `window._lumen_get_attr = …` must not
+    /// re-point `Element.getAttribute` — the page's write lands on a global the
+    /// shim never reads.
     #[test]
     fn native_cannot_be_hijacked_by_assignment() {
         let rt = runtime();
-        rt.eval("try { window._lumen_get_attr = function() { return 'HIJACKED'; }; } catch (e) {}")
-            .unwrap();
+        page(&rt, "try { window._lumen_get_attr = function() { return 'HIJACKED'; }; } catch (e) {}");
         assert_eq!(
             text(&rt, "document.getElementById('main').getAttribute('data-x')"),
             "orig",
             "page script replaced the DOM's bottom layer"
         );
-        // Strict-mode code gets a loud TypeError rather than a silent no-op.
-        assert!(truthy(
-            &rt,
-            "(function() { 'use strict'; \
-              try { window._lumen_get_attr = 1; return false; } \
-              catch (e) { return e instanceof TypeError; } })()"
-        ));
-    }
-
-    /// A frozen native is also not removable — `delete` used to report `true`
-    /// and leave the shim calling into `undefined`.
-    #[test]
-    fn native_cannot_be_deleted() {
-        let rt = runtime();
-        assert!(truthy(
-            &rt,
-            "(function() { try { return delete window._lumen_get_attr === false; } \
-              catch (e) { return true; } })()"
-        ));
+        // Not even a bare-name assignment or a delete reaches the container.
+        page(&rt, "try { _lumen_set_attr = function() {}; delete window._lumen_get_attr; } catch (e) {}");
+        rt.eval("document.getElementById('main').setAttribute('data-y', 'v')").unwrap();
+        assert_eq!(text(&rt, "document.getElementById('main').getAttribute('data-y')"), "v");
         assert!(truthy(&rt, "typeof _lumen_get_attr === 'function'"));
     }
 
-    /// The shim's own wrappers around natives (installed during the shim eval,
-    /// i.e. before the pass) are frozen too, not just the raw natives — those
-    /// wrappers carry the MutationObserver/resource hooks.
-    #[test]
-    fn shim_wrapper_over_native_is_frozen() {
-        let rt = runtime();
-        assert!(truthy(
-            &rt,
-            "Object.getOwnPropertyDescriptor(window, '_lumen_set_attr').writable === false"
-        ));
-        rt.eval("try { window._lumen_set_attr = function() {}; } catch (e) {}").unwrap();
-        rt.eval("document.getElementById('main').setAttribute('data-y', 'v')").unwrap();
-        assert_eq!(text(&rt, "document.getElementById('main').getAttribute('data-y')"), "v");
-    }
-
-    /// Engine *state* stays writable: the shim assigns to these long after the
-    /// pass has run, and a frozen slot would drop those writes silently.
+    /// Engine *state* is reachable and writable from the engine's scope: the shim
+    /// assigns to it long after install, and `_lumen_tick_timers` rewrites
+    /// `_lumen_timers` on every pump.
     #[test]
     fn engine_state_stays_writable() {
         let rt = runtime();
         for name in ["_lumen_timers", "_lumen_loc_parts", "_lumen_last_focused_nid"] {
-            let d = format!(
-                "(function() {{ var d = Object.getOwnPropertyDescriptor(window, '{name}'); \
-                  return d !== undefined && d.enumerable === false \n                  && (d.writable === true || typeof d.set === 'function'); }})()"
+            assert!(
+                truthy(&rt, &format!("typeof {name} !== 'undefined'")),
+                "{name} must be reachable from the engine's scope"
             );
-            assert!(truthy(&rt, &d), "{name} must be hidden but still writable");
         }
-        // End-to-end: `_lumen_tick_timers` rewrites `_lumen_timers` on every
-        // pump, so a frozen slot would stop timer delivery outright.
         rt.eval("var fired = 0; setTimeout(function() { fired++; }, 0);").unwrap();
         rt.eval("_lumen_tick_timers()").unwrap();
         assert_eq!(num(&rt, "fired"), 1.0);
+    }
+
+    /// BUG-753 census: the only engine-internal own property of the page's global
+    /// object is `_lumen_import_meta_resolve`, which module code reaches through
+    /// the `import.meta` preamble (`crate::import_meta`) and so cannot move onto
+    /// the container until `import.meta` is set up by a host callback (срез 3).
+    /// Any other name showing up here is a regression.
+    #[test]
+    fn only_known_internal_names_remain_on_the_global() {
+        let rt = runtime();
+        let names = text(
+            &rt,
+            "Object.getOwnPropertyNames(globalThis).filter(function(n) {                return /^__|^_+lumen/i.test(n); }).sort().join(',')",
+        );
+        assert_eq!(names, "_lumen_import_meta_resolve");
     }
 
     /// `WEB_API_SHIM` is evaluated through indirect eval so its top-level

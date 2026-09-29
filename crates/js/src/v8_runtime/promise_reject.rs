@@ -176,7 +176,7 @@ fn flush_promise_rejections(scope: &mut v8::PinScope) {
         return;
     }
     let ctx = scope.get_current_context();
-    let global = ctx.global(scope);
+    let global = crate::internal_globals::holder_for(scope, ctx, "_lumen_dispatch_unhandled_rejection");
     let Some(key) = v8::String::new(scope, "_lumen_dispatch_unhandled_rejection") else {
         return;
     };

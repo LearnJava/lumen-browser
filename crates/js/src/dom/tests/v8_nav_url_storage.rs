@@ -8,7 +8,7 @@ use crate::v8_runtime::V8JsRuntime;
 /// `install_dom` argument list, same `_LUMEN_EXTENSION_ACTIVE` pre-eval.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
@@ -646,10 +646,10 @@ fn deliver_popstate_fires_event_listeners() {
 #[test]
 fn deliver_popstate_fires_hashchange_on_fragment_change() {
     let rt = v8_runtime_with_url("https://example.com/page#a");
-    rt.eval("var __h = null; window.onhashchange = function(e) { window.__h = e.newURL; };").unwrap();
+    rt.eval("var __h = null; window.onhashchange = function(e) { globalThis.__h = e.newURL; };").unwrap();
     rt.eval("_lumen_deliver_popstate('null', 'https://example.com/page#b')").unwrap();
     rt.eval("_lumen_tick_timers()").unwrap();
-    let r = rt.eval("window.__h").unwrap();
+    let r = rt.eval("globalThis.__h").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("https://example.com/page#b".into()));
 }
 

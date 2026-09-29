@@ -65,8 +65,8 @@ const DIGITAL_CREDENTIALS_SHIM: &str = r#"(function() {
 
   // ── _lumen_digital_credential_get ────────────────────────────────────────
   // Phase 1 native binding stub (no-op until OS wallet integration).
-  if (typeof globalThis._lumen_digital_credential_get === 'undefined') {
-    globalThis._lumen_digital_credential_get = function(_requestJson) {
+  if (typeof __lumen_C._lumen_digital_credential_get === 'undefined') {
+    __lumen_C._lumen_digital_credential_get = function(_requestJson) {
       return null; // Phase 1: return JSON response from OS wallet
     };
   }

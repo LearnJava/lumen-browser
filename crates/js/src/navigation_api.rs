@@ -193,7 +193,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
       this._intercepted = true;
       const handler = options.handler || (() => {});
       this._handledPromise = Promise.resolve().then(handler);
-      window._lumen_pending_intercept_handler = handler;
+      __lumen_C._lumen_pending_intercept_handler = handler;
     }
 
     _isIntercepted() {
@@ -612,13 +612,13 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
   }
 
   // ── Navigation API shell wire-up ──────────────────────────────────────────
-  window._lumen_pending_intercept_handler = null;
+  __lumen_C._lumen_pending_intercept_handler = null;
 
   // Every shell publish resyncs the entry objects right away, so `dispose`
   // fires when the entry leaves the stacks rather than on the next read.
   if (typeof _lumen_navigation_set_state === 'function') {
     const nativeSetState = _lumen_navigation_set_state;
-    globalThis._lumen_navigation_set_state = function(json) {
+    __lumen_C._lumen_navigation_set_state = function(json) {
       nativeSetState(json);
       navigation._sync();
     };
@@ -626,7 +626,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
 
   // `destKey` (optional) names the target entry of a traversal; for
   // push/replace/fragment the destination is a URL with no entry yet.
-  window._lumen_dispatch_navigate = function(type, url, canIntercept, hashChange, destKey) {
+  __lumen_C._lumen_dispatch_navigate = function(type, url, canIntercept, hashChange, destKey) {
     var destination = null;
     var target = destKey ? (navigation._sync(), navigation._cache.get(String(destKey))) : null;
     if (target) {
@@ -668,7 +668,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
       }
       navigation._transition = new NavigationTransition(TOKEN, {
         navigationType: type, from: navigation.currentEntry, to: destination });
-      window._lumen_navigation_report_intercept(true, false);
+      __lumen_C._lumen_navigation_report_intercept(true, false);
       return true;
     }
     if (event.defaultPrevented) {
@@ -679,16 +679,16 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
         _lumen_abort_signal_fire(event.signal,
           new DOMException('The navigation was aborted', 'AbortError'));
       }
-      window._lumen_navigation_report_intercept(false, true);
+      __lumen_C._lumen_navigation_report_intercept(false, true);
       return true;
     }
     return false;
   };
 
-  window._lumen_run_navigate_handler = function() {
-    if (!window._lumen_pending_intercept_handler) return Promise.resolve();
-    var handler = window._lumen_pending_intercept_handler;
-    window._lumen_pending_intercept_handler = null;
+  __lumen_C._lumen_run_navigate_handler = function() {
+    if (!__lumen_C._lumen_pending_intercept_handler) return Promise.resolve();
+    var handler = __lumen_C._lumen_pending_intercept_handler;
+    __lumen_C._lumen_pending_intercept_handler = null;
     return Promise.resolve().then(handler).then(function(result) {
       var data = result || {};
       _lumen_navigation_request(
@@ -702,7 +702,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
     });
   };
 
-  window._lumen_fire_navigate_success = function() {
+  __lumen_C._lumen_fire_navigate_success = function() {
     window.navigation.dispatchEvent(trusted(new Event('navigatesuccess')));
     // §7.2.9.9: finished settles after the event, then the transition ends.
     const tr = navigation._transition;
@@ -711,7 +711,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
     if (navigation._ongoing) navigation._ongoing.ok(navigation.currentEntry);
   };
 
-  window._lumen_fire_navigate_error = function() {
+  __lumen_C._lumen_fire_navigate_error = function() {
     navigation._hasPendingState = false;
     navigation._pendingState = undefined;
     window.navigation.dispatchEvent(trusted(new Event('navigateerror')));
@@ -725,7 +725,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
   // The shell publishes the new stacks (`_lumen_navigation_set_state`) before
   // firing this, so `navigation.currentEntry` is already the new entry and
   // `_sync` has recorded the one it replaced.
-  window._lumen_fire_currententrychange = function() {
+  __lumen_C._lumen_fire_currententrychange = function() {
     navigation._sync();
     var from = navigation._changeFrom || navigation._current;
     var type = navigation._changeFrom ? navigation._changeType : null;
@@ -734,7 +734,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
     if (!from) return;
     window.navigation.dispatchEvent(trusted(new NavigationCurrentEntryChangeEvent(
       'currententrychange', { navigationType: type, from: from })));
-    if (navigation._ongoing && !window._lumen_pending_intercept_handler
+    if (navigation._ongoing && !__lumen_C._lumen_pending_intercept_handler
         && navigation.currentEntry !== from) {
       navigation._ongoing.ok(navigation.currentEntry);
     }

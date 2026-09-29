@@ -2283,6 +2283,16 @@ the time — read dates.
 
 ## Invariants
 
+- **Engine-internal names (`_lumen…`, `__…`, page-shim `_x`) live on a per-context container, not on the global**
+  ([BUG-753](../bugs/BUG-753-OPEN.md) срез 2, 2026-09-30). Shim / Rust-snippet / test code reaches them by bare name
+  because every internal `JsRuntime::eval` runs under `with (container)`; the page-script boundary (`eval_and_report*`,
+  module entry points) does not, so page script sees none of them. Traps: **never write `window._lumen_x` /
+  `globalThis._lumen_x` / `Object.defineProperty(globalThis, '_lumen_x', …)` in a shim** — it lands on the page's
+  global and the census test `only_known_internal_names_remain_on_the_global` fails; write `__lumen_C._lumen_x = …`
+  (a plain assignment, not `defineProperty`, when the page shim also reads the name — it holds a local behind an
+  accessor that only a `[[Set]]` reaches). `class X {}` at the top of an internal `eval` is re-published on the global
+  by an accessor; top-level `let`/`const` make the script run *unwrapped* (no bare internal names). Module code and
+  worker/page scripts cannot use `__lumen_C`; `_lumen_import_meta_resolve` is the one internal still on the global.
 - **There is exactly ONE event dispatch, `_lumen_propagate`, and every entry point is a wrapper over it**
   ([BUG-873](../bugs/BUG-873-FIXED.md), 2026-09-10). `_lumen_dispatch` (script), `_lumen_dispatch_bubble`
   and `_lumen_dispatch_rich` (native input) all call it, so a fix to phases, ordering or `window` delivery

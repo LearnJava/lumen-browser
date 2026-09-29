@@ -78,8 +78,8 @@ const PAINT_WORKLET_SHIM: &str = r#"(function(global) {
   'use strict';
 
   // Store registered paint worklets in a global map accessible from Rust bindings.
-  if (!global._lumen_paint_worklets) {
-    global._lumen_paint_worklets = new Map();
+  if (!__lumen_C._lumen_paint_worklets) {
+    __lumen_C._lumen_paint_worklets = new Map();
   }
 
   // Create or extend CSS global object.
@@ -123,7 +123,7 @@ const PAINT_WORKLET_SHIM: &str = r#"(function(global) {
         moduleUrl: moduleUrl,
         inputProperties: paintClass.inputProperties || []
       };
-      global._lumen_paint_worklets.set(name, def);
+      __lumen_C._lumen_paint_worklets.set(name, def);
     };
   }
 })(globalThis)"#;

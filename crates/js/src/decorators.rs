@@ -85,7 +85,7 @@ const DECORATOR_SHIM: &str = r##"(function(global) {
 
   // Class decorators apply bottom-up (closest to the class first); a non-null
   // return value replaces the class.
-  global.__lumen_apply_class_decorators = function(cls, decs, name) {
+  __lumen_C.__lumen_apply_class_decorators = function(cls, decs, name) {
     for (var i = decs.length - 1; i >= 0; i--) {
       var ctx = { kind: 'class', name: name };
       ctx[Symbol.ClassDecorator] = true;
@@ -97,7 +97,7 @@ const DECORATOR_SHIM: &str = r##"(function(global) {
 
   // Method decorators receive (fn, context) and may return a replacement.
   // `owner` is the class for static members, the prototype otherwise.
-  global.__lumen_apply_method_decorators = function(owner, name, decs, isStatic, clsName) {
+  __lumen_C.__lumen_apply_method_decorators = function(owner, name, decs, isStatic, clsName) {
     var value = owner[name];
     for (var i = decs.length - 1; i >= 0; i--) {
       var ctx = { kind: 'method', name: name, static: isStatic, private: false, class: clsName };
@@ -111,7 +111,7 @@ const DECORATOR_SHIM: &str = r##"(function(global) {
   // Field decorators receive (undefined, context) and may return an
   // initial-value transformer. Returns the composed transformer; the
   // transformed source calls it with `this` = instance (or class for static).
-  global.__lumen_apply_field_decorators = function(decs, name, isStatic) {
+  __lumen_C.__lumen_apply_field_decorators = function(decs, name, isStatic) {
     var fns = [];
     for (var i = decs.length - 1; i >= 0; i--) {
       var ctx = { kind: 'field', name: name, static: isStatic, private: false };
@@ -470,7 +470,7 @@ const DECORATOR_SHIM: &str = r##"(function(global) {
 
   // Fail-open entry point: any transformer error returns the source unchanged
   // so QuickJS's own diagnostics surface.
-  global.__lumen_transform_decorators = function(src) {
+  __lumen_C.__lumen_transform_decorators = function(src) {
     src = String(src);
     if (src.indexOf('@') < 0) return src;
     try {
