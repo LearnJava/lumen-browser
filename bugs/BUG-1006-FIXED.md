@@ -29,7 +29,7 @@
 (дольше, чем обрывавший её `timeout 280`); `websockets` `--update-expected` — 786/786 за 24:33,
 191 `.ini`, ни одного `CRITICAL`/`frame error`; `websockets` `--check` — 786/786 за 25:09,
 вердикт `check: 3 regression(s)…` (три плавающих `TIMEOUT`: `?wss`-варианты `bufferedAmount-*`
-и `readyState/005.html?default` — отдельный класс, как [BUG-999](BUG-999-OPEN.md)/
+и `readyState/005.html?default` — отдельный класс, как [BUG-999](BUG-999-FIXED.md)/
 [BUG-1003](BUG-1003-FIXED.md), к этому багу не относится). «Слишком длинный прогон» — не блокер;
 блокером была сама схема запуска.
 
