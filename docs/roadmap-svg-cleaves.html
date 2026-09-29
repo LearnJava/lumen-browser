@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-29",
+ "generated": "2026-09-30",
  "counts": {
-  "open": 194,
-  "fixed": 972,
+  "open": 193,
+  "fixed": 974,
   "inprogress": 0,
   "wontfix": 1
  },
- "total_bugs": 1167,
+ "total_bugs": 1168,
  "phases": [
   {
    "id": "P0",
@@ -5556,7 +5556,7 @@
        "title": "WPT-RUN-12: исполнители testdriver-экшенов",
        "status": "done",
        "size": "M",
-       "note": "Исполнитель WPT реализует ровно два testdriver-экшена (`click` и `generate_test_report`); `action_sequence`, `send_keys`, `bless`, `set_permission`, `delete_all_cookies`, `get_computed_role`, `get_computed_label` и остальные из примерно тридцати отклоняются `ActionError`, а отклонённый промис страница не видит, поэтому тест висит до таймаута враннера вместо честного FAIL. Подтверждено инструментированием `_handle_action`. Раньше блокировалось строже: `testdriver.js` открывается вызовом `element.getClientRects()`, которого не было (GAP-GEOM) — до экшенов дело не доходило в принципе. GAP-GEOM закрыт 2026-09-05, `getClientRects()` больше не бросает, так что написанные экшены теперь есть чем проверить — статус переведён в `ready`. Владелец — P2: это его собственный тулинг, а не движок. **DONE 2026-09-06 (P1):** `_handle_action` получил три ветки по приоритету из `BUG-810` — `action_sequence`/`send_keys` (оба через `session.input.perform_actions`, резолвя `{selectors}`-origin в абсолютную viewport-точку до транспорта, поскольку `replay_input_actions` читает `x`/`y` как уже абсолютные и `origin` игнорирует) и `delete_all_cookies` (`storage.deleteCookies`, уже реализован BiDi-сервером); ветка-заглушка теперь ещё и логирует (`self.logger.info`) вместо тихого отказа. Попутно найден и исправлен независимый дефект: `session.input.perform_actions` вызывался позиционно, а декоратор `@command` (`tools/webdriver/webdriver/bidi/modules/_module.py`) принимает только keyword-параметры — `click` (ранее заявленный как рабочий) падал бы той же `TypeError` при первом реальном использовании, обнаружено этим прогоном. Живой `wptrunner`-прогон до конца не дошёл (Python 3.14 на машине разработки убрал `ssl.wrap_socket`, нужный вендоренному `pywebsocket3`, а следом падает `h2`-сервер — обе поломки версии интерпретатора, не связаны с правкой); проверено юнит-уровнем на реальных `webdriver.bidi.modules.input` классах с замоканным транспортом. `bless` отдельной веткой не заведён — он не шлёт свой экшен, целиком строится через уже рабочий `click`. `set_permission` (нет ни одного `permissions.*` BiDi-обработчика) и `get_computed_role`/`get_computed_label` (accessibility-дерево есть — `crates/engine/a11y` — но без корреляции с DOM-элементом) оставлены: оба по объёму отдельная задача, а не трансляция payload'а — вынесены в [BUG-1014](bugs/BUG-1014-OPEN.md) → `WPT-RUN-13`. Подробности — [`docs/tasks/p2-wpt-runner-throughput.md`](docs/tasks/p2-wpt-runner-throughput.md) §WPT-RUN-12",
+       "note": "Исполнитель WPT реализует ровно два testdriver-экшена (`click` и `generate_test_report`); `action_sequence`, `send_keys`, `bless`, `set_permission`, `delete_all_cookies`, `get_computed_role`, `get_computed_label` и остальные из примерно тридцати отклоняются `ActionError`, а отклонённый промис страница не видит, поэтому тест висит до таймаута враннера вместо честного FAIL. Подтверждено инструментированием `_handle_action`. Раньше блокировалось строже: `testdriver.js` открывается вызовом `element.getClientRects()`, которого не было (GAP-GEOM) — до экшенов дело не доходило в принципе. GAP-GEOM закрыт 2026-09-05, `getClientRects()` больше не бросает, так что написанные экшены теперь есть чем проверить — статус переведён в `ready`. Владелец — P2: это его собственный тулинг, а не движок. **DONE 2026-09-06 (P1):** `_handle_action` получил три ветки по приоритету из `BUG-810` — `action_sequence`/`send_keys` (оба через `session.input.perform_actions`, резолвя `{selectors}`-origin в абсолютную viewport-точку до транспорта, поскольку `replay_input_actions` читает `x`/`y` как уже абсолютные и `origin` игнорирует) и `delete_all_cookies` (`storage.deleteCookies`, уже реализован BiDi-сервером); ветка-заглушка теперь ещё и логирует (`self.logger.info`) вместо тихого отказа. Попутно найден и исправлен независимый дефект: `session.input.perform_actions` вызывался позиционно, а декоратор `@command` (`tools/webdriver/webdriver/bidi/modules/_module.py`) принимает только keyword-параметры — `click` (ранее заявленный как рабочий) падал бы той же `TypeError` при первом реальном использовании, обнаружено этим прогоном. Живой `wptrunner`-прогон до конца не дошёл (Python 3.14 на машине разработки убрал `ssl.wrap_socket`, нужный вендоренному `pywebsocket3`, а следом падает `h2`-сервер — обе поломки версии интерпретатора, не связаны с правкой); проверено юнит-уровнем на реальных `webdriver.bidi.modules.input` классах с замоканным транспортом. `bless` отдельной веткой не заведён — он не шлёт свой экшен, целиком строится через уже рабочий `click`. `set_permission` (нет ни одного `permissions.*` BiDi-обработчика) и `get_computed_role`/`get_computed_label` (accessibility-дерево есть — `crates/engine/a11y` — но без корреляции с DOM-элементом) оставлены: оба по объёму отдельная задача, а не трансляция payload'а — вынесены в [BUG-1014](bugs/BUG-1014-FIXED.md) → `WPT-RUN-13`. Подробности — [`docs/tasks/p2-wpt-runner-throughput.md`](docs/tasks/p2-wpt-runner-throughput.md) §WPT-RUN-12",
        "bugs": [
         "BUG-810"
        ]
@@ -5564,9 +5564,9 @@
       {
        "id": "WPT-RUN-13",
        "title": "WPT-RUN-13: `set_permission` + `get_computed_role`/`label`",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Остаток WPT-RUN-12: `set_permission` (BiDi `permissions.setPermission` не реализован на сервере вовсе — `crates/bidi-server/src/protocol.rs` не диспетчеризует ни один метод этого модуля, и у движка нет модели permission-состояния, которую можно было бы менять) и `get_computed_role`/`get_computed_label` (accessibility-дерево реализовано — `crates/engine/a11y`, `AutomationCommand::A11yTree`, `query_a11y`/`query_a11y_all` в `lumen-driver` — но ни один путь не решает обратную задачу: по DOM-элементу найти его `AXNode` и прочитать роль/имя; нужна корреляция, например geometry-based lookup по прямоугольнику элемента, аналогично `_resolve_element_center`). Оба пункта — доработка по `probe-method.md §8`: функциональности нет вовсе и размер — семейство/модель, а не одна строка. Бриф — [bugs/BUG-1014-OPEN.md](bugs/BUG-1014-OPEN.md)",
+       "note": "Остаток WPT-RUN-12: `set_permission` (BiDi `permissions.setPermission` не реализован на сервере вовсе — `crates/bidi-server/src/protocol.rs` не диспетчеризует ни один метод этого модуля, и у движка нет модели permission-состояния, которую можно было бы менять) и `get_computed_role`/`get_computed_label` (accessibility-дерево реализовано — `crates/engine/a11y`, `AutomationCommand::A11yTree`, `query_a11y`/`query_a11y_all` в `lumen-driver` — но ни один путь не решает обратную задачу: по DOM-элементу найти его `AXNode` и прочитать роль/имя; нужна корреляция, например geometry-based lookup по прямоугольнику элемента, аналогично `_resolve_element_center`). Оба пункта — доработка по `probe-method.md §8`: функциональности нет вовсе и размер — семейство/модель, а не одна строка. Бриф — [bugs/BUG-1014-FIXED.md](bugs/BUG-1014-FIXED.md)",
        "bugs": [
         "BUG-1014"
        ]
@@ -7874,13 +7874,6 @@
    "status": "open",
    "title": "Перегенерация baseline прошла штатно (134/150 harness OK), но четыре последовательных `--check` на том же бинаре дали четыре разных результата (0, 1, 1, 4 регре…",
    "component": "не локализован до конкретного фикса (механизм сужен — см. срез 22; сами файлы флака — `svg-embedded-sizing/svg-in-iframe-{auto,fixed,percentage}.html`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1014": {
-   "status": "open",
-   "title": "Остаток `_handle_action`'а после WPT-RUN-12: `set_permission` и `get_computed_role`/`get_computed_label` по-прежнему отклоняются `ActionError`, но не как трансл…",
-   "component": "tests/wpt tooling + движок (`tools/wptrunner/wptrunner/executors/executorlumen.py::_handle_action`; `crates/bidi-server/src/protocol.rs` — нет ни одного `permissions.*`-обработчика; `crates/engine/a11y` — дерево есть, корреляции с DOM-элементом нет)",
    "date": null,
    "debtor": false
   },
@@ -15422,6 +15415,20 @@
    "component": "не локализован (общая точка блокировки — ожидание `load` у программно вставленного `<iframe src>`, `tests/wpt/webidl/ecmascript-binding/support/create-realm.js`; кандидаты — доставка `load` вложенному browsing context и создание самого контекста)",
    "date": "2026-09-29",
    "debtor": false
+  },
+  "BUG-1227": {
+   "status": "fixed",
+   "title": "`--dump-layout`: `<iframe style=\"height:100%\">` в auto-контейнере → 300×0. Гейт — `svg-embedded-sizing/*-percentage.html`. Найден P6 2026-09-30 (BUG-1011 срез 2…",
+   "component": "inline replaced (`iframe`/`img`/`object`) с `height: N%` при неопределённой высоте контейнера получает 0 вместо auto (CSS 2.1 §10.5)",
+   "date": "2026-09-30",
+   "debtor": false
+  },
+  "BUG-1014": {
+   "status": "fixed",
+   "title": "Остаток `_handle_action`'а после WPT-RUN-12: `set_permission` и `get_computed_role`/`get_computed_label` по-прежнему отклоняются `ActionError`, но не как трансл…",
+   "component": "tests/wpt tooling + движок (`tools/wptrunner/wptrunner/executors/executorlumen.py::_handle_action`; `crates/bidi-server/src/protocol.rs` — нет ни одного `permissions.*`-обработчика; `crates/engine/a11y` — дерево есть, корреляции с DOM-элементом нет)",
+   "date": "2026-09-30",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15664,6 +15671,9 @@
   "image/paint": [
    "BUG-077",
    "BUG-219"
+  ],
+  "inline replaced (`iframe`/`img`/`object`) с `height: N%` при неопределённой высоте контейнера получает 0 вместо auto (CSS 2.1 §10.5)": [
+   "BUG-1227"
   ],
   "js": [
    "BUG-042",

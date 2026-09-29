@@ -1,7 +1,6 @@
 # BUG-1014 — `set_permission`/`get_computed_role`/`get_computed_label` остаются неисполненными testdriver-экшенами: нужны новая BiDi-поверхность и корреляция a11y-дерева с DOM, не трансляция payload'а
 
-**Статус:** OPEN (ДОРАБОТКА → [WPT-RUN-13](../ROADMAP.md))
-**Тип:** нереализованная функциональность двух разных семейств, не дефект реализованного кода — ведётся как задача `WPT-RUN-13` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт.
+**Статус:** FIXED 2026-09-30 (P6) — WPT-RUN-13 закрыта: `set_permission` (срез 1), `get_computed_role`/`get_computed_label` (срез 2), сквозной прогон `accname/basic.html` — 2 ранее падавших подтеста проходят (срез 3: `send_command` возвращает future, нужен двойной await).
 **Заведён:** 2026-09-06 (P1, WPT-RUN-12) — выделен из [BUG-810](BUG-810-FIXED.md) при его закрытии: три самых частых экшена (`action_sequence`, `send_keys`, `delete_all_cookies`) были трансляцией уже существующего транспорта и закрыты той заявкой; эти два — нет.
 **Область:** `tools/wptrunner/wptrunner/executors/executorlumen.py::_handle_action`; `crates/bidi-server/src/protocol.rs` (нет ни одного `permissions.*`-метода); `crates/engine/a11y`, `crates/driver/src/types.rs::AutomationCommand::A11yTree` (дерево есть, корреляции с DOM нет)
 **Владелец:** P2 (обвязка WPT) для клиентской части; серверная часть (`permissions.*` в bidi-server, корреляция a11y↔DOM) — по объёму ближе к P1/движку, координация между дорожками на усмотрение того, кто берёт задачу.
