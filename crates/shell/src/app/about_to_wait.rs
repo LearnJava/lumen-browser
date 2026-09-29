@@ -1126,6 +1126,32 @@ impl Lumen {
                     }
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::SetPermission { name, state } => {
+                    // BUG-1014 (`permissions.setPermission`): recorded
+                    // process-globally so the next navigation's fresh runtime
+                    // re-applies it, and pushed into the current page now.
+                    // The reply is the shim's own verdict (`false` = unknown
+                    // name/state), so the BiDi client is not told «success»
+                    // for a permission `query()` could never report.
+                    let mut accepted = true;
+                    #[cfg(feature = "v8")]
+                    {
+                        let script = lumen_js::v8_runtime::permission_override_script(&name, &state);
+                        // No live page (`None`) cannot validate: record anyway,
+                        // the next navigation's shim ignores what it rejects.
+                        if let Some(Ok(v)) = route_query_js(
+                            self.engine_thread.as_ref(),
+                            self.js_ctx.as_ref(),
+                            move |j| j.eval_js_value(&script),
+                        ) {
+                            accepted = v.trim() == "true";
+                        }
+                        if accepted {
+                            lumen_js::v8_runtime::set_global_permission_override(&name, &state);
+                        }
+                    }
+                    let _ = reply_tx.send(AutomationReply::Eval(accepted.to_string()));
+                }
                 AutomationCommand::AddIntercept { id, phases, url_patterns } => {
                     // BUG-295 remainder (`network.addIntercept`): synced into
                     // `lumen_network`'s process-global registry, consulted at

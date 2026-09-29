@@ -98,7 +98,8 @@ mod overrides;
 mod runtime;
 
 pub use overrides::{
-    set_global_timezone_override, set_global_user_agent_override,
+    permission_override_script, set_global_permission_override, set_global_timezone_override,
+    set_global_user_agent_override,
     timezone_override_script, user_agent_override_script,
 };
 pub use runtime::{CustomPropertySnapshot, DomTouched, PseudoComputedStyles, V8JsRuntime};
@@ -107,6 +108,7 @@ pub(crate) use script_attribution::capture_call_site as script_attribution_captu
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
 use overrides::{global_timezone_override, global_user_agent_override};
+pub(crate) use overrides::global_permission_overrides;
 use runtime::pairs_from_flat;
 
 // ── S3: DOM-core native registration ─────────────────────────────────────────

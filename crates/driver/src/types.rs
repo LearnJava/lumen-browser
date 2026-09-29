@@ -532,6 +532,15 @@ pub enum AutomationCommand {
     /// clears the override (host timezone); `Some(id)` is an IANA timezone
     /// identifier (e.g. `"America/New_York"`).
     SetTimezone(Option<String>),
+    /// Set a permission state on the live window (BUG-1014, WebDriver BiDi
+    /// `permissions.setPermission`): `name` is a Permissions API name,
+    /// `state` one of `granted` / `denied` / `prompt`.
+    SetPermission {
+        /// Permission name (`PermissionDescriptor.name`).
+        name: String,
+        /// `granted`, `denied` or `prompt`.
+        state: String,
+    },
     /// Register a network intercept rule on the live window (BUG-295
     /// remainder, WebDriver BiDi `network.addIntercept`).
     AddIntercept {

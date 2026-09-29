@@ -6,6 +6,16 @@
 **Область:** `tools/wptrunner/wptrunner/executors/executorlumen.py::_handle_action`; `crates/bidi-server/src/protocol.rs` (нет ни одного `permissions.*`-метода); `crates/engine/a11y`, `crates/driver/src/types.rs::AutomationCommand::A11yTree` (дерево есть, корреляции с DOM нет)
 **Владелец:** P2 (обвязка WPT) для клиентской части; серверная часть (`permissions.*` в bidi-server, корреляция a11y↔DOM) — по объёму ближе к P1/движку, координация между дорожками на усмотрение того, кто берёт задачу.
 
+## Срез 1 (2026-09-30, P6): `set_permission` закрыт
+
+`permissions.setPermission` реализован: `crates/bidi-server/src/protocol.rs::permissions_set_permission`
+→ `BrowserSession::set_permission` → `AutomationCommand::SetPermission` → shell →
+`_lumen_permission_set` в шиме `crates/js/src/permissions.rs`. Состояние — процесс-глобальное
+(`v8_runtime::set_global_permission_override`), переживает навигацию, `query()` его читает и
+шлёт `change`. Неизвестное имя/состояние — `invalid argument`. Origin принимается, но состояние
+им не разделяется (живёт один origin страницы). Executor: `_action_set_permission`
+(`set_permission` и `bidi.permissions.set_permission`). **Остаётся** `get_computed_role`/`get_computed_label`.
+
 ## Почему это доработка, а не остаток той же починки
 
 `probe-method.md §8`: доработка требует функциональности, которой нет вовсе

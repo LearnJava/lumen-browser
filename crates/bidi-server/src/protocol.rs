@@ -206,6 +206,8 @@ pub struct BidiState {
     ///
     /// Set by `browser.setTimezoneOverride`; `None` = system timezone.
     timezone_override: Option<String>,
+    /// Permission states set by `permissions.setPermission` (name → state).
+    permission_states: HashMap<String, String>,
     /// Offline network simulation: `true` = all network requests fail.
     ///
     /// Set by `network.setOfflineStatus`.
@@ -320,6 +322,12 @@ impl BidiState {
     #[allow(dead_code)]
     pub fn timezone(&self) -> Option<&str> {
         self.timezone_override.as_deref()
+    }
+
+    /// State set for permission `name` by `permissions.setPermission`.
+    #[allow(dead_code)]
+    pub fn permission_state(&self, name: &str) -> Option<&str> {
+        self.permission_states.get(name).map(String::as_str)
     }
 
     /// Whether offline network simulation is active.
@@ -695,6 +703,7 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "emulation.setUserAgentOverride" => emulation_set_ua_override(id, &params, state),
         "browsingContext.handleUserPrompt" => bc_handle_user_prompt(id, &params, state),
         "browsingContext.setViewport" => bc_set_viewport(id, &params, state),
+        "permissions.setPermission" => permissions_set_permission(id, &params, state),
         "storage.getCookies" => storage_get_cookies(id, &params, state),
         "storage.setCookie" => storage_set_cookie(id, &params, state),
         "storage.deleteCookies" => storage_delete_cookies(id, &params, state),
@@ -1510,6 +1519,45 @@ fn browser_set_timezone(id: i64, params: &JsonValue, state: &mut BidiState) -> D
             &format!("setTimezoneOverride: {e}"),
         ));
     }
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `permissions.setPermission` (WebDriver BiDi Permissions module, BUG-1014).
+///
+/// Параметры: `descriptor: {name}`, `state: granted|denied|prompt`, `origin`
+/// (обязателен по спецификации; в живом окне не разделяет состояние — см.
+/// `lumen_js::v8_runtime::set_global_permission_override`). С живым окном
+/// состояние попадает в то, что реально читает `navigator.permissions.query()`;
+/// имя, неизвестное движку, — `invalid argument`, а не молчаливый успех.
+fn permissions_set_permission(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let bad = |msg: &str| DispatchResult::single(make_error(Some(id), "invalid argument", msg));
+    let Some(name) = params.get("descriptor").and_then(|d| d.get("name")).and_then(|v| v.as_str())
+    else {
+        return bad("setPermission: descriptor.name is required");
+    };
+    let Some(perm_state) = params.get("state").and_then(|v| v.as_str()) else {
+        return bad("setPermission: state is required");
+    };
+    if !matches!(perm_state, "granted" | "denied" | "prompt") {
+        return bad(&format!("setPermission: invalid state {perm_state:?}"));
+    }
+    if params.get("origin").and_then(|v| v.as_str()).is_none() {
+        return bad("setPermission: origin is required");
+    }
+    if let Some(live) = &mut state.live {
+        match live.set_permission(name, perm_state) {
+            Ok(true) => {}
+            Ok(false) => return bad(&format!("setPermission: unknown permission {name:?}")),
+            Err(e) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "unknown error",
+                    &format!("setPermission: {e}"),
+                ));
+            }
+        }
+    }
+    state.permission_states.insert(name.to_owned(), perm_state.to_owned());
     DispatchResult::single(make_success(id, empty_obj()))
 }
 
@@ -3226,6 +3274,23 @@ mod tests {
         let v = parse(&r.frames[0]);
         assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
         assert_eq!(state.timezone(), Some("Europe/Moscow"));
+    }
+
+    #[test]
+    fn set_permission_validates_and_stores() {
+        let mut state = BidiState::new();
+        let ok = dispatch(
+            r#"{"id":1,"method":"permissions.setPermission","params":{"descriptor":{"name":"geolocation"},"state":"granted","origin":"http://a.test"}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&ok.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.permission_state("geolocation"), Some("granted"));
+        let bad = dispatch(
+            r#"{"id":2,"method":"permissions.setPermission","params":{"descriptor":{"name":"geolocation"},"state":"maybe","origin":"http://a.test"}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&bad.frames[0]).get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+        assert_eq!(state.permission_state("geolocation"), Some("granted"));
     }
 
     #[test]

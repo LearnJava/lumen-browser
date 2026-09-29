@@ -353,6 +353,19 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
+    /// BUG-1014: round-trips to the live window, which records the state
+    /// process-globally (survives navigation) and pushes it into the current
+    /// page's Permissions shim. `false` = unknown permission name / state.
+    fn set_permission(&mut self, name: &str, state: &str) -> Result<bool> {
+        match self.execute(AutomationCommand::SetPermission {
+            name: name.to_owned(),
+            state: state.to_owned(),
+        })? {
+            AutomationReply::Eval(json) => Ok(json.trim() == "true"),
+            other => Err(unexpected_reply("SetPermission", &other)),
+        }
+    }
+
     /// BUG-295 remainder: round-trips to the live window, which registers
     /// the rule in `lumen_network`'s process-global intercept registry —
     /// consulted at the same `fetch_with_redirect` chokepoint every fetch
