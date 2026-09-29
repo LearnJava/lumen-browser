@@ -1,6 +1,8 @@
 # BUG-720 — `MIDIInputMap`/`MIDIOutputMap` are not exposed globally at all; a single non-standard `MIDIPortMap` stands in for both
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
+
+**Исправлено:** `MIDIInputMap`/`MIDIOutputMap` — отдельные классы (наследуют внутренний `MIDIPortMap`), экспортированы на `window`; `MIDIAccess.inputs`/`.outputs` строятся из своих. `window.MIDIPortMap` больше не экспортируется (не часть спецификации). Тест: `midi_port_map_class_exported`.
 **Компонент:** js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)
 **Найден:** P2, WPT-VENDOR-webmidi, 2026-08-09
 
