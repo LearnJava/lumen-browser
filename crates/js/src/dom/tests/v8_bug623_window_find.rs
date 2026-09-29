@@ -21,7 +21,7 @@ fn rt_with_dom() -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt

@@ -662,6 +662,12 @@ fn worker_global_shim(worker_id: u32) -> String {
     globalThis.location = _lumen_make_worker_location(
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }}
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // above.
+  if (typeof _lumen_make_worker_origin === 'function') {{
+    globalThis.origin = _lumen_make_worker_origin(
+      typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
+  }}
 
   // `isSecureContext` (BUG-766) — computed from the same
   // `_lumen_worker_location_url` `location` was just built from.

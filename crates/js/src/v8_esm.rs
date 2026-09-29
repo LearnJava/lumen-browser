@@ -1154,7 +1154,7 @@ mod tests {
             doc,
             "https://example.com/",
             None, None, None, None, None, None, None, None, None,
-            false,
+            false, None,
         )
         .unwrap();
         rt.register_module_source("styles", "body { color: red; } p { color: blue; }");
@@ -1333,7 +1333,7 @@ mod tests {
             None, None,
             None,
             None,
-            false)
+            false, None)
         .unwrap();
         rt
     }

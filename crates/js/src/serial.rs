@@ -89,7 +89,7 @@ mod tests {
     fn with_serial(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false, None)
             .unwrap();
         f(&rt);
     }

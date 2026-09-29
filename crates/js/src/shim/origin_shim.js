@@ -52,10 +52,32 @@
     // The origin of this realm's own global: its document's URL on a page, its
     // script URL in a worker. Read once and kept, so an opaque global origin
     // (a `data:` document or worker) stays same-origin with itself.
+    //
+    // BUG-1208: NOT `location.href` — for a non-sandboxed `about:blank`/
+    // `about:srcdoc` document `location.href` is still the `about:` address
+    // itself (opaque), while the realm's own origin is inherited from the
+    // PARENT (HTML LS §7.4.1). `_LUMEN_ORIGIN` (Rust, `v8_runtime.rs::install_dom`'s
+    // `realm_origin`) already carries that distinction — a serialized tuple
+    // origin (`scheme://host[:port]`) or the literal `"null"` for an opaque
+    // one (a sandboxed frame's fresh, per-document identity included, since
+    // Rust already minted the sandboxed case's opaque-ness the same way
+    // `location`'s own origin would). A serialized tuple origin string is
+    // itself a valid absolute URL of that origin, so `recordForHref` maps it
+    // straight back to the same tuple record `URL.prototype.origin` would
+    // give for that address — no separate parser needed.
     function globalRecord() {
         if (selfRecord === null) {
-            var href = (typeof location !== 'undefined' && location) ? String(location.href) : '';
-            selfRecord = recordForHref(href) || opaqueRecord();
+            var origin = typeof _LUMEN_ORIGIN !== 'undefined' ? String(_LUMEN_ORIGIN) : null;
+            if (origin !== null) {
+                selfRecord = (origin && origin !== 'null') ? recordForHref(origin) : null;
+            } else {
+                // A worker scope: `_LUMEN_ORIGIN` is a page-only global
+                // (`install_dom`) — no `about:`-inheritance case exists for a
+                // worker, so its own script URL is always the right answer.
+                var href = (typeof location !== 'undefined' && location) ? String(location.href) : '';
+                selfRecord = recordForHref(href);
+            }
+            if (selfRecord === null) selfRecord = opaqueRecord();
         }
         return selfRecord;
     }

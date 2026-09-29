@@ -7,7 +7,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -302,13 +302,13 @@ fn shell_delivered_rows_become_resource_entries() {
     let r = rt
         .eval(
             r#"
-                var origin = performance.timeOrigin;
+                var t0 = performance.timeOrigin;
                 _lumen_deliver_resource_timings(JSON.stringify([
                     { url: 'https://example.com/i.png', initiatorType: 'img',
-                      startMs: origin + 40, durationMs: 12, status: 200,
+                      startMs: t0 + 40, durationMs: 12, status: 200,
                       decodedBodySize: 64, encodedBodySize: 64 },
                     { url: 'https://example.com/early.css', initiatorType: 'css',
-                      startMs: origin - 500, durationMs: 3, status: 200 }
+                      startMs: t0 - 500, durationMs: 3, status: 200 }
                 ]));
                 var all = performance.getEntriesByType('resource');
                 all.length === 2 && all[0].startTime === 40 && all[0].initiatorType === 'img' &&
@@ -456,11 +456,11 @@ fn performance_timing_before_any_navigation_falls_back_to_zero() {
     let r = rt.eval(
         r#"
                 var t = performance.timing;
-                var origin = Math.round(performance.timeOrigin);
+                var t0 = Math.round(performance.timeOrigin);
                 // navigationStart/domLoading are always known (they're just
                 // timeOrigin); every other milestone falls back to the spec's
                 // own "hasn't happened yet" value of 0.
-                t.navigationStart === origin && t.domLoading === origin &&
+                t.navigationStart === t0 && t.domLoading === t0 &&
                     t.fetchStart === 0 && t.loadEventEnd === 0
                 "#
     ).unwrap();
@@ -480,14 +480,14 @@ fn performance_timing_derives_from_the_same_navigation_entry_as_l2() {
                         redirectCount: 0, type: 'navigate',
                     }));
                 var t = performance.timing;
-                var origin = Math.round(performance.timeOrigin);
-                t.navigationStart === origin &&
-                    t.domInteractive === origin + 40 &&
-                    t.domContentLoadedEventStart === origin + 40 &&
-                    t.domContentLoadedEventEnd === origin + 45 &&
-                    t.domComplete === origin + 100 &&
-                    t.loadEventStart === origin + 100 &&
-                    t.loadEventEnd === origin + 120 &&
+                var t0 = Math.round(performance.timeOrigin);
+                t.navigationStart === t0 &&
+                    t.domInteractive === t0 + 40 &&
+                    t.domContentLoadedEventStart === t0 + 40 &&
+                    t.domContentLoadedEventEnd === t0 + 45 &&
+                    t.domComplete === t0 + 100 &&
+                    t.loadEventStart === t0 + 100 &&
+                    t.loadEventEnd === t0 + 120 &&
                     t.loadEventEnd >= t.domComplete
                 "#
     ).unwrap();
@@ -562,9 +562,9 @@ fn performance_to_json_includes_timing_and_navigation() {
                         redirectCount: 0, type: 'navigate',
                     }));
                 var j = performance.toJSON();
-                var origin = Math.round(performance.timeOrigin);
+                var t0 = Math.round(performance.timeOrigin);
                 typeof j.timing === 'object' && typeof j.navigation === 'object' &&
-                    j.timing.domComplete === origin + 20 && j.navigation.type === 0
+                    j.timing.domComplete === t0 + 20 && j.navigation.type === 0
                 "#
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));

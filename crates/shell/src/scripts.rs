@@ -826,7 +826,16 @@ pub(crate) fn run_scripts_with_dom(
                 if let Some(jar) = cookie_jar {
                     rt = rt.with_cookie_jar(Arc::new(lumen_storage::CookieJarProvider::new(jar)));
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated) {
+                // BUG-1208: `window.origin`/`self.origin` inherit the
+                // parent's origin for a non-sandboxed `about:blank`/
+                // `about:srcdoc` sub-document (HTML LS §7.4.1) — every other
+                // caller (real-URL document, opaque-sandboxed frame, or the
+                // top-level page, which has no `ancestry` at all) computes
+                // its own origin from `page_url` alone.
+                let origin_inherit_from = ancestry
+                    .filter(|a| !a.opaque && page_url.starts_with("about:"))
+                    .map(|a| a.parent_url);
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated, origin_inherit_from) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 if let Some(ancestry) = ancestry {

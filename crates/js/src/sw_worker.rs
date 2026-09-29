@@ -64,6 +64,12 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   globalThis.location = _lumen_make_worker_location(
     (scope.indexOf('://') !== -1) ? scope
       : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope)));
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // above (a service worker's scope URL doubles as its own location URL,
+  // per the comment just above).
+  if (typeof _lumen_make_worker_origin === 'function') {{
+    globalThis.origin = _lumen_make_worker_origin(globalThis.location.href);
+  }}
   // `isSecureContext` (BUG-766) — same rule as the other two worker
   // flavours; a service worker's scope URL doubles as its own location URL.
   if (typeof _lumen_worker_secure_context_for === 'function') {{

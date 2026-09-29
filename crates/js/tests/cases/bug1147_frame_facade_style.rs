@@ -16,7 +16,7 @@ use lumen_js::v8_runtime::V8JsRuntime;
 fn frame_rt(child_html: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "https://example.com/doc", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/doc", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     let nid = match rt.eval("var f = document.createElement('iframe'); f.__nid__").unwrap() {
         lumen_core::JsValue::Number(n) => n as u32,

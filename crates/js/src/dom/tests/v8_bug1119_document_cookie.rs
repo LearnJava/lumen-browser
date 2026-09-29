@@ -16,7 +16,7 @@ fn runtime_at(url: &str, jar: Option<Arc<CookieJar>>) -> V8JsRuntime {
     if let Some(jar) = jar {
         rt = rt.with_cookie_jar(Arc::new(CookieJarProvider::new(jar)));
     }
-    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }

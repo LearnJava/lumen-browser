@@ -36,7 +36,7 @@ fn make_rt() -> V8JsRuntime {
     lumen_js::set_public_suffix_list(Arc::new(LastLabelPsl));
     let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "https://example.com/doc", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/doc", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }

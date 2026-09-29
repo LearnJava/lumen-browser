@@ -142,6 +142,12 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     globalThis.location = _lumen_make_worker_location(
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // above.
+  if (typeof _lumen_make_worker_origin === 'function') {
+    globalThis.origin = _lumen_make_worker_origin(
+      typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
+  }
 
   // `isSecureContext` (BUG-766) — same rule as the dedicated-worker twin
   // (`worker.rs`'s `worker_global_shim`), computed from the same

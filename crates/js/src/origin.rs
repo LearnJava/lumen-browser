@@ -54,6 +54,23 @@ fn site_of(host: &str, is_domain: bool) -> String {
         .to_owned()
 }
 
+/// BUG-1208: the ASCII serialization of `url`'s origin (HTML LS §7.1.1
+/// «ascii serialization of an origin») — `"null"` for an opaque origin or an
+/// unparseable `url`, `scheme://host[:port]` (default port omitted) for a
+/// tuple one. What `window.origin`/`self.origin`/`location.origin` must
+/// report for a realm whose own URL is `url` — including a `blob:` URL,
+/// whose origin is that of the URL in its path ([`Url::origin_serialization`],
+/// BUG-1197).
+///
+/// The one caller outside this file ([`crate::v8_runtime::V8JsRuntime::install_dom`])
+/// also uses this for the `about:blank`/`about:srcdoc` inheritance case: pass
+/// the PARENT document's URL instead of the child's own `about:` address.
+pub(crate) fn origin_serialization_for_url(url: &str) -> String {
+    Url::parse(url)
+        .map(|u| u.origin_serialization())
+        .unwrap_or_else(|_| "null".to_owned())
+}
+
 /// `_lumen_url_origin(href)` — `null` when `href` is not an absolute URL,
 /// `{opaque: true}` for an opaque origin, otherwise
 /// `{opaque: false, scheme, host, port, site}`.

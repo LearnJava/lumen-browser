@@ -12,7 +12,7 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true")
         .unwrap();
     rt.install_dom(
-        doc, "", None, None, None, None, None, None, None, None, None, false,
+        doc, "", None, None, None, None, None, None, None, None, None, false, None,
     )
     .unwrap();
     rt
