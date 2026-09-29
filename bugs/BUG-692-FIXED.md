@@ -1,6 +1,6 @@
 # BUG-692 — CSP `upgrade-insecure-requests` directive is parsed but never consumed — has zero effect on network requests
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** network (`crates/network/src/csp.rs` — `CspPolicy::upgrade_insecure_requests`; enforcement gap spans `crates/network/src/lib.rs` `HttpClient::fetch*`/`mixed_content.rs`/`crates/storage/src/csp_policies.rs`)
 **Найден:** P2, WPT-VENDOR-upgrade-insecure-requests, 2026-08-09
 

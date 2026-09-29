@@ -63,7 +63,7 @@ async_test(t => {
 загрузчик ресурса, ни один вызов скрипта, ни одна навигация хук не зовут —
 то есть нарушение некому обнаружить, и событию неоткуда взяться.
 
-Это не то же самое, что [BUG-692](BUG-692-OPEN.md): там одна директива
+Это не то же самое, что [BUG-692](BUG-692-FIXED.md): там одна директива
 (`upgrade-insecure-requests`) не применяется к URL; здесь отсутствует весь
 шаг применения и весь путь отчётности (`report-uri`/`report-to` — тоже).
 
@@ -2485,7 +2485,7 @@ warnings` (оба чисто); `cargo test -p lumen-shell --profile dev-release
 запрос. Поле `CspPolicy::upgrade_insecure_requests` парсится с самого начала
 (`crates/network/src/csp.rs:165`/`:440`, юнит-тест
 `parse_upgrade_insecure_requests`), но до этого среза не читалось нигде —
-ровно то, на что заведён отдельный [BUG-692](BUG-692-OPEN.md) (`rg
+ровно то, на что заведён отдельный [BUG-692](BUG-692-FIXED.md) (`rg
 upgrade_insecure_requests crates/` давал только сам `csp.rs`).
 
 Живая проба (`.tmp/srez43/serve.py` — python-сервер на `127.0.0.1`,
