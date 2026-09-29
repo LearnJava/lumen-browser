@@ -1,10 +1,42 @@
 # BUG-965: headless driver (`--mcp-port`/`--mcp`) never populates `scroll_states` — `scrollWidth`/`scrollHeight`/`scrollLeft`/`scrollTop` always wrong for scroll containers
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6, не воспроизводится)
 **Дата:** 2026-09-03
 **Компонент:** js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_get_scroll_state`) /
 driver (`crates/driver/src/session.rs::relayout`)
-**Найден:** P3, side discovery while live-verifying [BUG-504](BUG-504-OPEN.md)'s fix
+**Найден:** P3, side discovery while live-verifying [BUG-504](BUG-504-FIXED.md)'s fix
+
+## Проверка 2026-09-29 (P6)
+
+Живая проверка обоих заявленных симптомов на текущем `main` их не воспроизвела:
+
+- `scrollWidth` асимметричного бордера (`border-width:0 0 50px 80px`, `width:200px`)
+  читает **200** (padding-box), не 280 (border-box).
+- `scrollTop` после JS `el.scrollTo(0, 50)` читает **50**, не 0.
+
+Причина — `_lumen_get_scroll_state` (`crates/js/src/v8_runtime/install/platform.rs`)
+безусловно зовёт `flush.maybe_flush()` перед каждым чтением
+(`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`), а тот
+пересчитывает `scroll_states` с нуля из свежего layout и переносит на него
+предыдущий известный JS-side scroll-offset (`prev_scroll`) — независимо от
+того, звал ли embedder (driver или shell) `update_scroll_states` вообще. Этот
+механизм — общий код `crates/js`, появился позже подачи бага (после
+2026-09-03) как часть последующей работы над CSSOM-4/lazy-flush.
+
+`grep -rn "update_scroll_states" crates/driver/src/` по-прежнему не находит ни
+одного вызова в этом крейте, но это больше не имеет значения: чтение геометрии
+скролла в headless-сессии больше не зависит от явного push из
+`InProcessSession::commit_layout`.
+
+Добавлены 2 регрессионных теста в `crates/driver/src/session.rs`:
+`js_scroll_width_reads_padding_box_not_border_box_headless`,
+`js_scroll_top_reflects_prior_js_scroll_to_headless`.
+
+Попутно найден смежный, но отдельный дефект: `InProcessSession::scroll()`
+(нативный Rust-side скролл, минуя JS) теряется на следующем relayout, потому
+что `layout_and_commit` строит полностью новый `LayoutBox`-дерево без переноса
+`scroll_x`/`scroll_y` — заведён как [BUG-1215](BUG-1215-OPEN.md), не в скоуп
+этой задачи.
 
 ## Механизм
 
@@ -18,7 +50,7 @@ size (`_lumen_get_bounding_rect`) — a deliberate, documented fallback for
 elements that aren't scroll containers at all (see the comment above
 `get scrollWidth()` in the shim), but wrong for an actual `overflow: auto`/
 `scroll` container, whose `scrollWidth`/`scrollHeight` must reflect the real
-scrollable-overflow extent (padding-box floor, [BUG-504](BUG-504-OPEN.md)),
+scrollable-overflow extent (padding-box floor, [BUG-504](BUG-504-FIXED.md)),
 and whose `scrollLeft`/`scrollTop` must reflect the real current offset, not
 a hardcoded zero.
 

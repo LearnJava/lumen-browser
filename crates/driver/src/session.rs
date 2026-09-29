@@ -2988,4 +2988,39 @@ mod tests {
         let root_offset = s.active_property_trees().and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y));
         assert_eq!(root_offset, Some(30.0), "delta should land on the page-level scroll node");
     }
+
+    // ── BUG-965 (regression): headless JS scroll geometry reads real state ──
+    //
+    // Filed 2026-09-03 against `InProcessSession` (`--mcp-port`/`--mcp`):
+    // `scrollWidth` fell back to the border-box size instead of the real
+    // padding-box/overflow extent, and `scrollLeft`/`scrollTop` always read
+    // `0` regardless of a prior JS `scrollTo()`. Both are no longer
+    // reproducible — `FlushHandles::maybe_flush` (the shared lazy style/layout
+    // flush all `getComputedStyle`/geometry getters go through, including in
+    // this crate) now unconditionally recomputes `scroll_states` from a fresh
+    // layout on every `_lumen_get_scroll_state` call and reapplies any
+    // previously-known JS-side scroll offset onto it first. Kept as a
+    // regression guard rather than a fix.
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn js_scroll_width_reads_padding_box_not_border_box_headless() {
+        // Mirrors the bug's own live repro: a childless `overflow:auto` box
+        // with an asymmetric border (border-box would be 280, padding-box 200).
+        let mut s = make_session(
+            r#"<html><body style="margin:0">
+                <div id="outer" style="overflow:auto;width:200px;height:200px;
+                    border-style:solid;border-width:0 0 50px 80px"></div>
+            </body></html>"#,
+        );
+        assert_eq!(s.eval("document.getElementById('outer').scrollWidth").expect("eval"), "200");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn js_scroll_top_reflects_prior_js_scroll_to_headless() {
+        let mut s = make_session(nested_scroll_html());
+        s.eval("document.getElementById('outer').scrollTo(0, 50)").expect("eval scrollTo");
+        assert_eq!(s.eval("document.getElementById('outer').scrollTop").expect("eval"), "50");
+    }
 }
