@@ -99,7 +99,8 @@ impl Lumen {
         // "срез" write-ups in BUG-274-OPEN.md.
         let early_stream = std::env::var_os("LUMEN_NO_EARLY_STREAM").is_none();
         if early_stream {
-            self.start_streaming_load(self.load_generation);
+            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.start_streaming_load(tab_id, self.load_generation);
             if lumen_paint::frame_log_enabled()
                 && let Some(ms) = bench_frames::since_process_start_ms()
             {
@@ -149,7 +150,8 @@ impl Lumen {
         }
 
         if !early_stream {
-            self.start_streaming_load(self.load_generation);
+            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.start_streaming_load(tab_id, self.load_generation);
             if lumen_paint::frame_log_enabled()
                 && let Some(ms) = bench_frames::since_process_start_ms()
             {
