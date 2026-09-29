@@ -13347,6 +13347,32 @@ function _lumen_script_prepare(nid) {
     }, 0);
 }
 
+// By nid alone, same shape as `_lumen_is_style_element` below.
+function _lumen_is_script_element(nid) {
+    if (nid === null || nid === undefined) return false;
+    var local;
+    try { local = _lumen_u2n(_lumen_get_local_name(nid)); } catch (e) { return false; }
+    return local !== null && String(local).toLowerCase() === 'script';
+}
+
+// BUG-968: HTML LS "src attribute change steps" / "type attribute change
+// steps" (whatwg/html#10188) — mutating `src` or `type` on a connected
+// script re-enters "prepare a script" no matter whether the attribute
+// previously held a value, unlike the old text this replaced (which only
+// triggered on "previously had no such attribute"). This is deliberately a
+// *second* (or later) legitimate prepare, not the re-entry `_lumen_script_
+// prepare`'s own step-1 "already started" flag exists to guard against —
+// that flag has to be cleared here first, or a script whose earlier prepare
+// already ran (the common "swap the bundle" case this bug is about) would
+// see step 1 bounce this call back out as a no-op.
+function _lumen_script_attr_changed(nid, attrName) {
+    if (attrName !== 'src' && attrName !== 'type') return;
+    if (!_lumen_is_script_element(nid)) return;
+    if (!_lumen_resource_is_connected(nid)) return;
+    delete _lumen_script_started[nid];
+    _lumen_script_prepare(nid);
+}
+
 // ── HTML LS §8.4.4 document.write(): the insertion point (BUG-568) ───────────
 //
 // The shell parses the whole document before any script runs, so there is no

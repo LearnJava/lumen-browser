@@ -1,7 +1,7 @@
 # BUG-968: mutating `.src` on an already-prepared `<script>` never re-runs
 "prepare a script" — no second fetch, no second execution
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6)
 **Дата:** 2026-09-03
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` §"resource
 tracking" — `_lumen_resource_pending`/`_lumen_resource_try_prepare`)
@@ -104,3 +104,26 @@ re-entry bug to guard against.
 Attributed via
 `_exact_id_marker("/html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html", "/html/semantics/scripting-1/the-script-element/execution-timing/023.html")`
 in `tests/wpt/timeout_audit.py` (marker `script-src-mutation-not-prepared`).
+
+## Исправлено 2026-09-29 (P6)
+
+`_lumen_set_attr`/`_lumen_remove_attr` (`web_api_shim_tail_b.js`) now chain into a new
+`_lumen_script_attr_changed(nid, attrName)` (`web_api_shim_mid.js`) on every `src`/`type` write —
+the same wrap point `open` already uses for `<details>`, so every path that writes those attributes
+(`setAttribute`, `removeAttribute`, `toggleAttribute`, every IDL setter through these natives) reaches
+it uniformly. On an already-connected `<script>`, it deletes `_lumen_script_started[nid]` — the spec's
+per-element "already started" flag `_lumen_script_prepare`'s step 1 checks — before calling
+`_lumen_script_prepare(nid)` again. That reset is the part the "Что нужно" section above called out:
+this is deliberately a second (or later) legitimate prepare, not the re-entry the flag exists to guard
+against, so simply calling `_lumen_script_prepare` again (without clearing the flag first) would have
+been a no-op on a script whose earlier prepare had already run — exactly the case this bug is about.
+
+Live-verified with both existing probes, dev-release build:
+- `tests/wpt/verify_slice55_gaps.py` — `change-src-attr-prepare-a-script.html`: was
+  `harness-complete status=2 tests=1 ...:2` (TIMEOUT), now `status=0 tests=1 ...:0` (PASS).
+- `tests/wpt/verify_slice57_gaps.py` — `execution-timing/023.html`: was TIMEOUT (`status=2`), now
+  `status=0 tests=1 ...:0` (PASS) — confirms the "no `src` at connection, `.src` set for the first time
+  afterwards" shape is covered by the same fix, no separate condition needed.
+
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чисто (shim-only change,
+no Rust touched).
