@@ -600,13 +600,28 @@ impl Lumen {
             // (по умолчанию) — прежние синхронные вызовы по UI-хэндлу, байт-идентично
             // (`js_ctx == None` → `None` → навигация не ставится, как прежняя
             // ветка `Some(ctx)` не сматчилась).
-            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            // BUG-1224: результат диспетчеризации читается назад —
+            // `_lumen_dispatch_rich` возвращает `!event.defaultPrevented`, JSON-ом
+            // это `false` только при `preventDefault()`. Тогда нативная активация
+            // (ссылка, submit, флажок, details) не выполняется: так SPA-роутер
+            // берёт переход на себя. Запрос встаёт в очередь после диспетчеризации.
+            let proceed = match route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                move |j| j.eval_js_value(&script),
+            ) {
+                Some(Ok(json)) => json.trim() != "false",
+                Some(Err(_)) | None => true,
+            };
             if let Some(Some(nav)) = route_query_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
                 |j| j.take_navigate_request(),
             ) {
                 self.pending_js_navigate = Some(nav);
+            }
+            if !proceed {
+                return;
             }
         }
         let form_action: forms::FormClickAction =
