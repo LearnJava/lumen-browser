@@ -1,6 +1,6 @@
 # BUG-691 — `TextEvent` global constructor and `UIEvent.prototype.pseudoTarget` missing entirely
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — event-class block at `dom.rs:432` onward: `UIEvent`/`MouseEvent`/`KeyboardEvent`/`InputEvent`/`FocusEvent`/`WheelEvent`/`PointerEvent`/`AnimationEvent`/… has no `TextEvent` sibling and no `pseudoTarget` member on `UIEvent.prototype`)
 **Найден:** P2, WPT-VENDOR-uievents, 2026-08-09
 
@@ -77,3 +77,7 @@ TextEvent(type)`, `assert_throws_js(TypeError, …)` в тесте относи�
 не влияет на остальной сигнал прогона). Оба фикса не требуют
 `document.createEvent`/BUG-590 — независимо верифицируемы через
 `--mcp-live-port` или повторный `run_report.py --root uievents`.
+
+## Исправление
+
+P3, 2026-09-29. В `web_api_shim_mid.js` добавлен `TextEvent` (наследник `UIEvent`, `new TextEvent()` бросает `TypeError`, `initTextEvent`, `data`); `document.createEvent('TextEvent')` теперь возвращает его (раньше — `CompositionEvent`). На `UIEvent.prototype` добавлен геттер `pseudoTarget` (всегда `null`: ретаргетинга псевдоэлементов диспетчер не делает). Тест: `v8_event_classes::text_event_and_pseudo_target_surface`.
