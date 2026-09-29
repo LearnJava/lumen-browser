@@ -115,7 +115,7 @@ const SCROLL_TIMELINE_SHIM: &str = r#"(function() {
   ///
   /// Updates `currentTime` (as CSS %) on every root-viewport ScrollTimeline
   /// registered so far.  ViewTimeline.currentTime is left for P4 layout wiring.
-  globalThis._lumen_deliver_scroll_progress = function(progress_y, progress_x) {
+  __lumen_C._lumen_deliver_scroll_progress = function(progress_y, progress_x) {
     var pct_y = +progress_y * 100;
     var pct_x = +progress_x * 100;
     for (var i = 0; i < _sda_timelines.length; i++) {

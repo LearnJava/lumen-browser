@@ -53,7 +53,7 @@ const SCROLL_SNAP_EVENTS_SHIM: &str = r#"(function() {
   // when the user initiates a scroll that will snap to a new position.
   // Then calls _lumen_fire_snap_changed(nid, ...) when the snap is complete.
 
-  globalThis._lumen_fire_snap_changing = function(nid, snapTargetBlock, snapTargetInline) {
+  __lumen_C._lumen_fire_snap_changing = function(nid, snapTargetBlock, snapTargetInline) {
     if (typeof _lumen_make_element === 'undefined') return;
     var el = _lumen_make_element(nid);
     if (!el) return;
@@ -68,7 +68,7 @@ const SCROLL_SNAP_EVENTS_SHIM: &str = r#"(function() {
     }
   };
 
-  globalThis._lumen_fire_snap_changed = function(nid, snapTargetBlock, snapTargetInline) {
+  __lumen_C._lumen_fire_snap_changed = function(nid, snapTargetBlock, snapTargetInline) {
     if (typeof _lumen_make_element === 'undefined') return;
     var el = _lumen_make_element(nid);
     if (!el) return;

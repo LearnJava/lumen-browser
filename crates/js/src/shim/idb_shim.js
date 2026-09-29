@@ -1550,4 +1550,4 @@ globalThis.IDBObjectStore   = IDBObjectStore;
 globalThis.IDBIndex         = IDBIndex;
 globalThis.IDBCursor        = IDBCursor;
 globalThis.IDBCursorWithValue = IDBCursor;
-globalThis._lumen_idb_flush = _lumen_idb_flush;
+__lumen_C._lumen_idb_flush = _lumen_idb_flush;

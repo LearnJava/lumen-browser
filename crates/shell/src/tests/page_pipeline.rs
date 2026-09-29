@@ -1350,12 +1350,17 @@ fn dom_event_dispatch_records_script_timing_for_loaf() {
          <script>\
          document.getElementById('btn').addEventListener('click', function(){});\
          document.getElementById('btn').dispatchEvent(new Event('click', {bubbles:true}));\
-         var found = _lumen_frame_scripts.filter(function(s){return s.invoker === 'BUTTON.click';});\
-         document.documentElement.setAttribute('data-n', String(found.length));\
          </script>\
          </body></html>",
     );
-    let n: i64 = probe_attr(&page, "data-n").parse().expect("data-n must be a number");
+    // `_lumen_frame_scripts` is an engine internal (BUG-753 срез 2): page script cannot
+    // read it, so the assertion goes through the runtime's own (internal) eval.
+    let js = page.js_ctx.as_ref().expect("persistent JS context");
+    let n: i64 = js
+        .eval_js_value("_lumen_frame_scripts.filter(function(s){return s.invoker === 'BUTTON.click';}).length")
+        .expect("eval")
+        .parse()
+        .expect("script-timing count must be a number");
     assert!(n >= 1, "expected a BUTTON.click script timing entry, got {n} matches");
 }
 

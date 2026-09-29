@@ -59,7 +59,7 @@ const EYE_DROPPER_SHIM: &str = r#"
         // `typeof` guard (not `?.call?.()`, which does not protect against an
         // undeclared identifier and threw ReferenceError) keeps that honest
         // and routes straight to the documented white-color fallback below.
-        const nativeOpen = globalThis._lumen_eye_dropper_open;
+        const nativeOpen = __lumen_C._lumen_eye_dropper_open;
         const result = typeof nativeOpen === 'function' ? nativeOpen() : null;
 
         if (signal?.aborted) {

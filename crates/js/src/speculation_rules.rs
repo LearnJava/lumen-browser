@@ -57,8 +57,8 @@ const SPECULATION_RULES_SHIM: &str = r#"(function() {
   // Shell Phase 1 hook — called after HTML parsing when a
   // <script type="speculationrules"> block is encountered.
   // Phase 0: no-op. Phase 1: parse JSON, schedule prefetch/prerender hints.
-  if (typeof globalThis._lumen_deliver_speculation_rules === 'undefined') {
-    globalThis._lumen_deliver_speculation_rules = function(_rulesJson) {
+  if (typeof __lumen_C._lumen_deliver_speculation_rules === 'undefined') {
+    __lumen_C._lumen_deliver_speculation_rules = function(_rulesJson) {
       // Phase 0 no-op
     };
   }
@@ -123,8 +123,8 @@ mod tests {
             let ok = rt
                 .eval(
                     r#"
-                    typeof globalThis._lumen_deliver_speculation_rules === 'function'
-                      && (globalThis._lumen_deliver_speculation_rules('{}'), true)
+                    typeof __lumen_C._lumen_deliver_speculation_rules === 'function'
+                      && (__lumen_C._lumen_deliver_speculation_rules('{}'), true)
                     "#,
                 )
                 .unwrap();

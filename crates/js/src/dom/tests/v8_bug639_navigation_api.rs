@@ -386,7 +386,7 @@ fn prevent_default_aborts_signal_and_navigateerror_rejects_result() {
          navigation.onnavigateerror = () => __ev.push('navigateerror'); \
          globalThis.__r = navigation.navigate('?1'); \
          __r.committed.catch(e => { globalThis.__err = e.name; }); \
-         globalThis._lumen_navigation_report_intercept = () => {}; \
+         __lumen_C._lumen_navigation_report_intercept = () => {}; \
          _lumen_dispatch_navigate('push', 'http://example.test/?1', true, false); \
          _lumen_fire_navigate_error(); true",
     )
@@ -402,7 +402,7 @@ fn prevent_default_aborts_signal_and_navigateerror_rejects_result() {
 fn intercept_sets_transition_until_navigatesuccess() {
     let rt = runtime();
     rt.eval(
-        "globalThis._lumen_navigation_report_intercept = () => {}; \
+        "__lumen_C._lumen_navigation_report_intercept = () => {}; \
          navigation.onnavigate = e => e.intercept(); \
          _lumen_dispatch_navigate('push', 'http://example.test/#a', true, true); \
          globalThis.__tr = navigation.transition; \

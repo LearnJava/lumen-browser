@@ -57,7 +57,7 @@ const CSP_SHIM: &str = r#"
   //
   // Phase 0: this JS helper is defined so the event class is available;
   // the Rust binding `_lumen_fire_csp_violation` will forward here in Phase 1.
-  window._lumen_dispatch_csp_violation = function(directive, blockedUri, originalPolicy, disposition) {
+  __lumen_C._lumen_dispatch_csp_violation = function(directive, blockedUri, originalPolicy, disposition) {
     if (typeof document === 'undefined') { return; }
     var evt = new SecurityPolicyViolationEvent('securitypolicyviolation', {
       blockedURI:         blockedUri,
@@ -91,7 +91,7 @@ const CSP_SHIM: &str = r#"
   // boundary at the same single choke point срез 59 already crosses, instead
   // of widening every `fire_*_violation` call site with a sixth argument the
   // way `originalPolicy` itself is threaded.
-  window._lumen_send_csp_reports = function(originalPolicy, evt) {
+  __lumen_C._lumen_send_csp_reports = function(originalPolicy, evt) {
     if (typeof fetch !== 'function' || typeof URL !== 'function') { return; }
     var base = (typeof document !== 'undefined' && document.baseURI) ||
                (typeof location !== 'undefined' ? location.href : undefined);
@@ -285,7 +285,7 @@ mod tests {
     fn dispatch_helper_exists() {
         with_csp_api(|rt| {
             let ok = rt
-                .eval("typeof window._lumen_dispatch_csp_violation === 'function'")
+                .eval("typeof __lumen_C._lumen_dispatch_csp_violation === 'function'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
@@ -419,7 +419,7 @@ mod tests {
               _reports.push({{ target: target, init: init }});
               return Promise.resolve({{ ok: true }});
             }};
-            globalThis._lumen_get_report_to_endpoints_json = function() {{
+            __lumen_C._lumen_get_report_to_endpoints_json = function() {{
               return {};
             }};
             "#,

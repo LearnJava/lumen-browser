@@ -2357,12 +2357,12 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
   }
 
-  globalThis._lumen_frame_content_document = function(hostNid) {
+  __lumen_C._lumen_frame_content_document = function(hostNid) {
     var bid = bidOrNull(hostNid);
     if (bid === null || !_lumen_f_accessible(bid)) return null;
     return docFacade(bid);
   };
-  globalThis._lumen_frame_content_window = function(hostNid) {
+  __lumen_C._lumen_frame_content_window = function(hostNid) {
     var bid = bidOrNull(hostNid);
     if (bid === null) return null;
     return winFacade(bid);
@@ -2409,7 +2409,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     // BUG-1198: в полном шиме `top` — unforgeable (BUG-587), переопределить
     // его нельзя; его геттер читает этот хук. Прямое определение остаётся для
     // минимальных изолятов без шима, где `top` ещё настраиваемый.
-    globalThis._lumen_frame_top = topOfContext;
+    __lumen_C._lumen_frame_top = topOfContext;
     try {
       Object.defineProperty(window, 'top', {
         get: function() { return topOfContext(); },
@@ -2450,7 +2450,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   }
 
   // Родитель зарегистрирован: включить parent/top/frameElement/name.
-  globalThis._lumen_frame_install_hierarchy = function() {
+  __lumen_C._lumen_frame_install_hierarchy = function() {
     if (typeof window === 'undefined') return;
     installHierarchyAccessors();
   };
@@ -2461,7 +2461,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // регистрации = порядок документа (спечный tree order). Именованный
   // доступ покрывает ТОЛЬКО iframe (embed/form/img/object — не бриджевая
   // территория).
-  globalThis._lumen_frame_install_index = function(idx) {
+  __lumen_C._lumen_frame_install_index = function(idx) {
     if (typeof window === 'undefined') return;
     installLengthAccessor();
     try {
@@ -2475,11 +2475,11 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       // false, even for a supported index) — this flag is this one call's
       // carve-out to still install the getter itself (see
       // `named_access.rs::indexed_define_trusted`).
-      globalThis._lumen_indexed_define_trusted = true;
+      __lumen_C._lumen_indexed_define_trusted = true;
       try {
         Object.defineProperty(window, String(idx), { get: mk(host), configurable: true });
       } finally {
-        globalThis._lumen_indexed_define_trusted = false;
+        __lumen_C._lumen_indexed_define_trusted = false;
       }
       var nm = _lumen_frame_name_at(idx);
       if (nm) {
@@ -2493,7 +2493,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // каждого фрейма. Натив отдаёт JSON-массив сообщений, адресованных ЭТОМУ
   // контексту; каждое разворачивается в MessageEvent и доставляется через
   // хук из WEB_API_SHIM (window.onmessage + addEventListener('message')).
-  globalThis._lumen_frame_pump_messages = function() {
+  __lumen_C._lumen_frame_pump_messages = function() {
     if (typeof window === 'undefined') return;
     if (typeof _lumen_deliver_frame_message === 'function') {
       var raw = _lumen_frame_take_messages();
@@ -2594,7 +2594,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // (`_lumen_f_queue_parent_resource` читает слот parent): топ-страница
   // платит один пустой вызов натива на событие и не ставит конвертов.
   // Возврат — поставлен ли конверт (для тестов).
-  globalThis._lumen_frame_mirror_resource = function(nid, type) {
+  __lumen_C._lumen_frame_mirror_resource = function(nid, type) {
     if (typeof nid !== 'number' || nid < 0) return false;
     if (typeof type !== 'string' || !type || type.length > 128) return false;
     if (typeof _lumen_f_queue_parent_resource !== 'function') return false;
@@ -2723,7 +2723,7 @@ mod tests {
             peer: None,
         });
         // Атрибут хоста уже переименован — фасад его не читает.
-        rt.eval("globalThis._lumen_get_attr = function() { return 'o1'; };").unwrap();
+        rt.eval("__lumen_C._lumen_get_attr = function() { return 'o1'; };").unwrap();
         assert!(eval_bool(&rt, "_lumen_frame_content_window(7).name === 'o'"));
     }
 
@@ -3102,7 +3102,7 @@ mod tests {
         let key = Arc::as_ptr(&parent_doc) as usize;
 
         rt.eval(
-            "globalThis._lumen_document_base_url = function() { return 'https://reader.example/sub/'; }; \
+            "__lumen_C._lumen_document_base_url = function() { return 'https://reader.example/sub/'; }; \
              globalThis._url_resolve = function(rel, base) { \
                  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rel)) return rel; \
                  return base + rel; \
@@ -3239,19 +3239,19 @@ mod tests {
                 "globalThis.__msgs = []; \
                  globalThis.__clicks = []; \
                  globalThis.__acts = []; \
-                 globalThis._lumen_deliver_frame_message = function(d, o, s) { \
+                 __lumen_C._lumen_deliver_frame_message = function(d, o, s) { \
                      __msgs.push({ d: d, o: o, s: s }); \
                  }; \
-                 globalThis._lumen_deliver_frame_click = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_click = function(nid) { \
                      __clicks.push(nid); \
                  }; \
-                 globalThis._lumen_deliver_frame_focus = function(nid, ps) { \
+                 __lumen_C._lumen_deliver_frame_focus = function(nid, ps) { \
                      __acts.push(['focus', nid, !!ps]); \
                  }; \
-                 globalThis._lumen_deliver_frame_blur = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_blur = function(nid) { \
                      __acts.push(['blur', nid]); \
                  }; \
-                 globalThis._lumen_deliver_frame_dom_event = function(nid, env) { \
+                 __lumen_C._lumen_deliver_frame_dom_event = function(nid, env) { \
                      __acts.push(['dom', nid, env.type, !!env.bubbles, \
                                   (env.detail === undefined) ? null : env.detail]); \
                  };",
@@ -4032,7 +4032,7 @@ mod tests {
         rt_child
             .eval(
                 "globalThis.__runs = []; \
-                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_run_script = function(nid) { \
                      __runs.push(nid); \
                  };",
             )
@@ -4074,7 +4074,7 @@ mod tests {
         rt_child
             .eval(
                 "globalThis.__runs = []; \
-                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_run_script = function(nid) { \
                      __runs.push(nid); \
                  };",
             )
@@ -4111,7 +4111,7 @@ mod tests {
         rt_child
             .eval(
                 "globalThis.__runs = []; \
-                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_run_script = function(nid) { \
                      __runs.push(nid); \
                  };",
             )

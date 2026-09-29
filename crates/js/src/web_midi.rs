@@ -161,7 +161,7 @@ const WEB_MIDI_SHIM: &str = r#"
   // ── Native binding stub for Phase 1 shell integration ─────────────────────
   // _lumen_midi_deliver_message(portId, data) — delivers an incoming MIDI
   // message from OS MIDI stack (CoreMIDI/WinMM/ALSA) to the MIDIInput port.
-  globalThis._lumen_midi_deliver_message = function(portId, data) { };
+  __lumen_C._lumen_midi_deliver_message = function(portId, data) { };
 
   // ── Exports ───────────────────────────────────────────────────────────────
   window.MIDIPort = MIDIPort;
@@ -345,7 +345,7 @@ mod tests {
     fn midi_deliver_binding_exists() {
         with_midi_api(|rt| {
             let ok = rt
-                .eval("typeof globalThis._lumen_midi_deliver_message === 'function'")
+                .eval("typeof __lumen_C._lumen_midi_deliver_message === 'function'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });

@@ -7,7 +7,7 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true")
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true")
         .unwrap();
     rt.install_dom(
         doc,
@@ -36,22 +36,22 @@ fn is_true(rt: &V8JsRuntime, code: &str) -> bool {
 fn post_message_event_targets_the_window() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
-        "window.__r = null; \
+        "globalThis.__r = null; \
          window.addEventListener('message', function(t) { \
-           window.__r = { target: t.target === window, current: t.currentTarget === window, \
+           globalThis.__r = { target: t.target === window, current: t.currentTarget === window, \
                           phase: t.eventPhase, self: this === window, \
                           loc: t.target.location.origin, source: t.source === window }; \
          }); \
          window.postMessage({ message: 'x' }, '*');",
     )
     .unwrap();
-    assert!(is_true(&rt, "_lumen_tick_timers(); window.__r !== null"));
+    assert!(is_true(&rt, "_lumen_tick_timers(); globalThis.__r !== null"));
     assert!(is_true(
         &rt,
-        "window.__r.target && window.__r.current && window.__r.self && window.__r.source"
+        "globalThis.__r.target && globalThis.__r.current && globalThis.__r.self && globalThis.__r.source"
     ));
-    assert!(is_true(&rt, "window.__r.phase === 2"));
-    assert!(is_true(&rt, "window.__r.loc === 'https://example.test'"));
+    assert!(is_true(&rt, "globalThis.__r.phase === 2"));
+    assert!(is_true(&rt, "globalThis.__r.loc === 'https://example.test'"));
 }
 
 /// `onmessage` sees the same targets, and runs before the listeners.
@@ -59,15 +59,15 @@ fn post_message_event_targets_the_window() {
 fn onmessage_handler_gets_the_window_as_target() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
-        "window.__order = []; \
-         window.addEventListener('message', function(e) { window.__order.push('listener'); }); \
-         window.onmessage = function(e) { window.__order.push(e.target === window ? 'on' : 'on-bad'); }; \
+        "globalThis.__order = []; \
+         window.addEventListener('message', function(e) { globalThis.__order.push('listener'); }); \
+         window.onmessage = function(e) { globalThis.__order.push(e.target === window ? 'on' : 'on-bad'); }; \
          window.postMessage('x', '*');",
     )
     .unwrap();
     assert!(is_true(
         &rt,
-        "_lumen_tick_timers(); window.__order.join() === 'on,listener'"
+        "_lumen_tick_timers(); globalThis.__order.join() === 'on,listener'"
     ));
 }
 
@@ -76,15 +76,15 @@ fn onmessage_handler_gets_the_window_as_target() {
 fn dispatch_state_is_cleared_after_delivery() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
-        "window.__ev = null; \
-         window.addEventListener('message', function(e) { window.__ev = e; }); \
+        "globalThis.__ev = null; \
+         window.addEventListener('message', function(e) { globalThis.__ev = e; }); \
          window.postMessage('x', '*');",
     )
     .unwrap();
     assert!(is_true(
         &rt,
-        "_lumen_tick_timers(); window.__ev.target === window && window.__ev.currentTarget === null \
-         && window.__ev.eventPhase === 0"
+        "_lumen_tick_timers(); globalThis.__ev.target === window && globalThis.__ev.currentTarget === null \
+         && globalThis.__ev.eventPhase === 0"
     ));
 }
 
@@ -93,13 +93,13 @@ fn dispatch_state_is_cleared_after_delivery() {
 fn stop_immediate_propagation_is_honoured() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
-        "window.__n = 0; \
-         window.addEventListener('message', function(e) { window.__n++; e.stopImmediatePropagation(); }); \
-         window.addEventListener('message', function(e) { window.__n++; }); \
+        "globalThis.__n = 0; \
+         window.addEventListener('message', function(e) { globalThis.__n++; e.stopImmediatePropagation(); }); \
+         window.addEventListener('message', function(e) { globalThis.__n++; }); \
          window.postMessage('x', '*');",
     )
     .unwrap();
-    assert!(is_true(&rt, "_lumen_tick_timers(); window.__n === 1"));
+    assert!(is_true(&rt, "_lumen_tick_timers(); globalThis.__n === 1"));
 }
 
 /// Cross-frame delivery goes through the same dispatch.
@@ -107,13 +107,13 @@ fn stop_immediate_propagation_is_honoured() {
 fn frame_message_delivery_targets_the_window() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
-        "window.__r = null; \
+        "globalThis.__r = null; \
          window.addEventListener('message', function(e) { \
-           window.__r = e.target === window && e.currentTarget === window && e.data === 7; }); \
+           globalThis.__r = e.target === window && e.currentTarget === window && e.data === 7; }); \
          _lumen_deliver_frame_message(7, 'https://other.test', null);",
     )
     .unwrap();
-    assert!(is_true(&rt, "window.__r === true"));
+    assert!(is_true(&rt, "globalThis.__r === true"));
 }
 
 /// A page's own `window.dispatchEvent(new Event(...))` also targets the window.

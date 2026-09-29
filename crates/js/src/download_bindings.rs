@@ -83,7 +83,7 @@ pub(crate) fn install_download_bindings_v8(
     });
     rt.register_native("_lumen_network_download", native)?;
     rt.eval(
-        "globalThis._lumen_download = function(url, name) { \
+        "__lumen_C._lumen_download = function(url, name) { \
            _lumen_network_download(String(url), name == null ? '' : String(name)); \
          };",
     )?;

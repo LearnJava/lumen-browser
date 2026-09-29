@@ -6,7 +6,7 @@ use crate::v8_runtime::V8JsRuntime;
 // V8 twin of the (removed) QuickJS `runtime_with_dom` helper.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
@@ -1249,7 +1249,7 @@ fn inserted_script_with_blob_src_runs_and_fires_load() {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let r = rt.eval("JSON.stringify([ev, window.__blobRan])").unwrap();
+    let r = rt.eval("JSON.stringify([ev, globalThis.__blobRan])").unwrap();
     assert_eq!(r, lumen_core::JsValue::String(r#"["load",42]"#.into()));
     assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");
 }
@@ -1261,7 +1261,7 @@ fn inserted_script_with_blob_src_runs_and_fires_load() {
 fn inserted_scripts_interleave_execution_and_load() {
     let rt = v8_runtime_with_fetch(CaptureFetch::new());
     rt.eval(
-        "var RES = [];          ['m1', 'm2', 'm3', 'm4'].forEach(function(n) {              var s = document.createElement('script');              s.src = URL.createObjectURL(new Blob(['window.__last = \"' + n + '\";'], {type: 'text/javascript'}));              s.async = true;              s.addEventListener('load', function() { RES.push(n + '<-' + window.__last); window.__last = null; });              s.addEventListener('error', function() { RES.push(n + ':error'); });              document.head.appendChild(s);          });",
+        "var RES = [];          ['m1', 'm2', 'm3', 'm4'].forEach(function(n) {              var s = document.createElement('script');              s.src = URL.createObjectURL(new Blob(['globalThis.__last = \"' + n + '\";'], {type: 'text/javascript'}));              s.async = true;              s.addEventListener('load', function() { RES.push(n + '<-' + globalThis.__last); globalThis.__last = null; });              s.addEventListener('error', function() { RES.push(n + ':error'); });              document.head.appendChild(s);          });",
     )
     .unwrap();
     for _ in 0..50 {
@@ -1282,7 +1282,7 @@ fn inserted_scripts_interleave_execution_and_load() {
 fn inserted_script_delays_window_load() {
     let rt = v8_runtime_with_fetch(CaptureFetch::new());
     rt.eval(
-        "window.ORDER = [];          var s = document.createElement('script');          s.src = URL.createObjectURL(new Blob(['window.__exec = [\"m1\"];'], {type: 'text/javascript'}));          s.onload = function() { ORDER.push('script-load'); };          document.head.appendChild(s);          window.addEventListener('load', function() {              ORDER.push('window-load ' + document.readyState + ' exec=' + JSON.stringify(window.__exec || []));          });          window.addEventListener('pageshow', function() { ORDER.push('pageshow'); });          _lumen_apply_ready_state('interactive');          _lumen_apply_ready_state('complete');          _lumen_fire_page_lifecycle('pageshow', false);          ORDER.push('shell-done ' + document.readyState);",
+        "window.ORDER = [];          var s = document.createElement('script');          s.src = URL.createObjectURL(new Blob(['globalThis.__exec = [\"m1\"];'], {type: 'text/javascript'}));          s.onload = function() { ORDER.push('script-load'); };          document.head.appendChild(s);          window.addEventListener('load', function() {              ORDER.push('window-load ' + document.readyState + ' exec=' + JSON.stringify(globalThis.__exec || []));          });          window.addEventListener('pageshow', function() { ORDER.push('pageshow'); });          _lumen_apply_ready_state('interactive');          _lumen_apply_ready_state('complete');          _lumen_fire_page_lifecycle('pageshow', false);          ORDER.push('shell-done ' + document.readyState);",
     )
     .unwrap();
     for _ in 0..50 {

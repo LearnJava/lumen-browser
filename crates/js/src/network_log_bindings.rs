@@ -106,7 +106,7 @@ pub(crate) fn install_network_log_bindings_v8(
     );
     rt.register_native("_lumen_log_network_request", native)?;
     rt.eval(
-        "globalThis._lumen_net_log = function(method, url, status, ms) { \
+        "__lumen_C._lumen_net_log = function(method, url, status, ms) { \
            _lumen_log_network_request(String(method == null ? 'GET' : method), String(url), \
              Number(status == null ? 0 : status), Number(ms == null ? -1 : ms)); \
          };",

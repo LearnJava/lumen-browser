@@ -1579,7 +1579,7 @@ const FSAL_SHIM: &str = r#"
 
 // BUG-371 point 1: the natives live here from now on, not on `window`.
 function nat(name) {
-  return (typeof globalThis[name] === 'function') ? globalThis[name] : null;
+  return (typeof __lumen_C[name] === 'function') ? __lumen_C[name] : null;
 }
 var NAT_OPEN_PICKER  = nat('_lumen_show_open_file_picker');
 var NAT_SAVE_PICKER  = nat('_lumen_show_save_file_picker');
@@ -1626,8 +1626,8 @@ function fsUnwrap(raw, message) {
 // Bridge into `file_input.rs`'s shim: the only way to attach a read grant to a
 // `File`, since the token lives in that shim's private WeakMap. Also deleted
 // from the global object by the sealing step.
-var FS_INTERNAL = (typeof globalThis.__lumen_fs_internal === 'object')
-  ? globalThis.__lumen_fs_internal : null;
+var FS_INTERNAL = (typeof __lumen_C.__lumen_fs_internal === 'object')
+  ? __lumen_C.__lumen_fs_internal : null;
 
 // ── WebIDL plumbing ──────────────────────────────────────────────────────────
 
@@ -2663,8 +2663,8 @@ function showDirectoryPicker(options) {
 
 // ── [Serializable] (FS §4: all three handles survive structuredClone) ────────
 
-if (globalThis.__lumen_platform_cloners) {
-  globalThis.__lumen_platform_cloners.register(
+if (__lumen_C.__lumen_platform_cloners) {
+  __lumen_C.__lumen_platform_cloners.register(
     function(value) { return STATE.has(value); },
     function(value) {
       var st = STATE.get(value);
@@ -2681,7 +2681,7 @@ if (globalThis.__lumen_platform_cloners) {
 // public constructor BUG-374 removes. It captures this bridge at its own eval
 // time and deletes the global immediately, the same way it already treats
 // `_lumen_storage_get_directory`.
-Object.defineProperty(globalThis, '__lumen_fsa_internal', {
+Object.defineProperty(__lumen_C, '__lumen_fsa_internal', {
   value: Object.freeze({ makeDirectoryHandle: makeDirHandle }),
   enumerable: false, writable: false, configurable: true,
 });
@@ -2861,7 +2861,7 @@ mod tests_v8 {
         function _lumen_get_attr(nid, name) { return undefined; }
         function _lumen_dispatch_bubble(nid, type) {}
         function _lumen_make_element(nid) { return {__nid__: nid}; }
-        window._lumen_make_element = _lumen_make_element;
+        __lumen_C._lumen_make_element = _lumen_make_element;
         var __intervals = [];
         function setInterval(fn, ms) { __intervals.push(fn); return __intervals.length; }
         function clearInterval(id) { if (id) __intervals[id - 1] = null; }
@@ -2946,10 +2946,10 @@ mod tests_v8 {
         // re-evaluated afterwards so its IIFE picks the mocks up.
         rt.eval(
             r#"
-            globalThis._lumen_show_open_file_picker =
+            __lumen_C._lumen_show_open_file_picker =
               function() { return '{"name":"mock.txt","token":"","size":0}'; };
-            globalThis._lumen_show_save_file_picker = function() { return 'mock-write-id'; };
-            globalThis._lumen_show_directory_picker =
+            __lumen_C._lumen_show_save_file_picker = function() { return 'mock-write-id'; };
+            __lumen_C._lumen_show_directory_picker =
               function() { return '{"name":"mockdir","path_id":"mock-dir-id"}'; };
             "#,
         )
@@ -3408,9 +3408,9 @@ mod tests_v8 {
         let rt = with_fsa_for(origin);
         rt.eval(
             r#"
-            globalThis._lumen_show_open_file_picker  = function() { return null; };
-            globalThis._lumen_show_save_file_picker  = function() { return null; };
-            globalThis._lumen_show_directory_picker  = function() { return null; };
+            __lumen_C._lumen_show_open_file_picker  = function() { return null; };
+            __lumen_C._lumen_show_save_file_picker  = function() { return null; };
+            __lumen_C._lumen_show_directory_picker  = function() { return null; };
             "#,
         )
         .unwrap();
@@ -3479,7 +3479,7 @@ mod tests_v8 {
     #[test]
     fn refused_write_permission_rejects_with_not_allowed_error() {
         let rt = with_fsa_for("https://abort-write.fsal.test");
-        rt.eval("globalThis._lumen_show_save_file_picker = function() { return null; };")
+        rt.eval("__lumen_C._lumen_show_save_file_picker = function() { return null; };")
             .unwrap();
         rt.eval(super::FSAL_SHIM).unwrap();
         rt.eval(RESOLVE_HANDLES).unwrap();
@@ -3819,7 +3819,7 @@ mod tests_v8 {
         rt.eval(
             r#"
             var CLONERS = [];
-            Object.defineProperty(window, '__lumen_platform_cloners', {
+            Object.defineProperty(__lumen_C, '__lumen_platform_cloners', {
               value: {
                 register: function(test, clone) { CLONERS.push([test, clone]); },
                 find: function(v) {
@@ -3841,11 +3841,11 @@ mod tests_v8 {
             (async function() {{
               var root = {ROOT}('root', '{pid}');
               var f = await root.getFileHandle('cloned.txt', {{ create: true }});
-              var clone = window.__lumen_platform_cloners.find(f)(f);
+              var clone = __lumen_C.__lumen_platform_cloners.find(f)(f);
               __ok = (clone instanceof FileSystemFileHandle)
                   && (clone !== f) && clone.name === 'cloned.txt'
                   && (await clone.isSameEntry(f))
-                  && window.__lumen_platform_cloners.find(root)(root) instanceof
+                  && __lumen_C.__lumen_platform_cloners.find(root)(root) instanceof
                        FileSystemDirectoryHandle;
             }})();
             "#

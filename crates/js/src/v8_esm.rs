@@ -345,10 +345,10 @@ pub(crate) fn register_inline(source: &str) -> String {
 /// outright.
 fn document_base_url(scope: &mut v8::PinScope<'_, '_>) -> String {
     let stored = with_state(|s| s.page_url.clone());
-    let Some(code) = v8::String::new(
-        scope,
-        "(function(){try{return (typeof _lumen_document_base_url==='function')?_lumen_document_base_url():'';}catch(e){return '';}})()",
-    ) else {
+    const PROBE: &str = "(function(){try{return (typeof _lumen_document_base_url==='function')?_lumen_document_base_url():'';}catch(e){return '';}})()";
+    let ctx = scope.get_current_context();
+    let probe = crate::internal_globals::wrap_for_container(scope, ctx, PROBE);
+    let Some(code) = v8::String::new(scope, probe.as_deref().unwrap_or(PROBE)) else {
         return stored;
     };
     v8::tc_scope!(let tc, scope);
@@ -1056,7 +1056,7 @@ mod tests {
         // (`<base href>`), not the page URL captured once at navigation.
         let rt = rt();
         rt.eval(
-            "globalThis._lumen_document_base_url = function() { \
+            "__lumen_C._lumen_document_base_url = function() { \
              return 'https://example.com/base/'; };",
         )
         .unwrap();

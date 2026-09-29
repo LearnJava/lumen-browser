@@ -195,7 +195,7 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
   // `data-lumen-state-<name>` sentinel attribute directly (see the reflection
   // in `add`/`delete`/`clear` above), so layout never needs to call into the
   // JS engine during style computation.
-  globalThis._lumen_element_internals_get_states = function _lumen_element_internals_get_states(nid) {
+  __lumen_C._lumen_element_internals_get_states = function _lumen_element_internals_get_states(nid) {
     // Walk registered internals by nid — Phase 0: linear scan via __nid property.
     // Phase 1: replace with a WeakMap keyed on element objects.
     const el = typeof _lumen_get_element_by_nid === 'function'
@@ -238,9 +238,9 @@ mod tests {
 
             // Sentinel-attribute stubs, tracked in window.__attrs (mirrors dom.rs
             // `_lumen_set_attr`/`_lumen_remove_attr` for the `:state()` reflection test).
-            window.__attrs = {};
-            window._lumen_set_attr = function(nid, name, value) { window.__attrs[nid + ':' + name] = value; };
-            window._lumen_remove_attr = function(nid, name) { delete window.__attrs[nid + ':' + name]; };
+            globalThis.__attrs = {};
+            __lumen_C._lumen_set_attr = function(nid, name, value) { globalThis.__attrs[nid + ':' + name] = value; };
+            __lumen_C._lumen_remove_attr = function(nid, name) { delete globalThis.__attrs[nid + ':' + name]; };
 
             // Factory: element with Element prototype
             window.makeEl = function(nid) {
@@ -309,7 +309,7 @@ mod tests {
                     var el = makeEl(7);
                     var internals = el.attachInternals();
                     var had = internals.states.delete('never-added');
-                    !had && window.__attrs['7:data-lumen-state-never-added'] === undefined
+                    !had && globalThis.__attrs['7:data-lumen-state-never-added'] === undefined
                     "#,
                 )
                 .unwrap();
@@ -368,13 +368,13 @@ mod tests {
                     var el = makeEl(42);
                     var internals = el.attachInternals();
                     internals.states.add('loading');
-                    var setOpen = window.__attrs['42:data-lumen-state-loading'] === '';
+                    var setOpen = globalThis.__attrs['42:data-lumen-state-loading'] === '';
                     internals.states.add('checked');
                     internals.states.delete('loading');
-                    var removedLoading = window.__attrs['42:data-lumen-state-loading'] === undefined;
-                    var checkedStillSet = window.__attrs['42:data-lumen-state-checked'] === '';
+                    var removedLoading = globalThis.__attrs['42:data-lumen-state-loading'] === undefined;
+                    var checkedStillSet = globalThis.__attrs['42:data-lumen-state-checked'] === '';
                     internals.states.clear();
-                    var clearedChecked = window.__attrs['42:data-lumen-state-checked'] === undefined;
+                    var clearedChecked = globalThis.__attrs['42:data-lumen-state-checked'] === undefined;
                     setOpen && removedLoading && checkedStillSet && clearedChecked
                     "#,
                 )

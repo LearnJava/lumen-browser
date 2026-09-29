@@ -259,7 +259,7 @@ const GENERIC_SENSOR_SHIM: &str = r#"
   // type: 'accelerometer' | 'gyroscope' | 'magnetometer' | 'ambient-light' |
   //       'absolute-orientation' | 'relative-orientation'
   // payload: object with {x,y,z} or {quaternion:[x,y,z,w]} or {illuminance}
-  globalThis._lumen_sensor_deliver_reading = function(type, payload) {
+  __lumen_C._lumen_sensor_deliver_reading = function(type, payload) {
     // Reserved for Phase 1 shell integration.
     // Future: iterate active sensor instances matching `type`, apply payload,
     // set _hasReading=true, _timestamp=performance.now(), fire 'reading' event.
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn lumen_sensor_deliver_reading_is_function() {
         with_generic_sensor(|rt| {
-            check(rt, "typeof globalThis._lumen_sensor_deliver_reading === 'function'");
+            check(rt, "typeof __lumen_C._lumen_sensor_deliver_reading === 'function'");
         });
     }
 }
