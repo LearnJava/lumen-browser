@@ -2572,16 +2572,19 @@ runtime or the shim. Read them before a JS/Web-API change.
   splice silently shows the grey `<iframe>` placeholder (that is how `--screenshot` shipped without it).
   The pixel goldens do not cover frames at all: `lumen-driver` builds its own display list and
   `run.py`'s pages contain no `<iframe>`.
-- **`cloneNode` never re-arms a resource-loading element's "already started" tracking.**
+- **`cloneNode` never re-arms a resource-loading element's "already started" tracking — except `<style>`,
+  fixed by [BUG-967](../bugs/BUG-967-FIXED.md).**
   `_lumen_resource_track` (`web_api_shim_mid.js:8159`) — the map `appendChild`/`insertBefore` consult to
   know a freshly inserted `script`/`link`/`track`/`source`/`style` needs to fetch — is populated only
   from `document.createElement`/`createElementNS`. A clone (`cloneNode`, or `<template>.content.
-  cloneNode(true)`) goes through the native `_lumen_clone_subtree` instead and is never added, so any
-  such element that arrives via a clone is invisible to every per-element JS-side load trigger
-  ([BUG-967](../bugs/BUG-967-OPEN.md): a cloned `<style>` with `@import` never fetches it and never fires
-  `load`/`error`). `<link>` survives this only because the shell separately rewalks the whole document
-  tree for hrefs on every cascade pass (`collect_link_hrefs`) — `<style>`/`<script>`/`<track>`/`<source>`
-  have no such full-tree fallback.
+  cloneNode(true)`) goes through the native `_lumen_clone_subtree` instead and was never added. BUG-967
+  taught the three clone/import call sites to walk the cloned subtree and register any `<style>`
+  descendant the same way (`_lumen_track_cloned_style_blocks`) — deliberately `<style>`-only, since it is
+  the one kind here with no spec "already started" flag to preserve across a clone. `<script>`/`<track>`/
+  `<source>` are still invisible to every per-element JS-side load trigger when they arrive via a clone.
+  `<link>` survives this regardless, because the shell separately rewalks the whole document tree for
+  hrefs on every cascade pass (`collect_link_hrefs`) — `<script>`/`<track>`/`<source>` have no such
+  full-tree fallback.
 - **`_lumen_resource_pending` prepares a `<script>` at most once, ever — mutating `.src` afterwards is a
   silent no-op, including the very first time `.src` is ever set on a script that had none at connection.**
   The map doubles as the spec's per-element "already started" flag: the entry is deleted the first time the

@@ -3389,6 +3389,7 @@ function _lumen_make_document_fragment(nid) {
         // cloneNode: returns a new fragment with deep-cloned children (always deep for fragments).
         cloneNode:            function(deep) {
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
+            _lumen_track_cloned_style_blocks(clone_nid);
             return _lumen_make_document_fragment(clone_nid);
         },
         // DOM §4.4 (GAP-XMLDOC срез 38, BUG-685) — own copies, same reason as
@@ -8409,6 +8410,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // DOM LS §4.4: cloneNode(deep) — shallow or deep copy of this element.
         cloneNode:       function(deep) { var nid = this.__nid__;
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
+            _lumen_track_cloned_style_blocks(clone_nid);
             return _lumen_make_element(clone_nid);
         },
         // BUG-796: `content` used to live here, as a template-only getter answering
@@ -12752,6 +12754,7 @@ var document = {
         if (!node) return null;
         if (node.__nid__ !== undefined) {
             var clone_nid = _lumen_clone_subtree(node.__nid__, deep ? 1 : 0);
+            _lumen_track_cloned_style_blocks(clone_nid);
             if (options && options.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
             }
@@ -12901,6 +12904,30 @@ function _lumen_resource_track(nid, local) {
         && tag !== 'style' && tag !== 'embed' && tag !== 'object') return;
     _lumen_resource_pending[nid] = tag;
     _lumen_resource_pending_count++;
+}
+
+// BUG-967: `cloneNode`/`importNode` go through the native `_lumen_clone_subtree`
+// directly — unlike `createElement`, they never call `_lumen_resource_track`,
+// so a cloned `<style>` (the common `<template>.content.cloneNode(true)` idiom)
+// never enters `_lumen_resource_pending` and its later insertion never runs
+// "update a style block" (§4.14): no `load`/`error`, no `@import` fetch. Unlike
+// `<script>`/`<link>`, a `<style>` block has no spec "already started" flag to
+// preserve across a clone, so tracking every clone unconditionally is correct —
+// each copy gets its own independent update-block run, same as one built with
+// `createElement`. Scripts/links/tracks/etc. are deliberately NOT extended
+// here: their "already started" bookkeeping is why they are excluded from
+// `_lumen_resource_track` for parser/clone origins in the first place (see the
+// comment above `_lumen_resource_pending`), and this bug is about `<style>`
+// only. Walks the whole cloned subtree since `_lumen_clone_subtree` returns
+// only the new root, and a deep clone can carry `<style>` descendants.
+function _lumen_track_cloned_style_blocks(nid) {
+    if (nid === null || nid === undefined) return;
+    if (_lumen_is_style_element(nid) && _lumen_resource_pending[nid] === undefined) {
+        _lumen_resource_pending[nid] = 'style';
+        _lumen_resource_pending_count++;
+    }
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) _lumen_track_cloned_style_blocks(kids[i]);
 }
 
 // Same shadow-inclusive test as Node.isConnected, by nid alone — no element
