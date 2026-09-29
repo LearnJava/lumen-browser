@@ -80,20 +80,20 @@ fn assert_marker_absent(rt: &V8JsRuntime, name: &str) {
 // ── navigator.webdriver ──────────────────────────────────────────────────────
 
 #[test]
-fn webdriver_is_absent() {
+fn webdriver_is_not_true() {
     let rt = make_rt();
     assert!(
-        bool_eval(&rt, "typeof navigator.webdriver === 'undefined'"),
-        "navigator.webdriver must be absent (Selenium detection marker)"
+        bool_eval(&rt, "navigator.webdriver !== true"),
+        "navigator.webdriver must not be true (Selenium detection marker)"
     );
 }
 
 #[test]
-fn webdriver_not_in_navigator() {
+fn webdriver_is_false_in_navigator() {
     let rt = make_rt();
     assert!(
-        bool_eval(&rt, "!('webdriver' in navigator)"),
-        "'webdriver' must not be enumerable on navigator"
+        bool_eval(&rt, "'webdriver' in navigator && navigator.webdriver === false"),
+        "'webdriver' must be present and false, like Chrome/Firefox (BUG-754)"
     );
 }
 

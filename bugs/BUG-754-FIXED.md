@@ -1,6 +1,6 @@
 # BUG-754 — модель анти-фингерпринта смешанная: `navigator.webdriver` отсутствует полностью, тогда как в Chrome и Firefox это существующее свойство `false`, а остальной surface_api сознательно мимикрирует под Chrome
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3) — выбран вариант 1 (`navigator.webdriver === false`, configurable+enumerable accessor на прототипе Navigator); тесты `webdriver_present_and_configurable`, `webdriver_is_false_in_navigator`, `navigator_webdriver_is_false`; `docs/plan/privacy.md` и ADR-007 обновлены. Основание: цель privacy.md §Слой 2 — совпадать с current stable Chrome, а Chrome отдаёт `false`.
 **Компонент:** js (`crates/js/src/dom.rs` — литерал `navigator`, свойство не заводится; намеренность отсутствия задокументирована в `crates/js/src/surface_api.rs`). Тесты, закрепляющие текущую модель: `crates/js/src/surface_api.rs::tests::webdriver_absent_in_navigator`, `crates/js/tests/cases/no_automation_markers.rs::webdriver_not_in_navigator`, `crates/driver/tests/cases/antidetect_surface_api.rs::navigator_webdriver_is_absent`
 **Найден:** P3, 2026-08-10 — остаток [BUG-379](BUG-379-FIXED.md) (раздел «Заметки» заявки: «это отдельный вопрос выбора модели, и его стоит решить явно»)
 

@@ -129,11 +129,11 @@ fn one_line_prefix_detector_finds_nothing() {
 }
 
 #[test]
-fn navigator_webdriver_is_absent() {
+fn navigator_webdriver_is_false() {
     let mut s = session();
     assert!(
-        ev_bool(&mut s, "!('webdriver' in navigator)"),
-        "'webdriver' must not be a property of navigator"
+        ev_bool(&mut s, "'webdriver' in navigator && navigator.webdriver === false"),
+        "'webdriver' must be a property of navigator equal to false (BUG-754)"
     );
 }
 
