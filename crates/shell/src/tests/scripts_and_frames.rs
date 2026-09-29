@@ -2197,3 +2197,24 @@ fn fetch_embedded_source_yields_document_only_for_document_resources() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// BUG-1225: streaming-кадр не публикуется, пока ждут таблицы стилей из
+/// `<head>`; счётчик привязан к навигации и не течёт между ними.
+#[test]
+fn stream_css_pending_gates_frames_per_generation() {
+    use crate::page_load::{stream_css_pending, stream_css_pending_add, stream_css_pending_done};
+    let g = 9_000_001;
+    assert!(!stream_css_pending(g));
+    stream_css_pending_add(g);
+    stream_css_pending_add(g);
+    assert!(stream_css_pending(g));
+    stream_css_pending_done(g);
+    assert!(stream_css_pending(g), "одна таблица ещё в пути");
+    stream_css_pending_done(g);
+    assert!(!stream_css_pending(g));
+    stream_css_pending_done(g);
+    assert!(!stream_css_pending(g), "лишний done не уходит в минус");
+    stream_css_pending_add(g + 1);
+    assert!(!stream_css_pending(g), "другая навигация не видит чужой счётчик");
+    stream_css_pending_done(g + 1);
+}
