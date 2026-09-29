@@ -1,6 +1,6 @@
 # BUG-710: WebCodecs buffer types drop their payload — `VideoFrame`/`AudioData` never store the source data, `copyTo()`/`allocationSize()` are no-ops or missing entirely, `VideoColorSpace` doesn't exist
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** js (`crates/js/src/web_codecs.rs` — `webcodecs_shim`)
 **Найден:** WPT-VENDOR-webcodecs (`ROADMAP.md`)
 
@@ -109,3 +109,21 @@ buffer/geometry operations against it, including the destination-too-small
 a plain data-holding constructor. `displayWidth`/`displayHeight`/
 `visibleRect`/`rotation`/`flip`/`metadata()` on `VideoFrame` can derive
 from the same stored geometry.
+
+## Исправление (2026-09-29, P3)
+
+`webcodecs_shim` переписан для буферных типов, без кодека:
+
+* `EncodedVideoChunk`/`EncodedAudioChunk` — копируют `init.data`, `copyTo()` пишет в
+  `destination` и бросает `TypeError`, если он мал; неверный `type` — `TypeError`.
+* `AudioData` — хранит `data`, `allocationSize()`/`copyTo()` с `planeIndex`/
+  `frameOffset`/`frameCount` (interleaved и planar), `RangeError` на выход за границы.
+* `VideoFrame` — источники: BufferSource (`format`/`codedWidth`/`codedHeight`),
+  другой `VideoFrame`, canvas-подобный объект (RGBA-снимок через `getImageData`,
+  при его отсутствии — нули); `displayWidth`/`displayHeight`/`visibleRect`/`codedRect`/
+  `colorSpace`/`rotation`/`flip`/`metadata()`, `allocationSize()`, `copyTo()` с `rect`/`layout`.
+* `VideoColorSpace` — обычный конструктор с `toJSON()`.
+
+Не сделано: сериализация (`structuredClone`/`postMessage` кадров), `transfer`, валидация
+`ImageBitmap`-источников сверх ширины/высоты, RGB↔YUV конвертация при `copyTo({format})`.
+Тесты: `web_codecs::tests` (5 новых).
