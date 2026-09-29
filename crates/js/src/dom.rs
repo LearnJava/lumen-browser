@@ -592,7 +592,8 @@ pub(crate) fn web_api_shim() -> String {
 /// `WorkerGlobalScope`: [`EVENT_SHIM`], [`EVENT_TARGET_SHIM`],
 /// [`PERFORMANCE_SHIM`], the URL pair, [`TEXT_ENCODING_SHIM`],
 /// [`ABORT_SHIM`], [`STREAMS_SHIM`], [`HEADERS_SHIM`], [`FETCH_BODY_SHIM`],
-/// [`FORM_DATA_SHIM`], [`FILE_API_SHIM`] and [`WEBSOCKET_SHIM`].
+/// [`FORM_DATA_SHIM`], [`FILE_API_SHIM`], [`WEBSOCKET_SHIM`] and the URLPattern
+/// class (`[Exposed=(Window,Worker)]`, BUG-695).
 ///
 /// Evaluated as one script (like in the page) so `Performance`'s prototype
 /// chain finds `EventTarget`. The trailing `undefined` keeps the completion
@@ -606,9 +607,10 @@ pub(crate) fn web_api_shim() -> String {
 /// `_lumen_navigator_id` object its caller evaluates first.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn worker_exposed_shim() -> String {
+    use crate::url_pattern::URL_PATTERN_SHIM;
     format!(
         "{EVENT_SHIM}{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}{ORIGIN_SHIM}\
-         {TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
+         \n{URL_PATTERN_SHIM}\n{TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
          {WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )
 }
