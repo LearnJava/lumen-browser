@@ -411,6 +411,13 @@ pub struct V8JsRuntime {
     /// SharedWorker parent-side reporting) — parallel to
     /// `shared_worker_outbox` but for the `error` event rather than `message`.
     pub(super) shared_worker_errors: crate::worker::WorkerErrorQueue,
+    /// `SharedWorker` client ports this page has ever connected (port id →
+    /// identity key), used only by [`Drop`] below (BUG-1000): unlike
+    /// `workers`, the shared-worker hub is process-global
+    /// (`crate::shared_worker::HUB_V8`), so a page going away does not by
+    /// itself disconnect anything there — this map is what lets `Drop` tell
+    /// the hub which ports belonged to it.
+    pub(super) shared_worker_client_ports: crate::shared_worker::SharedWorkerClientPorts,
     /// Cookie-banner auto-dismiss (7C.3) enable flag (Ph3 V8 migration S12b-G6,
     /// BUG-548). Defaults to `true`. Shell sets this from the user's
     /// `cookie_banner_dismiss` preference via [`Self::set_cookie_banner_dismiss`].
@@ -539,6 +546,7 @@ impl V8JsRuntime {
             worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             shared_worker_errors: Arc::new(Mutex::new(Vec::new())),
+            shared_worker_client_ports: Arc::new(Mutex::new(HashMap::new())),
             cookie_banner_dismiss: AtomicBool::new(true),
             frame_docs: Arc::new(Mutex::new(crate::frame_bridge::FrameDocSlots::default())),
         })
@@ -548,6 +556,15 @@ impl V8JsRuntime {
     /// the next `install_dom`. Mirrors [`crate::QuickJsRuntime::set_cookie_banner_dismiss`].
     pub fn set_cookie_banner_dismiss(&self, enabled: bool) {
         self.cookie_banner_dismiss.store(enabled, Ordering::Relaxed);
+    }
+
+    /// This page's `SharedWorker` client-port map (BUG-1000) — `pub(crate)`
+    /// purely so `shared_worker.rs`'s own unit tests can install its bindings
+    /// against the runtime's *real* field instead of a throwaway one, and so
+    /// `drop(rt)` in those tests exercises the same path production code does.
+    #[cfg(test)]
+    pub(crate) fn shared_worker_client_ports_for_test(&self) -> crate::shared_worker::SharedWorkerClientPorts {
+        Arc::clone(&self.shared_worker_client_ports)
     }
 
     /// Shared handle to this runtime's `BroadcastChannel` registry, for the
@@ -1640,6 +1657,13 @@ impl V8JsRuntime {
 
 impl Drop for V8JsRuntime {
     fn drop(&mut self) {
+        // BUG-1000: a dedicated `Worker` disconnects for free here — its
+        // `WorkerRegistry` is a plain field of `self` and drops with it,
+        // breaking each worker thread's channel. `SharedWorker`'s hub is
+        // process-global, so it needs an explicit nudge: tell it about every
+        // port this page ever opened, so a worker left with no other client
+        // notices and terminates itself instead of outliving the page.
+        crate::shared_worker::close_all_client_ports_v8(&self.shared_worker_client_ports);
         let _ = self.cmd_tx.send(V8Command::Shutdown);
         if let Some(handle) = self.js_thread.take() {
             let _ = handle.join();

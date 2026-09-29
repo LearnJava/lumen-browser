@@ -1132,6 +1132,7 @@ impl V8JsRuntime {
             self,
             &self.shared_worker_outbox,
             &self.shared_worker_errors,
+            &self.shared_worker_client_ports,
             fp_shared_worker,
             ws_worker,
             worker_determinism,
