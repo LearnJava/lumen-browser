@@ -2407,6 +2407,7 @@ pub(crate) fn spawn_frame(
         // parent, the shapes this bug's WPT repro actually exercises.
         top: (depth >= 1).then_some((top_doc, top_url.as_str(), accessible_top)),
     };
+    let _runtime_span = lumen_core::trace::span("frame-runtime", "js");
     let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
         child_doc,
         info.sandbox,
@@ -2432,7 +2433,11 @@ pub(crate) fn spawn_frame(
         // события/RunScript (срезы 4–8), а статические iframe — самый
         // частый встраиваемый случай. Странице (второй вызов) хватает
         // старого поведения: без скриптов ей нечем отвечать.
-        true,
+        // BUG-1011: синтетическая страница ошибки (отклонённый `data:`/
+        // `javascript:`/сетевой отказ) не несёт ни скриптов, ни собеседника для
+        // postMessage — рантайм со всем шим-набором (~80 мс) там чистая трата;
+        // 216 таких фреймов в `svg-embedded-sizing` упирались в таймаут теста.
+        !load_failed,
         // BUG-443: a sub-document is laid out only after this call returns
         // (`layout_frame_document`), so there is no parse-time layout to offer.
         None,
@@ -2453,6 +2458,7 @@ pub(crate) fn spawn_frame(
         env.cookie_jar.clone().filter(|_| !opaque),
         Some(&ancestry),
     );
+    drop(_runtime_span);
     // PERF-14: same headless settle the page gets after its own scripts.
     crate::page_pipeline::settle_headless_fetches(child_js.as_ref());
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
@@ -2498,6 +2504,7 @@ pub(crate) fn spawn_frame(
     // FRAME-5: синхронно (см. doc-comment `load_frame_fonts`) — тем же
     // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
     // ребёнка выше в этой функции.
+    let _fonts_span = lumen_core::trace::span("frame-fonts", "font");
     let (font_registry, web_fonts, blocked_by_font_src) = load_frame_fonts(
         &frame_sheet.font_faces,
         &child_base,
@@ -2507,6 +2514,8 @@ pub(crate) fn spawn_frame(
         child_self_origin.as_ref(),
         child_referrer_policy,
     );
+    drop(_fonts_span);
+    let _layout_span = lumen_core::trace::span("frame-layout", "layout");
     let frame_layout = frame_measurer(&frame_sheet.font_faces, &font_registry, &web_fonts).map(|measurer| {
         layout_frame_document(
             &child_doc_arc,
@@ -2519,6 +2528,7 @@ pub(crate) fn spawn_frame(
             FrameNodeState::default(),
         )
     });
+    drop(_layout_span);
     // FRAME-5: CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)`
     // ребёнка уже после его layout-а (см. doc-comment
     // `fetch_frame_background_images` — картинки фона не влияют на расчёт
