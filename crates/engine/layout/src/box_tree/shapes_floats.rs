@@ -49,9 +49,16 @@ pub(crate) fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
     while let Some(node) = stack.pop() {
         node.rect.x += dx;
         node.rect.y += dy;
-        if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut node.kind {
+        if let BoxKind::SvgShape { svg_paint_matrix, svg_mask, .. } = &mut node.kind {
             svg_paint_matrix.matrix[4] += dx;
             svg_paint_matrix.matrix[5] += dy;
+            // The `<mask>` content lives outside `children` but is laid out in
+            // document space alongside the shape (`lay_out_svg_children_positions`),
+            // so it must travel with it (BUG-341 S42: a replayed probe left it
+            // at the probe's origin, detached from its own mask layer).
+            if let Some(mask) = svg_mask {
+                stack.extend(mask.content.iter_mut());
+            }
         }
         stack.extend(node.children.iter_mut());
     }

@@ -1430,7 +1430,7 @@ pub(crate) fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, av
         .unwrap_or(300.0)
         .max(0.0);
     let svg_h = s.height.as_ref()
-        .and_then(|l| l.resolve(em, avail_h, viewport))
+        .and_then(|l| super::resolve_block_size(l, em, avail_h, viewport))
         .or_else(|| view_box.as_ref().map(|vb| vb.height))
         .unwrap_or(150.0)
         .max(0.0);
