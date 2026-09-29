@@ -7,6 +7,10 @@
 
 use crate::*;
 
+/// BUG-1003: longest a due rAF batch waits for an in-flight relayout commit
+/// (see `pump_raf_engine_thread`).
+const RAF_RELAYOUT_HOLD_MS: f64 = 100.0;
+
 /// BUG-935 S31: measurement-only override for `defer_js_push` at the two call
 /// sites S27 converted (`relayout`/`poll_engine_commit`, `:188`/`:1267`
 /// below). S28/S29/S30 each tried an interleaved A/B of `true` vs `false` by
@@ -788,7 +792,17 @@ impl Lumen {
             self.raf_drain_gate = false;
             return submitted;
         }
-        if raf_due && self.take_raf_pending_lockfree() {
+        // BUG-1003: the relayout a finished turn just submitted delivers
+        // ResizeObserver/IntersectionObserver entries through the deferred JS
+        // push queued when its commit lands. Firing the next rAF batch before
+        // that (the batch is queued on the same engine FIFO, so it would run
+        // ahead of the push) lets a callback observe a frame in which the
+        // notification for the previous frame's DOM change is still missing —
+        // the update-the-rendering order is rAF → layout → observers → next
+        // frame. Bounded so a job that never commits cannot stall rAF.
+        let relayout_in_flight = self.engine_job_generation != self.engine_applied_generation
+            && timestamp_ms - self.last_raf_batch_ms < RAF_RELAYOUT_HOLD_MS;
+        if raf_due && !relayout_in_flight && self.take_raf_pending_lockfree() {
             self.last_raf_batch_ms = timestamp_ms;
             let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
             self.fire_raf_turn_async(raf_ts);

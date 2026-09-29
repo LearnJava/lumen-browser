@@ -1032,7 +1032,11 @@ function cancelAnimationFrame(id) {
 // timestamp_ms < 0 → use performance.now() (live DOMHighResTimeStamp, EE-5);
 // timestamp_ms >= 0 → use as-is (0 = deterministic mode, frozen clock).
 // All callbacks in a batch receive the SAME timestamp (captured once at start).
+// BUG-1003: counts rAF batches; ResizeObserver delivery reads it to tell
+// «the next frame's update-the-rendering» from «right after this delivery».
+var _ro_raf_epoch = 0;
 function _lumen_run_raf_callbacks(timestamp_ms) {
+    _ro_raf_epoch++;
     var ts = timestamp_ms < 0 ? performance.now() : +timestamp_ms;
     _wa_current_time = ts;
     var callbacks = _lumen_raf_callbacks.splice(0);
@@ -1052,6 +1056,9 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     // delivery loop is itself queued through this same callback array, after
     // resize observations too) — so a callback that reads
     // `document.activeElement` still sees the pre-fixup value.
+    // BUG-1003: Resize Observer §3.4 — observations are gathered after the
+    // rAF callbacks of the frame; a delivery held back for this batch runs now.
+    if (typeof _ro_deliver_after_raf === 'function') _ro_deliver_after_raf();
     _lumen_focus_fixup();
     return ran;
 }

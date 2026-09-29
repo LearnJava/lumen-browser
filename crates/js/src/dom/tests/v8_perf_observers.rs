@@ -1607,7 +1607,9 @@ fn resize_observer_fires_again_on_size_change() {
             "#).unwrap();
     // Change size
     rt.update_layout_rects([(nid, [0.0, 0.0, 200.0, 80.0])].into_iter().collect());
-    rt.eval("_lumen_deliver_resize_observers()").unwrap();
+    // BUG-1003: a second delivery inside the same frame is held back; the next
+    // frame's rAF batch is what reports it.
+    rt.eval("_lumen_run_raf_callbacks(0); _lumen_deliver_resize_observers()").unwrap();
     let cnt = rt.eval("_ro_sz_cnt").unwrap();
     assert_eq!(cnt, lumen_core::JsValue::Number(2.0));
 }
@@ -1875,6 +1877,7 @@ fn resize_observer_reparent_redelivers_at_same_size() {
                 var _ro_rp_parent = _ro_rp_target.parentNode;
                 _ro_rp_parent.removeChild(_ro_rp_target);
                 _ro_rp_parent.appendChild(_ro_rp_target);
+                _lumen_run_raf_callbacks(0);
                 _lumen_deliver_resize_observers();
             "#,
     )
