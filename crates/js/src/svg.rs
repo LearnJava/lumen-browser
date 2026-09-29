@@ -649,6 +649,12 @@ const SVG_SHIM: &str = r#"
   if (typeof _lumen_install_interest_for === 'function') {
     _lumen_install_interest_for(SVGAElement.prototype, 'SVGAElement');
   }
+  // `ping` (HTML LS §4.6.9 hyperlink auditing applies to "a hyperlink",
+  // which SVG's <a> is too) — plain DOMString reflection, same as
+  // `HTMLAnchorElement.prototype.ping`; no `HTMLHyperlinkElementUtils`.
+  if (typeof _lumen_install_reflection === 'function') {
+    _lumen_install_reflection(SVGAElement.prototype, [['ping', 'ping', 'string']]);
+  }
 
   // SVGImageElement — <image>
   class SVGImageElement extends SVGGraphicsElement {
