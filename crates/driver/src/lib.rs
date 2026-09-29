@@ -350,6 +350,15 @@ pub trait BrowserSession {
         Ok(())
     }
 
+    /// Set a permission state (WebDriver BiDi `permissions.setPermission`,
+    /// BUG-1014). `Ok(false)` = the engine does not know `name`.
+    ///
+    /// Default impl reports `Ok(true)` without effect (headless sessions have
+    /// no page to observe it); [`LiveWindowSession`] overrides it.
+    fn set_permission(&mut self, _name: &str, _state: &str) -> Result<bool> {
+        Ok(true)
+    }
+
     /// Register a network intercept rule (WebDriver BiDi `network.addIntercept`,
     /// BUG-295 remainder). A subsequent request whose URL matches
     /// `url_patterns` (exact-string match, per BiDi urlPattern `type: "string"`;

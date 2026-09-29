@@ -130,3 +130,39 @@ pub fn timezone_override_script(timezone_id: &str) -> String {
 }})();"#
     )
 }
+
+/// Process-global embedder permission states (WebDriver BiDi
+/// `permissions.setPermission`, BUG-1014): permission name → `granted` /
+/// `denied` / `prompt`.
+///
+/// Same process-global rationale as [`GLOBAL_UA_OVERRIDE`]. The origin from the
+/// BiDi command is not part of the key: one page's origin is live at a time,
+/// and the override outlives navigations the way the other emulation
+/// overrides do.
+static GLOBAL_PERMISSION_OVERRIDES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Record `name → state` for every later `install_permissions_api_v8` call.
+pub fn set_global_permission_override(name: &str, state: &str) {
+    if let Ok(mut guard) = GLOBAL_PERMISSION_OVERRIDES.lock() {
+        guard.retain(|(n, _)| n != name);
+        guard.push((name.to_owned(), state.to_owned()));
+    }
+}
+
+/// Snapshot of the recorded permission overrides.
+pub(crate) fn global_permission_overrides() -> Vec<(String, String)> {
+    GLOBAL_PERMISSION_OVERRIDES.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// JS that hands `name → state` to the Permissions shim
+/// (`_lumen_permission_set`); an expression evaluating to `true` when the
+/// shim accepted the pair.
+pub fn permission_override_script(name: &str, state: &str) -> String {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    format!(
+        "typeof _lumen_permission_set === 'function' \
+         && _lumen_permission_set(\"{}\", \"{}\")",
+        esc(name),
+        esc(state)
+    )
+}

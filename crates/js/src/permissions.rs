@@ -72,6 +72,10 @@
 pub(crate) fn install_permissions_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
     rt.eval(PERMISSIONS_SHIM)?;
+    // BUG-1014: embedder-set states survive navigation (fresh runtime each time).
+    for (name, state) in crate::v8_runtime::global_permission_overrides() {
+        rt.eval(&crate::v8_runtime::permission_override_script(&name, &state))?;
+    }
     Ok(())
 }
 
@@ -181,7 +185,13 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
 
   function isRecognised(name) { return owns(STATIC, name) || owns(LIVE, name); }
 
+  // Embedder-set states (WebDriver BiDi `permissions.setPermission`, BUG-1014).
+  // They sit in front of both tables: an automation client saying «this
+  // permission is X» is the user's answer, and `query()` has to report it.
+  var OVERRIDES = Object.create(null);
+
   function resolveState(name) {
+    if (name in OVERRIDES) return OVERRIDES[name];
     if (owns(LIVE, name)) {
       // A throwing resolver must not become a `granted`: the engine failing to
       // answer is not the user saying yes.
@@ -289,6 +299,18 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
   }
 
   globalThis._lumen_permission_state_changed = stateChanged;
+
+  // Engine-side entry for `permissions.setPermission`. Returns false for an
+  // unknown name or state so the caller can report it instead of silently
+  // storing something `query()` could never have produced.
+  globalThis._lumen_permission_set = function(name, state) {
+    name = String(name); state = String(state);
+    if (!isRecognised(name)) return false;
+    if (state !== GRANTED && state !== DENIED && state !== PROMPT) return false;
+    OVERRIDES[name] = state;
+    stateChanged(name);
+    return true;
+  };
 
   // -- Permissions (§5) -------------------------------------------------------
 
@@ -1105,6 +1127,22 @@ mod tests {
                     "`{name}` gave `{out}`"
                 );
             }
+        });
+    }
+
+    /// BUG-1014: `permissions.setPermission` moves what `query()` reports, fires
+    /// `change` on a live status, and rejects unknown names / states.
+    #[test]
+    fn embedder_override_moves_query_and_fires_change() {
+        with_permissions(|rt| {
+            assert_eq!(query(rt, "{ name: 'geolocation' }"), "resolved|denied");
+            rt.eval("var __n = 0; var __st; navigator.permissions.query({name:'geolocation'}).then(function(s){ __st = s; s.onchange = function(){ __n++; }; });").unwrap();
+            assert!(bool_eval(rt, "_lumen_permission_set('geolocation', 'granted')"));
+            assert_eq!(query(rt, "{ name: 'geolocation' }"), "resolved|granted");
+            assert_eq!(string_eval(rt, "String(__n)"), "1");
+            assert!(!bool_eval(rt, "_lumen_permission_set('no-such-name', 'granted')"));
+            assert!(!bool_eval(rt, "_lumen_permission_set('geolocation', 'maybe')"));
+            assert_eq!(query(rt, "{ name: 'geolocation' }"), "resolved|granted");
         });
     }
 }

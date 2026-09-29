@@ -51,12 +51,9 @@ page-visible `_lumen_deliver_report` JS global, no new BiDi surface needed)
 are actually executed; every other action fails cleanly (rejects the test's
 promise, logged on the runner side too since BUG-810) rather than hanging
 forever — the DoD is "not silently SKIPped", not "every `test_driver.*`
-method works". Left unimplemented past this slice for want of a matching
-engine/BiDi surface rather than tooling effort: `set_permission` (no
-`permissions.setPermission` BiDi command exists server-side —
-`crates/bidi-server/src/protocol.rs` has no `permissions.*` handler at all,
-so this is new engine-adjacent surface, not payload translation) and
-`get_computed_role`/`get_computed_label` (an accessibility tree does exist —
+method works". `set_permission` (`permissions.setPermission`, BUG-1014) is
+executed too. Left unimplemented for want of a matching engine/BiDi surface
+rather than tooling effort: `get_computed_role`/`get_computed_label` (an accessibility tree does exist —
 `crates/engine/a11y`, `AutomationCommand::A11yTree` — but nothing correlates
 one of its `AXNode`s back to the DOM element `params["selectors"]` resolves
 to; that correlation, not the tree itself, is the missing piece, and it's
@@ -374,6 +371,8 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 result = await self._action_send_keys(session, context, params)
             elif action == "delete_all_cookies":
                 result = await self._action_delete_all_cookies(session, context, params)
+            elif action in ("set_permission", "bidi.permissions.set_permission"):
+                result = await self._action_set_permission(session, context, params)
             else:
                 # BUG-810/WPT-RUN-12: the rejection itself already reaches the
                 # page fine (BUG-716 fixed unhandled-rejection visibility) —
@@ -504,6 +503,28 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         storage_delete_cookies`, already implemented for cookie-store tests
         independently of this action)."""
         await session.storage.delete_cookies()
+        return None
+
+    async def _action_set_permission(self, session, context, params):
+        """`test_driver.set_permission` / `bidi.permissions.set_permission` —
+        BiDi `permissions.setPermission` (BUG-1014,
+        `crates/bidi-server/src/protocol.rs::permissions_set_permission`),
+        which lands in what `navigator.permissions.query()` reads. The legacy
+        action nests `{descriptor, state}` under `permission_params` and has no
+        origin, so the page's own is used (the bidi variant already carries
+        one)."""
+        p = params.get("permission_params") or params
+        origin = params.get("origin")
+        if origin is None:
+            value = await session.script.evaluate(
+                expression="location.origin", target=ContextTarget(context),
+                await_promise=False)
+            origin = value.get("value")
+        try:
+            await session.permissions.set_permission(
+                descriptor=p["descriptor"], state=p["state"], origin=origin)
+        except BidiException as e:
+            raise ActionError(f"permissions.setPermission failed: {e}") from e
         return None
 
     async def _resolve_element_center(self, session, context, selectors):
