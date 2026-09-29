@@ -356,6 +356,35 @@ fn performance_mark_and_measure_interfaces_back_entries() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-696: measure() validation (User Timing L3 §4.3) — missing marks are a
+// SyntaxError, a zero PerformanceTiming attribute an InvalidAccessError, and
+// conflicting PerformanceMeasureOptions members a TypeError; a number in the
+// named form is a mark name, not a timestamp.
+#[test]
+fn performance_measure_validates_arguments() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                performance.mark('ok', { startTime: 10 });
+                function name(f) { try { f(); } catch (e) { return e.name; } return 'none'; }
+                var zero = ['redirectStart', 'unloadEventStart', 'domComplete'].filter(function(n) {
+                    return !performance.timing[n];
+                })[0];
+                var okDict = performance.measure('d', { start: 'ok', duration: 5 });
+                var okNav = performance.measure('n', 'navigationStart', 'ok');
+                name(function() { performance.measure('a', 'Missing'); }) === 'SyntaxError'
+                    && name(function() { performance.measure('a', 'ok', 'Missing'); }) === 'SyntaxError'
+                    && name(function() { performance.measure('a', 51.15, 'ok'); }) === 'SyntaxError'
+                    && name(function() { performance.measure('a', zero); }) === 'InvalidAccessError'
+                    && name(function() { performance.measure('a', { detail: 'x' }); }) === 'TypeError'
+                    && name(function() { performance.measure('a', { start: 1, duration: 2, end: 3 }); }) === 'TypeError'
+                    && name(function() { performance.measure('a', { start: 1 }, 'ok'); }) === 'TypeError'
+                    && name(function() { performance.measure('a', { start: -1 }); }) === 'TypeError'
+                    && okDict.startTime === 10 && okDict.duration === 5
+                    && okNav.startTime === 0 && okNav.duration === 10
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-687, same WPT: every entry type the registry lists must stringify as its
 // interface — the navigation entry by its own tag, not the inherited resource one.
 #[test]

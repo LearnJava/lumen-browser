@@ -257,16 +257,35 @@ Object.defineProperty(globalThis, 'PerformanceMark',
     { value: _perf_mark_iface, writable: true, enumerable: false, configurable: true });
 Object.defineProperty(globalThis, 'PerformanceMeasure',
     { value: _perf_measure_iface, writable: true, enumerable: false, configurable: true });
-// A mark name (string, resolved against the most recent same-named mark) or a
-// timestamp (number, used as-is) — the shared conversion both the named-args
-// and dictionary forms of `measure()` apply to `start`/`end` (User Timing L3
-// §4.3 "convert a mark to a timestamp").
+// User Timing L3 §4.3 "convert a mark to a timestamp". A number is used as-is
+// (negative or non-finite is a TypeError); anything else is a mark name. In a
+// Window a PerformanceTiming attribute name resolves first, through
+// `performance.timing` relative to `navigationStart`, and a zero attribute
+// (an event that never happened) is an InvalidAccessError; otherwise the most
+// recent same-named mark, and none at all is a SyntaxError.
 function _perf_mark_to_timestamp(value) {
-    if (typeof value === 'string') {
-        var m = _perf_entries_by_name(value, 'mark');
-        return m.length > 0 ? m[m.length - 1].startTime : 0;
+    if (typeof value === 'number') {
+        if (!isFinite(value)) throw new TypeError("Failed to execute 'measure' on 'Performance': The provided double value is non-finite.");
+        if (value < 0) throw new TypeError("Failed to execute 'measure' on 'Performance': Timestamps cannot be negative.");
+        return value;
     }
-    return Number(value);
+    var name = String(value);
+    if (typeof document === 'object' && document !== null
+        && _PERF_TIMING_ATTR_NAMES.indexOf(name) !== -1 && typeof performance.timing === 'object') {
+        var v = performance.timing[name];
+        if (name === 'navigationStart') return 0;
+        if (!v) {
+            throw new DOMException("Failed to execute 'measure' on 'Performance': The PerformanceTiming attribute '"
+                + name + "' is 0.", 'InvalidAccessError');
+        }
+        return v - performance.timing.navigationStart;
+    }
+    var m = _perf_entries_by_name(name, 'mark');
+    if (m.length === 0) {
+        throw new DOMException("Failed to execute 'measure' on 'Performance': The mark '" + name
+            + "' does not exist.", 'SyntaxError');
+    }
+    return m[m.length - 1].startTime;
 }
 // User Timing L3 §4.2 — performance.mark(name, options?): the PerformanceMark
 // constructor, then queue + buffer the entry it made.
@@ -292,33 +311,50 @@ Performance.prototype.measure = function measure(measureName) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'measure' on 'Performance': 1 argument required, but only 0 present.");
     var name = measureName, startOrMeasureOptions = arguments[1], endMark = arguments[2];
     var start, end, detail = null;
-    if (startOrMeasureOptions !== null && typeof startOrMeasureOptions === 'object') {
-        var opts = startOrMeasureOptions;
-        var hasStart = opts.start !== undefined;
-        var hasEnd = opts.end !== undefined;
-        var hasDuration = opts.duration !== undefined;
-        if ('detail' in opts) detail = opts.detail;
-        if (hasStart) start = _perf_mark_to_timestamp(opts.start);
-        if (hasEnd) end = _perf_mark_to_timestamp(opts.end);
-        if (hasDuration) {
-            if (!hasStart) start = end - Number(opts.duration);
-            if (!hasEnd) end = (hasStart ? start : 0) + Number(opts.duration);
+    var opts = null;
+    if (startOrMeasureOptions !== null && startOrMeasureOptions !== undefined
+        && (typeof startOrMeasureOptions === 'object' || typeof startOrMeasureOptions === 'function')) {
+        opts = startOrMeasureOptions;
+    }
+    var hasStart = false, hasEnd = false, hasDuration = false;
+    if (opts !== null) {
+        hasStart = opts.start !== undefined;
+        hasEnd = opts.end !== undefined;
+        hasDuration = opts.duration !== undefined;
+        var hasDetail = opts.detail !== undefined;
+        if (hasStart || hasEnd || hasDuration || hasDetail) {
+            if (endMark !== undefined) {
+                throw new TypeError("Failed to execute 'measure' on 'Performance': If a non-empty PerformanceMeasureOptions object was passed, |end_mark| must not be passed.");
+            }
+            if (!hasStart && !hasEnd) {
+                throw new TypeError("Failed to execute 'measure' on 'Performance': If a non-empty PerformanceMeasureOptions object was passed, it must have at least one of 'start' or 'end'.");
+            }
+            if (hasStart && hasEnd && hasDuration) {
+                throw new TypeError("Failed to execute 'measure' on 'Performance': If a non-empty PerformanceMeasureOptions object was passed, it must not have all of 'start', 'duration', and 'end'.");
+            }
         }
-        if (!hasStart && !hasDuration) start = 0;
-        if (!hasEnd && !hasDuration) end = this.now();
+        if (opts.detail !== undefined) detail = opts.detail;
+    }
+    // WebIDL: a union member that is neither an object nor a number becomes a
+    // DOMString, so a number is a mark *name* here ('51.15'), not a timestamp.
+    function toTimeArg(v) { return typeof v === 'number' ? v : String(v); }
+    if (endMark !== undefined) {
+        end = _perf_mark_to_timestamp(String(endMark));
+    } else if (hasEnd) {
+        end = _perf_mark_to_timestamp(toTimeArg(opts.end));
+    } else if (hasStart && hasDuration) {
+        end = _perf_mark_to_timestamp(toTimeArg(opts.start)) + Number(opts.duration);
+    } else {
+        end = this.now();
+    }
+    if (opts === null && startOrMeasureOptions !== undefined) {
+        start = _perf_mark_to_timestamp(String(startOrMeasureOptions));
+    } else if (hasStart) {
+        start = _perf_mark_to_timestamp(toTimeArg(opts.start));
+    } else if (hasDuration && hasEnd) {
+        start = end - Number(opts.duration);
     } else {
         start = 0;
-        end = this.now();
-        if (typeof startOrMeasureOptions === 'string') {
-            start = _perf_mark_to_timestamp(startOrMeasureOptions);
-        } else if (typeof startOrMeasureOptions === 'number') {
-            start = startOrMeasureOptions;
-        }
-        if (typeof endMark === 'string') {
-            end = _perf_mark_to_timestamp(endMark);
-        } else if (typeof endMark === 'number') {
-            end = endMark;
-        }
     }
     var entry = Object.create(_perf_measure_iface.prototype);
     entry.entryType = 'measure';
