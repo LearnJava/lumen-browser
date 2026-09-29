@@ -103,7 +103,13 @@ pub(crate) fn fetch_frame_lazy_images(
         if wants_intrinsic {
             let node_id = NodeId::from_raw(*nid);
             if let Ok(mut doc) = frame.doc.lock() {
-                lumen_layout::apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
+                lumen_layout::apply_intrinsic_size(
+                    &mut doc,
+                    node_id,
+                    image.width,
+                    image.height,
+                    frame.viewport,
+                );
             }
         }
         frame.images.push((key.clone(), Arc::clone(&image)));

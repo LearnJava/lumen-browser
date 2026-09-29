@@ -609,7 +609,7 @@ pub(crate) fn fetch_and_decode_images(
             ImgOutcome::Blocked => blocked_by_img_src.push(base.resolve_str(&req.url)),
             ImgOutcome::Static { image, intrinsic, cross_origin } => {
                 if let Some((w, h)) = intrinsic {
-                    apply_intrinsic_size(doc, req.node_id, w, h);
+                    apply_intrinsic_size(doc, req.node_id, w, h, viewport);
                 }
                 if cross_origin {
                     cross_origin_urls.push(req.url.clone());
@@ -618,7 +618,7 @@ pub(crate) fn fetch_and_decode_images(
             }
             ImgOutcome::Animated { first, gif, intrinsic, cross_origin } => {
                 if let Some((w, h)) = intrinsic {
-                    apply_intrinsic_size(doc, req.node_id, w, h);
+                    apply_intrinsic_size(doc, req.node_id, w, h, viewport);
                 }
                 if cross_origin {
                     cross_origin_urls.push(req.url.clone());

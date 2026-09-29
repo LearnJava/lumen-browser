@@ -65,11 +65,11 @@ fn object_without_decoded_image_renders_fallback_children() {
 fn object_with_decoded_image_is_an_image_box_at_intrinsic_size() {
     let mut doc = lumen_html_parser::parse(r#"<object data="logo.svg">fallback text</object>"#);
     let obj = find_tag(&doc, doc.root(), "object").unwrap();
-    assert!(apply_intrinsic_size(&mut doc, obj, 120, 40));
+    assert!(apply_intrinsic_size(&mut doc, obj, 120, 40, VP));
     // The size goes to the side table, never into reflected attributes.
     assert_eq!(doc.get(obj).get_attr("width"), None);
     assert_eq!(doc.get(obj).get_attr("height"), None);
-    assert!(!apply_intrinsic_size(&mut doc, obj, 120, 40), "second report is a no-op");
+    assert!(!apply_intrinsic_size(&mut doc, obj, 120, 40, VP), "second report is a no-op");
 
     let root = layout(&doc, &lumen_css_parser::parse(""), VP);
     let img = find_image(&root).expect("object with decoded image must be an Image box");
@@ -85,7 +85,7 @@ fn object_with_decoded_image_is_an_image_box_at_intrinsic_size() {
 fn object_width_attribute_scales_by_intrinsic_ratio() {
     let mut doc = lumen_html_parser::parse(r#"<object data="logo.svg" width="60"></object>"#);
     let obj = find_tag(&doc, doc.root(), "object").unwrap();
-    apply_intrinsic_size(&mut doc, obj, 120, 40);
+    apply_intrinsic_size(&mut doc, obj, 120, 40, VP);
     let root = layout(&doc, &lumen_css_parser::parse(""), VP);
     let img = find_image(&root).unwrap();
     assert_eq!((img.rect.width, img.rect.height), (60.0, 20.0));
@@ -95,7 +95,7 @@ fn object_width_attribute_scales_by_intrinsic_ratio() {
 fn changed_data_url_drops_stale_image_until_new_resource_reports() {
     let mut doc = lumen_html_parser::parse(r#"<object data="old.svg">fallback text</object>"#);
     let obj = find_tag(&doc, doc.root(), "object").unwrap();
-    apply_intrinsic_size(&mut doc, obj, 10, 10);
+    apply_intrinsic_size(&mut doc, obj, 10, 10, VP);
     if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(obj).data {
         for a in attrs.iter_mut().filter(|a| a.name.local.as_str() == "data") {
             a.value = "new.svg".into();
@@ -110,7 +110,7 @@ fn changed_data_url_drops_stale_image_until_new_resource_reports() {
 fn embed_with_decoded_image_is_an_image_box() {
     let mut doc = lumen_html_parser::parse(r#"<embed src="icon.png">"#);
     let emb = find_tag(&doc, doc.root(), "embed").unwrap();
-    apply_intrinsic_size(&mut doc, emb, 32, 16);
+    apply_intrinsic_size(&mut doc, emb, 32, 16, VP);
     let root = layout(&doc, &lumen_css_parser::parse(""), VP);
     let img = find_image(&root).expect("embed with decoded image must be an Image box");
     assert_eq!((img.rect.width, img.rect.height), (32.0, 16.0));

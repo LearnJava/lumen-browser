@@ -380,6 +380,11 @@ pub(crate) struct ImageSource {
     pub(crate) url: String,
     pub(crate) intrinsic_width: Option<u32>,
     pub(crate) intrinsic_height: Option<u32>,
+    /// BUG-969: `srcset`'s `Nw`-density correction for the picked candidate,
+    /// forwarded from `PickedSource::density_correction`. `None` for a plain
+    /// `src`/`Nx`-density pick, or when the legacy `src`-only fallback below
+    /// ran (no picker involved at all).
+    pub(crate) density_correction: Option<f32>,
 }
 
 // ─── SVG helpers ─────────────────────────────────────────────────────────────

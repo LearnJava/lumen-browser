@@ -816,7 +816,7 @@ pub(crate) fn fetch_frame_subresources(
         images.push((req.node_id, first.is_some()));
         if let Some(image) = first {
             if wants_intrinsic {
-                lumen_layout::apply_intrinsic_size(doc, req.node_id, image.width, image.height);
+                lumen_layout::apply_intrinsic_size(doc, req.node_id, image.width, image.height, viewport);
             }
             decoded_images.push((key, image));
         }
