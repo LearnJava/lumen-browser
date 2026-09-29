@@ -114,7 +114,7 @@ WPT (`run_report.py --all --recursive`, бинарь до правки прот�
 обеих категорий (`tests/wpt/metadata/`) переснят этим же коммитом. В нём
 появились FAIL, которых раньше не было, — это сабтесты, до которых прогон
 прежде не доходил: `measure*.html` (файлы были ERROR) падают на валидации
-`measure()` — [BUG-696](BUG-696-OPEN.md); `idlharness` — на отсутствующем
+`measure()` — [BUG-696](BUG-696-FIXED.md); `idlharness` — на отсутствующем
 интерфейсе `PerformanceEntry` (не выставлен ни для одного entry-типа).
 `idlharness.any.serviceworker.html` записан TIMEOUT вместо ERROR — бинарь до
 правки даёт тот же TIMEOUT, старый baseline был устаревшим.

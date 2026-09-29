@@ -1,6 +1,6 @@
 # BUG-696: `performance.mark()`/`performance.measure()` perform zero argument validation
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` in `WEB_API_SHIM`)
 **Найден:** P2, WPT-VENDOR-user-timing, 2026-08-09
 
@@ -124,3 +124,13 @@ catch (e) { console.log(e.name); }   // spec: SyntaxError. Lumen: "no throw"
 `measure_associated_with_navigation_timing.html`,
 `measure_exceptions_navigation_timing.html` (раньше эти файлы были ERROR и до
 утверждений не доходили).
+
+## Исправление 2026-09-29 (P3)
+
+`Performance.prototype.measure` (`crates/js/src/shim/performance_shim.js`) исполняет
+алгоритм User Timing L3 §4.3: словарь с `detail` без `start`/`end`, со всеми тремя
+`start`/`duration`/`end` или вместе с `endMark` — `TypeError`; `_perf_mark_to_timestamp`
+даёт `SyntaxError` для несуществующей метки, `InvalidAccessError` для нулевого
+атрибута `performance.timing` (только Window), `TypeError` для отрицательного/нечислового
+времени. Число в именованной форме — имя метки (`'51.15'`), а не момент времени.
+Тест: `performance_measure_validates_arguments` (`v8_perf_observers.rs`).
