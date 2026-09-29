@@ -1163,6 +1163,18 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn parse_simple_selector(&mut self) -> Option<SimpleSelector> {
         match self.peek()? {
+            // Selectors §6.3: `*|name` / `|name` — префикс пространства имён.
+            // `@namespace` не поддержан, поэтому префикс отбрасывается:
+            // wptrunner генерирует `:root > *|body:nth-child(2)` для клика.
+            '*' if self.peek_at(1) == Some('|') && self.peek_at(2) != Some('=') => {
+                self.consume();
+                self.consume();
+                self.parse_simple_selector()
+            }
+            '|' if matches!(self.peek_at(1), Some(c) if c == '*' || c == '\\' || is_ident_start(c)) => {
+                self.consume();
+                self.parse_simple_selector()
+            }
             '*' => {
                 self.consume();
                 Some(SimpleSelector::Universal)
