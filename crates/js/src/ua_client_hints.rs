@@ -54,7 +54,12 @@ const UA_CLIENT_HINTS_SHIM: &str = r#"
   };
 
   // NavigatorUAData — the object exposed as navigator.userAgentData.
-  function NavigatorUAData() {}
+  // No constructor operation in the spec: page script gets 'Illegal constructor';
+  // the single instance is created via Object.create below.
+  function NavigatorUAData() { throw new TypeError('Illegal constructor'); }
+  Object.defineProperty(NavigatorUAData.prototype, Symbol.toStringTag, {
+    value: 'NavigatorUAData', configurable: true
+  });
 
   // Low-entropy accessors.
   Object.defineProperty(NavigatorUAData.prototype, 'brands', {
@@ -109,7 +114,7 @@ const UA_CLIENT_HINTS_SHIM: &str = r#"
   if (typeof navigator !== 'undefined') {
     try {
       Object.defineProperty(navigator, 'userAgentData', {
-        value: new NavigatorUAData(),
+        value: Object.create(NavigatorUAData.prototype),
         writable: false,
         configurable: true,
         enumerable: true
@@ -197,6 +202,24 @@ mod tests {
                     _result.platformVersion === "10.0.0" &&
                     _result.architecture === "x86" &&
                     _result.bitness === "64"
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    #[test]
+    fn navigator_ua_data_is_not_constructible_and_has_tag() {
+        with_ua_hints_api(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    var threw = false;
+                    try { new NavigatorUAData(); } catch (e) { threw = e instanceof TypeError; }
+                    threw &&
+                    Object.prototype.toString.call(navigator.userAgentData) === "[object NavigatorUAData]" &&
+                    navigator.userAgentData instanceof NavigatorUAData
                     "#,
                 )
                 .unwrap();
