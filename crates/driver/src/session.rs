@@ -632,6 +632,7 @@ impl InProcessSession {
                     req.node_id,
                     image.width,
                     image.height,
+                    self.viewport,
                 );
             }
         }

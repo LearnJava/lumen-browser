@@ -164,7 +164,7 @@ fn find_img(doc: &Document, id: NodeId) -> Option<NodeId> {
 fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
     let mut doc = lumen_html_parser::parse(html);
     let img = find_img(&doc, doc.root()).expect("img present");
-    apply_intrinsic_size(&mut doc, img, iw, ih);
+    apply_intrinsic_size(&mut doc, img, iw, ih, lumen_core::geom::Size::new(1024.0, 768.0));
     let NodeData::Element { attrs, .. } = &doc.get(img).data else {
         unreachable!()
     };
@@ -235,8 +235,9 @@ fn bug269_percentage_width_falls_back_to_intrinsic_height() {
 fn img_apply_twice(html: &str, iw: u32, ih: u32) -> (bool, bool) {
     let mut doc = lumen_html_parser::parse(html);
     let img = find_img(&doc, doc.root()).expect("img present");
-    let first = apply_intrinsic_size(&mut doc, img, iw, ih);
-    let second = apply_intrinsic_size(&mut doc, img, iw, ih);
+    let vp = lumen_core::geom::Size::new(1024.0, 768.0);
+    let first = apply_intrinsic_size(&mut doc, img, iw, ih, vp);
+    let second = apply_intrinsic_size(&mut doc, img, iw, ih, vp);
     (first, second)
 }
 
@@ -263,6 +264,41 @@ fn bug735_half_filled_reports_change_once() {
     let (first, second) = img_apply_twice(r#"<img src="p.png" width="240">"#, 120, 80);
     assert!(first);
     assert!(!second);
+}
+
+// ── BUG-969: `srcset` `Nw`-density correction ────────────────────────────
+//
+// HTML LS §4.8.4.3.7: the used size of a `Nw`-picked candidate is the
+// decoded bitmap size divided by its effective density
+// (`width_descriptor / sizes-resolved source size`), not the raw decode.
+
+#[test]
+fn bug969_nw_descriptor_density_corrects_raw_decode() {
+    // sizes="400px" + srcset "100w" → effective density = 100/400 = 0.25.
+    // A real 100×100 decode must land as 400×400, not 100×100.
+    let (w, h) = img_dims(r#"<img srcset="p.png 100w" sizes="400px">"#, 100, 100);
+    assert_eq!(w.as_deref(), Some("400"));
+    assert_eq!(h.as_deref(), Some("400"));
+}
+
+#[test]
+fn bug969_density_descriptor_unaffected() {
+    // `Nx` (pixel-density) form has no `sizes`-driven correction in scope —
+    // raw decode goes in unchanged, same as before this fix.
+    let (w, h) = img_dims(r#"<img srcset="p.png 1x, hi.png 2x">"#, 100, 100);
+    assert_eq!(w.as_deref(), Some("100"));
+    assert_eq!(h.as_deref(), Some("100"));
+}
+
+#[test]
+fn bug969_explicit_width_attr_wins_verbatim() {
+    // Author-declared `width` is never itself density-corrected — only the
+    // decoder-filled slot is. The other axis derives from the (ratio-
+    // invariant) corrected aspect ratio, same as BUG-269.
+    let (w, h) =
+        img_dims(r#"<img srcset="p.png 100w" sizes="400px" width="50">"#, 100, 100);
+    assert_eq!(w.as_deref(), Some("50"));
+    assert_eq!(h.as_deref(), Some("50"));
 }
 
 // ── BUG-171 этап 2: off-UI-thread финальный pipeline ────────────────────

@@ -134,7 +134,7 @@ impl Lumen {
                         if let Some(src) = self.layout_source.as_ref() {
                             let mut doc = src.document.lock().unwrap();
                             let node_id = NodeId::from_index(nid as usize);
-                            apply_intrinsic_size(&mut doc, node_id, first.width, first.height);
+                            apply_intrinsic_size(&mut doc, node_id, first.width, first.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
                         }
                         eprintln!(
                             "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
@@ -165,7 +165,7 @@ impl Lumen {
                                 if let Some(src) = self.layout_source.as_ref() {
                                     let mut doc = src.document.lock().unwrap();
                                     let node_id = NodeId::from_index(nid as usize);
-                                    apply_intrinsic_size(&mut doc, node_id, img.width, img.height);
+                                    apply_intrinsic_size(&mut doc, node_id, img.width, img.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
                                 }
                                 eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
                                 let (w, h) = (img.width, img.height);
@@ -215,7 +215,7 @@ impl Lumen {
             if let Some(src) = self.layout_source.as_ref() {
                 let mut doc = src.document.lock().unwrap();
                 let node_id = NodeId::from_index(nid as usize);
-                apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
+                apply_intrinsic_size(&mut doc, node_id, image.width, image.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
             }
             let (w, h) = (image.width, image.height);
             if let Some(r) = self.renderer.as_mut() {
@@ -358,7 +358,7 @@ impl Lumen {
                     if let Some(src_ref) = self.layout_source.as_ref() {
                         let mut doc = src_ref.document.lock().unwrap();
                         let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                        apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height);
+                        apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
                     }
                     eprintln!(
                         "video GIF: загружен nid={nid} ({}×{}, {} кадров)",
@@ -551,7 +551,7 @@ impl Lumen {
             if let Some(src_ref) = self.layout_source.as_ref() {
                 let mut doc = src_ref.document.lock().unwrap();
                 let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                apply_intrinsic_size(&mut doc, node_id, width, height);
+                apply_intrinsic_size(&mut doc, node_id, width, height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
             }
             let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
             eprintln!("video FFmpeg: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
@@ -1757,12 +1757,12 @@ impl Lumen {
                 // image-события — `load`/`error` им шлёт JS-шим.
                 if req.embedded_content {
                     if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
-                        changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                        changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport);
                     }
                     continue;
                 }
                 if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
-                    changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                    changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport);
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
                         fires.push((nid, Some((w, h))));
                         if let Some(image) = self.stream_image_pixels.get(&req.url) {

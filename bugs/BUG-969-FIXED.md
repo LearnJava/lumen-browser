@@ -1,7 +1,7 @@
 # BUG-969: `srcset`'s `w`-descriptor density correction is never applied —
 `<img>` sized via `sizes`+`srcset` uses the raw decoded bitmap size instead
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6)
 **Дата:** 2026-09-03
 **Компонент:** html-parser (`crates/engine/html-parser/src/picture.rs::pick_from_srcset`)
 **Найден:** P2, WPT-RUN-6 срез 55, живой пробой
@@ -103,3 +103,39 @@ change too, since `image_requests.rs` currently just forwards whatever
 Attributed via
 `_exact_id_marker("/html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html")`
 in `tests/wpt/timeout_audit.py` (marker `srcset-density-correction-missing`).
+
+## Исправлено 2026-09-29 (P6)
+
+`PickedSource` (`crates/engine/html-parser/src/picture.rs`) gained a
+`density_correction: Option<f32>` field. `pick_from_srcset` now computes it
+whenever the width-picker (`pick_best_for_width`) selects an `Nw` candidate —
+`width_descriptor / source_size_px`, the same value the picker already used to
+rank candidates, just kept instead of discarded. `Nx`-density picks and the
+plain-`src` fallback carry `None` — out of this bug's stated scope, unchanged
+behaviour.
+
+`ImageSource` (`crates/engine/layout/src/box_tree/svg.rs`) forwards the field
+through `resolve_image_source`. `apply_intrinsic_size`
+(`crates/engine/layout/src/box_tree/image_requests.rs`) gained a `viewport:
+Size` parameter and, before writing the decoded bitmap size into an empty
+`width`/`height` slot, re-runs `resolve_image_source(doc, node_id, viewport)`
+to look up `density_correction` and divides both axes by it (uniform scaling
+— ratio-invariant, so it never disturbs the BUG-269 aspect-ratio branch or an
+author-declared `width`/`height` attribute, which this function never
+overwrites regardless). All ~10 call sites in `lumen-shell`/`lumen-driver`
+updated to pass the viewport already in scope at each of them
+(`fetch_and_decode_images`'s own parameter, `frame.viewport`,
+`self.relayout_viewport()`, `self.viewport`) — none needed new plumbing beyond
+threading the value one hop further.
+
+Verified with a new unit test reproducing the exact WPT scenario:
+`<img srcset="p.png 100w" sizes="400px">` decoding a real 100×100 bitmap now
+fills `width="400" height="400"` (was `100`/`100`) — `bug969_nw_descriptor_
+density_corrects_raw_decode` in `crates/shell/src/tests/page_pipeline.rs`,
+plus two guard tests (`Nx` unaffected, explicit `width` attribute wins
+verbatim) in the same file and three `PickedSource.density_correction` tests
+in `crates/engine/html-parser/src/picture.rs`.
+
+`cargo clippy -p lumen-html-parser/-p lumen-layout/-p lumen-shell/-p
+lumen-driver --all-targets -- -D warnings` чисто; full test suites of all
+four crates green (552 / 4112+77 / lumen-shell bin / 205+85+6 driver tests).
