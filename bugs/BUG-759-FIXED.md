@@ -1,6 +1,6 @@
 # BUG-759 — `credentials` unit-тесты гоняются на процесс-глобальном провайдере без синхронизации и красят гейт `scoped-test.sh`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3)
 **Компонент:** js (`crates/js/src/credentials.rs:516-540` — `create_without_provider_rejects_not_allowed`, `create_and_get_through_installed_provider`; `provider()` / установка провайдера)
 **Найден:** P3, 2026-08-10, гейтом `scripts/scoped-test.sh` при закрытии [BUG-391](BUG-391-FIXED.md)
 
@@ -78,3 +78,14 @@ error: 1 target failed: `-p lumen-js --lib`
 * Той же природы, что уже описанный флейк гейта в
   [BUG-632](BUG-632-FIXED.md) (устаревшая временная БД HTTP-кэша) — общий
   класс: гейт красят не правки, а разделяемое состояние тестов.
+
+## Исправление (2026-09-30)
+
+В `mod tests` (`crates/js/src/credentials.rs`) добавлен `ProviderScope`:
+тест-мьютекс на слот провайдера + установка провайдера (или `None`) и
+очистка слота на `Drop`. Три теста, трогающих слот
+(`create_without_provider_rejects_not_allowed`,
+`create_and_get_through_installed_provider`,
+`create_and_get_reject_rp_id_not_matching_origin`), идут через него;
+условие `if provider().is_none()` заменено на `assert!`.
+
