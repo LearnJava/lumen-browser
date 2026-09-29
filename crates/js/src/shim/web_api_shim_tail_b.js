@@ -4196,6 +4196,22 @@ _lumen_remove_attr = function(nid, name) {
     _lumen_details_open_changed(nid, was, false);
 };
 
+// BUG-968: chained onto the same `_lumen_set_attr`/`_lumen_remove_attr` wrap
+// point as `open` above, so `setAttribute`, `removeAttribute`,
+// `toggleAttribute` and every IDL property setter that writes through these
+// two natives all reach `_lumen_script_attr_changed` the same way, instead of
+// each call site needing its own copy of the check.
+var _orig_set_attr_script = _lumen_set_attr;
+_lumen_set_attr = function(nid, name, value) {
+    _orig_set_attr_script(nid, name, value);
+    _lumen_script_attr_changed(nid, String(name));
+};
+var _orig_remove_attr_script = _lumen_remove_attr;
+_lumen_remove_attr = function(nid, name) {
+    _orig_remove_attr_script(nid, name);
+    _lumen_script_attr_changed(nid, String(name));
+};
+
 // The parser's half, called when parsing ends (`_lumen_apply_ready_state`), for
 // the same reason `_lumen_link_hints_scan`/`_lumen_script_empty_src_scan` are:
 // markup never passes through the hook above, so a `<details open>` the parser
