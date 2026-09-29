@@ -155,4 +155,64 @@ N=1500/READS=5: `restyle+layout` — 2-12 мкс на повторный фла�
 часть), реальный процент улучшения на настоящих сайтах не измерялся (эмулятор не воспроизводит
 без сети — см. §Локализация).
 
+## Частичный фикс #2 (P3, 2026-09-29) — инкрементальные пост-layout коллекторы
+
+Сделал инкрементальными все четыре пост-layout коллектора из предыдущего среза, плюс
+`collect_scroll_containers_for_js_state`, которые до этого всегда гоняли по **всему** дереву
+на каждый флаш вне зависимости от размера `dirty_roots`. Новые scoped-варианты в
+`crates/engine/layout/src/lib.rs`: `collect_layout_rects_scoped`, `collect_client_rects_scoped`,
+`collect_computed_styles_scoped` (единственный, кому нужен `GeomCtx` предков — сначала
+спускается от реального корня до каждого искомого узла, потом обычная scoped-рекурсия),
+`collect_scroll_containers_for_js_state_scoped`. Общий диспетчер — `find_dirty_root_boxes`
+(один проход по дереву вместо N вызовов `find_box_by_node`, каждый из которых заново обходит
+от корня). `FlushHandles::maybe_flush` (`style_flush.rs`) теперь, когда инкрементальный путь
+сработал (`incr_scope = Some(...)`), вызывает scoped-варианты только для узлов из `dirty_roots`
+вместо full-tree версий; иначе (`incr_scope = None`, т.е. сработал full-путь) — как раньше.
+
+`try_incremental_flush` дополнительно возвращает `prev_node_ids`/`prev_node_raw_ids` —
+множество id узлов, которыми задетые поддеревья владели в **предыдущем** (`basis.layout`)
+дереве, до реструктуризации. Кэши (`layout_rects`/`client_rects`/`computed_styles`, ключ —
+`NodeId::index()`; `scroll_states` отдельно, ключ — `NodeId::raw()`, т.е. с поколением) сперва
+вычищают эти id, потом заполняются заново из свежего поддерева — иначе узел, удалённый мутацией
+из DOM, остался бы в кэше с устаревшими данными навсегда.
+
+Найденная и исправленная регрессия при первом проходе: `computed_styles` собирается лениво
+(флаг `computed_styles_needed`/`computed_styles_collected` — первое чтение форсит полный сбор).
+Флаш, который ПЕРВЫМ включает `computed_styles_needed`, не обязательно тот же флаш, у которого
+непустой `dirty_roots` (BUG-935 S44 уже описывает этот сценарий: `.focus()`'s
+scroll-into-view читает `_lumen_get_bounding_rect` и форсит реальный флаш, а `getComputedStyle`
+взводит `computed_styles_needed` только на СЛЕДУЮЩЕМ флаше, где `dirty_roots` уже пуст —
+ничего не поменялось с прошлого флаша). Scoped-сбор с пустым `dirty_roots` оставлял бы
+`computed_styles` пустой картой навсегда. Поймано регрессионными тестами
+`v8_bug560_sync_focus::get_computed_style_sees_same_tick_focus_call`/`_within` — оба упали на
+`""` вместо ожидаемого цвета. Фикс: при первом сборе (`computed_styles_collected == false`)
+всегда падать на полный `collect_computed_styles`, даже если инкрементальный путь сработал;
+scoped-путь используется только начиная со второго и далее сбора.
+
+**Измерено** (`--dump-layout` на том же локальном репро, N=1500/READS=200, без сети): до этого
+среза `33360` мс, после — `20331` мс — заметное (~39%) улучшение, но кост всё ещё растёт с
+размером скрипта/DOM (N=3000/READS=500 не укладывается в 60 с headless-таймаут). Оставшаяся
+стоимость на N=1500/READS=200: pseudo-styles/custom-properties/text-frags коллекторы
+(`collect_pseudo_computed_styles`, `collect_custom_properties`, `collect_text_frag_rects`)
+намеренно остались full-document (гейтятся только своими `_needed`-флагами, как до этого среза
+— они редкие чтения, не участвовали в замерах §Частичный фикс), а также сама O(depth)-стоимость
+`find_dirty_root_boxes`/`collect_computed_styles_scoped`'s spine-walk на каждый флаш. Реальный
+процент улучшения на настоящих сайтах (десятки тысяч узлов, cnn/udemy/dailymail) всё ещё не
+измерялся — репродукция без сети не воспроизводит их (см. §Локализация).
+
+Изменения этого среза: `crates/engine/layout/src/lib.rs` (`*_scoped` варианты четырёх
+коллекторов, `find_dirty_root_boxes`, `find_box_by_node` уже существовал,
+`collect_subtree_node_indices`/`collect_subtree_node_raw_ids`), `crates/js/src/v8_runtime/
+style_flush.rs` (`try_incremental_flush` возвращает доп. eviction-множества, `maybe_flush`
+разветвляется на scoped/full по `incr_scope`, `IncrFlushResult` типовой алиас для
+`clippy::type_complexity`). Полный набор тестов `lumen-layout` (4112 passed, 1 ignored) и
+`lumen-js` (4599 passed, `--features v8-backend`) зелёные, `cargo clippy -D warnings` на обоих
+крейтах чисто, `graphic_tests/dump_golden.py` (12/12 PASS) — эта правка не затрагивает display
+list/paint, дифф чисто в JS-видимых кэшах поверх уже построенного дерева layout, так что полный
+20-минутный `graphic_tests/run.py` не запускался (см. правило "anything else → scoped-test +
+dump_golden" в корневом `CLAUDE.md`).
+Статус остаётся **OPEN** — квадратичность смягчена (два независимых среза), но не устранена:
+следующий кандидат на профилирование — сам `find_dirty_root_boxes`/spine-walk (O(depth) на
+коллектор на флаш) и/или реальный прогон на cnn/udemy/dailymail для измерения итогового эффекта.
+
 
