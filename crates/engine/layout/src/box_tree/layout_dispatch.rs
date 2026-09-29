@@ -542,9 +542,9 @@ pub(super) fn dispatch_box(
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
     if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
         let _prof = lumen_core::profile::scope_detail("lo_svg");
-        // BUG-802: this path reads `available_height` in another function, so
-        // the flag cannot be maintained per resolution site here.
-        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        // BUG-802/BUG-341 S42: `lay_out_svg_root`'s only read of
+        // `available_height` (the CSS `height` resolution) goes through
+        // `resolve_block_size`, which maintains the flag per site.
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return DispatchOutcome::Done;
     }

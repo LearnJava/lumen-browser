@@ -1371,6 +1371,79 @@ fn flex_column_aligned_item_keeps_fit_content_width() {
     assert_eq!(a.rect.x, 70.0, "a.x {}", a.rect.x);
 }
 
+fn column_probe_census(html: &str, css: &str) -> super::super::FlexColumnCensus {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    super::super::set_flex_column_census(true);
+    let _ = super::super::take_flex_column_census();
+    let _ = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    super::super::set_flex_column_census(false);
+    super::super::take_flex_column_census()
+}
+
+#[test]
+fn flex_column_item_with_svg_probe_is_replayed() {
+    // BUG-341 S42: an `<svg>` used to set INDEFINITE_HEIGHT_CONSULTED
+    // unconditionally, so every column flex item containing an icon refused the
+    // Step-1 replay and was laid out twice. A fixed-size svg reads nothing from
+    // the containing block's height, so its probe must be replayed.
+    let html = r#"<div id="flex"><div id="a"><svg width="20" height="20"></svg></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:200px;height:300px}";
+    let c = column_probe_census(html, css);
+    assert!(c.probed >= 1, "census saw no probe: {c:?}");
+    assert_eq!(c.double, 0, "svg item laid out twice: {c:?}");
+    assert!(c.replayed >= 1, "probe not replayed: {c:?}");
+}
+
+#[test]
+fn flex_column_item_with_percent_height_svg_is_not_replayed() {
+    // BUG-341 S42 guard: the narrowed flag must still fire when the svg's
+    // `height` is a percentage — the probe (indefinite basis) and the final pass
+    // (definite basis) genuinely differ there.
+    let html = r#"<div id="flex"><div id="a"><svg style="height:50%" viewBox="0 0 10 10"></svg></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:200px;height:300px}";
+    let c = column_probe_census(html, css);
+    assert_eq!(c.replayed, 0, "percentage-height svg was replayed: {c:?}");
+    assert!(c.double_dirty >= 1, "double not attributed to the flag: {c:?}");
+}
+
+#[test]
+fn flex_column_item_with_intrinsic_keyword_height_is_replayed() {
+    // BUG-341 S42: `height: fit-content` fails to resolve against a definite
+    // basis exactly as against an indefinite one, so it is not a reason to
+    // refuse the replay.
+    let html = r#"<div id="flex"><div id="a"><div id="in">x</div></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:200px;height:300px}               #in{height:fit-content}";
+    let c = column_probe_census(html, css);
+    assert_eq!(c.double_dirty, 0, "keyword height dirtied the probe: {c:?}");
+}
+
+#[test]
+fn flex_column_replayed_probe_moves_svg_mask_content() {
+    // BUG-341 S42: with the svg no longer forcing a second layout, the replayed
+    // probe is shifted by `shift_tree`, which used to skip `<mask>` content
+    // (kept outside `children`) — the mask's rects stayed at the probe origin,
+    // far from the masked shape (graphic_tests/156-svg-mask).
+    let html = r#"<div id="flex"><div id="p" style="height:100px"></div><div id="a"><svg width="50" height="40" viewBox="0 0 50 40"><defs><mask id="m"><rect x="0" y="0" width="25" height="40" fill="white"/></mask></defs><rect x="0" y="0" width="50" height="40" fill="blue" mask="url(#m)"/></svg></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:200px;height:300px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    fn find<'a>(b: &'a super::super::LayoutBox, out: &mut Option<(&'a super::super::LayoutBox, f32)>) {
+        if let super::super::BoxKind::SvgShape { svg_mask: Some(m), .. } = &b.kind
+            && let Some(c) = m.content.first()
+        {
+            *out = Some((b, c.rect.y));
+        }
+        b.children.iter().for_each(|c| find(c, out));
+    }
+    let mut hit = None;
+    find(&root, &mut hit);
+    let (shape, mask_y) = hit.expect("masked shape");
+    assert!(shape.rect.y >= 100.0, "shape not below the 100px item: {}", shape.rect.y);
+    assert!((mask_y - shape.rect.y).abs() < 0.01, "mask content y {mask_y} vs shape y {}", shape.rect.y);
+}
+
 #[test]
 fn flex_nbsp_only_text_run_is_not_collapsed_away() {
     // BUG-791 срез 7: a flex container's anonymous-text-item builder treated an
