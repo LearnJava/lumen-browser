@@ -135,3 +135,156 @@ fn cross_document_link_activation_with_a_different_path_and_a_fragment() {
         other => panic!("expected a Push navigation, got {other:?}"),
     }
 }
+
+// ─── BUG-963: hyperlink auditing (`ping` attribute, HTML LS §4.6.9) ────────
+
+/// Records every request the ping mechanism issues through the one entry
+/// point that carries author headers (`fetch_request`) — the async bridge
+/// `_lumen_fire_hyperlink_ping` drives (`_lumen_fetch_async_start`) always
+/// reaches this method, never the legacy four.
+type PingCall = (String, String, Vec<(String, String)>, Vec<u8>);
+struct CaptureFetch {
+    calls: Mutex<Vec<PingCall>>,
+}
+impl CaptureFetch {
+    fn new() -> Arc<Self> {
+        Arc::new(Self { calls: Mutex::new(vec![]) })
+    }
+}
+impl lumen_core::ext::JsFetchProvider for CaptureFetch {
+    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        unreachable!("ping must go through fetch_request, not fetch_sync")
+    }
+    fn fetch_request(
+        &self,
+        req: &lumen_core::ext::JsFetchRequest<'_>,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        let body = req.body.as_ref().map_or_else(Vec::new, |b| b.bytes.to_vec());
+        self.calls.lock().unwrap().push((
+            req.url.to_string(),
+            req.method.to_string(),
+            req.headers.to_vec(),
+            body,
+        ));
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![],
+            body: vec![],
+            url: req.url.to_string(),
+        })
+    }
+}
+
+fn make_rt_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let doc = Arc::new(Mutex::new(Document::new()));
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
+    rt.install_dom(
+        doc,
+        "https://example.com/doc",
+        Some(p),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+    rt
+}
+
+#[test]
+fn anchor_click_fires_ping_requests_for_every_url() {
+    let capture = CaptureFetch::new();
+    let rt = make_rt_with_fetch(Arc::clone(&capture));
+    rt.eval(
+        "var _a = document.createElement('a'); \
+         _a.setAttribute('href', '#sec'); \
+         _a.setAttribute('ping', '/ping1 https://other.example/ping2'); \
+         _a.click();",
+    )
+    .unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+
+    let calls = capture.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2, "expected one POST per ping URL: {calls:?}");
+    for (url, method, headers, body) in calls.iter() {
+        assert_eq!(*method, "POST");
+        assert_eq!(*body, b"PING".to_vec());
+        assert!(
+            headers.iter().any(|(k, v)| k == "ping-from" && v == "https://example.com/doc"),
+            "missing Ping-From on {url}: {headers:?}"
+        );
+        assert!(
+            headers.iter().any(|(k, v)| k == "ping-to" && v == "https://example.com/doc#sec"),
+            "missing Ping-To on {url}: {headers:?}"
+        );
+    }
+    let urls: Vec<&str> = calls.iter().map(|(u, ..)| u.as_str()).collect();
+    assert!(urls.contains(&"https://example.com/ping1"));
+    assert!(urls.contains(&"https://other.example/ping2"));
+}
+
+#[test]
+fn anchor_click_without_ping_attribute_sends_nothing() {
+    let capture = CaptureFetch::new();
+    let rt = make_rt_with_fetch(Arc::clone(&capture));
+    rt.eval(
+        "var _a = document.createElement('a'); \
+         _a.setAttribute('href', '#sec'); \
+         _a.click();",
+    )
+    .unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(1));
+    assert!(capture.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn svg_anchor_ping_idl_reflection_round_trips() {
+    let rt = make_rt();
+    let out = rt.eval(
+        "var a = document.createElementNS('http://www.w3.org/2000/svg', 'a'); \
+         a.setAttribute('ping', 'https://example.com/p1 https://example.com/p2'); \
+         var before = a.ping; \
+         a.ping = 'https://example.com/p3'; \
+         before + '|' + a.getAttribute('ping') + '|' + a.ping",
+    );
+    assert_eq!(
+        out,
+        Ok(lumen_core::JsValue::String(
+            "https://example.com/p1 https://example.com/p2|https://example.com/p3|https://example.com/p3"
+                .into()
+        ))
+    );
+}
+
+#[test]
+fn svg_anchor_click_fires_ping_and_resolves_href_fragment() {
+    let capture = CaptureFetch::new();
+    let rt = make_rt_with_fetch(Arc::clone(&capture));
+    rt.eval(
+        "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); \
+         var a = document.createElementNS('http://www.w3.org/2000/svg', 'a'); \
+         a.setAttribute('href', '#sec'); \
+         a.setAttribute('ping', '/svgping'); \
+         svg.appendChild(a); \
+         a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));",
+    )
+    .unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+
+    let calls = capture.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "expected exactly one ping request: {calls:?}");
+    assert_eq!(calls[0].0, "https://example.com/svgping");
+    assert!(
+        calls[0].2.iter().any(|(k, v)| k == "ping-to" && v == "https://example.com/doc#sec"),
+        "Ping-To must resolve the SVGAnimatedString href to a fragment target: {calls:?}"
+    );
+    // Same-document fragment target: no full navigation should be requested.
+    assert!(rt.take_navigate_request().is_none());
+}

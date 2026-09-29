@@ -1,7 +1,7 @@
 # BUG-963: `ping` hyperlink-auditing attribute never sends a request
 
-**Статус:** OPEN
-**Компонент:** js (нет ни одного call-site — механизм отсутствует целиком)
+**Статус:** FIXED 2026-09-29 (P6)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js::_lumen_run_activation_behavior`, `crates/js/src/shim/web_api_shim_mid_b3.js::_lumen_fire_hyperlink_ping`, `crates/js/src/svg.rs::SVGAElement`)
 
 ## Симптом
 
@@ -58,3 +58,41 @@
 Затрагивает как минимум `svg/linking/scripted/a.ping-functionality.html`;
 не проверено, есть ли отдельные HTML-фокусированные WPT для того же
 механизма (`html/semantics/*ping*` не искался в этом срезе).
+
+## Исправление (2026-09-29, P6)
+
+`_lumen_run_activation_behavior`'s ветка `A`/`AREA`
+(`web_api_shim_tail_b.js`) теперь зовёт новую
+`_lumen_fire_hyperlink_ping(nid, targetHref)` (`web_api_shim_mid_b3.js`)
+до вызова `_lumen_navigate_or_fragment` — она не зависит от исхода
+навигации. Функция читает `ping`-атрибут, режет по ASCII-пробелам,
+резолвит каждый токен относительно `_lumen_document_base_url()` и для
+каждого URL заводит независимый `POST` через уже существующий async
+fetch-мост (PERF-14: `_lumen_fetch_async_start` + `_lumen_fetch_track`),
+с телом `PING` и заголовками `Ping-From`/`Ping-To`. Новой нативной
+привязки не потребовалось — `_lumen_fetch_async_start` уже проводит
+запрос через `JsFetchProvider::fetch_request`, то есть через тот же
+`connect-src` CSP-гейт, что и `fetch()`/`sendBeacon`. Resource Timing
+запись (`initiatorType: 'ping'`) пишется в poll-колбэке только после
+реального ответа — до этого момента запись была бы с нулевой
+длительностью и не прошла бы WPT-проверку `entry.duration > 99`.
+
+`SVGAElement.prototype` (`crates/js/src/svg.rs`) получила
+`_lumen_install_reflection(…, [['ping', 'ping', 'string']])` — обычное
+DOMString-отражение, как у `HTMLAnchorElement.prototype.ping`; SVG `<a>`
+намеренно не получает `HTMLHyperlinkElementUtils`.
+
+Попутно вскрылся и исправлен соседний дефект в той же ветке: `el.href`
+для SVG `<a>` — это объект `SVGAnimatedString` (SVGURIReference,
+SVG 2 §5.7), а не строка, так что `String(href)` там же ломал и саму
+навигацию по клику для SVG-ссылок (не только `ping`). Правка читает
+target-href из атрибута (`href` с фолбэком на `xlink:href` — так же,
+как это уже делает `SVGAElement.prototype.href`'s собственный геттер)
+и резолвит его через `_url_resolve`.
+
+8 новых unit-тестов в `crates/js/tests/cases/link_activation.rs`:
+несколько ping-URL на HTML `<a>`, отсутствие `ping`-атрибута → ноль
+запросов, IDL round-trip на SVG `<a>`, и клик по SVG `<a>` с фрагментным
+`href`, проверяющий и доставку ping, и то, что фрагментная навигация не
+уходит в полную перезагрузку. `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` чисто.

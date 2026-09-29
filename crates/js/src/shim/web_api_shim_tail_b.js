@@ -3808,7 +3808,26 @@ function _lumen_run_activation_behavior(nid, el) {
         // `hashchange`, `location` back without the fragment, and a page that
         // clicks such a link from script looping through reloads forever.
         var href = el.href;
-        if (href) _lumen_navigate_or_fragment(String(href), false);
+        var targetHref = (typeof href === 'string') ? href : '';
+        if (!targetHref) {
+            // SVG <a> (SVGURIReference, SVG 2 §5.7) exposes `href` as an
+            // `SVGAnimatedString`, not a plain string — read the underlying
+            // attribute (falling back to `xlink:href`) the same way
+            // `SVGAElement.prototype.href`'s own getter does.
+            try {
+                var rawHref = el.getAttribute('href');
+                if (rawHref === null && typeof el.getAttributeNS === 'function') {
+                    rawHref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+                }
+                if (rawHref !== null && rawHref !== undefined && String(rawHref) !== '') {
+                    targetHref = _url_resolve(String(rawHref), _lumen_document_base_url());
+                }
+            } catch (e) {}
+        }
+        // HTML LS §4.6.9 "Ping": fires independently of whether navigation
+        // itself succeeds, so it runs before the navigate/fragment call below.
+        _lumen_fire_hyperlink_ping(nid, targetHref);
+        if (targetHref) _lumen_navigate_or_fragment(targetHref, false);
         return;
     }
     if (tag === 'SUMMARY') {

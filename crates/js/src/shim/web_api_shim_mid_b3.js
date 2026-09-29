@@ -64,6 +64,50 @@ function _lumen_fire_media_src_violation(csp) {
     }
 }
 
+// HTML LS §4.6.9 "Hyperlink auditing" — one independent fire-and-forget POST
+// per space-separated URL in a `ping` attribute, run when the hyperlink is
+// activated (`_lumen_run_activation_behavior`'s A/AREA branch). Reuses the
+// PERF-14 async fetch bridge instead of a bespoke native binding so the
+// request runs off-thread, is gated by the same `connect-src` CSP check as
+// every other outgoing request, and the Resource Timing entry (initiatorType
+// 'ping') is only recorded once the real round trip completes — WPT's
+// `a.ping-functionality.html` asserts `entry.duration` against the target
+// endpoint's own artificial delay, so recording it at dispatch time (before
+// the response exists) would be wrong.
+function _lumen_fire_hyperlink_ping(nid, targetHref) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'ping'));
+    if (raw === null) return;
+    var tokens = String(raw).split(/[ \t\n\r\f]+/).filter(function(t) { return t !== ''; });
+    if (tokens.length === 0) return;
+    var base = _lumen_document_base_url();
+    var from = '';
+    try { from = String(location.href); } catch (e) {}
+    var to = String(targetHref || '');
+    var body = Array.from(new TextEncoder().encode('PING'));
+    for (var i = 0; i < tokens.length; i++) {
+        var pingUrl;
+        try { pingUrl = _url_resolve(tokens[i], base); } catch (e) { continue; }
+        (function(pingUrl) {
+            var startMs = performance.now();
+            var handle = _lumen_fetch_async_start(
+                pingUrl, 'POST', 'text/ping', body, true,
+                ['ping-from', from, 'ping-to', to], '|ping'
+            );
+            if (!handle) return;
+            _lumen_fetch_track(function() {
+                var st = _lumen_fetch_async_poll(handle);
+                if (st === 0) return false;
+                if (st === 1 && _lumen_fetch_async_commit(handle)) {
+                    _lumen_record_resource_timing(pingUrl, 'ping', startMs, performance.now() - startMs,
+                        { status: _lumen_fetch_get_status(), decodedBodySize: 0, encodedBodySize: 0, contentType: '' });
+                }
+                _lumen_fetch_async_free(handle);
+                return true;
+            });
+        })(pingUrl);
+    }
+}
+
 function _perf_rt_record_fetch(url, initiator, startMs, status) {
     if (typeof _lumen_record_resource_timing !== 'function') return;
     var len = 0;
