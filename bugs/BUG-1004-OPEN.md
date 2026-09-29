@@ -78,3 +78,19 @@ LUMEN_PROFILE=dev-release python tests/wpt/run_report.py \
 следующий шаг — ловить CRASH с сохранением stderr/дампа окна при массовом прогоне.
 Ловушка: запускать `tests/wpt/.venv/Scripts/python.exe`, а не системный `python` — иначе
 `Servers failed to start: wss:18889`.
+
+## Срез 3 (P6, 2026-09-29)
+
+Ловля CRASH массовыми прогонами с `--log-raw` (`process_output` в mozlog). `main` d6879279 (сборка
+`dev-release` после среза 1): 7 полных `--check --root close-watcher/user-activation --recursive`
+прогонов подряд (52 теста, ~250 с каждый) — 0 регрессий, 0 CRASH в raw-логе. Всего за срезы 2–3
+10 чистых прогонов, CRASH не поймался. Баг остаётся OPEN, воспроизведения нет.
+
+Ловушки, которые давали ложные «падения» и могли породить исходный CRASH:
+- `target/dev-release/lumen.exe` старше коммита среза 1 → 12 ERROR `*|body` (устаревший бинарь,
+  пересобирать `cargo build -p lumen-shell --profile dev-release` перед прогоном);
+- `timeout N` убивает `run_report.py`, оставляя осиротевшие `wptserve`/браузер → следующий запуск
+  «another WPT run active» или пустой/MISSING-набор (47 «регрессий»);
+- параллельный WPT-прогон из другого слота (p3-work) делит порты `18xxx` → искажённые результаты.
+Гипотеза: исходный редкий CRASH — столкновение с параллельным прогоном соседнего слота. Если баг
+не всплывёт при следующем массовом прогоне на чистой машине — закрывать как CANNOT-REPRODUCE.
