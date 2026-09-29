@@ -277,8 +277,15 @@ fn cc12_bench_cycle(
     state.prev_cascade_styles = counters.into_styles();
     let t_clone_styles = t2.elapsed().as_secs_f64() * 1000.0;
     let t3 = std::time::Instant::now();
-    let _dl = paint_ordered(&layout);
+    // BUG-341 S43: paint split into its three stages (stacking tree, paint
+    // order, display-list emit) — `paint_ordered` inlined, same calls.
+    let tree = lumen_layout::StackingTree::build(&layout);
+    let t_pt = t3.elapsed().as_secs_f64() * 1000.0;
+    let order = lumen_layout::PaintOrder::from_tree(&tree);
+    let t_po = t3.elapsed().as_secs_f64() * 1000.0;
+    let _dl = lumen_paint::build_display_list_ordered(&layout, &tree, &order).0;
     let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("[s43-paint] tree={t_pt:.3} order={:.3} emit={:.3}", t_po - t_pt, t_paint - t_po);
     // BUG-341 S22: a **move**, not a `clone()`. Production stopped copying
     // the tree here too — `relayout_chrome_host` hands the next pass its
     // own live tree with `take_content_area`'s removals undone
