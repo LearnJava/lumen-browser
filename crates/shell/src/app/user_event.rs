@@ -15,18 +15,30 @@ impl Lumen {
             // (see the variant doc comment); the automation dispatch that runs
             // right after in `about_to_wait` handles the actual command.
             LoadEvent::AutomationWake => {}
-            LoadEvent::EarlyPreloadHints(hints, base, generation) => {
+            LoadEvent::EarlyPreloadHints(hints, base, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 if generation != self.load_generation { return; }
                 // Ранние хинты из первого chunk — отправить в sink немедленно.
                 // `preload_dispatched` запоминает URL, чтобы финальный scan
                 // в LoadDone их не дублировал.
                 dispatch_preload_hints(&hints, &base, &self.event_sink, &mut self.preload_dispatched);
             }
-            LoadEvent::DocumentBase(base, generation) => {
+            LoadEvent::DocumentBase(base, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 if generation != self.load_generation { return; }
                 self.document_base = Some((base, generation));
             }
-            LoadEvent::HtmlChunk(chunk, generation) => {
+            LoadEvent::HtmlChunk(chunk, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 if generation != self.load_generation { return; }
                 // GAP-XMLDOC срез 29 (BUG-786/BUG-685): an XML-flavoured document
                 // (`.xhtml`/`.xht`/`.svg`) needs `xml_mode` armed on the streaming
@@ -58,7 +70,11 @@ impl Lumen {
                     self.stream_last_paint = std::time::Instant::now();
                 }
             }
-            LoadEvent::CssLoaded(boxed, generation) => {
+            LoadEvent::CssLoaded(boxed, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 if generation != self.load_generation { return; }
                 // PH1-2: CSS загружен параллельным потоком — мёрджим в stream_sheet.
                 // Применится в следующем paint_partial_dom (16 мс throttle).
@@ -201,7 +217,15 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
-            LoadEvent::LoadDone(raw, generation) => {
+            LoadEvent::LoadDone(raw, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    // BUG-1214: don't pay for the heavy final pipeline on a
+                    // tab that's no longer `self` — `raw`'s bytes are
+                    // dropped here and the tab reloads from scratch once the
+                    // user switches back (see `mark_bg_tab_needs_reload`).
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 // U-1: drop a superseded navigation's final pipeline — otherwise a
                 // slow earlier load would render its page over the newer one.
                 if generation != self.load_generation { return; }
@@ -313,6 +337,7 @@ impl Lumen {
                     // дропнется здесь, корректно завершив JS-поток.
                     let _ = proxy.send_event(LoadEvent::RenderDone(
                         Box::new(RenderOutcome { result, preload_dispatched }),
+                        tab_id,
                         generation,
                     ));
                 });
@@ -323,7 +348,16 @@ impl Lumen {
                     eprintln!("не удалось запустить поток финального pipeline: {err}");
                 }
             }
-            LoadEvent::RenderDone(outcome, generation) => {
+            LoadEvent::RenderDone(outcome, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    // BUG-1214: this tab was switched away from while
+                    // `render_bytes` was running — drop the finished JS
+                    // handle/page here (matches the `LoadDone` gate above)
+                    // rather than paint it into whichever tab happens to be
+                    // active now.
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 // BUG-171 этап 2: устаревшую навигацию отбрасываем — её страница и
                 // JS-хэндл дропаются вместе с `outcome` (JS-поток завершается).
                 if generation != self.load_generation { return; }
@@ -382,7 +416,11 @@ impl Lumen {
                     }
                 }
             }
-            LoadEvent::LoadError(msg, generation) => {
+            LoadEvent::LoadError(msg, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 if generation != self.load_generation { return; }
                 self.nav_start = None;
                 // Settled navigation error — mark done so a
@@ -399,7 +437,11 @@ impl Lumen {
                 // transition, so its captured snapshot must not survive it.
                 self.pending_mpa_view_transition_snapshot = None;
             }
-            LoadEvent::CertError(url, host, cert_err, generation) => {
+            LoadEvent::CertError(url, host, cert_err, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
                 if generation != self.load_generation { return; }
                 self.nav_start = None;
                 // A6: same settled-error bookkeeping as `LoadError` above

@@ -503,6 +503,18 @@ impl Lumen {
                 self.poll_dynamic_frames();
                 self.relayout_raf_dirty();
             }
+            // BUG-1214: a streaming `LoadEvent` for THIS tab arrived while it
+            // sat backgrounded — its in-flight bytes were discarded rather
+            // than corrupting whatever tab was active at the time (see
+            // `Lumen::mark_bg_tab_needs_reload`). `pending_reload` just came
+            // back with the rest of the snapshot above; `take()` clears it so
+            // this fires once. Queued rather than called directly: `reload`
+            // wants a settled `self` (source/document already restored, not
+            // mid-restore), same reasoning as the queue_task/UserInteraction
+            // reload path this flag was originally built for.
+            if self.pending_reload.take() {
+                self.reload();
+            }
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
             // checkpoint exists — restore scroll + form state from it.

@@ -1018,7 +1018,8 @@ impl Lumen {
             self.stream_layout_seeded = false;
             self.stream_builder = None;
             self.load_generation = self.load_generation.wrapping_add(1);
-            self.start_streaming_load(self.load_generation);
+            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.start_streaming_load(tab_id, self.load_generation);
             // E2E-1: поток загрузки уже получил свой клон источника вместе с
             // телом — значит POST отправлен ровно один раз. Стираем тело из
             // `self.source` здесь, а не в отдельной ветке каждого места, где
@@ -1375,7 +1376,11 @@ impl Lumen {
     ///
     /// `generation` (U-1) метит каждое испускаемое событие; `user_event`
     /// отбрасывает события устаревшего поколения, если навигацию успели сменить.
-    pub(crate) fn start_streaming_load(&self, generation: u64) {
+    /// `tab_id` (BUG-1214) — id вкладки, чья навигация это, снятый в момент
+    /// запуска: события маршрутизируются к ЭТОЙ вкладке (`self`, если она всё
+    /// ещё активна, иначе `bg_tabs[tab_id]`) независимо от того, какая вкладка
+    /// активна к моменту прихода события — см. [`Lumen::apply_load_event_for_tab`].
+    pub(crate) fn start_streaming_load(&self, tab_id: usize, generation: u64) {
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
@@ -1459,19 +1464,20 @@ impl Lumen {
                         // UI-поток резолвит картинки/шрифты частичного DOM от
                         // своей копии базы — сообщаем ему новую (BUG-757).
                         let _ = chunk_proxy
-                            .send_event(LoadEvent::DocumentBase(base.clone(), generation));
+                            .send_event(LoadEvent::DocumentBase(base.clone(), tab_id, generation));
                     }
                     feed_preload_and_emit(
                         &mut preload_scanner,
                         chunk,
                         &base,
                         &chunk_proxy,
+                        tab_id,
                         generation,
                         &sink_prefetch,
                         cj_prefetch.as_ref(),
                         &media_ctx,
                     );
-                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation));
+                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation));
                 };
                 match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
                     Ok(r) => r,
@@ -1488,10 +1494,11 @@ impl Lumen {
                                     url.clone(),
                                     host,
                                     cert_err.clone(),
+                                    tab_id,
                                     generation,
                                 ))
                             }
-                            _ => proxy.send_event(LoadEvent::LoadError(e.to_string(), generation)),
+                            _ => proxy.send_event(LoadEvent::LoadError(e.to_string(), tab_id, generation)),
                         };
                         return;
                     }
@@ -1501,7 +1508,7 @@ impl Lumen {
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), generation));
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), tab_id, generation));
                         return;
                     }
                 };
@@ -1514,12 +1521,13 @@ impl Lumen {
                         chunk,
                         &raw.base,
                         &proxy,
+                        tab_id,
                         generation,
                         &sink,
                         cj_prefetch.as_ref(),
                         &media_ctx,
                     );
-                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation)).is_err() {
+                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation)).is_err() {
                         return; // event loop завершён
                     }
                     pos = end;
@@ -1530,10 +1538,10 @@ impl Lumen {
             // Финальные hint-ы из буферизованного хвоста сканера.
             let tail = preload_scanner.end();
             if !tail.is_empty() {
-                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone(), generation));
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone(), tab_id, generation));
             }
 
-            let _ = proxy.send_event(LoadEvent::LoadDone(Box::new(raw), generation));
+            let _ = proxy.send_event(LoadEvent::LoadDone(Box::new(raw), tab_id, generation));
         });
         if let Err(err) = spawned {
             eprintln!("не удалось запустить поток стриминговой загрузки: {err}");
@@ -1844,6 +1852,43 @@ impl Lumen {
         match &self.document_base {
             Some((base, generation)) if *generation == self.load_generation => Some(base.clone()),
             _ => self.source.resource_base(),
+        }
+    }
+
+    /// BUG-1214: is `tab_id` the CURRENTLY active tab (the one `self`'s
+    /// per-page fields actually represent right now)? Every streaming
+    /// `LoadEvent` handler in `user_event.rs` gates its `self`-mutation on
+    /// this before checking `generation` — checking generation alone is not
+    /// enough once two tabs can stream concurrently, because
+    /// `self.load_generation` only ever describes the ACTIVE tab, and a
+    /// background tab's generation happening to coincide is possible after
+    /// `wrapping_add` wraps around (vanishingly unlikely, but `tab_id` is the
+    /// correct invariant regardless — see [`LoadEvent::EarlyPreloadHints`]).
+    pub(crate) fn is_active_tab(&self, tab_id: usize) -> bool {
+        self.tab_strip.tabs.get(self.tab_strip.active).is_some_and(|t| t.id == tab_id)
+    }
+
+    /// BUG-1214: a streaming `LoadEvent` arrived for a tab that is no longer
+    /// `self` (`window.open()` or a manual tab switch moved it to
+    /// `bg_tabs` mid-load). Before this fix such an event was either
+    /// silently dropped by the single process-wide `load_generation` check
+    /// (starving the background tab's navigation, `bugs/BUG-1214-OPEN.md`'s
+    /// original symptom) — or, under a naive keyed-generation patch, wrongly
+    /// applied to `self`'s fields, corrupting the tab that IS active
+    /// instead. Neither is acceptable: this tab's own `PageSnapshot` in
+    /// `bg_tabs` is not being live-updated field-by-field (that would need
+    /// every `LoadEvent` arm duplicated against a `PageSnapshot`, the
+    /// "полная архитектурная переделка" the bug asks for at full scope);
+    /// instead the background tab is marked for a full `reload()` the moment
+    /// it becomes active again (`switch_tab` already checks this exact flag
+    /// for the unrelated queue_task/UserInteraction reload case) — the
+    /// in-flight network fetch's bytes are discarded, but the navigation
+    /// itself is no longer silently lost, and — critically — the active
+    /// tab's own DOM/stream state is never touched by a load event that
+    /// isn't its own.
+    pub(crate) fn mark_bg_tab_needs_reload(&mut self, tab_id: usize) {
+        if let Some(snap) = self.bg_tabs.get(&tab_id) {
+            snap.pending_reload.set(true);
         }
     }
 
@@ -2583,6 +2628,7 @@ fn feed_preload_and_emit(
     chunk: &[u8],
     base: &ResourceBase,
     proxy: &EventLoopProxy<LoadEvent>,
+    tab_id: usize,
     generation: u64,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
@@ -2594,7 +2640,7 @@ fn feed_preload_and_emit(
     if early.is_empty() {
         return;
     }
-    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
+    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), tab_id, generation));
     // BUG-1116: `preload`/`modulepreload`/`prefetch` hints warm the same
     // process-global cache as the stylesheet/script warm-up right below —
     // started here, as early as the streaming scanner sees them, so the
@@ -2635,7 +2681,7 @@ fn feed_preload_and_emit(
                     && let Ok(text) = std::fs::read_to_string(&path)
                 {
                     let sheet = lumen_css_parser::parse(&text);
-                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                 }
             }
             ResolvedResource::Url(resolved) => {
@@ -2667,7 +2713,7 @@ fn feed_preload_and_emit(
                         // the full document (and its own charset) is known.
                         let sheet =
                             lumen_css_parser::parse(&String::from_utf8_lossy(&resource.body[..]));
-                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                     }
                 });
             }
@@ -2699,26 +2745,37 @@ pub(crate) enum LoadEvent {
     /// чтобы sink мог начать загружать CSS/шрифты ещё в процессе парсинга.
     /// Дедупликация с финальными хинтами из `LoadDone` — через
     /// `preload_dispatched` в `Lumen`.
-    /// Последнее поле — generation навигации (U-1): идентификатор load-цикла,
-    /// присвоенный в `reload`/`resumed`. `user_event` отбрасывает событие, если
-    /// его generation не совпадает с `Lumen::load_generation` — защита от
-    /// устаревших событий гонки навигаций (быстрый back/forward или клик по двум
-    /// ссылкам подряд), которые иначе подмешали бы DOM/CSS прошлой страницы.
-    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, u64),
+    /// Предпоследнее поле — id вкладки (BUG-1214), стриминг которой породил
+    /// событие: снят ОДИН раз в `reload`/`resumed` в момент запуска этой
+    /// навигации и не меняется, даже если пользователь переключит активную
+    /// вкладку, пока фоновый поток ещё грузит эту страницу. Последнее поле —
+    /// generation навигации (U-1): идентификатор load-цикла, присвоенный в
+    /// `reload`/`resumed`. `user_event` отбрасывает событие, если его
+    /// generation не совпадает с ожидаемым generation-ом ЭТОЙ вкладки —
+    /// защита от устаревших событий гонки навигаций (быстрый back/forward или
+    /// клик по двум ссылкам подряд), которые иначе подмешали бы DOM/CSS
+    /// прошлой страницы. До BUG-1214 сверка шла с единственным
+    /// process-wide `Lumen::load_generation`, поэтому вторая вкладка,
+    /// открытая тем же тиком `window.open()`, роняла ЛЮБОЕ событие первой —
+    /// `user_event` теперь сверяет generation вкладки `tab_id`, а не активной.
+    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, usize, u64),
     /// BUG-757: база документа стала известна и отличается от запрошенного
     /// адреса (сервер ответил редиректом). Отправляется из streaming-потока,
     /// как только тело потекло с финального hop-а — то есть ДО того, как
     /// частичный DOM начнёт заказывать картинки и шрифты, которые UI-поток
-    /// резолвит относительно базы. Последнее поле — generation навигации (U-1).
-    DocumentBase(ResourceBase, u64),
+    /// резолвит относительно базы. Предпоследнее поле — id вкладки, последнее —
+    /// generation навигации (U-1); см. [`Self::EarlyPreloadHints`] (BUG-1214).
+    DocumentBase(ResourceBase, usize, u64),
     /// Очередной chunk сырых байт HTML. UTF-8 границы не выравниваются —
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
-    /// code-point-ы внутри. Последнее поле — generation навигации (U-1).
-    HtmlChunk(Vec<u8>, u64),
+    /// code-point-ы внутри. Предпоследнее поле — id вкладки, последнее —
+    /// generation навигации (U-1); см. [`Self::EarlyPreloadHints`] (BUG-1214).
+    HtmlChunk(Vec<u8>, usize, u64),
     /// CSS загружен параллельным потоком для промежуточных streaming-кадров.
     /// Мёрджится в `Lumen::stream_sheet` и применяется в `paint_partial_dom`.
-    /// Последнее поле — generation навигации (U-1).
-    CssLoaded(Box<lumen_css_parser::Stylesheet>, u64),
+    /// Предпоследнее поле — id вкладки, последнее — generation навигации
+    /// (U-1); см. [`Self::EarlyPreloadHints`] (BUG-1214).
+    CssLoaded(Box<lumen_css_parser::Stylesheet>, usize, u64),
     /// PH1-2c: картинка `<img>` декодирована параллельным потоком во время
     /// streaming. Регистрируется в renderer-е по ключу `src` и вызывает redraw —
     /// картинки появляются по мере прихода, а не разом в финальном `LoadDone`.
@@ -2762,24 +2819,29 @@ pub(crate) enum LoadEvent {
         variation_settings: Vec<([u8; 4], f32)>,
         bytes: Vec<u8>,
     },
-    /// Все байты получены — для финального полного pipeline.
-    /// Последнее поле — generation навигации (U-1).
-    LoadDone(Box<RawPage>, u64),
-    /// Ошибка при загрузке страницы. Последнее поле — generation навигации (U-1).
-    LoadError(String, u64),
+    /// Все байты получены — для финального полного pipeline. Предпоследнее
+    /// поле — id вкладки, последнее — generation навигации (U-1); см.
+    /// [`Self::EarlyPreloadHints`] (BUG-1214).
+    LoadDone(Box<RawPage>, usize, u64),
+    /// Ошибка при загрузке страницы. Предпоследнее поле — id вкладки,
+    /// последнее — generation навигации (U-1); см. [`Self::EarlyPreloadHints`]
+    /// (BUG-1214).
+    LoadError(String, usize, u64),
     /// ph3-tls-hardening A6: the fetch failed because the TLS handshake's
     /// certificate did not verify (`lumen_core::error::Error::CertInvalid`,
     /// downcast out of the `Box<dyn Error>` the streaming/static fetch paths
     /// return before it collapses to a string). Routes to the cert
     /// interstitial instead of the generic `LoadError` path. Fields: full
     /// navigation URL, hostname (the key `tls::bypass::allow_host` needs for
-    /// "Proceed anyway"), the structured reason, and generation (U-1).
-    CertError(String, String, lumen_core::error::CertError, u64),
+    /// "Proceed anyway"), the structured reason, tab id, and generation (U-1);
+    /// see [`Self::EarlyPreloadHints`] (BUG-1214).
+    CertError(String, String, lumen_core::error::CertError, usize, u64),
     /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →
     /// layout) выполнен на фоновом потоке; готовый результат применяется на
-    /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Последнее
-    /// поле — generation навигации (U-1).
-    RenderDone(Box<RenderOutcome>, u64),
+    /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Предпоследнее
+    /// поле — id вкладки, последнее — generation навигации (U-1); см.
+    /// [`Self::EarlyPreloadHints`] (BUG-1214).
+    RenderDone(Box<RenderOutcome>, usize, u64),
     /// FRAME-4 срез 3: навигация ОДНОГО фрейма (клик по ссылке/сабмит формы/
     /// шаг истории внутри него) выполнена на фоновом потоке — та же сеть+
     /// парсинг+скрипты+layout, что раньше блокировали UI-поток целиком внутри
