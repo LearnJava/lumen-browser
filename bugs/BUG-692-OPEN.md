@@ -127,3 +127,15 @@ scheme по spec §4.1) на non-loopback host, переписать схему 
 Остаток списка среза 43/53 сузился до: картинки/навигация `<iframe>` уже
 закрыты (срезы 44, 52-53), заголовок `Upgrade-Insecure-Requests: 1` для
 `<iframe>`-навигации — ещё нет (срез 54 закрыл только top-level).
+
+## Обновление 2026-09-29 (P3) — `background-image` главного документа
+
+Срезы 43/44 закрыли `<img>` и фон под-документа `<iframe>`, но фон
+самого документа (`subresources::fetch_and_decode_background_images` и
+ранний старт `spawn_background_image_prefetch`) `upgrade_insecure_url` не
+звал: `img-src`-гейт видел `http://`, сам запрос уходил по `http://`.
+Теперь оба пути апгрейдят схему до гейта `img-src`, ключ `IMAGE_CACHE`
+остаётся сырым URL (`decode_background_image` получил отдельный
+`fetch_url`). Проверено `cargo clippy -p lumen-shell --all-targets`.
+Остаток: `@font-face`, media/`<track>`, `<script src>` (пути shell),
+навигации.
