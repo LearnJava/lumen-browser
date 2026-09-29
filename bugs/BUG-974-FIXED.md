@@ -1,8 +1,36 @@
 # BUG-974: процентные padding/margin строчного flex-элемента резолвятся против его собственного главного размера, а не против ширины контейнера
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6)
 **Компонент:** layout (`crates/engine/layout/src/box_tree/flex.rs::lay_out_flex`, строчная ветка финального прохода)
 **Найден:** P3, 2026-09-03, побочной пробой при BUG-341 S41 (сосед по коду того дефекта, который S41 исправил в колоночной ветке).
+
+## Исправление (2026-09-29, P6)
+
+`dispatch_box`'s `available_width` (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)
+играл две роли: свободное место для auto-margin/auto-width и базу для резолва
+процентов (`let cb = available_width`). Новое поле `UsedSizeOverride::percentage_base`
+разводит их — `flex_trampoline.rs::step_item`'s строчная ветка по-прежнему передаёт
+`available_width` как `inner_main` (ничего не меняя для auto-margin/justify-content),
+а `percentage_base: Some(content_width)` отдельно задаёт базу процентов для `cb`.
+`None` у всех остальных вызывающих `dispatch_box` не меняет их поведение
+(`cb = available_width`, как раньше).
+
+Тот же механизм закрывает и добавленный позже случай с процентным `max-width`
+(см. раздел ниже) — обе базы процентов резолвятся через один и тот же
+`percentage_base`.
+
+Два новых регрессионных теста в `crates/engine/layout/src/box_tree/tests/flex_align_content.rs`:
+`flex_row_item_percent_padding_resolves_against_container` (140 = 100 + 10% от 400)
+и `flex_row_item_percent_max_width_resolves_against_container` (500 = 50% от 1000).
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` чисто, все 4114 unit-тестов
+`lumen-layout` зелёные, `dump_golden.py` 12/12.
+
+**Гейт не пройден полностью:** правка двигает пиксели на строчных flex-контейнерах
+с процентными `padding`/`margin`/`max-width`, поэтому по правилам нужен полный
+`python graphic_tests/run.py --continue-on-fail`. В этой сессии калибровка TEST-00
+падает («magenta marker not found») — окно Lumen не получает foreground Windows
+(тот же класс ограничения, что `bugs/BUG-1062-FIXED.md`). Нужен отдельный прогон
+графического гейта из сессии с доступом к foreground-окну.
 
 ## Симптом
 
