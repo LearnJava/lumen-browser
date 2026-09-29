@@ -758,6 +758,11 @@ impl V8JsRuntime {
             // configurable and `internal_globals::seal_internal_globals_v8` can
             // hide and freeze them at the end of this function.
             //
+            // BUG-753 срез 1: the source is now wrapped in an IIFE
+            // (`internal_globals::wrap_page_shim`) that re-exports its names to the
+            // global itself; the indirect eval is kept for the module-shim-visible
+            // parts of the sealing contract until срез 3.
+            //
             // Safe only because the shim has no top-level `let`/`const`/`class`:
             // those are lexical, and eval puts them in a declarative environment
             // that dies with the eval call instead of on the global object — a
@@ -766,6 +771,7 @@ impl V8JsRuntime {
             {
                 v8::tc_scope!(tc, scope);
                 let shim = crate::dom::web_api_shim();
+                let shim = crate::internal_globals::wrap_page_shim(&shim);
                 let src = v8::String::new(tc, &shim)
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM source".into()))?;
                 let wrapper_src = v8::String::new(tc, "(function(s) { (0, eval)(s); })")

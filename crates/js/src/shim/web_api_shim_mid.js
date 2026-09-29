@@ -5279,7 +5279,7 @@ function _compute_validity(el) {
     // §4.10.21.1 #10: customError
     if (customMsg) flags.customError = true;
 
-    return new ValidityState(flags);
+    return new globalThis.ValidityState(flags);
 }
 
 // ── Path2D class (HTML LS §4.12.5.1.5) ─────────────────────────────────────────

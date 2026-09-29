@@ -620,7 +620,7 @@ function structuredClone(val, options) {
         // `__lumen_platform_cloners` entry, the same extension point
         // `filesystem_access.rs`'s handles use, checked further below.
         if (typeof Blob !== 'undefined' && v instanceof Blob &&
-            !(typeof File !== 'undefined' && v instanceof File)) {
+            !(typeof globalThis.File !== 'undefined' && v instanceof globalThis.File)) {
             var blobClone = Object.create(Blob.prototype);
             blobClone._bytes = v._bytes.slice(0);
             blobClone._type = v._type;

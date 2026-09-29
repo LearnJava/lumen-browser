@@ -38,17 +38,164 @@
 //!
 //! What this pass deliberately does **not** do: it cannot stop a script that
 //! already *knows* a name from reading it (`typeof window._lumen_get_attr`),
-//! because late binding through the global object is exactly how the shim
-//! calls its natives. Removing the names outright requires wrapping the shim
-//! in an IIFE and passing the natives in as arguments (BUG-378 "Как чинить"
-//! point 1) — a restructuring of `WEB_API_SHIM` plus all ~120 module shims,
-//! tracked separately as [BUG-753](../../../bugs/BUG-753-OPEN.md).
+//! because the ~120 module shims still call the page shim's names through the
+//! global object. [BUG-753](../../../bugs/BUG-753-OPEN.md) removes the names in
+//! slices: срез 1 ([`wrap_page_shim`]) put `WEB_API_SHIM` in an IIFE, so its own
+//! calls bind to locals and only a re-export remains on the global; the
+//! module shims move onto an internal container in срез 2, and срез 3 drops
+//! the re-export.
 //!
 //! Precedent: [`crate::file_input::seal_file_natives_v8`] (BUG-371) does the
 //! stronger thing — outright `delete` — for the file-API natives, which is
 //! possible only because those two shims copy the natives into closure
 //! variables at install time. The rest of the engine resolves them late, hence
 //! the weaker but universally applicable treatment here.
+
+/// Wrap the assembled page shim into a function scope (BUG-753, срез 1).
+///
+/// The shim's ~1000 top-level `var`/`function` names stop being global-object
+/// properties: they become locals of one IIFE, so the shim's own calls bind
+/// early (to the local) instead of walking the scope chain to the global. The
+/// epilogue then re-exports each name to the global so the ~120 module shims
+/// and Rust-side `eval` snippets that still call them by bare name keep
+/// working (срез 2 moves those consumers onto an internal container; срез 3
+/// drops the re-export of internal names altogether):
+///
+/// * public names (`document`, `Element`, `fetch`, …) — a plain
+///   `writable`/`enumerable`/`configurable` data property, the attributes the
+///   old indirect-eval `var` binding had;
+/// * internal and `_`-prefixed names ([`is_accessor_export`]) — a non-enumerable accessor over the
+///   local binding, so late writes by module shims / Rust (`_lumen_x = …`)
+///   still reach the variable the shim itself reads. Sealing (freezing the
+///   function-valued ones) is done by the pass in this module.
+///
+/// The names are found by scanning column-0 `function NAME` / `var NAME[, …]`
+/// lines — the shim's formatting invariant, guarded by
+/// `shim_exports_every_old_global`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn wrap_page_shim(body: &str) -> String {
+    let names = top_level_names(body);
+    let mut out = String::with_capacity(body.len() + names.len() * 160 + 1024);
+    out.push_str("(function() {\n");
+    // Prologue: the global properties exist *before* the body runs, as they did
+    // for eval-`var`s — the body itself calls `Object.defineProperty(globalThis,
+    // 'X', { enumerable: false })` on its own names and reads `window.X` while
+    // loading. Function declarations are hoisted, so their values are already
+    // final here; `var`s start as `undefined` and are filled in by the epilogue.
+    out.push_str(
+        "var __lumen_x = function(n, g, s) { try { Object.defineProperty(globalThis, n, \
+         { get: g, set: s, enumerable: false, configurable: true }); } catch (e) {} };\n\
+         var __lumen_p = function(n, v) { try { Object.defineProperty(globalThis, n, \
+         { value: v, writable: true, enumerable: true, configurable: true }); } catch (e) {} };\n\
+         var __lumen_v = function(n) { try { if (!Object.getOwnPropertyDescriptor(globalThis, n)) \
+         Object.defineProperty(globalThis, n, { value: void 0, writable: true, enumerable: true, \
+         configurable: true }); } catch (e) {} };\n\
+         var __lumen_f = function(n, v) { try { var d = Object.getOwnPropertyDescriptor(globalThis, n); \
+         if (d && v !== undefined && 'value' in d) Object.defineProperty(globalThis, n, { value: v }); } \
+         catch (e) {} };\n",
+    );
+    for (n, is_fn) in &names {
+        if is_accessor_export(n) {
+            out.push_str(&format!(
+                "__lumen_x(\"{n}\", function() {{ return {n}; }}, function(v) {{ {n} = v; }});\n"
+            ));
+        } else if *is_fn {
+            out.push_str(&format!("__lumen_p(\"{n}\", {n});\n"));
+        } else {
+            out.push_str(&format!("__lumen_v(\"{n}\");\n"));
+        }
+    }
+    out.push_str(body);
+    // Epilogue: publish the final values of public `var`s.
+    out.push_str("\n;\n");
+    for (n, is_fn) in &names {
+        if !is_accessor_export(n) && !*is_fn {
+            out.push_str(&format!("__lumen_f(\"{n}\", typeof {n} === 'undefined' ? void 0 : {n});\n"));
+        }
+    }
+    out.push_str("})();\n");
+    out
+}
+
+/// Names re-exported as live accessors: the engine-internal ones plus every
+/// other single-underscore name (`_wa_current_time`, `_details_known_open`) —
+/// shim state that tests and module shims write to from outside the IIFE.
+#[cfg(feature = "v8-backend")]
+fn is_accessor_export(n: &str) -> bool {
+    n.starts_with('_') || is_internal_name(n)
+}
+
+/// Same predicate as the `INTERNAL` regexp of [`SEAL_INTERNAL_GLOBALS`]:
+/// `^__` or `^_+lumen` (case-insensitive).
+#[cfg(feature = "v8-backend")]
+fn is_internal_name(n: &str) -> bool {
+    n.starts_with("__") || n.trim_start_matches('_').get(..5).is_some_and(|p| p.eq_ignore_ascii_case("lumen")) && n.starts_with('_')
+}
+
+/// Column-0 `function NAME(` and `var NAME[ = …][, NAME2 …];` declarations,
+/// as `(name, is_function_declaration)`.
+#[cfg(feature = "v8-backend")]
+fn top_level_names(body: &str) -> Vec<(String, bool)> {
+    fn ident(s: &str) -> Option<&str> {
+        let end = s
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            .unwrap_or(s.len());
+        (end > 0 && !s.as_bytes()[0].is_ascii_digit()).then(|| &s[..end])
+    }
+    /// Declarator heads of one `var` line: split at depth-0 commas, ignoring
+    /// anything inside brackets or quotes.
+    fn declarators(rest: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let (mut depth, mut quote, mut start, mut end) = (0i32, None::<char>, 0usize, rest.len());
+        let mut prev = ' ';
+        for (i, c) in rest.char_indices() {
+            match quote {
+                Some(q) => {
+                    if c == q && prev != '\\' {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '/' if rest[i..].starts_with("//") => {
+                        end = i;
+                        break;
+                    }
+                    '\'' | '"' | '`' => quote = Some(c),
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => depth -= 1,
+                    ',' if depth == 0 => {
+                        out.push(&rest[start..i]);
+                        start = i + 1;
+                    }
+                    _ => {}
+                },
+            }
+            prev = c;
+        }
+        out.push(&rest[start..end]);
+        out
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut names = Vec::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("function ") {
+            if let Some(n) = ident(rest.trim_start())
+                && seen.insert(n.to_string())
+            {
+                names.push((n.to_string(), true));
+            }
+        } else if let Some(rest) = line.strip_prefix("var ") {
+            for d in declarators(rest) {
+                if let Some(n) = ident(d.trim())
+                    && seen.insert(n.to_string())
+                {
+                    names.push((n.to_string(), false));
+                }
+            }
+        }
+    }
+    names
+}
 
 #[cfg(feature = "v8-backend")]
 use lumen_core::JsResult;
@@ -117,12 +264,21 @@ const SEAL_INTERNAL_GLOBALS: &str = r#"
           configurable: false
         });
       } else {
-        // Accessor: carry the getter/setter across untouched, hide it only.
+        // Accessor: the re-export of a shim-local binding (`wrap_page_shim`,
+        // BUG-753). Hide it and make it permanent; a function-valued one also
+        // loses its setter — a write from page script would re-point the
+        // shim's own local binding, which is the hijack this pass exists to
+        // prevent. State-valued ones keep the setter (module shims and Rust
+        // assign to them at runtime).
+        var setter = d.set;
+        try {
+          if (typeof d.get === 'function' && typeof d.get() === 'function') setter = undefined;
+        } catch (e) {}
         Object.defineProperty(globalThis, k, {
           get: d.get,
-          set: d.set,
+          set: setter,
           enumerable: false,
-          configurable: d.configurable
+          configurable: false
         });
       }
     } catch (e) { /* leave this one as it was rather than fail the pass */ }
@@ -300,7 +456,7 @@ mod tests {
         for name in ["_lumen_timers", "_lumen_loc_parts", "_lumen_last_focused_nid"] {
             let d = format!(
                 "(function() {{ var d = Object.getOwnPropertyDescriptor(window, '{name}'); \
-                  return d !== undefined && d.enumerable === false && d.writable === true; }})()"
+                  return d !== undefined && d.enumerable === false \n                  && (d.writable === true || typeof d.set === 'function'); }})()"
             );
             assert!(truthy(&rt, &d), "{name} must be hidden but still writable");
         }
@@ -334,6 +490,31 @@ mod tests {
             "top-level lexical declarations in WEB_API_SHIM would not survive its \
              indirect-eval evaluation (BUG-378) — declare them with `var` instead: {offenders:?}"
         );
+    }
+
+    /// The name scan behind [`super::wrap_page_shim`]: column-0 `function` /
+    /// `var` heads, comma lists, trailing `//` comments (a comma inside one
+    /// once produced the bogus name `in`), nested and indented lines ignored.
+    #[test]
+    fn top_level_names_scan() {
+        let src = "function a(x) { var inner = 1; }
+var b = 1, c = [1, 2], d; // e, in queue
+var s = 'x, y', f = function() {};
+  var indented = 1;
+let z = 1;
+";
+        let got: Vec<(String, bool)> = super::top_level_names(src);
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["a", "b", "c", "d", "s", "f"]);
+        assert!(got[0].1 && !got[1].1);
+    }
+
+    /// The IIFE keeps scratch `var`s of top-level loops off the global object,
+    /// while the declared names stay reachable (BUG-753 срез 1).
+    #[test]
+    fn shim_scratch_vars_do_not_leak_to_global() {
+        let rt = runtime();
+        assert!(truthy(&rt, "typeof window._dohi === 'undefined' && typeof Element === 'function'"));
     }
 
     /// Ordinary web-visible globals must keep their normal, enumerable shape —
