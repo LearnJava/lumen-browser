@@ -109,6 +109,27 @@ struct SharedWorkerThread {
 #[cfg(feature = "v8-backend")]
 static PORT_COUNTER: AtomicU32 = AtomicU32::new(1);
 
+/// Per-page record of `SharedWorker` client ports it has connected (port id →
+/// identity key) — a `V8JsRuntime` field, read only by its own `Drop` (BUG-1000).
+/// The hub (`HUB_V8`) is process-global and has no notion of "this page went
+/// away"; this map is what lets a page's teardown reach it anyway.
+#[cfg(feature = "v8-backend")]
+pub type SharedWorkerClientPorts = Arc<Mutex<HashMap<u32, String>>>;
+
+/// Close every port a page ever opened (BUG-1000, called from
+/// `V8JsRuntime::drop`) — same effect as that page's script calling
+/// `port.close()` on each, so a worker left with no other client notices via
+/// the same emptied-`ports`-map check as an explicit close and terminates
+/// itself rather than outliving the page indefinitely.
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn close_all_client_ports_v8(ports: &SharedWorkerClientPorts) {
+    let drained: Vec<(u32, String)> = std::mem::take(&mut *ports.lock().unwrap()).into_iter().collect();
+    for (port_id, key) in drained {
+        close_shared_worker_port_v8(&key, port_id);
+    }
+}
+
 /// Drain all messages a runtime's shared-worker ports have received.
 ///
 /// Returns the drained `(port_id, json)` list and clears the queue atomically.
@@ -674,10 +695,14 @@ fn post_to_shared_worker_v8(key: &str, port_id: u32, json: String) {
 /// Notify the shared worker that a client closed its port.
 ///
 /// The worker-side port mapping is dropped; the worker thread itself stays
-/// alive for other clients (shared workers outlive individual connections).
+/// alive as long as another client still holds a port open (shared workers
+/// outlive an individual connection) — but once the last one closes,
+/// `run_shared_worker_thread_v8`'s message loop notices its `ports` map went
+/// empty and terminates itself (BUG-1000), instead of idling in `HUB_V8`
+/// until the process exits.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-fn close_shared_worker_port_v8(key: &str, port_id: u32) {
+pub(crate) fn close_shared_worker_port_v8(key: &str, port_id: u32) {
     if let Some(t) = hub_v8().lock().unwrap().get(key) {
         let _ = t.tx.send(SwInMsg::Close { port_id });
     }
@@ -697,6 +722,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
     rt: &V8JsRuntime,
     outbox: &SharedWorkerOutbox,
     errors: &crate::worker::WorkerErrorQueue,
+    client_ports: &SharedWorkerClientPorts,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
@@ -725,12 +751,15 @@ pub(crate) fn install_shared_worker_bindings_v8(
         let errs = Arc::clone(errors);
         let fp = fetch_provider.clone();
         let det = determinism.clone();
+        // BUG-1000: recorded so this page's `Drop` can close every port it
+        // ever opened — see `SharedWorkerClientPorts`'s doc comment.
+        let cports = Arc::clone(client_ports);
         rt.register_native(
             "_lumen_sw_connect",
             into_v8_fn4(
                 move |key: String, script: String, script_url: String, is_module: bool| -> u32 {
-                    connect_shared_worker_v8(
-                        key,
+                    let port_id = connect_shared_worker_v8(
+                        key.clone(),
                         script,
                         script_url,
                         is_module,
@@ -739,7 +768,9 @@ pub(crate) fn install_shared_worker_bindings_v8(
                         fp.clone(),
                         ws_provider.clone(),
                         det.clone(),
-                    )
+                    );
+                    cports.lock().unwrap().insert(port_id, key);
+                    port_id
                 },
             ),
         )?;
@@ -993,12 +1024,24 @@ fn run_shared_worker_thread_v8(
                 }
             }
             SwInMsg::Close { port_id } => {
-                ports.lock().unwrap().remove(&port_id);
+                let now_empty = {
+                    let mut live = ports.lock().unwrap();
+                    live.remove(&port_id);
+                    live.is_empty()
+                };
                 error_ports.lock().unwrap().remove(&port_id);
                 let _ = rt.eval(&format!(
                     "if(typeof _lumen_sw_dispatch_port_close==='function')\
                      _lumen_sw_dispatch_port_close({port_id});"
                 ));
+                // BUG-1000: no client has a port left — nothing can reach
+                // this worker anymore (a fresh `new SharedWorker(key)` spawns
+                // its own thread once this one is gone, `connect_shared_worker_v8`
+                // above already handles a dead `tx`), so keeping the thread
+                // alive only leaks it until process exit.
+                if now_empty {
+                    close_flag.store(true, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -1362,7 +1405,8 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None, None, None).unwrap();
+        let client_ports = rt.shared_worker_client_ports_for_test();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, &client_ports, None, None, None).unwrap();
         (rt, outbox, errors)
     }
 
@@ -1524,6 +1568,60 @@ mod tests_v8 {
         assert_eq!(as_num(&rt.eval("globalThis.__b").unwrap()), 2.0);
     }
 
+    /// BUG-1000: a page that never called `port.close()` must still take its
+    /// `SharedWorker` connection down with it once its `V8JsRuntime` drops
+    /// (navigation, tab close) — the worker's own `n` counter resets, proving
+    /// a fresh worker thread was spawned rather than the original one
+    /// (which, left alone, used to run until the whole process exited).
+    #[test]
+    fn v8_dropping_the_page_runtime_closes_its_shared_worker_ports() {
+        let (rt1, outbox1) = runtime_with_shared_worker();
+        let script = "var n=0;onconnect=function(e){var p=e.ports[0];\
+            p.onmessage=function(){n+=1;p.postMessage(n);};};";
+        let data_url = format!("data:text/javascript,{}", urlencode(script));
+        let key = "v8-bug1000-drop";
+        rt1.eval(&format!(
+            "globalThis.__got=0;\
+             var w=new SharedWorker('{data_url}','{key}');\
+             w.port.onmessage=function(ev){{globalThis.__got=ev.data;}};\
+             w.port.postMessage('x');"
+        ))
+        .unwrap();
+        pump_until(&rt1, &outbox1, "globalThis.__got", 1.0);
+        assert_eq!(as_num(&rt1.eval("globalThis.__got").unwrap()), 1.0);
+
+        drop(rt1);
+
+        // The old thread only notices its last port closed, and exits,
+        // asynchronously — each retry opens a brand-new `SharedWorker`
+        // (a fresh `_lumen_sw_connect` call, so a still-live-but-dying old
+        // thread losing this particular attempt just means the next retry
+        // tries again) until one lands on either a respawned worker or the
+        // moment the old thread has fully exited.
+        let mut got = 0.0;
+        for _ in 0..50 {
+            let (rt2, outbox2) = runtime_with_shared_worker();
+            rt2.eval(&format!(
+                "globalThis.__got=0;\
+                 var w2=new SharedWorker('{data_url}','{key}');\
+                 w2.port.onmessage=function(ev){{globalThis.__got=ev.data;}};\
+                 w2.port.postMessage('x');"
+            ))
+            .unwrap();
+            pump_until(&rt2, &outbox2, "globalThis.__got", 1.0);
+            got = as_num(&rt2.eval("globalThis.__got").unwrap());
+            if got == 1.0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            got, 1.0,
+            "a fresh SharedWorker (n starting over at 1) must be reachable once \
+             the only page that held it open has dropped — BUG-1000"
+        );
+    }
+
     #[test]
     fn v8_distinct_names_are_isolated() {
         let (rt, outbox) = runtime_with_shared_worker();
@@ -1595,7 +1693,8 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, Some(fp), None, None).unwrap();
+        let client_ports = rt.shared_worker_client_ports_for_test();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, &client_ports, Some(fp), None, None).unwrap();
         (rt, outbox)
     }
 

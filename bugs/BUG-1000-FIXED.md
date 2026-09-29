@@ -1,9 +1,9 @@
 # BUG-1000 — `SharedWorker` не закрывается на уходе документа: соединение живёт до смерти процесса
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6)
 **Заведён:** 2026-09-05 (P3, побочная находка при диагностике [BUG-988](BUG-988-FIXED.md))
-**Область:** `crates/js/src/shared_worker.rs` (`hub_v8`/`HUB_V8`, `connect_shared_worker_v8`, `close_shared_worker_port_v8`)
-**Владелец:** P3
+**Область:** `crates/js/src/shared_worker.rs` (`hub_v8`/`HUB_V8`, `connect_shared_worker_v8`, `close_shared_worker_port_v8`) / `crates/js/src/v8_runtime/runtime.rs` (`V8JsRuntime::drop`)
+**Владелец:** P3, исправлено P6
 
 ## Симптом
 
@@ -57,3 +57,42 @@ park), но не даст `SharedWorker`-странице попасть в whol
 
 Найдено статическим разбором `crates/js/src/shared_worker.rs` при диагностике
 BUG-988 (P3 2026-09-05), живым прогоном не подтверждено.
+
+## Исправление 2026-09-29 (P6)
+
+Новое поле `V8JsRuntime::shared_worker_client_ports` (`SharedWorkerClientPorts`,
+`Arc<Mutex<HashMap<u32, String>>>` — port id → identity key) — реестр каждого
+порта, который эта конкретная страница открыла через `_lumen_sw_connect`.
+Дедицированный `Worker` разрывает связь бесплатно: его `WorkerRegistry` —
+обычное поле `V8JsRuntime`, роняется вместе с ним. У `SharedWorker` хаб
+процесс-глобальный, поэтому `Drop for V8JsRuntime` (`v8_runtime/runtime.rs`)
+теперь явно зовёт `close_all_client_ports_v8`, которая для каждого
+запомненного порта шлёт тот же `_lumen_sw_close`, что и явный `port.close()`
+из скрипта.
+
+На стороне воркера `run_shared_worker_thread_v8`'s обработчик `SwInMsg::Close`
+проверяет, не опустела ли карта `ports` ЭТОГО воркера после удаления записи —
+если да, взводит `close_flag` и поток завершается сам, вместо бесконечного
+ожидания в `HUB_V8`. Новый клиент того же `key` после этого просто порождает
+свежий поток (`connect_shared_worker_v8` уже обрабатывал мёртвый `tx` как
+кейс пересоздания).
+
+Пункт про park-blocker из «Первого шага» закрыт архитектурно, без отдельного
+кода: `park_current_page` (`crates/shell/src/lumen/bfcache.rs`) клонирует
+`Arc`-хендл рантайма в `ParkedPage`, а не дропает его — запаркованная
+страница просто не проходит через `Drop`, значит её `SharedWorker`-порты не
+закрываются, пока она не будет вытеснена или заменена по-настоящему. Отдельно
+распространять `_lumen_bfcache_blocked()` на `SharedWorker` не нужно: сам факт
+парковки уже не рвёт соединение.
+
+Регрессионный тест: `v8_dropping_the_page_runtime_closes_its_shared_worker_ports`
+(`crates/js/src/shared_worker.rs`) — открывает `SharedWorker`, роняет рантайм,
+затем ретраями (до 50×10 мс, поток закрывается асинхронно) убеждается, что
+свежий `new SharedWorker(тот же key)` порождает НОВЫЙ поток (счётчик `n`
+внутри воркера стартует заново с 1, а не продолжает с прежнего значения).
+
+Гейты: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` чисто; `cargo test -p lumen-js --features v8-backend --lib
+shared_worker` — 34/34 зелёных; `scripts/scoped-test.sh main` — все затронутые
+крейты зелёные; `LUMEN_PROFILE=dev-release python graphic_tests/dump_golden.py`
+— 12/12.
