@@ -1,6 +1,6 @@
 # BUG-753 — 725 внутренних имён движка по-прежнему **читаются** с глобала по известному имени (`typeof window._lumen_get_attr === 'function'`): одного `_lumen_query_selector_scoped` достаточно, чтобы опознать Lumen
 
-**Статус:** OPEN — срезы 1–2 из 3 сделаны (2026-09-29/30), см. §Срезы; на глобале страницы осталось одно внутреннее имя
+**Статус:** FIXED 2026-09-30 — три среза (IIFE, контейнер `__lumen_C`, `import.meta` через хост-колбэк); на глобале страницы внутренних имён нет
 **Компонент:** js (`crates/js/src/dom.rs::WEB_API_SHIM` — 246 top-level `var`/`function _lumen_…`; регистрация нативов из Rust — `crates/js/src/v8_compat.rs::register_v8_native`/`register_v8_native_scoped`, 468 имён; плюс top-level объявления ~120 модульных шимов `crates/js/src/*.rs`)
 **Найден:** P3, остаток при закрытии [BUG-378](BUG-378-FIXED.md) (2026-08-10)
 
@@ -127,8 +127,16 @@ seal-проход делает их непереконфигурируемыми
 у внутренних `eval`-ов, номер колонки первой строки сдвинут на длину префикса
 (`capture_call_site_reports_source_char_position` учитывает).
 
-**Срез 3 (не сделан):** `import.meta.resolve` через хост-колбэк
-`HostInitializeImportMetaObject` вместо текстовой преамбулы (снимает последнее имя
-и глобал-модульные `var __$lumen_meta__`); проверить, нужен ли ещё
-`SEAL_INTERNAL_GLOBALS` (перепись даёт ровно одно имя, так что скорее всего он
-мёртв); `with` оставить только тем шимам, которые реально читают внутренние имена.
+**Срез 3 (2026-09-30): `import.meta` через хост-колбэк.** `v8_esm::install_import_meta_hook`
+ставит на изолят `HostInitializeImportMetaObjectCallback`: при первом обращении модуля
+к `import.meta` он заполняет `url` (по хэшу модуля — у inline-модуля это URL страницы),
+`resolve()` (функция с URL модуля в `data`, резолв тем же `resolve_module_specifier`,
+BUG-1135) и Vite-стаб `env`. Текстовый препроцессор `import_meta.rs` (`__$lumen_meta__`,
+преамбула) и нативка `_lumen_import_meta_resolve` на глобале удалены. Перепись
+`Object.getOwnPropertyNames(globalThis)`: внутренних имён **1 → 0**; тест
+`only_known_internal_names_remain_on_the_global` теперь требует пустой список. Он же
+поймал свежую утечку из BUG-1014 (`globalThis._lumen_permission_set`) — переведена на
+`__lumen_C`. `SEAL_INTERNAL_GLOBALS` оставлен как страховка (перепись — на пустом
+списке, но проход дешёвый и держит непереконфигурируемость, если очередной шим снова
+сядет на глобал). **Остаток (не блокирует закрытие):** сужение `with (container)` до
+шимов, реально читающих внутренние имена — оптимизация, не приватность.
