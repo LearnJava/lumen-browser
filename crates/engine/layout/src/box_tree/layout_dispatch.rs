@@ -282,6 +282,26 @@ fn lay_out_inner(
 /// LAYOUT-2 срез 1: computes `b`'s used height from `content_height` (the block-
 /// flow/multicol/table content extent) — CSS 2.1 §10.6.3 explicit height,
 /// §10.6.7 aspect-ratio-derived, CSS Box Sizing L4 §5 size-containment fallback,
+/// Content-box высота replaced-элемента с `height: N%` при неопределённой
+/// базе: intrinsic-соотношение от уже посчитанной ширины, иначе UA-дефолт
+/// 150 (iframe/video, HTML LS §15.4.3) или размер холста. `None` — не replaced.
+fn replaced_percent_height_as_auto(b: &LayoutBox, s: &ComputedStyle) -> Option<f32> {
+    match &b.kind {
+        BoxKind::Image { .. } => {
+            let (aw, ah) = s.aspect_ratio.filter(|&(aw, ah)| aw > 0.0 && ah > 0.0)?;
+            let content_w = b.rect.width
+                - s.padding_left.resolve(0.0, None, Size::default()).unwrap_or(0.0)
+                - s.padding_right.resolve(0.0, None, Size::default()).unwrap_or(0.0)
+                - s.border_left_width
+                - s.border_right_width;
+            Some((content_w * ah / aw).max(0.0))
+        }
+        BoxKind::Iframe { .. } | BoxKind::Video { .. } => Some(150.0),
+        BoxKind::Canvas { height, .. } => Some(*height as f32),
+        _ => None,
+    }
+}
+
 /// CSS Basic UI L4 §4.4 field-sizing override, and the §10.4 min/max-height
 /// clamp. Shared by the plain block-flow branch (dispatched inline before
 /// LAYOUT-2, now via the explicit-stack driver in `block_flow_trampoline`) and
@@ -330,6 +350,12 @@ pub(super) fn finalize_block_height(
             } else {
                 specified
             }
+        } else if let Some(auto_h) = replaced_percent_height_as_auto(b, s) {
+            // CSS 2.1 §10.5: процентная высота при неопределённой высоте
+            // containing block ведёт себя как `auto`; у replaced-элемента
+            // это intrinsic-высота (BUG-1227).
+            auto_h + padding_top + padding_bottom
+                + s.border_top_width + s.border_bottom_width
         } else {
             content_height + padding_top + padding_bottom
                 + s.border_top_width + s.border_bottom_width
@@ -1507,7 +1533,9 @@ pub(super) fn dispatch_box(
                 {
                     *row_continuation_width = Some(content_width);
                 }
-                lay_out(&mut child, place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp, false);
+                // CSS 2.1 §10.5: процент высоты atomic inline-уровня резолвится от
+                // высоты containing block-а строки, а не от анонимной строки (BUG-1227).
+                lay_out(&mut child, place_x, cur_y, child_avail, available_height, measurer, viewport, children_pcb, hp, false);
                 if matches!(child.kind, BoxKind::Skip) {
                     children.push(child);
                     metrics.push((0.0, 0.0));
