@@ -164,6 +164,12 @@ pub(super) fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     t.nodes.insert(nid);
     t.epoch = t.epoch.wrapping_add(1);
+    // BUG-1211: record at the POST-increment epoch, so a same-tick flush
+    // basis taken right after this touch (which reads `epoch` after this
+    // function returns) treats this node as "already covered by the next
+    // basis" — see `DomTouched::touch_gen`'s doc comment.
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
 }
 
 /// BUG-341 S7: mark this cycle's DOM mutations as unattributable — a mutation
