@@ -193,6 +193,17 @@ use super::*;
         assert_eq!(s.font_family, vec!["Arial".to_string()]);
     }
 
+    // ── BUG-1011: percentage width/height attribute on replaced elements ──
+
+    #[test]
+    fn dimension_hint_percent_on_iframe_and_img() {
+        let s = doc_root_child_style("<iframe width=\"50%\" height=\"100\"></iframe>");
+        assert_eq!(s.width, Some(Length::Percent(50.0)));
+        assert_eq!(s.height, Some(Length::Px(100.0)));
+        let s = doc_root_child_style("<img width=\"25%\">");
+        assert_eq!(s.width, Some(Length::Percent(25.0)));
+    }
+
     // ── BUG-603: apply_background_image_presentational_hint ──────────────
 
     #[test]
