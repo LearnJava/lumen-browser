@@ -656,27 +656,48 @@ function _ro_len(value, fontPx, rootFontPx) {
     return 0;
 }
 
-// Content-box geometry of a border box: {w, h} of the content area plus the
-// {x, y} offset of its top-left corner inside the border box, which is what
-// Resize Observer §5.1 calls the entry's contentRect.
-function _ro_content_geometry(nid, borderW, borderH) {
+// Border + padding thickness of an element in CSS px.
+function _ro_insets(nid) {
     var fontPx = parseFloat(_lumen_get_computed_style(nid, 'font-size')) || 16;
     var rootFontPx = 16;
     try {
         var root = document.documentElement;
         if (root) rootFontPx = parseFloat(_lumen_get_computed_style(root.__nid__, 'font-size')) || 16;
     } catch (e) { rootFontPx = 16; }
-    var bl = _ro_len(_lumen_get_computed_style(nid, 'border-left-width'), fontPx, rootFontPx);
-    var br = _ro_len(_lumen_get_computed_style(nid, 'border-right-width'), fontPx, rootFontPx);
-    var bt = _ro_len(_lumen_get_computed_style(nid, 'border-top-width'), fontPx, rootFontPx);
-    var bb = _ro_len(_lumen_get_computed_style(nid, 'border-bottom-width'), fontPx, rootFontPx);
-    var pl = _ro_len(_lumen_get_computed_style(nid, 'padding-left'), fontPx, rootFontPx);
-    var pr = _ro_len(_lumen_get_computed_style(nid, 'padding-right'), fontPx, rootFontPx);
-    var pt = _ro_len(_lumen_get_computed_style(nid, 'padding-top'), fontPx, rootFontPx);
-    var pb = _ro_len(_lumen_get_computed_style(nid, 'padding-bottom'), fontPx, rootFontPx);
-    var w = borderW - bl - br - pl - pr;
-    var h = borderH - bt - bb - pt - pb;
-    return { w: w > 0 ? w : 0, h: h > 0 ? h : 0, x: pl, y: pt };
+    return {
+        bl: _ro_len(_lumen_get_computed_style(nid, 'border-left-width'), fontPx, rootFontPx),
+        br: _ro_len(_lumen_get_computed_style(nid, 'border-right-width'), fontPx, rootFontPx),
+        bt: _ro_len(_lumen_get_computed_style(nid, 'border-top-width'), fontPx, rootFontPx),
+        bb: _ro_len(_lumen_get_computed_style(nid, 'border-bottom-width'), fontPx, rootFontPx),
+        pl: _ro_len(_lumen_get_computed_style(nid, 'padding-left'), fontPx, rootFontPx),
+        pr: _ro_len(_lumen_get_computed_style(nid, 'padding-right'), fontPx, rootFontPx),
+        pt: _ro_len(_lumen_get_computed_style(nid, 'padding-top'), fontPx, rootFontPx),
+        pb: _ro_len(_lumen_get_computed_style(nid, 'padding-bottom'), fontPx, rootFontPx)
+    };
+}
+
+// Content-box geometry of a border box: {w, h} of the content area plus the
+// {x, y} offset of its top-left corner inside the border box, which is what
+// Resize Observer §5.1 calls the entry's contentRect.
+function _ro_content_geometry(nid, borderW, borderH) {
+    var i = _ro_insets(nid);
+    var w = borderW - i.bl - i.br - i.pl - i.pr;
+    var h = borderH - i.bt - i.bb - i.pt - i.pb;
+    return { w: w > 0 ? w : 0, h: h > 0 ? h : 0, x: i.pl, y: i.pt };
+}
+
+// BUG-1003: `_lumen_get_bounding_rect` is the transformed bounding box, but
+// Resize Observer §5.1 measures the untransformed border box — a transform
+// must not read as a resize. Computed width/height are the used px of the
+// layout box, so an element with a transform takes its border-box size from
+// them. Returns [w, h], or null when they cannot be read.
+function _ro_untransformed_border_size(nid) {
+    var cw = parseFloat(_lumen_get_computed_style(nid, 'width'));
+    var ch = parseFloat(_lumen_get_computed_style(nid, 'height'));
+    if (!isFinite(cw) || !isFinite(ch)) return null;
+    if (_lumen_get_computed_style(nid, 'box-sizing') === 'border-box') return [cw, ch];
+    var i = _ro_insets(nid);
+    return [cw + i.bl + i.br + i.pl + i.pr, ch + i.bt + i.bb + i.pt + i.pb];
 }
 
 // CSS Contain L2 §4.1 (BUG-852) — deliver the shell's batch of
@@ -821,8 +842,56 @@ function _lumen_deliver_animation_events(events) {
     }
 }
 
+// BUG-1003: Resize Observer §3.4 «broadcast active observations». A change
+// made inside a callback is reported in the same frame only for targets deeper
+// than the shallowest one already notified; the rest wait for the next frame,
+// after that frame's rAF callbacks. Without the gate a rAF chain the callback
+// started sees the next notification before its own next step runs. The held
+// remainder is delivered by `_ro_deliver_after_raf` (called at the end of each
+// rAF batch), bounded by a frame-length timer for pages without rAF. The gate
+// only covers one frame length after a delivery, so an unrelated later change
+// is never held.
+var _ro_hold_epoch = -1;
+var _ro_hold_time = 0;
+var _ro_min_depth = 0;
+var _ro_held = false;
+var _RO_HOLD_MAX_MS = 32;
+
+function _ro_deliver_after_raf() {
+    if (!_ro_held) return;
+    _ro_held = false;
+    _ro_hold_epoch = -1;
+    _lumen_deliver_resize_observers();
+}
+
+function _ro_hold_timeout() {
+    _ro_deliver_after_raf();
+}
+
+function _ro_arm_hold() {
+    if (_ro_held) return;
+    _ro_held = true;
+    var deadline = _lumen_now_ms() + _RO_HOLD_MAX_MS;
+    _lumen_timers.push({ id: _lumen_timer_seq++, fn: _ro_hold_timeout, deadline: deadline, interval: null, nesting: 0 });
+    _lumen_request_wakeup(deadline);
+}
+
+// Number of ancestors of a node, the depth §3.4 orders observations by.
+function _ro_depth(nid) {
+    var d = 0;
+    var cur = _lumen_u2n(_lumen_get_parent(nid));
+    while (cur !== null && cur !== undefined) {
+        d++;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return d;
+}
+
 function _lumen_deliver_resize_observers() {
     if (_ro_observers.length === 0) return;
+    var gated = _ro_hold_epoch === _ro_raf_epoch && _lumen_now_ms() - _ro_hold_time < _RO_HOLD_MAX_MS;
+    var gateDepth = _ro_min_depth;
+    var passMin = -1;
     var dpr = (typeof devicePixelRatio === 'number' && devicePixelRatio > 0) ? devicePixelRatio : 1;
     for (var oi = 0; oi < _ro_observers.length; oi++) {
         var obs = _ro_observers[oi];
@@ -835,12 +904,22 @@ function _lumen_deliver_resize_observers() {
             // box per §5.1 «calculate box size» — reported once, then it stops
             // differing from lastW/lastH.
             var bw = rect ? rect[2] : 0, bh = rect ? rect[3] : 0;
+            if (rect) {
+                var tf = _lumen_get_computed_style(nid, 'transform');
+                if (tf && tf !== 'none') {
+                    var ub = _ro_untransformed_border_size(nid);
+                    if (ub) { bw = ub[0]; bh = ub[1]; }
+                }
+            }
             // The content geometry costs nine computed-style reads, so a
             // border-box observation only pays for it once it has an entry.
             var cg = o.box === 'border-box' ? null : _ro_content_geometry(nid, bw, bh);
             var w = cg ? cg.w : bw;
             var h = cg ? cg.h : bh;
             if (o.lastW >= 0 && Math.abs(w - o.lastW) < 0.5 && Math.abs(h - o.lastH) < 0.5) continue;
+            var depth = _ro_depth(nid);
+            if (gated && depth <= gateDepth) { _ro_arm_hold(); continue; }
+            if (passMin < 0 || depth < passMin) passMin = depth;
             if (!cg) cg = _ro_content_geometry(nid, bw, bh);
             o.lastW = w; o.lastH = h;
             entries.push({
@@ -853,6 +932,9 @@ function _lumen_deliver_resize_observers() {
             });
         }
         if (entries.length > 0) {
+            _ro_hold_epoch = _ro_raf_epoch;
+            _ro_hold_time = _lumen_now_ms();
+            _ro_min_depth = passMin;
             try { obs._cb(entries, obs); } catch(e) { _lumen_report_exception(e); }
         }
     }

@@ -629,7 +629,7 @@ WPT-VENDOR − 199), из них 11 покрыть нечем, ещё 21 (дол
 **Три категории оказались невоспроизводимы, а не мертвы**, и вместо перегенерации откачены
 `git checkout --` в состояние до среза 6 — заведены отдельные баги (тот же класс, что
 [BUG-999](../../bugs/BUG-999-OPEN.md)):
-- `resize-observer` — [BUG-1003](../../bugs/BUG-1003-OPEN.md): подтест `Removing 2nd
+- `resize-observer` — [BUG-1003](../../bugs/BUG-1003-FIXED.md): подтест `Removing 2nd
   fragment` (`fragments.html`) дал FAIL в 3 из 4 наблюдений, PASS — только в том прогоне,
   что попал бы в baseline; `notify.html` один раз дал `ERROR` вместо `OK`.
 - `close-watcher` — [BUG-1004](../../bugs/BUG-1004-OPEN.md): два `--check`-прогона подряд
