@@ -592,6 +592,17 @@ use super::*;
     }
 
     #[test]
+    fn iframe_percent_height_with_auto_container_is_intrinsic_150() {
+        // CSS 2.1 §10.5: процент от неопределённой высоты = auto → 150 (BUG-1227).
+        let root = lay(
+            r#"<div style="height:600px"><div><iframe style="height:100%"></iframe></div></div>"#,
+            "",
+        );
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.height - 150.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
     fn iframe_html_attribute_dimensions_override_ua_default() {
         let root = lay(r#"<iframe src="x.html" width="800" height="600"></iframe>"#, "");
         let frame = first_iframe_child(&root);

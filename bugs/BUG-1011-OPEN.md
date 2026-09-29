@@ -396,8 +396,17 @@ iframe-src; вопрос архитектурный (P1-домен: можно �
 теперь идут через `parse_html_length_attr` (`Length::Percent`; HTML LS §15.4.3).
 
 Итог на `svg-embedded-sizing/`: `svg-in-iframe-auto` и `-fixed` — 216/216 PASS (было ~72 FAIL в каждом);
-остаток — `*-percentage.html` (`height: 100%` при auto-контейнере даёт 0 → [BUG-1227](BUG-1227-OPEN.md)),
+остаток — `*-percentage.html` (`height: 100%` при auto-контейнере даёт 0 → [BUG-1227](BUG-1227-FIXED.md)),
 а также `svg-in-img-*`/`svg-in-object-*` (intrinsic-размер SVG без width/height, `<object data>` — BUG-798).
 `--check` против baseline: 1073 регрессии (было 1286–1290); baseline не перегенерирован — часть тестов
 вернётся в PASS только после BUG-1227 и должна быть пересобрана одним прогоном после него.
 Display-list A/B по 181 странице корпуса до/после — байт-в-байт (в корпусе нет `width="N%"` на replaced).
+
+## Срез 29 (P6 2026-09-30): [BUG-1227](BUG-1227-FIXED.md) закрыт, baseline `svg-embedded-sizing/` записан
+
+`height: N%` у replaced при неопределённой базе → auto (intrinsic), и `InlineBlockRow` теперь передаёт
+детям высоту блока-родителя. `svg-in-iframe-{auto,fixed,percentage}` — 216/216 PASS (все три чисты).
+Baseline для каталога в git не существовал (`--check` сравнивался с «всё PASS», отсюда 1286–1290 «регрессий»
+в срезе 27); теперь записан `--update-expected`: 1274/1944 PASS, 6 `.ini` (`svg-in-img-*`, `svg-in-object-*`).
+Остаток — intrinsic-размер SVG без width/height в `<img>`/`<object>`, не флак. Флак-заметка среза 22
+(четыре разных результата `--check`) при этом не подтверждена ни в срезе 27, ни здесь.
