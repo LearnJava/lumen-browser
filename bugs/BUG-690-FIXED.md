@@ -1,6 +1,6 @@
 # BUG-690 — `NavigatorUAData` is directly constructible with `new` and lacks `Symbol.toStringTag`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P3)
 **Компонент:** js (`crates/js/src/ua_client_hints.rs` — `UA_CLIENT_HINTS_SHIM`)
 **Найден:** P2, WPT-VENDOR-ua-client-hints, 2026-08-09
 
@@ -71,3 +71,7 @@ Fix scope: заблокировать публичный `new NavigatorUAData()`
 (NavigatorUAData.prototype, Symbol.toStringTag, {value: 'NavigatorUAData',
 configurable: true})`. Не требует TLS-гэпа для воспроизведения/фикса — живой
 `--mcp-live-port`-пробы достаточно для верификации.
+
+## Исправление
+
+P3, 2026-09-29. `NavigatorUAData()` в `UA_CLIENT_HINTS_SHIM` теперь бросает `TypeError('Illegal constructor')`; единственный экземпляр для `navigator.userAgentData` создаётся через `Object.create(NavigatorUAData.prototype)`, минуя конструктор. На прототипе добавлен `Symbol.toStringTag` = `'NavigatorUAData'`. Тест `navigator_ua_data_is_not_constructible_and_has_tag` (`cargo test -p lumen-js --features v8-backend ua_client_hints`, 5/5).

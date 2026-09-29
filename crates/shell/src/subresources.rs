@@ -80,12 +80,18 @@ pub(crate) fn fetch_and_decode_background_images(
     let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let outcomes = parallel_map(&urls, |_, url| {
+        // BUG-692: `upgrade-insecure-requests` переписывает схему ДО гейта
+        // `img-src` (Fetch §4.1 шаг 5 < шаг 6); ключ кэша остаётся сырым
+        // `url`, меняется только адрес запроса.
+        let mut upgraded: Option<String> = None;
         if let Some((policy, self_origin)) = csp_gate {
             let resolved = base.resolve(url);
             let abs = match &resolved {
                 ResolvedResource::Url(u) => u.clone(),
                 ResolvedResource::File(p) => p.display().to_string(),
             };
+            upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &abs);
+            let abs = upgraded.clone().unwrap_or(abs);
             // Срез 58: report one text per independently violated policy
             // (CSP3 §7.8/§3.4) — the fetch stays blocked once regardless.
             let violated = crate::csp_enforce::violating_fetch_policy(
@@ -98,6 +104,7 @@ pub(crate) fn fetch_and_decode_background_images(
         let Some(image) = decode_background_image(
             image_cache::IMAGE_CACHE.current_generation(),
             url,
+            upgraded.as_deref().unwrap_or(url),
             base,
             sink,
             cookie_jar.clone(),
@@ -141,6 +148,7 @@ pub(crate) fn fetch_and_decode_background_images(
 pub(crate) fn decode_background_image(
     generation: u64,
     url: &str,
+    fetch_url: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
@@ -148,7 +156,7 @@ pub(crate) fn decode_background_image(
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<Arc<lumen_image::Image>> {
     let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, url, || {
-        decode_image(url, base, sink, cookie_jar, target, referrer_policy)
+        decode_image(fetch_url, base, sink, cookie_jar, target, referrer_policy)
     })?;
     Some(match decoded {
         image_cache::DecodedImage::Static(image) => image,
@@ -188,11 +196,14 @@ pub(crate) fn spawn_background_image_prefetch(job: BackgroundPrefetch) {
     let generation = image_cache::IMAGE_CACHE.current_generation();
     let spawned = std::thread::Builder::new().name("lumen-bg-prefetch".to_owned()).spawn(move || {
         parallel_map(&job.urls, |_, url| {
+            let mut upgraded: Option<String> = None;
             if let Some((policy, self_origin)) = &job.csp {
                 let abs = match job.base.resolve(url) {
                     ResolvedResource::Url(u) => u,
                     ResolvedResource::File(p) => p.display().to_string(),
                 };
+                upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &abs);
+                let abs = upgraded.clone().unwrap_or(abs);
                 if !crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, &abs, self_origin.as_ref(),
                 )
@@ -204,6 +215,7 @@ pub(crate) fn spawn_background_image_prefetch(job: BackgroundPrefetch) {
             let _ = decode_background_image(
                 generation,
                 url,
+                upgraded.as_deref().unwrap_or(url),
                 &job.base,
                 &job.sink,
                 job.cookie_jar.clone(),
