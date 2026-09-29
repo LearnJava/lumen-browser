@@ -5466,6 +5466,39 @@ BUG-131/159 наследование клипов) и требует полно�
 - Churn «31 `LayoutBox` построен / 11 переиспользован» (layout ~0.25-0.5 мс) —
   единственный оставшийся кодовый кандидат.
 
+## S45 — churn «31 построен / 11 переиспользован» — не churn: это цепочка keystroke, 31 разный узел, 20 из них — пустые `Skip`-боксы; код не менялся
+
+Ветка `p3-bug341-s45`, 2026-09-29. Задача из S44: разобрать churn «один узел —
+несколько `LayoutBox`» (31 построен / 11 переиспользован). Добавлена перепись
+`bug341_s45_hover_built_census` (`crates/shell/src/tests/bug341_census.rs`).
+
+### Что оказалось
+
+1. **Пара 31/11 относится к keystroke-циклу (CC12_KEY), а не к hover**, как
+   написано в S43/S44. Hover-цикл строит **3** бокса (`Document`, `Doctype`,
+   `Comment`) и переиспользует 1 (`html`) — и при наведении, и при снятии.
+2. **Дублей нет.** `bug341_s18_keystroke_box_build_census` на том же цикле:
+   `built=31 (distinct nodes 31)`. Формулировка S40 «один узел — несколько
+   `LayoutBox`» относится к повторным *вызовам `lay_out_inner`* (тот самый 3.1%
+   hit-rate), а не к счётчику `built` в `build_box`.
+3. Состав 31: 11 — цепочка предков `input#omniInput` (нереиспользуема по
+   построению, S16); 16 — комментарии/doctype/текст; 4 — `svg`, `#infoPanel`,
+   `#updateBar`, `#sidebar`. Эти 20 дают `BoxKind::Skip` (`build.rs`: ветка
+   `Text | Comment | Doctype …`, `display: none`, закрытый popover, `<defs>`):
+   поддерева за ними нет, реиспользовать нечего, стоимость — стиль из кэша
+   каскада и пустой бокс.
+
+### Вывод
+
+Layout keystroke-цикла (0.35-0.5 мс из ~0.8) — не пересборка боксов: 11
+реальных боксов цепочки и 20 пустых. Рычага «убрать churn» нет. Кодового
+кандидата в BUG-341 не осталось: остаётся архитектурное (кэш display list по
+поддереву, S44) и решение владельца перф-трека по p95.
+
+### Не сделано
+
+- Код и гейты не менялись. `CC12_KEY` в этом прогоне: p50 0.82 мс, p95 1.74 мс.
+
 ## Repro
 
 ```bash
@@ -5485,6 +5518,7 @@ cargo test -p lumen-shell --profile dev-release bug341_s36_layout_result_cache_s
 cargo test -p lumen-layout --profile dev-release box_tree::tests::bug341_differential::bug341_s37_cache_fixed_cost_breakdown -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s38_layout_result_cache_lazy_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s40_in_place_reuse_share -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s45_hover_built_census -- --ignored --nocapture
 ```
 
 S40 added `bug341_s40_in_place_reuse_share` (two-arm OFF/ON A/B, same fixture
