@@ -185,6 +185,26 @@ impl Lumen {
             Some(automation_ax_node(&ax_tree.root))
         }
 
+        /// Role and accessible name of the element a selector chain resolves to
+        /// (`AutomationCommand::ComputedA11y`, BUG-1014). Each selector after
+        /// the first is searched inside the previous match's shadow root.
+        /// `None` = no page or no such element.
+        pub(crate) fn automation_computed_a11y(&self, selectors: &[String]) -> Option<(String, String)> {
+            let source = self.layout_source.as_ref()?;
+            let doc = source.document.lock().ok()?;
+            let mut scope = doc.root();
+            let mut found = None;
+            for (i, sel) in selectors.iter().enumerate() {
+                let el = *lumen_layout::selector_query::query_all_within(&doc, scope, sel).first()?;
+                found = Some(el);
+                if i + 1 < selectors.len() {
+                    scope = doc.shadow_root_of(el)?;
+                }
+            }
+            let flat_tree = lumen_dom::build_flat_tree(&doc);
+            Some(lumen_a11y::computed_role_and_name(&doc, found?, &flat_tree))
+        }
+
         /// Box-model snapshot of the whole page for `AutomationCommand::LayoutSnapshot`
         /// (DEVX-14, wires `resource://layout` to the live window).
         ///

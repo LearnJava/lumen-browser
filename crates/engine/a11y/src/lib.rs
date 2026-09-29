@@ -165,6 +165,26 @@ pub fn build_ax_tree(doc: &Document, root_id: NodeId, flat_tree: &FlatTree) -> A
     }
 }
 
+/// Role and accessible name of one DOM element (BUG-1014: WebDriver
+/// `Get Computed Role` / `Get Computed Label`).
+///
+/// The role is read from the node's place in the built tree, because explicit
+/// `role=` validity depends on the parent context. An element the tree omits
+/// (inside an `aria-hidden` subtree) is resolved standalone, without a parent.
+pub fn computed_role_and_name(doc: &Document, node_id: NodeId, flat_tree: &FlatTree) -> (String, String) {
+    fn find(node: &AXNode, id: NodeId) -> Option<&AXNode> {
+        if node.node_id == id {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find(c, id))
+    }
+    let tree = build_ax_tree(doc, doc.root(), flat_tree);
+    match find(&tree.root, node_id) {
+        Some(n) => (n.role.as_str().to_owned(), n.name.clone()),
+        None => (resolve_role(doc, node_id, None).as_str().to_owned(), names::compute_name(doc, node_id)),
+    }
+}
+
 /// Composed children of `node_id` with every `<slot>` replaced by what is
 /// assigned to it: a slot is `display: contents` and has no role, so its
 /// content belongs to the slot's own parent — the UA slots of `<select>`/

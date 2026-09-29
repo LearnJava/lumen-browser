@@ -366,6 +366,21 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
+    /// BUG-1014: the live window resolves the selector chain against its DOM
+    /// and reads role/name from the accessibility tree. `None` = no match.
+    fn computed_a11y(&mut self, selectors: &[String]) -> Result<Option<(String, String)>> {
+        match self.execute(AutomationCommand::ComputedA11y { selectors: selectors.to_vec() })? {
+            AutomationReply::Eval(json) => {
+                let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| Error::Other(e.to_string()))?;
+                Ok(match (v["role"].as_str(), v["name"].as_str()) {
+                    (Some(r), Some(n)) => Some((r.to_owned(), n.to_owned())),
+                    _ => None,
+                })
+            }
+            other => Err(unexpected_reply("ComputedA11y", &other)),
+        }
+    }
+
     /// BUG-295 remainder: round-trips to the live window, which registers
     /// the rule in `lumen_network`'s process-global intercept registry —
     /// consulted at the same `fetch_with_redirect` chokepoint every fetch

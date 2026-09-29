@@ -359,6 +359,13 @@ pub trait BrowserSession {
         Ok(true)
     }
 
+    /// Role and accessible name of the element the selector chain resolves to
+    /// (BUG-1014). `Ok(None)` = no such element; headless sessions have no
+    /// live page and always answer `None`.
+    fn computed_a11y(&mut self, _selectors: &[String]) -> Result<Option<(String, String)>> {
+        Ok(None)
+    }
+
     /// Register a network intercept rule (WebDriver BiDi `network.addIntercept`,
     /// BUG-295 remainder). A subsequent request whose URL matches
     /// `url_patterns` (exact-string match, per BiDi urlPattern `type: "string"`;

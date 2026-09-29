@@ -541,6 +541,14 @@ pub enum AutomationCommand {
         /// `granted`, `denied` or `prompt`.
         state: String,
     },
+    /// Role and accessible name of the element addressed by a selector chain
+    /// (BUG-1014, WebDriver `Get Computed Role`/`Label`): the chain runs from
+    /// the outermost document down, each next selector inside the previous
+    /// match's shadow root. Reply: `Eval` with JSON `{"role":…,"name":…}`.
+    ComputedA11y {
+        /// Selector chain, one entry per shadow-root level.
+        selectors: Vec<String>,
+    },
     /// Register a network intercept rule on the live window (BUG-295
     /// remainder, WebDriver BiDi `network.addIntercept`).
     AddIntercept {

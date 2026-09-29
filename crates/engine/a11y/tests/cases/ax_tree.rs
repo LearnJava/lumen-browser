@@ -1494,3 +1494,32 @@ fn role_doc_bibliography_is_transparent_for_child_context() {
         .expect("listitem nested in a doc-bibliography must still resolve against the list");
     assert_eq!(item.name, "ref");
 }
+
+// ── computed_role_and_name (BUG-1014) ────────────────────────────────────────
+
+#[test]
+fn computed_role_and_name_by_node() {
+    let doc = parse(r#"<button id=b aria-label="Save">x</button><div id=d role=alert>hi</div>
+        <div aria-hidden=true><a id=h href="/">Link</a></div>"#);
+    let flat_tree = build_flat_tree(&doc);
+    let by_id = |id: &str| {
+        let mut stack = vec![doc.root()];
+        while let Some(n) = stack.pop() {
+            if doc.get(n).get_attr("id") == Some(id) {
+                return n;
+            }
+            stack.extend(doc.get(n).children.iter().copied());
+        }
+        panic!("no #{id}")
+    };
+    assert_eq!(
+        lumen_a11y::computed_role_and_name(&doc, by_id("b"), &flat_tree),
+        ("button".to_owned(), "Save".to_owned())
+    );
+    assert_eq!(lumen_a11y::computed_role_and_name(&doc, by_id("d"), &flat_tree).0, "alert");
+    // Inside aria-hidden: absent from the tree, resolved standalone.
+    assert_eq!(
+        lumen_a11y::computed_role_and_name(&doc, by_id("h"), &flat_tree),
+        ("link".to_owned(), "Link".to_owned())
+    );
+}
