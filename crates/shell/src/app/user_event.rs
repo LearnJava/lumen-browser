@@ -5,6 +5,7 @@
 //! (`super`) как есть; параметр `_event_loop` в теле не использовался
 //! и в переходнике не передаётся.
 
+use crate::page_load::{stream_css_pending, stream_css_pending_done};
 use crate::page_pipeline::is_xml_flavoured_document;
 use crate::*;
 
@@ -63,7 +64,11 @@ impl Lumen {
                     }
                 });
                 builder.feed_bytes(&chunk);
-                if self.stream_last_paint.elapsed().as_millis() >= STREAM_PAINT_INTERVAL_MS {
+                // BUG-1225: пока не пришли таблицы стилей из `<head>`, кадр не
+                // публикуется — остаётся прежняя страница, а не сырой HTML.
+                if self.stream_last_paint.elapsed().as_millis() >= STREAM_PAINT_INTERVAL_MS
+                    && !stream_css_pending(generation)
+                {
                     // Клонируем снапшот для layout — builder остаётся живым.
                     let doc_snap = builder.as_doc().clone();
                     self.paint_partial_dom(&doc_snap);
@@ -84,6 +89,7 @@ impl Lumen {
                 // hand-rolled field-by-field merge here that had fallen two
                 // fields behind the struct.
                 self.stream_sheet.merge_from(*boxed);
+                stream_css_pending_done(generation);
             }
             LoadEvent::ImageDecoded { src, image, animated } => {
                 // PH1-2c: картинка декодирована параллельным потоком во время

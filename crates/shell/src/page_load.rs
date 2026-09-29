@@ -2617,6 +2617,35 @@ impl Lumen {
     }
 }
 
+/// BUG-1225: число render-blocking таблиц стилей из `<head>`, для которых
+/// preload-сканер уже запустил загрузку, а `CssLoaded` ещё не обработан
+/// event loop-ом: `(generation, счётчик)`. Пока оно ненулевое, streaming-кадр
+/// не публикуется — иначе на экране виден сырой HTML без CSS. Каждая
+/// посчитанная таблица шлёт `CssLoaded` ровно один раз (при сбое — пустой
+/// таблицей), поэтому счётчик не зависает.
+static STREAM_CSS_PENDING: std::sync::Mutex<(u64, usize)> = std::sync::Mutex::new((0, 0));
+
+pub(crate) fn stream_css_pending_add(generation: u64) {
+    let mut g = STREAM_CSS_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if g.0 != generation {
+        *g = (generation, 0);
+    }
+    g.1 += 1;
+}
+
+pub(crate) fn stream_css_pending_done(generation: u64) {
+    let mut g = STREAM_CSS_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if g.0 == generation {
+        g.1 = g.1.saturating_sub(1);
+    }
+}
+
+/// `true`, пока для навигации `generation` ждут таблицы стилей (см. выше).
+pub(crate) fn stream_css_pending(generation: u64) -> bool {
+    let g = STREAM_CSS_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    g.0 == generation && g.1 > 0
+}
+
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
 /// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих
 /// путей `start_streaming_load`: сетевого streaming-а (URL) и нарезки
@@ -2672,15 +2701,18 @@ fn feed_preload_and_emit(
             }
             _ => continue,
         };
+        if is_css {
+            stream_css_pending_add(generation);
+        }
         match base.resolve(raw_url) {
             // Local files: read is instant — no cache benefit. Only CSS needs a
             // CssLoaded event for the progressive frame; scripts are read in
             // `parse_and_layout`.
             ResolvedResource::File(path) => {
-                if is_css
-                    && let Ok(text) = std::fs::read_to_string(&path)
-                {
-                    let sheet = lumen_css_parser::parse(&text);
+                if is_css {
+                    let sheet = std::fs::read_to_string(&path)
+                        .map(|text| lumen_css_parser::parse(&text))
+                        .unwrap_or_default();
                     let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                 }
             }
@@ -2692,6 +2724,10 @@ fn feed_preload_and_emit(
                 std::thread::spawn(move || {
                     use lumen_core::url::Url;
                     let Ok(parsed) = Url::parse(&resolved) else {
+                        if is_css {
+                            let _ = proxy2.send_event(LoadEvent::CssLoaded(
+                                Box::default(), tab_id, generation));
+                        }
                         return;
                     };
                     let resource = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
@@ -2704,15 +2740,16 @@ fn feed_preload_and_emit(
                             })
                             .map_err(|e| e.to_string())
                     });
-                    if is_css
-                        && let Ok(resource) = resource
-                    {
+                    if is_css {
                         // Progressive preview frame only — the authoritative
                         // parse (BUG-509 fallback-encoding algorithm) happens
                         // later in `stylesheets::fetch_stylesheet_text` once
                         // the full document (and its own charset) is known.
-                        let sheet =
-                            lumen_css_parser::parse(&String::from_utf8_lossy(&resource.body[..]));
+                        // Сбой загрузки → пустая таблица: `CssLoaded` обязан
+                        // прийти ровно один раз (BUG-1225, счётчик ожидания).
+                        let sheet = resource
+                            .map(|r| lumen_css_parser::parse(&String::from_utf8_lossy(&r.body[..])))
+                            .unwrap_or_default();
                         let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                     }
                 });
