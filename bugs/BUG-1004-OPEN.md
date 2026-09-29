@@ -68,3 +68,13 @@ LUMEN_PROFILE=dev-release python tests/wpt/run_report.py \
 (`y.html?dialog`, `ny-activate-preventDefault.html?CloseWatcher`) дают `CRASH`, тогда как
 по отдельности проходят стабильно (4/4). Гипотеза: падение/перезапуск окна между тестами
 одного процесса, а не user activation. Не локализовано.
+
+## Срез 2 (P6, 2026-09-29)
+
+Повтор на `main` d5dbe68bb (`dev-release`, venv-python, `--check --root close-watcher/user-activation
+--recursive`): 3 прогона подряд по 52 теста — 0 регрессий, 0 unexpected-PASS, CRASH не
+воспроизведён. Остаток среза 1 (редкий CRASH `y.html?dialog` / `ny-activate-preventDefault`) не
+подтверждён, но и не закрыт: без падающего прогона причину не локализовать. Баг остаётся OPEN;
+следующий шаг — ловить CRASH с сохранением stderr/дампа окна при массовом прогоне.
+Ловушка: запускать `tests/wpt/.venv/Scripts/python.exe`, а не системный `python` — иначе
+`Servers failed to start: wss:18889`.
