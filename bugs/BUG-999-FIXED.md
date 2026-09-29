@@ -1,6 +1,6 @@
 # BUG-999 — `<iframe src>`, добавленный из скрипта, не даёт `load` вовремя: шесть `promise_test` виснут, а какой именно доедет — лотерея
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29
 **Заведён:** 2026-09-05 (P2, WPT-RUN-7 срез 4 — генерация expectations baseline для `webidl`)
 **Область:** не локализован. Единственная общая точка блокировки всех шести подтестов —
 ожидание события `load` у программно вставленного `<iframe src>`
@@ -128,3 +128,17 @@ realm и путь, которым `testharnessreport.js` докладывает 
 Инструментальные `eprintln!` не оставлены в исходниках движка (снесены после замера,
 `git checkout --`); зонд `tests/wpt/verify_bug999_dynamic_iframe_load.py` — оставлен
 и исправлен, пригоден для повторного использования.
+
+## Закрытие 2026-09-29 (P6, срез 2)
+
+Полный `global-object-implicit-this-value-cross-realm.html` под `run_smoke.py` на свежем
+`dev-release`-бинаре, 4 прогона подряд: **идентичный результат каждый раз** — `load` у
+динамического `<iframe>` доезжает, `createRealm()` резолвится, 4 подтеста из 6 дают
+детерминированный итог (getter/setter/operation «incompatible object» — FAIL, getter
+«null/undefined» — PASS, setter «null/undefined» — FAIL `assert_true`, operation
+«null/undefined» — TIMEOUT). Симптом бага (лотерея по подтестам, невоспроизводимый
+baseline) исчез — вероятно, побочным эффектом FRAME-/NAVCTX-работ после 2026-09-05; точный
+коммит не искали. Baseline `.ini` приведён к наблюдаемому (setter-null TIMEOUT→FAIL,
+operation-null NOTRUN→TIMEOUT). Оставшиеся FAIL/TIMEOUT — обычные пробелы cross-realm
+семантики (`Reflect.set(other,"self",…,null)` возвращает false; `focus`/`postMessage`
+на `other` с `this=null`), не этот баг.
