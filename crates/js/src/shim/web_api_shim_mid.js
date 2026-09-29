@@ -934,6 +934,29 @@ function CompositionEvent(type, init) {
 CompositionEvent.prototype = Object.create(UIEvent.prototype);
 CompositionEvent.prototype.constructor = CompositionEvent;
 
+// UI Events §4.4 legacy TextEvent (BUG-691): not constructible (`new
+// TextEvent()` -> TypeError); only `document.createEvent('TextEvent')` makes
+// one, which sets the internal flag below for the duration of the call.
+var _lumen_text_event_internal = false;
+function TextEvent(type, init) {
+    if (!_lumen_text_event_internal) { throw new TypeError("Failed to construct 'TextEvent': Illegal constructor"); }
+    UIEvent.call(this, type, init);
+    this.data = '';
+}
+TextEvent.prototype = Object.create(UIEvent.prototype);
+TextEvent.prototype.constructor = TextEvent;
+TextEvent.prototype.initTextEvent = function(type, bubbles, cancelable, view, data) {
+    if (arguments.length < 1) { throw new TypeError("Failed to execute 'initTextEvent' on 'TextEvent': 1 argument required, but only 0 present."); }
+    this.initUIEvent(type, bubbles, cancelable, view, 0);
+    this.data = String(data);
+};
+
+// UI Events §idl-uievent legacy `pseudoTarget` (BUG-691): no pseudo-element
+// retargeting is performed by the dispatcher, so it is always null.
+Object.defineProperty(UIEvent.prototype, 'pseudoTarget', {
+    get: function() { return null; }, enumerable: true, configurable: true
+});
+
 // ── Per-element event listener store ─────────────────────────────────────────
 // Key: String(nid) + ':' + type  →  Array of handler functions.
 
@@ -12377,7 +12400,8 @@ var document = {
         var ctor = _lumen_legacy_event_ctor(String(iface || '').toLowerCase());
         if (!ctor) { throw new DOMException(iface + ' is not a supported event interface', 'NotSupportedError'); }
         var evt = Object.create(ctor.prototype);
-        ctor.call(evt, '');
+        _lumen_text_event_internal = (ctor === TextEvent);
+        try { ctor.call(evt, ''); } finally { _lumen_text_event_internal = false; }
         return evt;
     },
     // DOM LS §4.5: createProcessingInstruction(target, data). Throws

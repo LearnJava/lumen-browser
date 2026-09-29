@@ -810,3 +810,29 @@ fn window_exports_all_event_classes() {
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-691: `TextEvent` существует, не конструируется напрямую, создаётся через
+/// `createEvent('TextEvent')`; `UIEvent.prototype.pseudoTarget` — унаследованный геттер.
+#[test]
+fn text_event_and_pseudo_target_surface() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var thrown = false; \
+         try { new TextEvent('textInput'); } catch (x) { thrown = x instanceof TypeError; } \
+         var e = document.createEvent('TextEvent'); \
+         var chain = Object.getPrototypeOf(e) === TextEvent.prototype \
+             && Object.getPrototypeOf(TextEvent.prototype) === UIEvent.prototype; \
+         var noArg = false; \
+         try { e.initTextEvent(); } catch (x) { noArg = x instanceof TypeError; } \
+         e.initTextEvent('foo'); \
+         var d1 = e.type === 'foo' && !e.bubbles && e.view === null && e.data === 'undefined'; \
+         e.initTextEvent('foo', true, true, window, 'bar'); \
+         var d2 = e.bubbles && e.cancelable && e.view === window && e.data === 'bar'; \
+         var pt = typeof Object.getOwnPropertyDescriptor(UIEvent.prototype, 'pseudoTarget').get === 'function' \
+             && Object.getOwnPropertyDescriptor(MouseEvent.prototype, 'pseudoTarget') === undefined \
+             && 'pseudoTarget' in MouseEvent.prototype; \
+         thrown && chain && noArg && d1 && d2 && pt",
+    )
+    .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
