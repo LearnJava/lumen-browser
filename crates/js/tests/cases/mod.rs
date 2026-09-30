@@ -12,6 +12,7 @@
 mod activation_target;
 mod bug1147_frame_facade_style;
 mod bug1208_window_origin;
+mod bug1083_textdecoder_stream_bom;
 mod bug518_mixin_cssom;
 mod bug534_highlight_api;
 mod bug569_img_decode;
