@@ -258,6 +258,13 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     if let Some(num) = s.strip_suffix("rem") {
         return num.trim().parse::<f32>().ok().map(Length::Rem);
     }
+    // CSS Values L4 §5.1.2 — root-relative font units; same Phase 0 factors as
+    // their element-relative pairs (`lh`/`cap`/`ex`/`ch`), against the root font.
+    for (suffix, factor) in [("rlh", 1.2), ("rcap", 0.7), ("rex", 0.5), ("rch", 0.5), ("ric", 1.0)] {
+        if let Some(num) = s.strip_suffix(suffix) {
+            return num.trim().parse::<f32>().ok().map(|n| Length::Rem(n * factor));
+        }
+    }
     // ── Font-relative units ──────────────────────────────────────────────────
     // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
     // against the box's real font metrics at layout time (`FONT_CH_EX`), with a

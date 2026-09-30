@@ -62,3 +62,7 @@ FAIL relative-units 5 - vw in outside expected 20.48 +/- 1 but got 10.2399997711
 ## Срез 2 (P6, 2026-09-30) — `rem` следует за корнем
 
 `ComputedStyle::root_font_size` (наследуется, ставится на `<html>` после font-size). `font-size`/`line-height` в `rem` считаются от него; в боксовых длинах (`width`/`margin`/`padding`/`gap`/`top…`) коэффициент `Rem` домножается на `root_font_size/16` в `apply_zoom_to_lengths` (на самом корне — на `zoom`). Не охвачено: `rem` внутри `calc()`, прочие свойства с `Length::Rem` (`letter-spacing`, `overflow-clip-margin`…). Тест `rem_follows_root_font_size_and_zoom`. Пиксельный гейт не прогнан (TEST-00 из менеджера), `dump_golden` 12/12.
+
+## Срез 3 (P6, 2026-09-30) — `rlh`/`rcap`/`rex`/`rch`/`ric` парсятся
+
+Раньше декларация с этими единицами отбрасывалась. Теперь — кратные корневого шрифта (`Length::Rem`) с теми же Phase 0 коэффициентами, что у пар `lh` 1.2 / `cap` 0.7 / `ex`,`ch` 0.5 (`length.rs`, `calc.rs`). Тест `root_relative_font_units_parse`. Не сделано: настоящие `lh` (computed line-height) и `cap`, метрики `ex`/`ch` от корневого шрифта — пары `lh/rlh`, `ex/rex`, `ch/rch` в WPT могут расходиться. `snapshot_cpu` красный — известный дрейф BUG-1008; `dump_golden` 12/12.
