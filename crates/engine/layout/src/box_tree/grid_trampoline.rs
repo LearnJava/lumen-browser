@@ -53,6 +53,10 @@ pub(super) struct GridInit {
     pub(super) padding_top: f32,
     pub(super) padding_bottom: f32,
     pub(super) size_contained: bool,
+    /// Own `position != static` and the CB inherited from the parent — pick the
+    /// containing block of absolutely-positioned children (see `lay_out_abs`).
+    pub(super) is_positioned: bool,
+    pub(super) own_pcb: Rect,
     /// BUG-341 S33 probe-reuse cache — see `build_grid_init`'s doc comment.
     /// `(probe_x, probe_y, laid-out subtree)`, taken (and consumed) by the
     /// Final phase's `step_final_item`.
@@ -149,7 +153,7 @@ pub(super) fn run(
             }
             Pass::Final => {
                 if current.k >= current.init.item_idxs.len() {
-                    finish_frame(&mut current, viewport);
+                    finish_frame(&mut current, measurer, viewport, hp);
                     match stack.pop() {
                         None => {
                             *b = current.b;
@@ -755,10 +759,9 @@ fn post_final_item(
 
 /// Runs once every item is placed — (moved in from `layout_dispatch.rs`'s
 /// former post-`lay_out_grid` code) the container's own `b.rect.height`.
-/// Copied from the removed code's dispatch-arm tail. Grid has no
-/// `flex_abs`-equivalent deferred absolutely-positioned children pass — see
-/// `finish_container_height`'s doc comment.
-fn finish_frame(frame: &mut Frame, viewport: Size) {
+/// Copied from the removed code's dispatch-arm tail, plus the deferred
+/// absolutely-positioned children pass (`lay_out_abs`).
+fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: Size, hp: &dyn HyphenationProvider) {
     let content_height = frame.init.y_off;
     finish_container_height(
         &mut frame.b,
@@ -771,6 +774,50 @@ fn finish_frame(frame: &mut Frame, viewport: Size) {
         viewport,
         content_height,
     );
+    lay_out_abs(
+        &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
+        frame.init.content_x, frame.init.content_y, measurer, viewport, hp,
+    );
+}
+
+/// CSS Grid L1 §9.1 / CSS Position L3 §4 — lay out the absolutely-positioned
+/// children of a grid container after its own size is final. They are not grid
+/// items (filtered in `build_grid_init`); the static position is the content-box
+/// origin, the CB is the padding box when the container is positioned, else the
+/// inherited `own_pcb` (same rule as `flex_trampoline::finish_frame`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lay_out_abs(
+    b: &mut LayoutBox,
+    s: &ComputedStyle,
+    is_positioned: bool,
+    own_pcb: Rect,
+    content_x: f32,
+    content_y: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    let abs: Vec<(usize, f32, f32)> = b
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|(i, _)| (i, content_x, content_y))
+        .collect();
+    if abs.is_empty() {
+        return;
+    }
+    let my_pcb = if is_positioned {
+        Rect::new(
+            b.rect.x + s.border_left_width,
+            b.rect.y + s.border_top_width,
+            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+        )
+    } else {
+        own_pcb
+    };
+    lay_out_abs_children(b, &abs, measurer, viewport, my_pcb, hp);
 }
 
 /// CSS 2.1 §10.6.3/§10.6.7, CSS Box Sizing L4 §5 — resolve a grid container's
@@ -779,12 +826,8 @@ fn finish_frame(frame: &mut Frame, viewport: Size) {
 /// `build_grid_init` returns `None`/no-items case) so the empty-container
 /// early exit does not need its own copy of this logic — both feed it
 /// `content_height == 0.0` in that case, matching the removed `lay_out_grid`'s
-/// `return 0.0` early exit exactly. Unlike `flex_trampoline::finish_frame`,
-/// there is no `flex_abs`-equivalent tail here: absolutely-positioned
-/// children of a grid container are not excluded from `item_idxs` upstream
-/// (`grid::build_grid_init`, unlike `flex::build_flex_init`, does not filter
-/// `Position::Absolute`/`Fixed` out of its item list) — a pre-existing gap
-/// this slice reproduces unchanged, not introduces; not in scope to fix here.
+/// `return 0.0` early exit exactly. Absolutely-positioned children are not
+/// grid items and are laid out separately (`lay_out_abs`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn finish_container_height(
     b: &mut LayoutBox,

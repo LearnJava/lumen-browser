@@ -1330,7 +1330,7 @@ pub(super) fn dispatch_box(
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
-                    size_contained,
+                    size_contained, is_positioned, pcb,
                 ) {
                     Some(init) => return DispatchOutcome::NeedsGridLoop(init),
                     None => {
@@ -1339,6 +1339,10 @@ pub(super) fn dispatch_box(
                         super::grid_trampoline::finish_container_height(
                             b, &s, em, available_height, padding_top, padding_bottom,
                             size_contained, viewport, 0.0,
+                        );
+                        // All children may be abs-positioned (not grid items).
+                        super::grid_trampoline::lay_out_abs(
+                            b, &s, is_positioned, pcb, content_x, content_y, measurer, viewport, hp,
                         );
                         return DispatchOutcome::Done;
                     }

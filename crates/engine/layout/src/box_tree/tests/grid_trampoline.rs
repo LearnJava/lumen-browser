@@ -200,3 +200,22 @@ fn deep_subgrid_chain_lays_out_without_overflowing_the_stack() {
     assert_eq!(root.rect.x, 0.0);
     assert_eq!(root.rect.y, 0.0);
 }
+
+/// BUG-1102 — CSS Grid L1 §9.1: an absolutely-positioned child of a grid
+/// container is not a grid item. It used to be placed in a cell, so a
+/// `width: calc(100% - 4px)` list with `left/right` collapsed to a 0-wide
+/// track (developer.mozilla.org skip-links rendered one letter per line).
+#[test]
+fn absolute_child_of_grid_is_not_a_grid_item() {
+    let html = r#"<body><ul id="u"><li>hello world</li></ul><div id="d">x</div></body>"#;
+    let css = "body { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); } \
+               #u { position: absolute; left: 2px; right: 2px; top: 0; margin: 0; }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let u = super::find_by_id_all(&root, &doc, "u").expect("#u not found");
+    let d = super::find_by_id_all(&root, &doc, "d").expect("#d not found");
+    assert_eq!(u.rect.x, 2.0, "u.x={}", u.rect.x);
+    assert_eq!(u.rect.width, 796.0, "u.width={}", u.rect.width);
+    assert_eq!(d.rect.y, 0.0, "the only grid item must start in row 1, d.y={}", d.rect.y);
+}
