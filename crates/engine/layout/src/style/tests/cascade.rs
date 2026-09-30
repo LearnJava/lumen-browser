@@ -697,6 +697,15 @@ use super::*;
         assert!((s.effective_zoom - 0.5).abs() < 1e-6);
     }
 
+    /// BUG-1051: viewport units resolve against the unzoomed viewport, so the
+    /// zoom factor must land on their coefficient.
+    #[test]
+    fn zoom_scales_viewport_unit_coefficients() {
+        let s = zoom_test_style("<div style=\"zoom: 2; height: 1vh; width: 1vw\"></div>");
+        assert_eq!(s.height, Some(Length::Vh(2.0)));
+        assert_eq!(s.width, Some(Length::Vw(2.0)));
+    }
+
     /// This is the shape tbank.ru relies on: a fixed-width container that only
     /// fits the viewport once `zoom` is applied.
     #[test]

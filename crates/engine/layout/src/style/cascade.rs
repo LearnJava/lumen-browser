@@ -93,10 +93,10 @@ pub(in crate::style) fn parse_zoom(value: &str) -> Option<f32> {
     Some(factor)
 }
 
-/// Scale one already-computed absolute length by `z`. Only `Px` is touched:
-/// every other unit resolves later against a basis (`font_size`, the containing
-/// block, the viewport) that is itself already zoomed, so scaling here too
-/// would apply the factor twice.
+/// Scale one already-computed absolute length by `z`. Only `Px` and the viewport
+/// units are touched: every other unit resolves later against a basis
+/// (`font_size`, the containing block) that is itself already zoomed, so scaling
+/// here too would apply the factor twice.
 /// CSS Scoping L1 §3.5 (BUG-519): the tree-scoped `@function` lookup chain
 /// for a declaration that came from `sheet`, the stylesheet of the shadow
 /// tree hosted by `owner_host`. Innermost first: `sheet`'s own functions,
@@ -115,7 +115,11 @@ fn shadow_function_chain(doc: &Document, sheet: &Stylesheet, owner_host: NodeId)
 }
 
 fn zoom_length(len: &mut Length, z: f32) {
-    if let Length::Px(v) = len {
+    // Viewport units resolve against the unzoomed viewport, so the factor is
+    // folded into the coefficient (CSS Viewport L1 §5: `1vh` under `zoom: 2`
+    // is twice as tall as outside it). The font-relative units are not listed:
+    // their basis (`font_size`, the font metrics) already carries the zoom.
+    if let Length::Px(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v) = len {
         *v *= z;
     }
 }
