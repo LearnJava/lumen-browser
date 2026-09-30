@@ -166,7 +166,9 @@ TextDecoder.prototype.decode = function(buf, options) {
     // ignoreBOM=true (suppress stripping) on every chunk after the first so a
     // BOM-like byte sequence arriving mid-stream is decoded as plain content.
     var ignoreBOMForThisCall = this._sawInput ? true : this._ignoreBOM;
-    this._sawInput = true;
+    // Only a call that actually decodes bytes consumes the stream start: a chunk
+    // held back entirely as a partial BOM (EF BB / FF) must not count as seen.
+    if (toDecode.length > 0) this._sawInput = true;
 
     var result = _lumen_text_decode(this._encoding, toDecode, ignoreBOMForThisCall, this._fatal);
     if (result === undefined) {
