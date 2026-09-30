@@ -48,3 +48,7 @@ shell tick, after rAF callbacks and before focus fixup) while preserving
 BUG-661's "guaranteed first delivery even with no relayout" property --
 out of scope for a one-line fix, hence filed separately rather than folded
 into BUG-600.
+
+## Срез 1 (P6, 2026-09-30)
+
+Первая доставка `ResizeObserver` больше не забирается таймер-задачей раньше rAF: `_ro_initial_pass` откладывается (до 8 кадров), пока есть ожидающие rAF, а `_lumen_run_raf_callbacks` вызывает `_ro_frame_pass` после пакета rAF и до `_lumen_focus_fixup`. Юнит-тест `resize_observer_first_delivery_follows_raf_in_same_frame`. WPT `focus-fixup-rule-one-no-dialogs.html` не перепрогнан — баг остаётся OPEN до перепроверки.

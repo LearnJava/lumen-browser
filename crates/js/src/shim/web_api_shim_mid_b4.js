@@ -556,10 +556,10 @@ ResizeObserver.prototype.disconnect = function() {
 // _lumen_timers with nesting 0 rather than through setTimeout so the §8.6 4 ms
 // clamp cannot delay it, and _lumen_request_wakeup makes the parked shell loop
 // wake for it immediately.
-function _ro_schedule_initial() {
+function _ro_schedule_initial(delay) {
     if (_ro_initial_scheduled) return;
     _ro_initial_scheduled = true;
-    var deadline = _lumen_now_ms();
+    var deadline = _lumen_now_ms() + (delay || 0);
     _lumen_timers.push({ id: _lumen_timer_seq++, fn: _ro_initial_pass, deadline: deadline, interval: null, nesting: 0 });
     _lumen_request_wakeup(deadline);
 }
@@ -589,9 +589,31 @@ function _lumen_layout_published() {
     }
 }
 
+// BUG-1056: the same pending first delivery, run from the frame instead of the
+// timer task. `_lumen_run_raf_callbacks` calls it right after the rAF batch, so
+// «rAF callbacks, then resize observations, then focus fixup» is the fixed
+// order Resize Observer §3.2 gives; the timer task below only covers pages
+// that have no rAF pending. Returns without delivering while the first layout
+// snapshot is missing (the timer pass owns that wait).
+function _ro_frame_pass() {
+    if (!_ro_has_pending_initial() || !_lumen_layout_published()) return;
+    _lumen_deliver_resize_observers();
+}
+
+// Deferrals of the timer pass in favour of a pending rAF batch (each is one
+// frame length); bounded so a page whose rAF never runs still gets its callback.
+var _ro_raf_deferrals = 0;
+var _RO_MAX_RAF_DEFERRALS = 8;
+
 function _ro_initial_pass() {
     _ro_initial_scheduled = false;
-    if (!_ro_has_pending_initial()) return;
+    if (!_ro_has_pending_initial()) { _ro_raf_deferrals = 0; return; }
+    if (_lumen_raf_callbacks.length !== 0 && _ro_raf_deferrals < _RO_MAX_RAF_DEFERRALS) {
+        _ro_raf_deferrals++;
+        _ro_schedule_initial(_RO_HOLD_MAX_MS);
+        return;
+    }
+    _ro_raf_deferrals = 0;
     if (!_lumen_layout_published() && _ro_initial_attempts < _RO_INITIAL_MAX_ATTEMPTS) {
         _ro_initial_attempts++;
         _ro_schedule_initial();
