@@ -6,6 +6,7 @@
 //! Перенесено батчем SPLIT-ST14 из `crates/engine/layout/src/style.rs`
 //! (анкер `static COMPUTE_STYLE_CALLS`) без правок тел.
 
+use crate::style::calc::{looks_like_function_call, parse_math_function_value};
 use std::collections::HashMap;
 
 use lumen_core::geom::Size;
@@ -74,15 +75,20 @@ fn note_compute_style() {
 /// Returns `None` when the value does not parse, in which case the caller must
 /// leave the previous value alone — an invalid declaration is ignored, per
 /// CSS Syntax, not treated as `1.0`.
-pub(in crate::style) fn parse_zoom(value: &str) -> Option<f32> {
+pub(in crate::style) fn parse_zoom(value: &str, em_basis: f32) -> Option<f32> {
     let v = value.trim();
     if v.eq_ignore_ascii_case("normal") || v.eq_ignore_ascii_case("reset") {
         return Some(1.0);
     }
     let factor = if let Some(pct) = v.strip_suffix('%') {
-        pct.trim().parse::<f32>().ok()? / 100.0
+        match pct.trim().parse::<f32>() {
+            Ok(n) => n / 100.0,
+            Err(_) => parse_zoom_math(v, em_basis)?,
+        }
+    } else if let Ok(n) = v.parse::<f32>() {
+        n
     } else {
-        v.parse::<f32>().ok()?
+        parse_zoom_math(v, em_basis)?
     };
     // A negative or non-finite zoom is invalid; a zero one would collapse the
     // subtree to nothing, which no page means and which would divide by zero
@@ -91,6 +97,19 @@ pub(in crate::style) fn parse_zoom(value: &str) -> Option<f32> {
         return None;
     }
     Some(factor)
+}
+
+/// `zoom: calc(...)` / `sign(...)` etc. (CSS Values L4 §10): the math function
+/// is evaluated with `%` taken against 1 (so `2%` → 0.02) and `em` against the
+/// inherited font size, since `zoom` is resolved before this element's font-size.
+fn parse_zoom_math(v: &str, em_basis: f32) -> Option<f32> {
+    if !looks_like_function_call(v) {
+        return None;
+    }
+    let Length::Calc(node) = parse_math_function_value(v)? else {
+        return None;
+    };
+    node.resolve(em_basis, Some(1.0), Size { width: 0.0, height: 0.0 })
 }
 
 /// Scale one already-computed absolute length by `z`. Only `Px` and the viewport
@@ -999,7 +1018,7 @@ pub(crate) fn compute_style_shareable(
     let mut own_zoom = 1.0f32;
     for (_, _, _, _, _, _, decl, _) in &matched {
         if decl.property.eq_ignore_ascii_case("zoom")
-            && let Some(z) = parse_zoom(&decl.value)
+            && let Some(z) = parse_zoom(&decl.value, inherited.font_size)
         {
             own_zoom = z;
         }

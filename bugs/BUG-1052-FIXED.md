@@ -1,6 +1,6 @@
 # BUG-1052 — `zoom: calc(1 + (sign(...) * 0.5))` — `sign()` math function делает всё значение `zoom` невалидным
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6)
 **Заведён:** 2026-09-13 (BUG-532 срез P3, живой прогон `css/css-viewport/zoom/zoom-with-sign-function.html`)
 **Область:** css-parser (`zoom` grammar / `calc()` `sign()` math function)
 **Владелец:** P3/P4
@@ -28,3 +28,7 @@ FAIL calc(sign(1em - 1px) * 2%) should be used-value-equivalent to 2% - (то ж
 (`parse_zoom` в `cascade.rs`) `calc()`-выражения вообще, или только плоские
 числа/проценты — если только плоские, `sign()` — не специфичный для
 `sign()` пробел, а более общий «`zoom` не принимает `calc()`».
+
+## Исправление
+
+`parse_zoom` принимает math-функции: `parse_zoom_math` считает выражение с `%` от 1 и `em` от унаследованного font-size (zoom вычисляется до font-size элемента). Тест `zoom_accepts_math_functions`.
