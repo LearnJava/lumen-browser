@@ -945,3 +945,37 @@ fn tt_codegen_generator_function_constructor_of_string_throws_when_enforced() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-1087: интерфейсы Trusted Types имеют WebIDL-форму.
+#[test]
+fn tt_interfaces_have_webidl_shape() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var f = trustedTypes; \
+             var ok = []; \
+             ok.push(typeof TrustedTypePolicyFactory === 'function'); \
+             ok.push(Object.prototype.toString.call(f) === '[object TrustedTypePolicyFactory]'); \
+             ok.push(f.constructor === TrustedTypePolicyFactory); \
+             ok.push(!Object.prototype.hasOwnProperty.call(f, 'createPolicy')); \
+             ok.push(TrustedTypePolicyFactory.prototype.createPolicy.length === 1); \
+             ok.push(TrustedTypePolicyFactory.prototype.getAttributeType.length === 2); \
+             ok.push(TrustedHTML.length === 0); \
+             ok.push(!Object.getOwnPropertyDescriptor(TrustedHTML, 'prototype').writable); \
+             ok.push(Object.getOwnPropertyDescriptor(TrustedHTML.prototype, 'toJSON').enumerable); \
+             ok.push(TrustedHTML.prototype.toJSON.name === 'toJSON'); \
+             ok.push(!Object.getOwnPropertyDescriptor(globalThis, 'TrustedHTML').enumerable); \
+             var p = f.createPolicy('n', { createHTML: function(s) { return s; } }); \
+             ok.push(Object.prototype.toString.call(p) === '[object TrustedTypePolicy]'); \
+             ok.push(!Object.prototype.hasOwnProperty.call(p, 'name') && p.name === 'n'); \
+             var t1 = false; try { p.createHTML(); } catch (e) { t1 = e instanceof TypeError; } ok.push(t1); \
+             var t2 = false; try { TrustedHTML.prototype.toString.call(null); } catch (e) { t2 = e instanceof TypeError; } ok.push(t2); \
+             var t3 = false; try { new TrustedHTML(); } catch (e) { t3 = e instanceof TypeError; } ok.push(t3); \
+             ok.join(',')",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true".into())
+    );
+}
