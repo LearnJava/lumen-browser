@@ -13042,7 +13042,9 @@ function _lumen_pop_current_script() {
     if (frame) _lumen_dw_flush(frame);
 }
 
-// A classic script body runs in global scope — indirect eval is exactly that.
+// A classic script body runs as a real Script (BUG-1049: not indirect eval,
+// whose top-level let/const would die with the call instead of joining the
+// global lexical environment shared with modules).
 // An uncaught exception must not escape into the DOM call that inserted the
 // element (the spec reports it to the page instead), hence the catch.
 // `nid` is the `<script>` element being executed; it backs
@@ -13056,7 +13058,7 @@ function _lumen_script_execute_classic(text, nid) {
     // path, …), as opposed to the initial page-load loop in
     // `crates/shell/src/main.rs`, which goes through the Rust-side
     // `V8JsRuntime::eval_and_report` for the same reporting step instead.
-    try { (0, eval)(text); }
+    try { _lumen_run_classic_script(text); }
     catch (e) { _lumen_report_exception(e); }
     finally { _lumen_pop_current_script(); }
 }

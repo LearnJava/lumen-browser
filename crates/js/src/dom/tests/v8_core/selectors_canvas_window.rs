@@ -1506,6 +1506,26 @@ fn bug591_dynamic_script_runtime_exception_fires_window_error() {
     assert_eq!(result, lumen_core::JsValue::String("dyn-boom".to_string()));
 }
 
+/// BUG-1049: a DOM-inserted classic script is a real Script, so its top-level
+/// `const`/`let`/`class` land in the global lexical environment and stay visible
+/// to later code (a module reads them as free variables), not only its `var`s.
+#[test]
+fn bug1049_dynamic_script_lexical_declarations_reach_global() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"var s = document.createElement('script');
+               s.textContent = 'const c1049 = 42; let l1049 = 7; class K1049 {} var v1049 = 1;';
+               document.body.appendChild(s);
+               [typeof c1049, typeof l1049, typeof K1049, typeof v1049].join()"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        lumen_core::JsValue::String("number,number,function,number".to_string())
+    );
+}
+
 /// `V8JsRuntime::eval_and_report` (`v8_runtime.rs`) is the Rust-side
 /// counterpart wired into `crates/shell/src/main.rs`'s initial classic
 /// `<script>` loop; `lineno` here comes from `v8::Message` (1-based), not
