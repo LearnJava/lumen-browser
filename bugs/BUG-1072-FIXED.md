@@ -1,6 +1,6 @@
 # BUG-1072 — `websockets/back-forward-cache-closes-open-websocket-connection.tentative.window.html` вешает весь процесс браузера
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Тип:** зависание процесса — кандидат в механизм `hung-browser`.
 **Заведён:** 2026-09-20 (P6, повторный прогон `run_report.py --all --root websockets --recursive` после GAP-WSASYNC срезов 1-4)
 **Область:** не локализовано — либо bfcache-путь при живом WebSocket-соединении (`crates/shell/src/lumen/bfcache.rs`), либо сам WebSocket на закрытии страницы. Не проверялось напрямую, только через wptrunner.
@@ -59,3 +59,7 @@ RuntimeError: lumen --bidi-port did not print [bidi] token
 `bind` (`os error 10048`). Исправлено в `tools/wptrunner/wptrunner/browsers/lumen.py` (свежий порт на
 каждый запуск) — зависший тест больше не уносит хвост очереди. Сам триггер этого бага (TIMEOUT
 `back-forward-cache-closes-open-websocket-connection` и процесс, не умирающий по kill) этим не снят.
+
+## Закрытие (P6, 2026-09-30)
+
+Срез `websockets` [330:336] (шесть `back-forward-cache-*`) на `dev-release` HEAD `833e53fec`: все 6 — `harness OK`, каждый тест завершается за 1-4 с, браузер выходит по kill, релонча с `did not print [bidi] token` нет. Исходный TIMEOUT-и-зависший-процесс не воспроизводится — хвост снят исправлением BUG-1073 срез 6 (свежий `--bidi-port` на запуск) и работами над WebSocket после 2026-09-20. Подтест теперь `PRECONDITION_FAILED` (BFCache в окне не поддержан) — это отсутствующая функциональность, не зависание. `.ini`-baseline четырёх файлов переписан на `PRECONDITION_FAILED`, двух — удалён (чисто).
