@@ -1419,11 +1419,20 @@ pub(super) fn dispatch_box(
             // в Edge, и TEST-02/04/21/56 (ряды пустых inline-block) уходят в FAIL
             // на 0.68 % при пороге 0.5 %. Измерено A/B, IFC-1. Строки с текстом
             // это не задевает: у прогона своё half-leading, и оно всегда больше.
-            let strut_descent = measurer.map_or(0.0, |m| {
-                m.descent_px_with_families(b.style.font_size, &b.style.font_family)
-            });
-            let strut_ascent = measurer.map_or(0.0, |m| {
-                m.ascent_px_with_families(b.style.font_size, &b.style.font_family)
+            // Blink округляет ascent/descent/lineGap шрифта до целых px и делит
+            // half-leading с floor на верхнюю сторону (FontHeight::AddLeading), так
+            // что нижняя половина получает остаток: descent' = round(d) +
+            // ceil(round(gap) / 2). Без округления реальный descent (Times: 3.46px)
+            // делал ряд картинок на ~0.5px ниже эталона Edge, и TEST-18 уходил на 15 %
+            // (BUG-782, FONTLOAD-10).
+            let (strut_ascent, strut_descent) = measurer.map_or((0.0, 0.0), |m| {
+                let fs = b.style.font_size;
+                let fam = &b.style.font_family;
+                let gap = m.line_gap_px_with_families(fs, fam).round();
+                (
+                    m.ascent_px_with_families(fs, fam).round() + (gap / 2.0).floor(),
+                    m.descent_px_with_families(fs, fam).round() + (gap / 2.0).ceil(),
+                )
             });
             // Half x-height of the row's font: locates `vertical-align: middle`
             // relative to the baseline (CSS 2.1 §10.8.1).

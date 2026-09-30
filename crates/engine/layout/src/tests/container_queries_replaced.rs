@@ -810,9 +810,10 @@ use super::*;
         let sheet = lumen_css_parser::parse("#frame { padding: 3px; }");
         let root = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
         let frame = find_by_tag(&root, "div", &doc).expect("frame div");
-        // Fixed8.descent_px(16) = 16 * 0.2 = 3.2 (default strut descent).
-        // content = img 150 + descent 3.2; border-box = + padding 6 = 159.2.
-        let expected = 150.0 + 16.0 * 0.2 + 6.0;
+        // Strut по Blink (BUG-782): Fixed8 descent 3.2 → round 3, lineGap 3.2 →
+        // round 3, нижняя половина half-leading = ceil(3/2) = 2 → descent' = 5.
+        // content = img 150 + 5; border-box = + padding 6 = 161.
+        let expected = 150.0 + 5.0 + 6.0;
         assert!(
             (frame.rect.height - expected).abs() < 0.01,
             "frame height {} should include the image-bottom descent gap (expected {expected})",
@@ -1815,10 +1816,11 @@ use super::*;
         );
         let div = root_baseline.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let row = div.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
-        // Default vertical-align = baseline → strut 3.2px добавляется. height = 83.2.
+        // Default vertical-align = baseline → strut 5px (округление по Blink,
+        // BUG-782) добавляется. height = 85.
         assert!(
-            (row.rect.height - 83.2).abs() < 0.1,
-            "baseline-ряд: 83.2px (80+strut), got {}",
+            (row.rect.height - 85.0).abs() < 0.1,
+            "baseline-ряд: 85px (80+strut), got {}",
             row.rect.height
         );
         // bottom-aligned row: no strut.
@@ -1864,7 +1866,7 @@ use super::*;
     #[test]
     fn inline_block_rows_no_drift_after_block_sep() {
         // baseline-aligned ряды добавляют strut_descent, bottom-aligned — нет.
-        // Fixed8 strut = 16*0.2 = 3.2. row1(83.2) + sep(40) + row2(83.2) = 206.4.
+        // Fixed8 strut = 5 (округление по Blink, BUG-782). row1(85) + sep(40) + row2(85) = 210.
         let root = lay_measured(
             "<div>\
               <div class=ib></div><div class=ib></div>\
@@ -1876,10 +1878,10 @@ use super::*;
             body_w_or_default(),
         );
         let outer = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        // Default va=baseline → strut: row1(83.2) + sep(40) + row2(83.2) = 206.4.
+        // Default va=baseline → strut: row1(85) + sep(40) + row2(85) = 210.
         assert!(
-            (outer.rect.height - 206.4).abs() < 0.2,
-            "baseline-ряды: 206.4px (2×strut 3.2px), got {}",
+            (outer.rect.height - 210.0).abs() < 0.2,
+            "baseline-ряды: 210px (2×strut 5px), got {}",
             outer.rect.height
         );
         // bottom-aligned ряды: нет strut → row1(80) + sep(40) + row2(80) = 200.
