@@ -1,6 +1,6 @@
 # BUG-1087 — интерфейсы Trusted Types не WebIDL-формы: нет глобала `TrustedTypePolicyFactory`, `window.trustedTypes` — обычный объект
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6) — шим Trusted Types переписан на классы (WebIDL-форма), `window.trustedTypes` — accessor
 **Тип:** дефект реализованного кода — объектная модель Trusted Types собрана из литералов/`function`, а не из интерфейсов с прототипами.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 51, `trusted-types`)
 **Область:** js — `crates/js/src/trusted_types.rs` (`TRUSTED_TYPES_SHIM`: `var factory = { createPolicy: … }`, строка ~106)

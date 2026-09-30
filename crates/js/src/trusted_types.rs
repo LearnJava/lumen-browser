@@ -42,15 +42,41 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // is rejected by isHTML/isScript/isScriptURL.
   var VALUES = new WeakMap();
 
+  // WebIDL shape helpers: IDL operations/attributes are enumerable, `class`
+  // members are not; `toStringTag` is configurable, non-writable.
+  function markEnumerable(proto, names) {
+    names.forEach(function (n) {
+      var desc = Object.getOwnPropertyDescriptor(proto, n);
+      desc.enumerable = true;
+      Object.defineProperty(proto, n, desc);
+    });
+  }
+  function tag(C, name) {
+    Object.defineProperty(C.prototype, Symbol.toStringTag, { value: name, configurable: true });
+  }
+
+  // `constructor(...a)` keeps the interface object's `length` at 0 (no IDL
+  // constructor); only code holding SECRET can mint instances.
   function makeTrustedClass(className) {
-    function T(token, value) {
-      if (token !== SECRET) throw new TypeError('Illegal constructor');
-      VALUES.set(this, String(value));
-    }
-    T.prototype.toString = function () { return VALUES.get(this); };
-    T.prototype.toJSON = function () { return VALUES.get(this); };
-    Object.defineProperty(T, 'name', { value: className, configurable: true });
-    return T;
+    var C = {
+      [className]: class {
+        constructor(...a) {
+          if (a[0] !== SECRET) throw new TypeError('Illegal constructor');
+          VALUES.set(this, String(a[1]));
+        }
+        toString() {
+          if (!VALUES.has(this)) throw new TypeError('Illegal invocation');
+          return VALUES.get(this);
+        }
+        toJSON() {
+          if (!VALUES.has(this)) throw new TypeError('Illegal invocation');
+          return VALUES.get(this);
+        }
+      }
+    }[className];
+    markEnumerable(C.prototype, ['toString', 'toJSON']);
+    tag(C, className);
+    return C;
   }
 
   var TrustedHTML = makeTrustedClass('TrustedHTML');
@@ -60,36 +86,44 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   var POLICY_RULES = new WeakMap();
 
   // TT §3.2: invoke the policy's rule callback; missing rule => TypeError.
-  function runRule(policy, ruleName, Ctor, input, args) {
+  function runRule(policy, ruleName, Ctor, args) {
     var rules = POLICY_RULES.get(policy);
-    if (!rules || typeof rules[ruleName] !== 'function') {
+    if (!rules) throw new TypeError('Illegal invocation');
+    if (args.length < 1) {
+      throw new TypeError("Failed to execute '" + ruleName + "' on 'TrustedTypePolicy': 1 argument required, but only 0 present.");
+    }
+    if (typeof rules[ruleName] !== 'function') {
       throw new TypeError(
-        "Policy " + policy.name + "'s TrustedTypePolicyOptions did not specify a '" +
+        "Policy " + rules.name + "'s TrustedTypePolicyOptions did not specify a '" +
         ruleName + "' member");
     }
-    var result = rules[ruleName].apply(undefined, [String(input)].concat(args));
+    var result = rules[ruleName].apply(undefined, [String(args[0])].concat(Array.prototype.slice.call(args, 1)));
     return new Ctor(SECRET, result);
   }
 
-  function TrustedTypePolicy(token, name, rules) {
-    if (token !== SECRET) throw new TypeError('Illegal constructor');
-    Object.defineProperty(this, 'name', { value: String(name), enumerable: true });
-    // Snapshot the three callbacks (spec: options are read once at creation).
-    POLICY_RULES.set(this, {
-      createHTML: rules && rules.createHTML,
-      createScript: rules && rules.createScript,
-      createScriptURL: rules && rules.createScriptURL
-    });
+  class TrustedTypePolicy {
+    constructor(...a) {
+      if (a[0] !== SECRET) throw new TypeError('Illegal constructor');
+      var rules = a[2];
+      // Snapshot the three callbacks (spec: options are read once at creation).
+      POLICY_RULES.set(this, {
+        name: String(a[1]),
+        createHTML: rules && rules.createHTML,
+        createScript: rules && rules.createScript,
+        createScriptURL: rules && rules.createScriptURL
+      });
+    }
+    get name() {
+      var r = POLICY_RULES.get(this);
+      if (!r) throw new TypeError('Illegal invocation');
+      return r.name;
+    }
+    createHTML(input, ...rest) { return runRule(this, 'createHTML', TrustedHTML, arguments); }
+    createScript(input, ...rest) { return runRule(this, 'createScript', TrustedScript, arguments); }
+    createScriptURL(input, ...rest) { return runRule(this, 'createScriptURL', TrustedScriptURL, arguments); }
   }
-  TrustedTypePolicy.prototype.createHTML = function (input) {
-    return runRule(this, 'createHTML', TrustedHTML, input, Array.prototype.slice.call(arguments, 1));
-  };
-  TrustedTypePolicy.prototype.createScript = function (input) {
-    return runRule(this, 'createScript', TrustedScript, input, Array.prototype.slice.call(arguments, 1));
-  };
-  TrustedTypePolicy.prototype.createScriptURL = function (input) {
-    return runRule(this, 'createScriptURL', TrustedScriptURL, input, Array.prototype.slice.call(arguments, 1));
-  };
+  markEnumerable(TrustedTypePolicy.prototype, ['name', 'createHTML', 'createScript', 'createScriptURL']);
+  tag(TrustedTypePolicy, 'TrustedTypePolicy');
 
   var defaultPolicy = null;
   var EMPTY_HTML = new TrustedHTML(SECRET, '');
@@ -214,8 +248,18 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   };
 
   // TrustedTypePolicyFactory (the window.trustedTypes singleton).
-  var factory = {
-    createPolicy: function (name, rules) {
+  var FACTORIES = new WeakSet();
+  function brandCheck(o) {
+    if (!FACTORIES.has(o)) throw new TypeError('Illegal invocation');
+  }
+  class TrustedTypePolicyFactory {
+    constructor(...a) {
+      if (a[0] !== SECRET) throw new TypeError('Illegal constructor');
+      FACTORIES.add(this);
+    }
+    createPolicy(name, rules = undefined) {
+      brandCheck(this);
+      if (arguments.length < 1) throw new TypeError("Failed to execute 'createPolicy': 1 argument required, but only 0 present.");
       name = String(name);
       // DefaultPolicy guard: "default" is registered once; a second
       // registration throws (TT §4.3). Duplicate non-default names are
@@ -226,21 +270,23 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
         return defaultPolicy;
       }
       return new TrustedTypePolicy(SECRET, name, rules);
-    },
-    get defaultPolicy() { return defaultPolicy; },
+    }
+    get defaultPolicy() { brandCheck(this); return defaultPolicy; }
     // Brand checks: instanceof alone is forgeable via Object.create.
-    isHTML: function (v) { return v instanceof TrustedHTML && VALUES.has(v); },
-    isScript: function (v) { return v instanceof TrustedScript && VALUES.has(v); },
-    isScriptURL: function (v) { return v instanceof TrustedScriptURL && VALUES.has(v); },
-    get emptyHTML() { return EMPTY_HTML; },
-    get emptyScript() { return EMPTY_SCRIPT; },
+    isHTML(v) { brandCheck(this); return v instanceof TrustedHTML && VALUES.has(v); }
+    isScript(v) { brandCheck(this); return v instanceof TrustedScript && VALUES.has(v); }
+    isScriptURL(v) { brandCheck(this); return v instanceof TrustedScriptURL && VALUES.has(v); }
+    get emptyHTML() { brandCheck(this); return EMPTY_HTML; }
+    get emptyScript() { brandCheck(this); return EMPTY_SCRIPT; }
     // TT §4.4 sink tables (minimal Phase 0 subset).
     // TT §4.4 sink tables (spec algorithm: "Get Trusted Type data for
     // attribute" — takes elementNs/attrNs; default undefined ns normalizes to
     // null/HTML for the common call sites that omit them, matching every WPT
     // fixture that calls `getAttributeType(tag, attr)` with no namespace and
     // expects the plain-HTML table).
-    getAttributeType: function (tagName, attribute, elementNs, attrNs) {
+    getAttributeType(tagName, attribute, elementNs = null, attrNs = null) {
+      brandCheck(this);
+      if (arguments.length < 2) throw new TypeError("Failed to execute 'getAttributeType': 2 arguments required.");
       tagName = String(tagName).toLowerCase();
       attribute = String(attribute).toLowerCase();
       // Normalize: undefined/null/'' element namespace means "no namespace"
@@ -277,8 +323,10 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
         return 'TrustedScriptURL';
       }
       return null;
-    },
-    getPropertyType: function (tagName, property) {
+    }
+    getPropertyType(tagName, property, elementNs = null) {
+      brandCheck(this);
+      if (arguments.length < 2) throw new TypeError("Failed to execute 'getPropertyType': 2 arguments required.");
       tagName = String(tagName).toLowerCase();
       property = String(property);
       if (property === 'innerHTML' || property === 'outerHTML') return 'TrustedHTML';
@@ -290,19 +338,22 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
       }
       return null;
     }
-  };
-
-  globalThis.TrustedHTML = TrustedHTML;
-  globalThis.TrustedScript = TrustedScript;
-  globalThis.TrustedScriptURL = TrustedScriptURL;
-  globalThis.TrustedTypePolicy = TrustedTypePolicy;
-  globalThis.trustedTypes = factory;
-  if (typeof window !== 'undefined') {
-    window.TrustedHTML = TrustedHTML;
-    window.TrustedScript = TrustedScript;
-    window.TrustedScriptURL = TrustedScriptURL;
-    window.TrustedTypePolicy = TrustedTypePolicy;
-    window.trustedTypes = factory;
   }
+  markEnumerable(TrustedTypePolicyFactory.prototype, ['createPolicy', 'isHTML', 'isScript', 'isScriptURL', 'emptyHTML', 'emptyScript', 'getAttributeType', 'getPropertyType', 'defaultPolicy']);
+  tag(TrustedTypePolicyFactory, 'TrustedTypePolicyFactory');
+  var factory = new TrustedTypePolicyFactory(SECRET);
+
+  var ifaces = { TrustedHTML: TrustedHTML, TrustedScript: TrustedScript,
+    TrustedScriptURL: TrustedScriptURL, TrustedTypePolicy: TrustedTypePolicy,
+    TrustedTypePolicyFactory: TrustedTypePolicyFactory };
+  [globalThis].concat(typeof window !== 'undefined' && window !== globalThis ? [window] : []).forEach(function (g) {
+    Object.keys(ifaces).forEach(function (k) {
+      Object.defineProperty(g, k, { value: ifaces[k], writable: true, configurable: true, enumerable: false });
+    });
+    // readonly attribute on the global object (WebIDL [Global]).
+    Object.defineProperty(g, 'trustedTypes', {
+      get: function trustedTypes() { return factory; }, set: undefined, configurable: true, enumerable: true
+    });
+  });
 })();
 "#;
