@@ -1243,6 +1243,12 @@ fn automation_bare_path_is_not_percent_decoded() {
 /// Run one page through the whole [`parse_and_layout`] pipeline with defaults.
 #[cfg(feature = "v8")]
 fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
+    parse_and_layout_with_referrer(html, None)
+}
+
+/// [`parse_and_layout_for_test`] for a document fetched with `Referer: referrer`.
+#[cfg(feature = "v8")]
+fn parse_and_layout_with_referrer(html: &str, referrer: Option<&str>) -> crate::page_pipeline::ParsedPage {
     parse_and_layout(
         html.as_bytes(),
         Some("text/html"),
@@ -1266,6 +1272,7 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
         None,
         None,
         None,
+        referrer,
         None,
     )
     .expect("pipeline must not fail on a well-formed page")
@@ -1888,4 +1895,16 @@ fn departure_candidate_false_when_cross_origin() {
     let opted_in = lumen_css_parser::parse("@view-transition { navigation: auto; }");
 
     assert!(!mpa_view_transition_departure_candidate(&from, &opted_in, &to));
+}
+
+/// BUG-1156: `document.referrer` of a document fetched with a `Referer`
+/// carries that value; without one it stays `''`.
+#[cfg(feature = "v8")]
+#[test]
+fn bug1156_document_referrer_is_seeded_from_navigation_referer() {
+    let html = "<html><body><script>document.documentElement.setAttribute('data-r', document.referrer);</script></body></html>";
+    let with = parse_and_layout_with_referrer(html, Some("http://127.0.0.1:8767/a"));
+    assert_eq!(probe_attr(&with, "data-r"), "http://127.0.0.1:8767/a");
+    let without = parse_and_layout_for_test(html);
+    assert_eq!(probe_attr(&without, "data-r"), "");
 }

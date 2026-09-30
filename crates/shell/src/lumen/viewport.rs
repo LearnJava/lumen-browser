@@ -29,6 +29,32 @@ impl Lumen {
             .unwrap_or("")
     }
 
+    /// BUG-1156: the `Referer` a page-initiated top-level navigation to
+    /// `target` carries — the current document's URL filtered by its referrer
+    /// policy (header + `<meta name=referrer>`), overridden by the initiating
+    /// element's `referrerpolicy` attribute; `rel=noreferrer` suppresses it
+    /// (HTML LS §4.6.7.2). `None` when no `Referer` goes out.
+    pub(crate) fn initiator_referrer(
+        &self,
+        target: &str,
+        element_policy: Option<&str>,
+        rel: &str,
+    ) -> Option<String> {
+        if rel.split_ascii_whitespace().any(|t| t.eq_ignore_ascii_case("noreferrer")) {
+            return None;
+        }
+        let mut policy = match self.layout_source.as_ref() {
+            Some(ls) => crate::resource_base::document_referrer_policy(&*ls.document.lock().ok()?),
+            None => lumen_network::ReferrerPolicy::default_policy(),
+        };
+        if let Some(p) = element_policy.and_then(lumen_network::ReferrerPolicy::parse) {
+            policy = p;
+        }
+        let from = lumen_core::url::Url::parse(self.current_display_url()).ok()?;
+        let to = lumen_core::url::Url::parse(target).ok()?;
+        lumen_network::referrer_policy::compute_referrer(policy, &from, &to)
+    }
+
     /// Returns the detected target `ColorSpace` for the active display.
     ///
     /// Used by the paint layer to decide wide-gamut output (Step 4) and

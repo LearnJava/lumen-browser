@@ -3264,6 +3264,11 @@ pub struct HttpClient {
     /// scoped to a document (WebSocket dialers, most tests, worker fetch) —
     /// the hint fetch then falls back to a plain uncached GET.
     subresource_cache: Option<Arc<dyn lumen_core::ext::SubresourceCache>>,
+    /// BUG-1156: the final `Referer` value of a top-level navigation, already
+    /// computed by the shell from the initiator document's URL and referrer
+    /// policy. Sent only by [`Self::fetch_page`]/[`Self::fetch_page_streaming`];
+    /// `None` = user-initiated navigation (no `Referer`).
+    navigation_referrer: Option<String>,
 }
 
 impl HttpClient {
@@ -3303,6 +3308,7 @@ impl HttpClient {
             element_src_policy: None,
             sync_xhr_policy: (None, None),
             document_context: None,
+            navigation_referrer: None,
             subresource_cache: None,
         }
     }
@@ -3317,6 +3323,28 @@ impl HttpClient {
     pub fn with_document_context(mut self, referrer_url: Url, policy: ReferrerPolicy) -> Self {
         self.document_context = Some((referrer_url, policy));
         self
+    }
+
+    /// BUG-1156: attach the `Referer` a top-level navigation carries (the
+    /// value is final — policy already applied by the caller).
+    #[must_use]
+    pub fn with_navigation_referrer(mut self, referrer: Option<String>) -> Self {
+        self.navigation_referrer = referrer;
+        self
+    }
+
+    /// `Upgrade-Insecure-Requests` + `Referer` lines of a top-level navigation.
+    fn navigation_extra_headers(&self, send_uir_header: bool) -> String {
+        let mut h = String::new();
+        if send_uir_header {
+            h.push_str("Upgrade-Insecure-Requests: 1\r\n");
+        }
+        if let Some(r) = self.navigation_referrer.as_deref()
+            && !r.contains(['\r', '\n'])
+        {
+            h.push_str(&format!("Referer: {r}\r\n"));
+        }
+        h
     }
 
     /// ASCII host of the [`Self::with_document_context`] document — the page
@@ -4457,7 +4485,7 @@ impl HttpClient {
     /// rewrite (that already happened before `url` reached this call, via
     /// `csp_enforce::upgrade_navigation_url` in the shell).
     pub fn fetch_page(&self, url: &Url, body: Option<&NavigationBody>, send_uir_header: bool) -> Result<PageResponse> {
-        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
+        let uir_header = self.navigation_extra_headers(send_uir_header);
         let req_body = body.map(|b| RequestBody {
             method: &b.method,
             content_type: &b.content_type,
@@ -4538,7 +4566,7 @@ impl HttpClient {
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-            self.mixed_content.as_ref(), destination, None, uir_header,
+            self.mixed_content.as_ref(), destination, None, &uir_header,
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -4579,7 +4607,7 @@ impl HttpClient {
         body: Option<&NavigationBody>,
         send_uir_header: bool,
     ) -> Result<PageResponse> {
-        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
+        let uir_header = self.navigation_extra_headers(send_uir_header);
         let req_body = body.map(|b| RequestBody {
             method: &b.method,
             content_type: &b.content_type,
@@ -4665,7 +4693,7 @@ impl HttpClient {
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-            self.mixed_content.as_ref(), destination, None, uir_header,
+            self.mixed_content.as_ref(), destination, None, &uir_header,
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -8386,6 +8414,27 @@ mod tests {
         assert_eq!(page.status, 403);
         assert_eq!(page.body, b"<html>forbidden</html>");
         server.join().unwrap();
+    }
+
+    /// BUG-1156: a top-level navigation sends the `Referer` the shell computed
+    /// (`with_navigation_referrer`) on `fetch_page` and `fetch_page_streaming`,
+    /// and none without it (user-initiated navigation).
+    #[test]
+    fn fetch_page_sends_navigation_referrer_only_when_attached() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(2, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "ok")
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/b?x=1")).unwrap();
+        HttpClient::new()
+            .with_navigation_referrer(Some("http://127.0.0.1:8767/a".to_owned()))
+            .fetch_page(&url, None, false)
+            .expect("fetch_page");
+        HttpClient::new().fetch_page(&url, None, false).expect("fetch_page");
+        server.join().unwrap();
+        let reqs = captured.lock().unwrap().clone();
+        assert!(reqs[0].contains("Referer: http://127.0.0.1:8767/a\r\n"), "{}", reqs[0]);
+        assert!(!reqs[1].to_ascii_lowercase().contains("referer:"), "{}", reqs[1]);
     }
 
     /// BUG-1114 — same contract for `fetch()`: Fetch §4.1 says an HTTP error

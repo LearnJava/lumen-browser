@@ -374,6 +374,9 @@ pub struct V8JsRuntime {
     /// in via [`Self::with_cookie_jar`]. `None` (tests, headless, opaque-origin
     /// frames) leaves `document.cookie` reading `""` and ignoring writes.
     pub(super) cookie_jar: Option<Arc<dyn lumen_core::ext::CookieProvider>>,
+    /// BUG-1156: the referrer of the request that fetched this document —
+    /// backing store of `document.referrer`. `None` = no referrer (`''`).
+    pub(super) document_referrer: Option<String>,
     /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     pub(super) broadcast_channels: crate::broadcast_channel::BroadcastRegistry,
@@ -536,6 +539,7 @@ impl V8JsRuntime {
             image_load_hook: None,
             ss_store: None,
             cookie_jar: None,
+            document_referrer: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -778,6 +782,13 @@ impl V8JsRuntime {
     /// (mirrors [`Self::with_sw_worker_store`]).
     pub fn with_cookie_jar(mut self, jar: Arc<dyn lumen_core::ext::CookieProvider>) -> Self {
         self.cookie_jar = Some(jar);
+        self
+    }
+
+    /// BUG-1156: seed `document.referrer` (HTML LS §3.1.2 "the document's
+    /// referrer"). Must be called before `install_dom` to take effect.
+    pub fn with_document_referrer(mut self, referrer: Option<String>) -> Self {
+        self.document_referrer = referrer;
         self
     }
 

@@ -97,11 +97,13 @@ pub(crate) fn render_bytes(
     // onto the parsed document next to `csp_header` — see
     // `page_source::referrer_policy_header`.
     referrer_policy_header: Option<&str>,
+    // BUG-1156: `Referer` the navigation sent → `document.referrer`.
+    document_referrer: Option<&str>,
     // BUG-1118: see `parse_and_layout`'s doc comment on the same parameter —
     // forwarded straight through.
     dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, dynamic_image_hook_ctx)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, document_referrer, dynamic_image_hook_ctx)?;
     let display_list = crate::display_list_metrics::paint_ordered_in(&parsed.layout, viewport);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -943,6 +945,8 @@ pub(crate) fn parse_and_layout(
     // GAP-REFERRER срез 3: see `render_bytes`'s doc comment on this same
     // parameter — stamped onto the document right next to `csp_header`.
     referrer_policy_header: Option<&str>,
+    // BUG-1156: `Referer` the navigation sent → `document.referrer`.
+    document_referrer: Option<&str>,
     // BUG-1118: bundles this navigation's `Lumen::load_generation`, its
     // shared `Lumen::stream_images_requested` dedup set and `Lumen::load_proxy`
     // — everything the immediate `<img src>` fetch hook built below
@@ -998,6 +1002,7 @@ pub(crate) fn parse_and_layout(
     // by `resource_base::document_referrer_policy` at each point that needs
     // the resolved policy.
     doc.set_referrer_policy_header(referrer_policy_header.map(str::to_owned));
+    doc.set_document_referrer(document_referrer.map(str::to_owned));
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.

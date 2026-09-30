@@ -172,6 +172,7 @@ impl V8JsRuntime {
         // BUG-1119: the tab's jar, attached via `with_cookie_jar`; `None` keeps
         // `document.cookie` empty (tests, headless, opaque-origin frames).
         let cookie_jar = self.cookie_jar.clone();
+        let document_referrer = self.document_referrer.clone().unwrap_or_default();
         let deterministic_seed = if self
             .deterministic
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -664,6 +665,14 @@ impl V8JsRuntime {
                     .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_ORIGIN'".into()))?;
                 let val = v8::String::new(scope, &realm_origin)
                     .ok_or_else(|| JsError::Runtime("OOM: realm_origin value".into()))?;
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
+            }
+            // BUG-1156: `document.referrer`'s seed (`_lumen_document_referrer`).
+            {
+                let key = v8::String::new(scope, "_LUMEN_DOCUMENT_REFERRER")
+                    .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_DOCUMENT_REFERRER'".into()))?;
+                let val = v8::String::new(scope, &document_referrer)
+                    .ok_or_else(|| JsError::Runtime("OOM: document_referrer value".into()))?;
                 crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
             }
             {

@@ -30,6 +30,7 @@ fn post_source_behaves_like_a_url_source() {
             b"user=admin".to_vec(),
         ))),
         upgrade_insecure_requests: false,
+        referrer: None,
     };
     assert_eq!(src.url_str(), Some("https://example.com/login"));
     assert_eq!(src.describe(), "https://example.com/login");
@@ -58,6 +59,7 @@ fn forget_nav_body_keeps_url_and_drops_body() {
             b"user=admin".to_vec(),
         ))),
         upgrade_insecure_requests: false,
+        referrer: None,
     };
     src.forget_nav_body();
     assert!(src.nav_body().is_none(), "тело пережило загрузку — F5 ре-постнёт форму");
@@ -80,6 +82,7 @@ fn session_snapshot_of_post_source_is_url_only() {
             b"pass=secret".to_vec(),
         ))),
         upgrade_insecure_requests: false,
+        referrer: None,
     };
     assert_eq!(
         session_persist::source_url_string(&src),

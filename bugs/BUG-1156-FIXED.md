@@ -1,6 +1,6 @@
 # BUG-1156 — навигация по ссылке не несёт `Referer`, `document.referrer` новой страницы всегда `''`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-25 (P6, при закрытии [BUG-1121](BUG-1121-FIXED.md))
 **Область:** network/shell — `crates/network/src/lib.rs:4326` `HttpClient::fetch_page` не читает
 `document_context` (его читают только `fetch()`/XHR и подресурсы, GAP-REFERRER);
@@ -38,3 +38,17 @@ GAP-REFERRER закрыл `Referer` для `fetch()`/XHR/`sendBeacon` и все�
 Критерий: проба выше даёт в Lumen то же, что в Chrome; переход на чужой источник отдаёт только
 источник (`http://127.0.0.1:8767/`); `rel=noreferrer` и `referrerpolicy=no-referrer` на `<a>`
 дают `''` и запрос без заголовка.
+
+## Исправление (P3, 2026-10-01)
+
+`Lumen::initiator_referrer` (`crates/shell/src/lumen/viewport.rs`) считает `Referer` по URL текущего
+документа и его политике (`Referrer-Policy`, `<meta name=referrer>`, `referrerpolicy` ссылки;
+`rel=noreferrer` — без заголовка). Значение едет в `PageSource::Url { referrer }` → `HttpClient::
+with_navigation_referrer` (`fetch_page`/`fetch_page_streaming`) → `RawPage::document_referrer` →
+`Document::document_referrer` → `_LUMEN_DOCUMENT_REFERRER` → `document.referrer`. Подключено для
+клика по ссылке, `location.*` и отправки формы; адресная строка, история и автоматизация — без
+реферера. Тесты: `fetch_page_sends_navigation_referrer_only_when_attached` (network),
+`bug1156_document_referrer_is_seeded_from_navigation_referer` (shell). Живая проба на сервере
+`127.0.0.1` не прогонялась.
+
+Остаток — `document.referrer` у `<iframe>` (фасад в `frame_bridge.rs`) — [BUG-1231](BUG-1231-OPEN.md).

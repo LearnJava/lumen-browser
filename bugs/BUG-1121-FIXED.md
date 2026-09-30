@@ -51,7 +51,7 @@ HTML LS §3.1.2 «The document's referrer»: геттер возвращает U
 - Документ из `createHTMLDocument`/`createDocument` (`_lumen_build_detached_document`) и фасад
   документа `<iframe>` (`crates/js/src/frame_bridge.rs`) — тоже `''`, а не `undefined`.
 - Значение сейчас всегда `''`: навигация верхнего уровня `Referer` не шлёт — это не пробел шима,
-  а отдельный дефект сети/шелла, [BUG-1156](BUG-1156-OPEN.md). Переменная засевается в одном
+  а отдельный дефект сети/шелла, [BUG-1156](BUG-1156-FIXED.md). Переменная засевается в одном
   месте, когда он будет исправлен.
 
 Тесты: `crates/js/src/dom/tests/v8_bug1121_document_referrer.rs` (присутствие, тип, `.search`/
