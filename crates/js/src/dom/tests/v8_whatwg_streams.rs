@@ -1509,6 +1509,20 @@ fn text_encoder_stream_encodes_string() {
 }
 
 #[test]
+fn text_encoder_lone_surrogate_becomes_fffd_and_stream_joins_pair() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "Array.from(new TextEncoder().encode('\\ud800')).join() === '239,191,189'          && Array.from(new TextEncoder().encode('\\ud800a')).join() === '239,191,189,97'"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    rt.eval(
+        "var out = [];          var tes = new TextEncoderStream();          var w = tes.writable.getWriter(); var rd = tes.readable.getReader();          w.write('\\ud83d'); w.write('\\udca9'); w.write('a'); w.close();          (function pump() { rd.read().then(function(r) { if (!r.done) { out.push(Array.from(r.value).join()); pump(); } }); })();"
+    ).unwrap();
+    let r = rt.eval("out.join('|') === '240,159,146,169|97'").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn byte_length_queuing_strategy() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(

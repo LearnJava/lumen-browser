@@ -1188,9 +1188,18 @@ TextDecoderStream.prototype.constructor = TextDecoderStream;
 function TextEncoderStream() {
     _stream_require_new(new.target, 'TextEncoderStream');
     var enc = new TextEncoder();
+    // Encoding §5.2: a trailing high surrogate waits for the next chunk.
+    var pending = '';
     _ts_setup(this, {
         transform: function(chunk, c) {
-            c.enqueue(enc.encode(String(chunk)));
+            var s = pending + String(chunk);
+            pending = '';
+            var last = s.length ? s.charCodeAt(s.length - 1) : 0;
+            if ((last & 0xFC00) === 0xD800) { pending = s.charAt(s.length - 1); s = s.slice(0, -1); }
+            if (s.length > 0) c.enqueue(enc.encode(s));
+        },
+        flush: function(c) {
+            if (pending) c.enqueue(enc.encode('�'));
         }
     });
     this.encoding = 'utf-8';

@@ -1,6 +1,6 @@
 # BUG-1082 — `TextEncoder`/`TextEncoderStream` кодируют одиночный суррогат в WTF-8 (`ED A0 80`), а не в U+FFFD (`EF BF BD`); `TextEncoderStream` не переносит старший суррогат между чанками
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6) — `encode`/`encodeInto` заменяют одиночный суррогат на U+FFFD, `TextEncoderStream` переносит старший суррогат между чанками (`text_encoding_shim.js`, `streams_shim.js`)
 **Тип:** дефект — нарушение алгоритма «convert code units to scalar values» (Encoding Standard, `TextEncoder.encode`, `TextEncoderStream`).
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 50, `encoding`)
 **Область:** js — шим `TextEncoder`/`TextEncoderStream` (`crates/js/src/shim/web_api_shim_*.js`, где именно — не искалось)
