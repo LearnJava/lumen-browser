@@ -1,6 +1,6 @@
 # BUG-1039: `graphic_tests/run.py::_load_previous()` сравнивает прогон сам с собой
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6: фильтр исключает baselines.json, `graphic_tests/test_load_previous.py`)
 **Найден:** P1, LAYOUT-2 паинт срез 10 (fill_buckets трамплин), 2026-09-08
 
 ## Симптом
