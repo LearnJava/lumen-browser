@@ -232,7 +232,7 @@ sub.html` — детали в `docs/tasks/p2-test-track.md#test-3-срез-63-20
 вместо `in table body` и вкладывает каждую строку в ячейку предыдущей — DOM-цепочка
 глубиной ~131 000, `Maximum call stack size exceeded` и
 `thread 'lumen-pipeline' has overflowed its stack` → abort. Заведён
-[BUG-1155](BUG-1155-OPEN.md). Воспроизведение живым прогоном 2026-09-25
+[BUG-1155](BUG-1155-FIXED.md). Воспроизведение живым прогоном 2026-09-25
 (`run_report.py --all --root html/semantics/tabular-data --recursive --processes 6`,
 четыре прогона до фикса): в двух из четырёх вместе с `span-limits.html` упал сосед —
 `caption-methods.html` (прогон 1) и после первой половины фикса `sectionRowIndex.html`/

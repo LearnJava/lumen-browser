@@ -431,8 +431,27 @@ impl IncrementalTreeBuilder {
         let doc_root = builder.doc.root();
         builder.doc.append_child(doc_root, html);
         builder.open_elements.push(html);
-        builder.insertion_mode = InsertionMode::InBody;
+        builder.insertion_mode = builder.fragment_context_mode();
         (builder, html)
+    }
+
+    /// §13.4 шаг 6 / §13.2.4.1 шаг 4: insertion mode, который «reset the
+    /// insertion mode appropriately» выбирает по контекстному элементу
+    /// фрагмента (BUG-1155). Только табличные HTML-контексты — остальные
+    /// (`select`, `template`, `html`, `frameset`) остаются `in body`, как и
+    /// раньше; без контекста — тоже `in body`.
+    fn fragment_context_mode(&self) -> InsertionMode {
+        match &self.fragment_context {
+            Some(ctx) if ctx.namespace == Namespace::Html => match ctx.local.as_str() {
+                "tr" => InsertionMode::InRow,
+                "tbody" | "thead" | "tfoot" => InsertionMode::InTableBody,
+                "caption" => InsertionMode::InCaption,
+                "colgroup" => InsertionMode::InColumnGroup,
+                "table" => InsertionMode::InTable,
+                _ => InsertionMode::InBody,
+            },
+            _ => InsertionMode::InBody,
+        }
     }
 
     /// Скармливает chunk push-токенизатору и применяет полученные
@@ -3240,7 +3259,7 @@ impl IncrementalTreeBuilder {
             // and the EOF walk would then materialise a `<head>`/`<body>` pair
             // inside the fragment (visible on `'<table>…</table>'`).
             if last && self.is_fragment {
-                self.insertion_mode = InsertionMode::InBody;
+                self.insertion_mode = self.fragment_context_mode();
                 return;
             }
             let local = self.element_local(node);
