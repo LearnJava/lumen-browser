@@ -1243,6 +1243,75 @@ fn connect_h1(
     connect_inner(host, port, is_tls, resolver, tls_profile, socks5, read_timeout, true)
 }
 
+/// RFC 8305 "Connection Attempt Delay": how long to wait for an attempt
+/// before racing the next address.
+const HAPPY_EYEBALLS_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// BUG-1149: Happy Eyeballs (RFC 8305) TCP connect. Addresses are interleaved
+/// by family (first address's family first); the next attempt starts when the
+/// previous one fails or after `delay`, without cancelling it. The first
+/// established connection wins; losing attempts finish in their own threads
+/// and drop their socket. A single address connects inline.
+fn connect_happy_eyeballs(
+    addrs: &[std::net::SocketAddr],
+    timeout: std::time::Duration,
+    delay: std::time::Duration,
+) -> std::result::Result<TcpStream, String> {
+    match addrs {
+        [] => return Err("no addresses".to_owned()),
+        [a] => return TcpStream::connect_timeout(a, timeout).map_err(|e| format!("{a}: {e}")),
+        _ => {}
+    }
+    let first_v6 = addrs[0].is_ipv6();
+    let (same, other): (Vec<_>, Vec<_>) = addrs.iter().copied().partition(|a| a.is_ipv6() == first_v6);
+    let mut ordered = Vec::with_capacity(addrs.len());
+    let (mut si, mut oi) = (same.into_iter(), other.into_iter());
+    loop {
+        match (si.next(), oi.next()) {
+            (None, None) => break,
+            (a, b) => ordered.extend(a.into_iter().chain(b)),
+        }
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut pending = 0usize;
+    let mut next = 0usize;
+    let mut last_err = String::new();
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if next < ordered.len() {
+            let addr = ordered[next];
+            next += 1;
+            pending += 1;
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let r = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("{addr}: {e}"));
+                let _ = tx.send(r);
+            });
+        }
+        if pending == 0 {
+            return Err(last_err);
+        }
+        let wait = if next < ordered.len() {
+            delay
+        } else {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        };
+        match rx.recv_timeout(wait) {
+            Ok(Ok(s)) => return Ok(s),
+            Ok(Err(e)) => {
+                pending -= 1;
+                last_err = e;
+            }
+            Err(_) => {
+                if next >= ordered.len() {
+                    return Err(if last_err.is_empty() { "timed out".to_owned() } else { last_err });
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn connect_inner(
     host: &str,
@@ -1266,24 +1335,8 @@ fn connect_inner(
                 s5.host, s5.port
             )));
         }
-        let mut last_err: Option<Error> = None;
-        let mut tcp_opt: Option<TcpStream> = None;
-        for addr in &proxy_addrs {
-            match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
-                Ok(s) => {
-                    tcp_opt = Some(s);
-                    break;
-                }
-                Err(e) => {
-                    last_err = Some(Error::Network(format!("connect SOCKS5 proxy {addr}: {e}")));
-                }
-            }
-        }
-        let proxy_tcp = tcp_opt.ok_or_else(|| {
-            last_err.unwrap_or_else(|| {
-                Error::Network(format!("connect SOCKS5 proxy {}:{}: no addresses", s5.host, s5.port))
-            })
-        })?;
+        let proxy_tcp = connect_happy_eyeballs(&proxy_addrs, CONNECT_TIMEOUT, HAPPY_EYEBALLS_DELAY)
+            .map_err(|e| Error::Network(format!("connect SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
         // BUG-935 (S10): `socks5_connect` below does several `read_exact`
         // calls with no read timeout on the socket at all — a proxy that
         // accepts the TCP connect (passes `CONNECT_TIMEOUT`) but stalls
@@ -1311,23 +1364,8 @@ fn connect_inner(
                 "resolve {host}:{port}: no addresses"
             )));
         }
-        let mut last_err: Option<Error> = None;
-        let mut tcp_opt: Option<TcpStream> = None;
-        for addr in &addrs {
-            match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
-                Ok(s) => {
-                    tcp_opt = Some(s);
-                    break;
-                }
-                Err(e) => {
-                    last_err = Some(Error::Network(format!("connect {addr}: {e}")));
-                }
-            }
-        }
-        tcp_opt.ok_or_else(|| {
-            last_err
-                .unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
-        })?
+        connect_happy_eyeballs(&addrs, CONNECT_TIMEOUT, HAPPY_EYEBALLS_DELAY)
+            .map_err(|e| Error::Network(format!("connect {host}:{port}: {e}")))?
     };
 
     // BUG-307: without this, a server that accepts the TCP/TLS connection and
@@ -6370,6 +6408,35 @@ impl FetchInterceptor for InMemoryFetchInterceptor {
 mod tests {
     use super::*;
     use lumen_core::ext::{HttpAuthChallenge, HttpCredentials};
+
+    /// BUG-1149: a refused first address must not delay the second by the OS
+    /// SYN-retry time; the second address wins immediately.
+    #[test]
+    fn happy_eyeballs_falls_through_to_working_address() {
+        let good = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let bad = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let bad_addr = bad.local_addr().unwrap();
+        drop(bad); // closed port → refused
+        let addrs = [bad_addr, good.local_addr().unwrap()];
+        let t = std::time::Instant::now();
+        let s = connect_happy_eyeballs(
+            &addrs,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(50),
+        )
+        .expect("second address must connect");
+        assert_eq!(s.peer_addr().unwrap(), good.local_addr().unwrap());
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn happy_eyeballs_all_refused_is_error() {
+        let bad = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = bad.local_addr().unwrap();
+        drop(bad);
+        assert!(connect_happy_eyeballs(&[a, a], std::time::Duration::from_secs(5), std::time::Duration::from_millis(50)).is_err());
+        assert!(connect_happy_eyeballs(&[], std::time::Duration::from_secs(1), std::time::Duration::from_millis(50)).is_err());
+    }
 
     // ── JsSseSessionImpl (HTML Living Standard §9.2) ─────────────────────────
 

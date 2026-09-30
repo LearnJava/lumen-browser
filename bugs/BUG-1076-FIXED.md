@@ -68,7 +68,7 @@
 - `modules/dedicated-worker-import.any.worker.html` по-прежнему TIMEOUT (0/9), но уже не из-за
   `Worker`: модульный ребёнок во вложенном воркере работает (юнит-проба со статическим `import` и
   `self instanceof DedicatedWorkerGlobalScope` проходит), а время съедает
-  [BUG-1149](BUG-1149-OPEN.md) — каждая загрузка с `localhost` стоит ~2 с, а у этого id их пять подряд
+  [BUG-1149](BUG-1149-FIXED.md) — каждая загрузка с `localhost` стоит ~2 с, а у этого id их пять подряд
   до первого `postMessage`. Оконный вариант того же файла — TIMEOUT 1/9 по той же причине. То же у
   `dedicated-worker-import-data-url.any.worker.html`: на main он падал мгновенно (OK, 0/9 FAIL), теперь
   доходит до загрузок и упирается в таймаут. Доказательство — `run_report.py --root workers/modules
