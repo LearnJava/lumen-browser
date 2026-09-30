@@ -1452,7 +1452,7 @@ baseline (по ~7 мин): **0 регрессий, 0 unexpected pass, 0 друг
   `expected: ERROR`) затронуто 1992 из 2024 `.ini` во всём `tests/wpt/metadata/` — **не проверено по
   каждому файлу**; сверено только в этой категории.
 - **`TIMEOUT`/`NOTRUN` на подтестах `www*.localhost`:** поддомены не резолвятся на Windows
-  (`os error 11001`, `ping www.localhost` тоже не находит) — [BUG-1070](../../bugs/BUG-1070-OPEN.md);
+  (`os error 11001`, `ping www.localhost` тоже не находит) — [BUG-1070](../../bugs/BUG-1070-FIXED.md);
   `SystemDnsResolver` целиком `getaddrinfo`. Здесь же вероятная причина плавания среза 30 (фоновый
   DNS-шум), но она **не доказана**: в срезе 39 плавали другие подтесты.
 - Заголовок `Connection-Allowlist` в движке не реализован (скоуп категории 🚫) — отдельный баг не заводился.
@@ -1490,7 +1490,7 @@ OPEN (корневая причина плавания среза 30 не лок
   сходится (18 загрузок `.sxg` + 4 из `service-workers/` + 6 `.https.`-страниц по две строки = 46 строк
   TLS), но соответствие «файл → строка лога» проверено не по каждому файлу.
 - **29 `TIMEOUT` + 1 плавающий — все файлы `reporting/`:** в логе 29 строк
-  `resolve not-web-platform.test:18443 … (os error 11001)`. Это НЕ [BUG-1070](../../bugs/BUG-1070-OPEN.md)
+  `resolve not-web-platform.test:18443 … (os error 11001)`. Это НЕ [BUG-1070](../../bugs/BUG-1070-FIXED.md)
   (`*.localhost`), а альтернативный домен WPT, который резолвится только записью в hosts-файле
   (`tests/wpt/host_audit.py`, комментарий `browsers/lumen.py::env_options`, WPT-RUN-10 — семейство
   alt-домена оставлено открытым). Отдельный баг не заводился: окружение, не движок, и менять hosts
@@ -2013,7 +2013,7 @@ baseline получить не могут; правка `executorlumen.py` по�
 | Referrer Policy §8.3 «long referrer»: `Referer` длиннее 4096 байт должен обрезаться до origin — шаг отсутствует в `compute_referrer`, **новый** [BUG-1096](../../bugs/BUG-1096-FIXED.md) | 207 подтестов семьи `4K*` (`same-http`/`same-https` варианты `xhr`/`fetch`) — `assert_in_array: document.referrer value "<непокоцанный URL>" not in array [origin, undefined]` | `crates/network/src/referrer_policy.rs:98-148` — ни одна ветка `match policy` не проверяет `full().len() > 4096` |
 | `lumen-image` не умеет BMP (только PNG/JPEG/GIF/WebP/AVIF/SVG/JXL/HEIC) — общий WPT-хелпер `common/security-features/subresource/image.py` отдаёт `image/bmp`, **новый** [BUG-1097](../../bugs/BUG-1097-OPEN.md) | 156 подтестов `img-tag` только в `4K*`; инфраструктура шире одной категории (`mixed-content`/CSP/`upgrade-insecure-requests`/… — везде, где тест берёт `img-tag`/`picture-tag`), масштаб за пределами этого среза не измерен | `crates/engine/image/src/lib.rs::decode_raw` (120-152) — 8 форматов по сигнатуре, ветки для `BM`-сигнатуры нет, падает в `UnknownFormat` |
 
-**Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `www1.localhost` (own-subdomain cross-origin семья) не резолвится на этой машине — [BUG-1070](../../bugs/BUG-1070-OPEN.md) (`SystemDnsResolver` не реализует RFC 6761 §6.3 для `*.localhost`); живьём в stderr движка `resolve www1.localhost: имя или служба не известны (os error 11001)` на подавляющем большинстве `cross-http`/`cross-https` вариантов по всей категории, не только `4K*`. TLS-сертификат не покрывает SAN `localhost` (только `127.0.0.1`/`web-platform.test`) — [BUG-1069](../../bugs/BUG-1069-FIXED.md); живьём `TLS handshake: invalid peer certificate: certificate not valid for name "localhost"` на `.https.`-подресурсах. Оба — известный, уже локализованный класс, не движковая находка этого среза, но вместе объясняют основную долю FAIL/TIMEOUT/ERROR по категории за пределами BUG-1096/1097.
+**Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `www1.localhost` (own-subdomain cross-origin семья) не резолвится на этой машине — [BUG-1070](../../bugs/BUG-1070-FIXED.md) (`SystemDnsResolver` не реализует RFC 6761 §6.3 для `*.localhost`); живьём в stderr движка `resolve www1.localhost: имя или служба не известны (os error 11001)` на подавляющем большинстве `cross-http`/`cross-https` вариантов по всей категории, не только `4K*`. TLS-сертификат не покрывает SAN `localhost` (только `127.0.0.1`/`web-platform.test`) — [BUG-1069](../../bugs/BUG-1069-FIXED.md); живьём `TLS handshake: invalid peer certificate: certificate not valid for name "localhost"` на `.https.`-подресурсах. Оба — известный, уже локализованный класс, не движковая находка этого среза, но вместе объясняют основную долю FAIL/TIMEOUT/ERROR по категории за пределами BUG-1096/1097.
 
 **Не разобрано.** Кластер `promise_test: Unhandled rejection with value: object "[object Object]"` за пределами `img-tag` — `script-tag` (141 подтест в `4K*`), `sharedworker-classic` (12), `a-tag` (3). `script-tag` использует `common/security-features/subresource/script.py` (не изображение), значит НЕ объясняется BUG-1097; воспроизводится и для same-origin без редиректа, значит не BUG-1070/1069. Механизм не установлен — кандидат `requestViaScript`'s гонка `bindEvents2(window, "message", script, "error", window, "error")` (`common.sub.js:626-635`) против нашей доставки событий `postMessage`/`error`, не проверено.
 
@@ -2061,7 +2061,7 @@ redirects 1]` / `expected: FAIL`), подтверждено scoped `--check --ro
 
 **Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `.https.`-подресурсы
 (166 файлов) ловят TLS-цепочку [BUG-1069](../../bugs/BUG-1069-FIXED.md)/
-[BUG-1070](../../bugs/BUG-1070-OPEN.md) наравне с прошлыми категориями — основная доля
+[BUG-1070](../../bugs/BUG-1070-FIXED.md) наравне с прошлыми категориями — основная доля
 `ERROR`/`TIMEOUT` за пределами BUG-1098 и флапа BUG-1022 по-прежнему объясняется этой парой,
 отдельно не переизмерялась.
 
@@ -2143,7 +2143,7 @@ DNS:*.localhost`; `crates/` не тронуты, пересборка не тр�
 activation-after-registration.https.html` — было `ERROR` на TLS, стало unexpected PASS
 (harness `OK`, сам тест зелёный) — полное рукопожатие вплоть до зелёного результата тела
 теста. `*.localhost`-поддомены отдельно не проверялись: их резолвинг на этой машине упирается
-в DNS, не в сертификат ([BUG-1070](../../bugs/BUG-1070-OPEN.md), не в скоупе этого фикса).
+в DNS, не в сертификат ([BUG-1070](../../bugs/BUG-1070-FIXED.md), не в скоупе этого фикса).
 
 **Baseline-регенерация не входит в этот заход, как и предупреждал сам баг.** ~2000 `.ini` во
 всех уже закрытых срезах WPT-RUN-7 с `.https.`-файлами сейчас фиксируют `ERROR` как

@@ -74,5 +74,16 @@ LUMEN_PROFILE=dev-release python tests/wpt/run_report.py \
 `iframe-contentwindow-injection` и `navigation-redirect-default` в трёх прогонах не плавали. Все шесть записей
 сужены (`[PASS, TIMEOUT]`, `[TIMEOUT, NOTRUN]`, `[TIMEOUT, PASS]`, `[NOTRUN, TIMEOUT]`), три
 `--check` подряд — 0 регрессий. Корневая причина плавания не локализована; поддомены не резолвятся на
-Windows — [BUG-1070](BUG-1070-OPEN.md), это вероятный, но не доказанный источник. Статус остаётся OPEN:
+Windows — [BUG-1070](BUG-1070-FIXED.md), это вероятный, но не доказанный источник. Статус остаётся OPEN:
 блокер «baseline нельзя закоммитить» снят, но при перегенерации плавающий набор может оказаться другим.
+
+## Обновление 2026-09-30 (P6): BUG-1070 закрыт, плавание осталось
+
+[BUG-1070](BUG-1070-FIXED.md) починен (`*.localhost` → loopback в резолвере). Два подряд `--check` категории на одном бинаре
+(без перегенерации baseline, который теперь устарел — сместились сотни статусов) дали расхождение только в
+`iframe-contentwindow-injection.sub.window.html`: два подтеста `<link rel=prefetch>` (`about:` и `createElement`… `about:blank`)
+в одном прогоне FAIL, в другом PASS. Плавание `www*.localhost` (TIMEOUT↔NOTRUN) в этих двух прогонах не наблюдалось.
+Тот же файл изолированно (`run_smoke.py`, 4 прогона) стабилен: 4/5, FAIL на `createElement … about:blank`. Значит гонка
+проявляется только под нагрузкой полной категории (соседние страницы, параллельные фоновые fetch), не сама по себе.
+Дальше: перегенерировать baseline на новом резолвере и проверить, остаётся ли плавание; если да — искать нагрузочную
+причину в подсистеме prefetch/about:-iframe. Статус остаётся OPEN.
