@@ -1,6 +1,6 @@
 # BUG-1155: `innerHTML` на `<tbody>`/`<tr>`/`<table>` разбирает фрагмент в режиме `in body`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3) — `new_fragment`/`reset_insertion_mode` берут режим из контекстного элемента (`fragment_context_mode`); тест `table_contexts_start_in_their_own_insertion_mode`
 **Дата:** 2026-09-25
 **Компонент:** html-parser (`crates/engine/html-parser/src/tree_builder.rs::new_fragment`
 и `reset_insertion_mode` — стартовый insertion mode фрагмента безусловно `InBody`)
