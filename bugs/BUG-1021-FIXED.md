@@ -131,7 +131,7 @@ rather than guessed at.
 - `shape-outside: url()` — картинка-форма не загружается вообще (CSS Shapes
   image shapes не реализованы; строка `shape-outside` в CSS-SPECS.md).
 - `@font-face` во вставленном скриптом `<style>` не загружается —
-  [BUG-1154](BUG-1154-OPEN.md).
+  [BUG-1154](BUG-1154-FIXED.md).
 
 Юнит-тесты: `fetch_metadata::tests::*` (6),
 `subresource_fetch_sends_request_mode_per_destination`,

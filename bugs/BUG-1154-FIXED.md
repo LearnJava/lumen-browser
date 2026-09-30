@@ -1,6 +1,6 @@
 # BUG-1154: `@font-face` из `<style>`, вставленного скриптом после загрузки, никогда не загружается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Дата:** 2026-09-25
 **Компонент:** shell (`crates/shell/src/relayout.rs::refresh_dynamic_css` пересобирает
 `Stylesheet`, но не порождает загрузку новых `@font-face url()`; загрузка шрифтов
@@ -32,3 +32,7 @@ src: url(...) }</style>` в `<head>` и `<p style="font-family: SomeFont">` в
 После пересборки в `refresh_dynamic_css` собрать `@font-face url()`-источники,
 которых ещё нет в `self.web_fonts`/в полёте, и запустить для них тот же путь,
 что `page_load.rs` (с тем же CSP `font-src`-гейтом и `upgrade-insecure-requests`).
+
+## Исправление (P3, 2026-09-30)
+
+Загрузка вынесена из `apply_loaded_page` в `Lumen::spawn_web_font_fetches` (тот же CSP `font-src`/UIR-гейт). `refresh_dynamic_css` после пересборки листа собирает `@font-face url()` через `load_font_faces` и зовёт её; уже запрошенные источники отсекает `Lumen::requested_web_fonts` (сброс на навигации и при возврате на вкладку). Живой прогон: `<style>` с `@font-face`, вставленный через 300 мс, → `@font-face async загружен`. Ограничение: `local()`-источники поздних правил не регистрируются (как и раньше).
