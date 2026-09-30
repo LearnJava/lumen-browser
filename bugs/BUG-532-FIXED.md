@@ -102,7 +102,7 @@ computed-значения ширины бордеров/аутлайнов по 
    (`docs/probe-method.md` §8): [BUG-1050](BUG-1050-OPEN.md)
    (`getComputedStyle()` пропускает несколько шортхендов/свойств и
    неверно сериализует `box-shadow`/`text-shadow`/`filter` —
-   `svg-computed-style.html` 22/88), [BUG-1051](BUG-1051-OPEN.md)
+   `svg-computed-style.html` 22/88), [BUG-1051](BUG-1051-FIXED.md)
    (`lh`/`ex`/`cap`/`ch`/`vh`/`vw` не совпадают со своей root-relative
    парой под `zoom` — `font-relative-units.html` 1/6,
    `relative-units.html` 1/6), [BUG-1052](BUG-1052-OPEN.md)

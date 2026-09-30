@@ -306,6 +306,11 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     if let Some(num) = s.strip_suffix("lh") {
         return num.trim().parse::<f32>().ok().map(Length::Lh);
     }
+    // `ic` = advance of the water ideograph (U+6C34); Phase 0 approximation: 1em,
+    // matching the `ric` factor above.
+    if let Some(num) = s.strip_suffix("ic") {
+        return num.trim().parse::<f32>().ok().map(Length::Em);
+    }
     if let Some(num) = s.strip_suffix("em") {
         return num.trim().parse::<f32>().ok().map(Length::Em);
     }

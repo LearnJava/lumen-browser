@@ -93,6 +93,9 @@ pub struct ComputedStyle {
     /// whole tree so `rem` follows `html { font-size }` (CSS Values L4 §5.1.2).
     /// `16` until the root has been cascaded.
     pub root_font_size: f32,
+    /// `effective_zoom` of the document element (already inside `root_font_size`);
+    /// `rem` in a deeper zoomed element is rescaled by `effective_zoom / root_zoom`.
+    pub root_zoom: f32,
     pub line_height: f32,
     /// CSS2 §10.8.1 / CSS Fonts L5 §4 — whether `line-height` was specified as a
     /// relative value (`normal` or a unitless `<number>`) that scales with the
@@ -1070,6 +1073,7 @@ impl ComputedStyle {
             // No ancestor and no declaration yet — `zoom` starts neutral.
             effective_zoom: 1.0,
             root_font_size: 16.0,
+            root_zoom: 1.0,
             line_height: 1.2,
             line_height_is_relative: true,
             line_height_is_normal: true,
@@ -1405,6 +1409,7 @@ impl ComputedStyle {
             // `zoom` declaration is folded in by the pre-pass below.
             effective_zoom: inherited.effective_zoom,
             root_font_size: inherited.root_font_size,
+            root_zoom: inherited.root_zoom,
             line_height: inherited.line_height,
             line_height_is_relative: inherited.line_height_is_relative,
             line_height_is_normal: inherited.line_height_is_normal,
