@@ -847,11 +847,12 @@ impl Lumen {
                             let target = doc.get(anchor).get_attr("target").unwrap_or_default().to_owned();
                             let rel = doc.get(anchor).get_attr("rel").unwrap_or_default().to_owned();
                             let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
-                            (href, target, rel, csp_gate)
+                            let rp = doc.get(anchor).get_attr("referrerpolicy").map(str::to_owned);
+                            (href, target, rel, csp_gate, rp)
                         })
                     })
                 });
-                if let Some((href, target_attr, rel_attr, csp_gate)) = link {
+                if let Some((href, target_attr, rel_attr, csp_gate, anchor_rp)) = link {
                     // GAP-NAVCTX срез 1 (BUG-884): `<a href="javascript:...">`
                     // runs the code in the clicking document, ignoring `target`
                     // — popup/named-frame targeting for a `javascript:` anchor
@@ -925,7 +926,7 @@ impl Lumen {
                                 lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
                             }
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, anchor_rp.as_deref(), &rel_attr)));
                             // Fallback install for a popup document with no
                             // scripts at all (never reaches
                             // `run_scripts_with_dom`, so never consumes the
@@ -1006,7 +1007,7 @@ impl Lumen {
                             lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
                             self.switch_tab(tab_idx);
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, anchor_rp.as_deref(), &rel_attr)));
                         } else {
                             let has_noopener = rel_attr
                                 .split_ascii_whitespace()
@@ -1030,7 +1031,7 @@ impl Lumen {
                             // off it in GAP-NAVCTX срез 5.
                             lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, anchor_rp.as_deref(), &rel_attr)));
                             if !has_noopener {
                                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                                     j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
@@ -1096,7 +1097,7 @@ impl Lumen {
                                 });
                             }
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            let target = PageSource::from_arg(Some(&resolved)).with_uir_header(uir);
+                            let target = PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, anchor_rp.as_deref(), &rel_attr));
                             self.navigate_to(target);
                         }
                     } else {

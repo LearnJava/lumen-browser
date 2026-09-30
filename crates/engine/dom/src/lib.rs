@@ -776,6 +776,8 @@ pub struct Document {
     /// `csp_header`.
     #[serde(default)]
     referrer_policy_header: Option<String>,
+    /// BUG-1156: see [`Document::document_referrer`].
+    document_referrer: Option<String>,
     /// Raw `content` of every `<meta name="referrer">` encountered, in tree
     /// order (GAP-REFERRER срез 3, spec §3/§8.3: a later meta overrides an
     /// earlier one and the response header). Appended by the HTML parser as
@@ -843,6 +845,7 @@ impl Document {
             report_to_endpoints: HashMap::new(),
             style_attr_csp_blocked: HashSet::new(),
             referrer_policy_header: None,
+            document_referrer: None,
             meta_referrer: Vec::new(),
         }
     }
@@ -928,6 +931,17 @@ impl Document {
     /// shell's `document_referrer_policy`.
     pub fn referrer_policy_header(&self) -> Option<&str> {
         self.referrer_policy_header.as_deref()
+    }
+
+    /// BUG-1156: the `Referer` the request that fetched this document carried
+    /// (HTML LS §3.1.2 "the document's referrer"); `document.referrer` reads it.
+    pub fn document_referrer(&self) -> Option<&str> {
+        self.document_referrer.as_deref()
+    }
+
+    /// Stamp the document's referrer — see [`Self::document_referrer`].
+    pub fn set_document_referrer(&mut self, referrer: Option<String>) {
+        self.document_referrer = referrer;
     }
 
     /// Set the document's `Referrer-Policy` response header text. Called

@@ -327,7 +327,7 @@ impl Lumen {
                         &raw.report_to_endpoints,
                         raw.sync_xhr_document_policy,
                         raw.sync_xhr_permissions_policy,
-                        raw.referrer_policy_header.as_deref(),
+                        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
                         dynamic_image_hook_ctx,
                     )
                     .map_err(|e| e.to_string())

@@ -1933,7 +1933,7 @@ impl Lumen {
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
                         match resolve_js_navigation(&resolved, &self.source) {
-                            Ok(source) => self.navigate_to(source.with_uir_header(uir)),
+                            Ok(source) => self.navigate_to(source.with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""))),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
                     }
@@ -1947,7 +1947,7 @@ impl Lumen {
                         }
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         match resolve_js_navigation(&resolved, &self.source) {
-                            Ok(source) => self.navigate_replace(source.with_uir_header(uir)),
+                            Ok(source) => self.navigate_replace(source.with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""))),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
                     }

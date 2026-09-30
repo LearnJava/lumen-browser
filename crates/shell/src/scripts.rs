@@ -787,6 +787,9 @@ pub(crate) fn run_scripts_with_dom(
         })
         .collect();
 
+    // BUG-1156: read before `doc` moves into the Arc — `document.referrer` seed.
+    #[cfg(feature = "v8")]
+    let document_referrer = doc.document_referrer().map(str::to_owned);
     let doc_arc = Arc::new(Mutex::new(doc));
 
     if !always_runtime && scripts.is_empty() && deferred_scripts.is_empty() && extra_scripts.is_empty()
@@ -810,6 +813,7 @@ pub(crate) fn run_scripts_with_dom(
         match lumen_js::v8_runtime::V8JsRuntime::new() {
             Ok(mut rt) => {
                 rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
+                rt = rt.with_document_referrer(document_referrer);
                 if deterministic.enabled {
                     rt.set_deterministic_mode(true, deterministic.rng_seed, deterministic.monotonic_clock);
                 }

@@ -208,7 +208,7 @@ pub(crate) fn render_source_to_png(
         &raw.report_to_endpoints,
         raw.sync_xhr_document_policy,
         raw.sync_xhr_permissions_policy,
-        raw.referrer_policy_header.as_deref(),
+        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
 
@@ -329,7 +329,7 @@ pub(crate) fn do_print_to_pdf(
         &raw.report_to_endpoints,
         raw.sync_xhr_document_policy,
         raw.sync_xhr_permissions_policy,
-        raw.referrer_policy_header.as_deref(),
+        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
 
@@ -425,7 +425,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
         &raw.report_to_endpoints,
         raw.sync_xhr_document_policy,
         raw.sync_xhr_permissions_policy,
-        raw.referrer_policy_header.as_deref(),
+        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
 
@@ -642,13 +642,13 @@ pub(crate) fn run_dump(
         }
         DumpKind::Layout => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
             let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
             // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на
             // экран, — окно вклеивает содержимое под-документов в список
