@@ -61,6 +61,7 @@ use history_state::HistoryState;
 // Реализация трейта, отчёт об исключениях, кэш байт-кода и конвертеры значений
 // вынесены в подмодули батчем SPLIT-JS5.
 
+mod classic_script;
 mod code_cache;
 mod eval;
 mod value;
@@ -712,6 +713,17 @@ impl V8JsRuntime {
                 store_scoped,
                 "_lumen_capture_call_site",
                 Box::new(script_attribution::capture_call_site),
+            )?;
+
+            // BUG-1049: classic `<script>` bodies inserted through the DOM run as
+            // a real Script so their top-level `let`/`const` reach the global
+            // lexical environment (`classic_script.rs`).
+            crate::v8_compat::register_v8_native_scoped(
+                scope,
+                ctx,
+                store_scoped,
+                "_lumen_run_classic_script",
+                Box::new(classic_script::run_classic_script),
             )?;
 
             // Polyfill `DOMException`: quickjs-ng provides it as a built-in (part of
