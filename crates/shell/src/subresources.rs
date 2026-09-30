@@ -568,22 +568,28 @@ pub(crate) fn fetch_and_decode_images(
         // GAP-CANVASORIGIN срез 2 (BUG-941): `<img crossorigin>` on a
         // cross-origin URL takes the real CORS-checked fetch instead of the
         // plain cached one — see `decode_image_cors` doc comment for why it
-        // bypasses `IMAGE_CACHE`. A passing check untaints the canvas draw
+        // has its own `IMAGE_CACHE` slot. A passing check untaints the canvas draw
         // (`cross_origin = false` below); a failing one is a fetch error,
         // same bucket as a network failure (`ImgOutcome::Skip`), not a
         // tainted-but-visible image.
         let (decoded, cross_origin) = match (url_cross_origin, req.crossorigin, self_origin.as_ref()) {
             (true, Some(mode), Some(origin)) => (
-                decode_image_cors(CorsImageFetch {
-                    resolved_url: &resolved_url,
-                    raw_src: &req.url,
-                    self_origin: origin,
-                    mode,
-                    base,
-                    sink,
-                    cookie_jar: cookie_jar.clone(),
-                    target,
-                    referrer_policy,
+                // BUG-1150: отдельный слот кэша с ключом (URL, mode); origin
+                // документа неизменен в пределах навигации (кэш поколенческий).
+                // NUL-префикс не пересекается с ключом no-cors записи (сырой
+                // `req.url`).
+                image_cache::IMAGE_CACHE.get_or_decode_current(&cors_cache_key(&resolved_url, mode), || {
+                    decode_image_cors(CorsImageFetch {
+                        resolved_url: &resolved_url,
+                        raw_src: &req.url,
+                        self_origin: origin,
+                        mode,
+                        base,
+                        sink,
+                        cookie_jar: cookie_jar.clone(),
+                        target,
+                        referrer_policy,
+                    })
                 }),
                 false,
             ),
@@ -791,12 +797,10 @@ pub(crate) fn decode_image(
 /// resource fetch algorithm treats both the same way (the request errors,
 /// no image loads), it does not fall back to a tainted-but-visible image.
 ///
-/// Bypasses `image_cache::IMAGE_CACHE` deliberately: that cache is keyed by
-/// URL alone, with no axis for "was this fetched with credentials/Origin or
-/// without" — reusing a plain no-cors cache hit here would skip the very
-/// check this function exists to run. The cost is a duplicate network
-/// round-trip if the same cross-origin URL also appears as a plain `<img>`
-/// elsewhere on the page; acceptable for a first slice, not a correctness bug.
+/// Does not read the plain no-cors `IMAGE_CACHE` slot (keyed by URL alone):
+/// reusing it would skip the very check this function exists to run. The
+/// caller wraps it in its own slot keyed by [`cors_cache_key`] (BUG-1150), so
+/// identical `<img crossorigin>` elements share one request and one decode.
 /// Bundles [`decode_image_cors`]'s inputs — plain positional params would
 /// trip `clippy::too_many_arguments` at eight.
 struct CorsImageFetch<'a> {
@@ -809,6 +813,29 @@ struct CorsImageFetch<'a> {
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
     referrer_policy: lumen_network::ReferrerPolicy,
+}
+
+/// Ключ CORS-слота в `IMAGE_CACHE` (BUG-1150): `(resolved URL, crossorigin mode)`.
+fn cors_cache_key(resolved_url: &str, mode: lumen_layout::CrossOriginMode) -> String {
+    let m = match mode {
+        lumen_layout::CrossOriginMode::Anonymous => 'a',
+        lumen_layout::CrossOriginMode::UseCredentials => 'c',
+    };
+    format!("\0cors\0{m}\0{resolved_url}")
+}
+
+#[cfg(test)]
+mod cors_key_tests {
+    use super::cors_cache_key;
+    use lumen_layout::CrossOriginMode::{Anonymous, UseCredentials};
+
+    #[test]
+    fn key_separates_mode_and_never_equals_plain_url() {
+        let u = "https://cdn.example/a.svg";
+        assert_eq!(cors_cache_key(u, Anonymous), cors_cache_key(u, Anonymous));
+        assert_ne!(cors_cache_key(u, Anonymous), cors_cache_key(u, UseCredentials));
+        assert_ne!(cors_cache_key(u, Anonymous), u);
+    }
 }
 
 fn decode_image_cors(req: CorsImageFetch<'_>) -> Option<image_cache::DecodedImage> {

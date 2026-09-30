@@ -1,6 +1,6 @@
 # BUG-1150 — `<img crossorigin>` грузится заново на каждый элемент: `decode_image_cors` обходит `IMAGE_CACHE`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Заведён:** 2026-09-24 (P6, при закрытии [BUG-1116](BUG-1116-FIXED.md) — остаток повторных GET на tradingview)
 **Область:** shell (`crates/shell/src/subresources.rs::decode_image_cors` и его вызов в
 `fetch_and_decode_images`; комментарий над функцией прямо называет дубль «acceptable for a first slice»)
@@ -27,3 +27,14 @@
 origin документа)` — как ключует memory cache HTML LS §2.5.5 «list of available images».
 Одинаковые `<img crossorigin>` делят один запрос и один декод. Критерий: на tradingview нет
 повторных GET по URL из `<img crossorigin>` в пределах одной навигации.
+
+## Исправление (P3, 2026-09-30)
+
+`fetch_and_decode_images` оборачивает `decode_image_cors` в собственный слот
+`IMAGE_CACHE` с ключом `cors_cache_key(resolved_url, mode)` (`subresources.rs`).
+Origin документа в ключ не входит: кэш поколенческий, origin неизменен в пределах
+навигации. Ключ с NUL-префиксом не пересекается с no-cors записью (сырой `req.url`),
+поэтому CORS-проверка по-прежнему не пропускается. Одинаковые `<img crossorigin>`
+делят один запрос и один декод; in-flight дедуп даёт сам `get_or_decode`.
+Тест: `cors_key_tests` (ключ различает mode и не равен обычному URL). Живой прогон
+tradingview не выполнялся (сеть/окно не гонялись).
