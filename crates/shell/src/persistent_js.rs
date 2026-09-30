@@ -1107,7 +1107,7 @@ impl PersistentJs for V8PersistentJs {
         self.rt.update_stylesheet(sheet);
     }
     fn deliver_layout_observers(&self) {
-        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
+        self.eval_js("_lumen_deliver_resize_observers_layout();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
     }
     fn register_lazy_images(&self, pairs: &[(u32, &str)]) {
         if pairs.is_empty() {
