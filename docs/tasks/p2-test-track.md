@@ -1277,7 +1277,7 @@ known-intermittent из срезов 33/35 не понадобилось — в 
   `''` вместо `<template shadowrootmode=…>` (заглушка «Phase 0» в шиме), а
   `ShadowRoot.serializable`/`clonable`/`delegatesFocus`/`slotAssignment` равны `undefined`.
   Файл без `test_driver` — чистая проба движка.
-- **[BUG-1063](../../bugs/BUG-1063-OPEN.md)** — 51 из 63 файлов `TEST_END: ERROR` падают на
+- **[BUG-1063](../../bugs/BUG-1063-FIXED.md)** — 51 из 63 файлов `TEST_END: ERROR` падают на
   `:root > *|body:nth-child(2) is not a valid selector`. Селектор строит вендоренный
   `testdriver-extra.js::get_selector` для любого элемента без `id` (`*|<localName>:nth-child(n)`),
   а движок отвергает namespace-префикс `*|` целиком (`*|body`, `*|*`, `|body`). Идиома
@@ -1398,7 +1398,7 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 - **TIMEOUT/NOTRUN почти везде — [BUG-948](../../bugs/BUG-948-FIXED.md):** `long-animation-frame` намеренно
   нет в `supportedEntryTypes`, и ни одна `PerformanceLongAnimationFrameTiming` не производится, поэтому
   `PerformanceObserver`-тесты ждут запись, которая не придёт. Отдельного бага не заводилось.
-- **`ERROR` на `*|body:nth-child(2)` — [BUG-1063](../../bugs/BUG-1063-OPEN.md):** в логе прогона это
+- **`ERROR` на `*|body:nth-child(2)` — [BUG-1063](../../bugs/BUG-1063-FIXED.md):** в логе прогона это
   `*|body`, `*|iframe`, `*|button` от `test_driver.click`/`send_keys` (тот же `get_selector`,
   что в срезе 36) — файлы, зовущие `test_driver`, гаснут до первого утверждения. Сколько именно из 7
   `ERROR` — этот класс, по файлам не сверялось.
@@ -1645,7 +1645,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | Причина | id | Доказательство |
 |---|---|---|
 | hex-экранированный `id` в селекторе, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 152 | `eval: JS runtime error: #2 = < < f e  is not a valid selector` — `testdriver-extra.js::get_selector` |
-| `*\|` в селекторе безымянного элемента, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 12 | `:root > *\|body:nth-child(2) is not a valid selector` |
+| `*\|` в селекторе безымянного элемента, [BUG-1063](../../bugs/BUG-1063-FIXED.md) | 12 | `:root > *\|body:nth-child(2) is not a valid selector` |
 | сертификат `localhost`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 24 | 72 = 24×3 строки `ExecutorException`, все `TLS handshake … not valid for name "localhost"` |
 | harness `TIMEOUT` с подтестами | 31 | `Test TIMEOUT, expected OK` — не разбирались |
 | harness `OK` | 23 | — |
@@ -1765,7 +1765,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 | Причина | id | Доказательство |
 |---|---|---|
-| селектор с namespace-префиксом `*|`: `:root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 263 | `testdriver-extra.js::get_selector` для элемента без `id`; `editing/other/*`, `editing/run/*`, `editing/plaintext-only/*` |
+| селектор с namespace-префиксом `*|`: `:root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`, [BUG-1063](../../bugs/BUG-1063-FIXED.md) | 263 | `testdriver-extra.js::get_selector` для элемента без `id`; `editing/other/*`, `editing/run/*`, `editing/plaintext-only/*` |
 | hex-эскейп `id`: `#\66 \69 \72 \73 \74  is not a valid selector`, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 13 | `editing/other/empty-elements-insertion.html`, `editing/run/caret-navigation-after-removing-line-break.html` и др. |
 | https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 10 | `edit-context/*.https.html`, `plaintext-only/paste.https.html?…` |
 | `EditContext is not defined` | 2 | `edit-context/edit-context-bidi-caret-association.tentative.html` — интерфейс не реализован, баг не заводился |
@@ -1775,7 +1775,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | harness `TIMEOUT` | 25 | `other/delete-in-child-of-{head,html}.tentative.html` (по 4), `other/insertparagraph-in-child-of-{head,html}.tentative.html` (по 8), `run/undo-redo.html` (1) — причина не устанавливалась |
 
 **Главное.** Это самая массовая единичная причина harness-`ERROR` из всех снятых категорий: 263 из 700 id (38 %), в `pointerevents` было 12, в `shadow-dom` — единицы. Починка
-[BUG-1063](../../bugs/BUG-1063-OPEN.md) + [BUG-1065](../../bugs/BUG-1065-OPEN.md) переведёт ~276 файлов из `ERROR` в реальные подтесты (остаётся ~17 `ERROR`). Из 103 698 подтестов
+[BUG-1063](../../bugs/BUG-1063-FIXED.md) + [BUG-1065](../../bugs/BUG-1065-OPEN.md) переведёт ~276 файлов из `ERROR` в реальные подтесты (остаётся ~17 `ERROR`). Из 103 698 подтестов
 66 939 проходят, но это в основном `editing/run/*` с тысячами подтестов на файл, где `execCommand` уже реализован частично — баланс по id (382 из 700) честнее.
 
 **Ограничение записанного.** 263 + 13 + 10 id записаны как `ERROR` — нижняя планка; после починки BUG-1063/1065/1069 baseline регенерируется (`--update-expected` + три `--check`),

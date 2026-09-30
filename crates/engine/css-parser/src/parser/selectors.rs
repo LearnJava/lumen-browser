@@ -1172,8 +1172,12 @@ impl<'a> Parser<'a> {
                 self.parse_simple_selector()
             }
             '|' if matches!(self.peek_at(1), Some(c) if c == '*' || c == '\\' || is_ident_start(c)) => {
+                // `|E` — элемент без пространства имён; у HTML-элементов его нет,
+                // компаунд не должен совпасть ни с чем. `|` не может быть именем
+                // тега, так что `Type("|")` — заведомо пустое множество.
                 self.consume();
-                self.parse_simple_selector()
+                self.parse_simple_selector()?;
+                Some(SimpleSelector::Type("|".to_string()))
             }
             '*' => {
                 self.consume();
@@ -1189,7 +1193,15 @@ impl<'a> Parser<'a> {
             }
             '[' => self.parse_attr_selector(),
             ':' => self.parse_pseudo(),
-            c if is_ident_start(c) || c == '\\' => Some(SimpleSelector::Type(self.parse_ident()?)),
+            c if is_ident_start(c) || c == '\\' => {
+                let name = self.parse_ident()?;
+                // `ns|E`: `@namespace` не поддержан, а необъявленный префикс
+                // по Namespaces §6.3 — невалидный селектор.
+                if self.peek() == Some('|') && self.peek_at(1) != Some('=') {
+                    return None;
+                }
+                Some(SimpleSelector::Type(name))
+            }
             _ => None,
         }
     }

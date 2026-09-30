@@ -76,14 +76,14 @@ IDL-часть (`interestForElement` по образцу `commandForElement`,
 
 WPT `html/semantics/interestfor`: подтесты 49/268 → 164/244 (знаменатель упал, потому что
 три hover-варианта `interestfor-delay-start` теперь доходят до `test_driver` и падают
-ERROR на селекторе [BUG-1063](BUG-1063-OPEN.md), а раньше отрабатывали все 8 подтестов
+ERROR на селекторе [BUG-1063](BUG-1063-FIXED.md), а раньше отрабатывали все 8 подтестов
 в FAIL). `idlharness` 44/44, `interestelement-interface` 6/6, `interestevent-interface`
 10/10, `interestfor-css-shorthands` 26/26, focus-варианты `delay-start`/`delay-end` 7/8 и 5/5.
 
 Остаток вне задачи:
 
 - hover- и Escape-варианты через `test_driver.Actions()` — исполнитель не наводит курсор
-  и не шлёт Escape ([BUG-1194](BUG-1194-OPEN.md)), плюс селектор `*|body` ([BUG-1063](BUG-1063-OPEN.md));
+  и не шлёт Escape ([BUG-1194](BUG-1194-OPEN.md)), плюс селектор `*|body` ([BUG-1063](BUG-1063-FIXED.md));
 - 44 подтеста интерполяции в `interestfor-css-properties` (38/82): CSS Transitions/Animations
   не интерполируют `interest-delay-*` (планировщик переходов в `animation.rs` не знает
   `<time>`-свойств), Web Animations — [BUG-1195](BUG-1195-OPEN.md);
