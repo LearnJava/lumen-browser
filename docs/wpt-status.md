@@ -29,8 +29,12 @@
   `dom/nodes/` внутри неё по-прежнему несёт свой ручной гейт `run_suite.py`.
 - **Полнота прогона.** Часть категорий прогнана выборочно: при нулевой дисперсии результата
   (вся выборка упирается в один и тот же уже задокументированный гэп) прогон останавливался
-  вручную — так сделано для `css` (382 из 34607 id), `content-security-policy` (67 из 865 id) и
-  `mixed-content` (78 из 388 id, 100% TIMEOUT на TLS-гэпе). Это ограничение замера, а не
+  вручную — так сделано для `css` (382 из 34607 id) и `content-security-policy` (67 из 865 id).
+  `mixed-content` числилась здесь же до 2026-09-30 (78 из 388 id, 100% TIMEOUT на TLS-гэпе) — оба
+  блокера с тех пор устранены отдельными сессиями (TLS `UnknownIssuer` — несколькими `BUG-6xx`,
+  `common/security-features` довендорен в WPT-RUN-6 срезе 8), полный прогон 388/388 сделан в
+  WPT-RUN-7 срезе 65 (`docs/tasks/p2-test-track.md#test-3-срез-65-2026-0929-30`,
+  `docs/wpt-vendor-notes/mixed-content.md`). Это ограничение замера, а не
   вендоринга; заметка такой категории говорит об остановке явно.
 - **Полнота исполнения.** Общие хелперы вне категории (`/common/*`,
   `/resources/idlharness.js`+`WebIDLParser.js`) по устоявшейся конвенции не довендориваются —
@@ -272,7 +276,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `mediasession` | 🚫 | ✅ |  | BUG-636 | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/mediasession/`, 10 файлов: `META.yml`, `WEB_FEATURES.yml`, `LICENSE-WPT.md` скопирован из соседней `mediacapture-streams`, `README.md`,… [Подробности](wpt-vendor-notes/mediasession.md). |
 | `merchant-validation` | 🚫 | ✅ |  | BUG-637 | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/merchant-validation/`, 5 файлов: `META.yml`, `LICENSE-WPT.md` скопирован из соседней `mediasession`, 4 корневых тестовых файла:… [Подробности](wpt-vendor-notes/merchant-validation.md). |
 | `mimesniff` | ⬜ | ✅ |  | BUG-638 | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/mimesniff/`, 34 файла: `META.yml`, `README.md`, `LICENSE-WPT.md` скопирован из соседней `mediasession`, `media/`, `mime-types/`,… [Подробности](wpt-vendor-notes/mimesniff.md). |
-| `mixed-content` | ⬜ | 🟡 |  |  | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/mixed-content/`, 533 файла: `META.yml`, `README.md`, `LICENSE-WPT.md`, `WEB_FEATURES.yml`, `gen/` — 388 сгенерированных тестовых HTML через… 🟡 здесь относится к прогону, а не к вендорингу: категория вендорена целиком, но прогон остановлен вручную на 78 из 388 id — 0/78 harness OK, 100% TIMEOUT на TLS-гэпе `UnknownIssuer` без единого исключения, продолжение при нулевой дисперсии признано нерентабельным. [Подробности](wpt-vendor-notes/mixed-content.md). |
+| `mixed-content` | ⬜ | ✅ |  |  | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/mixed-content/`, 533 файла: `META.yml`, `README.md`, `LICENSE-WPT.md`, `WEB_FEATURES.yml`, `gen/` — 388 сгенерированных тестовых HTML через `common/security-features/tools/generate.py`). Прогон изначально остановлен на 78/388 (TLS-гэп `UnknownIssuer`, `common.sub.js` не вендорен) — оба блокера устранены отдельными сессиями до 2026-09-30, WPT-RUN-7 срез 65 прогнал полные 388/388 (222/388 harness OK) и завёл baseline (`tests/wpt/metadata/mixed-content/`, гейт `run_report.py --check`). [Подробности](wpt-vendor-notes/mixed-content.md). |
 | `mst-content-hint` | 🚫 | ✅ |  |  | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/mst-content-hint/`, 5 файлов: `META.yml`, `LICENSE-WPT.md` скопирован из соседней `mixed-content`, 3 корневых тестовых файла:… [Подробности](wpt-vendor-notes/mst-content-hint.md). |
 | `nav-tracking-mitigations` | 🚫 | ✅ |  |  | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/nav-tracking-mitigations/`, 9 файлов: `META.yml`, `LICENSE-WPT.md` скопирован из соседней `element-timing`, `resources/` — 5 файлов, 2… [Подробности](wpt-vendor-notes/nav-tracking-mitigations.md). |
 | `navigation-api` | ⬜ | ✅ |  | BUG-639 | Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/navigation-api/`, 493 файла, `LICENSE-WPT.md` скопирован из соседней `mimesniff`). API реально реализован (`window.navigation`), не… [Подробности](wpt-vendor-notes/navigation-api.md). |
