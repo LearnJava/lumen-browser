@@ -123,7 +123,7 @@ qualified-именем; у `…NS` `null` и `''` одинаково знача�
   при том что `createElementNS(SVG,'linearGradient')` даёт правильные `…/2000/svg` и
   `linearGradient`). Это [BUG-685](BUG-685-OPEN.md), не остаток этого бага: предикат
   различает namespace верно, ему подают неверный namespace. Смежное сужение того же
-  `enum Namespace` со стороны `createElementNS` — [BUG-830](BUG-830-OPEN.md).
+  `enum Namespace` со стороны `createElementNS` — [BUG-830](BUG-830-FIXED.md).
 * **`'getElementsByTagName' in Element.prototype` по-прежнему `false`** — строка из
   «Симптома», которая НЕ является признаком отсутствия метода: у этой фабрики обёрток все
   ~120 членов интерфейса лежат собственными свойствами инстанса, а не операциями прототипа,

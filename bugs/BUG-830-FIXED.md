@@ -1,6 +1,6 @@
 # BUG-830 — произвольный namespace-URI в `createElementNS` схлопывается в HTML
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3) — код уже влит срезом 36 GAP-XMLDOC (`7756a71f31`, `Namespace::Other`); эта запись закрыта тестом `create_element_ns_arbitrary_uri_stays_foreign` (`crates/js/src/dom/tests/v8_core/mod.rs`), проверяющим симптом и четыре WPT-сабтеста `Document.body.html`.
 **Компонент:** dom (`crates/engine/dom/src/lib.rs:119` — `enum Namespace`), js
 (`crates/js/src/v8_runtime.rs:2372-2394` — натив `_lumen_create_element_ns`)
 **Найден:** 2026-08-22 (P3), при закрытии [BUG-415](BUG-415-FIXED.md) — четыре сабтеста WPT
@@ -45,7 +45,7 @@ let namespace = if ns == "http://www.w3.org/2000/svg" {
 - [BUG-328](BUG-328-FIXED.md) закрыл ровно один частный случай этого же схлопывания —
   `createElementNS("", …)`, ради чего и появился вариант `Namespace::None`. Произвольный URI
   тогда не рассматривался.
-- [BUG-685](BUG-685-OPEN.md) — про **парсер**: он вообще не реализует foreign content и
+- [BUG-685](BUG-685-FIXED.md) — про **парсер**: он вообще не реализует foreign content и
   штампует `QualName::html` на всё, включая содержимое `<svg>`. Это другая дорога к дереву;
   здесь ломается скриптовая, где namespace передан явно и всё равно теряется.
 - Общий знаменатель у обоих — узость самого `Namespace`; MathML в перечислении есть, а
@@ -70,7 +70,7 @@ frameset followed by body inside the html element») не могут пройт�
 `Namespace::Other(Arc<str>)` рядом с существующими быстрыми вариантами, чтобы сравнение
 известных пространств осталось дешёвым). Затрагивает `QualName` и всех его потребителей —
 селекторы, layout-конструирование, a11y, сериализация — поэтому это не точечная правка шима,
-а правка ядра DOM; чинить разумно вместе с [BUG-685](BUG-685-OPEN.md), которому нужен тот же
+а правка ядра DOM; чинить разумно вместе с [BUG-685](BUG-685-FIXED.md), которому нужен тот же
 расширенный тип для таблиц HTML LS §13.2.6.5.
 
 ## Как воспроизвести
