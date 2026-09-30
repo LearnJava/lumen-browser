@@ -1,6 +1,6 @@
 # BUG-1064 — `getHTML()` не сериализует теневые корни, а `ShadowRoot.serializable`/`clonable`/`delegatesFocus`/`slotAssignment` не существуют: 6528 FAIL-подтестов `shadow-dom/declarative/gethtml.html`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Тип:** недоделанная реализация — `getHTML` в шиме прямо помечен заглушкой («Phase 0: serializableShadowRoots option deferred»); полей `serializable`/`clonable`/`delegatesFocus`/`slotAssignment` у `ShadowRoot` нет. Возможно, по классификации P3 это ДОРАБОТКА, а не дефект — решение за ним.
 **Заведён:** 2026-09-19 (WPT-RUN-7 срез 36, категория `shadow-dom`)
 **Область:** js-шим — `crates/js/src/shim/web_api_shim_mid.js:3857` (`ShadowRoot.prototype.getHTML`, игнорирует `opts`) и `:7848` (`getHTML` в литерале `Element`, тоже игнорирует `opts`); `_lumen_make_shadow_root` (`crates/js/src/dom.rs:1315`) — сюда `attachShadow`-словарь не доносится.
@@ -53,3 +53,13 @@ s.getHTML()                                // '<b>x</b>' — верно
 После починки baseline `tests/wpt/metadata/shadow-dom/declarative/gethtml.html.ini` (6528
 записей `expected: FAIL`) станет массой unexpected-pass — регенерировать `--update-expected`
 и подтвердить тремя `--check` подряд.
+
+## Исправление (2026-09-30)
+
+Поля `delegatesFocus`/`clonable`/`serializable`/`slotAssignment` к тому времени уже дал BUG-1130.
+Добавлен нативный `_lumen_get_html(nid, serializableAll, explicit, flags)`
+(`dom_helpers.rs::serialize_children_shadow`): корень хоста идёт `<template shadowrootmode=…>` первым
+внутри хоста, если он в `shadowRoots` либо (`serializableShadowRoots` и флаг `serializable`).
+`Element.getHTML` и `ShadowRoot.getHTML` делят `_lumen_get_html_opts`.
+`gethtml.html`: 6528 FAIL → 3264; baseline перегенерирован, три `--check` подряд чисты.
+Остаток: [BUG-1228](BUG-1228-OPEN.md) (setHTMLUnsafe без DSD), [BUG-1229](BUG-1229-OPEN.md) (текст script).
