@@ -107,7 +107,7 @@ surfaces, per risk #5 above).
   over on p95 in about half of interaction rounds — **not fully green**. The user made an explicit,
   conscious decision on 2026-07-28 to proceed with CC-14 anyway rather than block further on BUG-341
   (paused, resumable on request) — a deliberate trade-off, not a silently relaxed gate; see
-  `bugs/BUG-341-OPEN.md` and `docs/tasks/p1-css-chrome.md` §CC-14 for the numbers at the time of the
+  `bugs/BUG-341-FIXED.md` and `docs/tasks/p1-css-chrome.md` §CC-14 for the numbers at the time of the
   decision. `docs/tasks/p1-css-chrome.md` is the living execution
   log for CC-1…CC-17.
 

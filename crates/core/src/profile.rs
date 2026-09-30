@@ -159,7 +159,7 @@ pub fn scope(name: &'static str) -> ScopeGuard {
 /// they sit in — an instrumented `precompute_counters` roughly doubled — so
 /// they stay off during an ordinary `LUMEN_PROFILE_TREE=1` stage run, whose
 /// absolute numbers must stay comparable with the ones recorded in
-/// `bugs/BUG-341-OPEN.md`. Turn detail on to read *shares within* a stage; do
+/// `bugs/BUG-341-FIXED.md`. Turn detail on to read *shares within* a stage; do
 /// not compare its absolute numbers against a stage-only run.
 pub fn scope_detail(name: &'static str) -> ScopeGuard {
     if !detail_enabled() {

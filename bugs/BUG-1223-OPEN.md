@@ -1,6 +1,6 @@
 # BUG-1223 — Переходы между страницами bankruptcy-platform: 0.34–1.36 с, ~5 полных relayout на переход, каскад — 58 % каждого
 
-**Статус:** OPEN (замер; механизм общий с [BUG-341](BUG-341-OPEN.md) и [BUG-1112](BUG-1112-OPEN.md))
+**Статус:** OPEN (замер; механизм общий с [BUG-341](BUG-341-FIXED.md) и [BUG-1112](BUG-1112-OPEN.md))
 **Компонент:** layout (каскад `precompute_counters`), shell (relayout при мутации DOM), js (гидратация)
 **Найден:** 2026-09-29. Методика и цифры — [docs/perf/bankruptcy-platform-2026-09-29.md](../docs/perf/bankruptcy-platform-2026-09-29.md)
 

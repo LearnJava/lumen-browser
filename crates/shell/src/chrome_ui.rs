@@ -1746,7 +1746,7 @@ pub(crate) fn chrome_node_changes(
 /// tree back exactly as it was — which is what lets the next pass take the
 /// live tree as its `prev` basis instead of the pipeline copying a pristine
 /// one aside on every frame (that copy was the largest single item left in an
-/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
+/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-FIXED.md`).
 pub(crate) fn take_content_area(
     lb: &mut LayoutBox,
     node: lumen_dom::NodeId,
