@@ -666,19 +666,31 @@ use super::*;
         let approx = |got: Option<f32>, want: f32| {
             assert!(got.is_some_and(|g| (g - want).abs() < 1e-6), "got {got:?}, want {want}");
         };
-        approx(parse_zoom("0.8"), 0.8);
-        approx(parse_zoom(".8"), 0.8);
-        approx(parse_zoom("80%"), 0.8);
-        approx(parse_zoom("  1.5  "), 1.5);
+        approx(parse_zoom("0.8", 16.0), 0.8);
+        approx(parse_zoom(".8", 16.0), 0.8);
+        approx(parse_zoom("80%", 16.0), 0.8);
+        approx(parse_zoom("  1.5  ", 16.0), 1.5);
         // `normal`/`reset` contribute no scaling of their own.
-        approx(parse_zoom("normal"), 1.0);
-        approx(parse_zoom("RESET"), 1.0);
+        approx(parse_zoom("normal", 16.0), 1.0);
+        approx(parse_zoom("RESET", 16.0), 1.0);
         // Invalid values yield None so the caller drops the declaration rather
         // than resetting an already-cascaded value to 1.
-        assert_eq!(parse_zoom("-0.5"), None);
-        assert_eq!(parse_zoom("0"), None);
-        assert_eq!(parse_zoom("auto"), None);
-        assert_eq!(parse_zoom(""), None);
+        assert_eq!(parse_zoom("-0.5", 16.0), None);
+        assert_eq!(parse_zoom("0", 16.0), None);
+        assert_eq!(parse_zoom("auto", 16.0), None);
+        assert_eq!(parse_zoom("", 16.0), None);
+    }
+
+    /// BUG-1052: math functions (incl. `sign()` over `em`) are valid `zoom` values.
+    #[test]
+    fn zoom_accepts_math_functions() {
+        let approx = |got: Option<f32>, want: f32| {
+            assert!(got.is_some_and(|g| (g - want).abs() < 1e-6), "got {got:?}, want {want}");
+        };
+        approx(parse_zoom("calc(sign(1em - 1px) * 2)", 10.0), 2.0);
+        approx(parse_zoom("calc(sign(1em - 1px) * 2%)", 10.0), 0.02);
+        approx(parse_zoom("calc(1 + 0.5)", 10.0), 1.5);
+        assert_eq!(parse_zoom("calc(1 - 2)", 10.0), None);
     }
 
     /// The core of the property: `zoom` shrinks the box itself, not just its

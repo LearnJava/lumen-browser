@@ -105,7 +105,7 @@ computed-значения ширины бордеров/аутлайнов по 
    `svg-computed-style.html` 22/88), [BUG-1051](BUG-1051-FIXED.md)
    (`lh`/`ex`/`cap`/`ch`/`vh`/`vw` не совпадают со своей root-relative
    парой под `zoom` — `font-relative-units.html` 1/6,
-   `relative-units.html` 1/6), [BUG-1052](BUG-1052-OPEN.md)
+   `relative-units.html` 1/6), [BUG-1052](BUG-1052-FIXED.md)
    (`zoom: calc(sign(...))` отклоняется парсером целиком —
    `zoom-with-sign-function.html` 0/2). Их `.ini` не тронуты этим
    срезом (`svg-computed-style.html.ini` переписан под текущий фактический
