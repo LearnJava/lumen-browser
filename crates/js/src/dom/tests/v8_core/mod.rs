@@ -1077,11 +1077,8 @@ fn detached_document_body_setter() {
 /// whose first `doc.removeChild(...)` used to take 17 of its 24 failures
 /// with it. Each `assert_equals` of the original becomes one clause.
 ///
-/// The four subtests that put an element in a foreign namespace *and*
-/// expect it to stay distinguishable from the HTML one are omitted: the
-/// arena stores `Namespace` as a six-value enum, so
-/// `createElementNS('http://example.org/test', 'body')` is indistinguishable
-/// from `createElement('body')` — [BUG-830], a separate defect one layer down.
+/// The foreign-namespace subtests live in
+/// `create_element_ns_arbitrary_uri_stays_foreign` (BUG-830).
 #[test]
 fn detached_document_wpt_document_body_subtests() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -1131,6 +1128,16 @@ fn detached_document_wpt_document_body_subtests() {
                 b = d.createElement('body'); d.body = b; \
                 r.push(d.documentElement.firstChild.isSameNode(b) && d.body === null); \
                 r.indexOf(false)";
+    let first_failure = rt.eval(script).unwrap();
+    assert_eq!(first_failure, lumen_core::JsValue::Number(-1.0));
+}
+
+/// BUG-830: the four foreign-namespace subtests of WPT
+/// `Document.body.html`, plus the raw `createElementNS` symptom.
+#[test]
+fn create_element_ns_arbitrary_uri_stays_foreign() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = "                var NS = 'http://example.org/test';                 function mk() {                     var d = document.implementation.createHTMLDocument('');                     d.removeChild(d.documentElement);                     return d;                 }                 var r = []; var d, html, b, x;                 var e = document.createElementNS(NS, 'body');                 r.push(e.namespaceURI === NS && e.tagName === 'body' && e.localName === 'body');                 d = mk(); html = d.appendChild(d.createElementNS(NS, 'html'));                 html.appendChild(d.createElement('body')); r.push(d.body === null);                 d = mk(); html = d.appendChild(d.createElement('html'));                 x = html.appendChild(d.createElementNS(NS, 'body'));                 b = html.appendChild(d.createElement('body')); r.push(d.body.isSameNode(b));                 d = mk(); html = d.appendChild(d.createElement('html'));                 x = html.appendChild(d.createElementNS(NS, 'frameset'));                 b = html.appendChild(d.createElement('body')); r.push(d.body.isSameNode(b));                 r.indexOf(false)";
     let first_failure = rt.eval(script).unwrap();
     assert_eq!(first_failure, lumen_core::JsValue::Number(-1.0));
 }

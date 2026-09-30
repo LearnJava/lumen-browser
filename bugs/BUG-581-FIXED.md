@@ -115,7 +115,7 @@ check and for `instanceof HTMLTableCaptionElement`).
 
 **Residual, out of scope** — traced to separate, already-filed or clearly
 distinct root causes, not this bug's "bare stub" defect:
-[BUG-830](BUG-830-OPEN.md) (`createElementNS` with an arbitrary non-SVG/
+[BUG-830](BUG-830-FIXED.md) (`createElementNS` with an arbitrary non-SVG/
 MathML/empty namespace URI collapses to HTML) accounts for 5 subtests
 (`createTBody.html`'s "namespaced tbody", `cells.html`, `table-rows.html`'s
 "Complicated case", 3 of `caption-methods.html`'s namespace cases — the
