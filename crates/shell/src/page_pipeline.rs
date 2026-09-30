@@ -1222,6 +1222,7 @@ pub(crate) fn parse_and_layout(
         cross_origin_isolated,
         target,
         page_base: base.clone(),
+        image_hook_channel: dynamic_image_hook_ctx.as_ref().map(|c| (c.generation, c.proxy.clone())),
     };
     // BUG-1118: built from the still-owned `doc` (about to move into
     // `run_scripts_with_dom` below), same one-shot CSP/referrer-policy read
@@ -1239,6 +1240,7 @@ pub(crate) fn parse_and_layout(
                 target,
                 referrer_policy,
                 ctx,
+                viewport: (viewport.width, viewport.height),
             }) as Arc<dyn lumen_core::ext::ImageLoadHook>
         });
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(

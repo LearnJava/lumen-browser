@@ -69,9 +69,43 @@ pub(crate) struct DynamicImgFetchHook {
     pub(crate) target: lumen_core::ColorSpace,
     pub(crate) referrer_policy: lumen_network::ReferrerPolicy,
     pub(crate) ctx: DynamicImageHookCtx,
+    /// BUG-1148: layout viewport for the `sizes` picker run in the JS runtime.
+    pub(crate) viewport: (f32, f32),
+}
+
+impl DynamicImgFetchHook {
+    /// BUG-1148: hook for a document that is not the page's own (an `<iframe>`
+    /// sub-document, a tab restored from hibernation). Decoded pixels reach the
+    /// page renderer under the same raw-URL key the sub-document's layout emits,
+    /// through the page's `LoadEvent` channel; a fresh ledger keeps the
+    /// sub-document's relative URLs from shadowing the page's own requests.
+    pub(crate) fn for_document(
+        doc: &lumen_dom::Document,
+        base: ResourceBase,
+        sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        target: lumen_core::ColorSpace,
+        viewport: (f32, f32),
+        ctx: DynamicImageHookCtx,
+    ) -> Arc<dyn lumen_core::ext::ImageLoadHook> {
+        Arc::new(Self {
+            csp_gate: crate::csp_enforce::document_csp_policy(doc, doc.root()),
+            referrer_policy: crate::resource_base::document_referrer_policy(doc),
+            base,
+            sink,
+            cookie_jar,
+            target,
+            viewport,
+            ctx,
+        })
+    }
 }
 
 impl lumen_core::ext::ImageLoadHook for DynamicImgFetchHook {
+    fn viewport(&self) -> (f32, f32) {
+        self.viewport
+    }
+
     fn queue_image_load(&self, nid: u32, raw_src: &str) {
         // Same dedup set `spawn_image_requests` inserts into — whichever of
         // the two producers gets here first wins, the other skips. The node is

@@ -79,4 +79,4 @@ HTML LS §4.8.4.3 «update the image data»: присвоение `src`/вста
 только `/` и `/api` (`no-store`) — это ожидаемо, не регрессия.
 
 Остаток (`srcset`/`<picture>`, iframe-документы, вкладка после гибернации) вынесен в
-[BUG-1148](BUG-1148-OPEN.md).
+[BUG-1148](BUG-1148-FIXED.md).

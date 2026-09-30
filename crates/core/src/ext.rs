@@ -3644,12 +3644,10 @@ pub trait PushBackend: Send + Sync {
 /// generation and dedup set all captured at construction) and hands an
 /// `Arc<dyn ImageLoadHook>` to `V8JsRuntime::with_image_load_hook`.
 ///
-/// Scope: only the plain `src` attribute on `<img>`, only for the runtime
-/// built for the top-level document's own parser/inline scripts
-/// (`run_scripts_with_dom`'s primary call site). `srcset`/`<picture>`
-/// selection, iframes and bfcache-thaw runtimes are not wired — those keep
-/// relying on the post-relayout sweep ([`Self::queue_image_load`]'s caller
-/// doc comment has no bearing on them), same as before this trait existed.
+/// Scope: `src`/`srcset`/`sizes` on `<img>` and `<source>` mutation under a
+/// `<picture>` — the URL is chosen by the same picker the relayout sweep uses
+/// (BUG-1148). Wired for the top-level document, `<iframe>` sub-documents and
+/// tabs restored from hibernation.
 /// Срез 2 added subtree insertion (`appendChild`/`insertBefore` of an
 /// already-`src`-bearing `<img>`, and `innerHTML` parsed straight from
 /// markup) — see `queue_pending_img_loads` in `lumen-js`'s `dom_core.rs`.
@@ -3663,6 +3661,13 @@ pub trait ImageLoadHook: Send + Sync {
     /// DOM walk that dispatches `load`/`error`, so the implementation has to
     /// remember which node asked for `raw_src`.
     fn queue_image_load(&self, nid: u32, raw_src: &str);
+
+    /// BUG-1148: layout viewport (CSS px) for the `sizes`/`<source media>`
+    /// picker, so a `srcset` candidate chosen here matches the one the
+    /// relayout sweep picks (same key → the dedup set skips the second).
+    fn viewport(&self) -> (f32, f32) {
+        (1280.0, 720.0)
+    }
 }
 
 // ============================================================================

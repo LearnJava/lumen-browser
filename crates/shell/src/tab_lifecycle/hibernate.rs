@@ -44,6 +44,16 @@ pub(crate) fn resource_base_from_url(url: &str) -> ResourceBase {
     }
 }
 
+/// BUG-1148: what `restore_js_context` needs from the live `Lumen` to build an
+/// image-load hook for the restored runtime.
+pub(crate) struct RestoreImageHookCtx {
+    pub(crate) generation: u64,
+    pub(crate) proxy: winit::event_loop::EventLoopProxy<crate::page_load::LoadEvent>,
+    pub(crate) dedup: Arc<Mutex<crate::dynamic_image_hook::ImageRequestLedger>>,
+    pub(crate) target: lumen_core::ColorSpace,
+    pub(crate) viewport: (f32, f32),
+}
+
 /// Rebuild the JS runtime for a tab being restored from T3 hibernation.
 ///
 /// Reconstructs the per-origin localStorage / IndexedDB / Service Worker
@@ -72,6 +82,9 @@ pub(crate) fn restore_js_context(
     cookie_banner_dismiss: bool,
     deterministic: crate::deterministic::DetConfig,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    // BUG-1148: `(generation, proxy, dedup, target, viewport)` of the live
+    // `Lumen` — lets the re-run scripts start `<img>` loads immediately.
+    image_hook_ctx: Option<RestoreImageHookCtx>,
 ) -> (Arc<Mutex<Document>>, Option<Arc<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);
 
@@ -98,6 +111,21 @@ pub(crate) fn restore_js_context(
     let idb = crate::idb_store_for_base(&base, idb_dir);
     let sw = crate::sw_store_for_base(&base, sw_backend);
     let js_cookie_jar = cookie_jar.clone();
+    let image_hook = image_hook_ctx.map(|c| {
+        crate::dynamic_image_hook::DynamicImgFetchHook::for_document(
+            &doc,
+            base.clone(),
+            Arc::clone(&event_sink),
+            cookie_jar.clone(),
+            c.target,
+            c.viewport,
+            crate::dynamic_image_hook::DynamicImageHookCtx {
+                generation: c.generation,
+                dedup: c.dedup,
+                proxy: c.proxy,
+            },
+        )
+    });
     let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {
             // GAP-REFERRER срез 3: same reasoning as `page_pipeline.rs`'s
@@ -152,9 +180,8 @@ pub(crate) fn restore_js_context(
         Vec::new(),
         // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above.
         None,
-        // BUG-1118: restore path not wired to the immediate-`<img src>` hook
-        // either — same scope note as the iframe call site in `frames.rs`.
-        None,
+        // BUG-1148: restored runtime gets the immediate-`<img>` hook.
+        image_hook,
         // BUG-1119: the restored page's `document.cookie` sees the tab's jar.
         js_cookie_jar,
         // BUG-1198: a restored top-level page has no ancestors.

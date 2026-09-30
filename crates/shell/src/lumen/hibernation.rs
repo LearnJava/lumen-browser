@@ -178,6 +178,16 @@ impl Lumen {
         // Computed up front: `&mut self.ls_storage` below would otherwise
         // conflict with this `&self` method call as a later call argument.
         let cookie_jar = self.active_cookie_jar();
+        let image_hook_ctx = tab_lifecycle::hibernate::RestoreImageHookCtx {
+            generation: self.load_generation,
+            proxy: self.load_proxy.clone(),
+            dedup: Arc::clone(&self.stream_images_requested),
+            target: self.target_color_space(),
+            viewport: {
+                let v = self.relayout_viewport().unwrap_or(Size { width: 1280.0, height: 720.0 });
+                (v.width, v.height)
+            },
+        };
         let (document_arc, js_ctx) = tab_lifecycle::hibernate::restore_js_context(
             &data.url,
             doc,
@@ -189,6 +199,7 @@ impl Lumen {
             cookie_banner_dismiss,
             deterministic,
             Some(cookie_jar),
+            Some(image_hook_ctx),
         );
 
         let layout_source = LayoutSource {

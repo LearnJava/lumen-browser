@@ -25,7 +25,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## Resource loading
 
-- **A script-made `<img>` fires `load`/`error` reliably only via plain `src` in the top-level document** ([BUG-1048](../bugs/BUG-1048-FIXED.md) fixed that path, including a never-inserted `new Image()`). Inside an iframe, in a tab thawed from hibernation, or selected through `srcset`/`<picture>`, a *detached* image stays silent ([BUG-1148](../bugs/BUG-1148-OPEN.md)) — never read that silence as evidence that a policy blocked it.
+- **A script-made `<img>` fires `load`/`error` reliably only via plain `src` in the top-level document** ([BUG-1048](../bugs/BUG-1048-FIXED.md) fixed that path, including a never-inserted `new Image()`). Inside an iframe a *detached* image stays silent (the fetch itself starts at once; [BUG-1148](../bugs/BUG-1148-FIXED.md) covered `srcset`/`<picture>`, hibernation and the iframe fetch, [BUG-1230](../bugs/BUG-1230-OPEN.md)) — never read that silence as evidence that a policy blocked it.
 - **An SVG document inside `<object>`/`<embed>` is painted from the original bytes by resvg** (OBJECT-1 slice 5): `getSVGDocument()` returns a live DOM, but mutating it changes nothing on screen, and its `documentElement` is `<html>`, not `<svg>`. `<input type=image>` and SVG `<image>` fetch but fire no `load`/`error`. A probe needing a subresource should use `<link rel=stylesheet>`, `<script src>` or `fetch()`.
 
 ## Media

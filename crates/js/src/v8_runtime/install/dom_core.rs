@@ -41,13 +41,59 @@ fn queue_pending_img_loads(
     let mut stack = vec![root];
     while let Some(nid) = stack.pop() {
         let Some(node) = doc.try_get(nid) else { continue };
-        if node.element_name().is_some_and(|n| n.local == "img")
-            && let Some(src) = node.get_attr("src")
-            && !src.trim().is_empty()
-        {
-            hook.queue_image_load(nid.raw(), src);
-        }
+        queue_img_element(doc, nid, hook);
         stack.extend(node.children.iter().copied());
+    }
+}
+
+/// BUG-1148: queue the load of `nid` if it is an `<img>`, choosing the URL with
+/// the same `<picture>`/`srcset`/`sizes`/`src` picker the relayout sweep uses
+/// (`lumen_layout::collect_image_requests`), so both producers key the shared
+/// dedup set identically.
+fn queue_img_element(
+    doc: &lumen_dom::Document,
+    nid: lumen_dom::NodeId,
+    hook: &dyn lumen_core::ext::ImageLoadHook,
+) {
+    let Some(node) = doc.try_get(nid) else { return };
+    if !node.element_name().is_some_and(|n| n.local == "img") {
+        return;
+    }
+    let (w, h) = hook.viewport();
+    let url = lumen_layout::pick_image_request_url(doc, nid, lumen_core::Size { width: w, height: h });
+    if !url.trim().is_empty() {
+        hook.queue_image_load(nid.raw(), &url);
+    }
+}
+
+/// BUG-1148: HTML LS §4.8.4.3 — an attribute change that re-runs "update the
+/// image data": `src`/`srcset`/`sizes` on `<img>` itself, and
+/// `srcset`/`sizes`/`media`/`type`/`src` on a `<source>` whose parent is a
+/// `<picture>` (every `<img>` child of that `<picture>` re-picks).
+fn queue_img_after_attr_change(
+    doc: &lumen_dom::Document,
+    nid: lumen_dom::NodeId,
+    name: &str,
+    hook: &dyn lumen_core::ext::ImageLoadHook,
+) {
+    let Some(node) = doc.try_get(nid) else { return };
+    let Some(tag) = node.element_name() else { return };
+    let is = |a: &str| name.eq_ignore_ascii_case(a);
+    match tag.local.as_str() {
+        "img" if is("src") || is("srcset") || is("sizes") => queue_img_element(doc, nid, hook),
+        "source" if is("srcset") || is("sizes") || is("media") || is("type") || is("src") => {
+            if let Some(parent) = node.parent
+                && doc
+                    .try_get(parent)
+                    .and_then(|p| p.element_name())
+                    .is_some_and(|n| n.local == "picture")
+            {
+                for &c in &doc.get(parent).children {
+                    queue_img_element(doc, c, hook);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -688,13 +734,8 @@ pub(crate) fn install_node_properties(
                 // possibly itself blocked in a synchronous network call,
                 // returns). See `ImageLoadHook`'s doc comment for the exact
                 // scope of what this covers.
-                if changed
-                    && name.eq_ignore_ascii_case("src")
-                    && !value.trim().is_empty()
-                    && let Some(hook) = &img_hook
-                    && doc.get(nid).element_name().is_some_and(|n| n.local == "img")
-                {
-                    hook.queue_image_load(nid.raw(), &value);
+                if changed && let Some(hook) = &img_hook {
+                    queue_img_after_attr_change(&doc, nid, &name, hook.as_ref());
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
