@@ -1337,6 +1337,17 @@ pub(crate) fn install_frame_bridge_v8(
     {
         let reg = Arc::clone(&registry);
         rt.register_native(
+            "_lumen_f_referrer",
+            into_v8_fn1(move |bid: u32| -> String {
+                with_accessible_doc(&reg, bid, |d| {
+                    d.document_referrer().unwrap_or_default().to_owned()
+                }, String::new())
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
             "_lumen_f_title",
             into_v8_fn1(move |bid: u32| -> String {
                 with_accessible_doc(&reg, bid, |d| {
@@ -2177,9 +2188,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     Object.defineProperty(d, 'URL',               { get: function() { return _lumen_f_url(bid); }, configurable: true });
     Object.defineProperty(d, 'documentURI',       { get: function() { return _lumen_f_url(bid); }, configurable: true });
     Object.defineProperty(d, 'contentType',       { get: function() { return _lumen_f_content_type(bid); }, configurable: true });
-    // BUG-1121: строка, а не undefined. Реферер `<iframe src>` (GAP-REFERRER
-    // срез 4 шлёт его в запросе) в документ ребёнка не протянут — BUG-1156.
-    Object.defineProperty(d, 'referrer',          { get: function() { return ''; }, configurable: true });
+    // BUG-1121: строка, а не undefined. BUG-1231: значение — реферер запроса
+    // `<iframe src>`, выставленный shell'ом на документ ребёнка.
+    Object.defineProperty(d, 'referrer',          { get: function() { return _lumen_f_referrer(bid); }, configurable: true });
     // Ребёнок получил window load ещё в срезе 1 — readyState к моменту доступа
     // всегда «complete»; отдельного трекинга переходов срез 2 не ведёт.
     Object.defineProperty(d, 'readyState',        { get: function() { return 'complete'; }, configurable: true });
