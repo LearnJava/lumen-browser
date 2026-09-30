@@ -1,6 +1,6 @@
 # BUG-1089 — у `AudioContext` нет `sinkId`/`setSinkId()`/`AudioSinkInfo` и `playbackStats`/`playoutStats`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6). `sinkId`/`setSinkId()`/`AudioSinkInfo`/`sinkchange`, `playbackStats`/`playoutStats` добавлены в шим; нет устройств — любой непустой id даёт `NotFoundError`, задержки = base+output, underrun всегда 0. `.ini` WPT не пересняты (прогон не делался).
 **Тип:** пробел реализации — члены `AudioContext` из Web Audio 1.1 (выбор устройства вывода, статистика воспроизведения) отсутствуют.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 52, `webaudio`)
 **Область:** js — `crates/js/src/web_audio.rs` (`WEB_AUDIO_SHIM`, `AudioContext`)

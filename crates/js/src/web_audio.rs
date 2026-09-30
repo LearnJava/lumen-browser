@@ -1449,9 +1449,121 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     BaseAudioContext.call(this, opts.sampleRate || 44100, opts.renderSizeHint);
     this.baseLatency   = 0.01;
     this.outputLatency = 0.02;
+    var self = this;
+    var sink = _wa_sink_arg(opts.sinkId);
+    this._sinkId = '';
+    this._pendingSink = 0;
+    if (sink !== '') {
+      if (typeof sink === 'string') {
+        // No enumerable output devices: any non-empty id is unknown.
+        _wa_task(function() { self._wa_fire('error', { type: 'error' }); });
+      } else {
+        this._sinkId = sink;
+      }
+    }
+    this._statsSnap = null;
+    this._playbackStats = _wa_make_stats(this, false);
+    this._playoutStats = _wa_make_stats(this, true);
   }
   AudioContext.prototype = Object.create(BaseAudioContext.prototype);
   AudioContext.prototype.constructor = AudioContext;
+
+  // ── sinkId / setSinkId (Web Audio 1.1 §1.2.3-4) ────────────────────────────
+  function AudioSinkInfo(type) { Object.defineProperty(this, 'type', { value: type, enumerable: true }); }
+  globalThis.AudioSinkInfo = AudioSinkInfo;
+
+  // DOMString | AudioSinkOptions -> '' / non-empty string / AudioSinkInfo.
+  function _wa_sink_arg(v) {
+    if (v === undefined) return '';
+    if (v !== null && typeof v === 'object') {
+      if (v.type !== 'none') throw new TypeError("Failed to read the 'type' property of 'AudioSinkOptions': the provided value is not a valid enum value");
+      return new AudioSinkInfo('none');
+    }
+    return String(v);
+  }
+  Object.defineProperty(AudioContext.prototype, 'sinkId', {
+    get: function() { return this._sinkId; }, enumerable: true, configurable: true
+  });
+  AudioContext.prototype.setSinkId = function(sinkId) {
+    var self = this;
+    return new Promise(function(resolve, reject) {
+      var sink;
+      try { sink = _wa_sink_arg(sinkId); } catch (e) { reject(e); return; }
+      if (self._state === 'closed') {
+        reject(_wa_error('setSinkId: the context is closed', 'InvalidStateError')); return;
+      }
+      if (typeof sink === 'string' && sink !== '') {
+        reject(_wa_error('setSinkId: unknown device', 'NotFoundError')); return;
+      }
+      var cur = self._sinkId;
+      if ((typeof sink === 'string' && cur === sink) ||
+          (typeof sink !== 'string' && typeof cur !== 'string' && cur.type === sink.type)) {
+        resolve(); return;
+      }
+      var wasRunning = self._state === 'running';
+      if (wasRunning) self._setState('suspended');
+      _wa_task(function() {
+        if (self._state === 'closed') {
+          reject(_wa_error('setSinkId: the context was closed', 'InvalidStateError')); return;
+        }
+        self._sinkId = sink;
+        resolve();
+        _wa_task(function() {
+          self._wa_fire('sinkchange', { type: 'sinkchange' });
+          if (wasRunning && self._state === 'suspended') self._setState('running');
+        });
+      });
+    });
+  };
+
+  // ── playbackStats / playoutStats (Web Audio 1.1) ───────────────────────────
+  // No real device, so nothing ever underruns; latency is the context's own
+  // baseLatency + outputLatency. The values are a snapshot refreshed once per
+  // task (cleared by a microtask after the first read), per the spec's
+  // run-to-completion rule.
+  function AudioPlaybackStats() { throw new TypeError('Illegal constructor'); }
+  function AudioPlayoutStats() { throw new TypeError('Illegal constructor'); }
+  globalThis.AudioPlaybackStats = AudioPlaybackStats;
+  globalThis.AudioPlayoutStats = AudioPlayoutStats;
+  function _wa_make_stats(ctx, legacy) {
+    var k = legacy ? 1000 : 1;
+    var names = legacy
+      ? ['totalFramesDuration', 'fallbackFramesDuration', 'fallbackFramesEvents']
+      : ['totalDuration', 'underrunDuration', 'underrunEvents'];
+    var o = Object.create((legacy ? AudioPlayoutStats : AudioPlaybackStats).prototype);
+    function snap() {
+      if (!ctx._statsSnap) {
+        var total = ctx._state === 'closed' ? ctx._statsLast || 0 : ctx.currentTime;
+        ctx._statsLast = total;
+        var lat = total > 0 ? (ctx.baseLatency + ctx.outputLatency) : 0;
+        ctx._statsSnap = { total: total, lat: lat };
+        Promise.resolve().then(function() { ctx._statsSnap = null; });
+      }
+      return ctx._statsSnap;
+    }
+    function def(name, fn) {
+      Object.defineProperty(o, name, { get: fn, enumerable: true, configurable: true });
+    }
+    def(names[0], function() { return snap().total * k; });
+    def(names[1], function() { return 0; });
+    def(names[2], function() { return 0; });
+    ['averageLatency', 'minimumLatency', 'maximumLatency'].forEach(function(n) {
+      def(n, function() { return snap().lat * k; });
+    });
+    Object.defineProperty(o, 'resetLatency', { value: function() {}, configurable: true, writable: true });
+    Object.defineProperty(o, 'toJSON', { value: function() {
+      var r = {};
+      names.concat(['averageLatency', 'minimumLatency', 'maximumLatency']).forEach(function(n) { r[n] = o[n]; });
+      return r;
+    }, configurable: true, writable: true });
+    return o;
+  }
+  Object.defineProperty(AudioContext.prototype, 'playbackStats', {
+    get: function() { return this._playbackStats; }, enumerable: true, configurable: true
+  });
+  Object.defineProperty(AudioContext.prototype, 'playoutStats', {
+    get: function() { return this._playoutStats; }, enumerable: true, configurable: true
+  });
   AudioContext.prototype.suspend = function() {
     var self = this;
     return new Promise(function(resolve) {
@@ -1890,6 +2002,27 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(v, JsValue::String("128,256,128,64,4".to_string()));
+    }
+
+    /// BUG-1089: `sinkId`/`setSinkId()` and `playbackStats`/`playoutStats`.
+    #[test]
+    fn bug1089_sink_id_and_playback_stats() {
+        let rt = rt_with_web_audio();
+        let v = rt
+            .eval(
+                r#"
+                var c = new AudioContext();
+                var out = [c.sinkId === '', typeof c.setSinkId, c.playbackStats.totalDuration,
+                  c.playoutStats.totalFramesDuration, typeof c.playbackStats.resetLatency,
+                  Object.keys(c.playbackStats.toJSON()).length];
+                var bad = 0;
+                try { new AudioContext({sinkId: {type: 'x'}}); } catch (e) { if (e instanceof TypeError) bad++; }
+                out.push(bad, new AudioContext({sinkId: {type: 'none'}}).sinkId instanceof AudioSinkInfo);
+                out.join(',')
+                "#,
+            )
+            .unwrap();
+        assert_eq!(v, JsValue::String("true,function,0,0,function,6,1,true".to_string()));
     }
 
     /// BUG-591: `oncomplete` used to run inside a bare `catch (e) {}`, which
