@@ -199,7 +199,7 @@ git branch -D p<N>-task-name      # -d refuses for the same stale-main reason
 **Run `/lumen-task-finish`. It is the executable protocol — do not hand-run the steps beside it.**
 
 The skill owns the order and the details this page used to duplicate: which gate runs at what scope,
-the doc-sync matrix, merging when the root checkout is dirty, the `BUG-805` gate workaround, freeing
+the doc-sync matrix, merging when the root checkout is dirty, freeing
 the slot. Hand-running `cargo clippy -p` / `cargo test -p` right before invoking it pays twice for
 the same crates — the skill says so in its own header, and the checklist that used to stand here
 told you to do exactly that.

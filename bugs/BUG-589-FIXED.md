@@ -101,5 +101,5 @@ unaffected. `cargo test -p lumen-js --lib --features v8-backend` 3682/3682
 (was 3677), `cargo clippy -p lumen-js --all-targets --features v8-backend --
 -D warnings` clean. Full `scoped-test.sh`/`cargo clippy --workspace` not
 completed — the closure pulls in `lumen-network`, whose gate hangs
-independently ([BUG-805](BUG-805-OPEN.md)); the affected crate was tested
+independently ([BUG-805](BUG-805-FIXED.md)); the affected crate was tested
 directly and is green.

@@ -55,7 +55,7 @@ dynamicport tcp`), а в него попадают **19** из 83 запрещё
 
 ## Чего это НЕ
 
-Не [BUG-805](BUG-805-OPEN.md): тот про зависание `scoped-test.sh` на
+Не [BUG-805](BUG-805-FIXED.md): тот про зависание `scoped-test.sh` на
 `h3::udp::tests::udp_round_trip`, здесь же тест падает мгновенно и на другом
 механизме.
 

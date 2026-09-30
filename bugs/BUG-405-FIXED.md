@@ -3787,7 +3787,7 @@ false` он падает на 2129 различающихся байтах из 
   `cargo test -p lumen-paint --features backend-wgpu` (1177+34), `-p lumen-shell`
   (1581+2), `-p lumen-driver --features cpu-render cases::snapshot_cpu` — зелёные.
   `scripts/scoped-test.sh` целиком не гонялся: гейт красен и виснет на
-  `lumen-network` ([BUG-805](BUG-805-OPEN.md)), поэтому крейты прогнаны адресно.
+  `lumen-network` ([BUG-805](BUG-805-FIXED.md)), поэтому крейты прогнаны адресно.
 * `python graphic_tests/dump_golden.py` — 12/12 совпадают: правка живёт в шелле
   и рендерере, эмиттер display list не тронут.
 * **Полный графический прогон** (153 теста, живое окно): 12 FAIL, из них ни
@@ -3880,7 +3880,7 @@ skip-identical и ключ полосы) обходят весь display list **
   `cargo clippy -p lumen-shell --all-targets -- -D warnings` — чисто;
   `cargo test -p lumen-paint` (1016+29) — зелёный. `scripts/scoped-test.sh`
   целиком не гонялся: гейт красен и виснет на `lumen-network`
-  ([BUG-805](BUG-805-OPEN.md)), крейты прогнаны адресно.
+  ([BUG-805](BUG-805-FIXED.md)), крейты прогнаны адресно.
 * `python graphic_tests/dump_golden.py` — 12/12 совпадают. Полный графический
   прогон не требуется: эмиттер display list не тронут, правка живёт в свёртке
   хэшей и в версии списка.
