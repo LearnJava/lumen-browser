@@ -924,6 +924,29 @@ pub(crate) fn install_node_properties(
                 out
             }
         );
+        // BUG-1064: `getHTML()` — innerHTML plus shadow roots as
+        // `<template shadowrootmode>`. `explicit`: comma-separated nids of
+        // `shadowRoots`; `flags`: `nid:bits` pairs (1 delegatesFocus,
+        // 2 clonable, 4 serializable) from the JS-side init map.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_html",
+            move |node_id: u32, serializable_all: bool, explicit: String, flags: String| -> String {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                if !doc.contains_id(nid) {
+                    return String::new();
+                }
+                let opts = ShadowOpts {
+                    serializable_all,
+                    explicit: explicit.split(',').filter_map(|t| t.parse().ok()).collect(),
+                    flags,
+                };
+                let mut out = String::new();
+                serialize_children_shadow(&doc, nid, &mut out, Some(&opts));
+                out
+            }
+        );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);

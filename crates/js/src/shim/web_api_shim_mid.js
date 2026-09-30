@@ -3307,6 +3307,8 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
 // by shadow-root nid — the arena records only `mode`. A declarative
 // (`<template shadowrootmode>`) root has no entry and reads the defaults.
 var _lumen_shadow_root_init = {};
+// BUG-1064: `nid:bits,…` mirror of the map above for the native `getHTML`.
+var _lumen_shadow_flags = '';
 function _lumen_shadow_root_init_from(init) {
     return {
         delegatesFocus: !!(init && init.delegatesFocus),
@@ -4475,8 +4477,21 @@ ShadowRoot.prototype.setHTMLUnsafe = function(html) {
         : String(html);
     _lumen_set_inner_html(this.__nid__, s);
 };
+// HTML LS §14.5 getHTML({serializableShadowRoots, shadowRoots}) — BUG-1064.
+// Shared by `Element` and `ShadowRoot`; flags come from `_lumen_shadow_root_init`.
+function _lumen_get_html_opts(nid, opts) {
+    var all = !!(opts && opts.serializableShadowRoots);
+    var explicit = [];
+    if (opts && opts.shadowRoots !== undefined && opts.shadowRoots !== null) {
+        for (var r of opts.shadowRoots) {
+            if (r && r.__nid__ !== undefined) explicit.push(r.__nid__);
+        }
+    }
+    if (!all && explicit.length === 0) return _lumen_get_inner_html(nid);
+    return _lumen_get_html(nid, all, explicit.join(','), _lumen_shadow_flags);
+}
 ShadowRoot.prototype.getHTML = function(opts) {
-    return _lumen_get_inner_html(this.__nid__);
+    return _lumen_get_html_opts(this.__nid__, opts);
 };
 // DOM LS §4.9 Node.cloneNode() — a ShadowRoot is explicitly not clonable: the
 // spec calls this out by name, so it must throw rather than be absent
@@ -8555,7 +8570,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var m = (init && init.mode === 'closed') ? 'closed' : 'open';
             var sr_nid = _lumen_attach_shadow(nid, m);
             _lumen_ce_shadow_host_by_nid[sr_nid] = nid;
-            _lumen_shadow_root_init[sr_nid] = _lumen_shadow_root_init_from(init);
+            var _i = _lumen_shadow_root_init[sr_nid] = _lumen_shadow_root_init_from(init);
+            _lumen_shadow_flags += (_lumen_shadow_flags ? ',' : '') + sr_nid + ':' +
+                ((_i.delegatesFocus ? 1 : 0) | (_i.clonable ? 2 : 0) | (_i.serializable ? 4 : 0));
             if (init && init.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[sr_nid] = { registry: init.customElements._registry, pending: init.customElements._pending };
             }
@@ -9050,9 +9067,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // ── getHTML (WHATWG HTML LS §14.5) ───────────────────────────────────────
         // Serialises element's subtree as an HTML string.
-        // Phase 0: serializableShadowRoots option deferred (Shadow DOM Phase 2).
         getHTML: function(opts) { var nid = this.__nid__;
-            return _lumen_get_inner_html(nid);
+            return _lumen_get_html_opts(nid, opts);
         },
         // ── moveBefore (DOM LS, Chrome 133+) ─────────────────────────────────────
         // Moves `node` to be the previous sibling of `child` within this element,

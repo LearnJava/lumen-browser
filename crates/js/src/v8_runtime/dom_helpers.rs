@@ -390,11 +390,87 @@ fn parent_is_raw_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool 
 /// once every descendant has already been emitted (LIFO, children pushed in
 /// reverse to preserve document order).
 pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
-    enum Frame {
-        Open(lumen_dom::NodeId),
-        Close(String),
+    serialize_node_shadow(doc, id, out, None);
+}
+
+/// BUG-1064: which shadow roots `getHTML()` emits as `<template shadowrootmode>`.
+pub(super) struct ShadowOpts {
+    /// `serializableShadowRoots: true` — emit every root whose flag is set.
+    pub serializable_all: bool,
+    /// `shadowRoots: [...]` — emitted regardless of the flag.
+    pub explicit: std::collections::HashSet<u32>,
+    /// `nid:bits,…` for every shadow root (bits: 1 delegatesFocus, 2 clonable,
+    /// 4 serializable). Kept as text and scanned per host met during the walk —
+    /// a page can create thousands of roots, but a subtree holds few hosts.
+    pub flags: String,
+}
+
+impl ShadowOpts {
+    fn bits(&self, root: u32) -> u8 {
+        let key = root.to_string();
+        self.flags
+            .split(',')
+            .find_map(|t| t.split_once(':').filter(|(n, _)| *n == key))
+            .and_then(|(_, b)| b.parse().ok())
+            .unwrap_or(0)
     }
-    let mut stack = vec![Frame::Open(id)];
+}
+
+/// [`serialize_node`] with HTML LS §13.3 shadow-root serialization: a host's
+/// qualifying root goes first inside the host, as a `<template>`.
+pub(super) fn serialize_node_shadow(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    out: &mut String,
+    shadow: Option<&ShadowOpts>,
+) {
+    serialize_frames(doc, vec![Frame::Open(id)], out, shadow);
+}
+
+enum Frame {
+    Open(lumen_dom::NodeId),
+    Close(String),
+    Raw(String),
+}
+
+/// Pushes (in pop order: open tag, shadow children, close tag) the frames for
+/// `host`'s qualifying shadow root.
+fn push_shadow_frames(
+    doc: &lumen_dom::Document,
+    host: lumen_dom::NodeId,
+    opts: &ShadowOpts,
+    stack: &mut Vec<Frame>,
+) {
+    let Some(sr) = doc.shadow_root_of(host) else { return };
+    let lumen_dom::NodeData::ShadowRoot { mode } = &doc.get(sr).data else { return };
+    let bits = opts.bits(sr.raw());
+    if !(opts.explicit.contains(&sr.raw()) || (opts.serializable_all && bits & 4 != 0)) {
+        return;
+    }
+    let mut open = format!("<template shadowrootmode=\"{mode}\"");
+    if bits & 1 != 0 {
+        open.push_str(" shadowrootdelegatesfocus=\"\"");
+    }
+    if bits & 4 != 0 {
+        open.push_str(" shadowrootserializable=\"\"");
+    }
+    if bits & 2 != 0 {
+        open.push_str(" shadowrootclonable=\"\"");
+    }
+    open.push('>');
+    stack.push(Frame::Close("template".to_string()));
+    for &child in doc.get(sr).children.iter().rev() {
+        stack.push(Frame::Open(child));
+    }
+    stack.push(Frame::Raw(open));
+}
+
+fn serialize_frames(
+    doc: &lumen_dom::Document,
+    mut stack: Vec<Frame>,
+    out: &mut String,
+    shadow: Option<&ShadowOpts>,
+) {
     while let Some(frame) = stack.pop() {
         match frame {
             Frame::Open(id) => match &doc.get(id).data {
@@ -434,6 +510,9 @@ pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, o
                     for &child in doc.get(id).children.iter().rev() {
                         stack.push(Frame::Open(child));
                     }
+                    if let Some(opts) = shadow {
+                        push_shadow_frames(doc, id, opts, &mut stack);
+                    }
                 }
                 // Document/Doctype/ShadowRoot/DocumentFragment never appear as a
                 // regular DOM child reachable from `innerHTML`/`outerHTML` —
@@ -445,15 +524,32 @@ pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, o
                 out.push_str(&tag);
                 out.push('>');
             }
+            Frame::Raw(text) => out.push_str(&text),
         }
     }
 }
 
 /// Serializes `id`'s children in tree order (used for `innerHTML`, BUG-368).
 pub(super) fn serialize_children(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
-    for &child in &doc.get(id).children.clone() {
-        serialize_node(doc, child, out);
+    serialize_children_shadow(doc, id, out, None);
+}
+
+pub(super) fn serialize_children_shadow(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    out: &mut String,
+    shadow: Option<&ShadowOpts>,
+) {
+    let mut stack = Vec::new();
+    for &child in doc.get(id).children.iter().rev() {
+        stack.push(Frame::Open(child));
     }
+    // The host's own root precedes its children (the host's open tag is not
+    // part of `getHTML()`, so it is not emitted by `serialize_frames`).
+    if let Some(opts) = shadow {
+        push_shadow_frames(doc, id, opts, &mut stack);
+    }
+    serialize_frames(doc, stack, out, shadow);
 }
 
 /// Re-creates `src_id` (and its descendants) from the throwaway `src`
