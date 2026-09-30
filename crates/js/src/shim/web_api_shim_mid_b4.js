@@ -596,7 +596,21 @@ function _lumen_layout_published() {
 // that have no rAF pending. Returns without delivering while the first layout
 // snapshot is missing (the timer pass owns that wait).
 function _ro_frame_pass() {
-    if (!_ro_has_pending_initial() || !_lumen_layout_published()) return;
+    if (!_ro_layout_deferred && (!_ro_has_pending_initial() || !_lumen_layout_published())) return;
+    _ro_layout_deferred = false;
+    _lumen_deliver_resize_observers();
+}
+
+// BUG-1056: the shell's post-relayout delivery (`deliver_layout_observers`)
+// runs outside the frame's rAF pump; with rAF callbacks still queued it would
+// report observations ahead of them. Hold it for `_ro_frame_pass`, which the
+// pump runs right after the rAF batch.
+var _ro_layout_deferred = false;
+function _lumen_deliver_resize_observers_layout() {
+    if (_ro_observers.length !== 0 && _lumen_raf_callbacks.length !== 0) {
+        _ro_layout_deferred = true;
+        return;
+    }
     _lumen_deliver_resize_observers();
 }
 

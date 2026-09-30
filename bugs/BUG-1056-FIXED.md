@@ -1,6 +1,6 @@
 # BUG-1056: `ResizeObserver` delivery races `requestAnimationFrame`/focus-fixup instead of running inside the same "update the rendering" step
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid_b.js` -- `_ro_schedule_initial`/`_ro_initial_pass`, `_lumen_timers`)
 **Найден:** P3, BUG-600 follow-up, 2026-09-16
 
@@ -52,3 +52,7 @@ into BUG-600.
 ## Срез 1 (P6, 2026-09-30)
 
 Первая доставка `ResizeObserver` больше не забирается таймер-задачей раньше rAF: `_ro_initial_pass` откладывается (до 8 кадров), пока есть ожидающие rAF, а `_lumen_run_raf_callbacks` вызывает `_ro_frame_pass` после пакета rAF и до `_lumen_focus_fixup`. Юнит-тест `resize_observer_first_delivery_follows_raf_in_same_frame`. WPT `focus-fixup-rule-one-no-dialogs.html` не перепрогнан — баг остаётся OPEN до перепроверки.
+
+## Срез 2 (P6, 2026-09-30) — закрыт
+
+Причина остатка: пост-relayout проход шелла (`deliver_layout_observers` → `_lumen_deliver_resize_observers`) доставлял RO до rAF того же кадра. Добавлен `_lumen_deliver_resize_observers_layout`: при очереди rAF откладывает доставку до `_ro_frame_pass`. Юнит-тест `resize_observer_layout_delivery_follows_raf_in_same_frame`. WPT `focus-fixup-rule-one-no-dialogs.html`: 6/8 (`.ini` обновлён); #button3 (синхронный fixup) и #button6 падают по другим причинам, не по порядку RO.

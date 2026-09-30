@@ -2290,3 +2290,38 @@ fn intersection_observer_intersection_rect_height() {
     let ratio_ok = rt.eval("_ir_entry && Math.abs(_ir_entry.intersectionRatio - 0.4) < 0.01").unwrap();
     assert_eq!(ratio_ok, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-1056: the shell's post-relayout delivery must not report ahead of the
+/// rAF callbacks queued for the same frame.
+#[test]
+fn resize_observer_layout_delivery_follows_raf_in_same_frame() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (html_nid, body_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::find_element_by_tag(&doc, "html").unwrap().index() as u32,
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects(
+        [
+            (html_nid, [0.0, 0.0, 1024.0, 720.0]),
+            (body_nid, [0.0, 0.0, 200.0, 100.0]),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    rt.eval(
+        r#"
+                var _ro_ord = [];
+                new ResizeObserver(function() { _ro_ord.push('ro'); }).observe(document.body);
+                requestAnimationFrame(function() { _ro_ord.push('raf'); });
+                _lumen_deliver_resize_observers_layout();
+            "#,
+    )
+    .unwrap();
+    assert_eq!(rt.eval("_ro_ord.join()").unwrap(), lumen_core::JsValue::String("".into()));
+    rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+    assert_eq!(rt.eval("_ro_ord.join()").unwrap(), lumen_core::JsValue::String("raf,ro".into()));
+}
