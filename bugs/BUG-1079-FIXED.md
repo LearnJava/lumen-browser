@@ -1,6 +1,6 @@
 # BUG-1079 — оконные `WebAssembly.compileStreaming`/`instantiateStreaming` не проверяют аргументы и отдают не-спецификационные результаты
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6). Исправлено: streaming-проверки (Response, MIME, ok, bodyUsed), TypeError на не-объектный importObject, frozen exports. Не сделано: `WebAssembly.Global.prototype.type` (tentative).
 **Тип:** несоответствие спецификации — стриминговые методы в оконном шиме (`crates/js/src/webassembly.rs:342-357`) переиспользуют `compile`/`instantiate` без проверок алгоритма streaming
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 48, `wasm`)
 **Область:** js — `crates/js/src/webassembly.rs` (`compileStreaming`, `instantiateStreaming`, `Instance.exports`)
