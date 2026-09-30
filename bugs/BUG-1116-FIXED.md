@@ -134,8 +134,8 @@
 вынесено в [BUG-1150](BUG-1150-FIXED.md). Стенд `.tmp/seqlab` (700 мс/ответ, окно): с подсказками
 последний ответ 3.7 с, без них 4.7 с (Chrome 2.8/2.9) — подсказки больше не замедляют загрузку.
 Единственный дубль стенда — `<link rel=preload as=fetch>` + `fetch('/api')`: странице отдаётся
-отдельный запрос, [BUG-1151](BUG-1151-OPEN.md). Попутно на стенде видно, что каждый подресурс
-уходит с `Sec-Fetch-Dest: document`/`Mode: navigate`/`Site: none` — [BUG-1152](BUG-1152-OPEN.md).
+отдельный запрос, [BUG-1151](BUG-1151-FIXED.md). Попутно на стенде видно, что каждый подресурс
+уходит с `Sec-Fetch-Dest: document`/`Mode: navigate`/`Site: none` — [BUG-1152](BUG-1152-FIXED.md).
 
 Тесты: `mixed_content::preload_as_maps_to_consumer_destination`,
 `prefetch::{lookup_misses_when_nothing_warmed, lookup_waits_for_warm_reserved_before_its_thread_runs,

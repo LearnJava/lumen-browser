@@ -1,6 +1,6 @@
 # BUG-1152 — все подресурсы уходят с `Sec-Fetch-Dest: document`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Site: none`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3, закрыт перепроверкой — исправлено [BUG-1021](BUG-1021-FIXED.md))
 **Заведён:** 2026-09-24 (P6, при закрытии [BUG-1116](BUG-1116-FIXED.md) — сравнение заголовков на стенде)
 **Область:** network (`crates/network/src/http/headers.rs::build_request_headers` — навигационный
 набор `Sec-Fetch-*` вшит в профиль и не зависит от `RequestDestination`)
@@ -30,3 +30,17 @@ CORS-режим шрифтов, здесь про весь набор Fetch Meta
 `Sec-Fetch-Mode` (`no-cors` для элементов, `cors` для `fetch()`/`@font-face`), `Sec-Fetch-Site`
 по сравнению origin-ов инициатора и цели; `Sec-Fetch-User` только у навигаций пользователя.
 Критерий: заголовки на стенде совпадают с Chrome 153 по всем 16 запросам.
+
+## Закрытие (P3, 2026-09-30)
+
+Баг заведён 2026-09-24, а [BUG-1021](BUG-1021-FIXED.md) влит 2026-09-25: модуль
+`crates/network/src/fetch_metadata.rs` подменяет навигационный блок профиля
+per-request значениями `Sec-Fetch-Site/-Mode/-Dest` (вызовы в
+`HttpClient::fetch_subresource` и в пути `fetch()`/XHR, `lib.rs`).
+
+Проба (`--screenshot` на локальном сервере-эхе, dev-release от 2026-09-30):
+`/` → `none/navigate/document`; `/a.js` → `same-origin/no-cors/script`;
+`/s.css` → `same-origin/no-cors/style`; `/i.png` → `same-origin/no-cors/image`;
+`fetch('/api')` → `same-origin/cors/empty` — совпадает с Chrome 153 из симптома.
+Кода не менял. Не проверены кросс-сайт и шрифты (покрыты юнит-тестами
+`fetch_metadata::tests`).
