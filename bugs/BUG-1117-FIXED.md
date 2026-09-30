@@ -64,6 +64,6 @@ CSP `img-src`. Послелейаутный `fetch_and_decode_background_images`
 послелейаутным сборщиком на наборе разметок), `cascade_bg_urls_skip_boxless_elements`.
 Гейты: `cargo clippy --workspace --all-targets -D warnings` чист; `scripts/scoped-test.sh` —
 один FAILED, `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty` в
-`lumen-js` (крейт не затронут): известный флак [BUG-1110](BUG-1110-OPEN.md), в отдельном
+`lumen-js` (крейт не затронут): известный флак [BUG-1110](BUG-1110-FIXED.md), в отдельном
 прогоне проходит. Пиксели не двигаются: для не-GIF картинок декод тот же (`decode_to`), а GIF
 в фоне в корпусе `graphic_tests` нет.

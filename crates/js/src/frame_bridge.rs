@@ -191,11 +191,11 @@
 //!   новый объект Event, а не тот же инстанс, что у ребёнка.
 
 #[cfg(feature = "v8-backend")]
-use std::collections::HashSet;
+use std::collections::HashMap;
 #[cfg(feature = "v8-backend")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "v8-backend")]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// Псевдо-bid слота «окно родителя» в реестре ([`FrameDocSlots::parent`]).
 ///
@@ -564,10 +564,24 @@ pub(crate) fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocB
 /// ребёнка ЕГО СОБСТВЕННЫМ скриптом идёт обычными нативами `dom.rs` в его же
 /// рантайме и уже поднимает штатный `dom_dirty` этого рантайма — реестр ей не
 /// нужен, шелл дренирует оба источника рядом (`about_to_wait.rs`).
+///
+/// BUG-1110: значение — `Weak` документа. Живой `Weak` удерживает выделение
+/// `Arc`, поэтому аллокатор не может выдать тот же адрес новому документу,
+/// пока запись в реестре есть; запись умершего документа `take` отбрасывает
+/// (флаг «наследует» только живой документ), а `mark` вычищает такие записи.
 #[cfg(feature = "v8-backend")]
-fn frame_dom_dirty() -> &'static Mutex<HashSet<usize>> {
-    static DIRTY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-    DIRTY.get_or_init(|| Mutex::new(HashSet::new()))
+fn frame_dom_dirty() -> &'static Mutex<HashMap<usize, Weak<Mutex<lumen_dom::Document>>>> {
+    static DIRTY: OnceLock<Mutex<HashMap<usize, Weak<Mutex<lumen_dom::Document>>>>> =
+        OnceLock::new();
+    DIRTY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Пометить документ мутированным мостом (см. [`frame_dom_dirty`]).
+#[cfg(feature = "v8-backend")]
+fn mark_frame_dom_dirty(doc: &Arc<Mutex<lumen_dom::Document>>) {
+    let mut map = frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, w| w.strong_count() > 0);
+    map.insert(Arc::as_ptr(doc) as usize, Arc::downgrade(doc));
 }
 
 /// Забрать (и сбросить) флаг «документ с этим ключом мутирован мостом».
@@ -575,7 +589,8 @@ fn frame_dom_dirty() -> &'static Mutex<HashSet<usize>> {
 /// со своим `self_doc_key`; `false`, если мутаций не было.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn take_frame_dom_dirty(key: usize) -> bool {
-    frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).remove(&key)
+    let entry = frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+    entry.is_some_and(|w| w.strong_count() > 0)
 }
 
 /// Захватить биндинг `bid` на чтение, если он существует и разрешён.
@@ -627,11 +642,11 @@ fn with_accessible_doc_mut<R>(
     if !binding.accessible {
         return empty;
     }
-    let key = Arc::as_ptr(&binding.doc) as usize;
-    let mut doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
+    let shared = Arc::clone(&binding.doc);
+    let mut doc = shared.lock().unwrap_or_else(|e| e.into_inner());
     let result = f(&mut doc);
     drop(doc);
-    frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+    mark_frame_dom_dirty(&shared);
     result
 }
 
@@ -3013,7 +3028,7 @@ mod tests {
     /// Реестр строится вручную (не через `with_child_context`), чтобы
     /// получить `Arc` документа родителя и слить каждую мутацию через
     /// [`take_frame_dom_dirty`] сразу же — иначе висящий флаг в глобальном
-    /// `HashSet` (ключ — адрес `Arc`, срез 25) переживает эту функцию и
+    /// реестр (ключ — адрес `Arc`, срез 25) переживает эту функцию и
     /// после освобождения памяти может ложно сработать на чужом документе,
     /// которому аллокатор отдаст тот же адрес (гонка с параллельными
     /// тестами, ровно то, от чего `bridge_mutation_marks_frame_dirty_and_drains_once`
@@ -3673,6 +3688,21 @@ mod tests {
                 assert!(!take_frame_dom_dirty(key));
             },
         );
+    }
+
+    /// BUG-1110: флаг умершего документа не достаётся новому документу,
+    /// которому аллокатор выдал бы тот же адрес.
+    #[test]
+    fn dirty_flag_of_dropped_document_is_not_inherited() {
+        let dead = Arc::new(Mutex::new(lumen_html_parser::parse("<p>a</p>")));
+        let key = Arc::as_ptr(&dead) as usize;
+        mark_frame_dom_dirty(&dead);
+        drop(dead);
+        assert!(!take_frame_dom_dirty(key));
+        let live = Arc::new(Mutex::new(lumen_html_parser::parse("<p>b</p>")));
+        let live_key = Arc::as_ptr(&live) as usize;
+        mark_frame_dom_dirty(&live);
+        assert!(take_frame_dom_dirty(live_key));
     }
 
     #[test]

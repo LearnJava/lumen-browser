@@ -1,6 +1,8 @@
 # BUG-1110 — флак `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
+
+**Исправление:** реестр `frame_dom_dirty` хранит `Weak` документа: живой `Weak` удерживает выделение, адрес не переиспользуется; `take` отбрасывает запись умершего документа, `mark` чистит такие записи. Тест `dirty_flag_of_dropped_document_is_not_inherited`.
 **Заведён:** 2026-09-23 (P1, пойман `scripts/scoped-test.sh` на ветке
 `p1-bug1108-caret-trylock`, которая `lumen-js` не трогает).
 **Область:** js (`crates/js/src/frame_bridge.rs` — `frame_dom_dirty()`,

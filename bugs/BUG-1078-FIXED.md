@@ -37,7 +37,7 @@ dedicated/shared/service воркеры разом (тот же паттерн, 
 
 Гейт: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чист; `cargo test -p lumen-js --features v8-backend --lib`
 4222/4223 (единственный красный — предсуществующий флак `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty` при параллельном
-запуске, [BUG-1110](BUG-1110-OPEN.md), зелёный при `--test-threads=1`, не связан); `cargo clippy --workspace --all-targets -- -D warnings` чист;
+запуске, [BUG-1110](BUG-1110-FIXED.md), зелёный при `--test-threads=1`, не связан); `cargo clippy --workspace --all-targets -- -D warnings` чист;
 `scripts/scoped-test.sh` — тот же единственный флак, `lumen-network` в этот раз дошёл до конца без BUG-805-зависания.
 
 Живой WPT-прогон не выполнен — статус построен на юнит-тесте, дословно проверяющем `typeof` внутри воркерного изолята; `run_report.py`
