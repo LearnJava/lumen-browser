@@ -1,6 +1,6 @@
 # BUG-1158 — yahoo: скрипт, вставленный через `appendChild`, падает `SyntaxError: Unexpected token ':'` (в Chrome ошибки нет)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3)
 **Заведён:** 2026-09-25 (P6, при закрытии [BUG-1121](BUG-1121-FIXED.md))
 **Область:** не локализовано — путь вставки классического скрипта
 (`crates/js/src/shim/web_api_shim_mid.js`: `_lumen_resource_after_insert` →
@@ -56,3 +56,17 @@ bbc.com — `Uncaught SyntaxError: Unexpected token ':'` 3 из 3 прогоно
 `_lumen_resource_try_prepare` → `_lumen_script_prepare` → `_lumen_script_execute_classic` → `eval`.
 Chrome ошибки не даёт. Страница Next.js, так что второй кандидат для локализации по п. 1 выше —
 с меньшим числом сторонних скриптов, чем yahoo. Найдено по ходу закрытия [BUG-493](BUG-493-FIXED.md).
+
+## Исправление (P3, 2026-09-30)
+
+Корень — не вставка скрипта, а `innerHTML` на самом `<script>`: Next.js/React кладёт тело через
+`dangerouslySetInnerHTML`, а сырой HTML yahoo несёт `a<e` (JSON-экранирование `<`), которое
+после декодирования даёт `a<e`. `parse_fragment_with_context` стартовал токенизатор в data state
+независимо от контекста, `<e` открывал тег, тело обрезалось на `for(var e=…;a` →
+`SyntaxError: Unexpected token ':'`. Найдено временным логом тела в `_lumen_script_execute_classic`
+(4327 символов, обрыв перед `<`). Правка: для HTML-контекста script/style/iframe/noembed/noframes/xmp
+токенизатор стартует в RAWTEXT, для title/textarea — в RCDATA (HTML LS §13.4 шаг 4)
+(`tokenizer.rs::fragment_text_only_state`, `tree_builder.rs::run_pull_in_state`). Тесты:
+`html-parser/tests/fragment_parsing.rs`, `dom/tests/v8_bug1158_raw_text_inner_html.rs`. Живая проверка:
+на yahoo ошибок `[JS error]` нет. bbc из песочницы не открылся (TLS через прокси, `CaUsedAsEndEntity`) —
+второй сайт из записи не перепроверен, но он тоже Next.js с тем же путём.

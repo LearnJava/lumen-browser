@@ -252,3 +252,24 @@ fn table_contexts_start_in_their_own_insertion_mode() {
     let table = shape_with_context("<tr><td>x", Namespace::Html, "table");
     assert_eq!(table.len(), 1, "{table:?}");
 }
+
+// BUG-1158: `script.innerHTML = 'a<e'` — контекст script/style — RAWTEXT,
+// textarea/title — RCDATA; раньше `<e` уходил в тег и тело обрезалось.
+#[test]
+fn raw_text_context_keeps_lt_as_text() {
+    for local in ["script", "style", "xmp"] {
+        assert_eq!(
+            shape_with_context("for(a=0;a<e;a++){}&amp;", Namespace::Html, local),
+            vec!["#text\"for(a=0;a<e;a++){}&amp;\""],
+            "{local}"
+        );
+    }
+}
+
+#[test]
+fn rcdata_context_decodes_references_but_keeps_tags_as_text() {
+    assert_eq!(
+        shape_with_context("a<b>&amp;c", Namespace::Html, "textarea"),
+        vec!["#text\"a<b>&c\""]
+    );
+}
