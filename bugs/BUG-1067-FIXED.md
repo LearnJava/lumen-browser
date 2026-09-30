@@ -1,6 +1,6 @@
 # BUG-1067 — form GET-отправка из `<iframe>` с `target="_top"`/`_parent` не апгрейжена и не несёт `Upgrade-Insecure-Requests`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Тип:** дефект реализованного кода — навигация страницы из этой ветки собрана в обход общего пути апгрейда/UIR-заголовка, которым уже пользуются соседние формы навигации того же фрейма.
 **Заведён:** 2026-09-20 (P6, GAP-CSPENF срез 55 — попутная находка при добавлении UIR-заголовка для навигации `<iframe>`).
 **Область:** `crates/shell/src/lumen/frame_form_submit.rs::frame_submit_navigate`, ветка `LinkTarget::Page`.
@@ -39,3 +39,7 @@ LinkTarget::Page => {
 - POST-ветка той же функции (`frame_form_submit.rs`, метод `post`) — не читалась при
   находке этого дефекта, возможно несёт тот же пробел.
 - Живой замер (найдено чтением кода, не пробой).
+
+## Исправление
+
+Ветка `LinkTarget::Page` берёт `csp_enforce::upgrade_navigation_url(csp_gate, ...)` и `with_uir_header(navigation_wants_uir_header(csp_gate))` — как `navigate_page_from_frame`. POST-ветка во фрейме не отправляет вообще (только eprintln), проблемы нет.
