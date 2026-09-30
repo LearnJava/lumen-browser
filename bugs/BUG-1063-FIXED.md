@@ -1,6 +1,6 @@
 # BUG-1063 — CSS-селекторы с namespace-префиксом `*|` / `|` (`*|body`, `*|*`, `|body`) отвергаются как невалидные, из-за чего умирает любой `test_driver.click`/`send_keys` на элементе без `id`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6)
 **Тип:** дефект реализованного кода — `querySelector`/`querySelectorAll`/`matches`/`closest` бросают `SyntaxError` на синтаксически корректном селекторе с типом-в-namespace (CSS Namespaces Level 3 §6, `*|E`, `|E`, `*|*`).
 **Заведён:** 2026-09-19 (WPT-RUN-7 срез 36, категория `shadow-dom`)
 **Область:** `crates/engine/css-parser/src/parser/selectors.rs` (`parse_compound_selector`, `:1138`) → `layout/src/selector_query.rs`; ошибку бросает шим `_lumen_sel` (`crates/js/src/shim/web_api_shim_head.js:104`) по вердикту `_lumen_selector_is_valid`.
@@ -95,3 +95,13 @@ deviation; это ожидаемо, а не регрессия — baseline ре
 (ещё 13 id) остаётся не больше ~17 `ERROR`, а ~276 файлов перейдут с `ERROR` в реальные подтесты — категория `editing` станет заметно полезнее как гейт.
 Baseline `tests/wpt/metadata/editing/**` записан с `expected: ERROR` для этих файлов — нижняя планка; регенерировать после починки (`--update-expected` + три `--check`).
 Пример одиночного файла: `/editing/other/cloning-attributes-at-splitting-element.tentative.html`.
+
+## Закрытие (2026-09-30, P6)
+
+Основной симптом (`*|E`, `*|*`, `:root > *|body:nth-child(2)` → `SyntaxError`) уже снят
+[BUG-1004](BUG-1004-CANNOT-REPRODUCE.md) срезом 1 (префикс отбрасывается в `parse_simple_selector`); проба
+`--dump-layout` на 2026-09-30 подтвердила `BODY`/`HTML`/`P`. Добито здесь: `|E` больше не
+совпадает с HTML-элементами (`Type("|")` — пустое множество), необъявленный `ns|E` — `SyntaxError`.
+Тест — `namespace_prefix_undeclared_is_invalid_and_empty_ns_never_matches`.
+**Не сделано:** регенерация baseline `shadow-dom`/`pointerevents`/`editing` (`ERROR → …`) — отдельный
+прогон WPT (P2); стиль-листы с `@namespace` по-прежнему без XML-namespace.

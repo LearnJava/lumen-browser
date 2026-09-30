@@ -1797,3 +1797,11 @@ use super::*;
         }
         assert_eq!(parse_selector_list("*|div"), parse_selector_list("div"));
     }
+
+    #[test]
+    fn namespace_prefix_undeclared_is_invalid_and_empty_ns_never_matches() {
+        // BUG-1063: `svg|rect` без `@namespace` — SyntaxError; `|E` не равен `E`.
+        assert!(!crate::is_valid_selector_list("svg|rect"));
+        assert!(crate::is_valid_selector_list("*|p#out"));
+        assert_ne!(parse_selector_list("|div"), parse_selector_list("div"));
+    }

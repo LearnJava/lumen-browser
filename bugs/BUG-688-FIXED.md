@@ -119,7 +119,7 @@ WPT `touch-events` (`--all --root touch-events --recursive`, baseline перес
 `touch-touchevent-constructor.html` 5/5, idlharness теперь исполняется (раньше
 падал на `idl_test setup`). Минус два harness OK — не эта правка: с 2026-09-04
 исполнитель дошёл до `test_driver.Actions`, и селектор `*|body`, который он строит
-для элемента, отвергается `querySelector` ([BUG-1063](BUG-1063-OPEN.md)).
+для элемента, отвергается `querySelector` ([BUG-1063](BUG-1063-FIXED.md)).
 
 **Остаток вне этого бага:** реальные касания не диспатчатся — шелл не синтезирует
 `touchstart`/`touchmove`/`touchend`, а `executorlumen.py` не переводит

@@ -90,7 +90,7 @@ sanity-check `"Selection" in window` больше не роняет файлы `
 - 6 файлов OK→ERROR (`canvas-click`, `user-select-on-input-and-contenteditable`,
   `*/initial-selection-during-focus-event-propagation`) — `test_driver.click`
   строит селектор `*|body > *|div`, отвергаемый движком
-  ([BUG-1063](BUG-1063-OPEN.md)); бинарник `main` до фикса даёт тот же ERROR —
+  ([BUG-1063](BUG-1063-FIXED.md)); бинарник `main` до фикса даёт тот же ERROR —
   дрейф baseline от 2026-08-06.
 - `onselectionchange-on-document.html` FAIL→TIMEOUT — раньше `setPosition`
   отсутствовал и тест падал сразу, теперь дожидается `selectionchange`, которое

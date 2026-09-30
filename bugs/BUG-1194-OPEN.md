@@ -30,7 +30,7 @@
 `mouseover` и на `keydown` Escape шим реагирует (юнит-тесты
 `crates/js/src/dom/tests/v8_details_dialog_popover.rs`, `escape_loses_interest_without_cancel`).
 Часть hover-вариантов вдобавок умирает раньше — на селекторе `:root > *|body:nth-child(2)` для
-элемента без `id` ([BUG-1063](BUG-1063-OPEN.md)).
+элемента без `id` ([BUG-1063](BUG-1063-FIXED.md)).
 
 ## Что сделать
 
