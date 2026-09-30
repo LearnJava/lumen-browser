@@ -192,7 +192,7 @@ Ph3-v8-migration S12a (ADR-018, 2026-07-14) flipped `lumen-shell`'s default JS e
 - ⬜ mTLS/client certs, `qop=auth-int`, CORS POST/PUT bodies, H2 send-side flow control.
 
 ### lumen-ipc (`crates/ipc`)
-- ✅ Length-prefixed bincode over TCP loopback; `IpcChannel/Server/Client` blocking RPC; messages `Fetch/Ping/Shutdown`; powers out-of-process network service (`--network-service`).
+- ✅ Length-prefixed bincode over TCP loopback; `IpcChannel/Server/Client` blocking RPC; messages `Fetch/Ping/Shutdown`; the out-of-process network service (`--network-service`) is spawned and connected but **not wired into the resource loader** — page requests still use the in-process `HttpClient` (BUG-769).
 - ✅ Tab control channel (TAB-4/5): `CreateTab/NavigateTab/Screenshot/CloseTab` + `TabId`; shell `--ipc-server` is the TCP server, an external controller drives headless tabs and pulls deterministic CPU-rendered PNGs over IPC (no window/gdigrab/ffmpeg).
 - ⬜ Fetch is GET-only (no full method/headers/body yet). Tab control is single-client sequential (no multiplexing).
 
