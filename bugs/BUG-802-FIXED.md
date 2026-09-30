@@ -76,7 +76,7 @@ if needs_prelayout {
 плоская.
 
 Комментарий прямо над этим кодом описывает ровно этот класс дефекта как уже
-закрытый ([BUG-341](BUG-341-OPEN.md): «every flex item paid for two full
+закрытый ([BUG-341](BUG-341-FIXED.md): «every flex item paid for two full
 recursive layouts instead of one, compounding multiplicatively with
 flex-nesting depth»). Правка BUG-341 сузила предпроход по условию, но для
 `is_column` + `flex-basis: auto` условие осталось константой `true`, то есть

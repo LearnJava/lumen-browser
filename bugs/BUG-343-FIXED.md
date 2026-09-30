@@ -6,7 +6,7 @@ same number while this branch was in progress.
 
 **Статус:** FIXED 2026-07-29 (P1) — закрыт вместе с [BUG-333](BUG-333-FIXED.md), тот же корень
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general engine bug, not chrome-specific**
-**Найден:** P1, 2026-07-25, while investigating a CPU-snapshot mismatch (`1000000-final`) caused by the [BUG-341](BUG-341-OPEN.md) partial fix.
+**Найден:** P1, 2026-07-25, while investigating a CPU-snapshot mismatch (`1000000-final`) caused by the [BUG-341](BUG-341-FIXED.md) partial fix.
 
 ## Symptom
 
@@ -90,7 +90,7 @@ Two compounding issues:
    `style.width`/`style.height` is mutated in place rather than resolved
    fresh from an unmodified declaration each time.
 2. **Trigger:** `lay_out_flex`'s own Step 1 (the preliminary/probe pass,
-   still present for several branches after the [BUG-341](BUG-341-OPEN.md)
+   still present for several branches after the [BUG-341](BUG-341-FIXED.md)
    partial fix — anything needing real intrinsic content size) runs a flex
    item **as if it were a plain fill-available block** under the *container's
    full available width*, not its true post-flex-resolution share. If that
@@ -100,7 +100,7 @@ Two compounding issues:
    then it's too late, because (1) means the correct pass can't undo the
    damage.
 
-The [BUG-341](BUG-341-OPEN.md) partial fix (BUG-341 partial fix, 2026-07-25)
+The [BUG-341](BUG-341-FIXED.md) partial fix (BUG-341 partial fix, 2026-07-25)
 incidentally avoids triggering this **for row-direction `FlexBasis::Length`
 items specifically** (like `.snap-demo-x`, `flex: 1` → `flex-basis: 0%`),
 since Step 1 is now skipped entirely for that combination — no probe pass,

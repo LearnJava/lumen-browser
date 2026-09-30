@@ -112,7 +112,7 @@ fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node
 /// `cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture`.
 ///
 /// Was red (measured p50 ≈ 580-630ms, ~300× over the 2ms budget) before
-/// BUG-341's fixes — see [BUG-341](../../../bugs/BUG-341-OPEN.md) for the
+/// BUG-341's fixes — see [BUG-341](../../../bugs/BUG-341-FIXED.md) for the
 /// full history: `lay_out_flex`'s double layout pass (fixed, ~86ms),
 /// `bind_model`'s list rebuilds churning NodeIds every call (fixed), the
 /// S3 incremental cascade + S5 pipeline wiring below (this bench now
@@ -122,8 +122,9 @@ fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node
 /// both the old and new target on a "nothing hovered" transition, which
 /// this fixture hits every other cycle) — see BUG-341 "S3" for why a
 /// representative sibling-to-sibling hover move fares much better, and
-/// `bug341_s5_incremental_pipeline_share` below for that number. Still
-/// red at S5 — see BUG-341 "S5" for the re-measured numbers.
+/// `bug341_s5_incremental_pipeline_share` below for that number. Green on
+/// a quiet machine since BUG-341 S46 (p50 ~0.6-0.9ms); KEY p95 keeps only a
+/// 7-15% margin, so a red run under load measures the machine, not the code.
 #[test]
 #[ignore = "manual perf gate (CC-12) — see BUG-341; doc comment has the run command"]
 fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
@@ -172,14 +173,14 @@ fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
 
     assert!(
         hover_summary.p95_ms < BUDGET_MS,
-        "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
-             the current numbers and the open follow-up (S6) needed to close this",
+        "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S46\" for \
+             the baseline numbers; rerun on a quiet machine before filing a regression",
         hover_summary.p95_ms,
     );
     assert!(
         key_summary.p95_ms < BUDGET_MS,
-        "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
-             the current numbers and the open follow-up (S6) needed to close this",
+        "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S46\" for \
+             the baseline numbers; rerun on a quiet machine before filing a regression",
         key_summary.p95_ms,
     );
 }
