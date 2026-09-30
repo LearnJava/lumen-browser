@@ -969,6 +969,22 @@ pub fn encode_form_fields_multipart(fields: &[(String, String)], boundary: &str)
     (ct, body)
 }
 
+/// Encode form fields with the `text/plain` algorithm (HTML LS §4.10.21.8):
+/// one `name=value` line per field, each terminated by CRLF, no escaping.
+///
+/// Returns `(content_type, body_bytes)`; the content type is
+/// `text/plain;charset=UTF-8` as the entity-body submission step requires.
+pub fn encode_form_fields_plain(fields: &[(String, String)]) -> (String, Vec<u8>) {
+    let mut out = String::new();
+    for (name, value) in fields {
+        out.push_str(name);
+        out.push('=');
+        out.push_str(value);
+        out.push_str("\r\n");
+    }
+    ("text/plain;charset=UTF-8".to_owned(), out.into_bytes())
+}
+
 /// Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
 /// normalised to lower-case. Default: `"application/x-www-form-urlencoded"`.
 ///
@@ -2204,6 +2220,14 @@ mod tests {
         let (doc, submit) = make_submit_doc(); // no enctype attr
         let enctype = get_form_enctype(&doc, submit);
         assert_eq!(enctype, "application/x-www-form-urlencoded");
+    }
+
+    #[test]
+    fn encode_form_fields_plain_crlf_lines_no_escaping() {
+        let fields = vec![("a b".to_owned(), "1&2".to_owned()), ("c".to_owned(), "é".to_owned())];
+        let (ct, body) = encode_form_fields_plain(&fields);
+        assert_eq!(ct, "text/plain;charset=UTF-8");
+        assert_eq!(String::from_utf8(body).unwrap(), "a b=1&2\r\nc=é\r\n");
     }
 
     #[test]

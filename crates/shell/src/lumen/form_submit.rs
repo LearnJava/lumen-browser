@@ -96,12 +96,9 @@ impl Lumen {
                         // Multipart: deterministic boundary for Phase 0.
                         let boundary = "----LumenFormBoundary0000000000000000";
                         forms::encode_form_fields_multipart(&fields, boundary)
+                    } else if enctype == "text/plain" {
+                        forms::encode_form_fields_plain(&fields)
                     } else {
-                        // Сюда же попадает `enctype="text/plain"`: собственного
-                        // кодировщика plain-text (HTML LS §4.10.21.8) в движке
-                        // нет, поля кодируются urlencoded — BUG-1042. Заголовок
-                        // объявляет то, что реально лежит в теле, а не enctype
-                        // формы: соврать про кодировку хуже, чем её не иметь.
                         (
                             "application/x-www-form-urlencoded".to_owned(),
                             forms::encode_form_fields(&fields).into_bytes(),
@@ -139,12 +136,9 @@ impl Lumen {
                         }
                         "get" => {
                             // HTML LS §form-submission step 23: navigate
-                            // to action + query-string (only urlencoded for GET).
-                            let url_body = if enctype == "multipart/form-data" {
-                                forms::encode_form_fields(&fields)
-                            } else {
-                                body.clone()
-                            };
+                            // to action + query-string (only urlencoded for GET,
+                            // whatever the enctype says).
+                            let url_body = forms::encode_form_fields(&fields);
                             let get_url = forms::make_get_url(&action, &url_body);
                             let resolved = self.source.resolve_href(&get_url);
                             let resolved = crate::csp_enforce::upgrade_navigation_url(csp_gate.as_ref(), &resolved);
