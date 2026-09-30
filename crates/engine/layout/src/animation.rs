@@ -140,10 +140,13 @@ impl AnimationFrame {
                 props.insert("opacity".to_string(), crate::selector_query::opacity_to_css(opacity));
             }
             if let Some(transform) = &style.transform {
-                props.insert(
-                    "transform".to_string(),
-                    crate::selector_query::transform_list_to_css(transform),
-                );
+                // Resolved value, like `apply_used_geometry`: a `matrix()`, not the list.
+                let css = if transform.is_empty() {
+                    "none".to_string()
+                } else {
+                    crate::resolved_geometry::resolved_transform(transform, 1.0)
+                };
+                props.insert("transform".to_string(), css);
             }
             if let Some(color) = style.color {
                 props.insert("color".to_string(), crate::selector_query::color_to_css(color));
@@ -1677,7 +1680,7 @@ mod tests {
         let patches = frame.to_computed_style_patches();
         let props = patches.get(&5).expect("node 5 must have patches");
         assert_eq!(props.get("opacity").map(String::as_str), Some("0.5"));
-        assert_eq!(props.get("transform").map(String::as_str), Some("translateX(10px)"));
+        assert_eq!(props.get("transform").map(String::as_str), Some("matrix(1, 0, 0, 1, 10, 0)"));
     }
 
     // Integral opacity serializes without a decimal point, matching

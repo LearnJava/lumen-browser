@@ -5006,7 +5006,7 @@ function _wa_normalize_keyframes(keyframes) {
             var kf = {};
             kf.offset = (src.offset != null) ? +src.offset : (n <= 1 ? 0 : i / (n - 1));
             kf.easing = src.easing || 'linear';
-            kf.composite = src.composite || 'replace';
+            kf.composite = src.composite || 'auto';
             for (var p in src) {
                 if (p !== 'offset' && p !== 'easing' && p !== 'composite') kf[p] = src[p];
             }
@@ -5027,7 +5027,7 @@ function _wa_normalize_keyframes(keyframes) {
             var kf2 = {};
             kf2.offset = (offsets && offsets[j] != null) ? +offsets[j] : (len <= 1 ? 0 : j / (len - 1));
             kf2.easing = (Array.isArray(keyframes.easing) ? keyframes.easing[j] : keyframes.easing) || 'linear';
-            kf2.composite = 'replace';
+            kf2.composite = (Array.isArray(keyframes.composite) ? keyframes.composite[j] : keyframes.composite) || 'auto';
             for (var k = 0; k < propNames.length; k++) {
                 var arr = keyframes[propNames[k]];
                 kf2[propNames[k]] = arr[j];
@@ -5048,10 +5048,37 @@ function _wa_ease(t, easing) {
     else if (easing === 'ease-in-out') easing = 'cubic-bezier(0.42,0,0.58,1)';
     if (easing === 'step-start') return t > 0 ? 1 : 0;
     if (easing === 'step-end')   return t >= 1 ? 1 : 0;
+    // CSS Easing L1 §2.3 steps(<n>[, <jump-term>]).
+    var sm = easing.match(/^steps\(\s*(\d+)\s*(?:,\s*(jump-start|jump-end|jump-none|jump-both|start|end)\s*)?\)$/);
+    if (sm) {
+        var n = +sm[1], pos = sm[2] || 'end';
+        if (pos === 'start') pos = 'jump-start'; else if (pos === 'end') pos = 'jump-end';
+        var stepsN = (pos === 'jump-none') ? n - 1 : (pos === 'jump-both' ? n + 1 : n);
+        var cur = Math.floor(t * n);
+        if (pos === 'jump-start' || pos === 'jump-both') cur += 1;
+        if (t >= 0 && cur < 0) cur = 0;
+        if (t <= 1 && cur > stepsN) cur = stepsN;
+        return stepsN <= 0 ? 0 : cur / stepsN;
+    }
     // cubic-bezier(p1x, p1y, p2x, p2y) — approximate with de Casteljau.
     var m = easing.match(/^cubic-bezier\(([^,]+),([^,]+),([^,]+),([^)]+)\)$/);
     if (m) {
         var p1x = +m[1], p1y = +m[2], p2x = +m[3], p2y = +m[4];
+        if (t < 0 || t > 1) {
+            // CSS Easing L1 §2.2: outside [0,1] a cubic-bezier extrapolates
+            // along the tangent of the nearest end; a curve whose control
+            // points lie on the diagonal is linear-equivalent and keeps slope 1.
+            if (p1x === p1y && p2x === p2y) return t;
+            var slope = 0;
+            if (t < 0) {
+                if (p1x > 0) slope = p1y / p1x;
+                else if (p1y === 0 && p2x > 0) slope = p2y / p2x;
+                return t * slope;
+            }
+            if (p2x < 1) slope = (1 - p2y) / (1 - p2x);
+            else if (p2y === 1 && p1x < 1) slope = (1 - p1y) / (1 - p1x);
+            return 1 + (t - 1) * slope;
+        }
         // Newton's method to find t_css for x == t, bisection fallback.
         var cx = 3*p1x, bx = 3*(p2x-p1x)-cx, ax = 1-cx-bx;
         var u = t, solved = false;
@@ -5098,7 +5125,7 @@ function _wa_parse_color(str) {
 function _wa_lerp_color(a, b, t) {
     var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
     if (!ca || !cb) return t < 0.5 ? a : b;
-    function lr(x, y) { return Math.round(x + (y-x)*t); }
+    function lr(x, y) { return Math.max(0, Math.min(255, Math.round(x + (y-x)*t))); }
     var al = lr(ca[3], cb[3]);
     if (al === 255) return 'rgb('+lr(ca[0],cb[0])+','+lr(ca[1],cb[1])+','+lr(ca[2],cb[2])+')';
     return 'rgba('+lr(ca[0],cb[0])+','+lr(ca[1],cb[1])+','+lr(ca[2],cb[2])+','+(al/255).toFixed(4)+')';
@@ -5216,6 +5243,77 @@ function _wa_interp_prop(prop, from, to, t) {
     return _wa_lerp_scalar(from, to, t);
 }
 
+// Web Animations §5.4.2 composite operations. `under` is the underlying value
+// (the target's own inline / computed value before this animation painted
+// anything), `v` the keyframe value. Only `add` and `accumulate` reach here;
+// `replace` never calls in. Value types the shim cannot combine (mixed units,
+// keywords) fall back to `replace`, i.e. the keyframe value itself.
+function _wa_unit(v) {
+    var m = String(v).trim().match(/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(.*)$/i);
+    return m ? m[1].trim() : '';
+}
+
+function _wa_transform_fns(s) { return (s && s !== 'none') ? (s.match(/\w+\([^)]*\)/g) || []) : []; }
+
+function _wa_composite_transform(under, v, mode) {
+    var ua = _wa_transform_fns(under), va = _wa_transform_fns(v);
+    if (!ua.length && !va.length) return 'none';
+    if (!ua.length) return va.join(' ');
+    if (!va.length) return ua.join(' ');
+    if (mode === 'accumulate' && ua.length === va.length) {
+        var out = [];
+        for (var i = 0; i < ua.length; i++) {
+            var fa = _wa_parse_tfn(ua[i]), fb = _wa_parse_tfn(va[i]);
+            if (fa && fb && fa.name === 'matrix' && fb.name === 'matrix' && fa.args.length === 6 && fb.args.length === 6) {
+                // Accumulating matrices needs decomposition; a singular
+                // operand cannot be decomposed, so the keyframe value stands.
+                var da = fa.args[0] * fa.args[3] - fa.args[1] * fa.args[2];
+                var db = fb.args[0] * fb.args[3] - fb.args[1] * fb.args[2];
+                if (Math.abs(da) < 1e-9 || Math.abs(db) < 1e-9) return va.join(' ');
+            }
+            if (!fa || !fb || fa.name !== fb.name || fa.args.length !== fb.args.length ||
+                fa.name === 'matrix' || fa.name === 'matrix3d' || fa.name === 'rotate3d') { out = null; break; }
+            var scale = fa.name.indexOf('scale') === 0;
+            var args = [];
+            for (var j = 0; j < fa.args.length; j++) {
+                var x = parseFloat(fa.args[j]), y = parseFloat(fb.args[j]);
+                if (isNaN(x) || isNaN(y)) { out = null; break; }
+                var unit = _wa_unit(fa.args[j]) || _wa_unit(fb.args[j]);
+                args.push((scale ? x + y - 1 : x + y) + unit);
+            }
+            if (!out) break;
+            out.push(fa.name + '(' + args.join(', ') + ')');
+        }
+        if (out) return out.join(' ');
+    }
+    return ua.join(' ') + ' ' + va.join(' ');
+}
+
+function _wa_composite_scalar(under, v) {
+    var nu = parseFloat(under), nv = parseFloat(v);
+    if (isNaN(nu) || isNaN(nv)) return v;
+    var uu = _wa_unit(under), uv = _wa_unit(v);
+    if (uu !== uv && uu !== '' && uv !== '') return v;
+    return String(+(nu + nv).toFixed(6)) + (uv || uu);
+}
+
+function _wa_composite_color(under, v) {
+    var cu = _wa_parse_color(under), cv = _wa_parse_color(v);
+    if (!cu || !cv) return v;
+    function ad(x, y) { return Math.max(0, Math.min(255, x + y)); }
+    var al = ad(cu[3], cv[3]);
+    var rgb = ad(cu[0], cv[0]) + ',' + ad(cu[1], cv[1]) + ',' + ad(cu[2], cv[2]);
+    return al === 255 ? 'rgb(' + rgb + ')' : 'rgba(' + rgb + ',' + (al / 255).toFixed(4) + ')';
+}
+
+function _wa_composite_value(prop, under, v, mode) {
+    if (mode !== 'add' && mode !== 'accumulate') return v;
+    if (under == null || under === '') return v;
+    if (prop === 'transform') return _wa_composite_transform(under, v, mode);
+    if (_wa_color_props[prop]) return _wa_composite_color(under, v);
+    return _wa_composite_scalar(under, v);
+}
+
 // Compute the per-property interpolated styles for a KeyframeEffect at progress p.
 function _wa_compute_at_p(effect, p) {
     var kfs = effect._keyframes;
@@ -5226,16 +5324,26 @@ function _wa_compute_at_p(effect, p) {
         if (kfs[i].offset <= p && kfs[i+1].offset >= p) { from = kfs[i]; to = kfs[i+1]; break; }
     }
     var span = to.offset - from.offset;
-    var lt = span < 1e-7 ? 1 : Math.max(0, Math.min(1, (p - from.offset) / span));
-    lt = _wa_ease(lt, from.easing || 'linear');
+    // Outside [0,1] (an overshooting timing easing) the first/last interval
+    // extrapolates (Web Animations §5.3.3); a non-linear keyframe easing is
+    // only defined on [0,1], so it still sees a clamped input.
+    var lt = span < 1e-7 ? 1 : (p - from.offset) / span;
+    var kfe = from.easing || 'linear';
+    if (kfe !== 'linear' && !/^cubic-bezier\(/.test(kfe)) lt = Math.max(0, Math.min(1, lt));
+    lt = _wa_ease(lt, kfe);
     var result = {};
+    var under = effect._underlying || {};
+    function comp(kf, prop) {
+        var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
+        return _wa_composite_value(prop, under[prop], kf[prop], mode);
+    }
     for (var fp in from) {
         if (fp === 'offset' || fp === 'easing' || fp === 'composite') continue;
-        result[fp] = (fp in to) ? _wa_interp_prop(fp, from[fp], to[fp], lt) : from[fp];
+        result[fp] = (fp in to) ? _wa_interp_prop(fp, comp(from, fp), comp(to, fp), lt) : comp(from, fp);
     }
     for (var tp in to) {
         if (tp === 'offset' || tp === 'easing' || tp === 'composite') continue;
-        if (!(tp in result)) result[tp] = to[tp];
+        if (!(tp in result)) result[tp] = comp(to, tp);
     }
     return result;
 }
@@ -5659,9 +5767,34 @@ Animation.prototype._syncStyleAtCurrentTime = function() {
     this._applyForIterProgress(p, eff);
 };
 
+// Snapshot the target's own value of every animated property before this
+// animation paints over it — the "underlying value" `add`/`accumulate` build
+// on, and what `_clearStyles` puts back. Taken once per (re)start of painting.
+function _wa_capture_underlying(anim, eff) {
+    if (eff._underlying) return;
+    var composites = eff.composite === 'add' || eff.composite === 'accumulate' ||
+        eff._keyframes.some(function(k) { return k.composite === 'add' || k.composite === 'accumulate'; });
+    var u = {}, tgt = eff.target, props = _wa_effect_props(eff), cs = null;
+    for (var pr in props) {
+        var iv = '';
+        try { iv = tgt.style[pr]; } catch (e) {}
+        if (!iv && composites) {
+            try {
+                if (!cs) cs = getComputedStyle(tgt);
+                iv = cs[pr];
+            } catch (e) {}
+        }
+        u[pr] = iv;
+    }
+    eff._underlying = u;
+    anim._inlineBefore = {};
+    for (var q in props) { try { anim._inlineBefore[q] = tgt.style[q]; } catch (e) {} }
+}
+
 Animation.prototype._applyAtP = function(p) {
     var eff = this.effect;
     if (!eff || !eff.target) return;
+    _wa_capture_underlying(this, eff);
     var styles = _wa_compute_at_p(eff, p);
     for (var prop in styles) {
         try { eff.target.style[prop] = styles[prop]; } catch(e) {}
@@ -5672,10 +5805,13 @@ Animation.prototype._applyAtP = function(p) {
 Animation.prototype._clearStyles = function() {
     var eff = this.effect;
     if (!eff || !eff.target) return;
+    var before = this._inlineBefore || {};
     for (var prop in this._prevStyles) {
-        try { eff.target.style[prop] = ''; } catch(e) {}
+        try { eff.target.style[prop] = before[prop] || ''; } catch(e) {}
     }
     this._prevStyles = {};
+    eff._underlying = null;
+    this._inlineBefore = null;
 };
 
 Animation.prototype._onFinish = function() {
