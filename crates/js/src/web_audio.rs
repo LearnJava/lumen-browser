@@ -412,10 +412,21 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── AudioBuffer ─────────────────────────────────────────────────────────────
 
   function AudioBuffer(opts) {
-    opts = opts || {};
-    this.sampleRate        = opts.sampleRate || 44100;
-    this.length            = opts.length     || 0;
-    this.numberOfChannels  = opts.numberOfChannels || 1;
+    if (arguments.length < 1) throw new TypeError('AudioBufferOptions is required');
+    if (opts === undefined || opts === null || typeof opts !== 'object') {
+      throw new TypeError('The options argument is not a dictionary');
+    }
+    if (opts.length === undefined) throw new TypeError("Required member 'length' is missing");
+    if (opts.sampleRate === undefined) throw new TypeError("Required member 'sampleRate' is missing");
+    var nch = opts.numberOfChannels === undefined ? 1 : opts.numberOfChannels >>> 0;
+    var len = opts.length >>> 0;
+    var sr  = _wa_num(opts.sampleRate, 'sampleRate');
+    if (nch < 1 || nch > 32 || len < 1 || !(sr >= 3000 && sr <= 768000)) {
+      throw _wa_error('Unsupported AudioBuffer configuration', 'NotSupportedError');
+    }
+    this.sampleRate        = sr;
+    this.length            = len;
+    this.numberOfChannels  = nch;
     this.duration          = this.length / this.sampleRate;
     this._channels = [];
     for (var i = 0; i < this.numberOfChannels; i++) {
@@ -544,12 +555,77 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
 
   // ── AudioNode (base) ────────────────────────────────────────────────────────
 
+  // WebIDL dictionary conversion: `undefined`/`null` mean "no members"; any
+  // other non-object is a TypeError.
+  function _wa_dict(opts) {
+    if (opts === undefined || opts === null) return {};
+    if (typeof opts !== 'object' && typeof opts !== 'function') {
+      throw new TypeError('The options argument is not a dictionary');
+    }
+    return opts;
+  }
+
+  // A node constructor's first argument must be a BaseAudioContext.
+  function _wa_ctx(context) {
+    if (!(context instanceof BaseAudioContext)) {
+      throw new TypeError('Argument 1 is not a BaseAudioContext');
+    }
+    return context;
+  }
+
+  function _wa_enum(v, list, what) {
+    v = String(v);
+    if (list.indexOf(v) < 0) {
+      throw new TypeError("The provided value '" + v + "' is not a valid " + what);
+    }
+    return v;
+  }
+
+  // Coerces a dictionary member to a number for a range check: WebIDL `double`
+  // (not `unrestricted`) rejects NaN and the infinities with a TypeError.
+  function _wa_num(v, what) {
+    v = +v;
+    if (!isFinite(v)) throw new TypeError(what + ' is not a finite number');
+    return v;
+  }
+
+  // Nodes that cannot have more than two channels or the 'max' mode reject
+  // those option values with NotSupportedError (AudioNodeOptions constraints).
+  function _wa_stereo_limit(opts) {
+    opts = _wa_dict(opts);
+    if (opts.channelCount !== undefined && (opts.channelCount >>> 0) > 2) {
+      throw _wa_error('channelCount is limited to 2', 'NotSupportedError');
+    }
+    if (opts.channelCountMode !== undefined && String(opts.channelCountMode) === 'max') {
+      throw _wa_error("channelCountMode 'max' is not allowed", 'NotSupportedError');
+    }
+  }
+
+  // Nodes whose channel configuration is fixed throw InvalidStateError when an
+  // option contradicts it.
+  function _wa_fixed_channels(opts, count, mode, interp) {
+    opts = _wa_dict(opts);
+    var bad = function() { throw _wa_error('Option conflicts with a fixed value', 'InvalidStateError'); };
+    if (opts.channelCount !== undefined && (opts.channelCount >>> 0) !== count) bad();
+    if (opts.channelCountMode !== undefined && String(opts.channelCountMode) !== mode) bad();
+    if (interp && opts.channelInterpretation !== undefined &&
+        String(opts.channelInterpretation) !== interp) bad();
+  }
+
   function AudioNode(context, opts) {
-    opts = opts || {};
+    _wa_ctx(context);
+    opts = _wa_dict(opts);
     this.context               = context;
-    this.channelCount          = opts.channelCount          || 2;
-    this.channelCountMode      = opts.channelCountMode      || 'max';
-    this.channelInterpretation = opts.channelInterpretation || 'speakers';
+    var cc = 2;
+    if (opts.channelCount !== undefined) {
+      cc = opts.channelCount >>> 0;
+      if (cc < 1 || cc > 32) throw _wa_error('Invalid channelCount', 'NotSupportedError');
+    }
+    this.channelCount          = cc;
+    this.channelCountMode      = opts.channelCountMode === undefined ? 'max'
+      : _wa_enum(opts.channelCountMode, ['max', 'clamped-max', 'explicit'], 'ChannelCountMode');
+    this.channelInterpretation = opts.channelInterpretation === undefined ? 'speakers'
+      : _wa_enum(opts.channelInterpretation, ['speakers', 'discrete'], 'ChannelInterpretation');
     this.numberOfInputs        = 0;
     this.numberOfOutputs       = 0;
     this._connections          = [];   // outgoing destinations (nodes or params)
@@ -664,10 +740,17 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   }
 
   function OscillatorNode(context, opts) {
+    _wa_ctx(context);
+    var o = _wa_dict(opts);
+    var type = o.type === undefined ? 'sine' : _wa_enum(o.type, OSC_TYPES, 'OscillatorType');
+    if (o.periodicWave === null) throw new TypeError('periodicWave is not a PeriodicWave');
+    if (type === 'custom' && o.periodicWave === undefined) {
+      throw _wa_error("type 'custom' requires a periodicWave", 'InvalidStateError');
+    }
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 0;
     this.numberOfOutputs = 1;
-    this._type     = (opts && opts.type) ? opts.type : 'sine';
+    this._type     = (o.periodicWave !== undefined) ? 'custom' : type;
     this.frequency = _wa_param(context, (opts && opts.frequency != null) ? opts.frequency : 440);
     this.detune    = _wa_param(context, (opts && opts.detune    != null) ? opts.detune    : 0);
     this._phase   = 0;
@@ -975,13 +1058,29 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // reading the same instant through both cannot average the noise away.
   var _waAnalyserNextId = 1;
   function AnalyserNode(context, opts) {
+    _wa_ctx(context);
+    var o = _wa_dict(opts);
+    var fft = o.fftSize === undefined ? 2048 : o.fftSize >>> 0;
+    if (fft < 32 || fft > 32768 || (fft & (fft - 1)) !== 0) {
+      throw _wa_error('fftSize must be a power of two in [32, 32768]', 'IndexSizeError');
+    }
+    var minDb = o.minDecibels === undefined ? -100 : _wa_num(o.minDecibels, 'minDecibels');
+    var maxDb = o.maxDecibels === undefined ? -30 : _wa_num(o.maxDecibels, 'maxDecibels');
+    if (minDb >= maxDb) {
+      throw _wa_error('minDecibels must be less than maxDecibels', 'IndexSizeError');
+    }
+    var smooth = o.smoothingTimeConstant === undefined ? 0.8
+      : _wa_num(o.smoothingTimeConstant, 'smoothingTimeConstant');
+    if (smooth < 0 || smooth > 1) {
+      throw _wa_error('smoothingTimeConstant must be in [0, 1]', 'IndexSizeError');
+    }
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
-    this.fftSize              = (opts && opts.fftSize)              ? opts.fftSize              : 2048;
-    this.minDecibels          = (opts && opts.minDecibels  != null) ? opts.minDecibels          : -100;
-    this.maxDecibels          = (opts && opts.maxDecibels  != null) ? opts.maxDecibels          : -30;
-    this.smoothingTimeConstant= (opts && opts.smoothingTimeConstant != null) ? opts.smoothingTimeConstant : 0.8;
+    this.fftSize              = fft;
+    this.minDecibels          = minDb;
+    this.maxDecibels          = maxDb;
+    this.smoothingTimeConstant= smooth;
     this._ring    = null;   // most recent `fftSize` mono samples
     this._ringPos = 0;
     this._waId = _waAnalyserNextId++;
@@ -1044,10 +1143,22 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── DelayNode ───────────────────────────────────────────────────────────────
 
   function DelayNode(context, opts) {
+    _wa_ctx(context);
+    var o = _wa_dict(opts);
+    var maxDelay = o.maxDelayTime === undefined ? 1 : _wa_num(o.maxDelayTime, 'maxDelayTime');
+    if (!(maxDelay > 0 && maxDelay < 180)) {
+      throw _wa_error('maxDelayTime must be in (0, 180)', 'NotSupportedError');
+    }
+    if (o.delayTime !== undefined) {
+      var dt = _wa_num(o.delayTime, 'delayTime');
+      if (dt < 0 || dt > maxDelay) {
+        throw _wa_error('delayTime must be in [0, maxDelayTime]', 'NotSupportedError');
+      }
+    }
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
-    this._maxDelayTime = (opts && opts.maxDelayTime != null) ? +opts.maxDelayTime : 1;
+    this._maxDelayTime = maxDelay;
     this.delayTime = _wa_param(context, (opts && opts.delayTime != null) ? opts.delayTime : 0,
                                { minValue: 0, maxValue: this._maxDelayTime });
     this._lines = [];
@@ -1088,6 +1199,8 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── DynamicsCompressorNode ──────────────────────────────────────────────────
 
   function DynamicsCompressorNode(context, opts) {
+    _wa_ctx(context);
+    _wa_stereo_limit(opts);
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
@@ -1105,6 +1218,8 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── StereoPannerNode ────────────────────────────────────────────────────────
 
   function StereoPannerNode(context, opts) {
+    _wa_ctx(context);
+    _wa_stereo_limit(opts);
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
@@ -1143,12 +1258,35 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── PannerNode ──────────────────────────────────────────────────────────────
 
   function PannerNode(context, opts) {
+    _wa_ctx(context);
+    _wa_stereo_limit(opts);
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
-    opts = opts || {};
-    this.panningModel     = opts.panningModel    || 'equalpower';
-    this.distanceModel    = opts.distanceModel   || 'inverse';
+    opts = _wa_dict(opts);
+    var panning = opts.panningModel === undefined ? 'equalpower'
+      : _wa_enum(opts.panningModel, ['equalpower', 'HRTF'], 'PanningModelType');
+    var dist = opts.distanceModel === undefined ? 'inverse'
+      : _wa_enum(opts.distanceModel, ['linear', 'inverse', 'exponential'], 'DistanceModelType');
+    ['refDistance', 'maxDistance', 'rolloffFactor', 'coneInnerAngle', 'coneOuterAngle',
+     'coneOuterGain', 'positionX', 'positionY', 'positionZ', 'orientationX',
+     'orientationY', 'orientationZ'].forEach(function(k) {
+      if (opts[k] !== undefined) _wa_num(opts[k], k);
+    });
+    if (opts.refDistance !== undefined && +opts.refDistance < 0) {
+      throw new RangeError('refDistance must not be negative');
+    }
+    if (opts.maxDistance !== undefined && +opts.maxDistance <= 0) {
+      throw new RangeError('maxDistance must be positive');
+    }
+    if (opts.rolloffFactor !== undefined && +opts.rolloffFactor < 0) {
+      throw new RangeError('rolloffFactor must not be negative');
+    }
+    if (opts.coneOuterGain !== undefined && (+opts.coneOuterGain < 0 || +opts.coneOuterGain > 1)) {
+      throw _wa_error('coneOuterGain must be in [0, 1]', 'InvalidStateError');
+    }
+    this.panningModel     = panning;
+    this.distanceModel    = dist;
     this.refDistance      = opts.refDistance     != null ? opts.refDistance     : 1;
     this.maxDistance      = opts.maxDistance     != null ? opts.maxDistance     : 10000;
     this.rolloffFactor    = opts.rolloffFactor   != null ? opts.rolloffFactor   : 1;
@@ -1197,8 +1335,17 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── ChannelMergerNode ───────────────────────────────────────────────────────
 
   function ChannelMergerNode(context, opts) {
+    _wa_ctx(context);
+    var o = _wa_dict(opts);
+    var nIn = o.numberOfInputs === undefined ? 6 : o.numberOfInputs >>> 0;
+    if (nIn < 1 || nIn > 32) {
+      throw _wa_error('numberOfInputs must be in [1, 32]', 'IndexSizeError');
+    }
+    _wa_fixed_channels(opts, 1, 'explicit', null);
     AudioNode.call(this, context, opts);
-    this.numberOfInputs  = (opts && opts.numberOfInputs) ? opts.numberOfInputs : 6;
+    this.channelCount     = 1;
+    this.channelCountMode = 'explicit';
+    this.numberOfInputs  = nIn;
     this.numberOfOutputs = 1;
   }
   ChannelMergerNode.prototype = Object.create(AudioNode.prototype);
@@ -1219,9 +1366,19 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── ChannelSplitterNode ─────────────────────────────────────────────────────
 
   function ChannelSplitterNode(context, opts) {
+    _wa_ctx(context);
+    var o = _wa_dict(opts);
+    var nOut = o.numberOfOutputs === undefined ? 6 : o.numberOfOutputs >>> 0;
+    if (nOut < 1 || nOut > 32) {
+      throw _wa_error('numberOfOutputs must be in [1, 32]', 'IndexSizeError');
+    }
+    _wa_fixed_channels(opts, nOut, 'explicit', 'discrete');
     AudioNode.call(this, context, opts);
+    this.channelCount = nOut;
+    this.channelCountMode = 'explicit';
+    this.channelInterpretation = 'discrete';
     this.numberOfInputs  = 1;
-    this.numberOfOutputs = (opts && opts.numberOfOutputs) ? opts.numberOfOutputs : 6;
+    this.numberOfOutputs = nOut;
   }
   ChannelSplitterNode.prototype = Object.create(AudioNode.prototype);
   ChannelSplitterNode.prototype.constructor = ChannelSplitterNode;
@@ -1239,11 +1396,18 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── WaveShaperNode ──────────────────────────────────────────────────────────
 
   function WaveShaperNode(context, opts) {
+    _wa_ctx(context);
+    var o = _wa_dict(opts);
+    var over = o.oversample === undefined ? 'none'
+      : _wa_enum(o.oversample, ['none', '2x', '4x'], 'OverSampleType');
+    if (o.curve && o.curve.length < 2) {
+      throw _wa_error('curve needs at least two samples', 'InvalidStateError');
+    }
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
-    this.curve      = (opts && opts.curve)      ? opts.curve      : null;
-    this.oversample = (opts && opts.oversample) ? opts.oversample : 'none';
+    this.curve      = o.curve ? o.curve : null;
+    this.oversample = over;
   }
   WaveShaperNode.prototype = Object.create(AudioNode.prototype);
   WaveShaperNode.prototype.constructor = WaveShaperNode;
@@ -1271,11 +1435,19 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   // ── ConvolverNode ───────────────────────────────────────────────────────────
 
   function ConvolverNode(context, opts) {
+    _wa_ctx(context);
+    _wa_stereo_limit(opts);
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
     this.numberOfOutputs = 1;
-    this.buffer    = (opts && opts.buffer)    ? opts.buffer    : null;
-    this.normalize = (opts && opts.normalize != null) ? !!opts.normalize : true;
+    opts = _wa_dict(opts);
+    var buf = opts.buffer || null;
+    if (buf && buf.sampleRate !== context.sampleRate) {
+      throw _wa_error('Buffer sample rate does not match the context', 'NotSupportedError');
+    }
+    this.buffer    = buf;
+    this.normalize = opts.disableNormalization != null ? !opts.disableNormalization
+                   : (opts.normalize != null ? !!opts.normalize : true);
   }
   ConvolverNode.prototype = Object.create(AudioNode.prototype);
   ConvolverNode.prototype.constructor = ConvolverNode;
@@ -1606,18 +1778,24 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
 
   function OfflineAudioContext(numChannelsOrOpts, length, sampleRate) {
     var opts;
-    if (typeof numChannelsOrOpts === 'object' && numChannelsOrOpts !== null) {
-      opts = numChannelsOrOpts;
+    if (arguments.length === 1) {
+      opts = _wa_dict(numChannelsOrOpts);
+      if (opts.length === undefined) throw new TypeError("Required member 'length' is missing");
+      if (opts.sampleRate === undefined) throw new TypeError("Required member 'sampleRate' is missing");
+    } else if (arguments.length === 3) {
+      opts = { numberOfChannels: numChannelsOrOpts, length: length, sampleRate: sampleRate };
     } else {
-      opts = {
-        numberOfChannels: numChannelsOrOpts || 1,
-        length:           length            || 0,
-        sampleRate:       sampleRate        || 44100
-      };
+      throw new TypeError('OfflineAudioContext takes an options dictionary or three arguments');
     }
-    BaseAudioContext.call(this, opts.sampleRate || 44100, opts.renderSizeHint);
-    this.length           = opts.length           || 0;
-    this.numberOfChannels = opts.numberOfChannels || 1;
+    var nch = opts.numberOfChannels === undefined ? 1 : opts.numberOfChannels >>> 0;
+    var len = opts.length >>> 0;
+    var sr  = _wa_num(opts.sampleRate, 'sampleRate');
+    if (nch < 1 || nch > 32 || len < 1 || !(sr >= 3000 && sr <= 768000)) {
+      throw _wa_error('Unsupported OfflineAudioContext configuration', 'NotSupportedError');
+    }
+    BaseAudioContext.call(this, sr, opts.renderSizeHint);
+    this.length           = len;
+    this.numberOfChannels = nch;
     this._offline         = true;
     this._state           = 'suspended';
     this.oncomplete       = null;
@@ -2002,6 +2180,41 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(v, JsValue::String("128,256,128,64,4".to_string()));
+    }
+
+    /// BUG-1090: node constructors validate the context and the options.
+    #[test]
+    fn bug1090_node_constructors_validate() {
+        let rt = rt_with_web_audio();
+        let v = rt
+            .eval(
+                r#"
+                var c = new AudioContext();
+                function name(f) { try { f(); return 'ok'; } catch (e) { return e.name; } }
+                [name(function() { new AnalyserNode(); }),
+                 name(function() { new AnalyserNode(1); }),
+                 name(function() { new AnalyserNode(c, 42); }),
+                 name(function() { new AnalyserNode(c, {fftSize: 33}); }),
+                 name(function() { new PannerNode(c, {refDistance: -1}); }),
+                 name(function() { new PannerNode(c, {coneOuterGain: 2}); }),
+                 name(function() { new PannerNode(c, {channelCount: 3}); }),
+                 name(function() { new GainNode(c, {channelCountMode: 'foo'}); }),
+                 name(function() { new ChannelMergerNode(c, {numberOfInputs: 99}); }),
+                 name(function() { new ChannelSplitterNode(c, {channelCount: 3}); }),
+                 name(function() { new OscillatorNode(c, {type: 'custom'}); }),
+                 name(function() { new AudioBuffer({length: 1}); }),
+                 name(function() { new OfflineAudioContext(3, 42); }),
+                 name(function() { new GainNode(c, {gain: 2}); })].join(',')
+                "#,
+            )
+            .unwrap();
+        assert_eq!(
+            v,
+            JsValue::String(
+                "TypeError,TypeError,TypeError,IndexSizeError,RangeError,InvalidStateError,NotSupportedError,TypeError,IndexSizeError,InvalidStateError,InvalidStateError,TypeError,TypeError,ok"
+                    .to_string()
+            )
+        );
     }
 
     /// BUG-1089: `sinkId`/`setSinkId()` and `playbackStats`/`playoutStats`.
