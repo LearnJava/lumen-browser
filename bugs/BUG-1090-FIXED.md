@@ -1,6 +1,6 @@
 # BUG-1090 — конструкторы аудио-узлов ничего не валидируют: `new AnalyserNode()` без контекста не бросает, невалидные опции принимаются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6). Конструкторы `AudioNode`-подклассов, `AudioBuffer` и `OfflineAudioContext` проверяют контекст и опции (TypeError/RangeError/IndexSizeError/NotSupportedError/InvalidStateError по таблицам интерфейсов). `ctor-analyser` 78/78, `ctor-audiobuffer` 62/62; остаток ctor-* — сеттеры (BUG-708), `PeriodicWave`, `IIRFilterNode` (BUG-707). `.ini` пересняты по каталогам узлов.
 **Тип:** пробел реализации — WebIDL-проверка аргументов конструкторов `AudioNode`-наследников отсутствует.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 52, `webaudio`)
 **Область:** js — `crates/js/src/web_audio.rs` (`WEB_AUDIO_SHIM`, конструкторы узлов: `opts = opts || {}` и присвоение полей без проверки)
