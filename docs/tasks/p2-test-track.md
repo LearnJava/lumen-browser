@@ -1880,7 +1880,7 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 | Воркерный `XMLHttpRequest` без `overrideMimeType`, [BUG-1081](../../bugs/BUG-1081-FIXED.md) | 26 сообщений | `replacement-encodings`/`unsupported-encodings` `.any.worker.html` |
 | Одиночный суррогат кодируется в WTF-8, [BUG-1082](../../bugs/BUG-1082-FIXED.md) | `api-surrogates-utf8` 1/6, `textencoder-utf16-surrogates` 2/7, `streams/encode-utf8` 3/19 | проба `--dump-layout` |
 | Потоковый `TextDecoder` не срезает BOM, разнесённый по чанкам, [BUG-1083](../../bugs/BUG-1083-FIXED.md) | `streams/decode-ignore-bom` 5/12, `textdecoder-copy` 0/2 | проба `--dump-layout` |
-| `TextDecoderStream` принимает не-`BufferSource`, [BUG-1084](../../bugs/BUG-1084-OPEN.md) | `streams/decode-bad-chunks` 0/5 | проба `--dump-layout` |
+| `TextDecoderStream` принимает не-`BufferSource`, [BUG-1084](../../bugs/BUG-1084-FIXED.md) | `streams/decode-bad-chunks` 0/5 | проба `--dump-layout` |
 | `WebAssembly.Memory({shared:true})` отдаёт `ArrayBuffer`, [BUG-1085](../../bugs/BUG-1085-OPEN.md) | 55 подтестов (`encodeInto.any.html` 54, `textdecoder-copy.any.html` 1); хелпер `common/sab.js` подключают 12 файлов из 5 категорий | `Error("WebAssembly.Memory does not support shared:true")` |
 | harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 16 из 18 `ERROR`: `sharedarraybuffer.https.html` и 15 `*.any.serviceworker.html` (`certificate not valid for name "localhost"`, 48 строк в логе) | service-worker-варианты до кода движка не доходят |
 

@@ -1170,7 +1170,15 @@ function TextDecoderStream(label, options) {
     var dec = new TextDecoder(label, options);
     _ts_setup(this, {
         transform: function(chunk, c) {
-            var str = dec.decode(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk), { stream: true });
+            // Encoding §5.1: the chunk must be an ArrayBuffer or ArrayBufferView.
+            var isSab = typeof SharedArrayBuffer !== 'undefined' && chunk instanceof SharedArrayBuffer;
+            if (!(chunk instanceof ArrayBuffer) && !isSab && !ArrayBuffer.isView(chunk)) {
+                throw new TypeError("Failed to execute 'write' on 'TextDecoderStream': chunk is not a BufferSource");
+            }
+            var bytes = ArrayBuffer.isView(chunk)
+                ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+                : new Uint8Array(chunk);
+            var str = dec.decode(bytes, { stream: true });
             if (str.length > 0) c.enqueue(str);
         },
         flush: function(c) {
