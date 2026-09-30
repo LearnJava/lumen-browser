@@ -1,6 +1,6 @@
 # BUG-1105 — `<audio>.duration` остаётся `Infinity` у полностью декодированного MP3
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Заведён:** P3, 2026-09-23, попутно при закрытии [BUG-924](BUG-924-FIXED.md)
 **Область:** shell (`crates/shell/src/platform/audio_player.rs:169-176` — `AudioCmd::Load`, `rodio::Decoder::total_duration()`)
 **Владелец:** P3
@@ -42,3 +42,9 @@ PROBE abs:loadeddata currentSrc=http://127.0.0.1:PORT/sine440.mp3 duration=Infin
 
 Тот же пробник, `duration=` в логе — конечное число, близкое к реальной
 длительности `tests/wpt/media/sine440.mp3`.
+
+## Исправление
+
+`probe_duration` (`crates/shell/src/platform/audio_player.rs`): при `total_duration() == None`
+длительность считается полным проходом декодера — samples / (channels × sample_rate).
+Тест `probe_duration_mp3_is_finite` на `tests/wpt/media/sine440.mp3`.
