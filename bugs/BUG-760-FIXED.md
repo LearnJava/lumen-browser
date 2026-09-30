@@ -1,6 +1,6 @@
 # BUG-760 — headless MCP `navigate` не разбирает `file://` URL: теряется буква диска
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Компонент:** driver (`crates/driver/src/session.rs:790` —
 `InProcessSession::navigate`, ветка `url.strip_prefix("file://")`)
 **Найден:** P3, 2026-08-11, при построении живой пробы к
@@ -76,3 +76,7 @@ if let Some(path) = url.strip_prefix("file://") {
 * [[BUG-723]] — потеря двоеточия диска в `_url_resolve` шима на `file://`-странице.
 * [[BUG-438]] — провалившаяся навигация в live-окне отвечает успехом; здесь,
   в отличие от неё, headless-путь честно возвращает ошибку.
+
+## Исправлено (P3, 2026-09-30)
+
+`navigate` использует `file_url_to_path` (session.rs) вместо `strip_prefix`; `about:blank` → `navigate_html("")`. Тесты: `navigate_file_url_with_drive_letter_slash`, `navigate_about_blank_headless`.
