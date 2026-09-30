@@ -1,6 +1,6 @@
 # BUG-1149 — `connect` перебирает адреса по очереди, без Happy Eyeballs: `localhost` на Windows стоит ~2 с на каждое новое соединение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3): `connect_happy_eyeballs` в `crates/network/src/lib.rs`
 **Заведён:** 2026-09-24 (P1, при WORKER-1 срез 5 — разбор новых TIMEOUT воркерных WPT-тестов)
 **Область:** network (`crates/network/src/lib.rs::connect_inner` — прямой путь, цикл
 `for addr in &addrs { TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) }`; тот же цикл для
