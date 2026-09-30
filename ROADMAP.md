@@ -73,7 +73,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | P1-css21 | P1 | | done | | | | CSS 2.1 + flexbox |
 | P1-img | P1 | | done | | | | Картинки (decode/paint) |
 | P1-tabs | P1 | | done | | | | Вкладки, история, закладки |
-| PH1-4 | P1 | | done | | | | PH1-4: Network service в отдельном процессе (lumen-ipc) |
+| PH1-4 | P1 | | active | | | | PH1-4: Network service в отдельном процессе (lumen-ipc) |
 | P1-storage | P1 | | done | | | | Storage service + базовый adblock + DoH |
 | PH1-5 | P1 | | done | | | | PH1-5: пакеты Linux/macOS/Windows (CI/CD) |
 | PH1-6 | P1 | | done | | | | PH1-6: Stacking contexts + CSS Painting Order |
