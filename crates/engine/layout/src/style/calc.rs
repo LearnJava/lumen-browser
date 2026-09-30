@@ -1043,6 +1043,10 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     let length = match unit {
         "px" => Length::Px(value),
         "rem" => Length::Rem(value),
+        "rlh" => Length::Rem(value * 1.2),
+        "rcap" => Length::Rem(value * 0.7),
+        "rex" | "rch" => Length::Rem(value * 0.5),
+        "ric" => Length::Rem(value),
         // `ch`/`ex` carry their own variants (resolved against real font metrics
         // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
         "ch" => Length::Ch(value),

@@ -724,6 +724,18 @@ use super::*;
         assert_eq!(s.width, Some(Length::Rem(12.5)), "{:?} {:?}", doc.get(div).data, s.display); // 5 × 40 / 16
     }
 
+    /// BUG-1051: root-relative font units parse (were dropped) as root-font multiples.
+    #[test]
+    fn root_relative_font_units_parse() {
+        let vp = Size::new(800.0, 600.0);
+        for (unit, factor) in [("rlh", 1.2), ("rcap", 0.7), ("rex", 0.5), ("rch", 0.5), ("ric", 1.0)] {
+            let l = crate::style::values::length::parse_length_q(&format!("5{unit}"), false)
+                .unwrap_or_else(|| panic!("{unit} did not parse"));
+            let px = l.resolve(16.0, None, vp).unwrap();
+            assert!((px - 5.0 * factor * 16.0).abs() < 0.01, "{unit}: {px}");
+        }
+    }
+
     /// This is the shape tbank.ru relies on: a fixed-width container that only
     /// fits the viewport once `zoom` is applied.
     #[test]
