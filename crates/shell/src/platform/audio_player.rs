@@ -128,6 +128,26 @@ impl Default for PlatformAudioPlayer {
     }
 }
 
+/// Длительность в секундах; `NaN`, если определить не удалось.
+///
+/// `total_duration()` у minimp3-бэкенда (mp3) всегда `None` — тогда
+/// досчитываем полным проходом по сэмплам: samples / channels / rate.
+fn probe_duration(bytes: &[u8]) -> f64 {
+    use rodio::{Decoder, Source};
+    let Ok(d) = Decoder::new(Cursor::new(bytes.to_vec())) else {
+        return f64::NAN;
+    };
+    if let Some(t) = d.total_duration() {
+        return t.as_secs_f64();
+    }
+    let (ch, rate) = (u64::from(d.channels()), u64::from(d.sample_rate()));
+    if ch == 0 || rate == 0 {
+        return f64::NAN;
+    }
+    let samples = d.count() as u64;
+    samples as f64 / (ch * rate) as f64
+}
+
 // ── Audio thread body ─────────────────────────────────────────────────────────
 
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -166,14 +186,7 @@ fn audio_thread(
                 match Decoder::new(cursor) {
                     Ok(source) => {
                         // Probe duration before appending to sink.
-                        let dur = {
-                            let c2 = Cursor::new(bytes.clone());
-                            rodio::Decoder::new(c2)
-                                .ok()
-                                .and_then(|d| d.total_duration())
-                                .map(|d| d.as_secs_f64())
-                                .unwrap_or(f64::NAN)
-                        };
+                        let dur = probe_duration(&bytes);
                         {
                             let mut st = state.lock().unwrap();
                             st.duration = dur;
@@ -524,6 +537,14 @@ impl<'a> std::io::Read for Base64Reader<'a> {
 mod tests {
     use super::*;
     use lumen_core::ext::AudioPlaybackProvider;
+
+    #[test]
+    fn probe_duration_mp3_is_finite() {
+        // BUG-1105: minimp3 не отдаёт total_duration() — считаем проходом.
+        let bytes = include_bytes!("../../../../tests/wpt/media/sine440.mp3");
+        let d = probe_duration(bytes);
+        assert!(d.is_finite() && d > 0.0, "duration = {d}");
+    }
 
     #[test]
     fn alloc_handle_unique() {
