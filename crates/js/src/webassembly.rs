@@ -91,9 +91,14 @@ const WEBASSEMBLY_SHIM: &str = r#"
       var initial = descriptor.initial | 0;
       if (initial < 0) throw new RangeError('Memory initial must be >= 0');
       var maximum = (descriptor.maximum !== undefined) ? (descriptor.maximum | 0) : 65536;
+      var shared = !!descriptor.shared;
+      if (shared && descriptor.maximum === undefined) {
+        throw new TypeError('Shared memory requires a maximum');
+      }
       this._pages = initial;
       this._max = maximum;
-      this._buffer = new ArrayBuffer(initial * 65536);
+      this._shared = shared;
+      this._buffer = shared ? new SharedArrayBuffer(initial * 65536) : new ArrayBuffer(initial * 65536);
     }
     get buffer() { return this._buffer; }
     grow(delta) {
@@ -103,7 +108,7 @@ const WEBASSEMBLY_SHIM: &str = r#"
       var next = prev + d;
       if (next > this._max) return -1;
       this._pages = next;
-      this._buffer = new ArrayBuffer(next * 65536);
+      this._buffer = this._shared ? new SharedArrayBuffer(next * 65536) : new ArrayBuffer(next * 65536);
       return prev;
     }
   }
@@ -929,6 +934,18 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(same, JsValue::Bool(true), "buffer identity must persist across a non-growing call");
+    }
+
+    /// BUG-1085: `shared:true` memory exposes a `SharedArrayBuffer` and needs `maximum`.
+    #[test]
+    fn v8_shared_memory_buffer_is_sab() {
+        let rt = rt_with_wasm();
+        let ok = rt
+            .eval(
+                "var m = new WebAssembly.Memory({shared:true, initial:1, maximum:2});                 var thrown = false;                 try { new WebAssembly.Memory({shared:true, initial:1}); } catch (e) { thrown = e instanceof TypeError; }                 (m.buffer instanceof SharedArrayBuffer) && thrown                 && !(new WebAssembly.Memory({initial:1}).buffer instanceof SharedArrayBuffer)",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
