@@ -52,7 +52,7 @@ DNS:127.0.0.1,DNS:localhost,DNS:*.localhost`. `ca-cert.pem` — копия, ка
 
 Оба подтверждают: TLS-рукопожатие для `https://localhost:PORT/...` теперь проходит проверку
 имени, хендшейк для `*.localhost`-поддоменов не проверялся отдельно (сама доступность
-`www1.localhost` и т.п. на этой машине упирается в нерезолвящийся DNS — [BUG-1070](BUG-1070-OPEN.md),
+`www1.localhost` и т.п. на этой машине упирается в нерезолвящийся DNS — [BUG-1070](BUG-1070-FIXED.md),
 не в сертификат).
 
 ## Следствие для baseline (не сделано этим заходом)
@@ -90,7 +90,7 @@ DNS:127.0.0.1,DNS:localhost,DNS:*.localhost`. `ca-cert.pem` — копия, ка
   ждут *insecure* context на `.http.`-странице (`shared-storage/insecure-context.tentative.http.html`,
   `…-writable-insecure-context…http.sub.html`), получают `FAIL` независимо от сертификата — верный ответ движка на
   неверный хост. Починка сертификата этого не лечит.
-- `*.localhost` в SAN не решает нерезолвимость самих поддоменов на Windows — см. [BUG-1070](BUG-1070-OPEN.md).
+- `*.localhost` в SAN не решает нерезолвимость самих поддоменов на Windows — см. [BUG-1070](BUG-1070-FIXED.md).
 - `pointerevents` (срез 44 WPT-RUN-7, 2026-09-21): **24 id из 258** — те же `TLS handshake … not valid for name "localhost"` (`coalesced_events_attributes.https.html`, `pointerevent_pointerrawupdate*.https.html`, `pointerlock/*.https.html`, `idlharness.https.window.html` и др.); остальные `ERROR` категории — не сертификат, а [BUG-1065](BUG-1065-OPEN.md)/[BUG-1063](BUG-1063-OPEN.md).
 - `workers` (срез 46 WPT-RUN-7, 2026-09-21): **25 id из 337** — 14 `*.any.serviceworker.html` и 11 `*.https.*` (`Worker-creation-happens-in-parallel.https.html`, `same-site-cookies/*.https.window.html`, `postMessage_block.https.html` и др.) — `TLS handshake … not valid for name "localhost"` на `https://localhost:18443/workers/…`; ещё 6 harness-`ERROR` категории (`modules/{dedicated,shared}-worker-import-{csp,referrer}.html`, `semantics/structured-clone/{dedicated,shared}.html`) — по имени не https, причина не разбиралась.
 - `editing` (срез 47 WPT-RUN-7, 2026-09-21): **10 id из 700** — `TLS handshake … not valid for name "localhost"` на `https://localhost:18443/editing/…`

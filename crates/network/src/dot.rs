@@ -210,6 +210,9 @@ impl DnsResolver for DotResolver {
         if let Ok(ip) = IpAddr::from_str(literal_candidate) {
             return Ok(vec![SocketAddr::new(ip, port)]);
         }
+        if let Some(addrs) = crate::dns::localhost_addrs(hostname, port) {
+            return Ok(addrs);
+        }
 
         // AAAA сначала (RFC 6724 §6 default — dual-stack preference), потом A.
         // Если AAAA дал Err — продолжаем на A; если оба пусты — Err.
