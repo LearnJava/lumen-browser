@@ -121,6 +121,8 @@ pub(crate) fn build_grid_init(
     padding_top: f32,
     padding_bottom: f32,
     size_contained: bool,
+    is_positioned: bool,
+    own_pcb: Rect,
 ) -> Option<Box<super::grid_trampoline::GridInit>> {
     use super::grid_trampoline::GridInit;
 
@@ -130,11 +132,14 @@ pub(crate) fn build_grid_init(
     let inherited_cols: Option<SubgridContext> = SUBGRID_COL_CTX.with(|c| c.borrow_mut().take());
     let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
 
-    // Indices of actual items (non-Skip).
+    // Indices of actual items (non-Skip). CSS Grid L1 §9.1: an absolutely-positioned
+    // child does not take part in grid layout — it is not a grid item and is laid out
+    // afterwards against its containing block (`grid_trampoline::lay_out_abs`).
     let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
-        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip)
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .map(|(i, _)| i)
         .collect();
     // CSS Grid §6: grid items are placed in "modified document order" — source order
@@ -555,6 +560,8 @@ pub(crate) fn build_grid_init(
         padding_top,
         padding_bottom,
         size_contained,
+        is_positioned,
+        own_pcb,
         probe_reuse,
     }))
 }
