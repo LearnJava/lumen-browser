@@ -219,7 +219,7 @@ the time — read dates.
   real base also meant deleting `start()`'s hand-written `onactivate` call —
   `dispatchEvent` performs that step itself, so keeping both would have
   delivered `activate` twice. `SensorErrorEvent` is still not an `Event`
-  ([BUG-761](../bugs/BUG-761-OPEN.md)).
+  ([BUG-761](../bugs/BUG-761-FIXED.md)).
 - **`queryLocalFonts()` exists, and the 2020-draft `navigator.fonts` is gone
   (BUG-385, P3, 2026-08-10).** `local_font_access.rs` implemented a WICG draft that
   was dropped before the API shipped: `navigator.fonts.query()` — a surface no
