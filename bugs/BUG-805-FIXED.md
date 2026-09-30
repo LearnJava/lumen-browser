@@ -1,6 +1,6 @@
 # BUG-805 — `scripts/scoped-test.sh` не может стать зелёным: `lumen-network` виснет на UDP-тесте и осыпается на loopback-тестах под нагрузкой
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3)
 **Заведён:** 2026-08-21 (P3, побочно на гейте [BUG-405](BUG-405-FIXED.md) среза 37)
 **Домен:** network (`crates/network/src/h3/udp.rs:450`, `crates/network/src/lib.rs` — тесты `tests::fetch_*`/`auth_*`)
 
@@ -99,3 +99,11 @@ cargo test -p lumen-network --lib tests::fetch_emits_completed_even_for_4xx -- -
 * **Не конкуренция сессий** (второй прогон одиночный, см. таблицу выше).
 * **Не [BUG-632](BUG-632-FIXED.md)** (протухшие `lumen_test_http_cache_*.db`):
   падают не кэш-тесты, а loopback-тесты `fetch_*`/`auth_*`.
+
+## Исправление (2026-09-30, P3)
+
+1. `udp_round_trip` и `udp_timeout_then_blocking_restores_and_delivers` теперь читают с
+   `set_read_timeout(5 с)` и падают внятным `expect`, а не вешают гейт при потере датаграммы.
+2. Осыпание loopback-тестов на 2026-09-30 **не воспроизводится**: `cargo test -p lumen-network --lib`
+   — 2483/2483, 4 прогона подряд по ~5 с, `h3::udp::` зелёный за 0.04 с. Причина исходных падений
+   (среда/нагрузка на момент 2026-08-21) не установлена; при рецидиве завести новый баг.
