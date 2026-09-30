@@ -75,7 +75,14 @@ fn attrs_have_html_encoding(attrs: &[(String, String)]) -> bool {
 /// для `parse`/`parse_xml_flavoured`/`parse_fragment` — все три раньше молча
 /// разошлись бы, реализуй каждая свою копию цикла.
 fn run_pull(builder: &mut IncrementalTreeBuilder, input: &str) {
-    let mut tokenizer = Tokenizer::new(input);
+    run_pull_in_state(builder, input, None);
+}
+
+/// [`run_pull`] с заранее заданным RAWTEXT/RCDATA-состоянием токенизатора —
+/// фрагмент, чей контекстный элемент `<script>`/`<style>`/`<textarea>`/…
+/// (BUG-1158): `el.innerHTML = 'a<b'` обязан дать текст, а не тег.
+fn run_pull_in_state(builder: &mut IncrementalTreeBuilder, input: &str, text_only: Option<(String, bool)>) {
+    let mut tokenizer = Tokenizer::with_state(input, text_only);
     tokenizer.set_xml_mode(builder.xml_mode);
     tokenizer.set_cdata_allowed(builder.cdata_sections_allowed());
     while let Some(token) = tokenizer.next() {
@@ -177,8 +184,12 @@ pub struct FragmentContext {
 /// element (GAP-XMLDOC срез 14, BUG-685) — `context: None` reproduces
 /// `parse_fragment`'s old body-like default exactly.
 pub fn parse_fragment_with_context(input: &str, context: Option<FragmentContext>) -> (Document, NodeId) {
+    let text_only = context
+        .as_ref()
+        .filter(|c| c.namespace == Namespace::Html)
+        .and_then(|c| crate::tokenizer::fragment_text_only_state(&c.local));
     let (mut builder, root) = IncrementalTreeBuilder::new_fragment(context);
-    run_pull(&mut builder, input);
+    run_pull_in_state(&mut builder, input, text_only);
     (builder.finish(), root)
 }
 

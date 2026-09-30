@@ -520,7 +520,7 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
   первый непустой кадр — 37–87 с (Chrome: `load` за 21.7 с);
 - [BUG-648](BUG-648-OPEN.md) — imdb тоже падает на синхронной доставке buffered-записей
   `PerformanceObserver` (`a is not a function`), дописано к cnbc;
-- [BUG-1158](BUG-1158-OPEN.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
+- [BUG-1158](BUG-1158-FIXED.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
   дописано к yahoo;
 - [BUG-1145](BUG-1145-FIXED.md) — imdb и twitch: `eval` отвечает `JS context not available` посреди
   загрузки и снова работает через 10–25 с, дописано.
