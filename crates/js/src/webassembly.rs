@@ -280,15 +280,23 @@ const WEBASSEMBLY_SHIM: &str = r#"
       else if (e.kind === 'global') exports[e.name] = makeExportGlobal(instId, e.index);
       else if (e.kind !== 'memory') exports[e.name] = null; // table export — MVP stub
     }
-    return exports;
+    return Object.freeze(exports);
   }
 
   // ── WebAssembly.Instance ──────────────────────────────────────────────────
+  function checkImportObject(importObject) {
+    if (importObject !== undefined &&
+        (importObject === null || (typeof importObject !== 'object' && typeof importObject !== 'function'))) {
+      throw new TypeError('WebAssembly.Instance(): Argument 1 must be an object');
+    }
+  }
+
   class Instance {
     constructor(module, importObject) {
       if (!(module instanceof Module)) {
         throw new LinkError('Instance requires a WebAssembly.Module');
       }
+      checkImportObject(importObject);
       var imports = JSON.parse(__lumen_wasm_module_imports(module._id));
       var funcs = [], globals = [];
       for (var i = 0; i < imports.length; i++) {
@@ -339,22 +347,34 @@ const WEBASSEMBLY_SHIM: &str = r#"
     });
   }
 
-  function compileStreaming(source) {
+  // Streaming-compile source check: Response with `application/wasm`, ok, unused body.
+  function streamingBytes(source) {
     return Promise.resolve(source).then(function(resp) {
-      if (resp && typeof resp.arrayBuffer === 'function') {
-        return resp.arrayBuffer().then(function(buf) { return compile(buf); });
+      if (typeof Response === 'undefined' || !(resp instanceof Response)) {
+        throw new TypeError('WebAssembly streaming: Argument 0 must be a Response or a Promise for a Response');
       }
-      return compile(resp);
+      var ct = String(resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (ct !== 'application/wasm') {
+        throw new TypeError('WebAssembly streaming: Incorrect response MIME type. Expected application/wasm.');
+      }
+      if (!resp.ok) {
+        throw new TypeError('WebAssembly streaming: HTTP status code is not ok');
+      }
+      if (resp.bodyUsed) {
+        throw new TypeError('WebAssembly streaming: Response body has already been used');
+      }
+      return resp.arrayBuffer();
     });
   }
 
+  function compileStreaming(source) {
+    return streamingBytes(source).then(function(buf) { return compile(buf); });
+  }
+
   function instantiateStreaming(source, importObject) {
-    return Promise.resolve(source).then(function(resp) {
-      if (resp && typeof resp.arrayBuffer === 'function') {
-        return resp.arrayBuffer().then(function(buf) { return instantiate(buf, importObject); });
-      }
-      return instantiate(resp, importObject);
-    });
+    try { checkImportObject(importObject); }
+    catch (e) { return Promise.reject(e); }
+    return streamingBytes(source).then(function(buf) { return instantiate(buf, importObject); });
   }
 
   // ── Publish global WebAssembly object ─────────────────────────────────────
@@ -686,6 +706,20 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(sum, JsValue::Number(42.0));
+    }
+
+    /// BUG-1079: `exports` is a frozen null-prototype object and a non-object
+    /// `importObject` is a `TypeError` (WebAssembly JS API §Instance).
+    #[test]
+    fn v8_exports_frozen_and_bad_imports_type_error() {
+        let rt = rt_with_wasm();
+        bytes_global(&rt, "__add_bytes", ADD_WASM);
+        let ok = rt
+            .eval(
+                "var m = new WebAssembly.Module(new Uint8Array(__add_bytes));                 var inst = new WebAssembly.Instance(m);                 var bad = 0;                 [null, true, ''].forEach(function(v){                   try { new WebAssembly.Instance(m, v); } catch (e) { if (e instanceof TypeError) bad++; }                 });                 Object.isFrozen(inst.exports) && Object.getPrototypeOf(inst.exports) === null && bad === 3",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     /// `(module (import "env" "h" (func (param i64) (result i64)))
