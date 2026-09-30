@@ -1993,6 +1993,9 @@ pub(crate) struct FrameLoadEnv {
     /// BUG-480 срез 15: целевое цветовое пространство декодера картинок — то
     /// же, с которым страница декодирует свои (`parse_and_layout`).
     pub(crate) target: lumen_core::ColorSpace,
+    /// BUG-1148: `(generation, прокси LoadEvent)` страницы — по ним скрипты
+    /// фрейма получают хук немедленной загрузки `<img>` (`None` в headless).
+    pub(crate) image_hook_channel: Option<(u64, winit::event_loop::EventLoopProxy<crate::page_load::LoadEvent>)>,
     /// База ВЕРХНЕГО окна: `window.top.location` фреймов глубины ≥ 1 и вторая
     /// сторона same-origin-проверки к нему.
     ///
@@ -2407,6 +2410,21 @@ pub(crate) fn spawn_frame(
         // parent, the shapes this bug's WPT repro actually exercises.
         top: (depth >= 1).then_some((top_doc, top_url.as_str(), accessible_top)),
     };
+    let image_hook = env.image_hook_channel.as_ref().map(|(generation, proxy)| {
+        crate::dynamic_image_hook::DynamicImgFetchHook::for_document(
+            &child_doc,
+            child_base.clone(),
+            Arc::clone(sink),
+            cookie_jar.clone(),
+            env.target,
+            (env.viewport.width, env.viewport.height),
+            crate::dynamic_image_hook::DynamicImageHookCtx {
+                generation: *generation,
+                dedup: Arc::default(),
+                proxy: proxy.clone(),
+            },
+        )
+    });
     let _runtime_span = lumen_core::trace::span("frame-runtime", "js");
     let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
         child_doc,
@@ -2449,10 +2467,9 @@ pub(crate) fn spawn_frame(
         // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above —
         // no layout to offer yet, so nothing to flush against either.
         None,
-        // BUG-1118: iframe scripts not wired to the immediate-`<img src>`
-        // hook yet — see `ImageLoadHook`'s doc comment for scope; sub-
-        // documents keep relying on the post-relayout sweep only.
-        None,
+        // BUG-1148: frame scripts get the immediate-`<img>` hook too, bound to
+        // the frame's own base URL.
+        image_hook,
         // BUG-1119: the frame's `document.cookie` uses the jar its requests
         // go through; an opaque origin has no cookies (HTML LS §3.1.3).
         env.cookie_jar.clone().filter(|_| !opaque),

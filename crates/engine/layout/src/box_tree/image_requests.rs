@@ -71,6 +71,15 @@ pub fn collect_image_requests(doc: &Document, viewport: Size) -> Vec<ImageReques
     out
 }
 
+/// BUG-1148: URL, который [`collect_image_requests`] выдал бы для одного
+/// `<img>` — тот же picker (`<picture>`/`srcset`/`sizes`/`src`), но без обхода
+/// всего документа. Нужен JS-рантайму, чтобы поставить загрузку сразу при
+/// мутации источника. Пустая строка — качать нечего.
+#[must_use]
+pub fn pick_image_request_url(doc: &Document, img_id: NodeId, viewport: Size) -> String {
+    resolve_image_source(doc, img_id, viewport).url
+}
+
 /// Обходит готовое layout-дерево и возвращает уникальные URL-ы из
 /// `background-image: url(...)` (CSS Backgrounds L3 §3.10) — те же ключи,
 /// что эмиттер кладёт в `DisplayCommand::DrawBackgroundImage.src`.

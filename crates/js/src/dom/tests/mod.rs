@@ -284,6 +284,7 @@ mod v8_bug630_image_load_events;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1118_srez2_subtree_img_load;
+mod v8_bug1148_srcset_img_load;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug552_document_metadata;

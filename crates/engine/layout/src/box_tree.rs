@@ -146,7 +146,7 @@ use svg::{
 mod image_requests;
 pub use image_requests::{
     apply_intrinsic_size, collect_background_image_requests, collect_cascade_background_image_requests,
-    collect_image_requests, CrossOriginMode, ImageRequest,
+    collect_image_requests, pick_image_request_url, CrossOriginMode, ImageRequest,
 };
 use image_requests::resolve_image_source;
 
