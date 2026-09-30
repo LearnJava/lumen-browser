@@ -560,10 +560,10 @@ fn ifc1_text_before_inline_block_stays_on_one_line() {
         48.0,
         "trailing text follows the inline-block"
     );
-    // One line box: strut ascent 12.8 vs the 16px box's bottom margin edge →
-    // above = 16, below = max(strut 3.2, run 4.8) = 4.8.
+    // One line box: above = 16 (the 16px box's bottom margin edge), below =
+    // max(strut 5 — Blink rounding, BUG-782 —, run 4.8) = 5.
     assert!(
-        (row.rect.height - 20.8).abs() < 0.01,
+        (row.rect.height - 21.0).abs() < 0.01,
         "one line box expected, got h={}",
         row.rect.height
     );
@@ -616,7 +616,7 @@ fn ifc1_inline_block_with_text_shares_the_outer_baseline() {
     assert_eq!(ib.rect.y, runs[0].rect.y, "inner and outer text share a baseline");
     assert_eq!(runs[0].rect.y, runs[1].rect.y);
     assert!(
-        (row.rect.height - 19.2).abs() < 0.01,
+        (row.rect.height - 19.4).abs() < 0.01,
         "one line-height tall, got h={}",
         row.rect.height
     );
@@ -692,10 +692,10 @@ fn ifc2_image_shares_the_line_with_the_text_around_it() {
     assert_eq!(kids[0].rect.x - row.rect.x, 0.0);
     assert_eq!(kids[1].rect.x - row.rect.x, 24.0, "image follows the text");
     assert_eq!(kids[2].rect.x - row.rect.x, 48.0, "text follows the image");
-    // above = 16 (the image's bottom margin edge), below = max(strut 3.2,
-    // run 4.8) = 4.8.
+    // above = 16 (the image's bottom margin edge), below = max(strut 5 —
+    // Blink rounding, BUG-782 —, run 4.8) = 5.
     assert!(
-        (row.rect.height - 20.8).abs() < 0.01,
+        (row.rect.height - 21.0).abs() < 0.01,
         "one line box expected, got h={}",
         row.rect.height
     );
@@ -725,7 +725,7 @@ fn ifc2_image_sits_on_the_baseline_by_its_bottom_margin_edge() {
     assert_eq!(img.rect.y - row.rect.y, 0.0, "the tallest box opens the line");
     assert_eq!(run.rect.y - row.rect.y, 6.0, "text drops onto the shared baseline");
     assert!(
-        (row.rect.height - 24.8).abs() < 0.01,
+        (row.rect.height - 25.0).abs() < 0.01,
         "margin counts towards the line box, got h={}",
         row.rect.height
     );
