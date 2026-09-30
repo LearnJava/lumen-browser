@@ -917,6 +917,24 @@ fn text_decoder_stream_closes_its_readable_side() {
     assert_eq!(r, lumen_core::JsValue::String("hi/false undefined/true".into()));
 }
 
+/// BUG-1084: a chunk that is not an ArrayBuffer/ArrayBufferView must reject
+/// `write()` with a `TypeError`; views with offset and other views decode.
+#[test]
+fn text_decoder_stream_rejects_non_buffer_source_chunk() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var out = [];                  ['str', null, undefined, 7, {}, [1]].forEach(function(bad, i) {                      var w = new TextDecoderStream().writable.getWriter();                      w.write(bad).then(function() { out.push(i + ':ok'); },                                        function(e) { out.push(i + ':' + (e instanceof TypeError)); });                  });                  var t2 = new TextDecoderStream();                  var buf = new Uint8Array([120, 104, 105, 121]);                  t2.writable.getWriter().write(new DataView(buf.buffer, 1, 2));                  t2.readable.getReader().read().then(function(r) { out.push('v:' + r.value); });"
+    ).unwrap();
+    for _ in 0..8 {
+        rt.eval("0").unwrap();
+    }
+    let r = rt.eval("out.slice().sort().join(' ')").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("0:true 1:true 2:true 3:true 4:true 5:true v:hi".into())
+    );
+}
+
 #[test]
 fn transform_stream_has_readable_and_writable() {
     let rt = v8_runtime_with_dom(make_doc());
