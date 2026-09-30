@@ -126,7 +126,7 @@ is_secure_context`, 5/5. Юнит-тесты бьют по `install_dom` нап�
 локальный HTTP-сервер, слушающий и loopback, и LAN-адрес): `http://127.0.0.1`
 → `true`, `http://localhost` → `true`, `http://<LAN-IPv4>` → `false`,
 `file://…` → `true` — 4/4. Формы `file:///D:/…` и `about:blank` в headless-MCP
-недостижимы по уже заведённому [BUG-760](BUG-760-OPEN.md) (`navigate` там не
+недостижимы по уже заведённому [BUG-760](BUG-760-FIXED.md) (`navigate` там не
 знает ни трёхслэшевой формы, ни схемы `about:`), поэтому проверены только
 юнит-тестами.
 

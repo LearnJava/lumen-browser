@@ -1047,9 +1047,17 @@ impl BrowserSession for InProcessSession {
         self.net_log.clear();
         self.con_log.clear();
 
-        if let Some(path) = url.strip_prefix("file://") {
-            let bytes = std::fs::read(path)
-                .map_err(|e| Error::Io(format!("не удалось прочитать {path}: {e}")))?;
+        // BUG-760: `about:blank` — штатный стартовый документ, а не файл.
+        if url == "about:blank" {
+            return self.navigate_html("");
+        }
+
+        // BUG-760: `file:///D:/x` → `D:/x` (общий разбор `file_url_to_path`,
+        // а не голый `strip_prefix`, оставлявший `/D:/x`).
+        if let Some(path) = file_url_to_path(url) {
+            let bytes = std::fs::read(&path).map_err(|e| {
+                Error::Io(format!("не удалось прочитать {}: {e}", path.display()))
+            })?;
             return self.run_pipeline(&bytes, None, url.to_owned());
         }
 
@@ -2416,6 +2424,27 @@ mod tests {
         s.run_pipeline(&bytes, Some("text/html"), "file://test".into())
             .expect("pipeline не запустился");
         s
+    }
+
+    #[test]
+    fn navigate_file_url_with_drive_letter_slash() {
+        // BUG-760: `file:///<abs>` не должен оставлять ведущий `/` перед буквой диска.
+        let dir = std::env::temp_dir().join("lumen_bug760");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("p.html");
+        std::fs::write(&f, r#"<html><body><div id="a">x</div></body></html>"#).unwrap();
+        let p = f.display().to_string().replace('\\', "/");
+        let url = if p.starts_with('/') { format!("file://{p}") } else { format!("file:///{p}") };
+        let mut s = InProcessSession::new();
+        s.navigate(&url).expect("file:// URL должен грузиться");
+        assert_eq!(s.current_url(), url);
+    }
+
+    #[test]
+    fn navigate_about_blank_headless() {
+        let mut s = InProcessSession::new();
+        s.navigate("about:blank").expect("about:blank — штатный документ");
+        assert_eq!(s.current_url(), "about:blank");
     }
 
     #[test]
