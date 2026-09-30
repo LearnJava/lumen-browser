@@ -16,7 +16,7 @@ use lumen_core::geom::Size;
 
 use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
 use crate::style::values::misc::OverflowClipMarginBox;
-use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, ROOT_FONT_SIZE};
+use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_SIZE};
 
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
 /// отдельную семантику (centering). Typed; `%` резолвится при layout с
@@ -83,6 +83,10 @@ pub enum Length {
     /// Resolved via the same `FONT_CH_EX` thread-local; the spec fallback when the
     /// metric is unavailable is `0.5em` (the assumed x-height).
     Ex(f32),
+    /// CSS Values L4 §5.1.1 — `lh`: the computed `line-height` of the element
+    /// (absolute px, from `FONT_LH` set per box at layout time). Outside a layout
+    /// pass the fallback is `1.2em`.
+    Lh(f32),
     /// `%` — процент. Базис зависит от свойства: для `font-size` это
     /// `em_basis`, для `line-height` — текущий font-size, для
     /// margin/padding/width — containing block width (Phase 0 пока не считает,
@@ -154,6 +158,7 @@ impl Length {
             Length::Ex(v) => {
                 Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
             }
+            Length::Lh(v) => Some(FONT_LH.with(|c| c.get()).map_or(*v * 1.2 * em_basis, |lh| *v * lh)),
             Length::Percent(v) => percent_basis.map(|b| *v / 100.0 * b),
             Length::Vh(v) => Some(*v / 100.0 * viewport.height),
             Length::Vw(v) => Some(*v / 100.0 * viewport.width),
@@ -281,7 +286,7 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
         return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
     }
     if let Some(num) = s.strip_suffix("lh") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 1.2));
+        return num.trim().parse::<f32>().ok().map(Length::Lh);
     }
     if let Some(num) = s.strip_suffix("em") {
         return num.trim().parse::<f32>().ok().map(Length::Em);
@@ -472,7 +477,7 @@ pub fn canonical_specified_sizing_length(s: &str) -> Option<String> {
 /// and this function is never reached for calc() anyway, see above).
 fn length_literal_is_negative(l: &Length) -> bool {
     match l {
-        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v)
+        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v) | Length::Lh(v)
         | Length::Percent(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v)
         | Length::Cqw(v) | Length::Cqh(v) | Length::Cqi(v) | Length::Cqb(v)
         | Length::Cqmin(v) | Length::Cqmax(v) => *v < 0.0,

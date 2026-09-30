@@ -87,6 +87,16 @@ use super::*;
         assert_eq!(Length::Ch(1.0).resolve(20.0, None, vp()), Some(10.0));
     }
 
+    #[test]
+    fn length_resolve_lh_uses_line_height_context() {
+        assert_eq!(parse_length("2lh"), Some(Length::Lh(2.0)));
+        // Outside layout: 1.2em fallback.
+        assert_eq!(Length::Lh(1.0).resolve(10.0, None, vp()), Some(12.0));
+        let prev = crate::style::push_lh_context(Some(30.0));
+        assert_eq!(Length::Lh(2.0).resolve(10.0, None, vp()), Some(60.0));
+        crate::style::pop_lh_context(prev);
+    }
+
     // ── viewport units ────────────────────────────────────────────────────
 
     #[test]

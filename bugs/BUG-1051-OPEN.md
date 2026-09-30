@@ -66,3 +66,7 @@ FAIL relative-units 5 - vw in outside expected 20.48 +/- 1 but got 10.2399997711
 ## Срез 3 (P6, 2026-09-30) — `rlh`/`rcap`/`rex`/`rch`/`ric` парсятся
 
 Раньше декларация с этими единицами отбрасывалась. Теперь — кратные корневого шрифта (`Length::Rem`) с теми же Phase 0 коэффициентами, что у пар `lh` 1.2 / `cap` 0.7 / `ex`,`ch` 0.5 (`length.rs`, `calc.rs`). Тест `root_relative_font_units_parse`. Не сделано: настоящие `lh` (computed line-height) и `cap`, метрики `ex`/`ch` от корневого шрифта — пары `lh/rlh`, `ex/rex`, `ch/rch` в WPT могут расходиться. `snapshot_cpu` красный — известный дрейф BUG-1008; `dump_golden` 12/12.
+
+## Срез 4 (P6, 2026-09-30) — настоящий `lh`
+
+`Length::Lh` (раньше `Em(1.2)`): резолвится в used line-height бокса через thread-local `FONT_LH` (`push_lh_context` в `layout_dispatch.rs`, рядом с `ch`/`ex`); вне layout и в `font-size` — фолбэк 1.2em. Тест `length_resolve_lh_uses_line_height_context`, `lumen-layout` 4128 ок, `dump_golden` 12/12. Пиксельный гейт не прогнан. Не сделано: `cap` (нет метрики cap-height в `TextMeasurer`), `ex`/`ch` от корневого шрифта для `rex`/`rch`, `rlh` от корневого line-height. BUG-1051 остаётся OPEN.

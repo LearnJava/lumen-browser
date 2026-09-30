@@ -369,7 +369,7 @@ fn split_top_level_comma(s: &str) -> Option<Vec<&str>> {
 // ---------------------------------------------------------------------
 
 fn length_leaf_is_font_relative(l: &Length) -> bool {
-    matches!(l, Length::Em(_) | Length::Rem(_) | Length::Ch(_) | Length::Ex(_))
+    matches!(l, Length::Em(_) | Length::Rem(_) | Length::Ch(_) | Length::Ex(_) | Length::Lh(_))
 }
 
 fn calc_node_has_font_relative_length(node: &CalcNode) -> bool {
