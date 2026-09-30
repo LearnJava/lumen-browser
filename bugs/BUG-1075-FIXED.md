@@ -1,6 +1,6 @@
 # BUG-1075 — `navigation.navigate('#frag' | '?q')` передаёт оболочке относительный URL без разбора по базе документа: загрузка падает `invalid url: "#frag": relative URL without a base`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6) — `navigate()` резолвит URL по `document.baseURI`, при ошибке разбора синхронный `SyntaxError`. Остаток: `file:///` (другая причина), `navigation.reload()` — см. «Не проверялось»
 **Тип:** дефект реализованного кода — шим `navigation.navigate()` отдаёт `url` как есть, оболочка грузит его как абсолютный.
 **Заведён:** 2026-09-21 (P2, WPT-RUN-7 срез 45, `navigation-api`)
 **Область:** js — `crates/js/src/navigation_api.rs::NAVIGATION_API_SHIM`, `navigate()` (`_lumen_navigation_request(action, url, key, stateJson)`, строка 176: `url` не резолвится против `document.baseURI`); приёмник — оболочка (`crates/shell/src/app/`, обработка очереди Navigation API). Точное место разбора не локализовано.

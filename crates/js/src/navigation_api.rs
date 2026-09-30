@@ -467,6 +467,13 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
 
     navigate(url, options = {}) {
       const opts = options || {};
+      // §7.2.9.4 step 3: parse against the document's base URL; failure is a
+      // synchronous SyntaxError. The shell receives an absolute URL only.
+      try {
+        url = new URL(String(url), document.baseURI).href;
+      } catch (e) {
+        throw new DOMException('Invalid URL', 'SyntaxError');
+      }
       const state = opts.state;
       // `history: 'replace'` is the spec option (§7.2.9.4); `replace: true`
       // is the pre-standard spelling this shim used to read — kept.
