@@ -724,6 +724,24 @@ use super::*;
         assert_eq!(s.width, Some(Length::Rem(12.5)), "{:?} {:?}", doc.get(div).data, s.display); // 5 × 40 / 16
     }
 
+    /// BUG-1051: a nested `zoom` adds its factor on top of the root's for `rem`
+    /// and `rlh`, and a `px` line-height is zoomed like any other length.
+    #[test]
+    fn nested_zoom_scales_root_relative_units_and_px_line_height() {
+        let doc = lumen_html_parser::parse(
+            "<html style=\"font-size: 10px; zoom: 2\"><body><div style=\"zoom: 2; width: 1rem; height: 1rlh; line-height: 10px\"></div></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let html_style = compute_style(&doc, doc.document_element().unwrap(), &sheet, &ComputedStyle::root(), vp, false);
+        let body_style = compute_style(&doc, doc.body().unwrap(), &sheet, &html_style, vp, false);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &body_style, vp, false);
+        assert_eq!(s.width, Some(Length::Rem(2.5)), "{:?}", s.width); // 1 × 20/16 × (4/2)
+        assert_eq!(s.height, Some(Length::Rlh(2.0)), "{:?}", s.height);
+        assert!((s.line_height * s.font_size - 40.0).abs() < 0.01, "{} × {}", s.line_height, s.font_size);
+    }
+
     /// BUG-1051: root-relative font units parse (were dropped) as root-font multiples.
     #[test]
     fn root_relative_font_units_parse() {
@@ -734,6 +752,8 @@ use super::*;
             let px = l.resolve(16.0, None, vp).unwrap();
             assert!((px - 5.0 * factor * 16.0).abs() < 0.01, "{unit}: {px}");
         }
+        let ic = crate::style::values::length::parse_length_q("3ic", false).unwrap();
+        assert_eq!(ic.resolve(16.0, None, vp), Some(48.0));
         // Inside a layout pass they follow the root font's metrics (lh, ch, ex).
         let prev = crate::style::push_root_font_metrics(Some((40.0, 22.0, 11.0)));
         for (unit, want) in [("rlh", 200.0), ("rch", 110.0), ("rex", 55.0)] {

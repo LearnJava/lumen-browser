@@ -195,7 +195,7 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
         style.line_height_is_relative = false;
         style.line_height_is_normal = false;
         match &len {
-            Length::Px(v) => style.line_height = v / style.font_size,
+            Length::Px(v) => style.line_height = v * style.effective_zoom / style.font_size,
             Length::Em(v) => style.line_height = *v,
             Length::Rem(v) => {
                 style.line_height = v * style.root_font_size / style.font_size;

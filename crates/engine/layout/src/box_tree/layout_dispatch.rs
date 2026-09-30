@@ -401,6 +401,87 @@ pub(super) fn finalize_block_height(
     }
 }
 
+/// Font-relative-unit contexts for one box (CSS Values L4 §5.1.1): the real
+/// `ch`/`ex` metrics of its font and its used line-height (`lh`). Restores the
+/// parent's values on drop, keeping the thread-locals balanced across the
+/// recursive layout walk. Without a measurer the contexts are cleared, so
+/// `ch`/`ex`/`lh` fall back to the spec `0.5em`/`1.2em` assumption.
+///
+/// Trampolines resolve a box's block-size *after* `dispatch_box` has returned,
+/// so their `run` entry points re-enter this context for the box they finish.
+pub(super) struct FontContext {
+    prev_ch_ex: Option<(f32, f32)>,
+    prev_lh: Option<f32>,
+}
+
+impl FontContext {
+    pub(super) fn enter(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Self {
+        let _prof = lumen_core::profile::scope_detail("lo_chex");
+        let ch_ex = measurer.map(|m| {
+            let fs = b.style.font_size.max(0.0);
+            (
+                m.char_width_with_families('0', fs, &b.style.font_family),
+                m.x_height_px(fs),
+            )
+        });
+        // `lh`: `used_line_height` is the measurer-resolved value; fall back to
+        // the cascaded ratio when unresolved (BUG-1051).
+        let lh = measurer.map(|_| {
+            if b.used_line_height > 0.0 { b.used_line_height } else { b.style.font_size * b.style.line_height }
+        });
+        Self {
+            prev_ch_ex: crate::style::push_ch_ex_context(ch_ex),
+            prev_lh: crate::style::push_lh_context(lh),
+        }
+    }
+}
+
+impl Drop for FontContext {
+    fn drop(&mut self) {
+        crate::style::pop_ch_ex_context(self.prev_ch_ex);
+        crate::style::pop_lh_context(self.prev_lh);
+    }
+}
+
+/// `rlh`/`rex`/`rch`: metrics of the root element's font, published by the
+/// outermost layout call below the (anonymous) document box and held for the
+/// whole walk, trampolines included.
+struct RootFontGuard(Option<Option<(f32, f32, f32)>>);
+
+impl RootFontGuard {
+    fn enter(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Self {
+        // The document node's own box (index 0) is anonymous — its font is the UA
+        // default, not `<html>`'s — so measure its first rendered child instead.
+        // Block-flow trampolines reach `<html>` through `dispatch_box` directly,
+        // so only the call on the document box can hold the guard for the walk.
+        let src = if b.node.index() == 0 {
+            b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
+        } else {
+            Some(b)
+        };
+        Self(match (measurer, src, crate::style::root_font_metrics()) {
+            (Some(m), Some(src), None) => {
+                let fs = src.style.font_size.max(0.0);
+                let lh = if src.used_line_height > 0.0 { src.used_line_height } else { fs * src.style.line_height };
+                Some(crate::style::push_root_font_metrics(Some((
+                    lh,
+                    m.char_width_with_families('0', fs, &src.style.font_family),
+                    m.x_height_px(fs),
+                ))))
+            }
+            _ => None,
+        })
+    }
+}
+
+impl Drop for RootFontGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.0 {
+            crate::style::pop_root_font_metrics(prev);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lay_out_inner_impl(
     b: &mut LayoutBox,
@@ -425,6 +506,7 @@ fn lay_out_inner_impl(
     // recursing, and `block_flow_trampoline::run` drives it — and every further
     // plain-block descendant it meets — on an explicit heap stack instead of
     // the native call stack (`<div>`×20000 no longer overflows it).
+    let _root_font = RootFontGuard::enter(b, measurer);
     match dispatch_box(
         b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
         in_block_flow, outer_floats, parent_justify_items, used_size_override,
@@ -436,28 +518,33 @@ fn lay_out_inner_impl(
         // LAYOUT-2 срез 3: the flex dispatch arm's item-placement loop, same
         // shape as the block-flow case above — see `flex_trampoline::run`.
         DispatchOutcome::NeedsFlexLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::flex_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 4: the grid dispatch arm's probe + final-placement
         // passes, same shape as the flex case above — see `grid_trampoline::run`.
         DispatchOutcome::NeedsGridLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::grid_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 6: the table dispatch arm's per-cell placement pass,
         // same shape as the flex/grid cases above — see `table_trampoline::run`.
         DispatchOutcome::NeedsTableLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::table_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 7: the multicol dispatch arm's per-segment placement
         // pass, same shape as the flex/grid/table cases above — see
         // `multicol_trampoline::run`.
         DispatchOutcome::NeedsMulticolLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::multicol_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 8: the vertical-writing-mode dispatch arm's per-child
         // stacking pass, same shape as the multicol case above — see
         // `vertical_trampoline::run`.
         DispatchOutcome::NeedsVerticalLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::vertical_trampoline::run(b, init, measurer, viewport, hp);
         }
     }
@@ -514,62 +601,8 @@ pub(super) fn dispatch_box(
 
     record_layout_key_occurrence(b.node, start_x, start_y, available_width, available_height, &b.style, used_size_override.as_ref());
 
-    // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
-    // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`
-    // resolve against the actual font for this box and its descendants. The guard
-    // restores the parent's value on every return path, keeping the thread-local
-    // balanced across the recursive layout walk. Without a measurer the context is
-    // cleared, so ch/ex fall back to the spec `0.5em` assumption.
-    struct ChExGuard(Option<(f32, f32)>);
-    impl Drop for ChExGuard {
-        fn drop(&mut self) {
-            crate::style::pop_ch_ex_context(self.0);
-        }
-    }
-    let _ch_ex_guard = {
-        let _prof = lumen_core::profile::scope_detail("lo_chex");
-        let ch_ex = measurer.map(|m| {
-            let fs = b.style.font_size.max(0.0);
-            (
-                m.char_width_with_families('0', fs, &b.style.font_family),
-                m.x_height_px(fs),
-            )
-        });
-        ChExGuard(crate::style::push_ch_ex_context(ch_ex))
-    };
-    // `rlh`/`rex`/`rch`: metrics of the root element's font. The outermost box
-    // laid out is the root; nested calls see the context already set.
-    struct RootGuard(Option<Option<(f32, f32, f32)>>);
-    impl Drop for RootGuard {
-        fn drop(&mut self) {
-            if let Some(prev) = self.0 {
-                crate::style::pop_root_font_metrics(prev);
-            }
-        }
-    }
-    let _root_guard = RootGuard(match (measurer, crate::style::root_font_metrics()) {
-        (Some(m), None) => {
-            let fs = b.style.font_size.max(0.0);
-            let lh = if b.used_line_height > 0.0 { b.used_line_height } else { fs * b.style.line_height };
-            Some(crate::style::push_root_font_metrics(Some((
-                lh,
-                m.char_width_with_families('0', fs, &b.style.font_family),
-                m.x_height_px(fs),
-            ))))
-        }
-        _ => None,
-    });
-    // `lh` unit: the box's used line-height (BUG-1051). `used_line_height` is the
-    // measurer-resolved value; fall back to the cascaded ratio when unresolved.
-    struct LhGuard(Option<f32>);
-    impl Drop for LhGuard {
-        fn drop(&mut self) {
-            crate::style::pop_lh_context(self.0);
-        }
-    }
-    let _lh_guard = LhGuard(crate::style::push_lh_context(measurer.map(|_| {
-        if b.used_line_height > 0.0 { b.used_line_height } else { b.style.font_size * b.style.line_height }
-    })));
+    // `ch`/`ex`/`lh` contexts for this box and its descendants (see `FontContext`).
+    let _font_ctx = FontContext::enter(b, measurer);
 
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
     // flow position starts below the expanded viewport and the shell hasn't

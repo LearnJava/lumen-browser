@@ -1,6 +1,6 @@
 # BUG-1051 — вьюпорт-/шрифт-относительные единицы дают другой рендер-размер, чем их «root-relative» аналог, под `zoom`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6, срез 6)
 **Заведён:** 2026-09-13 (BUG-532 срез P3, живой прогон `css/css-viewport/zoom/relative-units.html` и `zoom/font-relative-units.html`)
 **Область:** layout (используемое значение — `getBoundingClientRect()`, не CSSOM)
 **Владелец:** P1/P3
@@ -74,3 +74,15 @@ FAIL relative-units 5 - vw in outside expected 20.48 +/- 1 but got 10.2399997711
 ## Срез 5 (P6, 2026-09-30) — `rlh`/`rex`/`rch` от метрик корневого шрифта
 
 Новые `Length::{Rlh,Rex,Rch}`; контекст `ROOT_FONT_METRICS` (lh, ch, ex корня) ставит внешний `lay_out_inner` (корневой бокс). Проба `--dump-layout` (html `font-size:20px; line-height:1; zoom:2`): `lh=rlh`, `ex=rex`, `ch=rch` совпадают. Тест `root_relative_font_units_parse`, `lumen-layout` 4128 ок, `dump_golden` 12/12. WPT-смоук не запущен (wss-патч нового слота не применён). Не сделано: настоящий `cap`/`rcap` (нет метрики cap-height), `ic`/`ric`. BUG-1051 остаётся OPEN.
+
+## Срез 6 (P6, 2026-09-30) — закрыт
+
+Оба WPT-файла зелёные (`run_smoke.py`, dev-release): `font-relative-units.html` 6/6, `relative-units.html` 6/6; `.ini` с ожидаемыми падениями удалены. Причины остатка:
+
+- `rem` во вложенном `zoom`: коэффициент `Rem` не учитывал зум элемента сверх корневого — добавлено `ComputedStyle::root_zoom`, `rem_k *= z / root_zoom`; то же для `Rlh/Rex/Rch` (`zoom_length`).
+- `line-height: <px>` не умножался на зум (ratio делился зумленный font-size на незумленные px).
+- `lh`/`ch`/`ex` терялись при расчёте высоты блока: контекст жил в `dispatch_box`, а высоту блока считает трамплин уже после его возврата. Контекст вынесен в `FontContext`, входят в него `block_flow_trampoline::finish_frame` и ветки flex/grid/table/multicol/vertical.
+- `rlh`/`rex`/`rch` брали метрики анонимного документного бокса (шрифт 16px), а не `<html>`; `RootFontGuard` держится на всём обходе от документного бокса и меряет его первый нерезаный потомок.
+- `ic`/`ric`: `ic` не парсился; теперь 1em (Phase 0).
+
+Не сделано (фидельность, не равенство пар): метрика cap-height для `cap`/`rcap` и ширина иероглифа для `ic`/`ric` — Phase 0 приближения 0.7em/1em. Тесты `nested_zoom_scales_root_relative_units_and_px_line_height`, `root_relative_font_units_parse`; `lumen-layout` 4129 ок, clippy чист, `dump_golden` 12/12. Пиксельный гейт не прогнан (TEST-00 из менеджера).

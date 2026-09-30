@@ -1,5 +1,5 @@
 use super::*;
-use super::layout_dispatch::{dispatch_box, finalize_block_height, finish_after_match};
+use super::layout_dispatch::{dispatch_box, finalize_block_height, finish_after_match, FontContext};
 
 /// LAYOUT-2 срез 1 — see `dispatch_box`'s doc comment (`layout_dispatch.rs`)
 /// for why this split exists. `Done` matches every dispatch arm that already
@@ -721,6 +721,9 @@ fn finish_frame(
     hp: &dyn HyphenationProvider,
     bottom_cache: &mut MarginCollapseCache,
 ) {
+    // The block-size below may use `lh`/`ch`/`ex`; `dispatch_box`'s context for
+    // this box was dropped when it handed the children loop over to `run`.
+    let _font_ctx = FontContext::enter(&frame.b, measurer);
     // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this box
     // collapses its bottom margin (auto height, no bottom padding/border, no
     // BFC) and the last in-flow child is a collapsible block, that child's
