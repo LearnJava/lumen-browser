@@ -49,6 +49,10 @@ pub(crate) struct Lumen {
     /// scroll, JS DOM mutation) — без хранения здесь resize-relayout терял бы
     /// web-метрики и откатывался к Inter.  Очищается на каждой навигации.
     pub(crate) web_fonts: Vec<LoadedWebFont>,
+    /// BUG-1154: ключи уже запрошенных `@font-face url()`-источников страницы —
+    /// дедупликация между первичной сборкой и `refresh_dynamic_css`. Очищается
+    /// на навигации вместе с `web_fonts`.
+    pub(crate) requested_web_fonts: std::collections::HashSet<String>,
     pub(crate) source: PageSource,
     pub(crate) event_sink: Arc<dyn EventSink>,
     pub(crate) modifiers: ModifiersState,

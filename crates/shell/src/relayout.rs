@@ -182,7 +182,30 @@ impl Lumen {
         // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
         // прохода — против нового листа они недействительны.
         self.page_prev_cascade_styles = None;
+        // BUG-1154: `@font-face url()` из поздно вставленного `<style>` (или
+        // CSSOM-правки) — загрузку порождала только первичная сборка страницы.
+        if text_changed || cssom_epoch != 0 {
+            self.spawn_dynamic_web_fonts();
+        }
         true
+    }
+
+    /// BUG-1154: запускает загрузку `@font-face url()`-источников текущего листа,
+    /// которых первичная сборка не видела; уже запрошенные отсекает
+    /// `spawn_web_font_fetches`.
+    fn spawn_dynamic_web_fonts(&mut self) {
+        let Some(src) = self.layout_source.as_ref() else { return };
+        if src.stylesheet.font_faces.is_empty() {
+            return;
+        }
+        let Some(base) = self.document_resource_base() else { return };
+        let (_, pending) = load_font_faces(
+            &src.stylesheet.font_faces,
+            &base,
+            &self.event_sink,
+            Some(self.active_cookie_jar()),
+        );
+        self.spawn_web_font_fetches(pending);
     }
 
     /// GAP-CSSANIM срез 9: this frame's `height` transition/`@keyframes`

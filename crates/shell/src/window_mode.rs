@@ -235,6 +235,7 @@ pub(crate) fn run_window_mode(
         pending_images: Vec::new(),
         page_font_registry: Arc::new(lumen_font::FontRegistry::new()),
         web_fonts: Vec::new(),
+        requested_web_fonts: std::collections::HashSet::new(),
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
