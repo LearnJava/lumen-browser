@@ -1034,6 +1034,21 @@ fn seconds_list_to_css(v: &[f32]) -> String {
         .join(", ")
 }
 
+/// Shortest serialisation of a four-sided shorthand (CSS Values §… `margin`
+/// style): 1 value when all agree, 2 when top=bottom and left=right, 3 when
+/// only left=right, else 4.
+fn box_sides_shorthand(t: &str, r: &str, b: &str, l: &str) -> String {
+    if t == r && r == b && b == l {
+        t.to_string()
+    } else if t == b && r == l {
+        format!("{t} {r}")
+    } else if r == l {
+        format!("{t} {r} {b}")
+    } else {
+        format!("{t} {r} {b} {l}")
+    }
+}
+
 fn box_shadow_list_to_css(v: &[BoxShadow]) -> String {
     if v.is_empty() {
         return "none".into();
@@ -1041,8 +1056,9 @@ fn box_shadow_list_to_css(v: &[BoxShadow]) -> String {
     v.iter()
         .map(|s| {
             let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
+            // CSSOM: the colour serialises first (BUG-1050).
             let mut out = format!(
-                "{} {} {} {} {color}",
+                "{color} {} {} {} {}",
                 px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur), px_str(s.spread),
             );
             if s.inset {
@@ -1061,7 +1077,7 @@ fn text_shadow_list_to_css(v: &[TextShadow]) -> String {
     v.iter()
         .map(|s| {
             let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
-            format!("{} {} {} {color}", px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur))
+            format!("{color} {} {} {}", px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1371,7 +1387,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
     m.insert("line-height".into(), {
         let v = style.line_height;
-        if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
+        if !style.line_height_is_relative {
+            // BUG-1050: an absolute `<length>` is stored as a ratio of the
+            // (zoomed) font-size; the computed value is that length in px.
+            px_str(v * style.font_size / z)
+        } else if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
     });
     m.insert("letter-spacing".into(), px_str(style.letter_spacing));
     m.insert("word-spacing".into(), px_str(style.word_spacing));
@@ -1556,6 +1576,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("scroll-margin-right".into(), px_str(style.scroll_margin_right));
     m.insert("scroll-margin-bottom".into(), px_str(style.scroll_margin_bottom));
     m.insert("scroll-margin-left".into(), px_str(style.scroll_margin_left));
+    m.insert("scroll-padding-top".into(), px_str(style.scroll_padding_top));
+    m.insert("scroll-padding-right".into(), px_str(style.scroll_padding_right));
+    m.insert("scroll-padding-bottom".into(), px_str(style.scroll_padding_bottom));
+    m.insert("scroll-padding-left".into(), px_str(style.scroll_padding_left));
     // CSS Scroll Anchoring 1 — `overflow-anchor` (BUG-524 срез 1, parsing/CSSOM only).
     m.insert("overflow-anchor".into(), match style.overflow_anchor {
         OverflowAnchor::Auto => "auto",
@@ -1691,13 +1715,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // `border-width`/`border-style` mirror `border-color` above: a shorthand
     // resolves only when all four sides agree, otherwise `""` — matches real
     // UA `getPropertyValue` behaviour on a per-side-differing shorthand.
-    m.insert("border-width".into(), {
-        let (t, r, b, l) = (
-            px_str(style.border_top_width), px_str(style.border_right_width),
-            px_str(style.border_bottom_width), px_str(style.border_left_width),
-        );
-        if t == r && r == b && b == l { t } else { String::new() }
-    });
+    m.insert("border-width".into(), box_sides_shorthand(
+        &px_str(style.border_top_width / z), &px_str(style.border_right_width / z),
+        &px_str(style.border_bottom_width / z), &px_str(style.border_left_width / z),
+    ));
     m.insert("border-style".into(), {
         let (t, r, b, l) = (
             border_style_to_css(style.border_top_style), border_style_to_css(style.border_right_style),
@@ -1733,6 +1754,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // ── Shadows (CSS Backgrounds L3 §7.1, CSS Text Decoration L3 §2.5) ──
     m.insert("box-shadow".into(), box_shadow_list_to_css(&style.box_shadow));
     m.insert("text-shadow".into(), text_shadow_list_to_css(&style.text_shadow));
+
+    // CSS Text Decoration L4 §3.3/§3.7 (BUG-1050) — `auto`/`from-font`/`<length>`.
+    m.insert("text-decoration-thickness".into(), match style.text_decoration_thickness {
+        crate::TextDecorationThickness::Auto => "auto".into(),
+        crate::TextDecorationThickness::FromFont => "from-font".into(),
+        crate::TextDecorationThickness::Length(v) => px_str(v),
+        crate::TextDecorationThickness::Percentage(p) => format!("{p}%"),
+    });
+    m.insert("text-underline-offset".into(), style.text_underline_offset.map_or("auto".into(), px_str));
 
     // ── Perspective ──────────────────────────────────────────────────
     m.insert("perspective-origin".into(), format!(
@@ -1954,6 +1984,19 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         m.insert("padding-block".into(), two_value(&m, "padding-top", "padding-bottom"));
         m.insert("inset-inline".into(), two_value(&m, "left", "right"));
         m.insert("inset-block".into(), two_value(&m, "top", "bottom"));
+    }
+
+    // Four-sided shorthands (BUG-1050): serialised from the longhands already
+    // in the map (so un-zoom is inherited), collapsed to the shortest form.
+    for (short, [t, r, b, l]) in [
+        ("margin", ["margin-top", "margin-right", "margin-bottom", "margin-left"]),
+        ("padding", ["padding-top", "padding-right", "padding-bottom", "padding-left"]),
+        ("inset", ["top", "right", "bottom", "left"]),
+        ("scroll-margin", ["scroll-margin-top", "scroll-margin-right", "scroll-margin-bottom", "scroll-margin-left"]),
+        ("scroll-padding", ["scroll-padding-top", "scroll-padding-right", "scroll-padding-bottom", "scroll-padding-left"]),
+    ] {
+        let v = box_sides_shorthand(&m[t], &m[r], &m[b], &m[l]);
+        m.insert(short.into(), v);
     }
 
     m
@@ -2667,6 +2710,23 @@ mod tests {
     // ──────────────── CSSOM-3 срез 1: extended computed-style coverage ────────────────
 
     #[test]
+    fn computed_map_box_shorthands_bug1050() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { margin: 1px 2px 3px 4px; padding: 5px 6px; scroll-margin: 7px;              scroll-padding: 8px 9px 10px; position: absolute; top: 1px; right: 2px; bottom: 1px; left: 2px;              text-decoration-thickness: 3px; text-underline-offset: 4px; line-height: 20px; }",
+        );
+        let g = |k: &str| m.get(k).map(String::as_str);
+        assert_eq!(g("margin"), Some("1px 2px 3px 4px"));
+        assert_eq!(g("padding"), Some("5px 6px"));
+        assert_eq!(g("scroll-margin"), Some("7px"));
+        assert_eq!(g("scroll-padding"), Some("8px 9px 10px"));
+        assert_eq!(g("inset"), Some("1px 2px"));
+        assert_eq!(g("text-decoration-thickness"), Some("3px"));
+        assert_eq!(g("text-underline-offset"), Some("4px"));
+        assert_eq!(g("line-height"), Some("20px"));
+    }
+
+    #[test]
     fn computed_map_border_width_style_shorthands() {
         let m = div_computed_map(
             "<div>x</div>",
@@ -2675,13 +2735,12 @@ mod tests {
         assert_eq!(m.get("border-width").map(String::as_str), Some("2px"));
         assert_eq!(m.get("border-style").map(String::as_str), Some("dashed"));
 
-        // Differing per-side values → shorthand resolves to "", matching
-        // border-color's already-established behaviour above.
+        // Differing per-side values → 4-value shorthand (BUG-1050).
         let m = div_computed_map(
             "<div>x</div>",
             "div { border-top-width: 1px; border-right-width: 2px; border-bottom-width: 3px; border-left-width: 4px; }",
         );
-        assert_eq!(m.get("border-width").map(String::as_str), Some(""));
+        assert_eq!(m.get("border-width").map(String::as_str), Some("1px 2px 3px 4px"));
     }
 
     #[test]
@@ -2719,11 +2778,11 @@ mod tests {
         );
         assert_eq!(
             m.get("box-shadow").map(String::as_str),
-            Some("1px 2px 3px 4px rgb(255, 0, 0) inset"),
+            Some("rgb(255, 0, 0) 1px 2px 3px 4px inset"),
         );
         assert_eq!(
             m.get("text-shadow").map(String::as_str),
-            Some("5px 6px 7px rgb(0, 0, 255)"),
+            Some("rgb(0, 0, 255) 5px 6px 7px"),
         );
 
         let m = div_computed_map("<div>x</div>", "");
