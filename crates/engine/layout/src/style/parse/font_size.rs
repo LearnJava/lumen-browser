@@ -130,6 +130,8 @@ fn resolve_font_size(
         // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
         Length::Ch(v) | Length::Ex(v) => (*v * 0.5 * parent_fs, FontSizeBasis::ParentRelative),
         Length::Lh(v) => (*v * 1.2 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Rlh(v) => (*v * 1.2 * style.root_font_size, FontSizeBasis::ParentRelative),
+        Length::Rex(v) | Length::Rch(v) => (*v * 0.5 * style.root_font_size, FontSizeBasis::ParentRelative),
         Length::Percent(v) => (*v / 100.0 * parent_fs, FontSizeBasis::ParentRelative),
         Length::Vh(v) => (*v / 100.0 * viewport.height, FontSizeBasis::Absolute),
         Length::Vw(v) => (*v / 100.0 * viewport.width, FontSizeBasis::Absolute),
@@ -202,6 +204,9 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
             Length::Ch(_)
             | Length::Ex(_)
             | Length::Lh(_)
+            | Length::Rlh(_)
+            | Length::Rex(_)
+            | Length::Rch(_)
             | Length::Vh(_)
             | Length::Vw(_)
             | Length::Vmin(_)
@@ -278,6 +283,7 @@ pub(in crate::style) fn is_font_size_token(tok: &str) -> bool {
     // `font-size: calc(…)` с тем же значением работал.
     matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
         | Length::Ch(_) | Length::Ex(_) | Length::Lh(_)
+        | Length::Rlh(_) | Length::Rex(_) | Length::Rch(_)
         | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)
         | Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
         | Length::Cqmin(_) | Length::Cqmax(_)

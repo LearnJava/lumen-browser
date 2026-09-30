@@ -734,6 +734,13 @@ use super::*;
             let px = l.resolve(16.0, None, vp).unwrap();
             assert!((px - 5.0 * factor * 16.0).abs() < 0.01, "{unit}: {px}");
         }
+        // Inside a layout pass they follow the root font's metrics (lh, ch, ex).
+        let prev = crate::style::push_root_font_metrics(Some((40.0, 22.0, 11.0)));
+        for (unit, want) in [("rlh", 200.0), ("rch", 110.0), ("rex", 55.0)] {
+            let l = crate::style::values::length::parse_length_q(&format!("5{unit}"), false).unwrap();
+            assert_eq!(l.resolve(16.0, None, vp), Some(want), "{unit}");
+        }
+        crate::style::pop_root_font_metrics(prev);
     }
 
     /// This is the shape tbank.ru relies on: a fixed-width container that only

@@ -16,7 +16,7 @@ use lumen_core::geom::Size;
 
 use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
 use crate::style::values::misc::OverflowClipMarginBox;
-use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_SIZE};
+use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS, ROOT_FONT_SIZE};
 
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
 /// отдельную семантику (centering). Typed; `%` резолвится при layout с
@@ -87,6 +87,12 @@ pub enum Length {
     /// (absolute px, from `FONT_LH` set per box at layout time). Outside a layout
     /// pass the fallback is `1.2em`.
     Lh(f32),
+    /// `rlh`/`rex`/`rch` — `lh`/`ex`/`ch` of the root element's font (CSS Values L4
+    /// §5.1.2), from `ROOT_FONT_METRICS` set at the root box; fallback `1.2`/`0.5`
+    /// of the 16px root.
+    Rlh(f32),
+    Rex(f32),
+    Rch(f32),
     /// `%` — процент. Базис зависит от свойства: для `font-size` это
     /// `em_basis`, для `line-height` — текущий font-size, для
     /// margin/padding/width — containing block width (Phase 0 пока не считает,
@@ -158,6 +164,9 @@ impl Length {
             Length::Ex(v) => {
                 Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
             }
+            Length::Rlh(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 1.2 * ROOT_FONT_SIZE, |(lh, _, _)| *v * lh)),
+            Length::Rch(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 0.5 * ROOT_FONT_SIZE, |(_, ch, _)| *v * ch)),
+            Length::Rex(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 0.5 * ROOT_FONT_SIZE, |(_, _, ex)| *v * ex)),
             Length::Lh(v) => Some(FONT_LH.with(|c| c.get()).map_or(*v * 1.2 * em_basis, |lh| *v * lh)),
             Length::Percent(v) => percent_basis.map(|b| *v / 100.0 * b),
             Length::Vh(v) => Some(*v / 100.0 * viewport.height),
@@ -265,10 +274,19 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     }
     // CSS Values L4 §5.1.2 — root-relative font units; same Phase 0 factors as
     // their element-relative pairs (`lh`/`cap`/`ex`/`ch`), against the root font.
-    for (suffix, factor) in [("rlh", 1.2), ("rcap", 0.7), ("rex", 0.5), ("rch", 0.5), ("ric", 1.0)] {
+    for (suffix, factor) in [("rcap", 0.7), ("ric", 1.0)] {
         if let Some(num) = s.strip_suffix(suffix) {
             return num.trim().parse::<f32>().ok().map(|n| Length::Rem(n * factor));
         }
+    }
+    if let Some(num) = s.strip_suffix("rlh") {
+        return num.trim().parse::<f32>().ok().map(Length::Rlh);
+    }
+    if let Some(num) = s.strip_suffix("rex") {
+        return num.trim().parse::<f32>().ok().map(Length::Rex);
+    }
+    if let Some(num) = s.strip_suffix("rch") {
+        return num.trim().parse::<f32>().ok().map(Length::Rch);
     }
     // ── Font-relative units ──────────────────────────────────────────────────
     // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
@@ -478,6 +496,7 @@ pub fn canonical_specified_sizing_length(s: &str) -> Option<String> {
 fn length_literal_is_negative(l: &Length) -> bool {
     match l {
         Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v) | Length::Lh(v)
+        | Length::Rlh(v) | Length::Rex(v) | Length::Rch(v)
         | Length::Percent(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v)
         | Length::Cqw(v) | Length::Cqh(v) | Length::Cqi(v) | Length::Cqb(v)
         | Length::Cqmin(v) | Length::Cqmax(v) => *v < 0.0,

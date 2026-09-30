@@ -70,3 +70,7 @@ FAIL relative-units 5 - vw in outside expected 20.48 +/- 1 but got 10.2399997711
 ## Срез 4 (P6, 2026-09-30) — настоящий `lh`
 
 `Length::Lh` (раньше `Em(1.2)`): резолвится в used line-height бокса через thread-local `FONT_LH` (`push_lh_context` в `layout_dispatch.rs`, рядом с `ch`/`ex`); вне layout и в `font-size` — фолбэк 1.2em. Тест `length_resolve_lh_uses_line_height_context`, `lumen-layout` 4128 ок, `dump_golden` 12/12. Пиксельный гейт не прогнан. Не сделано: `cap` (нет метрики cap-height в `TextMeasurer`), `ex`/`ch` от корневого шрифта для `rex`/`rch`, `rlh` от корневого line-height. BUG-1051 остаётся OPEN.
+
+## Срез 5 (P6, 2026-09-30) — `rlh`/`rex`/`rch` от метрик корневого шрифта
+
+Новые `Length::{Rlh,Rex,Rch}`; контекст `ROOT_FONT_METRICS` (lh, ch, ex корня) ставит внешний `lay_out_inner` (корневой бокс). Проба `--dump-layout` (html `font-size:20px; line-height:1; zoom:2`): `lh=rlh`, `ex=rex`, `ch=rch` совпадают. Тест `root_relative_font_units_parse`, `lumen-layout` 4128 ок, `dump_golden` 12/12. WPT-смоук не запущен (wss-патч нового слота не применён). Не сделано: настоящий `cap`/`rcap` (нет метрики cap-height), `ic`/`ric`. BUG-1051 остаётся OPEN.
