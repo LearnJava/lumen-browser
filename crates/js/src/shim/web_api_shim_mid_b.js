@@ -1039,6 +1039,14 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     _ro_raf_epoch++;
     var ts = timestamp_ms < 0 ? performance.now() : +timestamp_ms;
     _wa_current_time = ts;
+    // BUG-1041: playback events queued before this frame go out ahead of the
+    // rAF callbacks (Web Animations §4.4.3 "update animations and send events").
+    if (typeof _wa_pending_events !== 'undefined' && _wa_pending_events.length !== 0) {
+        var _wa_evs = _wa_pending_events.splice(0);
+        for (var _e = 0; _e < _wa_evs.length; _e++) {
+            try { _wa_evs[_e].run(); } catch(e) { _lumen_report_exception(e); }
+        }
+    }
     var callbacks = _lumen_raf_callbacks.splice(0);
     var ran = false;
     if (callbacks.length !== 0) {

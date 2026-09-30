@@ -4972,6 +4972,7 @@ function _lumen_notify_fullscreen_exit() {
 var _wa_current_time = 0;
 // Live registry of all non-idle Animation instances.
 var _wa_animations = [];
+var _wa_pending_events = [];
 
 // AnimationPlaybackEvent (W3C Web Animations §4.4.3) — fired on finish/cancel.
 function AnimationPlaybackEvent(type, init) {
@@ -5542,9 +5543,21 @@ Object.defineProperty(Animation.prototype, '_fire', {
             timelineTime: this.timeline ? this.timeline.currentTime : null,
         });
         var deadline = _lumen_now_ms();
+        // BUG-1041: «update animations and send events» precedes the rAF
+        // callbacks of the same frame, so `_lumen_run_raf_callbacks` drains
+        // this queue first; whichever of the two (task or frame) comes first
+        // dispatches, the other finds `sent` set.
+        var rec = { sent: false, run: function() {
+            if (rec.sent) return;
+            rec.sent = true;
+            var at = _wa_pending_events.indexOf(rec);
+            if (at >= 0) _wa_pending_events.splice(at, 1);
+            self.dispatchEvent(ev);
+        } };
+        _wa_pending_events.push(rec);
         _lumen_timers.push({
             id: _lumen_timer_seq++,
-            fn: function() { self.dispatchEvent(ev); },
+            fn: function() { rec.run(); },
             deadline: deadline, interval: null, nesting: 0,
         });
         _lumen_request_wakeup(deadline);
