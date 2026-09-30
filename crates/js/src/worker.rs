@@ -2527,6 +2527,23 @@ mod tests_v8 {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    /// Polls (up to 10 s) until the worker has posted something, instead of a
+    /// fixed pause that flakes under parallel load (BUG-1111).
+    fn wait_queue(queue: &WorkerMessageQueue) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while queue.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Same as [`wait_queue`] for the worker error queue.
+    fn wait_errors(errors: &WorkerErrorQueue) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while errors.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn v8_worker_shim_installs_without_error() {
         let rt = V8JsRuntime::new().unwrap();
@@ -2895,7 +2912,6 @@ mod tests_v8 {
     /// `Worker_ErrorEvent_*`/`WorkerGlobalScope_ErrorEvent_*` tests.
     #[test]
     fn v8_worker_end_to_end_message_exception_runs_scope_onerror_then_reports() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -2923,7 +2939,7 @@ mod tests_v8 {
         );
 
         post_to_worker(&reg, worker_id, "\"boom\"".to_string());
-        std::thread::sleep(Duration::from_millis(400));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(
@@ -2946,7 +2962,6 @@ mod tests_v8 {
     /// module *load* failure and must stay quiet here.
     #[test]
     fn v8_worker_end_to_end_top_level_throw_runs_scope_handlers_once() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -2974,7 +2989,7 @@ mod tests_v8 {
             &Arc::new(Mutex::new(Vec::new())),
             &Arc::new(Mutex::new(0u32)), None, None,
         );
-        std::thread::sleep(Duration::from_millis(400));
+        wait_queue(&queue);
 
         let mut msgs: Vec<String> = drain_messages(&queue).into_iter().map(|(_, j)| j).collect();
         msgs.sort();
@@ -3095,7 +3110,6 @@ mod tests_v8 {
     /// TIMEOUT the three `hr-time` WPT files hit.
     #[test]
     fn v8_worker_end_to_end_performance_now() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3110,7 +3124,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3121,7 +3135,6 @@ mod tests_v8 {
 
     #[test]
     fn v8_worker_end_to_end_postmessage() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3133,7 +3146,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "21".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3149,7 +3162,6 @@ mod tests_v8 {
     /// this reported `object`/`function` was `undefined` for both.
     #[test]
     fn v8_worker_end_to_end_has_offscreen_canvas() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3161,7 +3173,7 @@ mod tests_v8 {
             .to_string();
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3175,7 +3187,6 @@ mod tests_v8 {
 
     #[test]
     fn v8_worker_import_scripts_via_data_url() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3193,7 +3204,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "34".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3204,7 +3215,6 @@ mod tests_v8 {
 
     #[test]
     fn v8_worker_import_scripts_via_blob_url() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         // Pre-populate the blob store as the main thread would via createObjectURL.
@@ -3224,7 +3234,7 @@ mod tests_v8 {
 
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
         post_to_worker(&reg, worker_id, "7".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one reply");
@@ -3400,7 +3410,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "1".to_string());
-        std::thread::sleep(Duration::from_millis(200));
+        wait_queue(&queue);
         post_to_worker(&reg, worker_id, "2".to_string());
         std::thread::sleep(Duration::from_millis(200));
 
@@ -3506,7 +3516,6 @@ mod tests_v8 {
     /// and the JS `Response` wrapper decodes the body back to text.
     #[test]
     fn v8_worker_fetch_reaches_provider_and_decodes_body() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3522,7 +3531,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one fetch()-derived reply: {msgs:?}");
@@ -3536,7 +3545,6 @@ mod tests_v8 {
     /// `semantics/xhr/*` test reads.
     #[test]
     fn v8_worker_xhr_send_reaches_provider() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3554,7 +3562,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one XHR-derived reply: {msgs:?}");
@@ -3883,7 +3891,6 @@ mod tests_v8 {
     /// ESM loader really runs on the worker thread over the same bridge.
     #[test]
     fn v8_module_worker_evaluates_static_import() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3909,7 +3916,7 @@ mod tests_v8 {
         );
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(500));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(
@@ -3928,7 +3935,6 @@ mod tests_v8 {
     /// state BUG-777 describes (a green test masking a missing feature).
     #[test]
     fn v8_classic_worker_still_rejects_an_import_statement() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3949,7 +3955,7 @@ mod tests_v8 {
             &Arc::new(Mutex::new(Vec::new())),
             &Arc::new(Mutex::new(0u32)), None, None,
         );
-        std::thread::sleep(Duration::from_millis(300));
+        wait_errors(&errors);
 
         let errs = drain_errors(&errors);
         assert_eq!(errs.len(), 1, "classic worker should report a parse error: {errs:?}");
@@ -4343,7 +4349,7 @@ mod tests_v8 {
             spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         let mut got: Vec<String> = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
         while Instant::now() < deadline && !got.iter().any(|m| m == "\"interval:2\"") {
             std::thread::sleep(Duration::from_millis(20));
             got.extend(drain_messages(&queue).into_iter().map(|(_, m)| m));
