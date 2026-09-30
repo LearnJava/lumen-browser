@@ -114,7 +114,7 @@ fn shadow_function_chain(doc: &Document, sheet: &Stylesheet, owner_host: NodeId)
     chain.iter().any(|f| !f.is_empty()).then_some(chain)
 }
 
-fn zoom_length(len: &mut Length, z: f32) {
+fn zoom_length(len: &mut Length, z: f32, rem_k: f32) {
     // Viewport units resolve against the unzoomed viewport, so the factor is
     // folded into the coefficient (CSS Viewport L1 §5: `1vh` under `zoom: 2`
     // is twice as tall as outside it). The font-relative units are not listed:
@@ -122,12 +122,17 @@ fn zoom_length(len: &mut Length, z: f32) {
     if let Length::Px(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v) = len {
         *v *= z;
     }
+    // `rem` resolves against the fixed 16px UA constant, so the root's
+    // (zoomed) font-size is folded into the coefficient the same way.
+    if let Length::Rem(v) = len {
+        *v *= rem_k;
+    }
 }
 
 /// Same for a `<length> | auto` field — `auto` carries no length to scale.
-fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32) {
+fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32, rem_k: f32) {
     if let LengthOrAuto::Length(l) = len {
-        zoom_length(l, z);
+        zoom_length(l, z, rem_k);
     }
 }
 
@@ -145,8 +150,8 @@ fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32) {
 /// `font_size` is handled by the caller rather than here, because it is the one
 /// value whose correct factor depends on whether the element specified it (see
 /// the call site).
-fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
-    if (z - 1.0).abs() < f32::EPSILON {
+fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32) {
+    if (z - 1.0).abs() < f32::EPSILON && (rem_k - 1.0).abs() < f32::EPSILON {
         return;
     }
     for len in [
@@ -158,7 +163,7 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
         &mut style.max_height,
     ] {
         if let Some(l) = len.as_mut() {
-            zoom_length(l, z);
+            zoom_length(l, z, rem_k);
         }
     }
     for len in [
@@ -171,7 +176,7 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
         &mut style.bottom,
         &mut style.left,
     ] {
-        zoom_length_or_auto(len, z);
+        zoom_length_or_auto(len, z, rem_k);
     }
     for len in [
         &mut style.padding_top,
@@ -181,7 +186,7 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
         &mut style.row_gap,
         &mut style.column_gap,
     ] {
-        zoom_length(len, z);
+        zoom_length(len, z, rem_k);
     }
     // Border widths are already resolved to px by the cascade.
     style.border_top_width *= z;
@@ -1028,6 +1033,10 @@ pub(crate) fn compute_style_shareable(
         FontSizeBasis::Absolute => style.effective_zoom,
         FontSizeBasis::ParentRelative => own_zoom,
     };
+    // The document element's computed font-size is what `rem` refers to.
+    if doc.get(node).parent == Some(doc.root()) {
+        style.root_font_size = style.font_size;
+    }
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
@@ -1335,7 +1344,14 @@ pub(crate) fn compute_style_shareable(
     // each is scaled exactly once. `font_size` was handled next to the cascade's
     // font-size pre-pass and is deliberately not re-scaled here.
     let z = style.effective_zoom;
-    apply_zoom_to_lengths(&mut style, z);
+    // On the document element itself `rem` still means the initial 16px (CSS
+    // Values L4 §5.1.2), zoomed like any other absolute length.
+    let rem_k = if doc.get(node).parent == Some(doc.root()) {
+        z
+    } else {
+        style.root_font_size / crate::style::ROOT_FONT_SIZE
+    };
+    apply_zoom_to_lengths(&mut style, z, rem_k);
 
     (style, shareable)
 }
