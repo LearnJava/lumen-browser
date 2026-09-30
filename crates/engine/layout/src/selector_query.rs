@@ -654,6 +654,7 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::Rem(v) => format!("{}rem", v),
         Length::Ch(v) => format!("{}ch", v),
         Length::Ex(v) => format!("{}ex", v),
+        Length::Lh(v) => format!("{}lh", v),
         Length::Percent(v) => format!("{}%", v),
         Length::Vh(v) => format!("{}vh", v),
         Length::Vw(v) => format!("{}vw", v),

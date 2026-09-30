@@ -23,6 +23,7 @@ fn fmt_len(l: &Length) -> String {
         Length::Rem(v) => format!("{v:.2}rem"),
         Length::Ch(v) => format!("{v:.2}ch"),
         Length::Ex(v) => format!("{v:.2}ex"),
+        Length::Lh(v) => format!("{v:.2}lh"),
         Length::Percent(v) => format!("{v:.2}%"),
         Length::Vh(v) => format!("{v:.2}vh"),
         Length::Vw(v) => format!("{v:.2}vw"),

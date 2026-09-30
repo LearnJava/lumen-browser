@@ -537,6 +537,17 @@ pub(super) fn dispatch_box(
         });
         ChExGuard(crate::style::push_ch_ex_context(ch_ex))
     };
+    // `lh` unit: the box's used line-height (BUG-1051). `used_line_height` is the
+    // measurer-resolved value; fall back to the cascaded ratio when unresolved.
+    struct LhGuard(Option<f32>);
+    impl Drop for LhGuard {
+        fn drop(&mut self) {
+            crate::style::pop_lh_context(self.0);
+        }
+    }
+    let _lh_guard = LhGuard(crate::style::push_lh_context(measurer.map(|_| {
+        if b.used_line_height > 0.0 { b.used_line_height } else { b.style.font_size * b.style.line_height }
+    })));
 
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
     // flow position starts below the expanded viewport and the shell hasn't
