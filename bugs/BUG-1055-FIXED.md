@@ -1,6 +1,6 @@
 # BUG-1055 — `appendChild` молча роняет детач-узлы (`new Comment()`/`new Text()`/`createProcessingInstruction`), вставленные в живое дерево
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6, вариант (a): продвижение в арена-узел при вставке)
 **Заведён:** 2026-09-15 (GAP-XMLDOC срез 25 P1, живой прогон `tests/wpt/run_report.py --all --root dom/nodes`, `dom/nodes/rootNode.html`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — арена-элементный `appendChild`, `~6718`)
 **Владелец:** P3
@@ -57,3 +57,13 @@ inconsistently — arena-side `_lumen_get_children`/layout would not see it).
 Не взят в GAP-XMLDOC/BUG-786 — не XML-специфично, и решение задевает больше
 чем PI. Кандидат на отдельный P1/P3 срез с явным выбором (a) vs (b) до
 правки.
+
+## Исправление (2026-09-30)
+
+Выбран вариант (a). `_lumen_adopt_detached` (`web_api_shim_mid.js`) при первой вставке создаёт
+арена-узел (Text/Comment — существующие нативы, PI — новый `_lumen_create_processing_instruction`),
+копирует данные, строит эталонный wrapper `_lumen_build_element(nid)` и переносит его свойства на
+исходный объект (идентичность `===` сохраняется), затем регистрирует объект в кэше wrapper'ов.
+Вызывается из `appendChild`/`insertBefore`/`replaceChild` (элемент, фрагмент), `before`/`after`/
+`replaceWith`/`append`/`prepend`/`replaceChildren`. Не покрыто: `ShadowRoot.prototype.append/prepend/
+replaceChildren` и `document.appendChild`/`insertBefore` (свой литерал). Тесты — `v8_bug1055_detached_insert.rs`.

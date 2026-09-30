@@ -388,6 +388,7 @@ _lumen_insert_before = function(parent, child, reference) {
 // again — `Node.prototype.replaceChild` has to be re-installed, or every node
 // keeps calling the two-record original.
 function _lumen_mo_replace_child(newChild, oldChild) { var nid = this.__nid__;
+    _lumen_adopt_detached(newChild);
     if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
         throw new TypeError('replaceChild: both arguments must be nodes');
     }

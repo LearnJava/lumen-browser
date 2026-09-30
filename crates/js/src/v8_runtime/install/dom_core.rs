@@ -1165,6 +1165,19 @@ pub(crate) fn install_tree_mutation(
             }
         );
         let d = Arc::clone(&doc);
+        // BUG-1055: promotes a detached JS-only ProcessingInstruction to an
+        // arena node on insertion; same -1-on-overflow contract as above.
+        reg!(scope, ctx, store,
+            "_lumen_create_processing_instruction",
+            move |target: String, data: String| -> i32 {
+                let mut doc = d.lock().unwrap();
+                match doc.try_create_processing_instruction(target, data) {
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
         reg!(scope, ctx, store,
             "_lumen_create_cdata_section",
             move |text: String| -> i32 {
