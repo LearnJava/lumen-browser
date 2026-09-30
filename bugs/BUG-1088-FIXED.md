@@ -1,6 +1,6 @@
 # BUG-1088 — у `AudioContext`/`OfflineAudioContext` нет `renderSizeHint` и `renderQuantumSize`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6)
 **Тип:** пробел реализации — черновик Web Audio API (`renderSizeHint` в опциях конструктора, атрибут `renderQuantumSize`) в шиме не реализован.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 52, `webaudio`)
 **Область:** js — `crates/js/src/web_audio.rs` (`WEB_AUDIO_SHIM`: `AudioContext`, `OfflineAudioContext`, размер кванта рендера зашит как 128)
@@ -26,6 +26,10 @@ new OfflineAudioContext({numberOfChannels:1, length:128, sampleRate:44100, rende
 
 `renderQuantumSize` — число (по умолчанию 128); `renderSizeHint` — `'default'` | `'hardware'` | положительное целое, невалидное значение бросает `TypeError`;
 рендер `OfflineAudioContext` идёт квантами `renderQuantumSize`, а не зашитыми 128.
+
+## Исправление
+
+`renderSizeHint` разбирается в `BaseAudioContext` (`default`/`hardware` → 128, целое ≥ 1, иначе `TypeError`), `renderQuantumSize` — неписаемое свойство контекста; рендер офлайн-контекста, `currentTime` и округление `suspend()` идут по нему. Тест `bug1088_render_size_hint`.
 
 ## Связанное
 

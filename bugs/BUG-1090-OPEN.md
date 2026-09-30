@@ -32,4 +32,4 @@ new PannerNode(new AudioContext(), {refDistance: -1})  -> не бросает   
 
 ## Не проверялось
 
-- Разбивка остальных подтестов `ctor-*` (не `did not throw`): часть — дефолты и отсутствующие члены (`IIRFilterNode`, [BUG-707](BUG-707-OPEN.md); `renderSizeHint`, [BUG-1088](BUG-1088-OPEN.md)).
+- Разбивка остальных подтестов `ctor-*` (не `did not throw`): часть — дефолты и отсутствующие члены (`IIRFilterNode`, [BUG-707](BUG-707-OPEN.md); `renderSizeHint`, [BUG-1088](BUG-1088-FIXED.md)).
