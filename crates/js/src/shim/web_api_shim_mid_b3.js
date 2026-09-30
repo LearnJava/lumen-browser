@@ -166,6 +166,33 @@ function _lumen_fetch_pump() {
     return _lumen_fetch_inflight.length;
 }
 
+// BUG-1151, HTML LS §4.6.7 «consume a preloaded resource»: `<link rel=preload
+// as=fetch>` hints seen on this page, URL → credentials mode their request
+// carried (`crossorigin` absent = `no-cors`, which a `cors` fetch() can never
+// take). A hint is used by at most one fetch().
+var _lumen_fetch_hints = {};
+
+function _lumen_fetch_hint_register(url, crossorigin) {
+    if (crossorigin === null || crossorigin === undefined) return;
+    _lumen_fetch_hints[url] =
+        (String(crossorigin).trim().toLowerCase() === 'use-credentials') ? 'include' : 'same-origin';
+}
+
+// True when this `fetch()` matches a registered hint (URL, `cors` mode,
+// credentials mode) and carries nothing the hint's request could not have had:
+// GET, no body, no author headers, default cache mode. The hint is spent either way.
+function _lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders) {
+    var want = _lumen_fetch_hints[url];
+    if (want === undefined) return false;
+    if (method !== 'GET' || hasBody || authorHeaders.length !== 0) return false;
+    var req = (typeof input === 'object' && input) ? input : null;
+    var mode = (init && init.mode) || (req && req.mode) || 'cors';
+    var creds = (init && init.credentials) || (req && req.credentials) || 'same-origin';
+    var cache = (init && init.cache) || (req && req.cache) || 'default';
+    delete _lumen_fetch_hints[url];
+    return mode === 'cors' && creds === want && cache === 'default';
+}
+
 function _lumen_fetch(input) {
     var init = arguments[1];
     try {
@@ -346,6 +373,11 @@ function _lumen_fetch(input) {
                     _fetchLoad = (init && init._lumenModule) ? 'cors|script' : 'no-cors|script';
                 } else {
                     _fetchLoad = ((init && typeof init.mode === 'string') ? init.mode : '') + '|';
+                    // BUG-1151: a plain page `fetch()` may consume a
+                    // `<link rel=preload as=fetch>` hint's bytes (third segment).
+                    if (_lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders)) {
+                        _fetchLoad += '|preloaded';
+                    }
                 }
                 var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders, _fetchLoad);
                 if (!handle) {

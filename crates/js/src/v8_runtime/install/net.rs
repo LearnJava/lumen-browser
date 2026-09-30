@@ -841,7 +841,7 @@ pub(crate) fn install_fetch(
             // (BUG-1116) first asks for the bytes a `<link rel=preload>` hint
             // already fetched — `fetch_preloaded` — and goes to the network only
             // when there are none. A page `fetch()` has an empty destination and
-            // never does.
+            // does so only for a hint the shim matched (BUG-1151, `|preloaded`).
             let am_start = Arc::clone(&async_map);
             reg!(scope, ctx, store, 
                 "_lumen_fetch_async_start",
@@ -858,9 +858,13 @@ pub(crate) fn install_fetch(
                         .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
                     let map = Arc::clone(&am_start);
                     let headers = pairs_from_flat(headers);
-                    let (mode, destination) = load.split_once('|').unwrap_or(("", ""));
-                    let (mode, destination) = (mode.to_owned(), destination.to_owned());
-                    let use_preloaded = !destination.is_empty() && method == "GET" && !has_body;
+                    let mut load_parts = load.splitn(3, '|');
+                    let mode = load_parts.next().unwrap_or("").to_owned();
+                    let destination = load_parts.next().unwrap_or("").to_owned();
+                    // BUG-1151: the shim matched a page `fetch()` to a `<link
+                    // rel=preload as=fetch>` hint (third segment `preloaded`).
+                    let hinted = load_parts.next() == Some("preloaded");
+                    let use_preloaded = (!destination.is_empty() || hinted) && method == "GET" && !has_body;
                     std::thread::spawn(move || {
                         let preloaded = if use_preloaded { provider.fetch_preloaded(&url) } else { None };
                         let res = match preloaded {

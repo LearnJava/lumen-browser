@@ -13971,6 +13971,10 @@ function _lumen_link_preload(nid, href) {
     if (_LUMEN_LINK_AS_DESTINATIONS[dest] !== 1) return;
     if (!_lumen_link_hint_media_matches(nid)) return;
     if (!_lumen_link_hint_type_supported(dest, _lumen_u2n(_lumen_get_attr(nid, 'type')))) return;
+    if (dest === 'fetch') {
+        _lumen_fetch_hint_register(_url_resolve(String(href), _lumen_document_base_url()),
+                                   _lumen_u2n(_lumen_get_attr(nid, 'crossorigin')));
+    }
     _lumen_link_hint_fetch(nid, href, null, dest);
 }
 
