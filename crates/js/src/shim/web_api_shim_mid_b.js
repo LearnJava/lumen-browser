@@ -1066,6 +1066,7 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     // `document.activeElement` still sees the pre-fixup value.
     // BUG-1003: Resize Observer §3.4 — observations are gathered after the
     // rAF callbacks of the frame; a delivery held back for this batch runs now.
+    if (typeof _ro_frame_pass === 'function') _ro_frame_pass();
     if (typeof _ro_deliver_after_raf === 'function') _ro_deliver_after_raf();
     _lumen_focus_fixup();
     return ran;

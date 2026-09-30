@@ -1756,6 +1756,45 @@ fn resize_observer_initial_delivery_without_relayout() {
     assert_eq!(rt.eval("_ro_init_w").unwrap(), lumen_core::JsValue::Number(200.0));
 }
 
+/// BUG-1056: with an rAF pending, the first delivery is not taken by the
+/// timer task ahead of it — the frame runs rAF callbacks, then the observer.
+#[test]
+fn resize_observer_first_delivery_follows_raf_in_same_frame() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (html_nid, body_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::find_element_by_tag(&doc, "html").unwrap().index() as u32,
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects(
+        [
+            (html_nid, [0.0, 0.0, 1024.0, 720.0]),
+            (body_nid, [0.0, 0.0, 200.0, 100.0]),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    rt.eval(
+        r#"
+                var _ro_ord = [];
+                new ResizeObserver(function() { _ro_ord.push('ro'); }).observe(document.body);
+                requestAnimationFrame(function() { _ro_ord.push('raf'); });
+            "#,
+    )
+    .unwrap();
+    rt.eval("_lumen_tick_timers()").unwrap();
+    assert_eq!(
+        rt.eval("_ro_ord.join()").unwrap(),
+        lumen_core::JsValue::String("".into()),
+        "the timer task must leave the delivery to the frame"
+    );
+    rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+    assert_eq!(rt.eval("_ro_ord.join()").unwrap(), lumen_core::JsValue::String("raf,ro".into()));
+}
+
 /// BUG-661 §1: the pass waits for the first layout snapshot instead of
 /// reporting a bogus 0×0 entry for a document that has not been laid out.
 #[test]
