@@ -1689,7 +1689,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 | Причина | id | Доказательство |
 |---|---|---|
-| `navigation.navigate()` с относительным URL, [BUG-1075](../../bugs/BUG-1075-OPEN.md) | 67 | `browsingContext.navigate(…) failed: navigation failed: invalid url: "#frag": relative URL without a base`; в логе 146 строк `Reload: #…`/`Reload: ?…` |
+| `navigation.navigate()` с относительным URL, [BUG-1075](../../bugs/BUG-1075-FIXED.md) | 67 | `browsingContext.navigate(…) failed: navigation failed: invalid url: "#frag": relative URL without a base`; в логе 146 строк `Reload: #…`/`Reload: ?…` |
 | `navigate()` с непарсящимся абсолютным URL (`https://example.com\0mozilla.org`) — тот же корень | 2 | тот же `browsingContext.navigate … invalid url` |
 | `navigate('file:///')` | 1 | `network error: file: not a local path: file:///` — не разбиралась |
 | исполнитель: `AssertionError: Got results from …?phase=…, expected …` | 10 | многофазные тесты (`?phase=start`/`initial`, `navigate-history-back-after-pushState`) — результат приходит от другого URL, чем ждёт `executorlumen.py`; **на стороне исполнителя, не диагностировано** |

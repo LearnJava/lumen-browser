@@ -291,7 +291,7 @@ fn navigate_state_is_attached_to_the_committed_entry() {
     two_entries(&rt);
     rt.eval("navigation.navigate('#1', { state: { v: 7 }, history: 'replace' }); true").unwrap();
     let q = rt.take_nav_updates();
-    assert!(q.iter().any(|(a, url, _, _)| matches!(a, NavAction::Replace) && url == "#1"));
+    assert!(q.iter().any(|(a, url, _, _)| matches!(a, NavAction::Replace) && url == "https://example.com/page.html#1"));
     set_state(
         &rt,
         &[("https://example.com/a", "nav-1"), ("https://example.com/page.html#1", "nav-3")],
@@ -416,4 +416,23 @@ fn intercept_sets_transition_until_navigatesuccess() {
          && __tr.to.url === 'http://example.test/#a'"
     ));
     assert!(bool_of(&rt, "navigation.transition === null && __done === true"));
+}
+
+// ── BUG-1075: navigate() resolves its URL against the document base ─────────
+
+#[test]
+fn navigate_resolves_relative_url_and_throws_syntax_error() {
+    let rt = runtime();
+    rt.eval(
+        "globalThis.__got = []; \
+\
+         navigation.navigate('#frag'); navigation.navigate('?q=1'); \
+         globalThis.__err = ''; \
+         try { navigation.navigate('https://example.com\0mozilla.org'); } \
+         catch (e) { __err = e.name; } true",
+    )
+    .unwrap();
+    let urls: Vec<String> = rt.take_nav_updates().into_iter().map(|(_, u, _, _)| u).collect();
+    assert_eq!(urls, ["https://example.com/page.html#frag", "https://example.com/page.html?q=1"]);
+    assert_eq!(str_of(&rt, "__err"), "SyntaxError");
 }
