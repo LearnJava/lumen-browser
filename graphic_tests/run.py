@@ -1869,18 +1869,21 @@ def _load_latest() -> dict | None:
         return None
 
 
-def _load_previous() -> dict | None:
-    """Загружает предыдущий результат (второй по дате файл, не latest.json)."""
+def _load_previous(results_dir: str | None = None) -> dict | None:
+    """Загружает предыдущий результат (второй по дате файл, не latest/baselines)."""
+    results_dir = results_dir or RESULTS_DIR
     try:
+        # baselines.json сортируется раньше timestamp-имён ('b' > '2') и сдвинул бы
+        # files[1] на текущий прогон (BUG-1039) — исключаем наравне с latest.json.
         files = sorted(
-            [f for f in os.listdir(RESULTS_DIR)
-             if f.endswith('.json') and f != 'latest.json'],
+            [f for f in os.listdir(results_dir)
+             if f.endswith('.json') and f not in ('latest.json', 'baselines.json')],
             reverse=True,
         )
         # files[0] — только что записанный, files[1] — предыдущий
         if len(files) < 2:
             return None
-        with open(os.path.join(RESULTS_DIR, files[1]), encoding='utf-8') as f:
+        with open(os.path.join(results_dir, files[1]), encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return None
