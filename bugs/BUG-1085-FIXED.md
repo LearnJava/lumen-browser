@@ -1,6 +1,6 @@
 # BUG-1085 — `new WebAssembly.Memory({shared:true, …}).buffer` — обычный `ArrayBuffer`, а не `SharedArrayBuffer`; `shared:true` без `maximum` не бросает
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6) — шим `WebAssembly.Memory`: `shared:true` → `SharedArrayBuffer`, без `maximum` → `TypeError`
 **Тип:** пробел реализации — общая память WebAssembly не реализована (создаётся неразделяемая); `SharedArrayBuffer` как конструктор при этом есть.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 50, `encoding`)
 **Область:** js — `crates/js/src/webassembly.rs` (шим `WebAssembly.Memory`), возможно `crates/js/src/v8_runtime.rs`
