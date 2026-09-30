@@ -1058,7 +1058,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   DelayNode.prototype._process = function(byInput, n) {
     var input = _input0(byInput, n);
     var sr = this.context.sampleRate;
-    var lineLen = Math.max(RENDER_QUANTUM, Math.ceil(this._maxDelayTime * sr) + RENDER_QUANTUM);
+    var lineLen = Math.ceil(this._maxDelayTime * sr) + Math.max(RENDER_QUANTUM, this.context.renderQuantumSize || 0);
     var d = _paramBuf(this.delayTime, n);
     var out = _silence(input.length, n);
     var endPos = this._writePos;
@@ -1321,8 +1321,21 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
 
   // ── BaseAudioContext (shared by AudioContext + OfflineAudioContext) ─────────
 
-  function BaseAudioContext(sampleRate) {
+  // `renderSizeHint` (Web Audio 1.1): 'default' | 'hardware' | positive integer.
+  // No audio device here, so 'hardware' resolves to the default quantum.
+  function _wa_quantum(hint) {
+    if (hint === undefined || hint === 'default' || hint === 'hardware') return RENDER_QUANTUM;
+    if (typeof hint === 'number') {
+      var v = Math.floor(hint);
+      if (isFinite(hint) && v >= 1 && v <= 0xFFFFFFFF) return v;
+    }
+    throw new TypeError("Failed to construct audio context: invalid renderSizeHint");
+  }
+
+  function BaseAudioContext(sampleRate, renderSizeHint) {
     this.sampleRate    = sampleRate || 44100;
+    Object.defineProperty(this, 'renderQuantumSize',
+      { value: _wa_quantum(renderSizeHint), enumerable: true, configurable: true });
     this._currentTime  = 0;
     this._state        = 'running';
     this._offline      = false;
@@ -1346,7 +1359,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     // still advance monotonically for scheduling to mean anything.
     get: function() {
       if (this._offline) return this._currentTime;
-      var q = RENDER_QUANTUM / this.sampleRate;
+      var q = this.renderQuantumSize / this.sampleRate;
       var t = this._baseTime;
       if (this._state === 'running' && typeof Date !== 'undefined') {
         t += (Date.now() - this._runSince) / 1000;
@@ -1433,7 +1446,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
 
   function AudioContext(opts) {
     opts = opts || {};
-    BaseAudioContext.call(this, opts.sampleRate || 44100);
+    BaseAudioContext.call(this, opts.sampleRate || 44100, opts.renderSizeHint);
     this.baseLatency   = 0.01;
     this.outputLatency = 0.02;
   }
@@ -1490,7 +1503,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
         sampleRate:       sampleRate        || 44100
       };
     }
-    BaseAudioContext.call(this, opts.sampleRate || 44100);
+    BaseAudioContext.call(this, opts.sampleRate || 44100, opts.renderSizeHint);
     this.length           = opts.length           || 0;
     this.numberOfChannels = opts.numberOfChannels || 1;
     this._offline         = true;
@@ -1540,15 +1553,16 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
         _wa_task(function() { next.resolve(); });
         return;
       }
-      var n = Math.min(RENDER_QUANTUM, this.length - this._renderedFrames);
+      var Q = this.renderQuantumSize;
+      var n = Math.min(Q, this.length - this._renderedFrames);
       _qid++;
       _rt0 = this._renderedFrames / sr;
       this._currentTime = _rt0;
       // Nodes always see a full quantum; only `n` frames are kept.
-      var byInput = _gatherInputs(this.destination, RENDER_QUANTUM);
-      var mixed = _mixSignals(byInput[0] || [], RENDER_QUANTUM);
-      var acc = _silence(nch, RENDER_QUANTUM);
-      _addInto(acc, mixed, RENDER_QUANTUM);
+      var byInput = _gatherInputs(this.destination, Q);
+      var mixed = _mixSignals(byInput[0] || [], Q);
+      var acc = _silence(nch, Q);
+      _addInto(acc, mixed, Q);
       for (var c = 0; c < nch; c++) {
         var dst = buf.getChannelData(c), src = acc[c];
         for (var i = 0; i < n; i++) dst[this._renderedFrames + i] = src[i];
@@ -1578,7 +1592,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
       }
       // §"OfflineAudioContext.suspend": the time is quantized and rounded up
       // to a render-quantum boundary.
-      var frame = Math.ceil(t * self.sampleRate / RENDER_QUANTUM) * RENDER_QUANTUM;
+      var frame = Math.ceil(t * self.sampleRate / self.renderQuantumSize) * self.renderQuantumSize;
       if (frame < self._renderedFrames || frame >= self.length) {
         reject(_wa_error('suspend: time is outside the rendered range', 'InvalidStateError'));
         return;
@@ -1854,6 +1868,28 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    /// BUG-1088: `renderSizeHint` sets `renderQuantumSize`; invalid hints throw.
+    #[test]
+    fn bug1088_render_size_hint() {
+        let rt = rt_with_web_audio();
+        let v = rt
+            .eval(
+                r#"
+                var bad = 0;
+                ['bogus', 0, -1, 1.5e10].forEach(function(h) {
+                  try { new AudioContext({renderSizeHint: h}); } catch (e) { if (e instanceof TypeError) bad++; }
+                });
+                [new AudioContext().renderQuantumSize,
+                 new AudioContext({renderSizeHint: 256}).renderQuantumSize,
+                 new AudioContext({renderSizeHint: 'hardware'}).renderQuantumSize,
+                 new OfflineAudioContext({numberOfChannels:1, length:512, sampleRate:44100, renderSizeHint: 64}).renderQuantumSize,
+                 bad].join(',')
+                "#,
+            )
+            .unwrap();
+        assert_eq!(v, JsValue::String("128,256,128,64,4".to_string()));
     }
 
     /// BUG-591: `oncomplete` used to run inside a bare `catch (e) {}`, which
