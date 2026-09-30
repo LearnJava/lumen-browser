@@ -226,6 +226,9 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Ch(v) => (3, *v),
         Length::Ex(v) => (4, *v),
         Length::Lh(v) => (16, *v),
+        Length::Rlh(v) => (17, *v),
+        Length::Rex(v) => (18, *v),
+        Length::Rch(v) => (19, *v),
         Length::Percent(v) => (5, *v),
         Length::Vh(v) => (6, *v),
         Length::Vw(v) => (7, *v),
@@ -253,6 +256,9 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         Length::Ch(_) => Length::Ch(v),
         Length::Ex(_) => Length::Ex(v),
         Length::Lh(_) => Length::Lh(v),
+        Length::Rlh(_) => Length::Rlh(v),
+        Length::Rex(_) => Length::Rex(v),
+        Length::Rch(_) => Length::Rch(v),
         Length::Percent(_) => Length::Percent(v),
         Length::Vh(_) => Length::Vh(v),
         Length::Vw(_) => Length::Vw(v),
@@ -1045,9 +1051,10 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     let length = match unit {
         "px" => Length::Px(value),
         "rem" => Length::Rem(value),
-        "rlh" => Length::Rem(value * 1.2),
+        "rlh" => Length::Rlh(value),
         "rcap" => Length::Rem(value * 0.7),
-        "rex" | "rch" => Length::Rem(value * 0.5),
+        "rex" => Length::Rex(value),
+        "rch" => Length::Rch(value),
         "ric" => Length::Rem(value),
         // `ch`/`ex` carry their own variants (resolved against real font metrics
         // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).

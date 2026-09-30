@@ -537,6 +537,28 @@ pub(super) fn dispatch_box(
         });
         ChExGuard(crate::style::push_ch_ex_context(ch_ex))
     };
+    // `rlh`/`rex`/`rch`: metrics of the root element's font. The outermost box
+    // laid out is the root; nested calls see the context already set.
+    struct RootGuard(Option<Option<(f32, f32, f32)>>);
+    impl Drop for RootGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = self.0 {
+                crate::style::pop_root_font_metrics(prev);
+            }
+        }
+    }
+    let _root_guard = RootGuard(match (measurer, crate::style::root_font_metrics()) {
+        (Some(m), None) => {
+            let fs = b.style.font_size.max(0.0);
+            let lh = if b.used_line_height > 0.0 { b.used_line_height } else { fs * b.style.line_height };
+            Some(crate::style::push_root_font_metrics(Some((
+                lh,
+                m.char_width_with_families('0', fs, &b.style.font_family),
+                m.x_height_px(fs),
+            ))))
+        }
+        _ => None,
+    });
     // `lh` unit: the box's used line-height (BUG-1051). `used_line_height` is the
     // measurer-resolved value; fall back to the cascaded ratio when unresolved.
     struct LhGuard(Option<f32>);

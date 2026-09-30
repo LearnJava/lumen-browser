@@ -298,7 +298,7 @@ use parse::font_size::{FontSizeBasis, apply_font_size};
 // внутри `style.rs` нет (правило §2.1).
 pub use env::{
     clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active,
-    forced_colors_active, pop_ch_ex_context, pop_lh_context, print_media_active, push_ch_ex_context, push_lh_context,
+    forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
     set_animated_heights, set_cq_context, set_forced_colors, set_interactive_state,
     set_print_media, StyleEnvSnapshot,
 };
@@ -310,7 +310,7 @@ pub use restyle::{
 // `CONTAINER_CQ`/`FONT_CH_EX` читает `style::values::length` по старому пути
 // `crate::style::…` (SPLIT-ST9): это реэкспорт, а не импорт, — своих вызывателей
 // в `style.rs` у обеих нет.
-pub(in crate::style) use env::{CONTAINER_CQ, FONT_CH_EX, FONT_LH};
+pub(in crate::style) use env::{CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS};
 // `media_context_from_viewport` перестала быть нужна и производственному
 // `style.rs`, и его реэкспорту — `style::cascade_index` (SPLIT-ST18) зовёт её
 // напрямую по пути `crate::style::env::media_context_from_viewport`, минуя это
