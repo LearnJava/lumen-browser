@@ -750,6 +750,15 @@ fn animation_cancel_removes_from_registry() {
 }
 
 #[test]
+fn animation_playback_events_precede_raf_callbacks_bug1041() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var log = [];          var a = new Animation(new KeyframeEffect(null, [], 300));          a.oncancel = function() { log.push('cancel'); };          a.play(); a.cancel();          requestAnimationFrame(function() { log.push('raf'); });          _lumen_run_raf_callbacks(16);          log.join(',')"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("cancel,raf".into()));
+}
+
+#[test]
 fn document_timeline_exists() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval("document.timeline instanceof DocumentTimeline").unwrap();

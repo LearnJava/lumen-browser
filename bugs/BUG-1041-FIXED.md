@@ -1,6 +1,6 @@
 # BUG-1041 — Web Animations: `finish`/`cancel` vs `requestAnimationFrame` — гонка, порядок не гарантирован
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6)
 **Заведён:** 2026-09-08 (P2, WPT-RUN-7 срез 32 — `--update-expected` для `web-animations`)
 **Область:** не локализовано в Rust-коде. Кандидат — диспетчеризация событий Web Animations
 (`finish`/`cancel`) относительно очереди `requestAnimationFrame`, вероятно в шиме
@@ -84,3 +84,16 @@ LUMEN_PROFILE=dev-release python tests/wpt/run_report.py \
 остальных 138 файлов категории, параллельно нагружающих воркеры `--processes 6`) — не
 исключено, что гонка зависит именно от параллельной нагрузки, а не является чисто
 внутридвижковой.
+
+## Исправление (2026-09-30, P6)
+
+Причина: событие `finish`/`cancel` уходило только задачей в `_lumen_timers`, а
+`_lumen_run_raf_callbacks` не смотрел в эту очередь — кто из двух (задача или кадр)
+выполнится первым, решал момент тика. Спека («update animations and send events»)
+требует событий раньше rAF того же кадра. Теперь `Animation._fire` кладёт запись в
+`_wa_pending_events`; `_lumen_run_raf_callbacks` сначала сливает её, задача-таймер
+диспетчеризует, только если запись ещё не ушла. Тест —
+`animation_playback_events_precede_raf_callbacks_bug1041`.
+
+Не проверено: WPT-категория `web-animations` не прогонялась (вендор-каталог в слоте
+отсутствует), `.ini` с `expected: [FAIL, PASS]` оставлен — P2 сузит при следующем срезе.
