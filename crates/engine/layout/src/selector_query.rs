@@ -779,53 +779,29 @@ pub(crate) fn opacity_to_css(v: f32) -> String {
 /// static one.
 pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
     if list.is_empty() {
-        "none".into()
+        return "none".into();
+    }
+    // CSSOM §9 / Transforms L1 §18: resolved value — `matrix()` для 2D,
+    // иначе `matrix3d()`, а не заданный список функций (BUG-1157).
+    let m = crate::property_trees::compute_local_transform(list, (0.0, 0.0, 0.0));
+    let v = &m.0;
+    if m.is_2d_affine() {
+        let parts = [v[0], v[1], v[4], v[5], v[12], v[13]].map(matrix_num);
+        format!("matrix({})", parts.join(", "))
     } else {
-        list.iter().map(transform_fn_to_css).collect::<Vec<_>>().join(" ")
+        format!("matrix3d({})", v.map(matrix_num).join(", "))
     }
 }
 
-fn transform_fn_to_css(f: &TransformFn) -> String {
-    match f {
-        TransformFn::Translate(x, y) => format!("translate({}, {})", px_str(*x), px_str(*y)),
-        TransformFn::TranslateX(x) => format!("translateX({})", px_str(*x)),
-        TransformFn::TranslateY(y) => format!("translateY({})", px_str(*y)),
-        TransformFn::TranslateZ(z) => format!("translateZ({})", px_str(*z)),
-        TransformFn::Translate3d(x, y, z) => {
-            format!("translate3d({}, {}, {})", px_str(*x), px_str(*y), px_str(*z))
-        }
-        TransformFn::Rotate(a) => {
-            let deg = a.to_degrees();
-            if deg.fract() == 0.0 {
-                format!("rotate({}deg)", deg as i64)
-            } else {
-                format!("rotate({}deg)", deg)
-            }
-        }
-        TransformFn::RotateX(a) => format!("rotateX({}deg)", a.to_degrees()),
-        TransformFn::RotateY(a) => format!("rotateY({}deg)", a.to_degrees()),
-        TransformFn::RotateZ(a) => format!("rotateZ({}deg)", a.to_degrees()),
-        TransformFn::Rotate3d(x, y, z, a) => {
-            format!("rotate3d({}, {}, {}, {}deg)", x, y, z, a.to_degrees())
-        }
-        TransformFn::Scale(sx, sy) => format!("scale({}, {})", sx, sy),
-        TransformFn::ScaleX(sx) => format!("scaleX({})", sx),
-        TransformFn::ScaleY(sy) => format!("scaleY({})", sy),
-        TransformFn::ScaleZ(sz) => format!("scaleZ({})", sz),
-        TransformFn::Scale3d(sx, sy, sz) => format!("scale3d({}, {}, {})", sx, sy, sz),
-        TransformFn::SkewX(a) => format!("skewX({}deg)", a.to_degrees()),
-        TransformFn::SkewY(a) => format!("skewY({}deg)", a.to_degrees()),
-        TransformFn::Matrix(m) => format!(
-            "matrix({}, {}, {}, {}, {}, {})",
-            m[0], m[1], m[2], m[3], m[4], m[5]
-        ),
-        TransformFn::Matrix3d(m) => format!(
-            "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
-            m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
-        ),
-        TransformFn::Perspective(d) => format!("perspective({})", px_str(*d)),
+/// Число в сериализации матрицы: до 6 значащих цифр, как у Chrome;
+/// микроскопический f32-шум от `sin/cos` даёт `-0` → `0`.
+fn matrix_num(v: f32) -> String {
+    let v = f64::from(v);
+    if v == 0.0 {
+        return "0".into();
     }
+    let r: f64 = format!("{:.5e}", v).parse().unwrap_or(v);
+    if r.abs() < 1e-4 { format!("{:e}", r) } else { format!("{}", r) }
 }
 
 fn filter_fn_to_css(f: &FilterFn) -> String {
@@ -2158,6 +2134,25 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let tree = crate::layout(&doc, &sheet, Size::new(1024.0, 600.0));
         (doc, tree)
+    }
+
+    #[test]
+    fn computed_transform_is_matrix_resolved_value() {
+        let t = |v: Vec<TransformFn>| transform_list_to_css(&v);
+        assert_eq!(t(vec![]), "none");
+        assert_eq!(t(vec![TransformFn::TranslateX(10.0)]), "matrix(1, 0, 0, 1, 10, 0)");
+        assert_eq!(
+            t(vec![TransformFn::Scale(2.0, 2.0), TransformFn::Rotate(0.0)]),
+            "matrix(2, 0, 0, 2, 0, 0)"
+        );
+        assert_eq!(
+            t(vec![TransformFn::TranslateX(5.0), TransformFn::TranslateY(3.0)]),
+            "matrix(1, 0, 0, 1, 5, 3)"
+        );
+        assert_eq!(
+            t(vec![TransformFn::Translate3d(1.0, 2.0, 3.0)]),
+            "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1)"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # BUG-1157 — `getComputedStyle(el).transform` отдаёт заданное значение, а не `matrix(…)`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P3)
 **Заведён:** 2026-09-25 (P6, при закрытии [BUG-1121](BUG-1121-FIXED.md))
 **Область:** layout — `crates/engine/layout/src/selector_query.rs:1591`
 (`computed_style_to_map`: `transform_list_to_css(&style.transform)` сериализует список функций
@@ -38,3 +38,7 @@ imgur: после [BUG-1121](BUG-1121-FIXED.md) первая ошибка вер
 иначе `matrix3d(…)`; `none` — как есть. Проверить, кто ещё читает эту карту (`CSSStyleDeclaration`
 computed-объект, Typed OM `computedStyleMap`): у Typed OM своя сериализация, её не трогать.
 Критерий: таблица выше совпадает с Chrome; на imgur нет ошибки `reading '1'`.
+
+## Исправление
+
+`transform_list_to_css` (`selector_query.rs`) перемножает список функций через `compute_local_transform` и выводит `matrix()` для 2D / `matrix3d()` иначе; `none` как есть. Числа до 6 значащих цифр. Typed OM не затронут. Отличие от Chrome: `rotate(90deg)` даёт f32-шум (`-4.37114e-08`), у Chrome `6.12323e-17`.
