@@ -1,6 +1,7 @@
 # BUG-1040 — Web Animations: именованные easing-ключевые слова аппроксимированы неверно, `transform: none` не сериализуется как матрица
 
 **Статус:** OPEN
+**Обновление 2026-09-30 (P6):** симптом 1 исправлен — `_wa_ease` сводит `ease`/`ease-in`/`ease-out`/`ease-in-out` к cubic-bezier с контрольными точками спеки, решатель: Newton 16 итераций + bisection (`cubic-bezier(0,0,0,0)` ≡ linear побитно). 8 подтестов `effect-value-transformed-distance.html` теперь PASS, блоки убраны из `.ini`. Остался симптом 2: в шиме нет обработки `composite`/`accumulate` вообще (`grep composite` — только пропуск ключа), это пробел функциональности, а не точечный дефект.
 **Заведён:** 2026-09-08 (P2, WPT-RUN-7 срез 32 — перегенерация baseline `web-animations` после мержа BUG-530)
 **Область:** `crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_ease()` (именованные ключевые слова) и `_wa_lerp_transform()`/`_wa_compute_at_p()` (сериализация `transform`)
 **Владелец:** P1/P3

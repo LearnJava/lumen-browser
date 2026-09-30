@@ -5042,23 +5042,35 @@ function _wa_normalize_keyframes(keyframes) {
 // Easing functions: linear / ease / ease-in / ease-out / ease-in-out.
 function _wa_ease(t, easing) {
     if (!easing || easing === 'linear') return t;
-    if (easing === 'ease-in')  return t * t;
-    if (easing === 'ease-out') return t * (2 - t);
-    if (easing === 'ease' || easing === 'ease-in-out') return t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+    if (easing === 'ease')        easing = 'cubic-bezier(0.25,0.1,0.25,1)';
+    else if (easing === 'ease-in')     easing = 'cubic-bezier(0.42,0,1,1)';
+    else if (easing === 'ease-out')    easing = 'cubic-bezier(0,0,0.58,1)';
+    else if (easing === 'ease-in-out') easing = 'cubic-bezier(0.42,0,0.58,1)';
     if (easing === 'step-start') return t > 0 ? 1 : 0;
     if (easing === 'step-end')   return t >= 1 ? 1 : 0;
     // cubic-bezier(p1x, p1y, p2x, p2y) — approximate with de Casteljau.
     var m = easing.match(/^cubic-bezier\(([^,]+),([^,]+),([^,]+),([^)]+)\)$/);
     if (m) {
         var p1x = +m[1], p1y = +m[2], p2x = +m[3], p2y = +m[4];
-        // Newton's method to find t_css for x == t, then return y.
-        var u = t;
-        for (var iter = 0; iter < 8; iter++) {
-            var cx = 3*p1x, bx = 3*(p2x-p1x)-cx, ax = 1-cx-bx;
-            var x = ((ax*u+bx)*u+cx)*u;
+        // Newton's method to find t_css for x == t, bisection fallback.
+        var cx = 3*p1x, bx = 3*(p2x-p1x)-cx, ax = 1-cx-bx;
+        var u = t, solved = false;
+        for (var iter = 0; iter < 16; iter++) {
+            var x = ((ax*u+bx)*u+cx)*u - t;
+            if (Math.abs(x) < 1e-12) { solved = true; break; }
             var dx = (3*ax*u+2*bx)*u+cx;
             if (Math.abs(dx) < 1e-8) break;
-            u -= (x - t) / dx;
+            u -= x / dx;
+        }
+        if (!solved) {
+            var lo = 0, hi = 1;
+            u = t;
+            for (var k = 0; k < 60; k++) {
+                var xv = ((ax*u+bx)*u+cx)*u;
+                if (Math.abs(xv - t) < 1e-12) break;
+                if (xv < t) lo = u; else hi = u;
+                u = (lo + hi) / 2;
+            }
         }
         var cy = 3*p1y, by = 3*(p2y-p1y)-cy, ay = 1-cy-by;
         return ((ay*u+by)*u+cy)*u;
