@@ -1627,6 +1627,7 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
 }
 
 mod bug1198_opaque_frame;
+mod bug1231_frame_referrer;
 mod dom_suspend_focus;
 
 // ── LONGTASK-1 срез 4-5: culprit source-location attribution ──────────────

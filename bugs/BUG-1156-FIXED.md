@@ -51,4 +51,4 @@ with_navigation_referrer` (`fetch_page`/`fetch_page_streaming`) → `RawPage::do
 `bug1156_document_referrer_is_seeded_from_navigation_referer` (shell). Живая проба на сервере
 `127.0.0.1` не прогонялась.
 
-Остаток — `document.referrer` у `<iframe>` (фасад в `frame_bridge.rs`) — [BUG-1231](BUG-1231-OPEN.md).
+Остаток — `document.referrer` у `<iframe>` (фасад в `frame_bridge.rs`) — [BUG-1231](BUG-1231-FIXED.md).
