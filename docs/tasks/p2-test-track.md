@@ -1272,7 +1272,7 @@ known-intermittent из срезов 33/35 не понадобилось — в 
 Главный результат прогона — не baseline, а то, во что категория упирается
 (из 9689 сабтестов 8380 не пройдены — две причины дают почти всё):
 
-- **[BUG-1064](../../bugs/BUG-1064-OPEN.md)** — `shadow-dom/declarative/gethtml.html`: 6528 из
+- **[BUG-1064](../../bugs/BUG-1064-FIXED.md)** — `shadow-dom/declarative/gethtml.html`: 6528 из
   8380 непройденных (~78 %) в одном файле. `getHTML({serializableShadowRoots|shadowRoots})` возвращает
   `''` вместо `<template shadowrootmode=…>` (заглушка «Phase 0» в шиме), а
   `ShadowRoot.serializable`/`clonable`/`delegatesFocus`/`slotAssignment` равны `undefined`.

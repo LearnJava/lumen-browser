@@ -91,7 +91,7 @@ DOM §4.8: `ShadowRoot : DocumentFragment : Node`, плюс миксины `Docu
 - `delegatesFocus`/`slotAssignment`/`clonable`/`serializable` (readonly) и `onslotchange`.
 
 Сериализация `getHTML({serializableShadowRoots})` в скоуп не входила — она остаётся в
-[BUG-1064](BUG-1064-OPEN.md) (теперь у него есть `ShadowRoot.serializable`/`clonable`/
+[BUG-1064](BUG-1064-FIXED.md) (теперь у него есть `ShadowRoot.serializable`/`clonable`/
 `delegatesFocus`/`slotAssignment`).
 
 **Проверка.**
