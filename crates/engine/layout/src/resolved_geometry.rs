@@ -274,4 +274,56 @@ pub(crate) fn apply_used_geometry(m: &mut HashMap<String, String>, b: &LayoutBox
             (None, None) => {}
         }
     }
+
+    if !s.transform.is_empty() {
+        set_used(m, "transform", resolved_transform(&s.transform, z));
+    }
+}
+
+/// CSS Transforms L1 §2: the resolved value of `transform` for a box that has
+/// one is the list collapsed into a single `matrix()` (or `matrix3d()` when
+/// any 3D component is non-trivial), with translations in CSS px (`zoom`
+/// undone). The origin does not enter — it is applied at paint time.
+pub(crate) fn resolved_transform(fns: &[crate::style::TransformFn], zoom: f32) -> String {
+    let mut a = crate::property_trees::compute_local_transform(fns, (0.0, 0.0, 0.0)).0;
+    a[12] /= zoom;
+    a[13] /= zoom;
+    a[14] /= zoom;
+    let num = |v: f32| (if v.abs() < 1e-6 { 0.0 } else { v }).to_string();
+    let flat = a[2] == 0.0
+        && a[3] == 0.0
+        && a[6] == 0.0
+        && a[7] == 0.0
+        && a[8] == 0.0
+        && a[9] == 0.0
+        && a[10] == 1.0
+        && a[11] == 0.0
+        && a[14] == 0.0
+        && a[15] == 1.0;
+    let pick: &[usize] = if flat { &[0, 1, 4, 5, 12, 13] } else { &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] };
+    let body = pick.iter().map(|&i| num(a[i])).collect::<Vec<_>>().join(", ");
+    format!("{}({body})", if flat { "matrix" } else { "matrix3d" })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_transform;
+    use crate::style::TransformFn;
+
+    #[test]
+    fn transform_collapses_to_2d_matrix() {
+        let fns = [TransformFn::TranslateX(100.0), TransformFn::Scale(2.0, 3.0)];
+        assert_eq!(resolved_transform(&fns, 1.0), "matrix(2, 0, 0, 3, 100, 0)");
+    }
+
+    #[test]
+    fn transform_with_3d_component_is_matrix3d() {
+        let s = resolved_transform(&[TransformFn::TranslateZ(5.0)], 1.0);
+        assert!(s.starts_with("matrix3d(") && s.ends_with(", 5, 1)"), "{s}");
+    }
+
+    #[test]
+    fn transform_translation_undoes_zoom() {
+        assert_eq!(resolved_transform(&[TransformFn::TranslateX(100.0)], 2.0), "matrix(1, 0, 0, 1, 50, 0)");
+    }
 }
