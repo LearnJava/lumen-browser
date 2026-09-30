@@ -303,7 +303,7 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
   // Engine-side entry for `permissions.setPermission`. Returns false for an
   // unknown name or state so the caller can report it instead of silently
   // storing something `query()` could never have produced.
-  globalThis._lumen_permission_set = function(name, state) {
+  __lumen_C._lumen_permission_set = function(name, state) {
     name = String(name); state = String(state);
     if (!isRecognised(name)) return false;
     if (state !== GRANTED && state !== DENIED && state !== PROMPT) return false;

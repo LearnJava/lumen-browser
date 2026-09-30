@@ -537,6 +537,29 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
 mod tests {
     use super::*;
 
+    /// The provider slot is process-global, so tests touching it run one at a
+    /// time (BUG-759). `ProviderScope` holds the lock, installs the given
+    /// provider (or none) and empties the slot on `Drop`.
+    static PROVIDER_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct ProviderScope(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl ProviderScope {
+        fn new(p: Option<Arc<dyn CredentialProvider>>) -> Self {
+            let guard = PROVIDER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+            *slot().write().unwrap() = p;
+            Self(guard)
+        }
+    }
+
+    impl Drop for ProviderScope {
+        fn drop(&mut self) {
+            if let Ok(mut g) = slot().write() {
+                *g = None;
+            }
+        }
+    }
+
     #[test]
     fn base64url_roundtrip() {
         for case in [vec![], vec![0u8], vec![1, 2, 3], vec![0xfb, 0xff], (0..=255).collect()] {
@@ -608,14 +631,12 @@ mod tests {
 
     #[test]
     fn create_without_provider_rejects_not_allowed() {
-        // No provider installed in this isolated path → NotAllowedError.
-        // (Provider is process-global; other tests may install one, so only
-        // assert the error shape when none is present.)
-        if provider().is_none() {
-            let out = create("a|b|c|d|e|f|g|-7|0|".to_owned());
-            assert!(out.contains("\"ok\":false"));
-            assert!(out.contains("NotAllowedError"));
-        }
+        // No provider installed → NotAllowedError.
+        let _scope = ProviderScope::new(None);
+        assert!(provider().is_none());
+        let out = create("a|b|c|d|e|f|g|-7|0|".to_owned());
+        assert!(out.contains("\"ok\":false"));
+        assert!(out.contains("NotAllowedError"));
     }
 
     #[test]
@@ -653,7 +674,7 @@ mod tests {
                 })
             }
         }
-        set_credential_provider(Arc::new(Echo));
+        let _scope = ProviderScope::new(Some(Arc::new(Echo)));
 
         let rp = base64url_encode(b"example.com");
         let name = base64url_encode(b"alice");
@@ -695,7 +716,7 @@ mod tests {
                 unreachable!("rp.id/origin mismatch must be rejected before the provider is called");
             }
         }
-        set_credential_provider(Arc::new(Boom));
+        let _scope = ProviderScope::new(Some(Arc::new(Boom)));
 
         let rp = base64url_encode(b"attacker-controlled-unrelated.example");
         let name = base64url_encode(b"alice");

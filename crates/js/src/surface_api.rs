@@ -107,17 +107,23 @@ const GPC_SHIM: &str = r#"(function() {
 
 #[cfg(feature = "v8-backend")]
 const SURFACE_API_SHIM: &str = r#"(function() {
-  // ── Seal navigator.webdriver ────────────────────────────────────────────────
-  // Selenium/WebDriver sets navigator.webdriver = true.  We explicitly define
-  // it as a non-configurable getter returning `undefined` so automation scripts
-  // can never make it truthy, even via property assignment.
+  // ── navigator.webdriver ─────────────────────────────────────────────────────
+  // Chrome and Firefox expose `navigator.webdriver === false` outside of
+  // automation, so an *absent* property is the distinguishing signal
+  // (BUG-754).  Define it as an accessor returning `false`, `configurable`
+  // and `enumerable` like Chrome — a non-configurable one would be
+  // distinguishable in the same way (BUG-379).
   if (typeof navigator !== 'undefined') {
-    // navigator.webdriver is intentionally NOT defined here — it must be
-    // completely absent (not even as `undefined`).  Defining it via
-    // Object.defineProperty would make `'webdriver' in navigator` return true,
-    // which is itself a detection signal used by some fingerprinting scripts.
-    // Lumen's navigator object is built from scratch in dom.rs and never
-    // includes this property, so no action is needed.
+    try {
+      if (!('webdriver' in navigator)) {
+        const proto = Object.getPrototypeOf(navigator);
+        const target = (proto && proto !== Object.prototype) ? proto : navigator;
+        Object.defineProperty(target, 'webdriver', {
+          get: function webdriver() { return false; },
+          set: undefined, configurable: true, enumerable: true
+        });
+      }
+    } catch(_) {}
 
     // ── Standard browser compatibility properties ─────────────────────────────
     // Many fingerprinting scripts check these properties to decide whether they
@@ -297,21 +303,23 @@ mod tests {
     }
 
     #[test]
-    fn webdriver_is_undefined() {
+    fn webdriver_is_false() {
         with_surface_api(|rt| {
-            let v = rt
-                .eval("typeof navigator.webdriver === 'undefined'")
-                .unwrap();
-            assert_eq!(v, JsValue::Bool(true), "navigator.webdriver must be undefined");
+            let v = rt.eval("navigator.webdriver === false").unwrap();
+            assert_eq!(v, JsValue::Bool(true), "navigator.webdriver must be false");
         });
     }
 
     #[test]
-    fn webdriver_absent_in_navigator() {
+    fn webdriver_present_and_configurable() {
         with_surface_api(|rt| {
-            // navigator.webdriver must be completely absent — not even enumerable.
-            let v = rt.eval("!('webdriver' in navigator)").unwrap();
-            assert_eq!(v, JsValue::Bool(true), "webdriver must not be a property of navigator");
+            // Like Chrome: present, `false`, configurable accessor (BUG-754).
+            let v = rt
+                .eval(
+                    "'webdriver' in navigator && (function(){ var o = navigator;                      while (o && !Object.getOwnPropertyDescriptor(o, 'webdriver'))                        o = Object.getPrototypeOf(o);                      var d = Object.getOwnPropertyDescriptor(o, 'webdriver');                      return d.configurable && d.enumerable; })()",
+                )
+                .unwrap();
+            assert_eq!(v, JsValue::Bool(true), "webdriver must be a configurable property");
         });
     }
 

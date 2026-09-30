@@ -24,6 +24,8 @@ pub(super) fn v8_thread_main(
     // S12b-23: dynamic `import()` is resolved by an isolate-wide host hook
     // (static imports go through the callback passed to `instantiate_module`).
     crate::v8_esm::install_dynamic_import_hook(&mut isolate);
+    // BUG-753 срез 3: `import.meta` (url/resolve/env) is filled by a host hook.
+    crate::v8_esm::install_import_meta_hook(&mut isolate);
     // BUG-716: unhandledrejection/rejectionhandled dispatch, also isolate-wide.
     install_promise_reject_hook(&mut isolate);
     // Create the context inside a short-lived HandleScope so the scope's borrow
@@ -75,8 +77,6 @@ pub(super) fn v8_thread_main(
     // callback itself (`_lumen_tt_get_compliant_script_for_codegen`), same
     // division as every other sink this task closed.
     codegen_hook::install(&mut inner.isolate, &inner.context);
-    // BUG-1135: the native behind every module's `import.meta.resolve()`.
-    crate::v8_esm::install_import_meta_resolve(&mut inner.isolate, &inner.context);
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {

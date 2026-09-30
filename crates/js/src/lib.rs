@@ -12,7 +12,6 @@ pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
 pub mod import_attributes;
-pub mod import_meta;
 pub mod paint_worklet;
 pub mod gamepad;
 pub mod highlight_api;
