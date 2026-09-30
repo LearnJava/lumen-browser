@@ -75,7 +75,7 @@ REPORT detached_set_throws THREW SecurityError: ...
 ```
 
 Все шесть срезов ведут себя по спеке; `scripts/scoped-test.sh` до `lumen-js`
-не доходит из-за независимого сломанного гейта [BUG-805](BUG-805-OPEN.md)
+не доходит из-за независимого сломанного гейта [BUG-805](BUG-805-FIXED.md)
 (`lumen-network` виснет/осыпается) — не связано с этой правкой.
 
 ## Осознанно не сделано

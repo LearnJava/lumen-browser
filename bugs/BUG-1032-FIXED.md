@@ -100,7 +100,7 @@ bug581_table_api`) дал 17/17 зелёных — реализация прис
 и статус документации никогда не сверялся с кодом заново. Изменений кода в
 этой сессии нет — только исправление статуса `BUGS.md`/`ROADMAP.md`/этого файла.
 Остаток вне скоупа (не проверен заново, унаследован из BUG-581): namespace-
-схлопывание [BUG-830](BUG-830-OPEN.md), prefix-упрощение [BUG-367](BUG-367-FIXED.md),
+схлопывание [BUG-830](BUG-830-FIXED.md), prefix-упрощение [BUG-367](BUG-367-FIXED.md),
 кросс-realm `instanceof` через `<iframe>`, `DOMParser`+`importNode`,
 `colSpan`/`rowSpan` reflection — ни одна из этих причин не относится к самому
 API-поверхности `GAP-TABLEIDL`.

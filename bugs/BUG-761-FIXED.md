@@ -1,6 +1,6 @@
 # BUG-761 — `SensorErrorEvent` не наследуется от `Event`, и `error`-событие ниоткуда не диспатчится
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30
 **Компонент:** js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`,
 конструктор `SensorErrorEvent`: два присваивания `this.type`/`this.error`
 без прототипа `Event`; потребитель отсутствует — `dispatchEvent` с
@@ -74,3 +74,13 @@ W3C Generic Sensor API §11 — `interface SensorErrorEvent : Event`.
 * [[BUG-400]] — `performance` не `EventTarget`; [[BUG-664]] —
   `navigator.connection` не `EventTarget`: то же семейство «объект спеки
   собран литералом вместо интерфейса».
+
+## Исправлено (P3, 2026-09-30)
+
+`SensorErrorEvent.prototype = Object.create(Event.prototype)`, конструктор зовёт
+`EventBase.call(this, type, init)` после валидации BUG-393 (все `TypeError`
+сохранены). Тесты: `generic_sensor::tests::sensor_error_event_is_an_event`
+(на стабе) и `dom::tests::v8_generic_sensor::sensor_error_event_is_a_real_event`
+(на настоящем `Event`). Вторая половина симптома — диспатч `error` движком —
+не сделана: аппаратного пути нет (Phase 0), диспатч появится вместе с
+`_lumen_sensor_deliver_reading`.

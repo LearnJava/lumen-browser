@@ -48,7 +48,7 @@ Verified in an isolated sparse worktree checked out to `main` (`e11f78862`) with
 branch changes applied — identical 7-page mismatch, identical byte counts. `p3-bug517-block-step`
 (BUG-517, `block-step-size`/`-insert`/`-align`/`-round` CSS properties) does not
 touch any of the 7 affected pages or the rasterizer — unrelated, merged anyway per
-the same policy as [BUG-805](BUG-805-OPEN.md) (gate broken independent of the branch
+the same policy as [BUG-805](BUG-805-FIXED.md) (gate broken independent of the branch
 under test, documented and proceeded).
 
 ## Дополнение 2026-09-09 (P6, гейт BUG-599): дрейфует и ТЕКСТОВЫЙ набор эталонов

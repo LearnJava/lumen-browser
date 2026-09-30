@@ -430,6 +430,9 @@ mod tests {
     // an immediately following blocking `recv` observes it; the timeout tests
     // never send, so their outcome is timing-independent (no data can arrive).
 
+    /// Upper bound for a loopback receive in tests.
+    const RECV_DEADLINE: Duration = Duration::from_secs(5);
+
     /// Connects a pair of loopback `UdpDatagram`s to each other.
     fn connected_pair() -> (UdpDatagram, UdpDatagram) {
         // Bind both to ephemeral ports first to learn the assigned addresses,
@@ -449,9 +452,11 @@ mod tests {
     #[test]
     fn udp_round_trip() {
         let (mut a, mut b) = connected_pair();
+        // Bounded read: a lost loopback datagram must fail the test, not hang the gate.
+        b.set_read_timeout(Some(RECV_DEADLINE)).unwrap();
         a.send(b"quic-datagram").unwrap();
         let mut buf = [0u8; MAX_DATAGRAM_SIZE];
-        let n = b.recv(&mut buf).unwrap();
+        let n = b.recv(&mut buf).expect("loopback datagram not delivered within deadline");
         assert_eq!(&buf[..n], b"quic-datagram");
     }
 
@@ -493,9 +498,10 @@ mod tests {
         let mut buf = [0u8; MAX_DATAGRAM_SIZE];
         assert!(b.recv(&mut buf).is_err());
 
-        b.set_read_timeout(None).unwrap();
+        // Blocking mode restored, but bounded so a lost datagram fails instead of hanging.
+        b.set_read_timeout(Some(RECV_DEADLINE)).unwrap();
         a.send(b"after-restore").unwrap();
-        let n = b.recv(&mut buf).unwrap();
+        let n = b.recv(&mut buf).expect("loopback datagram not delivered within deadline");
         assert_eq!(&buf[..n], b"after-restore");
     }
 }

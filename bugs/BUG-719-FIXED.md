@@ -102,4 +102,4 @@ inaccessible_bridge_mutation_does_not_mark_dirty` (флак, проходит в
 одиночном прогоне) и `cases::snapshot_cpu::cpu_snapshots_match_references`
 (чужой дрейф эталонов [BUG-1008](BUG-1008-OPEN.md), тот же набор из
 7 файлов); прогон не дошёл до `lumen-network` из-за известного гейта
-[BUG-805](BUG-805-OPEN.md). Только JS-шим, пиксели не затронуты.
+[BUG-805](BUG-805-FIXED.md). Только JS-шим, пиксели не затронуты.

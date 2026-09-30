@@ -190,7 +190,7 @@ warnings` и `cargo clippy -p lumen-shell --all-targets -- -D warnings` —
 (6/6, включая новый `pending_opener_is_armed_once_and_cleared_on_take`) и
 `cargo test --bin lumen scripts_and_frames` (84/84) — оба зелёные.
 `scripts/scoped-test.sh` не запускался до конца — известная поломка
-гейта ([BUG-805](BUG-805-OPEN.md), `lumen-network`), не от этой правки:
+гейта ([BUG-805](BUG-805-FIXED.md), `lumen-network`), не от этой правки:
 отдельный прогон `cargo test -p lumen-network --lib` в рамках гейта до
 BUG-805 не дошёл (2207/2207 прошли за 4.37 с), полный скрипт просто не
 успел завершиться за разумное время до конца работы над срезом.

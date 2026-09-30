@@ -122,7 +122,7 @@ all 8 sensors still constructible             -> all ok
 * `SensorErrorEvent` по-прежнему не наследуется от `Event`
   (`instanceof Event` → `false`, нет `bubbles`/`target`/`stopPropagation`),
   и `error`-событие ниоткуда не диспатчится — заведено отдельно как
-  [BUG-761](BUG-761-OPEN.md).
+  [BUG-761](BUG-761-FIXED.md).
 
 ## Связанные
 

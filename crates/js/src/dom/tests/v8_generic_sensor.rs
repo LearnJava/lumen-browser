@@ -44,6 +44,16 @@ fn sensors_are_real_event_targets() {
     ));
 }
 
+/// BUG-761: `SensorErrorEvent : Event` against the engine's real `Event`.
+#[test]
+fn sensor_error_event_is_a_real_event() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "var err = new DOMException('x', 'NotAllowedError');          var e = new SensorErrorEvent('error', {error: err, cancelable: true});          e instanceof Event && e.type === 'error' && e.error === err          && e.bubbles === false && e.cancelable === true          && typeof e.preventDefault === 'function'"
+    ));
+}
+
 /// A `Sensor` has no constructor operation in the IDL; the concrete
 /// subclasses do.
 #[test]

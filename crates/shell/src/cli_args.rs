@@ -35,7 +35,7 @@ pub(crate) fn print_usage() {
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
-    eprintln!("  [--network-service]                             — вынести HTTP/TLS/DNS в отдельный процесс (PH1-4)");
+    eprintln!("  [--network-service]                             — [заглушка] запустить lumen-network-service; запросы пока идут через встроенный HttpClient");
     eprintln!("  --ipc-server                                    — headless IPC-сервер таб-команд: PNG-снимки через TCP (TAB-5)");
 }
 
@@ -303,8 +303,9 @@ mod forced_colors_tests {
 
 /// Извлечь `--network-service` из аргументов (PH1-4).
 ///
-/// Когда флаг присутствует, шелл запускает `lumen-network-service` как дочерний процесс
-/// и делегирует все HTTP/TLS/DNS запросы через IPC вместо встроенного `HttpClient`.
+/// Когда флаг присутствует, шелл запускает `lumen-network-service` как дочерний процесс.
+/// Запросы через него **пока не идут** (BUG-769): загрузчик ресурсов принимает конкретный
+/// `HttpClient`, а не `NetworkTransport`, поэтому транспорт только удерживается живым.
 pub(crate) fn extract_network_service(args: &[String]) -> (bool, Vec<String>) {
     let mut found = false;
     let mut rest = Vec::new();
@@ -846,10 +847,13 @@ pub(crate) fn run_cli() -> ExitCode {
     // PH1-4: Запустить сетевой сервис как дочерний процесс (если --network-service).
     // Хендл живёт до конца main() — при дропе убивает дочерний процесс.
     // _transport хранит Arc, чтобы не дропнуть IPC-соединение до конца сессии.
+    // BUG-769: транспорт в загрузчик НЕ передаётся — все запросы идут через встроенный
+    // `HttpClient` (HSTS/cookies/кэш/ad-block/прокси). Подпроцесс клиента с этим стеком
+    // не имеет, поэтому подстановку нельзя делать без переноса конфигурации в подпроцесс.
     let (_network_svc, _transport) = if use_network_service {
         match network_service::NetworkServiceHandle::spawn() {
             Ok((handle, transport)) => {
-                eprintln!("lumen: сетевой сервис запущен (PH1-4, --network-service)");
+                eprintln!("lumen: сетевой сервис запущен (PH1-4, --network-service), но запросы пока идут через встроенный HttpClient (BUG-769)");
                 (Some(handle), Some(transport))
             }
             Err(e) => {

@@ -310,7 +310,7 @@ fontload3_document_fonts_population.rs`): синхронный top-level скр�
 `lumen-canvas`/`lumen-chrome`/`lumen-image`/`lumen-js`/`lumen-knowledge`/
 `lumen-layout`/`lumen-mcp`/`lumen-paint`/`lumen-shell`/`lumen-storage`) —
 без регрессий; `lumen-network` из замыкания пропущен намеренно — известный
-сломанный гейт [BUG-805](BUG-805-OPEN.md) (зависает на UDP-тесте), не
+сломанный гейт [BUG-805](BUG-805-FIXED.md) (зависает на UDP-тесте), не
 связан с этим срезом.
 
 **Не входит в срез** (остаётся тем, чем было для gap 0/1 в FONTLOAD-2, плюс

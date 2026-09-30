@@ -76,4 +76,4 @@ intrinsic-пикселя; чинит и row-, и column-направление (
 `scripts/scoped-test.sh` — единственный красный `cpu_snapshots_match_references`
 (те же 7 файлов, что и в [BUG-1048](BUG-1048-FIXED.md)) — предсуществующий
 дрейф, не регрессия (правка не трогает paint); `lumen-network` — известный
-сломанный гейт [BUG-805](BUG-805-OPEN.md).
+сломанный гейт [BUG-805](BUG-805-FIXED.md).
