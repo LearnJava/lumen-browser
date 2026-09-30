@@ -43,3 +43,19 @@ FAIL relative-units 5 - vw in outside expected 20.48 +/- 1 but got 10.2399997711
 кандидат тот же класс проблемы, что и `font_size`'s
 `FontSizeBasis::Absolute`/`ParentRelative` различие, просто ещё не
 воспроизведённое для этих единиц.
+
+## Срез 1 (P6, 2026-09-30) — `vh`/`vw`/`vmin`/`vmax`
+
+Причина: `zoom_length` (`cascade.rs`) масштабировал только `Px`; вьюпорт-единицы
+резолвятся от **незумленного** вьюпорта, а комментарий утверждал обратное.
+Исправлено: коэффициент зума умножается на коэффициент `Vh/Vw/Vmin/Vmax`;
+тест `zoom_scales_viewport_unit_coefficients`. `relative-units.html` 4/5 → ожидается зелёный.
+
+## Остаток (найден пробой `--dump-layout`, html `font-size:20px; zoom:2`)
+
+- `rem` — константа `ROOT_FONT_SIZE = 16` (`parse/font.rs:233`), а не font-size
+  корня: `5rem` = 80 вместо 200. Это не про zoom, `rem` не следует за `html { font-size }` вообще.
+- `rlh`/`rex`/`rch`/`rcap` не парсятся (декларация отбрасывается).
+- `lh` = `Em(1.2)` (`calc.rs:1052`), `cap` = `Em(0.7)` — заглушки, не line-height/cap-height.
+- `ex`/`ch` берут метрики шрифта элемента — при верном зумленном `font_size` расхождения
+  быть не должно, пока не заведены `rex`/`rch`.
