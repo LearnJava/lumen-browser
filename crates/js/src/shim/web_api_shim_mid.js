@@ -3363,7 +3363,7 @@ function _lumen_selection_tree_root_nid(nid) {
 // или `null`, если аргумент не то и не другое.
 function _lumen_node_or_text_nid(arg) {
     if (typeof arg === 'string') return _lumen_create_text_node(arg);
-    if (arg && arg.__nid__ !== undefined) return arg.__nid__;
+    if (arg && _lumen_adopt_detached(arg).__nid__ !== undefined) return arg.__nid__;
     return _lumen_create_text_node(String(arg));
 }
 
@@ -3447,6 +3447,8 @@ function _lumen_make_document_fragment(nid) {
         get nextSibling()     { return null; },
         get previousSibling() { return null; },
         insertBefore:         function(newNode, refNode) {
+            _lumen_adopt_detached(newNode);
+            _lumen_adopt_detached(refNode);
             if (!newNode || newNode.__nid__ === undefined) {
                 throw new TypeError('insertBefore: newNode must be a node');
             }
@@ -3458,6 +3460,7 @@ function _lumen_make_document_fragment(nid) {
             return newNode;
         },
         replaceChild:         function(newChild, oldChild) {
+            _lumen_adopt_detached(newChild);
             if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
                 throw new TypeError('replaceChild: both arguments must be nodes');
             }
@@ -4225,6 +4228,35 @@ function _lumen_make_character_data(nodeType, nodeName, data, proto) {
     Object.defineProperty(obj, 'parentNode',    { get: function() { return null; },         enumerable: true, configurable: true });
     Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },           enumerable: true, configurable: true });
     return obj;
+}
+
+// BUG-1055: `new Text()`/`new Comment()`/`createProcessingInstruction()` build
+// detached JS-only nodes with no arena id, so every insertion path used to
+// drop them silently. On first insertion the node is promoted in place: an
+// arena node is created with a copy of its data and the object takes over the
+// wrapper a live node of that kind would have (same `===` identity, and the
+// wrapper cache maps the new id back to it). Returns its argument.
+var _LUMEN_DETACHED_OWN_KEYS = ['data', 'nodeValue', 'textContent', 'length',
+    'nodeType', 'nodeName', 'ownerDocument', 'parentNode', 'childNodes',
+    '__isProcessingInstruction__', 'target', 'appendChild', 'insertBefore',
+    'replaceChild', 'removeChild', 'cloneNode', 'getRootNode'];
+function _lumen_adopt_detached(c) {
+    if (!c || typeof c !== 'object' || c.__nid__ !== undefined) return c;
+    var nt = c.nodeType, nid;
+    if (nt === 3) { nid = _lumen_create_text_node(c.data); }
+    else if (nt === 8) { nid = _lumen_create_comment(c.data); }
+    else if (nt === 7 && c.__isProcessingInstruction__) {
+        nid = _lumen_create_processing_instruction(c.target, c.data);
+    } else { return c; }
+    if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+    var fresh = _lumen_build_element(nid);
+    var keys = Reflect.ownKeys(fresh);
+    for (var i = 0; i < _LUMEN_DETACHED_OWN_KEYS.length; i++) { delete c[_LUMEN_DETACHED_OWN_KEYS[i]]; }
+    for (var j = 0; j < keys.length; j++) {
+        Object.defineProperty(c, keys[j], Object.getOwnPropertyDescriptor(fresh, keys[j]));
+    }
+    _lumen_wrapper_cache_set(nid, c);
+    return c;
 }
 
 // DOM §4.5 Comment(data) / Text(data) — a returned object wins over `this`, so
@@ -8203,6 +8235,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (_lumen_is_doctype(nid)) {
                 throw new DOMException('A DocumentType node cannot have children', 'HierarchyRequestError');
             }
+            _lumen_adopt_detached(c);
             if (!c || c.__nid__ === undefined) return c;
             _lumen_ce_push_element_queue();
             try {
@@ -8267,7 +8300,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 if (typeof _bn === 'string') {
                     var _btn = _lumen_create_text_node(_bn);
                     _lumen_insert_before(pid, _btn, nid);
-                } else if (_bn && _bn.__nid__ !== undefined) {
+                } else if (_bn && _lumen_adopt_detached(_bn).__nid__ !== undefined) {
                     _lumen_insert_before(pid, _bn.__nid__, nid);
                 }
             }
@@ -8286,7 +8319,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     var _atn = _lumen_create_text_node(_an);
                     if (nextSib !== null) { _lumen_insert_before(pid, _atn, nextSib); }
                     else { _lumen_append_child(pid, _atn); }
-                } else if (_an && _an.__nid__ !== undefined) {
+                } else if (_an && _lumen_adopt_detached(_an).__nid__ !== undefined) {
                     if (nextSib !== null) { _lumen_insert_before(pid, _an.__nid__, nextSib); }
                     else { _lumen_append_child(pid, _an.__nid__); }
                 }
@@ -8310,7 +8343,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                         var _rtn = _lumen_create_text_node(_rn);
                         if (nextSib !== null) { _lumen_insert_before(pid, _rtn, nextSib); }
                         else { _lumen_append_child(pid, _rtn); }
-                    } else if (_rn && _rn.__nid__ !== undefined) {
+                    } else if (_rn && _lumen_adopt_detached(_rn).__nid__ !== undefined) {
                         if (nextSib !== null) { _lumen_insert_before(pid, _rn.__nid__, nextSib); }
                         else { _lumen_append_child(pid, _rn.__nid__); }
                     }
@@ -8329,7 +8362,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     var _ptn = _lumen_create_text_node(_pn);
                     if (firstChild !== null) { _lumen_insert_before(nid, _ptn, firstChild); }
                     else { _lumen_append_child(nid, _ptn); }
-                } else if (_pn && _pn.__nid__ !== undefined) {
+                } else if (_pn && _lumen_adopt_detached(_pn).__nid__ !== undefined) {
                     if (firstChild !== null) { _lumen_insert_before(nid, _pn.__nid__, firstChild); }
                     else { _lumen_append_child(nid, _pn.__nid__); }
                 }
@@ -8342,7 +8375,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var _an = arguments[_ai];
                 if (typeof _an === 'string') {
                     _lumen_append_child(nid, _lumen_create_text_node(_an));
-                } else if (_an && _an.__nid__ !== undefined) {
+                } else if (_an && _lumen_adopt_detached(_an).__nid__ !== undefined) {
                     _lumen_append_child(nid, _an.__nid__);
                 }
             }
@@ -8425,7 +8458,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var _rcn = arguments[_rni];
                 if (typeof _rcn === 'string') {
                     _lumen_append_child(nid, _lumen_create_text_node(_rcn));
-                } else if (_rcn && _rcn.__nid__ !== undefined) {
+                } else if (_rcn && _lumen_adopt_detached(_rcn).__nid__ !== undefined) {
                     _lumen_append_child(nid, _rcn.__nid__);
                 }
             }
@@ -8903,6 +8936,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // the reflection table (BUG-383).
         // DOM LS §4.2.4: insertBefore(newNode, refNode) — inserts before refNode (or appends if null).
         insertBefore: function(newNode, refNode) { var nid = this.__nid__;
+            _lumen_adopt_detached(newNode);
+            _lumen_adopt_detached(refNode);
             if (!newNode || newNode.__nid__ === undefined) return newNode;
             if (!refNode || refNode.__nid__ === undefined) {
                 return this.appendChild(newNode);
