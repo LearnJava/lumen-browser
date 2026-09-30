@@ -1422,7 +1422,7 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 **Выбор кандидата.** Из оставшихся малых первым проверен `appmanifest` (102 файла, 0 предикторных хитов):
 `--update-expected` за 5 с — `no tests selected`, единственные 4 файла с `testharness.js` — `*-manual.html`.
 Baseline получить нечем (в список «покрыть нечем» к `annotation-*`, `avif`, `print` и т.д.). Вторым взят
-`connection-allowlist` — категория [BUG-1038](../../bugs/BUG-1038-OPEN.md), откаченная в срезе 30; счёт по
+`connection-allowlist` — категория [BUG-1038](../../bugs/BUG-1038-FIXED.md), откаченная в срезе 30; счёт по
 id заранее: `running 73 all vendored` (срез 30 брал те же 73).
 
 **Baseline.** `--update-expected --recursive --processes 4` — 6:33 (23/73 harness OK, 82/164 подтестов,

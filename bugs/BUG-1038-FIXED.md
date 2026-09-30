@@ -1,6 +1,6 @@
 # BUG-1038 — `connection-allowlist`: минимум два независимых нестабильных сигнала на трёх подряд `--check`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-30 (P6)
 **Заведён:** 2026-09-08 (P2, WPT-RUN-7 срез 30 — попытка перегенерации `connection-allowlist`)
 **Область:** не локализовано. Кандидаты — гонка вокруг `<link rel="prefetch">` в
 `about:`-контенте iframe (`iframe-contentwindow-injection.sub.window.html`) и что-то в
@@ -87,3 +87,16 @@ Windows — [BUG-1070](BUG-1070-FIXED.md), это вероятный, но не 
 проявляется только под нагрузкой полной категории (соседние страницы, параллельные фоновые fetch), не сама по себе.
 Дальше: перегенерировать baseline на новом резолвере и проверить, остаётся ли плавание; если да — искать нагрузочную
 причину в подсистеме prefetch/about:-iframe. Статус остаётся OPEN.
+
+## Закрытие 2026-09-30 (P6)
+
+Корень плавания — не логика connection-allowlist, а два внешних фактора:
+1. `www*.localhost` не резолвились ([BUG-1070](BUG-1070-FIXED.md), починен: `*.localhost` → loopback).
+2. Тесты `navigation-*` решают «навигация заблокирована / прошла» по окну **50 мс** после `iframe.onload`
+   (`resources/navigation_redirect_test.js`, `step_timeout(…, 50)`). Под нагрузкой машины (разбор страницы 0,47 с вместо
+   0,2 с) postMessage приходит позже окна — все «should succeed» → FAIL, «should fail» → PASS, инверсия по всей
+   семье `navigation-redirect-*`/`navigation-wildcard`/`navigation-response-origin` (+ `iframe-contentwindow-injection`).
+   Отдельно каждый файл стабилен. Движковой гонки нет.
+
+Baseline `connection-allowlist` перегенерирован на новом резолвере, плавающие подтесты записаны списками
+(`[PASS, FAIL]`, `[TIMEOUT, NOTRUN]` и т. п.). Три `--check` подряд на первом baseline — 0 регрессий; затем один прогон дал 21 регрессию (семья navigation, механизм выше), ещё один — 1 (`websocket`, `PASS→TIMEOUT`), оба плавающих набора дописаны списками; два `--check` после этого — 0 регрессий.

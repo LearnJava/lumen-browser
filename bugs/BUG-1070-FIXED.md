@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-09-30 (P6, в рамках BUG-1038)
 **Тип:** пробел реализации — RFC 6761 §6.3 разрешает приложению самому считать `*.localhost` loopback-адресом, а `SystemDnsResolver` этого не делает.
-**Заведён:** 2026-09-20 (P2, WPT-RUN-7 срез 39, `connection-allowlist`; косвенно упомянут в [BUG-1038](BUG-1038-OPEN.md) как «нерезолвящиеся `www*.localhost`»)
+**Заведён:** 2026-09-20 (P2, WPT-RUN-7 срез 39, `connection-allowlist`; косвенно упомянут в [BUG-1038](BUG-1038-FIXED.md) как «нерезолвящиеся `www*.localhost`»)
 **Область:** `crates/network/src/dns.rs::SystemDnsResolver::resolve` (и DoH-путь `doh.rs`, не проверялся).
 **Владелец:** P3 (сеть).
 
@@ -41,4 +41,4 @@ fetch error: network error: resolve www.localhost:18300: network error: resolve 
 без обращения к резолверу. Вызывается первой строкой в `SystemDnsResolver`, `DohResolver`, `DotResolver` (proxy-путь идёт через
 тот же `DnsResolver`). Тест `localhost_subdomains_resolve_to_loopback`. Эффект на WPT: `www*.localhost` теперь достижимы, статусы
 подтестов `connection-allowlist` (`navigation-*`, `websocket`, shared-worker) сместились NOTRUN/TIMEOUT → FAIL/PASS — baseline
-категории требует перегенерации (не сделана, см. [BUG-1038](BUG-1038-OPEN.md)).
+категории требует перегенерации (не сделана, см. [BUG-1038](BUG-1038-FIXED.md)).
