@@ -1,6 +1,6 @@
 BUGS.md:117
-BUGS.md:118
-BUGS.md:120
+BUGS.md:119
+BUGS.md:121
 BUGS.md:122
 BUGS.md:123
 BUGS.md:124
@@ -18,4 +18,3 @@ BUGS.md:135
 BUGS.md:136
 BUGS.md:137
 BUGS.md:138
-BUGS.md:139

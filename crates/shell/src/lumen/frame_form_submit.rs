@@ -200,8 +200,14 @@ impl Lumen {
                 }
                 // Адрес разрешается базой РЕБЁНКА, а уходит наверх: форму
                 // написал ребёнок, а меняется документ страницы.
-                let resolved = nav_base.resolve_str(get_url);
-                self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                // BUG-1067: политика РЕБЁНКА (`upgrade-insecure-requests`) —
+                // тот же приём, что у ссылок (`navigate_page_from_frame`).
+                let resolved = crate::csp_enforce::upgrade_navigation_url(
+                    csp_gate,
+                    &nav_base.resolve_str(get_url),
+                );
+                let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate);
+                self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
             }
             LinkTarget::Frame(target_idx) => {
                 if !links::is_navigable_href(get_url) {
