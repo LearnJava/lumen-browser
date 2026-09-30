@@ -706,6 +706,24 @@ use super::*;
         assert_eq!(s.width, Some(Length::Vw(2.0)));
     }
 
+    /// BUG-1051: `rem` follows the document element's (zoomed) font-size.
+    #[test]
+    fn rem_follows_root_font_size_and_zoom() {
+        let doc = lumen_html_parser::parse(
+            "<html style=\"font-size: 20px; zoom: 2\"><body><div style=\"width: 5rem; font-size: 1rem\"></div></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let html = doc.document_element().unwrap();
+        let html_style = compute_style(&doc, html, &sheet, &ComputedStyle::root(), vp, false);
+        assert!((html_style.font_size - 40.0).abs() < 0.01);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let body_style = compute_style(&doc, doc.body().unwrap(), &sheet, &html_style, vp, false);
+        let s = compute_style(&doc, div, &sheet, &body_style, vp, false);
+        assert!((s.font_size - 40.0).abs() < 0.01, "font_size = {}", s.font_size);
+        assert_eq!(s.width, Some(Length::Rem(12.5)), "{:?} {:?}", doc.get(div).data, s.display); // 5 × 40 / 16
+    }
+
     /// This is the shape tbank.ru relies on: a fixed-width container that only
     /// fits the viewport once `zoom` is applied.
     #[test]

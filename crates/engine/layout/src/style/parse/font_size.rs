@@ -123,7 +123,8 @@ fn resolve_font_size(
     let (px, basis) = match &len {
         Length::Px(v) => (*v, FontSizeBasis::Absolute),
         Length::Em(v) => (*v * parent_fs, FontSizeBasis::ParentRelative),
-        Length::Rem(v) => (*v * ROOT_FONT_SIZE, FontSizeBasis::Absolute),
+        // `root_font_size` is already zoomed, like `parent_fs`.
+        Length::Rem(v) => (*v * style.root_font_size, FontSizeBasis::ParentRelative),
         // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
         // the *parent* font. Real ch/ex metrics for the parent are not available at
         // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
@@ -194,7 +195,7 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
             Length::Px(v) => style.line_height = v / style.font_size,
             Length::Em(v) => style.line_height = *v,
             Length::Rem(v) => {
-                style.line_height = v * ROOT_FONT_SIZE / style.font_size;
+                style.line_height = v * style.root_font_size / style.font_size;
             }
             Length::Percent(v) => style.line_height = v / 100.0,
             Length::Ch(_)
