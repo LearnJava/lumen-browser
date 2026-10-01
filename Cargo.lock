@@ -2511,6 +2511,7 @@ dependencies = [
  "resvg",
  "weezl",
  "workspace-hack",
+ "zune-bmp",
  "zune-core 0.5.1",
  "zune-jpeg 0.5.15",
  "zune-png",
@@ -5941,6 +5942,16 @@ dependencies = [
  "potential_utf",
  "resb",
  "serde",
+]
+
+[[package]]
+name = "zune-bmp"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b77b890dbf6b1a32fc57d9f1f30e22175694c454581de7c6e466f2853cf9fe3"
+dependencies = [
+ "log",
+ "zune-core 0.5.1",
 ]
 
 [[package]]

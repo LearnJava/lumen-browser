@@ -5,6 +5,7 @@
 
 mod jpeg;
 mod png;
+pub mod bmp;
 pub mod webp;
 mod gif;
 pub mod avif;
@@ -17,6 +18,7 @@ pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
+pub use bmp::{BmpError, decode_bmp, is_bmp};
 pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, GifLoopCount, is_gif};
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 pub use jxl::{JxlError, JxlImageDecoder, decode_jxl, is_jxl};
@@ -49,6 +51,7 @@ pub fn supported_mime_types() -> &'static [&'static str] {
         "image/jpeg",
         "image/jpg",
         "image/gif",
+        "image/bmp",
         "image/webp",
         "image/avif",
         "image/jxl",
@@ -124,6 +127,7 @@ pub fn decode_to(bytes: &[u8], target: lumen_core::ColorSpace) -> Result<Image, 
 /// - [`ImageError::Png`] — PNG-сигнатура совпала, но декодер выдал ошибку.
 /// - [`ImageError::Jpeg`] — JPEG-сигнатура совпала, но декодер выдал ошибку.
 /// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодирование не удалось.
+/// - [`ImageError::Bmp`] — BMP-сигнатура совпала, но декодирование не удалось.
 /// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодирование не удалось.
 /// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
 /// - [`ImageError::Svg`] — SVG-сигнатура распознана, но `usvg` не смог разобрать документ.
@@ -149,6 +153,9 @@ fn decode_raw(bytes: &[u8]) -> Result<Image, ImageError> {
     }
     if is_gif(bytes) {
         return decode_gif(bytes).map_err(ImageError::Gif);
+    }
+    if is_bmp(bytes) {
+        return decode_bmp(bytes).map_err(ImageError::Bmp);
     }
     if is_webp(bytes) {
         let (width, height, data) = decode_webp(bytes).map_err(ImageError::Webp)?;
@@ -182,6 +189,8 @@ pub enum ImageError {
     Webp(WebpError),
     /// GIF-сигнатура распознана (GIF87a/GIF89a), но декодирование не удалось.
     Gif(GifError),
+    /// BMP-сигнатура распознана (`BM` + DIB-заголовок), но декодирование не удалось.
+    Bmp(BmpError),
     /// AVIF ftyp-бокс обнаружен (brand=avif/avis), но декодирование не удалось.
     Avif(AvifError),
     /// SVG-сигнатура распознана, но `usvg` не смог разобрать документ.
@@ -200,6 +209,7 @@ impl core::fmt::Display for ImageError {
             Self::Jpeg(e) => write!(f, "JPEG: {e}"),
             Self::Webp(e) => write!(f, "WebP: {e}"),
             Self::Gif(e) => write!(f, "GIF: {e}"),
+            Self::Bmp(e) => write!(f, "BMP: {e}"),
             Self::Avif(e) => write!(f, "AVIF: {e}"),
             Self::Svg(e) => write!(f, "SVG: {e}"),
             Self::Jxl(e) => write!(f, "JPEG XL: {e}"),
@@ -220,6 +230,10 @@ impl From<JpegError> for ImageError {
 
 impl From<WebpError> for ImageError {
     fn from(e: WebpError) -> Self { Self::Webp(e) }
+}
+
+impl From<BmpError> for ImageError {
+    fn from(e: BmpError) -> Self { Self::Bmp(e) }
 }
 
 impl From<GifError> for ImageError {
