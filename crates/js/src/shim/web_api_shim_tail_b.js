@@ -5349,6 +5349,35 @@ function _wa_compute_at_p(effect, p) {
     return result;
 }
 
+// Phase test, separate from what gets painted (BUG-1192): true once `ct` is
+// past the end of the active interval, whatever `fill` is.
+function _wa_after_end(timing, ct) {
+    var dur = +timing.duration || 0;
+    var elapsed = ct - +(timing.delay || 0);
+    if (elapsed < 0) return false;
+    if (dur <= 0) return true;
+    var it = timing.iterations;
+    if (it === Infinity || it == null) return false;
+    return elapsed >= dur * (+it || 1);
+}
+
+// Directed, eased progress of the last frame of the active interval — what
+// `fill: forwards|both` leaves on screen (honours iterations and direction).
+function _wa_end_progress(timing) {
+    var it = timing.iterations;
+    var maxIter = (it == null) ? 1 : (+it || 1);
+    var frac = maxIter % 1;
+    var iterProg = frac === 0 ? 1 : frac;
+    var iterIdx = frac === 0 ? maxIter - 1 : Math.floor(maxIter);
+    var dir = timing.direction || 'normal';
+    var isOdd = iterIdx % 2 === 1;
+    var d = iterProg;
+    if      (dir === 'reverse')           d = 1 - iterProg;
+    else if (dir === 'alternate')         d = isOdd ? 1 - iterProg : iterProg;
+    else if (dir === 'alternate-reverse') d = isOdd ? iterProg : 1 - iterProg;
+    return _wa_ease(Math.max(0, Math.min(1, d)), timing.easing || 'linear');
+}
+
 // Compute the iteration progress [0,1] from animation timing and currentTime.
 function _wa_iter_progress(timing, ct) {
     var dur = +timing.duration || 0;
@@ -5361,11 +5390,11 @@ function _wa_iter_progress(timing, ct) {
     // A zero-length active interval is over as soon as the delay is: the
     // animation must reach `finished` (and resolve `finished`) like any other,
     // not stay `running` at progress 1 forever (found with BUG-670).
-    if (dur <= 0) return (fill === 'forwards' || fill === 'both') ? 1 : -2;
+    if (dur <= 0) return (fill === 'forwards' || fill === 'both') ? _wa_end_progress(timing) : -2;
     var maxIter = (timing.iterations === Infinity || timing.iterations == null) ? Infinity : +(timing.iterations) || 1;
     var totalDur = maxIter === Infinity ? Infinity : dur * maxIter;
     if (totalDur !== Infinity && elapsed >= totalDur) {
-        return (fill === 'forwards' || fill === 'both') ? 1 : -2;
+        return (fill === 'forwards' || fill === 'both') ? _wa_end_progress(timing) : -2;
     }
     var iterFloor = Math.floor(elapsed / dur);
     var iterProg = (elapsed % dur) / dur;
@@ -5738,12 +5767,14 @@ Animation.prototype._tick = function(now) {
     var ct = this.currentTime;
     if (ct === null) return;
     var p = _wa_iter_progress(eff._timing, ct);
-    if (p === -2) {
-        // Past end — finished
+    if (p === -2 || _wa_after_end(eff._timing, ct)) {
+        // Past end — finished. `fill` only decides which frame stays and
+        // whether the animation stays relevant (listed in getAnimations()).
         this._state = 'finished';
-        this._applyAtP(1);
+        if (p === -2) this._applyAtP(1); else this._applyAtP(p);
+        var fillEnd = eff._timing.fill;
         var idx = _wa_animations.indexOf(this);
-        if (idx >= 0) _wa_animations.splice(idx, 1);
+        if (idx >= 0 && fillEnd !== 'forwards' && fillEnd !== 'both') _wa_animations.splice(idx, 1);
         this._onFinish();
         _wa_process_replacements(this);
         return;
@@ -5815,11 +5846,12 @@ Animation.prototype._applyAtP = function(p) {
     this._prevStyles = styles;
 };
 
-Animation.prototype._clearStyles = function() {
+Animation.prototype._clearStyles = function(keep) {
     var eff = this.effect;
     if (!eff || !eff.target) return;
     var before = this._inlineBefore || {};
     for (var prop in this._prevStyles) {
+        if (keep && keep[prop]) continue;
         try { eff.target.style[prop] = before[prop] || ''; } catch(e) {}
     }
     this._prevStyles = {};
@@ -5867,9 +5899,9 @@ function _wa_is_replaceable(anim) {
 
 // Supersede `anim`: mark it removed, drop the inline styles it had committed,
 // take it out of the live registry and fire `remove` (§4.4.2).
-function _wa_remove_replaced(anim) {
+function _wa_remove_replaced(anim, keep) {
     anim._replaceState = 'removed';
-    anim._clearStyles();
+    anim._clearStyles(keep);
     var idx = _wa_animations.indexOf(anim);
     if (idx >= 0) _wa_animations.splice(idx, 1);
     anim._onRemove();
@@ -5892,7 +5924,7 @@ function _wa_process_replacements(anim) {
         var otherProps = _wa_effect_props(other.effect);
         var shared = false;
         for (var p in otherProps) { if (props[p]) { shared = true; break; } }
-        if (shared) _wa_remove_replaced(other);
+        if (shared) _wa_remove_replaced(other, props);
     }
 }
 

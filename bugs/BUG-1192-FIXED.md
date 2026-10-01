@@ -1,6 +1,6 @@
 # BUG-1192 — анимация с `fill: forwards`/`both` не доходит до `finished`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-26 (P3, при закрытии [BUG-670](BUG-670-FIXED.md)).
 **Область:** js — Web Animations в
 [`web_api_shim_tail_b.js`](../crates/js/src/shim/web_api_shim_tail_b.js)
@@ -48,3 +48,12 @@ a.finished       // не резолвится, onfinish/событие finish н
 в фазе after с `fill: forwards` рисуется прогресс `1` без учёта `iterations`/
 `direction`/`endDelay`, хотя `getComputedTiming()` (BUG-670) считает фазу верно.
 Логично перевести отрисовку на тот же расчёт фаз, что в `getComputedTiming`.
+
+## Исправление
+
+`_wa_after_end` отделяет фазу «после конца» от прогресса: `_tick` финиширует
+по ней независимо от `fill`. `_wa_end_progress` даёт последний кадр с учётом
+`iterations`/`direction`/`easing`, его и оставляет `fill: forwards|both`.
+Такая анимация остаётся в `getAnimations()`. `_clearStyles(keep)` при замене
+не трогает свойства, которые пишет заменяющая анимация, — стиль не откатывается.
+Тест: `fill_forwards_animation_finishes_and_stays_relevant`.
