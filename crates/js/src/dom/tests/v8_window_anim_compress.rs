@@ -1071,6 +1071,20 @@ fn zero_duration_animation_finishes_after_delay() {
     assert_eq!(r, lumen_core::JsValue::String("finished".into()));
 }
 
+/// BUG-1192: `fill: forwards|both` must not keep the animation `running`
+/// after the active interval; it finishes, stays in `getAnimations()` and
+/// leaves the directed last frame (not a bare progress 1).
+#[test]
+fn fill_forwards_animation_finishes_and_stays_relevant() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div');              _wa_current_time = 0;              var a = el.animate({opacity:[0, 1]}, {duration: 100, fill: 'forwards', direction: 'reverse'});              var b = el.animate({width:['0px', '10px']}, {duration: 100});              _wa_current_time = 500; a._tick(500); b._tick(500);              [a.playState, b.playState, el.getAnimations().indexOf(a) >= 0,               el.getAnimations().indexOf(b) >= 0, el.style.opacity].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("finished,finished,true,false,0".into()));
+}
+
 // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ──
 //
 // V8 twin note: the originals interleaved write/close/read().then()/assert
