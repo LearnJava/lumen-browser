@@ -931,7 +931,7 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
             needed.store(true, Ordering::Relaxed);
             // CSSOM-9: the snapshot's stashed computed values are not properties.
-            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) {
+            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) && prop != lumen_layout::BOXLESS_KEY {
                 return String::new();
             }
             flush.maybe_flush();

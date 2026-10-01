@@ -1,7 +1,6 @@
 BUGS.md:140
 BUGS.md:141
 BUGS.md:142
-BUGS.md:143
-BUGS.md:152
+BUGS.md:151
 BUGS.md:121
 BUGS.md:122

@@ -113,6 +113,6 @@ A/B `--dump-display-list` по 180 страницам `graphic_tests/` + `sample
 содержимое теперь один flex-item (content-слот), как у Chrome.
 
 Оставшиеся 5 подтестов `widgets/shadow-dom.html` упираются в другое: пустой `<span>` не
-публикует computed style ([BUG-1191](BUG-1191-OPEN.md)), а `all: inherit` каскад не
+публикует computed style ([BUG-1191](BUG-1191-FIXED.md)), а `all: inherit` каскад не
 применяет (GAP-CSSALL). Проверено юнит-тестами с непустым `<span>` и поштучным `inherit`
 (`crates/js/src/dom/tests/v8_gap_uashadowslot.rs`).

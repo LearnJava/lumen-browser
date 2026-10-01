@@ -7614,7 +7614,8 @@ function _lumen_merge_with_next_text(pid, nodeNid) {
 // entry alone would call it rendered and step 1 would never reach `textContent`.
 function _lumen_rt_is_rendered(n) {
     return _lumen_get_computed_style(n, 'visibility') !== ''
-        && _lumen_get_computed_style(n, 'display') !== 'none';
+        && _lumen_get_computed_style(n, 'display') !== 'none'
+        && _lumen_get_computed_style(n, 'computed:-lumen-boxless') === '';
 }
 
 // Step 8 of the collection steps: a box that starts and ends a line. `table-row`
@@ -9160,6 +9161,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             while (cur !== null && cur !== undefined) {
                 var disp = _lumen_get_computed_style(cur, 'display');
                 if (disp === '' || disp === 'none') return false;
+                // BUG-1191: a boxless element has a style entry but no box.
+                if (_lumen_get_computed_style(cur, 'computed:-lumen-boxless') !== '') return false;
                 if (checkOpacity) {
                     var op = _lumen_get_computed_style(cur, 'opacity');
                     if (op !== null && op !== '' && parseFloat(op) === 0) return false;

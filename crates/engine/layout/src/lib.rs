@@ -127,7 +127,7 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
-pub use resolved_geometry::COMPUTED_VALUE_KEY_PREFIX;
+pub use resolved_geometry::{BOXLESS_KEY, COMPUTED_VALUE_KEY_PREFIX};
 pub use inert::{collect_inert_regions, is_inert, InertRegion};
 pub use starting_style::{resolve_starting_style, StartingStyleTracker};
 pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
@@ -1654,10 +1654,15 @@ pub fn collect_computed_styles(
                 continue;
             }
             let id = lumen_dom::NodeId::from_index(i);
-            if let Some(style) = counters.style_arc(id)
-                && style.display == Display::Contents
-            {
-                out.insert(idx, computed_style_to_map(&style));
+            if let Some(style) = counters.style_arc(id) {
+                let mut m = computed_style_to_map(&style);
+                // BUG-1191: no box (empty inline, `display: none` /
+                // `content-visibility: hidden` descendant) — publish the
+                // cascaded style, marked so «rendered» checks can skip it.
+                if style.display != Display::Contents {
+                    m.insert(resolved_geometry::BOXLESS_KEY.to_owned(), "1".to_owned());
+                }
+                out.insert(idx, m);
             }
         }
     }

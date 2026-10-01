@@ -1,6 +1,6 @@
 # BUG-1191 — `getComputedStyle` пуст у элемента без бокса
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-26 (P1, при закрытии GAP-UASHADOWSLOT).
 **Область:** layout — [`collect_computed_styles`](../crates/engine/layout/src/lib.rs)
 (снимок строится обходом `LayoutBox`-дерева), js — шим `getComputedStyle`.
@@ -35,3 +35,12 @@ contents` из кэша каскада (`CounterMap::style_arc`). Inline-эле�
 регрессируют. Критерий: в WPT `html/rendering/widgets/shadow-dom.html` проверка
 `assert_not_equals(childStyle.length, 0)` проходит для `<select>`/`<details>` (последний шаг —
 `all: inherit`, каскадом применяется с GAP-CSSALL, 2026-09-27).
+
+## Исправление
+
+`collect_computed_styles` публикует запись и для элемента без бокса: стиль берётся из кэша
+каскада (`CounterMap::style_arc`), запись помечена ключом `BOXLESS_KEY`
+(`computed:-lumen-boxless`, под префиксом `computed:`, поэтому не виден как свойство).
+`_lumen_get_computed_style` отвечает на этот единственный ключ; `_lumen_rt_is_rendered`
+(`innerText`) и `checkVisibility` читают его как «бокса нет». Тест —
+`crates/driver/tests/cases/bug1191_boxless_computed_style.rs`.
