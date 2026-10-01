@@ -30,7 +30,7 @@ TimeEvent
 
 ## Масштаб
 
-- `svg/idlharness.window.html`: 145/1005 `FAIL`-подтестов этого файла — прямое следствие (остальные 860 — другая грань того же файла, см. [BUG-1093](BUG-1093-OPEN.md)).
+- `svg/idlharness.window.html`: 145/1005 `FAIL`-подтестов этого файла — прямое следствие (остальные 860 — другая грань того же файла, см. [BUG-1093](BUG-1093-FIXED.md)).
 - Знаковый побочный эффект в отдельном файле: `svg/types/scripted/SVGAnimatedNumber-initial-values.html` (102 подтеста, `Cannot read properties of undefined (reading 'baseVal')`) — весь набор фильтровых примитивов SVG (`feComponentTransfer`, `feConvolveMatrix`, `feDiffuseLighting`, `feDisplacementMap`, `feDistantLight`, `feDropShadow`, `feMorphology`, `fePointLight`, `feSpecularLighting`, `feSpotLight`, `feTurbulence`) тоже отсутствует в `SVG_TAG_MAP` (там заведены только `feBlend`/`feColorMatrix`/`feComposite`/`feGaussianBlur`/`feOffset`/`feMerge`/`feMergeNode` — 7 из 18 `fe*`-элементов спеки), так что и их IDL-атрибуты (`SVGAnimatedNumber` на `k1`/`stdDeviationX`/… ) не существуют — тот же класс дефекта, что и «глобал не заведён», только на уровне элемента, а не значения. Отдельная задача не заводится — чинится тем же проходом, что и `SVG_TAG_MAP`-таблица для этого бага.
 
 ## Ожидание
@@ -39,7 +39,7 @@ TimeEvent
 
 ## Связанное
 
-- [BUG-1093](BUG-1093-OPEN.md) — тот же файл, вторая грань: уже заведённые SVG-интерфейсы не соответствуют форме WebIDL (не глобал отсутствует, а прототип не той формы).
+- [BUG-1093](BUG-1093-FIXED.md) — тот же файл, вторая грань: уже заведённые SVG-интерфейсы не соответствуют форме WebIDL (не глобал отсутствует, а прототип не той формы).
 - `docs/tasks/p2-test-track.md#test-3-срез-53-2026-09-22`.
 
 ## Не проверялось
@@ -48,4 +48,4 @@ TimeEvent
 
 ## Исправление
 
-`crates/js/src/svg.rs`: заведены `SVGNumber`, `SVGAngle` (единицы deg/rad/grad, парсинг `valueAsString`), `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGMPathElement` (`<mpath>`), `TimeEvent`, `ShadowAnimation`, `SVGUseElementShadowRoot` (три последних — только при наличии `Event`/`Animation`/`ShadowRoot`); `createSVGNumber()`/`createSVGAngle()` возвращают типизированные экземпляры; 11 недостающих `fe*`-элементов добавлены в `SVG_TAG_MAP` с `SVGAnimated*`-атрибутами. `SVGAElement` к этому моменту уже существовал (GAP-INTERESTINVOKER). Форма прототипов (члены на инстансе, не на прототипе) — по-прежнему [BUG-1093](BUG-1093-OPEN.md).
+`crates/js/src/svg.rs`: заведены `SVGNumber`, `SVGAngle` (единицы deg/rad/grad, парсинг `valueAsString`), `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGMPathElement` (`<mpath>`), `TimeEvent`, `ShadowAnimation`, `SVGUseElementShadowRoot` (три последних — только при наличии `Event`/`Animation`/`ShadowRoot`); `createSVGNumber()`/`createSVGAngle()` возвращают типизированные экземпляры; 11 недостающих `fe*`-элементов добавлены в `SVG_TAG_MAP` с `SVGAnimated*`-атрибутами. `SVGAElement` к этому моменту уже существовал (GAP-INTERESTINVOKER). Форма прототипов (члены на инстансе, не на прототипе) — по-прежнему [BUG-1093](BUG-1093-FIXED.md).

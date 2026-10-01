@@ -2652,3 +2652,4 @@ runtime or the shim. Read them before a JS/Web-API change.
   `push_get` already finds subscribed — the *first* `subscribe()` for a pair never dispatches.
   `install_push_api_v8` gained a third parameter, `sw_worker_store: Option<SwWorkerStore>`; `None`
   (headless/no SW) makes both dispatch paths safe no-ops, same shape as the other push natives.
+- **SVG DOM по WebIDL (BUG-1093, 2026-10-01).** `svg.rs`: значимые типы SVG — на WeakMap-слотах с аксессорами на прототипе; `shim/svg_idl_shape.js` + сгенерированная `shim/svg_idl_table.js` (`scripts/gen_svg_idl_table.py` из `tests/wpt/interfaces/SVG.idl`) доводят каждый интерфейс до формы WebIDL и добавляют отсутствующие члены как живое отражение атрибутов. Новый SVG-интерфейс/атрибут: правь IDL-вход и перегенерируй таблицу, не пиши аксессор руками. `svg/idlharness.window.html` — 1709/1709.
