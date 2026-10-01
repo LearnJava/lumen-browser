@@ -243,6 +243,94 @@ const SVG_SHIM: &str = r#"
   }
   window.SVGPointList = SVGPointList;
 
+  // SVGNumber (SVG 2 §5.8) — `value` is a coerced double.
+  class SVGNumber {
+    constructor(v) { this._v = +v || 0; }
+    get value() { return this._v; }
+    set value(v) { this._v = +v; }
+  }
+  window.SVGNumber = SVGNumber;
+
+  // SVGAngle (SVG 2 §5.10). Units: 1 unspecified (= deg), 2 deg, 3 rad, 4 grad.
+  const _LUMEN_ANGLE_TO_DEG = [0, 1, 1, 180 / Math.PI, 0.9];
+  const _LUMEN_ANGLE_SUFFIX = ['', '', 'deg', 'rad', 'grad'];
+  class SVGAngle {
+    constructor() { this._unit = 1; this._value = 0; }
+    get unitType() { return this._unit; }
+    get value() { return this._value * _LUMEN_ANGLE_TO_DEG[this._unit]; }
+    set value(v) { this._value = +v / _LUMEN_ANGLE_TO_DEG[this._unit]; }
+    get valueInSpecifiedUnits() { return this._value; }
+    set valueInSpecifiedUnits(v) { this._value = +v; }
+    get valueAsString() { return String(this._value) + _LUMEN_ANGLE_SUFFIX[this._unit]; }
+    set valueAsString(s) {
+      var m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(deg|grad|rad)?\s*$/.exec(String(s));
+      if (!m) throw new DOMException('Invalid angle', 'SyntaxError');
+      this._value = parseFloat(m[1]);
+      this._unit = m[2] === 'deg' ? 2 : m[2] === 'rad' ? 3 : m[2] === 'grad' ? 4 : 1;
+    }
+    newValueSpecifiedUnits(unitType, v) {
+      if (unitType < 1 || unitType > 4) throw new DOMException('Invalid unit type', 'NotSupportedError');
+      this._unit = unitType; this._value = +v;
+    }
+    convertToSpecifiedUnits(unitType) {
+      if (unitType < 1 || unitType > 4) throw new DOMException('Invalid unit type', 'NotSupportedError');
+      var deg = this.value; this._unit = unitType; this.value = deg;
+    }
+  }
+  SVGAngle.SVG_ANGLETYPE_UNKNOWN     = 0;
+  SVGAngle.SVG_ANGLETYPE_UNSPECIFIED = 1;
+  SVGAngle.SVG_ANGLETYPE_DEG         = 2;
+  SVGAngle.SVG_ANGLETYPE_RAD         = 3;
+  SVGAngle.SVG_ANGLETYPE_GRAD        = 4;
+  window.SVGAngle = SVGAngle;
+
+  // Shared list base for SVGNumberList / SVGLengthList.
+  class _LumenSVGList {
+    constructor() { this._items = []; }
+    get length() { return this._items.length; }
+    get numberOfItems() { return this._items.length; }
+    clear() { this._items = []; }
+    initialize(x) { this._items = [x]; return x; }
+    getItem(i) {
+      if (i >= this._items.length || i < 0) throw new DOMException('Index out of range', 'IndexSizeError');
+      return this._items[i];
+    }
+    insertItemBefore(x, i) { this._items.splice(Math.min(i, this._items.length), 0, x); return x; }
+    replaceItem(x, i) {
+      if (i >= this._items.length || i < 0) throw new DOMException('Index out of range', 'IndexSizeError');
+      this._items[i] = x; return x;
+    }
+    removeItem(i) {
+      if (i >= this._items.length || i < 0) throw new DOMException('Index out of range', 'IndexSizeError');
+      return this._items.splice(i, 1)[0];
+    }
+    appendItem(x) { this._items.push(x); return x; }
+  }
+  class SVGNumberList extends _LumenSVGList {}
+  window.SVGNumberList = SVGNumberList;
+  class SVGLengthList extends _LumenSVGList {}
+  window.SVGLengthList = SVGLengthList;
+
+  class SVGAnimatedAngle {
+    constructor() { this.baseVal = new SVGAngle(); this.animVal = new SVGAngle(); }
+  }
+  window.SVGAnimatedAngle = SVGAnimatedAngle;
+  class SVGAnimatedNumberList {
+    constructor() { this.baseVal = new SVGNumberList(); this.animVal = new SVGNumberList(); }
+  }
+  window.SVGAnimatedNumberList = SVGAnimatedNumberList;
+  class SVGAnimatedLengthList {
+    constructor() { this.baseVal = new SVGLengthList(); this.animVal = new SVGLengthList(); }
+  }
+  window.SVGAnimatedLengthList = SVGAnimatedLengthList;
+
+  // SVGUnitTypes (SVG 2 §5.11) — constants-only interface.
+  class SVGUnitTypes {}
+  SVGUnitTypes.SVG_UNIT_TYPE_UNKNOWN           = 0;
+  SVGUnitTypes.SVG_UNIT_TYPE_USERSPACEONUSE    = 1;
+  SVGUnitTypes.SVG_UNIT_TYPE_OBJECTBOUNDINGBOX = 2;
+  window.SVGUnitTypes = SVGUnitTypes;
+
   // ── Attribute reflection (GAP-SVGDOM) ───────────────────────────────────
   // A real SVG element (parser-built or from `createElementNS`) never runs
   // an ES class constructor — `_lumen_build_element` (web_api_shim_mid.js)
@@ -519,8 +607,8 @@ const SVG_SHIM: &str = r#"
     createSVGTransformFromMatrix(m) {
       const t = new SVGTransform(); t.setMatrix(m); return t;
     }
-    createSVGNumber() { return { value: 0 }; }
-    createSVGAngle()  { return { value: 0, unitType: 1, valueInSpecifiedUnits: 0, valueAsString: '0' }; }
+    createSVGNumber() { return new SVGNumber(); }
+    createSVGAngle()  { return new SVGAngle(); }
 
     getElementById(id) { return null; }
     getIntersectionList(rect, referenceElement) { return []; }
@@ -1293,6 +1381,105 @@ const SVG_SHIM: &str = r#"
   class SVGSetElement extends SVGAnimateElement {}
   window.SVGSetElement = SVGSetElement;
 
+  // SVGMPathElement — <mpath> (SVGURIReference)
+  class SVGMPathElement extends SVGElement {
+    constructor() { super(); this.tagName = 'mpath'; this.href = new SVGAnimatedString(''); }
+  }
+  window.SVGMPathElement = SVGMPathElement;
+
+  // TimeEvent (SMIL Animation §6) — begin/end/repeat events.
+  if (typeof Event === 'function') {
+    class TimeEvent extends Event {
+      constructor(type, init) {
+        super(type, init);
+        this._detail = (init && init.detail !== undefined) ? (init.detail | 0) : 0;
+        this._view = (init && init.view) || null;
+      }
+      get view() { return this._view; }
+      get detail() { return this._detail; }
+      initTimeEvent(type, view, detail) {
+        this.initEvent(type, false, false);
+        this._view = view || null; this._detail = detail | 0;
+      }
+    }
+    window.TimeEvent = TimeEvent;
+  }
+
+  // ShadowAnimation — an Animation mirrored into a <use> instance. Lumen has
+  // no per-instance animation mirroring; the interface exists for feature
+  // detection and extends Animation.
+  if (typeof Animation === 'function') {
+    class ShadowAnimation extends Animation {
+      constructor(source, target) {
+        super();
+        this._source = source || null;
+        this._target = target || null;
+      }
+      get sourceAnimation() { return this._source; }
+    }
+    window.ShadowAnimation = ShadowAnimation;
+  }
+
+  // SVGUseElementShadowRoot — the shadow root of a <use> instance tree.
+  if (typeof ShadowRoot === 'function') {
+    class SVGUseElementShadowRoot extends ShadowRoot {}
+    window.SVGUseElementShadowRoot = SVGUseElementShadowRoot;
+  }
+
+  // Remaining filter primitives (Filter Effects §15): typed prototypes with
+  // their SVGAnimated* attribute surface.
+  function _lumen_def_fe(ctorName, tag, init) {
+    var C = class extends SVGElement {
+      constructor() { super(); this.tagName = tag; if (init) init(this); }
+    };
+    Object.defineProperty(C, 'name', { value: ctorName });
+    window[ctorName] = C;
+    return C;
+  }
+  const _N = function(v) { return new SVGAnimatedNumber(v); };
+  const _I = function(v) { return new SVGAnimatedInteger(v); };
+  const _E = function(v) { return new SVGAnimatedEnumeration(v); };
+  var SVGFEComponentTransferElement = _lumen_def_fe('SVGFEComponentTransferElement', 'feComponentTransfer');
+  var SVGFEConvolveMatrixElement = _lumen_def_fe('SVGFEConvolveMatrixElement', 'feConvolveMatrix', function(e) {
+    e.orderX = _I(3); e.orderY = _I(3);
+    e.kernelMatrix = new SVGAnimatedNumberList(); e.divisor = _N(1);
+    e.bias = _N(0); e.targetX = _I(0); e.targetY = _I(0); e.edgeMode = _E(1);
+    e.kernelUnitLengthX = _N(0); e.kernelUnitLengthY = _N(0);
+    e.preserveAlpha = new SVGAnimatedBoolean(false);
+  });
+  var SVGFEDiffuseLightingElement = _lumen_def_fe('SVGFEDiffuseLightingElement', 'feDiffuseLighting', function(e) {
+    e.surfaceScale = _N(1); e.diffuseConstant = _N(1);
+    e.kernelUnitLengthX = _N(0); e.kernelUnitLengthY = _N(0);
+  });
+  var SVGFEDisplacementMapElement = _lumen_def_fe('SVGFEDisplacementMapElement', 'feDisplacementMap', function(e) {
+    e.scale = _N(0); e.xChannelSelector = _E(4); e.yChannelSelector = _E(4);
+  });
+  var SVGFEDistantLightElement = _lumen_def_fe('SVGFEDistantLightElement', 'feDistantLight', function(e) {
+    e.azimuth = _N(0); e.elevation = _N(0);
+  });
+  var SVGFEDropShadowElement = _lumen_def_fe('SVGFEDropShadowElement', 'feDropShadow', function(e) {
+    e.dx = _N(2); e.dy = _N(2); e.stdDeviationX = _N(2); e.stdDeviationY = _N(2);
+  });
+  var SVGFEMorphologyElement = _lumen_def_fe('SVGFEMorphologyElement', 'feMorphology', function(e) {
+    e.operator = _E(1); e.radiusX = _N(0); e.radiusY = _N(0);
+  });
+  var SVGFEPointLightElement = _lumen_def_fe('SVGFEPointLightElement', 'fePointLight', function(e) {
+    e.x = _N(0); e.y = _N(0); e.z = _N(0);
+  });
+  var SVGFESpecularLightingElement = _lumen_def_fe('SVGFESpecularLightingElement', 'feSpecularLighting', function(e) {
+    e.surfaceScale = _N(1); e.specularConstant = _N(1); e.specularExponent = _N(1);
+    e.kernelUnitLengthX = _N(0); e.kernelUnitLengthY = _N(0);
+  });
+  var SVGFESpotLightElement = _lumen_def_fe('SVGFESpotLightElement', 'feSpotLight', function(e) {
+    e.x = _N(0); e.y = _N(0); e.z = _N(0);
+    e.pointsAtX = _N(0); e.pointsAtY = _N(0); e.pointsAtZ = _N(0);
+    e.specularExponent = _N(1); e.limitingConeAngle = _N(0);
+  });
+  var SVGFETurbulenceElement = _lumen_def_fe('SVGFETurbulenceElement', 'feTurbulence', function(e) {
+    e.baseFrequencyX = _N(0); e.baseFrequencyY = _N(0);
+    e.numOctaves = _I(1); e.seed = _N(0); e.stitchTiles = _E(2); e.type = _E(2);
+  });
+
   // SVGViewElement — <view>
   class SVGViewElement extends SVGElement {
     constructor() {
@@ -1384,6 +1571,18 @@ const SVG_SHIM: &str = r#"
     'feOffset':         SVGFEOffsetElement,
     'feMerge':          SVGFEMergeElement,
     'feMergeNode':      SVGFEMergeNodeElement,
+    'feComponentTransfer': SVGFEComponentTransferElement,
+    'feConvolveMatrix': SVGFEConvolveMatrixElement,
+    'feDiffuseLighting': SVGFEDiffuseLightingElement,
+    'feDisplacementMap': SVGFEDisplacementMapElement,
+    'feDistantLight':   SVGFEDistantLightElement,
+    'feDropShadow':     SVGFEDropShadowElement,
+    'feMorphology':     SVGFEMorphologyElement,
+    'fePointLight':     SVGFEPointLightElement,
+    'feSpecularLighting': SVGFESpecularLightingElement,
+    'feSpotLight':      SVGFESpotLightElement,
+    'feTurbulence':     SVGFETurbulenceElement,
+    'mpath':            SVGMPathElement,
     'foreignObject':    SVGForeignObjectElement,
     'foreignobject':    SVGForeignObjectElement,
     'animate':          SVGAnimateElement,
@@ -1502,6 +1701,33 @@ mod tests_v8 {
     fn svg_element_class_exists() {
         let rt = with_svg();
         assert!(bool_eval(&rt, "typeof window.SVGElement === 'function'"));
+    }
+
+    #[test]
+    fn bug_1092_missing_svg_globals_exist() {
+        let rt = with_svg();
+        for n in [
+            "SVGAngle", "SVGNumber", "SVGNumberList", "SVGLengthList", "SVGAnimatedAngle",
+            "SVGAnimatedNumberList", "SVGAnimatedLengthList", "SVGUnitTypes", "SVGAElement",
+            "SVGMPathElement", "SVGFETurbulenceElement", "SVGFEDropShadowElement",
+        ] {
+            assert!(bool_eval(&rt, &format!("typeof window.{n} === 'function'")), "{n}");
+        }
+    }
+
+    #[test]
+    fn bug_1092_factories_return_typed_instances() {
+        let rt = with_svg();
+        assert!(bool_eval(&rt, r#"
+            const svg = new SVGSVGElement();
+            const n = svg.createSVGNumber(), a = svg.createSVGAngle();
+            n.value = '2.5';
+            a.valueAsString = '1rad';
+            n instanceof SVGNumber && n.value === 2.5 && a instanceof SVGAngle
+              && a.unitType === SVGAngle.SVG_ANGLETYPE_RAD
+              && Math.abs(a.value - 180 / Math.PI) < 1e-9
+              && SVGUnitTypes.SVG_UNIT_TYPE_OBJECTBOUNDINGBOX === 2
+        "#));
     }
 
     #[test]

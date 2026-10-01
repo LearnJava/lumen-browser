@@ -18,8 +18,8 @@
 //! at a render-quantum boundary, and a source node fires `ended` when its
 //! scheduled stop time — or its buffer — runs out.
 //!
-//! **Not rendered:** `DynamicsCompressorNode`, `PannerNode`, `ConvolverNode`
-//! and `AudioWorkletNode` pass their input through unchanged, and a realtime
+//! **Not rendered:** `AudioWorkletNode` passes its input through unchanged
+//! (`PannerNode` has no HRTF dataset and uses equal-power), and a realtime
 //! `AudioContext` still makes no sound — it only advances `currentTime` and
 //! schedules `ended`, since nothing binds it to an output device.
 
@@ -1213,6 +1213,46 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   }
   DynamicsCompressorNode.prototype = Object.create(AudioNode.prototype);
   DynamicsCompressorNode.prototype.constructor = DynamicsCompressorNode;
+  // Soft-knee static curve in dB (Web Audio 1.14, DynamicsCompressorNode):
+  // returns the output level for an input level x.
+  function _compCurveDb(x, T, K, R) {
+    var over = x - T;
+    if (2 * over < -K) return x;
+    if (2 * Math.abs(over) <= K) {
+      var d = over + K / 2;
+      return x + (1 / R - 1) * d * d / (2 * K);
+    }
+    return T + over / R;
+  }
+  DynamicsCompressorNode.prototype._process = function(byInput, n) {
+    var input = _input0(byInput, n);
+    var sr = this.context.sampleRate;
+    // k-rate: each parameter's first-frame value (inputs included) per quantum.
+    var k = function(param) { return _paramBuf(param, n)[0]; };
+    var T = k(this.threshold), K = Math.max(k(this.knee), 1e-6), R = Math.max(k(this.ratio), 1);
+    var atk = Math.max(k(this.attack), 0), rel = Math.max(k(this.release), 0);
+    var aCoef = atk > 0 ? 1 - Math.exp(-1 / (atk * sr)) : 1;
+    var rCoef = rel > 0 ? 1 - Math.exp(-1 / (rel * sr)) : 1;
+    // Makeup gain: the spec compensates 60% of the full-scale attenuation.
+    var makeup = Math.pow(10, -_compCurveDb(0, T, K, R) * 0.6 / 20);
+    var out = _silence(input.length, n);
+    var g = this._gainDb === undefined ? 0 : this._gainDb;   // smoothed gain in dB (<= 0)
+    for (var i = 0; i < n; i++) {
+      var peak = 0;
+      for (var c = 0; c < input.length; c++) {
+        var a = Math.abs(input[c][i]);
+        if (a > peak) peak = a;
+      }
+      var xdb = peak > 1e-9 ? 20 * Math.log10(peak) : -180;
+      var target = _compCurveDb(xdb, T, K, R) - xdb;
+      g += (target - g) * (target < g ? aCoef : rCoef);
+      var lin = Math.pow(10, g / 20) * makeup;
+      for (var c2 = 0; c2 < input.length; c2++) out[c2][i] = input[c2][i] * lin;
+    }
+    this._gainDb = g;
+    this.reduction = g;
+    return out;
+  };
   globalThis.DynamicsCompressorNode = DynamicsCompressorNode;
 
   // ── StereoPannerNode ────────────────────────────────────────────────────────
@@ -1307,6 +1347,101 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   };
   PannerNode.prototype.setOrientation = function(x, y, z) {
     this.orientationX.value = x; this.orientationY.value = y; this.orientationZ.value = z;
+  };
+  // Spatialization (Web Audio 1.25, PannerNode): distance model, cone and
+  // equal-power azimuth panning, evaluated per frame from the node's and the
+  // listener's a-rate position/orientation. HRTF has no dataset here and falls
+  // back to equal-power.
+  function _pn_norm(v) {
+    var l = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return l > 0 ? [v[0] / l, v[1] / l, v[2] / l] : null;
+  }
+  function _pn_dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function _pn_cross(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+  function _pn_azimuth(sl, L) {
+    // sl: listener to source vector; L: listener forward/up.
+    var dir = _pn_norm(sl);
+    if (!dir) return 0;
+    var fwd = _pn_norm(L.fwd);
+    var right = fwd && _pn_norm(_pn_cross(L.fwd, L.up));
+    if (!fwd || !right) return 0;
+    var up = _pn_cross(right, fwd);
+    var d = _pn_dot(dir, up);
+    var proj = _pn_norm([dir[0] - d * up[0], dir[1] - d * up[1], dir[2] - d * up[2]]);
+    if (!proj) return 0;
+    var az = Math.acos(Math.min(1, Math.max(-1, _pn_dot(proj, right)))) * 180 / Math.PI;
+    if (_pn_dot(proj, fwd) < 0) az = 360 - az;
+    return (az >= 0 && az <= 270) ? 90 - az : 450 - az;
+  }
+  // Positions feed distance maths that the WPT reference computes in double
+  // precision, so sample them as doubles rather than through `_paramBuf`.
+  function _pn_buf(param, n) {
+    var buf = new Float64Array(n);
+    param._fill(buf, _rt0, _rdt, n);
+    // A k-rate parameter holds its first frame's value for the whole quantum,
+    // connected inputs included.
+    if (param.automationRate === 'k-rate') buf.fill(buf[0]);
+    return buf;
+  }
+  PannerNode.prototype._process = function(byInput, n) {
+    var input = _input0(byInput, n);
+    var lis = this.context.listener;
+    var px = _pn_buf(this.positionX, n), py = _pn_buf(this.positionY, n), pz = _pn_buf(this.positionZ, n);
+    var ox = _pn_buf(this.orientationX, n), oy = _pn_buf(this.orientationY, n), oz = _pn_buf(this.orientationZ, n);
+    var lx = _pn_buf(lis.positionX, n), ly = _pn_buf(lis.positionY, n), lz = _pn_buf(lis.positionZ, n);
+    var fx = _pn_buf(lis.forwardX, n), fy = _pn_buf(lis.forwardY, n), fz = _pn_buf(lis.forwardZ, n);
+    var ux = _pn_buf(lis.upX, n), uy = _pn_buf(lis.upY, n), uz = _pn_buf(lis.upZ, n);
+    var ref = this.refDistance, maxD = this.maxDistance, roll = this.rolloffFactor;
+    var model = this.distanceModel;
+    var inner = this.coneInnerAngle, outer = this.coneOuterAngle, outerGain = this.coneOuterGain;
+    var out = _silence(2, n);
+    var mono = input.length === 1;
+    for (var i = 0; i < n; i++) {
+      var sl = [px[i] - lx[i], py[i] - ly[i], pz[i] - lz[i]];
+      var dist = Math.sqrt(_pn_dot(sl, sl));
+      var dg;
+      if (model === 'linear') {
+        var dc = Math.min(Math.max(dist, ref), maxD);
+        var rl = Math.min(Math.max(roll, 0), 1);
+        dg = maxD === ref ? 1 - rl : 1 - rl * (dc - ref) / (maxD - ref);
+      } else if (model === 'exponential') {
+        dg = ref > 0 ? Math.pow(Math.max(dist, ref) / ref, -roll) : 1;
+      } else {
+        var den = ref + roll * (Math.max(dist, ref) - ref);
+        dg = den > 0 ? ref / den : 1;
+      }
+      var cg = 1;
+      var od = _pn_norm([ox[i], oy[i], oz[i]]), sd = _pn_norm([-sl[0], -sl[1], -sl[2]]);
+      if (od && sd && !(inner === 360 && outer === 360)) {
+        var ang = Math.abs(Math.acos(Math.min(1, Math.max(-1, _pn_dot(od, sd)))) * 180 / Math.PI);
+        var hi = Math.abs(inner) / 2, ho = Math.abs(outer) / 2;
+        if (ang <= hi) cg = 1;
+        else if (ang >= ho) cg = outerGain;
+        else { var t = (ang - hi) / (ho - hi); cg = (1 - t) + outerGain * t; }
+      }
+      var gain = dg * cg;
+      var az = _pn_azimuth(sl, { fwd: [fx[i], fy[i], fz[i]], up: [ux[i], uy[i], uz[i]] });
+      if (az < -90) az = -180 - az; else if (az > 90) az = 180 - az;
+      if (mono) {
+        var x = (az + 90) / 180 * Math.PI / 2;
+        out[0][i] = input[0][i] * Math.cos(x) * gain;
+        out[1][i] = input[0][i] * Math.sin(x) * gain;
+      } else {
+        var l = input[0][i], r = input[1][i];
+        if (az <= 0) {
+          var x2 = (az + 90) / 90 * Math.PI / 2;
+          out[0][i] = (l + r * Math.cos(x2)) * gain;
+          out[1][i] = r * Math.sin(x2) * gain;
+        } else {
+          var x3 = az / 90 * Math.PI / 2;
+          out[0][i] = l * Math.cos(x3) * gain;
+          out[1][i] = (r + l * Math.sin(x3)) * gain;
+        }
+      }
+    }
+    return out;
   };
   globalThis.PannerNode = PannerNode;
 
@@ -1451,6 +1586,140 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   }
   ConvolverNode.prototype = Object.create(AudioNode.prototype);
   ConvolverNode.prototype.constructor = ConvolverNode;
+  // Web Audio 1.9, ConvolverNode: the equal-power scale applied to a
+  // normalized impulse response.
+  function _convScale(ir, normalize) {
+    if (!normalize) return 1;
+    var nch = ir.numberOfChannels, len = ir.length, power = 0;
+    for (var c = 0; c < nch; c++) {
+      var d = ir.getChannelData(c);
+      for (var i = 0; i < len; i++) power += d[i] * d[i];
+    }
+    power = Math.sqrt(power / (nch * len));
+    if (!isFinite(power) || power < 0.000125) power = 0.000125;
+    var scale = 1 / power * 0.00125 * (44100 / ir.sampleRate);
+    if (nch === 4) scale *= 0.5;
+    return scale;
+  }
+  // In-place radix-2 complex FFT of size re.length (a power of two);
+  // `inverse` applies the 1/N scale.
+  function _fft(re, im, inverse) {
+    var N = re.length, i, j, k, t;
+    for (i = 1, j = 0; i < N; i++) {
+      var bit = N >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (var len = 2; len <= N; len <<= 1) {
+      var ang = 2 * Math.PI / len * (inverse ? 1 : -1);
+      var wr = Math.cos(ang), wi = Math.sin(ang), half = len >> 1;
+      for (i = 0; i < N; i += len) {
+        var cr = 1, ci = 0;
+        for (k = 0; k < half; k++) {
+          var a = i + k, b = a + half;
+          var xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi;
+          re[a] += xr; im[a] += xi;
+          t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+    if (inverse) for (i = 0; i < N; i++) { re[i] /= N; im[i] /= N; }
+  }
+  // Uniform-partitioned FFT convolution, one block per render quantum: the
+  // response is cut into blocks of `n` frames, each block's spectrum is kept,
+  // and a delay line of input-block spectra is multiplied against them.
+  // Cost per quantum is O(P * N) for P partitions instead of O(len * n).
+  ConvolverNode.prototype._convState = function(n, irc, len, h) {
+    var N = 1;
+    while (N < 2 * n) N <<= 1;
+    var P = Math.ceil(len / n), parts = [];
+    for (var c = 0; c < irc; c++) {
+      var list = [];
+      for (var p = 0; p < P; p++) {
+        var re = new Float64Array(N), im = new Float64Array(N);
+        for (var i = 0; i < n && p * n + i < len; i++) re[i] = h[c][p * n + i];
+        _fft(re, im, false);
+        list.push({ re: re, im: im });
+      }
+      parts.push(list);
+    }
+    return { n: n, N: N, P: P, parts: parts, fdl: [], pos: 0, carry: [] };
+  };
+  ConvolverNode.prototype._process = function(byInput, n) {
+    var ir = this.buffer;
+    if (!ir || !ir.length) return _silence(1, n);
+    var irc = ir.numberOfChannels, len = ir.length;
+    // Input width per channelCountMode, capped at stereo (the node's limit).
+    var list = byInput[0] || [], maxIn = 1, i;
+    for (i = 0; i < list.length; i++) if (list[i].length > maxIn) maxIn = list[i].length;
+    var want = this.channelCountMode === 'explicit' ? this.channelCount
+             : this.channelCountMode === 'clamped-max' ? Math.min(maxIn, this.channelCount) : maxIn;
+    var input = _silence(Math.max(1, Math.min(want, 2)), n);
+    for (i = 0; i < list.length; i++) _addInto(input, list[i], n);
+    if (!this._irData || this._irSrc !== ir || this._irNorm !== this.normalize) {
+      var scale = _convScale(ir, this.normalize), data = [];
+      for (var c0 = 0; c0 < irc; c0++) {
+        var src = ir.getChannelData(c0), d = new Float32Array(len);
+        for (var i0 = 0; i0 < len; i0++) d[i0] = src[i0] * scale;
+        data.push(d);
+      }
+      this._irData = data; this._irSrc = ir; this._irNorm = this.normalize;
+      this._st = null;
+    }
+    // A mono response keeps the input width; longer responses are "true
+    // stereo" and always produce two channels.
+    var inCh = irc === 1 ? input.length : 2;
+    var st = this._st;
+    if (!st || st.n !== n || st.inCh !== inCh) {
+      st = this._st = this._convState(n, irc, len, this._irData);
+      st.inCh = inCh;
+      for (var k0 = 0; k0 < inCh; k0++) {
+        var fdl = [];
+        for (var p0 = 0; p0 < st.P; p0++) fdl.push({ re: new Float64Array(st.N), im: new Float64Array(st.N) });
+        st.fdl.push(fdl);
+      }
+    }
+    var N = st.N, P = st.P;
+    st.pos = (st.pos + P - 1) % P;           // newest spectrum replaces the oldest
+    for (var k = 0; k < inCh; k++) {
+      var slot = st.fdl[k][st.pos], sig = input[k] || input[0];
+      slot.re.fill(0); slot.im.fill(0);
+      for (i = 0; i < n; i++) slot.re[i] = sig[i];
+      _fft(slot.re, slot.im, false);
+    }
+    // Which (input channel, response channel) pairs feed each output channel.
+    var routes = irc === 1 ? input.map(function(_, o) { return [[o, 0]]; })
+               : irc === 2 ? [[[0, 0]], [[1, 1]]]
+               : [[[0, 0], [1, 2]], [[0, 1], [1, 3]]];
+    var out = _silence(routes.length, n);
+    if (!st.carry.length) for (var o0 = 0; o0 < routes.length; o0++) st.carry.push(new Float64Array(N));
+    var accRe = new Float64Array(N), accIm = new Float64Array(N);
+    for (var o = 0; o < routes.length; o++) {
+      accRe.fill(0); accIm.fill(0);
+      for (var r = 0; r < routes[o].length; r++) {
+        var kk = routes[o][r][0], cc = routes[o][r][1];
+        for (var p = 0; p < P; p++) {
+          var x = st.fdl[kk][(st.pos + p) % P], hh = st.parts[cc][p];
+          for (var f = 0; f < N; f++) {
+            accRe[f] += x.re[f] * hh.re[f] - x.im[f] * hh.im[f];
+            accIm[f] += x.re[f] * hh.im[f] + x.im[f] * hh.re[f];
+          }
+        }
+      }
+      _fft(accRe, accIm, true);
+      // Overlap-add: the first `n` frames are due now, the rest carries over.
+      var carry = st.carry[o], dst = out[o];
+      for (i = 0; i < n; i++) dst[i] = accRe[i] + carry[i];
+      for (i = 0; i < N - n; i++) carry[i] = (i + n < N ? carry[i + n] : 0) + accRe[i + n];
+      for (i = N - n; i < N; i++) carry[i] = 0;
+    }
+    return out;
+  };
   globalThis.ConvolverNode = ConvolverNode;
 
   // ── MediaElementAudioSourceNode ─────────────────────────────────────────────
@@ -1796,6 +2065,9 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     BaseAudioContext.call(this, sr, opts.renderSizeHint);
     this.length           = len;
     this.numberOfChannels = nch;
+    // §OfflineAudioContext: the destination is as wide as the rendered buffer.
+    this.destination.channelCount    = nch;
+    this.destination.maxChannelCount = nch;
     this._offline         = true;
     this._state           = 'suspended';
     this.oncomplete       = null;
@@ -2720,5 +2992,57 @@ mod tests_v8 {
         .unwrap();
         let ok = rt.eval("rejected === 'InvalidStateError'").unwrap();
         assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    /// BUG-1091: a rendered constant through one node, sampled at frame 200.
+    fn render_one(setup: &str) -> JsValue {
+        let rt = rt_with_web_audio();
+        rt.eval(&format!(
+            r#"
+            var ctx = new OfflineAudioContext(2, 512, 44100);
+            var src = ctx.createConstantSource(); src.offset.value = 1;
+            {setup}
+            src.start(0);
+            var rendered = null;
+            ctx.oncomplete = function(e) {{ rendered = e.renderedBuffer; }};
+            ctx.startRendering();
+            rendered.getChannelData(0)[200] + ',' + rendered.getChannelData(1)[200]
+            "#
+        ))
+        .unwrap()
+    }
+
+    /// Inverse distance model: ref 1 at distance 2 gives gain 0.5, then the
+    /// straight-ahead (azimuth 0) equal-power split applies cos/sin(pi/4).
+    #[test]
+    fn bug1091_panner_inverse_distance_attenuates() {
+        let v = render_one(
+            "var p = ctx.createPanner(); p.positionZ.value = -2; src.connect(p); p.connect(ctx.destination);",
+        );
+        let JsValue::String(s) = v else { panic!("string expected") };
+        let l: f64 = s.split(',').next().unwrap().parse().unwrap();
+        assert!((l - 0.5 * std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-5, "got {s}");
+    }
+
+    /// A one-sample impulse response delays and scales (normalize off).
+    #[test]
+    fn bug1091_convolver_applies_impulse_response() {
+        let v = render_one(
+            "var b = ctx.createBuffer(1, 4, 44100); b.getChannelData(0)[2] = 0.5;              var c = ctx.createConvolver(); c.normalize = false; c.buffer = b;              src.connect(c); c.connect(ctx.destination);",
+        );
+        let JsValue::String(s) = v else { panic!("string expected") };
+        let l: f64 = s.split(',').next().unwrap().parse().unwrap();
+        assert!((l - 0.5).abs() < 1e-6, "got {s}");
+    }
+
+    /// Full-scale input above threshold comes out quieter than a bypass.
+    #[test]
+    fn bug1091_compressor_reduces_loud_signal() {
+        let v = render_one(
+            "var k = ctx.createDynamicsCompressor(); k.ratio.value = 20; k.threshold.value = -40;              src.connect(k); k.connect(ctx.destination);",
+        );
+        let JsValue::String(s) = v else { panic!("string expected") };
+        let l: f64 = s.split(',').next().unwrap().parse().unwrap();
+        assert!(l > 0.0 && l < 0.9, "got {s}");
     }
 }
