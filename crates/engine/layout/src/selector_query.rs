@@ -15,6 +15,7 @@ use lumen_core::{ColorSpace, Size};
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
+    SvgColorInterpolation,
     matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
     BackgroundRepeat, BackgroundSize, BgSizeAxis, BlockStepAlign, BlockStepInsert, BlockStepRound,
@@ -1891,6 +1892,23 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("stroke-linejoin".into(), stroke_linejoin_to_css(style.svg_stroke_linejoin).into());
     m.insert("stroke-miterlimit".into(), format!("{}", style.svg_stroke_miterlimit));
     m.insert("stroke-dashoffset".into(), px_str(style.svg_stroke_dashoffset));
+    // SVG 2 §Geometry / §Painting (BUG-1094).
+    m.insert("cx".into(), length_to_css(&style.svg_cx));
+    m.insert("cy".into(), length_to_css(&style.svg_cy));
+    m.insert("r".into(), length_to_css(&style.svg_r));
+    m.insert("x".into(), length_to_css(&style.svg_x));
+    m.insert("y".into(), length_to_css(&style.svg_y));
+    m.insert("rx".into(), length_or_auto_to_css(&style.svg_rx));
+    m.insert("ry".into(), length_or_auto_to_css(&style.svg_ry));
+    m.insert("color-interpolation".into(), match style.svg_color_interpolation {
+        SvgColorInterpolation::Auto => "auto",
+        SvgColorInterpolation::Srgb => "srgb",
+        SvgColorInterpolation::LinearRgb => "linearrgb",
+    }.into());
+    m.insert("path-length".into(), match style.svg_path_length {
+        Some(n) => format!("{}", n),
+        None => "none".into(),
+    });
     m.insert("stroke-dasharray".into(), if style.svg_stroke_dasharray.is_empty() {
         "none".into()
     } else {

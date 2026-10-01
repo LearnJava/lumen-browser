@@ -43,9 +43,12 @@ use crate::style::{
     ScrollbarWidth,
     StrokeLinecap,
     StrokeLinejoin,
+    SvgColorInterpolation,
     SvgPaint,
     SvgPaintOrder,
     Visibility,
+    Length,
+    LengthOrAuto,
     parse_box_shadow_one,
     parse_cursor_kw,
     parse_length_q,
@@ -848,6 +851,44 @@ pub(in crate::style) fn apply_decl_paint(
                 style.svg_stroke_dashoffset = v;
             }
         }
+        // SVG 2 §Geometry (BUG-1094): `cx`/`cy`/`x`/`y` `<length-percentage>`,
+        // `r` `<length-percentage [0,∞]>`, `rx`/`ry` `auto | <length-percentage [0,∞]>`.
+        "cx" => { set_svg_geometry(&mut style.svg_cx, val, em_basis, viewport, is_quirks, false); }
+        "cy" => { set_svg_geometry(&mut style.svg_cy, val, em_basis, viewport, is_quirks, false); }
+        "x" => { set_svg_geometry(&mut style.svg_x, val, em_basis, viewport, is_quirks, false); }
+        "y" => { set_svg_geometry(&mut style.svg_y, val, em_basis, viewport, is_quirks, false); }
+        "r" => { set_svg_geometry(&mut style.svg_r, val, em_basis, viewport, is_quirks, true); }
+        "rx" | "ry" => {
+            let target = if prop == "rx" { &mut style.svg_rx } else { &mut style.svg_ry };
+            if val.trim().eq_ignore_ascii_case("auto") {
+                *target = LengthOrAuto::Auto;
+            } else {
+                let mut l = Length::Px(0.0);
+                if set_svg_geometry(&mut l, val, em_basis, viewport, is_quirks, true) {
+                    *target = LengthOrAuto::Length(l);
+                }
+            }
+        }
+        "color-interpolation" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                style.svg_color_interpolation = SvgColorInterpolation::Auto;
+            } else if v.eq_ignore_ascii_case("srgb") {
+                style.svg_color_interpolation = SvgColorInterpolation::Srgb;
+            } else if v.eq_ignore_ascii_case("linearrgb") {
+                style.svg_color_interpolation = SvgColorInterpolation::LinearRgb;
+            }
+        }
+        "path-length" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.svg_path_length = None;
+            } else if let Ok(n) = v.parse::<f32>()
+                && n.is_finite()
+            {
+                style.svg_path_length = Some(n);
+            }
+        }
         "paint-order" => {
             // CSS Fill & Stroke L3 §6 / SVG 2 §13.7.
             if let Some(o) = SvgPaintOrder::parse(val) {
@@ -1051,4 +1092,39 @@ fn svg_paint_url_id(v: &str) -> Option<String> {
         .or_else(|| inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
         .unwrap_or(inner);
     inner.strip_prefix('#').map(str::to_owned).filter(|id| !id.is_empty())
+}
+
+/// SVG 2 §Geometry (BUG-1094): parses a `<length-percentage>` into `target`.
+/// Absolute/`em`-relative values resolve to `Px` (computed-value time); `%`
+/// and `calc()` mixing `%` stay typed. `non_negative` rejects a negative
+/// literal (`r`/`rx`/`ry`) and clamps a resolved negative `calc()` to 0.
+/// Returns whether the declaration was valid.
+fn set_svg_geometry(
+    target: &mut Length,
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+    non_negative: bool,
+) -> bool {
+    let Some(len) = parse_length_q(val, is_quirks) else { return false };
+    let resolved = match len {
+        Length::Percent(p) => {
+            if non_negative && p < 0.0 {
+                return false;
+            }
+            Length::Percent(p)
+        }
+        other => match other.resolve(em_basis, None, viewport) {
+            Some(px) => {
+                if non_negative && px < 0.0 && !matches!(other, Length::Calc(_)) {
+                    return false;
+                }
+                Length::Px(if non_negative { px.max(0.0) } else { px })
+            }
+            None => other,
+        },
+    };
+    *target = resolved;
+    true
 }

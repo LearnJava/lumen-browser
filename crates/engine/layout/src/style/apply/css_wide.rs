@@ -670,6 +670,18 @@ fn apply_css_wide_keyword_with(
         "stroke-dashoffset" => {
             style.svg_stroke_dashoffset = if inh_only_inherit { inherited.svg_stroke_dashoffset } else { init.svg_stroke_dashoffset };
         }
+        // SVG 2 §Geometry (BUG-1094): non-inherited; `color-interpolation` inherited.
+        "cx" => style.svg_cx = if inh_only_inherit { inherited.svg_cx.clone() } else { init.svg_cx.clone() },
+        "cy" => style.svg_cy = if inh_only_inherit { inherited.svg_cy.clone() } else { init.svg_cy.clone() },
+        "r" => style.svg_r = if inh_only_inherit { inherited.svg_r.clone() } else { init.svg_r.clone() },
+        "x" => style.svg_x = if inh_only_inherit { inherited.svg_x.clone() } else { init.svg_x.clone() },
+        "y" => style.svg_y = if inh_only_inherit { inherited.svg_y.clone() } else { init.svg_y.clone() },
+        "rx" => style.svg_rx = if inh_only_inherit { inherited.svg_rx.clone() } else { init.svg_rx.clone() },
+        "ry" => style.svg_ry = if inh_only_inherit { inherited.svg_ry.clone() } else { init.svg_ry.clone() },
+        "path-length" => style.svg_path_length = if inh_only_inherit { inherited.svg_path_length } else { init.svg_path_length },
+        "color-interpolation" => {
+            style.svg_color_interpolation = if inh { inherited.svg_color_interpolation } else { init.svg_color_interpolation };
+        }
         // CSS Fill & Stroke L3 §6 — paint-order is inherited: unset/revert → inherited.
         "paint-order" => {
             style.paint_order = if inh { inherited.paint_order } else { init.paint_order };

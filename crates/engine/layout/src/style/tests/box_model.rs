@@ -493,6 +493,37 @@ use super::*;
 
     // === clip-rule parsing (SVG §14.3.4) ===
 
+    // BUG-1094 — SVG 2 geometry / painting CSS properties.
+    #[test]
+    fn svg_geometry_properties_parse_and_resolve_em() {
+        use crate::style::Length;
+        assert_eq!(ts_prop("cx", "-10px").svg_cx, Length::Px(-10.0));
+        assert_eq!(ts_prop("cy", "0.5em").svg_cy, Length::Px(8.0));
+        assert_eq!(ts_prop("x", "40%").svg_x, Length::Percent(40.0));
+        assert_eq!(ts_prop("r", "calc(10px + 0.5em)").svg_r, Length::Px(18.0));
+        // Negative `r` is invalid: the declaration is dropped.
+        assert_eq!(ts_prop("r", "-1px").svg_r, Length::Px(0.0));
+        assert_eq!(ts_prop("r", "-10%").svg_r, Length::Px(0.0));
+    }
+
+    #[test]
+    fn svg_rx_ry_accept_auto_and_reject_negative() {
+        use crate::style::{Length, LengthOrAuto};
+        assert_eq!(ts_prop("rx", "auto").svg_rx, LengthOrAuto::Auto);
+        assert_eq!(ts_prop("ry", "10px").svg_ry, LengthOrAuto::Length(Length::Px(10.0)));
+        assert_eq!(ts_prop("rx", "-1px").svg_rx, LengthOrAuto::Auto);
+    }
+
+    #[test]
+    fn svg_color_interpolation_and_path_length() {
+        use crate::style::SvgColorInterpolation as C;
+        assert_eq!(ComputedStyle::root().svg_color_interpolation, C::Srgb);
+        assert_eq!(ts_prop("color-interpolation", "linearRGB").svg_color_interpolation, C::LinearRgb);
+        assert_eq!(ts_prop("color-interpolation", "none").svg_color_interpolation, C::Srgb);
+        assert_eq!(ts_prop("path-length", "100").svg_path_length, Some(100.0));
+        assert_eq!(ts_prop("path-length", "none").svg_path_length, None);
+    }
+
     #[test]
     fn clip_rule_default_is_nonzero() {
         assert_eq!(ComputedStyle::root().svg_clip_rule, FillRule::NonZero);

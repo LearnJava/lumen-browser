@@ -2315,6 +2315,14 @@ var _LUMEN_LENGTH_PROPERTIES = {
     'inset-inline-end':   { allowAuto: true, nonNegative: false },
     'inset-block-start':  { allowAuto: true, nonNegative: false },
     'inset-block-end':    { allowAuto: true, nonNegative: false },
+    // SVG 2 §Geometry (BUG-1094).
+    'cx': { allowAuto: false, nonNegative: false },
+    'cy': { allowAuto: false, nonNegative: false },
+    'x':  { allowAuto: false, nonNegative: false },
+    'y':  { allowAuto: false, nonNegative: false },
+    'r':  { allowAuto: false, nonNegative: true },
+    'rx': { allowAuto: true,  nonNegative: true },
+    'ry': { allowAuto: true,  nonNegative: true },
 };
 
 // CSS Scroll Snap L1 §8 (CSSOM-2/BUG-484, срез 19): kept out of
@@ -2409,6 +2417,7 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
+    'color-interpolation': ['auto', 'srgb', 'linearrgb'],
     // CSS Rhythmic Sizing L1 §3 (BUG-517) — `block-step-size` is a
     // `none | <length [0,∞]>` grammar, not a flat keyword list, so it gets
     // its own canon function (`_lumen_css_canonical_block_step_size`,
