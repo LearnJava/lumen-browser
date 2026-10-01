@@ -281,7 +281,7 @@ pub(crate) fn anon_inline_run(
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         style: Arc::new(style),
-        kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None, row_continuation_width: None },
+        kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
         children: vec![],
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),

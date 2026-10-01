@@ -1053,8 +1053,9 @@ pub(super) fn dispatch_box(
     }
 
     // InlineRun обрабатывается до основного match.
-    if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width } = &mut b.kind {
+    if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width, first_line_inset } = &mut b.kind {
         let row_continuation_width = *row_continuation_width;
+        let first_line_inset = *first_line_inset;
         if let Some(m) = measurer {
             // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
             // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
@@ -1063,7 +1064,7 @@ pub(super) fn dispatch_box(
             } else {
                 content_width
             };
-            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
+            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport) + first_line_inset;
             // UAX #9 P2–I2 once per paragraph, before any wrapping trial: the
             // result splits segments at embedding-level boundaries, and every
             // re-wrap (::first-line pass B, text-wrap: balance/pretty) must see
@@ -1450,6 +1451,7 @@ pub(super) fn dispatch_box(
                     b_collapses_bottom,
                     seen_inflow_child: false,
                     inside_marker_w: 0.0,
+                    inside_marker_h: 0.0,
                     abs_deferred: Vec::new(),
                     s,
                     em,
@@ -1691,6 +1693,7 @@ pub(super) fn dispatch_box(
                                 lines: vec![line],
                                 first_line_style: None,
                                 row_continuation_width: None,
+                                first_line_inset: 0.0,
                             },
                             children: Vec::new(),
                             col_span: 1,

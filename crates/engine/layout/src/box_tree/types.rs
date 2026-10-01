@@ -343,6 +343,13 @@ pub enum BoxKind {
         /// width. Always `None` again once layout of this box is done; the
         /// `InlineBlockRow` loop reads the field, not any later pass.
         row_continuation_width: Option<f32>,
+        /// CSS Lists L3 §2.4 — `list-style-position: inside`: width of the
+        /// marker that shares this run's first line box. Added to the first
+        /// line's start offset (like `text-indent`) so only line 0 is pushed
+        /// right and wrapped lines return to the content edge. Set by the
+        /// parent block-flow loop right before layout (absolute, not
+        /// accumulated — relayout-safe); `0.0` everywhere else.
+        first_line_inset: f32,
     },
     /// Анонимный контейнер для горизонтального потока `display: inline-block`
     /// элементов. Сами дочерние боксы хранятся в `LayoutBox.children`. При
