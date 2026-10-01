@@ -51,12 +51,14 @@ mod smil;
 mod spell_menu;
 mod state;
 mod tabs_cmd;
+mod doc_select;
 mod text_drag_select;
 mod text_input;
 mod transition_events;
 mod viewport;
 mod viewport_sync;
 
+pub(crate) use doc_select::build_page_with_selection_highlight;
 pub(crate) use state::Lumen;
 pub(crate) use focused_field_snapshot::FocusedFieldSnapshot;
 pub(crate) use select_dropdown_snapshot::SelectDropdownSnapshot;

@@ -1955,3 +1955,54 @@
         }
     }
 
+
+    // ── CSS UI L4 §6.2: `user-select` in the `::selection` highlight ────────
+
+    /// Fill rects emitted by `build_display_list_with_selection` over the
+    /// selection `first text node .. last text node` of `<p>`'s children.
+    fn selection_fills(css: &str) -> usize {
+        let doc = lumen_html_parser::parse("<p>aa <span>bb</span> cc</p>");
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
+        let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        fn collect_texts(
+            doc: &lumen_dom::Document,
+            n: lumen_dom::NodeId,
+            out: &mut Vec<lumen_dom::NodeId>,
+        ) {
+            if matches!(doc.get(n).data, lumen_dom::NodeData::Text(_)) {
+                out.push(n);
+            }
+            for &c in &doc.get(n).children {
+                collect_texts(doc, c, out);
+            }
+        }
+        let mut texts = Vec::new();
+        collect_texts(&doc, doc.root(), &mut texts);
+        let (first, last) = (texts[0], *texts.last().unwrap());
+        let sel = SelectionHighlight {
+            range: lumen_dom::Range {
+                start: lumen_dom::DomPosition { container: first, offset: 0 },
+                end: lumen_dom::DomPosition { container: last, offset: 3 },
+            },
+            fg_color: None,
+            bg_color: Color { r: 1, g: 2, b: 3, a: 255 },
+        };
+        let base = fills(&build_display_list(&tree)).len();
+        let with = build_display_list_with_selection(&tree, Some(&sel));
+        fills(&with).len() - base
+    }
+
+    #[test]
+    fn selection_highlights_every_node_between_the_endpoints() {
+        // "aa " + "bb" (between, neither endpoint) + " cc" merge into ONE
+        // same-style fragment whose own node is the start endpoint — one fill
+        // covering all of it (the `bb` node is not dropped).
+        assert_eq!(selection_fills(""), 1);
+    }
+
+    #[test]
+    fn selection_skips_user_select_none_text() {
+        // `bb` no longer merges with its neighbours and gets no fill: "aa " and
+        // " cc" are highlighted, the `none` span between them is not.
+        assert_eq!(selection_fills("span { user-select: none }"), 2);
+    }

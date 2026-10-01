@@ -44,7 +44,7 @@ use forms::collect_forms;
 mod selection;
 pub use selection::{
     delete_range, insert_paragraph_break, insert_text_at, locate_text_offset_range,
-    node_child_count, node_length, node_text_content, range_text, split_text_node,
+    node_child_count, node_length, node_text_content, range_text, range_text_filtered, split_text_node,
     DomPosition, Range, Selection,
 };
 

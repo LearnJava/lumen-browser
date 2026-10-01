@@ -899,6 +899,9 @@ impl Lumen {
                     // click above landed on a typeable field — `focused_node`/
                     // `focused_frame` are this click's outcome by now.
                     self.begin_text_drag_select(x_css, y_css);
+                    // CSS UI L4 §6.2: page-text drag selection with
+                    // `user-select` enforced; a field drag armed above wins.
+                    self.begin_doc_select(x_css, y_css);
                 }
             }
         } else {
@@ -1051,6 +1054,7 @@ impl Lumen {
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —
             // the selection itself stays, only the drag tracking stops.
             self.text_drag = None;
+            self.doc_select = None;
             // Курсор был «зафиксирован» как Pointer пока тянули
             // thumb; теперь пересчитаем по hover-точке текущего
             // положения курсора (CursorMoved-event на release сам

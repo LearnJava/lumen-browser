@@ -1150,6 +1150,11 @@ pub(crate) struct Lumen {
     /// this struct (`scroll_drag`, `panel_resize`, `dnd_state`) already
     /// follows.
     pub(crate) text_drag: Option<super::text_drag_select::TextDragTarget>,
+    /// Mouse-drag selection over ordinary page text in progress — armed by
+    /// [`super::doc_select::Lumen::begin_doc_select`] on a left press, extended
+    /// on `CursorMoved`, disarmed on release (the selection itself stays in
+    /// `Document::selection`). Carries the `user-select: contain` scope.
+    pub(crate) doc_select: Option<super::doc_select::DocSelectDrag>,
     /// `(индекс фрейма, узел ЕГО документа)` под НАЖАТОЙ кнопкой мыши внутри
     /// содержимого фрейма — `:active` под-документа (BUG-480 срез 23).
     ///

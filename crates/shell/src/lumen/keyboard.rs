@@ -575,6 +575,16 @@ impl Lumen {
             return;
         }
 
+        // Ctrl+C over a page-text selection copies it (minus `user-select:
+        // none` text). A focused typeable field keeps its own handling.
+        if code == KeyCode::KeyC
+            && self.modifiers == ModifiersState::CONTROL
+            && self.focused_node.is_none_or(|n| self.typeable_field(n).is_none())
+            && self.copy_page_selection()
+        {
+            return;
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };

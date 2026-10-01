@@ -733,6 +733,30 @@ fn user_select_none() {
 }
 
 #[test]
+fn user_select_webkit_alias() {
+    let root = lay("<p>x</p>", "p { -webkit-user-select: none; }");
+    assert_eq!(first_p_style(&root).user_select, UserSelect::None);
+}
+
+#[test]
+fn user_select_none_text_does_not_merge_with_neighbours() {
+    // `bb` is `user-select: none`; it must stay its own fragment so selection
+    // and copy can treat it separately from "aa " / " cc".
+    let root = lay("<p>aa <span>bb</span> cc</p>", "span { user-select: none; }");
+    fn frags(b: &crate::LayoutBox, out: &mut Vec<String>) {
+        if let crate::BoxKind::InlineRun { lines, .. } = &b.kind {
+            out.extend(lines.iter().flatten().map(|f| f.text.clone()));
+        }
+        for c in &b.children {
+            frags(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    frags(&root, &mut out);
+    assert_eq!(out.len(), 3, "{out:?}");
+}
+
+#[test]
 fn user_select_text() {
     let root = lay("<p>x</p>", "p { user-select: text; }");
     assert_eq!(first_p_style(&root).user_select, UserSelect::Text);

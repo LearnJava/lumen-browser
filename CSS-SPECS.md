@@ -604,7 +604,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `cursor` | ✅ | 17 keywords; OS cursor via winit |
-| `user-select` | 🟡 | HitTestResult wire-up ✅; text selection enforcement ⬜ |
+| `user-select` | ✅ | inherited; `-webkit-user-select` alias. Enforced end-to-end: `none` — no caret/anchor (`caret_at_point`), no `::selection` highlight (`selection_rects`, paint `frag_selection_highlight`), dropped from Ctrl+C (`user_select_none_text_nodes` → `range_text_filtered`), never merged into a selectable inline fragment (`text_rendering_eq`); `all` — a press selects the whole element (`select_scope_at_point`); `contain` — a drag that starts inside is clamped to the element (`clamp_to_range`); `auto`/`text` — plain. Mouse drag over page text (`shell/lumen/doc_select.rs`) drives `Document::selection`; highlight painted before the glyphs. Gap: the field-internal text of `<input>`/`<textarea>` keeps its own caret model (ignores `user-select`) |
 | `pointer-events` | ✅ | inherited (CSS UI L4 §6.1) incl. `inherit`/`initial`/`unset`/`revert`; `none` skipped by `hit_test`/`hit_test_all` (shell click/hover/cursor, `elementFromPoint`) and `collect_clickable_elements`; inline elements gated by their own frag style, so a child `auto` inside a `none` parent is a target; SVG `visible*`/`painted`/`fill`/`stroke`/`all` parsed, treated as `auto` outside SVG geometry ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |

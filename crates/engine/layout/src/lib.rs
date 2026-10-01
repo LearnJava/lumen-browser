@@ -109,7 +109,10 @@ pub use property_trees::{
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
-pub use selection::{caret_at_point, selection_rects};
+pub use selection::{
+    caret_at_point, clamp_to_range, node_between, select_scope_at_point, selection_rects,
+    user_select_none_text_nodes, SelectScope,
+};
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
 pub use style::{compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style};
 pub use selector_query::{
