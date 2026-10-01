@@ -304,17 +304,33 @@ fn clickable_skips_pointer_events_none_link() {
 
 #[test]
 fn clickable_pointer_events_none_skips_element_but_not_children() {
-    // Parent has pointer-events:none; child link has default (auto).
+    // Parent has pointer-events:none; child link opts back in with `auto`.
     // Child must still be clickable even though parent is not.
     let doc = lumen_html_parser::parse(
-        r#"<div style="pointer-events:none"><a href="/child">Child</a></div>"#,
+        r#"<div style="pointer-events:none"><a href="/child" style="pointer-events:auto">Child</a></div>"#,
     );
     let sheet = lumen_css_parser::parse("");
     let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
     let elems = collect_clickable_elements(&root, &doc);
     assert!(
         elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/child")),
-        "child link inside pointer-events:none parent must remain clickable"
+        "child link with pointer-events:auto inside a none parent must remain clickable"
+    );
+}
+
+#[test]
+fn clickable_pointer_events_none_is_inherited_by_child_link() {
+    // `pointer-events` is inherited: a link with no declaration of its own
+    // inside a `none` parent computes to `none` and is not clickable.
+    let doc = lumen_html_parser::parse(
+        r#"<div style="pointer-events:none"><a href="/child" style="display:block">Child</a></div>"#,
+    );
+    let sheet = lumen_css_parser::parse("");
+    let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let elems = collect_clickable_elements(&root, &doc);
+    assert!(
+        !elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/child")),
+        "inherited pointer-events:none link must not be in clickable set"
     );
 }
 

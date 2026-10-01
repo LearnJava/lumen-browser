@@ -605,7 +605,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `cursor` | ✅ | 17 keywords; OS cursor via winit |
 | `user-select` | 🟡 | HitTestResult wire-up ✅; text selection enforcement ⬜ |
-| `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
+| `pointer-events` | ✅ | inherited (CSS UI L4 §6.1) incl. `inherit`/`initial`/`unset`/`revert`; `none` skipped by `hit_test`/`hit_test_all` (shell click/hover/cursor, `elementFromPoint`) and `collect_clickable_elements`; inline elements gated by their own frag style, so a child `auto` inside a `none` parent is a target; SVG `visible*`/`painted`/`fill`/`stroke`/`all` parsed, treated as `auto` outside SVG geometry ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |
 | `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17) |

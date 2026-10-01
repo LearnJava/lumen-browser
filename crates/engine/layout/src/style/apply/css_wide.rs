@@ -355,6 +355,9 @@ fn apply_css_wide_keyword_with(
         "cursor" => {
             style.cursor = if inh { inherited.cursor } else { init.cursor };
         }
+        "pointer-events" => {
+            style.pointer_events = if inh { inherited.pointer_events } else { init.pointer_events };
+        }
         "writing-mode" => {
             style.writing_mode = if inh { inherited.writing_mode } else { init.writing_mode };
         }

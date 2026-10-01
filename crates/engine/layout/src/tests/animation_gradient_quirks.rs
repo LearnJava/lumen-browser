@@ -768,16 +768,52 @@ fn scroll_behavior_inherited() {
 }
 
 #[test]
-fn pointer_events_not_inherited() {
+fn pointer_events_inherited() {
     let root = lay(
         "<div><p>x</p></div>",
         "div { pointer-events: none; }",
     );
     let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
     let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-    // НЕ наследуется — у p default Auto.
-    assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+    // Наследуется (CSS UI L4 §6.1: Inherited: yes) — p видит none от div.
+    assert_eq!(p.style.pointer_events, PointerEvents::None);
     assert_eq!(div.style.pointer_events, PointerEvents::None);
+}
+
+#[test]
+fn pointer_events_child_can_override_inherited_none() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: auto; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+}
+
+#[test]
+fn pointer_events_css_wide_keywords() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: auto; }          p { pointer-events: inherit; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::None);
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: initial; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: unset; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::None, "unset на inherited = inherit");
 }
 
 #[test]

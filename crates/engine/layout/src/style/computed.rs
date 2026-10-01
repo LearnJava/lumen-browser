@@ -556,7 +556,9 @@ pub struct ComputedStyle {
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
-    /// CSS Pointer Events L1. Default `auto`. Не наследуется.
+    /// CSS UI L4 §6.1 / Pointer Events L1. Default `auto`. **Наследуется**
+    /// (`Inherited: yes`): потомок `pointer-events: none` тоже не цель, пока
+    /// сам не вернёт `auto`/`all`.
     pub pointer_events: PointerEvents,
     /// CSS Pointer Events L3 / Touch Events — `touch-action`. NOT inherited. Initial: `Auto`.
     /// Phase 0: parse + store; обработка touch-жестов — P3 task.
@@ -1602,9 +1604,9 @@ impl ComputedStyle {
             justify_content: AlignValue::Auto,
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
-            // Will Change / Pointer Events — не наследуются.
+            // Will Change — не наследуется; Pointer Events — наследуется.
             will_change: Vec::new(),
-            pointer_events: PointerEvents::Auto,
+            pointer_events: inherited.pointer_events,
             touch_action: TouchAction::Auto,
             appearance: Appearance::Auto,
             field_sizing: FieldSizing::Fixed,
