@@ -1,6 +1,6 @@
 # BUG-1092 — 13 SVG/SMIL WebIDL-глобалов не заведены вовсе: `SVGAElement`, `SVGAngle`, `SVGNumber`, `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGUseElementShadowRoot`, `ShadowAnimation`, `TimeEvent`, `SVGMPathElement`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6)
 **Тип:** пробел реализации — глобальные конструкторы SVG DOM не зарегистрированы на `window`.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 53, `svg`)
 **Область:** js — `crates/js/src/svg.rs` (88 присвоений `window.SVG* = ...`, но не для этих 13 имён; `createSVGNumber()`/`createSVGAngle()` на `SVGSVGElement.prototype`, `crates/js/src/svg.rs:522-523`, возвращают голый объект-литерал `{ value: 0, ... }`, а не экземпляр реального класса)
@@ -45,3 +45,7 @@ TimeEvent
 ## Не проверялось
 
 - Полный список остальных `fe*`-элементов вне `SVGAnimatedNumber-initial-values.html` (их собственные `idlharness`-провалы, если есть, могли попасть в общий пул `svg/idlharness.window.html` под уже учтённые 145/860 — не разделено по элементам).
+
+## Исправление
+
+`crates/js/src/svg.rs`: заведены `SVGNumber`, `SVGAngle` (единицы deg/rad/grad, парсинг `valueAsString`), `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGMPathElement` (`<mpath>`), `TimeEvent`, `ShadowAnimation`, `SVGUseElementShadowRoot` (три последних — только при наличии `Event`/`Animation`/`ShadowRoot`); `createSVGNumber()`/`createSVGAngle()` возвращают типизированные экземпляры; 11 недостающих `fe*`-элементов добавлены в `SVG_TAG_MAP` с `SVGAnimated*`-атрибутами. `SVGAElement` к этому моменту уже существовал (GAP-INTERESTINVOKER). Форма прототипов (члены на инстансе, не на прототипе) — по-прежнему [BUG-1093](BUG-1093-OPEN.md).
