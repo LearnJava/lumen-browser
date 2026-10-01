@@ -438,35 +438,39 @@ impl FlushHandles {
             );
         }
         // BUG-1211 (post-collectors): when the incremental cascade+layout
-        // path ran, re-walk only the subtrees `dirty_roots` names instead of
-        // the whole document — the four collectors below were, until this
-        // slice, always O(whole document) regardless of how small the
-        // incremental delta was, which is what left BUG-1211 open even
-        // after the cascade+layout part went incremental (see the bug
-        // file's "Частичный фикс" entry: ~90-120ms per flush here, vs.
-        // 2-12µs for cascade+layout, on N=1500). `find_dirty_root_boxes`
-        // locates each root's *fresh* box (present in `layout_root` even
-        // when reused wholesale by the graft — reused subtrees keep their
-        // node ids); the collectors below then only touch those subtrees'
-        // nodes, and `prev_node_ids` (computed against the tree *before*
-        // this restyle, back in `try_incremental_flush`) is evicted first
-        // so a node the mutation removed from the DOM does not linger in
-        // the caches with stale geometry/style forever.
+        // path ran, the four collectors below re-walk only what could have
+        // changed instead of the whole document — they were, until that slice,
+        // always O(whole document) regardless of how small the incremental delta
+        // was, which is what left BUG-1211 open even after the cascade+layout
+        // part went incremental (see the bug file's "Частичный фикс" entry:
+        // ~90-120ms per flush here, vs. 2-12µs for cascade+layout, on N=1500).
+        //
+        // BUG-1238: "what could have changed" is wider than the `dirty_roots`
+        // subtrees — a sibling after a resized box is translated wholesale and an
+        // ancestor may have grown, neither named by a root. `ScopedCollection`
+        // walks the fresh tree for those too (pruning at subtrees the cascade
+        // left alone whose published rect did not move). `prev_node_ids`
+        // (computed against the tree *before* this restyle, back in
+        // `try_incremental_flush`) is evicted first so a node the mutation
+        // removed from the DOM does not linger in the caches with stale
+        // geometry/style forever.
+        let collect_t0 = std::time::Instant::now();
         if let Some((dirty_roots, prev_node_ids, _)) = &incr_scope {
-            let scoped_roots = lumen_layout::find_dirty_root_boxes(&layout_root, dirty_roots);
-            {
-                let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
-                for nid in prev_node_ids {
-                    lr.remove(nid);
-                }
-                lumen_layout::collect_layout_rects_scoped(&doc_guard, &scoped_roots, &mut lr);
+            let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
+            let plan = lumen_layout::ScopedCollection::plan(
+                &layout_root, dirty_roots, counters.clean_subtrees(), &lr, viewport,
+            );
+            for nid in prev_node_ids {
+                lr.remove(nid);
             }
+            plan.collect_layout_rects(&doc_guard, &mut lr);
+            drop(lr);
             {
                 let mut cr = self.client_rects.lock().unwrap_or_else(|e| e.into_inner());
                 for nid in prev_node_ids {
                     cr.remove(nid);
                 }
-                lumen_layout::collect_client_rects_scoped(&doc_guard, &scoped_roots, &mut cr);
+                plan.collect_client_rects(&doc_guard, &mut cr);
             }
             if self.computed_styles_needed.load(Ordering::Relaxed) {
                 let mut cs = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
@@ -480,18 +484,16 @@ impl FlushHandles {
                 // scroll-into-view read runs the real flush, THEN
                 // `getComputedStyle` sets `computed_styles_needed` on the
                 // NEXT flush, whose `dirty_roots` is empty because nothing
-                // changed since). Scoping to `dirty_roots` in that case
-                // would leave the entire map empty forever — fall back to
-                // one full collect exactly when this is that first-ever
-                // collect, same as the always-on `layout_rects`/
-                // `client_rects` above got for free by never being gated.
+                // changed since). Scoping to the plan in that case would leave
+                // the entire map empty forever — fall back to one full collect
+                // exactly when this is that first-ever collect, same as the
+                // always-on `layout_rects`/`client_rects` above got for free
+                // by never being gated.
                 if self.computed_styles_collected.load(Ordering::Relaxed) {
                     for nid in prev_node_ids {
                         cs.remove(nid);
                     }
-                    lumen_layout::collect_computed_styles_scoped(
-                        &doc_guard, &layout_root, dirty_roots, viewport, &mut cs,
-                    );
+                    plan.collect_computed_styles(&doc_guard, viewport, &mut cs);
                 } else {
                     *cs = lumen_layout::collect_computed_styles(
                         &layout_root, &doc_guard, Some(&counters), viewport,
@@ -515,6 +517,7 @@ impl FlushHandles {
                 self.computed_styles_collected.store(true, Ordering::Relaxed);
             }
         }
+        let collect_ms = collect_t0.elapsed().as_secs_f64() * 1000.0;
         // BUG-935 S43: skip while the page has never read the corresponding
         // cache — see the fields' doc comments. Each of the two natives that
         // can set the flag calls `maybe_flush` right after, so a page's very
@@ -589,8 +592,9 @@ impl FlushHandles {
         // `[js-stall]` sample can be matched to its forced-reflow count.
         if lumen_paint::frame_log_enabled() {
             eprintln!(
-                "[engine] maybe_flush done {:.1}ms path={} dirty_roots={} touched={}",
+                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={}",
                 flush_t0.elapsed().as_secs_f64() * 1000.0,
+                collect_ms,
                 if incr_scope.is_some() { "incremental" } else { "full" },
                 incr_scope.as_ref().map_or(0, |(roots, _, _)| roots.len()),
                 touched.nodes.len(),
