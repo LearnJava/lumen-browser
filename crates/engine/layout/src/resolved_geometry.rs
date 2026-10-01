@@ -40,6 +40,16 @@ use crate::style::{BoxSizing, ComputedStyle, Display, FloatSide, LengthOrAuto, P
 /// collides with a real property; readers of the resolved view skip it.
 pub const COMPUTED_VALUE_KEY_PREFIX: &str = "computed:";
 
+/// Marker key (BUG-1191) on a snapshot entry published for an element that owns
+/// no `LayoutBox` — an empty inline, a `display: none` /
+/// `content-visibility: hidden` descendant. The entry carries the element's
+/// cascaded values so `getComputedStyle` answers like Chrome, but «has an
+/// entry» no longer means «was laid out»; `innerText`/`checkVisibility` read
+/// this marker (via `_lumen_get_computed_style`, the one key under the prefix
+/// it answers) to tell the two apart. Under [`COMPUTED_VALUE_KEY_PREFIX`], so
+/// it never shows up as a property.
+pub const BOXLESS_KEY: &str = "computed:-lumen-boxless";
+
 /// Inserts the used value `v` for `name`, keeping the displaced computed value
 /// under [`COMPUTED_VALUE_KEY_PREFIX`] when the two differ.
 fn set_used(m: &mut HashMap<String, String>, name: &str, v: String) {
