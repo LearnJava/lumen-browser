@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-01",
  "counts": {
-  "open": 144,
-  "fixed": 1027,
+  "open": 143,
+  "fixed": 1029,
   "inprogress": 0,
   "wontfix": 1
  },
- "total_bugs": 1172,
+ "total_bugs": 1173,
  "phases": [
   {
    "id": "P0",
@@ -7919,24 +7919,17 @@
    "date": null,
    "debtor": true
   },
-  "BUG-1159": {
-   "status": "open",
-   "title": "Range: `compareBoundaryPoints` сравнивает номера узлов арены вместо tree order и не бросает `NotSupportedError`/`WrongDocumentError`; `comparePoint` — `return 0…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — объектный литерал Range)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1160": {
-   "status": "open",
-   "title": "`Range-mutations-dataChange.html` — 1699 FAIL `DOM node limit exceeded` (страница зовёт `setupRangeTests()` сотни раз, живых узлов мало), `replaceData` — 37; `R…",
-   "component": "dom/js (`MAX_DOM_NODES` 50 000 в `crates/engine/dom/src/lib.rs:129` считает `nodes.len()`, отсоединённые узлы возвращаются только 30-секундным GC-тиком `about_to_wait.rs:1740`; причина зависаний не локализована)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1161": {
    "status": "open",
    "title": "Документ из `createHTMLDocument`/`createDocument`/`new Document()`: `documentElement.parentNode`/doctype/PI `parentNode` — `null`, соседи детей документа не свя…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js:4161` `_lumen_build_detached_document` — дети документа в JS-массиве, арена не знает документа узла)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1232": {
+   "status": "open",
+   "title": "`Range` не обновляется при мутациях DOM (live range): `dom/ranges` `Range-mutations-*` TIMEOUT/ERROR, `Range-adopt-test` 0/4. Остаток [BUG-1159](bugs/BUG-1159-F…",
+   "component": "js/dom (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — `[nid, offset]` без перепривязки)",
    "date": null,
    "debtor": false
   },
@@ -15485,6 +15478,20 @@
    "component": "js (`crates/js/src/svg.rs` — 88 присвоений `window.SVG* = ...`, но не для этих 13 имён; `createSVGNumber()`/`createSVGAngle()` на `SVGSVGElement.prototype`, `svg.rs:522-523`, возвращают объект-литерал)",
    "date": "2026-10-01",
    "debtor": false
+  },
+  "BUG-1159": {
+   "status": "fixed",
+   "title": "Range: сравнение граничных точек по порядку в дереве, `comparePoint`/`isPointInRange`/`intersectsNode`, проверки `set*`, `cloneContents`/`extractContents`/`inse…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range`)",
+   "date": "2026-10-01",
+   "debtor": false
+  },
+  "BUG-1160": {
+   "status": "fixed",
+   "title": "Скрипт, создающий и бросающий узлы в одной синхронной задаче, упирался в `MAX_DOM_NODES` (`QuotaExceededError`) при нуле живых узлов: синхронный реклейм по треб…",
+   "component": "dom/js (`crates/js/src/v8_runtime/install/dom_core.rs` `install_dom_reclaim`, `crates/engine/dom/src/lib.rs` `live_node_count`)",
+   "date": "2026-10-01",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15647,7 +15654,7 @@
   "dom (`crates/engine/dom/src/vtt.rs::parse_vtt` — разбиение на блоки только по пустым строкам; проверка подписи `header.as_bytes()[6].is_ascii_whitespace()`)": [
    "BUG-903"
   ],
-  "dom/js (`MAX_DOM_NODES` 50 000 в `crates/engine/dom/src/lib.rs:129` считает `nodes.len()`, отсоединённые узлы возвращаются только 30-секундным GC-тиком `about_to_wait.rs:1740`; причина зависаний не локализована)": [
+  "dom/js (`crates/js/src/v8_runtime/install/dom_core.rs` `install_dom_reclaim`, `crates/engine/dom/src/lib.rs` `live_node_count`)": [
    "BUG-1160"
   ],
   "driver": [
@@ -16119,7 +16126,7 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` -- литерал `var document`, обёртка doctype, геттер `parentNode` обёрток узлов)": [
    "BUG-557"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — объектный литерал Range)": [
+  "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range`)": [
    "BUG-1159"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `MouseEvent` constructor)": [
@@ -16521,6 +16528,9 @@
   ],
   "js/dom": [
    "BUG-306"
+  ],
+  "js/dom (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — `[nid, offset]` без перепривязки)": [
+   "BUG-1232"
   ],
   "js/layout (`crates/engine/layout/src/style/syntax_string.rs`, `crates/js/src/css_properties_values_api.rs`)": [
    "BUG-531"

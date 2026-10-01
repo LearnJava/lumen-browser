@@ -1446,6 +1446,13 @@ impl Document {
         NodeId::pack(index, 0)
     }
 
+    /// Arena slots in use — [`Self::node_count`] minus freed slots awaiting reuse
+    /// (BUG-1160). What [`MAX_DOM_NODES`] is measured against: a reclaimed slot
+    /// is free capacity, not a node.
+    pub fn live_node_count(&self) -> usize {
+        self.nodes.len() - self.free_slots.len()
+    }
+
     /// Number of nodes currently allocated in this document's arena (including the root).
     pub fn node_count(&self) -> usize {
         self.nodes.len()
@@ -1471,7 +1478,7 @@ impl Document {
     /// Called by the `_lumen_create_element` JS binding so that JS-driven DOM mutations
     /// cannot grow the tree beyond the safety limit.
     pub fn try_create_element(&mut self, name: QualName) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         let ua_shadow = ua_shadow_kind(&name);
@@ -1565,7 +1572,7 @@ impl Document {
     /// cannot grow the tree beyond the safety limit (BUG-418: unlike `createElement`,
     /// this path was previously ungated entirely).
     pub fn try_create_text(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         Ok(self.alloc(NodeData::Text(content.into())))
@@ -1585,7 +1592,7 @@ impl Document {
     /// cannot grow the tree beyond the safety limit (BUG-418: unlike `createElement`,
     /// this path was previously ungated entirely).
     pub fn try_create_comment(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         Ok(self.alloc(NodeData::Comment(content.into())))
@@ -1612,7 +1619,7 @@ impl Document {
         target: impl Into<String>,
         data: impl Into<String>,
     ) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         Ok(self.alloc(NodeData::ProcessingInstruction {
@@ -6771,6 +6778,22 @@ mod tests {
         assert_eq!(doc.node_count(), MAX_DOM_NODES);
         let result = doc.try_create_element(QualName::html("p"));
         assert_eq!(result, Err(NodeLimitExceeded));
+    }
+
+    #[test]
+    fn try_create_element_ok_after_reclaim_frees_slots_at_limit() {
+        // BUG-1160: the cap counts live slots, not arena length — a reclaimed
+        // slot is free capacity again.
+        let mut doc = Document::new();
+        while doc.node_count() < MAX_DOM_NODES {
+            doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(doc.try_create_element(QualName::html("p")), Err(NodeLimitExceeded));
+        let dead = doc.dead_node_ids();
+        doc.reclaim_dead_nodes(&dead);
+        assert_eq!(doc.live_node_count(), MAX_DOM_NODES - dead.len());
+        assert!(doc.try_create_element(QualName::html("p")).is_ok());
+        assert_eq!(doc.node_count(), MAX_DOM_NODES, "freed slot reused, arena did not grow");
     }
 
     #[test]

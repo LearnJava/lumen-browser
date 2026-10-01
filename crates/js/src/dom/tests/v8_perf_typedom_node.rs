@@ -845,7 +845,10 @@ fn dom_node_count_at_max_after_prefill() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         // Verify prefill worked
         assert_eq!(d.node_count(), lumen_dom::MAX_DOM_NODES);
@@ -865,7 +868,10 @@ fn dom_create_element_throws_quota_exceeded_when_full() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         Arc::new(Mutex::new(d))
     };
@@ -891,7 +897,10 @@ fn dom_create_text_node_throws_quota_exceeded_when_full() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         Arc::new(Mutex::new(d))
     };
@@ -913,7 +922,10 @@ fn dom_create_comment_throws_quota_exceeded_when_full() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         Arc::new(Mutex::new(d))
     };
@@ -1031,4 +1043,47 @@ fn chrome_runtime_get_url() {
     assert_eq!(v, lumen_core::JsValue::String(
         "chrome-extension://lumen-extension/icons/icon.png".into()
     ));
+}
+
+#[test]
+fn dom_create_element_reclaims_detached_garbage_at_limit() {
+    // BUG-1160: a script that builds and drops nodes in one synchronous job
+    // (Range-mutations-*) used to hit MAX_DOM_NODES with almost no live nodes;
+    // the 30 s shell GC tick never gets a turn inside the loop.
+    let rt = v8_runtime_with_dom(Arc::new(Mutex::new(lumen_dom::Document::new())));
+    let r = rt.eval(
+        r#"
+                var made = 0, caught = '';
+                try { for (; made < 120000; made++) { document.createElement('div'); } }
+                catch (e) { caught = e.name; }
+                caught + ':' + made
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(":120000".into()));
+}
+
+#[test]
+fn dom_create_element_still_throws_when_limit_is_all_live() {
+    // The on-demand reclaim must not free attached nodes: a document that
+    // really holds MAX_DOM_NODES live nodes keeps raising QuotaExceededError.
+    let doc = {
+        use lumen_dom::{Document, QualName};
+        let mut d = Document::new();
+        while d.node_count() < lumen_dom::MAX_DOM_NODES {
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
+        }
+        Arc::new(Mutex::new(d))
+    };
+    let rt = v8_runtime_with_dom(doc);
+    let r = rt.eval(
+        r#"
+                var caught = '';
+                try { document.createElement('p'); document.createElement('p'); }
+                catch (e) { caught = e.name; }
+                caught
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
 }

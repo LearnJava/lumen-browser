@@ -1146,6 +1146,61 @@ pub(crate) fn install_node_count(
     Ok(())
 }
 
+/// BUG-1160: synchronous reclaim of detached, unreferenced nodes, called by the
+/// shim when `_lumen_create_*` reports `MAX_DOM_NODES` reached.
+///
+/// The shell's 30 s idle GC tick (`gc_tick.rs`) cannot help a page that builds
+/// and drops nodes in one synchronous script — `WeakRef` targets stay pinned
+/// until the job ends and the `FinalizationRegistry` cleanup runs as a later
+/// platform task, so `Document::js_refs` never drops inside the loop. Here the
+/// native forces the sequence itself: lift the kept-objects pin, run a V8 GC,
+/// pump the platform queue (runs the finalizer callbacks, which call
+/// `_lumen_dom_release_ref` — hence the document lock is NOT held across it),
+/// then `dead_node_ids` + `reclaim_dead_nodes`.
+///
+/// Returns the freed node indices (for `_lumen_gc_collect`'s JS-side purge), or
+/// an empty array. A pass that freed nothing suppresses the next one for
+/// `RECLAIM_BACKOFF`, so a page that really holds 50 000 live nodes does not
+/// pay a full GC per failed `createElement`.
+#[allow(clippy::unwrap_used)]  // как у соседних секций: poisoned doc-мьютекс = паника потока JS
+pub(crate) fn install_dom_reclaim(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<crate::v8_compat::OwnedNativeFnScoped>,
+    doc: Arc<Mutex<lumen_dom::Document>>,
+) -> JsResult<()> {
+    const RECLAIM_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+    let last_empty: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let native = Box::new(
+        move |scope: &mut v8::PinScope, _args: &v8::FunctionCallbackArguments, rv: &mut v8::ReturnValue| {
+            if let Ok(g) = last_empty.lock()
+                && g.is_some_and(|t| t.elapsed() < RECLAIM_BACKOFF)
+            {
+                rv.set(v8::Array::new(scope, 0).into());
+                return;
+            }
+            let platform = v8::V8::get_current_platform();
+            scope.clear_kept_objects();
+            scope.low_memory_notification();
+            scope.low_memory_notification();
+            while v8::Platform::pump_message_loop(&platform, scope, false) {}
+            let freed: Vec<u32> = {
+                let mut d = doc.lock().unwrap();
+                let dead = d.dead_node_ids();
+                d.reclaim_dead_nodes(&dead);
+                dead.iter().map(|n| n.index() as u32).collect()
+            };
+            if let Ok(mut g) = last_empty.lock() {
+                *g = freed.is_empty().then(std::time::Instant::now);
+            }
+            let elems: Vec<v8::Local<v8::Value>> =
+                freed.iter().map(|&i| v8::Number::new(scope, f64::from(i)).into()).collect();
+            rv.set(v8::Array::new_with_elements(scope, &elems).into());
+        },
+    );
+    crate::v8_compat::register_v8_native_scoped(scope, ctx, store, "_lumen_dom_reclaim_now", native)
+}
+
 /// `appendChild`/`removeChild`/`insertBefore` and friends.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]  // BUG-1118 срез 2 added the 8th; mirrors install_node_properties

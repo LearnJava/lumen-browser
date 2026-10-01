@@ -6578,6 +6578,31 @@ function _lumen_wrapper_cache_set(nid, obj) {
     return obj;
 }
 
+// BUG-1160: a creator that hit MAX_DOM_NODES (-1) retries once after a
+// synchronous reclaim of detached, unreferenced nodes. The 30 s shell GC tick
+// can't run inside a script that builds and drops nodes in one job, so without
+// this a page like `Range-mutations-*` (hundreds of throwaway fixtures) dies
+// with QuotaExceededError while holding few live nodes. The native forces the
+// V8 GC + FinalizationRegistry pump itself (see `install_dom_reclaim`); the
+// freed ids go through `_lumen_gc_collect` so a reused slot inherits no
+// listeners/state from its previous node.
+function _lumen_reclaim_and_retry(raw) {
+    return function() {
+        var n = raw.apply(undefined, arguments);
+        if (n >= 0) { return n; }
+        var freed = _lumen_dom_reclaim_now();
+        if (freed.length === 0) { return n; }
+        _lumen_gc_collect(freed);
+        return raw.apply(undefined, arguments);
+    };
+}
+_lumen_create_element = _lumen_reclaim_and_retry(_lumen_create_element);
+_lumen_create_element_ns = _lumen_reclaim_and_retry(_lumen_create_element_ns);
+_lumen_create_text_node = _lumen_reclaim_and_retry(_lumen_create_text_node);
+_lumen_create_comment = _lumen_reclaim_and_retry(_lumen_create_comment);
+_lumen_create_processing_instruction = _lumen_reclaim_and_retry(_lumen_create_processing_instruction);
+_lumen_create_cdata_section = _lumen_reclaim_and_retry(_lumen_create_cdata_section);
+
 // ── ParentNode / ElementTraversal helpers (DOM Standard §4.2.6/§4.2.7) ────────
 // BUG-310: element-only tree navigation. `_lumen_get_children` returns EVERY
 // child node (text/comment included), so `children`/`childElementCount`/
