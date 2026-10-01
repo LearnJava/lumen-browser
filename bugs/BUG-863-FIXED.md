@@ -96,7 +96,7 @@ Object.create(window[a].prototype))` → `Cannot read properties of undefined (r
 Все 24+3 ERROR с `createCDATASection is not a function` ушли. Категории впервые дошли до своих
 утверждений; причины оставшихся отказов заведены отдельно:
 [BUG-1159](BUG-1159-FIXED.md) (Range — заглушки сравнения и операций над содержимым),
-[BUG-1160](BUG-1160-OPEN.md) (лимит арены на `Range-mutations-*`, три TIMEOUT),
+[BUG-1160](BUG-1160-FIXED.md) (лимит арены на `Range-mutations-*`, три TIMEOUT),
 [BUG-1161](BUG-1161-OPEN.md) (отсоединённый документ не владеет узлами),
 [BUG-1162](BUG-1162-OPEN.md) (`createElement` в XML-документе),
 [BUG-1163](BUG-1163-OPEN.md) (`wholeText`),

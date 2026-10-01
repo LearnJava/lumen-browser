@@ -436,6 +436,7 @@ impl V8JsRuntime {
             install::install_tree_navigation(scope, ctx, store, Arc::clone(&doc))?;
 
             install::install_node_count(scope, ctx, store, Arc::clone(&doc))?;
+            install::install_dom_reclaim(scope, ctx, store_scoped, Arc::clone(&doc))?;
 
             install::install_tree_mutation(
                 scope,
