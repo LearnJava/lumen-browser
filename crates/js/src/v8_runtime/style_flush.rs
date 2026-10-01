@@ -279,6 +279,7 @@ impl FlushHandles {
         {
             return;
         }
+        let flush_t0 = std::time::Instant::now();
         // BUG-935 S33: diagnostic-only counter — confirms/refutes whether a
         // per-`_lumen_get_bounding_rect`-call same-tick flush (CSSOM-4) fires a
         // *real* (non-no-op) full `layout_measured_with_counters` more than
@@ -554,6 +555,17 @@ impl FlushHandles {
         // BUG-935 S34: only `flush_stale` resets here — `dom_dirty` is the
         // scheduler's own signal and stays untouched by this flush.
         self.flush_stale.store(false, Ordering::Relaxed);
+        // BUG-935 срез 53: the cost and path of every real flush, so a live
+        // `[js-stall]` sample can be matched to its forced-reflow count.
+        if lumen_paint::frame_log_enabled() {
+            eprintln!(
+                "[engine] maybe_flush done {:.1}ms path={} dirty_roots={} touched={}",
+                flush_t0.elapsed().as_secs_f64() * 1000.0,
+                if incr_scope.is_some() { "incremental" } else { "full" },
+                incr_scope.as_ref().map_or(0, |(roots, _, _)| roots.len()),
+                touched.nodes.len(),
+            );
+        }
     }
 
     /// BUG-1211: attempt the incremental cascade+layout path instead of a
@@ -624,7 +636,9 @@ impl FlushHandles {
             .copied()
             .filter(|n| touched.touch_gen.get(n).copied().unwrap_or(0) > basis.touch_epoch)
             .collect();
+        let tp0 = std::time::Instant::now();
         let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
+        let tp_index = tp0.elapsed();
         let mut dirty_roots = std::collections::HashSet::new();
         // BUG-341 S17: `DomTouched` records node ids without attribute names
         // (same gap `relayout.rs` documents), so every page-side mutation
@@ -642,6 +656,7 @@ impl FlushHandles {
                 doc, basis.focus.map(lumen_dom::NodeId::from_raw), current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
             ));
         }
+        let tp_roots = tp0.elapsed();
         let content_dirty = if new_touched.is_empty() {
             lumen_layout::counters::ContentDirty::Nothing
         } else {
@@ -674,11 +689,15 @@ impl FlushHandles {
         let null_hp = lumen_core::ext::NullHyphenationProvider;
         lumen_layout::counters::set_incremental_restyle(true);
         lumen_layout::box_tree::set_incremental_box_build(true);
+        let tp_prev = tp0.elapsed();
         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
             doc, sheet, viewport, measurer, &null_hp, false, basis.layout, delta,
         );
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
+        if lumen_paint::frame_log_enabled() {
+            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
+        }
         Some((result.0, result.1, dirty_roots_for_return, prev_node_ids, prev_node_raw_ids))
     }
 

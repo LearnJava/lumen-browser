@@ -77,12 +77,20 @@ pub(super) fn v8_thread_main(
     // callback itself (`_lumen_tt_get_compliant_script_for_codegen`), same
     // division as every other sink this task closed.
     codegen_hook::install(&mut inner.isolate, &inner.context);
+    // BUG-935 срез 53: `LUMEN_JS_STALL_SAMPLE_MS` — стек долгой JS-задачи в stderr.
+    let stall_sampler = super::stall_sampler::StallSampler::start(&mut inner.isolate, &inner.context);
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             V8Command::Run(job) => {
+                if let Some(s) = &stall_sampler {
+                    s.job_started();
+                }
                 job(&mut inner);
+                if let Some(s) = &stall_sampler {
+                    s.job_finished();
+                }
                 // BUG-918: end of the job = end of the microtask checkpoint,
                 // which is where HTML LS §8.1.7.3 step 4 notifies about
                 // rejected promises. Every JS entry point on this runtime
