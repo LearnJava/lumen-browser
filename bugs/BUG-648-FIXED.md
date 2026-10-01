@@ -239,6 +239,6 @@ connection without sending TLS close_notify` без повтора на ново
   текущего `main` (`run_smoke.py`): там оба теста так же TIMEOUT, так что это не результат этого фикса.
   `not-clonable` висит, потому что ребёнок шлёт ответ через `window.top.postMessage`, а во фрейме
   `window.top === window` ([BUG-1187](BUG-1187-FIXED.md)). Попутно найдено: `postMessage` из
-  синхронного скрипта фрейма родителю не доходит ([BUG-1188](BUG-1188-OPEN.md)).
+  синхронного скрипта фрейма родителю не доходит ([BUG-1188](BUG-1188-FIXED.md)).
 - Подтесты операций (`getEntries*`, `disconnect`, `takeRecords`) требовали проверки бренда — сделана
   (см. выше).
