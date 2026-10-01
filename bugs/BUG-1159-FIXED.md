@@ -1,6 +1,6 @@
 # BUG-1159 — `Range`: сравнение, проверки и операции над содержимым — заглушки
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-25 (P6, при закрытии [BUG-863](BUG-863-FIXED.md))
 **Область:** js — `crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_range` (объектный литерал
 Range, строки ~9917–10030)
@@ -37,3 +37,17 @@ Range, строки ~9917–10030)
 DOM §5.5: порядок граничных точек (tree order через общего предка), проверки из «set the start or
 end», `comparePoint`/`isPointInRange`/`intersectsNode` по спековым шагам, clone/extract/surround/insert
 по §5.5 «clone the contents»/«extract»/«insert».
+
+## Исправлено
+
+`_lumen_make_range` (`web_api_shim_mid.js`): порядок граничных точек по дереву (`_lumen_range_cmp`),
+`compareBoundaryPoints` (проверки `how` как unsigned short, `WrongDocumentError`; константы
+`END_TO_END=2`/`END_TO_START=3` по IDL и на самом `Range`), `comparePoint`/`isPointInRange`/
+`intersectsNode`, проверки `set{Start,End}*`/`select*` (`IndexSizeError`, `InvalidNodeTypeError`,
+схлопывание при другом корне), `cloneContents`/`extractContents`/`insertNode`/`surroundContents`
+по DOM §5.5, `collapse()` без аргумента — в конец. `node_length` в `selection.rs` знает Comment/PI.
+`dom/ranges`: 12262 → 31325 из 44063 сабтестов. Тесты — `bug1159_range_spec.rs`.
+
+Остаток (не про сравнение/операции): отсоединённые/XML-документы и Attr без nid — [BUG-1161](BUG-1161-OPEN.md);
+живое обновление диапазонов при мутациях DOM — [BUG-1232](BUG-1232-OPEN.md).
+
