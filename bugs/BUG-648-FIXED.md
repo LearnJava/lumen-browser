@@ -234,7 +234,7 @@ connection without sending TLS close_notify` без повтора на ново
 
 - 13 подтестов `PerformanceEntry interface: …` в `idlharness.any.html`. Раньше `idl_test setup`
   падал до них, и baseline записал их PASS в тихом режиме. Теперь они выполняются и падают, потому что
-  интерфейса `PerformanceEntry` нет. Заведено [BUG-1189](BUG-1189-OPEN.md).
+  интерфейса `PerformanceEntry` нет. Заведено [BUG-1189](BUG-1189-FIXED.md).
 - `not-clonable.html` и `idlharness.any.serviceworker.html` → TIMEOUT. Проверено A/B на бинаре с
   текущего `main` (`run_smoke.py`): там оба теста так же TIMEOUT, так что это не результат этого фикса.
   `not-clonable` висит, потому что ребёнок шлёт ответ через `window.top.postMessage`, а во фрейме

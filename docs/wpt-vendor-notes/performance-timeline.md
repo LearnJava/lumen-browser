@@ -11,5 +11,5 @@
 после фикса — в [BUG-648](../../bugs/BUG-648-FIXED.md). `window.stop` вынесен в
 [BUG-1186](../../bugs/BUG-1186-OPEN.md). Baseline `tests/wpt/metadata/performance-timeline/`
 переснят: +28 PASS. `idlharness.any.html` теперь доходит до проверок интерфейсов, у
-`PerformanceEntry` их 13, и все падают ([BUG-1189](../../bugs/BUG-1189-OPEN.md)).
+`PerformanceEntry` их 13, и все падают ([BUG-1189](../../bugs/BUG-1189-FIXED.md)).
 `not-clonable.html` висит из-за `window.top` во фрейме ([BUG-1187](../../bugs/BUG-1187-FIXED.md)).

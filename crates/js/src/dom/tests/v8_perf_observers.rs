@@ -249,6 +249,31 @@ fn performance_paint_timing_interface_backs_paint_entries() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-1189: `PerformanceEntry` is the shared base of every entry interface; the
+// accessors are setter-less, so entries must still carry their own fields.
+#[test]
+fn performance_entry_is_shared_base_of_entries() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                _lumen_deliver_paint_entry('first-paint', 10.0);
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 5);
+                performance.mark('m'); performance.measure('x', 'm');
+                var all = performance.getEntries();
+                var d = Object.getOwnPropertyDescriptor(PerformanceEntry.prototype, 'name');
+                var threw = false;
+                try { new PerformanceEntry(); } catch (e) { threw = e instanceof TypeError; }
+                var protoThrows = false;
+                try { PerformanceEntry.prototype.name; } catch (e) { protoThrows = e instanceof TypeError; }
+                threw && protoThrows && !!d.get && d.set === undefined
+                    && all.length >= 4
+                    && all.every(function(e) { return e instanceof PerformanceEntry && e.name !== '' && e.entryType !== ''; })
+                    && performance.getEntriesByType('paint')[0].startTime === 10.0
+                    && performance.getEntriesByType('measure')[0].name === 'x'
+                    && performance.getEntriesByType('mark')[0].id === 0
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-678: `assert_implements(window.LargestContentfulPaint)` opens every LCP
 // and soft-navigation WPT; the interface object must exist, refuse `new`, back
 // the entries the shell delivers and serialise the IDL attributes.
