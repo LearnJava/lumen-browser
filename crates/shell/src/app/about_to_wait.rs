@@ -391,6 +391,13 @@ impl Lumen {
             // never a blocking engine `query` that would stall the parked loop
             // behind the JS turn.
             let raf_due = now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
+            // SMIL keeps itself alive with a no-op rAF (see `_lumen_smil_wake`):
+            // a batch that dirties nothing never reaches `RedrawRequested`, so
+            // tick the timeline here too, before the batch fires.
+            #[cfg(feature = "v8")]
+            if raf_due && self.raf_pending_lockfree() {
+                self.tick_smil((now_ms / 1000.0) as f32);
+            }
             if self.pump_raf_engine_thread(raf_due, now_ms) {
                 self.request_redraw();
             }
@@ -415,6 +422,9 @@ impl Lumen {
                 }
                 self.last_raf_batch_ms = now_ms;
                 let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
+                // Same reason as the engine-thread branch above.
+                #[cfg(feature = "v8")]
+                self.tick_smil((now_ms / 1000.0) as f32);
                 if let Some(j) = self.js_ctx.as_ref() {
                     j.run_animation_frame(raf_ts);
                 }
