@@ -395,7 +395,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `list-style` / `list-style-type` | ✅ | disc/circle/square → geometric marker boxes; decimal/roman/alpha → text glyphs; `emit_list_marker` display_list.rs:4927 |
-| `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
+| `list-style-position` | ✅ | inside/outside (CSS Lists L3 §2.4); `inside` marker shares line 0 of an inline first child (that line alone is inset by the marker width via `BoxKind::InlineRun::first_line_inset`, wrapped lines return to the content edge); a block-level first child starts one marker line lower at full width |
 | `list-style-image` | ✅ | url() parsed; image marker rendered (DrawImage replaces bullet, CSS Lists L3 §2.3) |
 | `counter-reset` / `counter-increment` | ✅ | resolution done — `precompute_counters()` pre-order DOM walk (see T3 Counters) |
 | `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |

@@ -69,6 +69,9 @@ pub(super) struct BlockFlowInit {
     pub(super) b_collapses_bottom: bool,
     pub(super) seen_inflow_child: bool,
     pub(super) inside_marker_w: f32,
+    /// Line height of the pending inside marker — consumed together with
+    /// `inside_marker_w` when the first in-flow child is block-level.
+    pub(super) inside_marker_h: f32,
     pub(super) abs_deferred: Vec<(usize, f32, f32)>,
     pub(super) s: Arc<ComputedStyle>,
     pub(super) em: f32,
@@ -293,6 +296,7 @@ fn step_child(
                     line_h.round(),
                 );
                 frame.init.inside_marker_w = marker_w.round();
+                frame.init.inside_marker_h = line_h.round();
                 // Do NOT advance child_y — marker is inline with content.
             }
         }
@@ -325,17 +329,39 @@ fn step_child(
         return StepOutcome::Advance;
     }
 
+    // CSS Lists L3 §2.4 — `list-style-position: inside`: the marker is an
+    // inline box at the start of the principal box's first line.
+    //  * first in-flow child is an inline run → the marker shares line 0:
+    //    that line alone is inset by the marker width (`first_line_inset`,
+    //    like `text-indent`), wrapped lines return to the content edge;
+    //  * first in-flow child is block-level → the marker sits alone in an
+    //    anonymous line box above it, so the block starts one marker line
+    //    lower at the full content width (margins do not collapse through
+    //    the marker's line box);
+    //  * anything else (inline-block row, replaced) keeps the historical
+    //    horizontal shift of the child.
+    let inside_marker_w = std::mem::take(&mut frame.init.inside_marker_w);
+    let inside_marker_h = std::mem::take(&mut frame.init.inside_marker_h);
+    let mut marker_shift = 0.0;
+    if inside_marker_w > 0.0 {
+        let child = &mut frame.b.children[i];
+        match &mut child.kind {
+            BoxKind::InlineRun { first_line_inset, .. } => *first_line_inset = inside_marker_w,
+            BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table => {
+                frame.init.child_y += inside_marker_h;
+                frame.init.prev_block_mb = 0.0;
+                frame.init.seen_inflow_child = true;
+            }
+            _ => marker_shift = inside_marker_w,
+        }
+    }
     let child_y = frame.init.child_y;
     // Normal flow: narrow x/width for active floats.
     let flow_left  = frame.init.fc.left_edge_at(child_y, content_x);
     let flow_right = frame.init.fc.right_edge_at(child_y, container_right);
-    // Apply inside-marker indent to the first normal-flow content child.
-    let (mut eff_left, mut eff_w) = if frame.init.inside_marker_w > 0.0 {
-        let l = flow_left + frame.init.inside_marker_w;
-        frame.init.inside_marker_w = 0.0;
+    let (mut eff_left, mut eff_w) = {
+        let l = flow_left + marker_shift;
         (l, (flow_right - l).max(0.0))
-    } else {
-        (flow_left, (flow_right - flow_left).max(0.0))
     };
     // CSS 2.1 §9.5: a block-level box in normal flow is NOT narrowed by
     // floats — its width and margins resolve against the full containing

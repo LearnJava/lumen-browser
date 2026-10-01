@@ -404,6 +404,7 @@ mod tests {
                 lines,
                 first_line_style: None,
                 row_continuation_width: None,
+                first_line_inset: 0.0,
             },
             children: vec![],
             col_span: 1,
