@@ -2225,7 +2225,7 @@ https.html`) + 1 status-change. Три непересекающихся набо
 подряд: 0 регрессий, 0 unexpected pass, 0 других отклонений.** Baseline 245 → 245
 (перегенерация, не новая категория).
 
-**Найден [BUG-1099](../../bugs/BUG-1099-OPEN.md).** Два файла (`service-worker-dedicated-
+**Найден [BUG-1099](../../bugs/BUG-1099-FIXED.md).** Два файла (`service-worker-dedicated-
 worker`, `service-worker-shared-worker`, оба `.https.`) падают в `cleanup` с
 `worker.terminate is not a function`/`Cannot read properties of undefined (reading
 'close')`. Корень найден по исходнику, не предположение: оба теста создают воркер через

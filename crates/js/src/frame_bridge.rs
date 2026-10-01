@@ -2373,6 +2373,16 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         if (r.kind === 'function') {
           return function() {
             var args = Array.prototype.slice.call(arguments);
+            // BUG-1099: `new w.Ctor(...)` — объект пира через границу
+            // изолятов не передать (возвращается только сериализованное
+            // значение), поэтому конструкция идёт в этом контексте тем же
+            // именем (Worker/SharedWorker/… есть в каждом контексте шима).
+            if (new.target !== undefined) {
+              var local = globalThis[String(prop)];
+              if (typeof local === 'function') {
+                return Reflect.construct(local, args);
+              }
+            }
             var cr = _lumen_f_global_call(bid, String(prop), args);
             if (cr.kind === 'error') { throw new Error(cr.message); }
             return cr.value;
