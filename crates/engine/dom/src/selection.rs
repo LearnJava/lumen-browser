@@ -357,7 +357,8 @@ pub fn node_child_count(doc: &Document, node: NodeId) -> usize {
 /// Used to clamp Range endpoint offsets to valid values.
 pub fn node_length(doc: &Document, node: NodeId) -> usize {
     match &doc.get(node).data {
-        NodeData::Text(s) => s.chars().count(),
+        NodeData::Text(s) | NodeData::Comment(s) => s.chars().count(),
+        NodeData::ProcessingInstruction { data, .. } => data.chars().count(),
         _ => doc.get(node).children.len(),
     }
 }

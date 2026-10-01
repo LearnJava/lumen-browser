@@ -10894,56 +10894,198 @@ function _lumen_notify_css_font_loaded(family) {
 // Creates a Range object whose endpoints are identified by [nid, offset] pairs.
 // nid 0 with offset 0 is the collapsed-at-document-start default.
 
+// DOM §5.5 helpers. All positions are [nid, offset] pairs of arena ids.
+// Wrapper for a boundary-point container; the document root is the `document` singleton.
+function _lumen_range_node(nid) { return nid === _lumen_root_nid ? document : _lumen_make_element(nid); }
+
+function _lumen_range_root(nid) {
+    var chain = _lumen_ancestor_nids(nid);
+    return chain[chain.length - 1];
+}
+
+function _lumen_range_index(nid) {
+    var p = _lumen_u2n(_lumen_get_parent(nid));
+    return p === null ? 0 : _lumen_get_children(p).indexOf(nid);
+}
+
+// -1/0/1: position of boundary point A relative to B (same root assumed).
+function _lumen_range_cmp(nA, oA, nB, oB) {
+    if (nA === nB) return oA === oB ? 0 : (oA < oB ? -1 : 1);
+    var ca = _lumen_ancestor_nids(nA);
+    var cb = _lumen_ancestor_nids(nB);
+    var ia = cb.indexOf(nA);
+    // A is an ancestor of B: compare A's offset with the index of the child
+    // of A on the path to B.
+    if (ia >= 0) return _lumen_range_index(cb[ia - 1]) < oA ? 1 : -1;
+    // B is an ancestor of A: the mirror case.
+    if (ca.indexOf(nB) >= 0) return -_lumen_range_cmp(nB, oB, nA, oA);
+    var i = ca.length - 1, j = cb.length - 1;
+    while (i >= 0 && j >= 0 && ca[i] === cb[j]) { i--; j--; }
+    var kids = _lumen_get_children(ca[i + 1]);
+    return kids.indexOf(ca[i]) < kids.indexOf(cb[j]) ? -1 : 1;
+}
+
+function _lumen_range_node_arg(node, what) {
+    var nid = _lumen_tree_nid(node);
+    if (nid === null) {
+        throw new TypeError("Failed to execute '" + what + "' on 'Range': parameter 1 is not of type 'Node'.");
+    }
+    return nid;
+}
+
+// Validates a (node, offset) argument pair; returns the node id.
+function _lumen_range_point_arg(node, offset, what, argc) {
+    if (argc < 2) {
+        throw new TypeError("Failed to execute '" + what + "' on 'Range': 2 arguments required, but only " + argc + " present.");
+    }
+    var nid = _lumen_range_node_arg(node, what);
+    if (node.nodeType === 10) throw new DOMException('The node is a DocumentType.', 'InvalidNodeTypeError');
+    if ((offset >>> 0) > _lumen_node_length(nid)) throw new DOMException("The offset is larger than the node's length.", 'IndexSizeError');
+    return nid;
+}
+
+function _lumen_range_common_nid(a, b) {
+    var ca = _lumen_ancestor_nids(a), cb = _lumen_ancestor_nids(b);
+    for (var i = 0; i < ca.length; i++) { if (cb.indexOf(ca[i]) >= 0) return ca[i]; }
+    return a;
+}
+
+function _lumen_range_is_cdata(node) {
+    var t = node.nodeType;
+    return t === 3 || t === 4 || t === 7 || t === 8;
+}
+
+// Child of `ca` on the path down to `nid`, or null when `nid` is `ca` itself.
+function _lumen_range_child_toward(ca, nid) {
+    var chain = _lumen_ancestor_nids(nid);
+    var i = chain.indexOf(ca);
+    return i > 0 ? chain[i - 1] : null;
+}
+
+// DOM §5.5 "clone the contents" / "extract" of `r` into a fresh fragment.
+// `extract` also removes the content and collapses `r` per the spec.
+function _lumen_range_contents(r, extract) {
+    var sn = r.__start_nid__, so = r.__start_off__, en = r.__end_nid__, eo = r.__end_off__;
+    var snode = _lumen_make_node(sn);
+    var doc = snode.nodeType === 9 ? snode : (snode.ownerDocument || document);
+    var frag = doc.createDocumentFragment();
+    if (sn === en && so === eo) return frag;
+    if (sn === en && _lumen_range_is_cdata(snode)) {
+        var c0 = snode.cloneNode(false);
+        c0.data = snode.substringData(so, eo - so);
+        frag.appendChild(c0);
+        if (extract) snode.replaceData(so, eo - so, '');
+        return frag;
+    }
+    var ca = _lumen_range_common_nid(sn, en);
+    var firstP = (ca === sn) ? null : _lumen_range_child_toward(ca, sn);
+    var lastP = (ca === en) ? null : _lumen_range_child_toward(ca, en);
+    var contained = [];
+    var kids = _lumen_get_children(ca);
+    for (var i = 0; i < kids.length; i++) {
+        var k = kids[i];
+        if (k === firstP || k === lastP) continue;
+        if (_lumen_range_cmp(k, 0, sn, so) > 0 && _lumen_range_cmp(k, _lumen_node_length(k), en, eo) < 0) {
+            if (_lumen_make_node(k).nodeType === 10) throw new DOMException('The range contains a doctype.', 'HierarchyRequestError');
+            contained.push(k);
+        }
+    }
+    var newNid, newOff;
+    if (extract) {
+        if (ca === sn) { newNid = sn; newOff = so; }
+        else {
+            var enChain = _lumen_ancestor_nids(en);
+            var ref = sn;
+            while (enChain.indexOf(_lumen_u2n(_lumen_get_parent(ref))) < 0) ref = _lumen_u2n(_lumen_get_parent(ref));
+            newNid = _lumen_u2n(_lumen_get_parent(ref)); newOff = _lumen_range_index(ref) + 1;
+        }
+    }
+    var c, sub;
+    if (firstP !== null) {
+        var fnode = _lumen_make_node(firstP);
+        c = fnode.cloneNode(false);
+        if (_lumen_range_is_cdata(fnode)) {
+            var flen = _lumen_node_length(firstP);
+            c.data = fnode.substringData(so, flen - so);
+            frag.appendChild(c);
+            if (extract) fnode.replaceData(so, flen - so, '');
+        } else {
+            frag.appendChild(c);
+            sub = _lumen_make_range(sn, so, firstP, _lumen_node_length(firstP));
+            c.appendChild(_lumen_range_contents(sub, extract));
+        }
+    }
+    for (var j = 0; j < contained.length; j++) {
+        var cn = _lumen_make_node(contained[j]);
+        frag.appendChild(extract ? cn : cn.cloneNode(true));
+    }
+    if (lastP !== null) {
+        var lnode = _lumen_make_node(lastP);
+        c = lnode.cloneNode(false);
+        if (_lumen_range_is_cdata(lnode)) {
+            c.data = lnode.substringData(0, eo);
+            frag.appendChild(c);
+            if (extract) lnode.replaceData(0, eo, '');
+        } else {
+            frag.appendChild(c);
+            sub = _lumen_make_range(lastP, 0, en, eo);
+            c.appendChild(_lumen_range_contents(sub, extract));
+        }
+    }
+    if (extract) {
+        r.__start_nid__ = newNid; r.__start_off__ = newOff;
+        r.__end_nid__ = newNid; r.__end_off__ = newOff;
+    }
+    return frag;
+}
+
 function _lumen_make_range(sNid, sOff, eNid, eOff) {
     var r = {
         __start_nid__: sNid, __start_off__: sOff,
         __end_nid__:   eNid, __end_off__:   eOff,
-        get startContainer() { return _lumen_make_element(this.__start_nid__); },
+        get startContainer() { return _lumen_range_node(this.__start_nid__); },
         get startOffset()    { return this.__start_off__; },
-        get endContainer()   { return _lumen_make_element(this.__end_nid__); },
+        get endContainer()   { return _lumen_range_node(this.__end_nid__); },
         get endOffset()      { return this.__end_off__; },
         get collapsed()      { return this.__start_nid__ === this.__end_nid__ && this.__start_off__ === this.__end_off__; },
-        get commonAncestorContainer() {
-            if (this.__start_nid__ === this.__end_nid__) return _lumen_make_element(this.__start_nid__);
-            var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
-            return p !== null ? _lumen_make_element(p) : _lumen_make_element(this.__start_nid__);
+        get commonAncestorContainer() { return _lumen_range_node(_lumen_range_common_nid(this.__start_nid__, this.__end_nid__)); },
+        // DOM §5.5 "set the start or end": a point in another tree, or one
+        // that would invert the range, drags the opposite boundary along.
+        __set__: function(isStart, nid, off) {
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) {
+                this.__start_nid__ = nid; this.__start_off__ = off;
+                this.__end_nid__ = nid; this.__end_off__ = off;
+            } else if (isStart) {
+                if (_lumen_range_cmp(nid, off, this.__end_nid__, this.__end_off__) > 0) {
+                    this.__end_nid__ = nid; this.__end_off__ = off;
+                }
+                this.__start_nid__ = nid; this.__start_off__ = off;
+            } else {
+                if (_lumen_range_cmp(nid, off, this.__start_nid__, this.__start_off__) < 0) {
+                    this.__start_nid__ = nid; this.__start_off__ = off;
+                }
+                this.__end_nid__ = nid; this.__end_off__ = off;
+            }
         },
         setStart: function(node, offset) {
-            if (!node || node.__nid__ === undefined) return;
-            this.__start_nid__ = node.__nid__; this.__start_off__ = offset >>> 0;
+            var nid = _lumen_range_point_arg(node, offset, 'setStart', arguments.length);
+            this.__set__(true, nid, offset >>> 0);
         },
         setEnd: function(node, offset) {
-            if (!node || node.__nid__ === undefined) return;
-            this.__end_nid__ = node.__nid__; this.__end_off__ = offset >>> 0;
+            var nid = _lumen_range_point_arg(node, offset, 'setEnd', arguments.length);
+            this.__set__(false, nid, offset >>> 0);
         },
-        setStartBefore: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__start_nid__ = p; this.__start_off__ = Math.max(0, idx);
+        // Parent id and index of `node`; InvalidNodeTypeError when parentless.
+        __side__: function(node, what) {
+            var nid = _lumen_range_node_arg(node, what);
+            var p = _lumen_u2n(_lumen_get_parent(nid));
+            if (p === null) throw new DOMException('The node has no parent.', 'InvalidNodeTypeError');
+            return [p, _lumen_get_children(p).indexOf(nid)];
         },
-        setStartAfter: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__start_nid__ = p; this.__start_off__ = idx + 1;
-        },
-        setEndBefore: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__end_nid__ = p; this.__end_off__ = Math.max(0, idx);
-        },
-        setEndAfter: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__end_nid__ = p; this.__end_off__ = idx + 1;
-        },
+        setStartBefore: function(node) { var s = this.__side__(node, 'setStartBefore'); this.__set__(true, s[0], s[1]); },
+        setStartAfter:  function(node) { var s = this.__side__(node, 'setStartAfter');  this.__set__(true, s[0], s[1] + 1); },
+        setEndBefore:   function(node) { var s = this.__side__(node, 'setEndBefore');   this.__set__(false, s[0], s[1]); },
+        setEndAfter:    function(node) { var s = this.__side__(node, 'setEndAfter');    this.__set__(false, s[0], s[1] + 1); },
         collapse: function(toStart) {
             if (toStart === false) {
                 this.__start_nid__ = this.__end_nid__; this.__start_off__ = this.__end_off__;
@@ -10952,17 +11094,15 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
             }
         },
         selectNode: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var ch = _lumen_get_children(p), idx = ch.indexOf(node.__nid__);
-            this.__start_nid__ = p; this.__start_off__ = Math.max(0, idx);
-            this.__end_nid__   = p; this.__end_off__   = idx + 1;
+            var s = this.__side__(node, 'selectNode');
+            this.__start_nid__ = s[0]; this.__start_off__ = s[1];
+            this.__end_nid__   = s[0]; this.__end_off__   = s[1] + 1;
         },
         selectNodeContents: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            this.__start_nid__ = node.__nid__; this.__start_off__ = 0;
-            this.__end_nid__   = node.__nid__; this.__end_off__   = _lumen_node_length(node.__nid__);
+            var nid = _lumen_range_node_arg(node, 'selectNodeContents');
+            if (node.nodeType === 10) throw new DOMException('The node is a DocumentType.', 'InvalidNodeTypeError');
+            this.__start_nid__ = nid; this.__start_off__ = 0;
+            this.__end_nid__   = nid; this.__end_off__   = _lumen_node_length(nid);
         },
         cloneRange: function() {
             return _lumen_make_range(this.__start_nid__, this.__start_off__, this.__end_nid__, this.__end_off__);
@@ -10975,8 +11115,8 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
             this.__start_nid__ = pos[0]; this.__start_off__ = pos[1];
             this.__end_nid__   = pos[0]; this.__end_off__   = pos[1];
         },
-        extractContents: function() { this.deleteContents(); return null; },
-        cloneContents:   function() { return null; },
+        extractContents: function() { return _lumen_range_contents(this, true); },
+        cloneContents:   function() { return _lumen_range_contents(this, false); },
         // DOM Parsing §5 createContextualFragment (BUG-573). Spec calls for
         // parsing `fragmentHtml` with the range's start node as context
         // element (affects e.g. how a bare `<td>` parses); `_lumen_parse_html_fragment`
@@ -10995,21 +11135,73 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
             return _lumen_make_document_fragment(fragNid);
         },
         insertNode: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
-            if (p !== null) _lumen_append_child(p, node.__nid__);
+            if (arguments.length < 1) throw new TypeError("Failed to execute 'insertNode' on 'Range': 1 argument required.");
+            var nid = _lumen_range_node_arg(node, 'insertNode');
+            var sn = this.__start_nid__, so = this.__start_off__;
+            var start = _lumen_make_node(sn);
+            var t = start.nodeType;
+            var startParent = _lumen_u2n(_lumen_get_parent(sn));
+            if (t === 7 || t === 8 || (t === 3 && startParent === null) || sn === nid) {
+                throw new DOMException('The range start is not a valid insertion point.', 'HierarchyRequestError');
+            }
+            var reference = null;
+            if (t === 3) {
+                // Split the start Text node at the offset; the tail is the reference.
+                var data = start.data;
+                var tail = (start.ownerDocument || document).createTextNode(data.substring(so));
+                start.data = data.substring(0, so);
+                _lumen_make_node(startParent).insertBefore(tail, start.nextSibling);
+                reference = tail;
+            } else {
+                var kids = _lumen_get_children(sn);
+                reference = so < kids.length ? _lumen_make_node(kids[so]) : null;
+            }
+            var parent = reference !== null ? _lumen_make_node(_lumen_u2n(_lumen_get_parent(reference.__nid__))) : start;
+            if (reference !== null && reference === node) reference = node.nextSibling;
+            if (node.parentNode) node.parentNode.removeChild(node);
+            var newOffset = reference !== null ? _lumen_range_index(reference.__nid__) : _lumen_node_length(parent.__nid__);
+            newOffset += node.nodeType === 11 ? _lumen_node_length(nid) : 1;
+            parent.insertBefore(node, reference);
+            if (this.collapsed) { this.__end_nid__ = parent.__nid__; this.__end_off__ = newOffset; }
         },
-        surroundContents:     function() {},
+        surroundContents: function(newParent) {
+            if (arguments.length < 1) throw new TypeError("Failed to execute 'surroundContents' on 'Range': 1 argument required.");
+            var npid = _lumen_range_node_arg(newParent, 'surroundContents');
+            var snChain = _lumen_ancestor_nids(this.__start_nid__);
+            var enChain = _lumen_ancestor_nids(this.__end_nid__);
+            var partial = function(chain, other) {
+                for (var i = 0; i < chain.length && other.indexOf(chain[i]) < 0; i++) {
+                    if (_lumen_make_node(chain[i]).nodeType !== 3) return true;
+                }
+                return false;
+            };
+            if (partial(snChain, enChain) || partial(enChain, snChain)) {
+                throw new DOMException('The range partially selects a non-Text node.', 'InvalidStateError');
+            }
+            var nt = newParent.nodeType;
+            if (nt === 9 || nt === 10 || nt === 11) {
+                throw new DOMException('The new parent is a Document, DocumentType or DocumentFragment.', 'InvalidNodeTypeError');
+            }
+            var frag = this.extractContents();
+            var old = _lumen_get_children(npid);
+            for (var i = old.length - 1; i >= 0; i--) newParent.removeChild(_lumen_make_node(old[i]));
+            this.insertNode(newParent);
+            newParent.appendChild(frag);
+            this.selectNode(newParent);
+        },
         compareBoundaryPoints: function(how, other) {
-            how = (how >>> 0) & 3;
-            var pairs = [[this.__start_nid__, this.__start_off__, other.__start_nid__, other.__start_off__],
-                         [this.__start_nid__, this.__start_off__, other.__end_nid__,   other.__end_off__  ],
-                         [this.__end_nid__,   this.__end_off__,   other.__start_nid__, other.__start_off__],
-                         [this.__end_nid__,   this.__end_off__,   other.__end_nid__,   other.__end_off__  ]];
-            var p = pairs[how];
-            if (p[0] !== p[2]) return p[0] < p[2] ? -1 : 1;
-            if (p[1] !== p[3]) return p[1] < p[3] ? -1 : 1;
-            return 0;
+            if (arguments.length < 2) throw new TypeError("Failed to execute 'compareBoundaryPoints' on 'Range': 2 arguments required.");
+            how = how >>> 0;
+            if (how > 3) throw new DOMException('The comparison method provided must be one of START_TO_START, START_TO_END, END_TO_END, END_TO_START.', 'NotSupportedError');
+            if (!other || other.__start_nid__ === undefined) throw new TypeError("Failed to execute 'compareBoundaryPoints' on 'Range': parameter 2 is not of type 'Range'.");
+            if (_lumen_range_root(this.__start_nid__) !== _lumen_range_root(other.__start_nid__)) {
+                throw new DOMException('The two Ranges are not in the same tree.', 'WrongDocumentError');
+            }
+            var p = [[this.__start_nid__, this.__start_off__, other.__start_nid__, other.__start_off__],
+                     [this.__end_nid__,   this.__end_off__,   other.__start_nid__, other.__start_off__],
+                     [this.__end_nid__,   this.__end_off__,   other.__end_nid__,   other.__end_off__  ],
+                     [this.__start_nid__, this.__start_off__, other.__end_nid__,   other.__end_off__  ]][how];
+            return _lumen_range_cmp(p[0], p[1], p[2], p[3]);
         },
         getBoundingClientRect: function() {
             var el = _lumen_make_element(this.__start_nid__);
@@ -11019,11 +11211,36 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         // Element.prototype.getClientRects()'s return type just below.
         getClientRects:   function() { return new DOMRectList([this.getBoundingClientRect()]); },
         detach:           function() {},
-        isPointInRange:   function() { return false; },
-        comparePoint:     function() { return 0; },
-        intersectsNode:   function() { return false; },
+        isPointInRange: function(node, offset) {
+            var nid = _lumen_range_point_arg(node, offset, 'isPointInRange', arguments.length);
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) return false;
+            offset = offset >>> 0;
+            return _lumen_range_cmp(nid, offset, this.__start_nid__, this.__start_off__) >= 0 &&
+                   _lumen_range_cmp(nid, offset, this.__end_nid__, this.__end_off__) <= 0;
+        },
+        comparePoint: function(node, offset) {
+            if (arguments.length < 2) throw new TypeError("Failed to execute 'comparePoint' on 'Range': 2 arguments required.");
+            var nid = _lumen_range_node_arg(node, 'comparePoint');
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) {
+                throw new DOMException('The node provided is in a different tree.', 'WrongDocumentError');
+            }
+            _lumen_range_point_arg(node, offset, 'comparePoint', 2);
+            offset = offset >>> 0;
+            if (_lumen_range_cmp(nid, offset, this.__start_nid__, this.__start_off__) < 0) return -1;
+            if (_lumen_range_cmp(nid, offset, this.__end_nid__, this.__end_off__) > 0) return 1;
+            return 0;
+        },
+        intersectsNode: function(node) {
+            var nid = _lumen_range_node_arg(node, 'intersectsNode');
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) return false;
+            var p = _lumen_u2n(_lumen_get_parent(nid));
+            if (p === null) return true;
+            var idx = _lumen_get_children(p).indexOf(nid);
+            return _lumen_range_cmp(p, idx, this.__end_nid__, this.__end_off__) < 0 &&
+                   _lumen_range_cmp(p, idx + 1, this.__start_nid__, this.__start_off__) > 0;
+        },
     };
-    r.START_TO_START = 0; r.START_TO_END = 1; r.END_TO_START = 2; r.END_TO_END = 3;
+    r.START_TO_START = 0; r.START_TO_END = 1; r.END_TO_END = 2; r.END_TO_START = 3;
     // BUG-474: without this, every Range minted here (createRange, Selection
     // ranges, caretRangeFromPoint, `new Range()`) is a plain object and fails
     // `instanceof Range` — WPT asserts that on the very first caretRangeFromPoint
@@ -11036,7 +11253,7 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
 // Range constructor (allows `new Range()`)
 function Range() { return _lumen_make_range(0, 0, 0, 0); }
 Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
-Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
+Range.prototype.END_TO_END  = 2; Range.prototype.END_TO_START  = 3;
 
 // ── StaticRange (WHATWG DOM §5.4) — BUG-533 ─────────────────────────────────
 // An immutable AbstractRange: unlike Range, its [nid, offset] boundary pair
