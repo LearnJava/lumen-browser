@@ -3547,3 +3547,39 @@ off-thread relayout на каждый rAF-тик при активном rAF+DOM
 
 Без изменений кода в этом срезе — только реклассификация статуса и
 запись решения.
+
+## Срез 51 (2026-10-01) — блокер M4-свопа переатрибутирован: не ShareCache, а инлайн-сбор JS-данных
+
+Новая гипотеза, не зависящая от ShareCache, которую требовал срез 49 —
+найдена при разборе [BUG-1112](BUG-1112-OPEN.md) срез 13 (там же все
+рычаги и числа).
+
+- `cascade_reused`/`cascade_recomputed` в логе on-thread relayout'а — это
+  `counters::CascadeStats` (межпроходный кэш BUG-341), попадания
+  `ShareCache` в них не засчитываются вообще. Вывод среза 47
+  («`cascade_reused=0` ⇒ ShareCache пуст ⇒ полный каскад») был
+  неверен.
+- Живой перемер на lenta.ru под `LUMEN_BUG935_M4_SWAP=1`
+  (`main` @ 9bae83a53): 6 из 9 on-thread тиков — `restyle=1` с
+  `cascade_recomputed` 0–9, т.е. каскада практически нет, а тик
+  всё равно стоит 223–1037 мс. По `[engine] apply-step` доминанта —
+  `js_geometry_collect` (173–482 мс) и `collect_computed_styles`
+  (162–700 мс).
+- Рычаг: временно «починенный» ShareCache (`insert=326` вместо 0) —
+  `cascade_reused` по-прежнему 0, `apply_ms` 121–318 мс. ShareCache
+  стоимость тика не определяет.
+
+**Причина фриза под свопом:** `try_relayout_raf_incremental` вызывает
+`apply_relayout_result(.., None)`, и `PrecollectedJsData` собирается
+инлайн на UI-потоке (`relayout.rs`, ветка `None => …` у
+`js_geometry_collect`). Срез 41 унёс этот сбор на движковый поток только
+для off-thread пути и прямо оставил M4-путь нетронутым.
+
+**Следующий шаг (новая гипотеза для P3):** убрать инлайн-сбор с
+UI-потока на M4-пути — отправить `collect_js_data` движковой задачей
+после on-thread relayout'а (или отложить, как `defer_js_push`), затем
+повторить живой A/B `LUMEN_BUG935_M4_SWAP` на lenta.ru тем же
+`scripts/bug935_raf_relayout_census.py`. Статус `OPEN (DEBTOR)` не
+меняется этим срезом — задача поставлена, не сделана.
+
+Без изменений кода.
