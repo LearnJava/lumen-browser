@@ -71,3 +71,15 @@ BUG-1096): **312 подтестов** только в семье `4K*` пада�
 
 `tests/wpt/run_report.py --check --all --root referrer-policy/4K --recursive --processes 7` —
 156 `img-tag`-подтестов этого кластера должны перейти в unexpected PASS.
+
+## Срез 1 (2026-10-01, ветка `p1-bug-1097-bmp`)
+
+Добавлен `crates/engine/image/src/bmp.rs` (`decode_bmp`/`is_bmp`/`BmpError`) поверх `zune-bmp` 0.5
+(тот же `zune-core 0.5`, что `zune-jpeg`/`zune-png`), ветка `is_bmp` в `decode_raw`,
+`image/bmp` в `supported_mime_types()`. Юнит-тесты (5) включают байты, которые реально
+отдаёт `image.py` (3x2, 24 bpp, padding) — декодируются в ожидаемые RGB.
+
+**Не проверено сквозным прогоном** — команда из «Как проверить фикс» (`referrer-policy/4K`,
+многочасовая) не запускалась. Баг остаётся OPEN до неё: нужно убедиться, что 156 `img-tag`-подтестов
+стали unexpected PASS и перегенерировать baseline `referrer-policy`/`mixed-content`.
+Остаток `script-tag`/`sharedworker-classic`/`a-tag` — по-прежнему не объяснён.
