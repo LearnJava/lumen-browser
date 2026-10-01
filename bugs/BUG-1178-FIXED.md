@@ -1,6 +1,6 @@
 # BUG-1178 — у документа без `<script>` нет JS-рантайма: MCP `eval` всегда «JS context not available»
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-25 (P6, по ходу закрытия [BUG-493](BUG-493-FIXED.md)).
 **Область:** shell (`crates/shell/src/scripts.rs:788-791` — `run_scripts_with_dom` возвращает
 `(doc_arc, None, None)`, если скриптов нет и `always_runtime == false`;
@@ -34,3 +34,9 @@ Chrome (CDP `Runtime.evaluate`) отвечает на любой страниц�
 ленивый вариант.
 
 Критерий: `eval("document.title")` на `noscript.html` возвращает `"noscript"`.
+
+## Исправление
+
+`page_pipeline.rs` передаёт `always_runtime = true` для страницы верхнего уровня: рантайм создаётся
+всегда (как для фреймов, BUG-480 срез 8). Ленивый вариант не понадобился. Живая проба
+`--mcp-live-port` на `http://127.0.0.1:8793/noscript.html`: `eval("document.title")` → `"noscript"`.

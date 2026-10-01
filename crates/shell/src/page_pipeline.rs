@@ -1268,7 +1268,10 @@ pub(crate) fn parse_and_layout(
         &ext_scripts,
         classic_scripts,
         deferred_scripts,
-        false,
+        // BUG-1178: страница верхнего уровня без `<script>` тоже получает рантайм —
+        // `eval` автоматизации и расширения читают DOM через JS (Chrome: `window`
+        // есть всегда).
+        true,
         parse_time_snapshot,
         cascade.stylesheet_nodes.clone(),
         parse_time_stylesheet,
