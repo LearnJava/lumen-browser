@@ -2947,6 +2947,14 @@ fn fetch_with_redirect(
                 let next = url
                     .resolve(location)
                     .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
+                // BUG-1098: Fetch §4.4 HTTP-redirect fetch step «если scheme
+                // locationURL не HTTP(S) — network error». `data:`/`file:`
+                // выше обслуживаются без сети как стартовый URL, но как
+                // redirect-target они обязаны проваливаться, иначе сервер
+                // подсовывает странице содержимое «локальной» схемы.
+                if !matches!(next.scheme(), "http" | "https") {
+                    return Err(Error::Network(format!("unsupported scheme: {}", next.scheme())));
+                }
                 // Range пробрасывается в redirect-target: пользователь
                 // запросил range на исходном URL, ожидает тот же range от
                 // final-resource (это и есть смысл redirect для range-GET).
@@ -8379,6 +8387,20 @@ mod tests {
         assert_eq!(streamed, b"done");
         assert_eq!(body, b"done");
         server.join().unwrap();
+    }
+
+    /// BUG-1098: redirect на `data:`/`mailto:` — network error, а не декодирование.
+    #[test]
+    fn redirect_to_non_http_scheme_is_network_error() {
+        for loc in ["data:,HI", "mailto:a@a.com"] {
+            let resp = format!("HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes();
+            let (port, server) = mock_http_server(1, move |_| resp.clone());
+            let client = HttpClient::new();
+            let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+            let err = client.fetch_page(&url, None, false).err().expect("redirect must fail");
+            assert!(format!("{err:?}").contains("unsupported scheme"), "{loc}: {err:?}");
+            server.join().unwrap();
+        }
     }
 
     /// BUG-757: после редиректа наружу отдаётся адрес hop-а, который ответил
