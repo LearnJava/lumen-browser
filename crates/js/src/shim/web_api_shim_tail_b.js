@@ -5133,13 +5133,27 @@ function _wa_lerp_color(a, b, t) {
 }
 
 // Lerp a single CSS scalar+unit value (e.g. '100px', '0.5').
+// Absolute units of one dimension → factor to the canonical unit (s, px, deg).
+var _wa_unit_scale = {
+    s: ['s', 1], ms: ['s', 0.001],
+    px: ['px', 1], in: ['px', 96], cm: ['px', 96 / 2.54], mm: ['px', 96 / 25.4],
+    q: ['px', 96 / 101.6], pt: ['px', 96 / 72], pc: ['px', 16],
+    deg: ['deg', 1], grad: ['deg', 0.9], rad: ['deg', 180 / Math.PI], turn: ['deg', 360]
+};
+
 function _wa_lerp_scalar(a, b, t) {
     var na = parseFloat(a), nb = parseFloat(b);
     if (isNaN(na) || isNaN(nb)) return t < 0.5 ? a : b;
-    var v = na + (nb - na) * t;
-    var ua = String(a).replace(/[0-9. +-]/g, '');
-    var ub = String(b).replace(/[0-9. +-]/g, '');
-    return v + (ua || ub || '');
+    var ua = _wa_unit(a).toLowerCase(), ub = _wa_unit(b).toLowerCase();
+    if (ua === ub || !ua || !ub) {
+        return (na + (nb - na) * t) + (_wa_unit(a) || _wa_unit(b));
+    }
+    var sa = _wa_unit_scale[ua], sb = _wa_unit_scale[ub];
+    // Different units of one dimension mix in the canonical unit; anything
+    // else (px vs %, s vs px) is not interpolable and flips discretely.
+    if (!sa || !sb || sa[0] !== sb[0]) return t < 0.5 ? a : b;
+    na *= sa[1]; nb *= sb[1];
+    return +((na + (nb - na) * t).toFixed(6)) + sa[0];
 }
 
 // CSS color-like property names.

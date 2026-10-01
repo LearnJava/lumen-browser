@@ -1410,3 +1410,25 @@ fn decompression_stream_multi_chunk_matches_single_chunk() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// ── BUG-1195: смешивание единиц в _wa_lerp_scalar ───────────────────────────
+
+/// Разные единицы одного измерения приводятся к каноническим (s/px/deg),
+/// несовместимые — дискретно; одинаковые остаются как есть; прогресс вне
+/// [0,1] экстраполирует.
+#[test]
+fn wa_lerp_scalar_converts_units_and_extrapolates() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "[_wa_lerp_scalar('1s','2000ms',0.5), _wa_lerp_scalar('1s','2000ms',-0.3), \
+              _wa_lerp_scalar('1in','96px',0.5), _wa_lerp_scalar('1turn','90deg',0.5), \
+              _wa_lerp_scalar('10px','20px',0.5), _wa_lerp_scalar('10px','50%',0.2), \
+              _wa_lerp_scalar('1s','2px',0.7)].join()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("1.5s,0.7s,96px,225deg,15px,10px,2px".into())
+    );
+}
