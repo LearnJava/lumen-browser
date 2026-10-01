@@ -45,3 +45,7 @@ struct/scripted/autofocus-attribute.svg, struct/scripted/use-load-error-events.t
 ## Не проверялось
 
 - 3 оставшихся `ERROR` (не `TIMEOUT`) top-level результата (`restart-never-and-begin-click.html`, `outer-svg-intrinsic-size-002.html`, `SVGAnimatedEnumeration-initial-values.html`) — 0/0 подтестов, детальный блок отчёта пуст (нет саб-тестовой таблицы), причина не разобрана в этом срезе.
+
+## Прогресс
+
+- 2026-10-01 (P6): `begin` разбирается как список `;` — смещения, `id.begin|end±offset` (syncbase, ссылка на состояние другого элемента), `[id.]event±offset` (слушатель на целевом элементе, по событию старт). Покрыто юнит-тестом `svg_smil_syncbase_end_plus_offset_and_event_begin`. WPT `svg` не перемерялся — число TIMEOUT неизвестно, баг остаётся OPEN. Не сделано: `end` со syncbase/event, повторные интервалы (restart), `repeat(n)`, синхронный `beginElement()`-instance-time по спецификации.

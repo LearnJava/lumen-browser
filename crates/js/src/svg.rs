@@ -1530,16 +1530,44 @@ const SVG_SHIM: &str = concat!(r#"
     return m[2] === 'ms' ? n / 1000 : n;
   }
 
-  // `begin` — first comma-separated token only (multiple begin instances are
-  // out of scope). Absent → spec default `0s`. `indefinite` or any
-  // unsupported (syncbase/event/repeat) form → `null`, meaning "only
-  // `beginElement()`/`beginElementAt()` can start this animation".
-  function _lumen_smil_parse_begin_offset(nid) {
+  // `begin` — list of `;`-separated terms (SMIL Timing §begin-value-list).
+  // Supported: clock offsets (`2s`), `indefinite` (no term — only
+  // `beginElement()` starts it), syncbase (`id.begin`/`id.end` ± offset) and
+  // event-base (`id.eventname` ± offset, id optional → parent element).
+  // Absent/empty → spec default `0s`. Anything unparseable is dropped.
+  function _lumen_smil_parse_begin_terms(nid) {
     var raw = _lumen_u2n(_lumen_get_attr(nid, 'begin'));
-    if (raw == null || raw.trim() === '') return 0;
-    var tok = raw.split(',')[0].trim();
-    if (tok === 'indefinite') return null;
-    return _lumen_smil_parse_clock(tok);
+    if (raw == null || raw.trim() === '') return [{ kind: 'offset', off: 0 }];
+    var terms = [];
+    raw.split(';').forEach(function(part) {
+      var tok = part.trim();
+      if (tok === '' || tok === 'indefinite') return;
+      var c = _lumen_smil_parse_clock(tok);
+      if (c !== null) { terms.push({ kind: 'offset', off: c }); return; }
+      var off = 0;
+      var head = tok;
+      var om = /\s*([+-])\s*([0-9.][^\s]*)$/.exec(tok);
+      if (om) {
+        var ov = _lumen_smil_parse_clock(om[2]);
+        if (ov !== null) { off = om[1] === '-' ? -ov : ov; head = tok.slice(0, om.index); }
+      }
+      // `[id.]name` — the first unescaped dot splits id from name.
+      var dot = -1;
+      for (var k = 0; k < head.length; k++) {
+        if (head[k] === '\\') { k++; continue; }
+        if (head[k] === '.') { dot = k; break; }
+      }
+      var unesc = function(x) { return x.replace(/\\(.)/g, '$1'); };
+      var id = dot >= 0 ? unesc(head.slice(0, dot)) : null;
+      var name = unesc(dot >= 0 ? head.slice(dot + 1) : head).trim();
+      if (!name || (dot >= 0 && id === '')) return;
+      if (id !== null && (name === 'begin' || name === 'end')) {
+        terms.push({ kind: 'sync', id: id, which: name, off: off });
+      } else {
+        terms.push({ kind: 'event', id: id, name: name, off: off, bound: false });
+      }
+    });
+    return terms;
   }
 
   // `end` — first token, resolved as an absolute document-timeline instant
@@ -1609,8 +1637,9 @@ const SVG_SHIM: &str = concat!(r#"
     var st = _lumen_smil_states[nid];
     if (!st) {
       st = {
-        beginTime: null, resolvedOnce: false, cycle: 0, ended: false,
+        beginTime: null, cycle: 0, ended: false,
         beginFired: false, manualBegin: null, manualEnd: null,
+        endTime: null, terms: null,
       };
       _lumen_smil_states[nid] = st;
     }
@@ -1640,10 +1669,33 @@ const SVG_SHIM: &str = concat!(r#"
         st.beginTime = mb; st.ended = false; st.cycle = 0; st.beginFired = false;
       }
     }
-    if (st.beginTime === null && !st.resolvedOnce) {
-      st.resolvedOnce = true;
-      var off = _lumen_smil_parse_begin_offset(nid);
-      if (off !== null) st.beginTime = epoch + off;
+    if (st.terms === null) st.terms = _lumen_smil_parse_begin_terms(nid);
+    if (st.beginTime === null && !st.ended) {
+      var best = null;
+      for (var ti = 0; ti < st.terms.length; ti++) {
+        var tm = st.terms[ti];
+        var cand = null;
+        if (tm.kind === 'offset') {
+          cand = epoch + tm.off;
+        } else if (tm.kind === 'sync') {
+          var refEl = document.getElementById(tm.id);
+          var refSt = refEl && refEl.__nid__ != null ? _lumen_smil_states[refEl.__nid__] : null;
+          var rt = refSt ? (tm.which === 'begin' ? refSt.beginTime : refSt.endTime) : null;
+          if (rt !== null && rt !== undefined) cand = rt + tm.off;
+        } else if (!tm.bound) {
+          var tgt = tm.id === null ? el.parentNode : document.getElementById(tm.id);
+          if (tgt && typeof tgt.addEventListener === 'function') {
+            tm.bound = true;
+            (function(t) {
+              tgt.addEventListener(t.name, function() {
+                if (st.manualBegin === null) st.manualBegin = t.off;
+              });
+            })(tm);
+          }
+        }
+        if (cand !== null && (best === null || cand < best)) best = cand;
+      }
+      if (best !== null) st.beginTime = best;
     }
     var manualEndNow = null;
     if (st.manualEnd !== null) {
@@ -1689,6 +1741,7 @@ const SVG_SHIM: &str = concat!(r#"
 
     if (now_s >= effectiveEnd) {
       st.ended = true;
+      st.endTime = isFinite(effectiveEnd) ? effectiveEnd : now_s;
       if (attrName && _lumen_smil_parse_fill(nid) !== 'freeze') {
         delete _lumen_smil_overrides[nid + '|' + attrName];
       }
@@ -2506,5 +2559,38 @@ mod tests_v8 {
         assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') === -1"));
         rt.eval("_lumen_tick_smil(3.0);").unwrap();
         assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') !== -1"));
+    }
+
+    #[test]
+    fn svg_smil_syncbase_end_plus_offset_and_event_begin() {
+        let rt = with_smil_node("animate", &[("attributeName", "x"), ("begin", "0s"), ("dur", "1s"), ("to", "10")]);
+        rt.eval(
+            r#"
+            var a = __lumen_C._lumen_smil_node;
+            __lumen_C._lumen_smil_attrs[2] = {attributeName: "y", begin: "a.end+1s", to: "7"};
+            var b = new (_lumen_svg_ctor_for_local("set"))();
+            b.__nid__ = 2;
+            _allEls.push(b);
+            __lumen_C._lumen_smil_attrs[3] = {attributeName: "z", begin: "a.fooEvent", to: "9"};
+            var c = new (_lumen_svg_ctor_for_local("set"))();
+            c.__nid__ = 3;
+            _allEls.push(c);
+            var listeners = {};
+            a.addEventListener = function(n, f) { listeners[n] = f; };
+            document.getElementById = function(id) { return id === 'a' ? a : null; };
+            _lumen_tick_smil(0.0);
+            _lumen_tick_smil(1.0);
+            "#,
+        )
+        .unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['2|y'] === undefined"));
+        rt.eval("_lumen_tick_smil(1.5);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['2|y'] === undefined"));
+        rt.eval("_lumen_tick_smil(2.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['2|y'] === '7'"));
+        // Event-based begin waits for the listener to fire.
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['3|z'] === undefined"));
+        rt.eval("listeners.fooEvent(); _lumen_tick_smil(2.5);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['3|z'] === '9'"));
     }
 }
