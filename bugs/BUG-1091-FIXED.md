@@ -1,6 +1,6 @@
 # BUG-1091 — `PannerNode`, `ConvolverNode`, `DynamicsCompressorNode` в офлайн-рендере пропускают вход без обработки
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6). `PannerNode` (distance/cone/equal-power), `ConvolverNode` (FFT-свёртка, normalize), `DynamicsCompressorNode` (soft-knee, attack/release, reduction) рендерятся; HRTF — заменён equal-power. Подтесты WPT не перемерялись (.ini не обновлён).
 **Тип:** пробел реализации — DSP-часть трёх узлов не написана; «осознанный остаток» [BUG-828](BUG-828-FIXED.md), под который задачи не заведено.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 52, `webaudio`)
 **Область:** js — `crates/js/src/web_audio.rs` (шапка модуля: «**Not rendered:** `DynamicsCompressorNode`, `PannerNode`, `ConvolverNode` and `AudioWorkletNode` pass their input through unchanged»)
