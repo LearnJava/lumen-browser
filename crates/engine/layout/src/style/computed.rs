@@ -1063,10 +1063,11 @@ impl ComputedStyle {
     }
 
     /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
-    /// насыщенность, letter/word-spacing, декорация). Используется для слияния
+    /// насыщенность, letter/word-spacing, декорация, фон). Используется для слияния
     /// inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
+            && self.background_color == other.background_color
             && (self.font_size - other.font_size).abs() < f32::EPSILON
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
