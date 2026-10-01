@@ -83,7 +83,7 @@ ERROR на селекторе [BUG-1063](BUG-1063-FIXED.md), а раньше о�
 Остаток вне задачи:
 
 - hover- и Escape-варианты через `test_driver.Actions()` — исполнитель не наводит курсор
-  и не шлёт Escape ([BUG-1194](BUG-1194-OPEN.md)), плюс селектор `*|body` ([BUG-1063](BUG-1063-FIXED.md));
+  и не шлёт Escape ([BUG-1194](BUG-1194-FIXED.md)), плюс селектор `*|body` ([BUG-1063](BUG-1063-FIXED.md));
 - 44 подтеста интерполяции в `interestfor-css-properties` (38/82): CSS Transitions/Animations
   не интерполируют `interest-delay-*` (планировщик переходов в `animation.rs` не знает
   `<time>`-свойств), Web Animations — [BUG-1195](BUG-1195-OPEN.md);

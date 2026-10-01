@@ -46,5 +46,4 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## WPT-specific
 
-- **`test_driver.Actions()` cannot hover or press Escape**: a `pointerMove` without a following `pointerDown` only records the point (no `mouseover`, no `:hover`), and `keyDown('\uE00C')` is typed as text after a click at the last point instead of arriving as `key === 'Escape'` ([BUG-1194](../bugs/BUG-1194-OPEN.md)). A hover- or hotkey-driven subtest failing under WPT measures this, not the feature — probe the feature with a dispatched `mouseover`/`KeyboardEvent` instead.
 - **An id-less element used to die with `<path> is not a valid selector`** (`*|body` path of `testdriver-extra.js::get_selector`) — fixed ([BUG-1063](../bugs/BUG-1063-FIXED.md)); the `shadow-dom`/`pointerevents`/`editing` baselines still record `ERROR` until a WPT regeneration run.

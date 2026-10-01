@@ -1,6 +1,6 @@
 # BUG-1194 — `input.performActions`: `pointerMove` без клика не наводит курсор, `keyDown('\uE00C')` не Escape
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-26 (P1, по ходу GAP-INTERESTINVOKER — вне выданного пункта).
 **Область:** WPT-исполнитель / BiDi —
 [`crates/bidi-server/src/protocol.rs`](../crates/bidi-server/src/protocol.rs) `replay_input_actions`,
@@ -38,3 +38,13 @@
   `CursorMoved` (hit-test, смена `hovered_nid`, `pointerout/mouseout/.../mouseover/pointerenter`).
 - Ключи WebDriver PUA (`\uE000`–`\uE05D`) → `KeyDown/KeyUp` с соответствующим `key`/`code`
   вместо печати символа; `keyDown`/`keyUp` без указателя не должны кликать.
+
+## Исправление
+
+- `AutomationCommand::PointerMove {x,y}` → `Lumen::on_cursor_moved` (тот же путь, что `CursorMoved`:
+  hit-test, `hovered_nid`, `pointerover/mouseover/pointerenter`, `:hover`).
+- `AutomationCommand::Key {key, code, down}` → `inject_key_events` (`keydown`/`keyup` по отдельности).
+- `AutomationCommand::TypeFocused(text)` — печать в уже сфокусированный элемент без клика.
+- `replay_input_actions`: PUA-коды WebDriver (`webdriver_special_key`) → `Key`; обычные символы —
+  click-then-type только если перед ними был pointer-источник, иначе `TypeFocused`.
+- Тесты: `input_perform_actions_hover_and_special_keys`, `input_perform_actions_text_without_pointer_does_not_click`.

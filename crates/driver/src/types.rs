@@ -498,6 +498,29 @@ pub enum AutomationCommand {
     Type(Target, String),
     /// Scroll by delta in document coordinates.
     Scroll(ScrollDelta),
+    /// Move the pointer to viewport CSS-pixel coordinates without pressing a
+    /// button (BUG-1194): goes the same way as a real `CursorMoved` — hit
+    /// test, `:hover`, `pointerout/mouseout/…/mouseover/pointerenter`.
+    PointerMove {
+        /// Viewport X, CSS px.
+        x: f32,
+        /// Viewport Y, CSS px.
+        y: f32,
+    },
+    /// Press or release one non-text key (BUG-1194): dispatches `keydown` or
+    /// `keyup` with the given `KeyboardEvent.key`/`code` at the focused
+    /// element, without clicking anywhere.
+    Key {
+        /// `KeyboardEvent.key`, e.g. `Escape`.
+        key: String,
+        /// `KeyboardEvent.code`, e.g. `Escape`, `ShiftLeft`.
+        code: String,
+        /// `true` — `keydown`, `false` — `keyup`.
+        down: bool,
+    },
+    /// Type characters into the currently focused element without clicking
+    /// first (BUG-1194; `Type` always clicks its target).
+    TypeFocused(String),
     /// Evaluate JavaScript in the active tab.
     ///
     /// The second field is how long (ms) the live window waits for its engine

@@ -958,6 +958,42 @@ impl Lumen {
                     self.scroll_by_delta(delta.x, delta.y);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                // BUG-1194: hover without a click — the same handler a real
+                // `CursorMoved` runs (hit test, `:hover`, over/out/enter/leave).
+                AutomationCommand::PointerMove { x, y } => {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f64, |r| r.scale_factor())
+                        .max(1e-6);
+                    self.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+                        f64::from(x) * dpr,
+                        f64::from(y) * dpr,
+                    ));
+                    #[cfg(feature = "v8")]
+                    self.flush_pointer_moves();
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // BUG-1194: a bare key press/release (Escape, Tab, Shift, …).
+                AutomationCommand::Key { key, code, down } => {
+                    let event = if down { "keydown" } else { "keyup" };
+                    self.inject_key_events(&key, &code, &[event]);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // BUG-1194: characters into the already focused element.
+                AutomationCommand::TypeFocused(text) => {
+                    let in_frame = self.focused_frame.is_some();
+                    let mut consumed = true;
+                    for ch in text.chars() {
+                        consumed &= if in_frame { self.inject_frame_char(ch) } else { self.inject_char(ch) };
+                    }
+                    let reply = if consumed {
+                        AutomationReply::Ack
+                    } else {
+                        AutomationReply::Error("Focused element is not a mutable text field".to_string())
+                    };
+                    let _ = reply_tx.send(reply);
+                }
                 // BUG-1199: the page under test called `window.open()` and is
                 // parked in `bg_tabs` — its runtime keeps ticking there (GAP-NAVCTX
                 // срез 15), so evaluate against it directly, as the per-tick pump
