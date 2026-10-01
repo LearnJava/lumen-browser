@@ -1146,13 +1146,19 @@ impl Lumen {
             // fully synchronous `relayout()` has no engine-thread job to
             // piggy-back on, so it still falls back to the inline path below,
             // byte-identical to before this slice.
-            let js_data = if self.js_present {
+            // BUG-935 S51: on a deferred push with nothing precollected (the
+            // M4 incremental path, the synchronous `relayout()`), only the
+            // cheap layout-shift half runs here; the tree walks move into the
+            // deferred engine task below — see `DeferredJsCollect`. A blocking
+            // push (`defer_js_push=false`) still collects inline: its caller
+            // gets the result back synchronously anyway.
+            let pending = if self.js_present {
                 match precollected {
-                    Some(data) => Some(data),
+                    Some(mut data) => {
+                        self.prev_layout_shift_rects = std::mem::take(&mut data.next_layout_shift_baseline);
+                        Some(PendingJsData::Ready(Box::new(data)))
+                    }
                     None => (|| {
-                        let lb_ref = self.layout_box.as_ref()?;
-                        let doc_guard =
-                            self.layout_source.as_ref()?.document.lock().ok()?;
                         let pseudo_styles_needed = self
                             .pseudo_styles_needed_flag
                             .as_ref()
@@ -1168,7 +1174,33 @@ impl Lumen {
                             .as_ref()
                             .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
                             .unwrap_or(true);
-                        Some(apply_step!(
+                        let lb_ref = self.layout_box.as_ref()?;
+                        let document = Arc::clone(&self.layout_source.as_ref()?.document);
+                        if defer_js_push {
+                            let mut shift = apply_step!(
+                                "js_shift_collect",
+                                collect_js_shift_data(
+                                    lb_ref,
+                                    viewport,
+                                    &self.prev_layout_shift_rects,
+                                    self.last_input_epoch_s,
+                                    now_s,
+                                )
+                            );
+                            let hit_test_tree = apply_step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
+                            self.prev_layout_shift_rects = std::mem::take(&mut shift.next_baseline);
+                            return Some(PendingJsData::Deferred(DeferredJsCollect {
+                                hit_test_tree,
+                                document,
+                                viewport,
+                                shift,
+                                pseudo_styles_needed,
+                                custom_props_needed,
+                                computed_styles_needed,
+                            }));
+                        }
+                        let doc_guard = document.lock().ok()?;
+                        let mut data = apply_step!(
                             "js_geometry_collect",
                             collect_js_data(
                                 lb_ref,
@@ -1181,27 +1213,15 @@ impl Lumen {
                                 custom_props_needed,
                                 computed_styles_needed,
                             )
-                        ))
+                        );
+                        self.prev_layout_shift_rects = std::mem::take(&mut data.next_layout_shift_baseline);
+                        Some(PendingJsData::Ready(Box::new(data)))
                     })(),
                 }
             } else {
                 None
             };
-            if let Some(PrecollectedJsData {
-                rects,
-                layout_shift_score,
-                layout_shift_sources,
-                had_input,
-                client_rects,
-                hit_test_tree,
-                styles,
-                pseudo_styles,
-                customs,
-                scroll_states,
-                next_layout_shift_baseline,
-            }) = js_data
-            {
-                self.prev_layout_shift_rects = next_layout_shift_baseline;
+            if let Some(pending) = pending {
                 let (vw, vh) = (viewport.width, viewport.height);
                 let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
@@ -1248,6 +1268,24 @@ impl Lumen {
                                 result
                             }};
                         }
+                        // BUG-935 S51: the tree walks run here, on the engine
+                        // thread, when the producer had nothing precollected.
+                        let Some(PrecollectedJsData {
+                            rects,
+                            layout_shift_score,
+                            layout_shift_sources,
+                            had_input,
+                            client_rects,
+                            hit_test_tree,
+                            styles,
+                            pseudo_styles,
+                            customs,
+                            scroll_states,
+                            next_layout_shift_baseline: _,
+                        }) = timed_step!("js_geometry_collect_deferred", pending.resolve())
+                        else {
+                            return;
+                        };
                         timed_step!("update_layout_rects", js.update_layout_rects(rects));
                         timed_step!("update_client_rects", js.update_client_rects(client_rects));
                         timed_step!("update_hit_test_tree", js.update_hit_test_tree(hit_test_tree));
@@ -1292,7 +1330,20 @@ impl Lumen {
                         }
                     });
                     });
-                } else {
+                } else if let Some(PrecollectedJsData {
+                    rects,
+                    layout_shift_score,
+                    layout_shift_sources,
+                    had_input,
+                    client_rects,
+                    hit_test_tree,
+                    styles,
+                    pseudo_styles,
+                    customs,
+                    scroll_states,
+                    next_layout_shift_baseline: _,
+                }) = pending.resolve()
+                {
                     lazy_reqs = apply_step!("js_push_blocking", route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
@@ -2258,13 +2309,65 @@ pub(crate) struct PrecollectedJsData {
     pub(crate) next_layout_shift_baseline: std::collections::HashMap<u32, [f32; 4]>,
 }
 
+/// BUG-935 S51: the cheap, layout-shift half of [`collect_js_data`] — kept
+/// on whichever thread applies the commit even when the expensive half
+/// ([`collect_js_tree_data`]) moves into a deferred engine-thread task,
+/// because it reads and advances [`Lumen::prev_layout_shift_rects`]: running
+/// it later, on another thread, would need a second hand-off just to bring
+/// the next baseline back. Measured sub-millisecond on lenta.ru
+/// (`collect_layout_shift_rects` ~0.4ms, `layout_shift_score` ~0.04ms).
+#[cfg(feature = "v8")]
+pub(crate) struct JsShiftData {
+    pub(crate) score: f64,
+    pub(crate) sources: Vec<LayoutShiftSource>,
+    pub(crate) had_input: bool,
+    pub(crate) next_baseline: std::collections::HashMap<u32, [f32; 4]>,
+}
+
+#[cfg(feature = "v8")]
+fn collect_js_shift_data(
+    lb_ref: &lumen_layout::LayoutBox,
+    viewport: Size,
+    prev_layout_shift_rects: &std::collections::HashMap<u32, [f32; 4]>,
+    last_input_epoch_s: f32,
+    now_s: f32,
+) -> JsShiftData {
+    let step_log = lumen_paint::frame_log_enabled();
+    macro_rules! step {
+        ($label:literal, $expr:expr) => {{
+            let t0 = step_log.then(std::time::Instant::now);
+            let result = $expr;
+            if let Some(t0) = t0 {
+                let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                eprintln!("[engine] apply-step {ms:.2}ms ({})", $label);
+            }
+            result
+        }};
+    }
+    let shift_rects = step!(
+        "collect_layout_shift_rects",
+        lumen_layout::collect_layout_shift_rects(lb_ref)
+    );
+    let layout_shift = step!(
+        "layout_shift_score",
+        compute_layout_shift_score(prev_layout_shift_rects, &shift_rects, viewport.width, viewport.height)
+    );
+    JsShiftData {
+        score: layout_shift.score,
+        sources: layout_shift.sources,
+        had_input: now_s - last_input_epoch_s < 0.5,
+        next_baseline: shift_rects,
+    }
+}
+
 /// BUG-935 S41: the pure collection step factored out of
 /// [`Lumen::apply_relayout_result`] so [`Lumen::make_relayout_job`] can run
 /// it on the engine thread instead — S40 found this already the dominant
 /// UI-thread cost of every commit, off-thread or not. Depends only on the
 /// freshly computed layout tree, the (locked) document and a layout-shift
 /// baseline snapshot — no `Lumen` field, so it needs neither `&self` nor the
-/// renderer/frame state.
+/// renderer/frame state. BUG-935 S51: now the composition of
+/// [`collect_js_shift_data`] and [`collect_js_tree_data`].
 #[cfg(feature = "v8")]
 #[allow(clippy::too_many_arguments)]
 fn collect_js_data(
@@ -2283,6 +2386,42 @@ fn collect_js_data(
     custom_props_needed: bool,
     computed_styles_needed: bool,
 ) -> PrecollectedJsData {
+    let shift = collect_js_shift_data(lb_ref, viewport, prev_layout_shift_rects, last_input_epoch_s, now_s);
+    let step_log = lumen_paint::frame_log_enabled();
+    let t0 = step_log.then(std::time::Instant::now);
+    let hit_test_tree = Arc::new(lb_ref.clone());
+    if let Some(t0) = t0 {
+        eprintln!("[engine] apply-step {:.2}ms (clone_hit_test_tree)", t0.elapsed().as_secs_f32() * 1000.0);
+    }
+    collect_js_tree_data(
+        hit_test_tree,
+        doc_guard,
+        viewport,
+        shift,
+        pseudo_styles_needed,
+        custom_props_needed,
+        computed_styles_needed,
+    )
+}
+
+/// BUG-935 S51: the expensive half of [`collect_js_data`] — every tree walk
+/// (`collect_layout_rects`/`collect_client_rects`/`collect_computed_styles`
+/// and the gated pseudo/custom-property/scroll collectors), 160-700ms per
+/// tick on lenta.ru. Takes the layout tree as the `Arc` that is also pushed
+/// to JS as `hit_test_tree`, so a caller that defers this into an
+/// engine-thread task ([`DeferredJsCollect`]) pays for exactly one clone of
+/// the tree on its own thread — the same clone the inline path already made.
+#[cfg(feature = "v8")]
+#[allow(clippy::too_many_arguments)]
+fn collect_js_tree_data(
+    hit_test_tree: Arc<lumen_layout::LayoutBox>,
+    doc_guard: std::sync::MutexGuard<'_, Document>,
+    viewport: Size,
+    shift: JsShiftData,
+    pseudo_styles_needed: bool,
+    custom_props_needed: bool,
+    computed_styles_needed: bool,
+) -> PrecollectedJsData {
     let step_log = lumen_paint::frame_log_enabled();
     macro_rules! step {
         ($label:literal, $expr:expr) => {{
@@ -2295,18 +2434,9 @@ fn collect_js_data(
             result
         }};
     }
+    let lb_ref: &lumen_layout::LayoutBox = &hit_test_tree;
     let rects = step!("collect_layout_rects", collect_layout_rects(lb_ref, &doc_guard));
-    let shift_rects = step!(
-        "collect_layout_shift_rects",
-        lumen_layout::collect_layout_shift_rects(lb_ref)
-    );
-    let layout_shift = step!(
-        "layout_shift_score",
-        compute_layout_shift_score(prev_layout_shift_rects, &shift_rects, viewport.width, viewport.height)
-    );
-    let had_input = now_s - last_input_epoch_s < 0.5;
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
-    let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
     let styles = if computed_styles_needed {
         Some(step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None, viewport)))
     } else {
@@ -2341,16 +2471,87 @@ fn collect_js_data(
     );
     PrecollectedJsData {
         rects,
-        layout_shift_score: layout_shift.score,
-        layout_shift_sources: layout_shift.sources,
-        had_input,
+        layout_shift_score: shift.score,
+        layout_shift_sources: shift.sources,
+        had_input: shift.had_input,
         client_rects,
         hit_test_tree,
         styles,
         pseudo_styles,
         customs,
         scroll_states,
-        next_layout_shift_baseline: shift_rects,
+        next_layout_shift_baseline: shift.next_baseline,
+    }
+}
+
+/// BUG-935 S51: everything [`collect_js_tree_data`] needs, captured on the UI
+/// thread by [`Lumen::apply_relayout_result`] and run later inside the
+/// deferred JS-push engine task — the M4 incremental path
+/// (`try_relayout_raf_incremental`) and the synchronous `relayout()` have no
+/// off-thread layout job to precollect in (S41 only covered
+/// `poll_engine_commit`), so before this slice they paid the whole
+/// collection on the UI thread: S13 of BUG-1112 measured it at 173-700ms per
+/// rAF tick on lenta.ru under `LUMEN_BUG935_M4_SWAP=1`, the actual cause of
+/// the S47 freeze. The document is snapshotted on the engine thread, between
+/// JS turns — the same window `make_relayout_job`'s own collection already
+/// runs in, so a script that mutated the DOM after this layout sees exactly
+/// the snapshot semantics the off-thread path has had since S41.
+#[cfg(feature = "v8")]
+pub(crate) struct DeferredJsCollect {
+    hit_test_tree: Arc<lumen_layout::LayoutBox>,
+    document: Arc<std::sync::Mutex<Document>>,
+    viewport: Size,
+    shift: JsShiftData,
+    pseudo_styles_needed: bool,
+    custom_props_needed: bool,
+    computed_styles_needed: bool,
+}
+
+#[cfg(feature = "v8")]
+impl DeferredJsCollect {
+    /// `None` only when the document lock is poisoned — the inline path
+    /// skipped the whole push on the same condition.
+    fn run(self) -> Option<PrecollectedJsData> {
+        // Hold the document lock only for a snapshot clone, not for the whole
+        // 100-250ms collection: the UI thread re-locks the document right
+        // after spawning this task (`spawn_dynamic_image_loads`, hit tests,
+        // event dispatch), and the first live A/B of S51 showed it simply
+        // blocking on this mutex for the full collection instead of running
+        // it — the freeze moved, it did not go away.
+        let step_log = lumen_paint::frame_log_enabled();
+        let t0 = step_log.then(std::time::Instant::now);
+        let snapshot = std::sync::Mutex::new(self.document.lock().ok()?.clone());
+        if let Some(t0) = t0 {
+            eprintln!("[engine] task-step {:.2}ms (js_collect_doc_snapshot)", t0.elapsed().as_secs_f32() * 1000.0);
+        }
+        let doc_guard = snapshot.lock().ok()?;
+        Some(collect_js_tree_data(
+            self.hit_test_tree,
+            doc_guard,
+            self.viewport,
+            self.shift,
+            self.pseudo_styles_needed,
+            self.custom_props_needed,
+            self.computed_styles_needed,
+        ))
+    }
+}
+
+/// BUG-935 S51: JS geometry for one commit — already collected, or captured
+/// for collection inside the deferred push task (see [`DeferredJsCollect`]).
+#[cfg(feature = "v8")]
+enum PendingJsData {
+    Ready(Box<PrecollectedJsData>),
+    Deferred(DeferredJsCollect),
+}
+
+#[cfg(feature = "v8")]
+impl PendingJsData {
+    fn resolve(self) -> Option<PrecollectedJsData> {
+        match self {
+            Self::Ready(data) => Some(*data),
+            Self::Deferred(d) => d.run(),
+        }
     }
 }
 
