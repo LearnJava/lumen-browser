@@ -21,6 +21,12 @@ lumen-core.workspace = true
 zune-jpeg = "0.5"
 zune-png = "0.5"
 zune-core = "0.5"
+# Provisional: BMP-декодер (BUG-1097) — WPT-хелпер security-features отдаёт image/bmp.
+# Trait-anchor: lumen_core::ext::ImageDecoder (единственная точка вызова —
+# lumen_image::bmp::decode_bmp, ветка в decode_raw рядом с остальными форматами).
+# Graduation: permanent — BMP реальный веб-формат; тот же автор и zune-core 0.5,
+# что zune-jpeg/zune-png выше, новых транзитивных зависимостей нет.
+zune-bmp = "0.5"
 image-webp = "0.2"
 png = "0.17"
 gif = "0.14"
