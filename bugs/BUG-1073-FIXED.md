@@ -23,7 +23,7 @@
 
 Два из четырёх процессов умирают на старте. Дальше цепочка чисто инфраструктурная: `BiDi connect` → `ConnectionRefusedError [WinError 1225]`, релонч, `IO Completion Port failed to signal process shutdown`, три релонча подряд не поднимают `--bidi-port` (`RuntimeError: lumen --bidi-port did not print [bidi] token`) — и `TestRunnerManager` падает, обрывая **весь** прогон на 12–93 тестах из 258; `--check` даёт сотни ложных `REGRESSION … got MISSING`.
 
-Хвост (`did not print [bidi] token`) — тот же, что у [BUG-1072](BUG-1072-OPEN.md), но **триггер другой**: там зависший тест, здесь падение при старте.
+Хвост (`did not print [bidi] token`) — тот же, что у [BUG-1072](BUG-1072-FIXED.md), но **триггер другой**: там зависший тест, здесь падение при старте.
 
 ## Воспроизведение и частота
 

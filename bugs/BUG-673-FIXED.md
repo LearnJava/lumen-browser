@@ -41,7 +41,7 @@ Timing L2 §4) — записи остаются "утиными" plain-object �
 
 Тот же класс дефекта, что [BUG-645](BUG-645-FIXED.md)
 (`PerformancePaintTiming`), [BUG-624](BUG-624-FIXED.md)
-(`Navigator`), [BUG-637](BUG-637-OPEN.md) (`Window`) и
+(`Navigator`), [BUG-637](BUG-637-FIXED.md) (`Window`) и
 [BUG-589](BUG-589-FIXED.md) (`window` сам не WebIDL-объект) —
 WebIDL-интерфейсные объекты систематически отсутствуют как глобалы,
 хотя поведение самих shim-функций местами уже реализовано. Здесь он

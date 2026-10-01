@@ -55,7 +55,7 @@ segments.push(segment + ":nth-child(" + nth + ")");
 `css/selectors` (`focus-visible-*`, `user-invalid`), `editing`, `fullscreen`, `focus`,
 `event-timing`. Сколько из них передаёт элемент **без `id`** (только такие идут через
 `*|`-путь; элемент с `id` идёт по `#\61 \62 …` и упирается в другой дефект —
-[BUG-1065](BUG-1065-OPEN.md), эскейпы в селекторах), срез не считал.
+[BUG-1065](BUG-1065-FIXED.md), эскейпы в селекторах), срез не считал.
 
 ## Что НЕ проверено
 
@@ -84,14 +84,14 @@ deviation; это ожидаемо, а не регрессия — baseline ре
 
 ## Срез 44 WPT-RUN-7 (2026-09-21, `pointerevents`)
 
-`pointerevents` (258 id): **12 id** упали на `*|`-пути этого бага (`:root > *|body:nth-child(2)`), ещё **152** — на ветке с `id` ([BUG-1065](BUG-1065-OPEN.md)); вместе 164 из 258 (64 %) — harness-`ERROR` до первого подтеста. Baseline записан с `expected: ERROR` для этих файлов — нижняя планка, гейт по ним пуст, пока баг не закрыт; после фикса регенерировать (`--update-expected` + три `--check`), сдвиг `ERROR → OK/FAIL/TIMEOUT` ожидаем, а не регрессия.
+`pointerevents` (258 id): **12 id** упали на `*|`-пути этого бага (`:root > *|body:nth-child(2)`), ещё **152** — на ветке с `id` ([BUG-1065](BUG-1065-FIXED.md)); вместе 164 из 258 (64 %) — harness-`ERROR` до первого подтеста. Baseline записан с `expected: ERROR` для этих файлов — нижняя планка, гейт по ним пуст, пока баг не закрыт; после фикса регенерировать (`--update-expected` + три `--check`), сдвиг `ERROR → OK/FAIL/TIMEOUT` ожидаем, а не регрессия.
 
 ## Срез 47 WPT-RUN-7 (2026-09-21, `editing`)
 
 `editing` (700 id после раскрытия `?…`-вариантов): **263 из 293 harness-`ERROR`** — `eval: JS runtime error: :root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`
 (суффиксы `*|ul`, `*|ol`, `*|dl`, `*|span`, `*|img` — те же). Это самая массовая причина `ERROR` из всех снятых категорий (`pointerevents` — 12 id, `shadow-dom` — единицы):
 `editing/other/*.html`, `editing/run/*.html` и `editing/plaintext-only/*.html` открываются через `test_driver.click`/`send_keys` на элементе без `id`, а
-`testdriver-extra.js::get_selector` строит именно такой путь. Для сравнения: 382/700 id проходят harness, то есть после починки этого бага и [BUG-1065](BUG-1065-OPEN.md)
+`testdriver-extra.js::get_selector` строит именно такой путь. Для сравнения: 382/700 id проходят harness, то есть после починки этого бага и [BUG-1065](BUG-1065-FIXED.md)
 (ещё 13 id) остаётся не больше ~17 `ERROR`, а ~276 файлов перейдут с `ERROR` в реальные подтесты — категория `editing` станет заметно полезнее как гейт.
 Baseline `tests/wpt/metadata/editing/**` записан с `expected: ERROR` для этих файлов — нижняя планка; регенерировать после починки (`--update-expected` + три `--check`).
 Пример одиночного файла: `/editing/other/cloning-attributes-at-splitting-element.tentative.html`.

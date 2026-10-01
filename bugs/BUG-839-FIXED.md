@@ -305,7 +305,7 @@ NOTRUN в честный FAIL — файл теперь доходит до ко
   `redirectEnd`/`workerStart` — нули, `nextHopProtocol` пуст для подресурсов
   движка.
 * **Доставка наблюдателю по-прежнему синхронная**, а не задачей
-  ([BUG-648](BUG-648-OPEN.md)): `buffered-does-not-sync-invoke.html` это
+  ([BUG-648](BUG-648-FIXED.md)): `buffered-does-not-sync-invoke.html` это
   проверяет отдельно. `droppedEntriesCount` от этого не зависит — флаг
   «requires dropped entries» пер-наблюдательный.
 * **`transferSize`** — `encodedBodySize + 300` (фиксированная аппроксимация

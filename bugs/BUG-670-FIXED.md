@@ -109,7 +109,7 @@ computed timing по Web Animations §4.6–4.10: `duration: 'auto'` → 0, `fil
 ## Остаток
 
 - `fill: forwards|both` не доходит до `finished`, а отрисовка в фазе after игнорирует
-  `iterations`/`direction` — [BUG-1192](BUG-1192-OPEN.md) (4 провала `active-time.html`).
+  `iterations`/`direction` — [BUG-1192](BUG-1192-FIXED.md) (4 провала `active-time.html`).
 - Нет интерфейса `AnimationEffect` (`KeyframeEffect` наследует прямо от `Object`).
 - `duration: 'auto'` у scroll-/view-таймлайна должен разрешаться в процентную
   intrinsic-длительность (CSSNumberish); шим не моделирует её, поэтому

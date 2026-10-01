@@ -518,7 +518,7 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
 - [BUG-1179](BUG-1179-FIXED.md) — imdb: страница челленджа (13 узлов) остаётся текущим документом
   до 26–88 с после навигации, хотя HTML настоящей страницы и её скрипты получены к 9-й секунде;
   первый непустой кадр — 37–87 с (Chrome: `load` за 21.7 с);
-- [BUG-648](BUG-648-OPEN.md) — imdb тоже падает на синхронной доставке buffered-записей
+- [BUG-648](BUG-648-FIXED.md) — imdb тоже падает на синхронной доставке buffered-записей
   `PerformanceObserver` (`a is not a function`), дописано к cnbc;
 - [BUG-1158](BUG-1158-FIXED.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
   дописано к yahoo;

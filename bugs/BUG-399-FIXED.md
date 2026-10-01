@@ -140,7 +140,7 @@ is_secure_context`, 5/5. Юнит-тесты бьют по `install_dom` нап�
   `Gyroscope_insecure_context.html`, с которого началась заявка: чтобы тест
   позеленел на не-loopback origin, нужен не только флаг, но и гейт.
 * В `WorkerGlobalScope` свойства нет вовсе (`worker_global_shim` его не
-  заводит) — [BUG-766](BUG-766-OPEN.md), тот же класс, что
+  заводит) — [BUG-766](BUG-766-FIXED.md), тот же класс, что
   [BUG-401](BUG-401-FIXED.md).
 
 ## Связанные

@@ -11,4 +11,4 @@ Test category, added 2026-08-09 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 **2026-09-26, [BUG-670](../../bugs/BUG-670-FIXED.md) закрыт** (`getComputedTiming()`):
 перепрогон `--all --root web-animations --recursive` — 123/139 harness OK,
 **907 → 1108/3034 сабтестов** (база того же дня). Остаток по финишу/отрисовке
-`fill: forwards` — [BUG-1192](../../bugs/BUG-1192-OPEN.md).
+`fill: forwards` — [BUG-1192](../../bugs/BUG-1192-FIXED.md).

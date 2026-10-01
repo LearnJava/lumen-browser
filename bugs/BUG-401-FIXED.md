@@ -153,7 +153,7 @@ timeOrigins differ when worker is created after a delay»: у воркера,
 * [BUG-768](BUG-768-FIXED.md) — заведён этим фиксом: `--deterministic`
   не доезжал ни до одной worker-области (все три источника —
   `Math.random`, `Date.now`, `_lumen_now_ms`); закрыт P3 2026-09-24.
-* [BUG-766](BUG-766-OPEN.md) — `isSecureContext` отсутствует в
+* [BUG-766](BUG-766-FIXED.md) — `isSecureContext` отсутствует в
   `WorkerGlobalScope`: тот же класс пробела, и после этого фикса у него
   есть готовое место — `worker::install_worker_scope_globals_v8`.
 * [BUG-400](BUG-400-FIXED.md) — тот же API (`Performance`), другой

@@ -37,7 +37,7 @@ api.html` и `uievents/ui_event_pseudo_target.html`:
 Узкое, оба дефекта — по одному файлу каждый, 8 сабтестов суммарно из 127 в
 категории. Не пересекается с доминирующим сигналом прогона (110 из 127
 FAIL/TIMEOUT сабтестов — переподтверждение уже открытых
-[BUG-574](BUG-574-OPEN.md) (`Node.contains` отсутствует, ломает
+[BUG-574](BUG-574-FIXED.md) (`Node.contains` отсутствует, ломает
 `test_driver.click()`/`send_keys()` — 34 сабтеста), [BUG-622](BUG-622-DUPLICATE.md)
 (`document.defaultView` отсутствует → «Browsing context for element was
 detached» на всех тестах с `<iframe>` — 52 сабтеста), [BUG-590](BUG-590-FIXED.md)
