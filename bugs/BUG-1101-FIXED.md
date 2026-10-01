@@ -69,7 +69,7 @@ before/after the patch (see gate note below) — display-list neutral.
   теперь содержит реальные фреймы (было пусто до диагностики).
 - `crates.io`: `[unhandled-rejection] TypeError: Cannot read properties of
   undefined (reading 'get')` **исчез**. Страница продвигается дальше и
-  упирается в уже заведённый [BUG-1092](BUG-1092-OPEN.md) (`SVGAElement`
+  упирается в уже заведённый [BUG-1092](BUG-1092-FIXED.md) (`SVGAElement`
   и ещё 12 отсутствующих SVG WebIDL-глобалов) — отдельный, уже
   локализованный дефект, полный рендер crates.io требует и его тоже.
 - `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
