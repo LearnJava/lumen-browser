@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- BUG-935 slice 53 / BUG-1211: price of reading layout from page JS, no network.
+     LUMEN_FRAME_LOG=1 ./target/dev-release/lumen.exe --dump-layout <this file> 2>&1 | grep -E "ms/op|maybe_flush done"
+     Reads on a clean DOM are ~0.01 ms; `mutate+read` pays a whole forced flush per cycle
+     (~0.15-0.4 s here, 1500 divs) because a `style` write widens the restyle root to the parent. -->
+<html><body><div id="root"></div>
+<script>
+var root=document.getElementById('root');
+for(var i=0;i<1500;i++){var d=document.createElement('div');d.className='c'+(i%7);d.innerHTML='<p>item '+i+' <b>x</b></p><span>y</span>';root.appendChild(d);}
+var els=Array.prototype.slice.call(root.children);
+function t(name,n,f){var s=performance.now();f(n);var e=performance.now()-s;console.log(name+' x'+n+': '+e.toFixed(1)+' ms = '+(e/n).toFixed(3)+' ms/op');}
+els[0].offsetWidth;
+t('offsetWidth',500,function(n){for(var i=0;i<n;i++)els[i].offsetWidth;});
+t('offsetTop',20,function(n){for(var i=0;i<n;i++)els[i].offsetTop;});
+t('offsetLeft',20,function(n){for(var i=0;i<n;i++)els[i].offsetLeft;});
+t('clientWidth',200,function(n){for(var i=0;i<n;i++)els[i].clientWidth;});
+t('scrollTop',200,function(n){for(var i=0;i<n;i++)els[i].scrollTop;});
+t('innerText leaf',20,function(n){for(var i=0;i<n;i++)els[i].innerText;});
+t('innerText root',2,function(n){for(var i=0;i<n;i++)root.innerText;});
+t('mutate+offsetWidth',5,function(n){for(var i=0;i<n;i++){els[i].style.width=(i+10)+'px';els[i].offsetWidth;}});
+t('mutate+getBCR',5,function(n){for(var i=0;i<n;i++){els[i].style.width=(i+20)+'px';els[i].getBoundingClientRect();}});
+t('mutate+gcs',5,function(n){for(var i=0;i<n;i++){els[i].style.width=(i+30)+'px';getComputedStyle(els[i]).width;}});
+</script></body></html>

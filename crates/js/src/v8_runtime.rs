@@ -85,6 +85,7 @@ mod named_access;
 mod promise_reject;
 mod script_attribution;
 mod sheet_sync;
+mod stall_sampler;
 mod style_flush;
 mod thread;
 

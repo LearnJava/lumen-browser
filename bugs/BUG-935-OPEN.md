@@ -3632,3 +3632,49 @@ UI-потока на M4-пути — отправить `collect_js_data` дви
 разобрать (2): возможно, своп голодит обработку автоматизации.
 
 Статус `OPEN (DEBTOR)` не меняется.
+
+## Срез 53 (P1, 2026-10-01) — причина «тишины» — не своп, а долгие JS-задачи страницы на движковом потоке
+
+Срез 52 оставил открытым вопрос (2): под `LUMEN_BUG935_M4_SWAP=1` `wait document_ready`
+не дожидается. Живой перемер lenta.ru (`--maximized`, `LUMEN_NO_ADBLOCK=1`,
+`bug935_raf_relayout_census.py --settle-s 15 --ticks 8`, `main` @ 8bc8919ec):
+**при `swap=0` он не дожидается тоже** (оба прогона: `Wait error: automation command
+timed out`), т.е. своп тут ни при чём. Первые два scroll-RTT — 44 и 53 с при swap=1,
+11,8 и 12,3 с при swap=0.
+
+**Механизм.** `wait`/`eval`/`scroll` — `route_query_js` на движковый поток, FIFO. Поток
+занят одной `Task` из `about_to_wait.rs:280` (`tick_timers` + `pump_*`): `[engine] task
+19218ms` (swap=0), `4597ms`/`2116ms` (swap=1). `eval` под нагрузкой прямо отвечает
+`engine thread busy … running task from about_to_wait.rs:280 for 147.1 s`. То есть
+зависание — это JS-код страницы, а не маршрутизация relayout'а.
+
+**Инструмент.** Лога шелла хватало лишь до точки входа, отладчика нет (срез 3), поэтому
+добавлен сэмплер стека: `LUMEN_JS_STALL_SAMPLE_MS=<N>`
+(`crates/js/src/v8_runtime/stall_sampler.rs`, описание — `docs/automation.md`). Сторожевой
+поток через `IsolateHandle::request_interrupt` снимает `StackTrace::current_stack_trace`
+на JS-потоке, пока задача идёт дольше N мс. Без переменной ни потока, ни счётчиков нет.
+`LUMEN_FRAME_LOG=1` теперь печатает и `[engine] maybe_flush done <мс> path=… dirty_roots=N`.
+
+**Что держит поток на lenta.ru** (N=300 мс, 100 с, 164 снимка ≈ 49 с занятости):
+46 % — баннерный код (`_saveBannerSizes`, `findOwnPlace`, `isCollapsed`) в цикле
+чтений геометрии/стилей; 7 % — доставка IntersectionObserver (`_io_cb_chain`/`_io_position`);
+5 % — `innerText` (`_lumen_rendered_text`→`_lumen_rt_collect`, один вызов до 6 с);
+остальное — `getBoundingClientRect`/`offsetParent`/`documentElement`, `readBytes`.
+За 75 с — 41 принудительный `maybe_flush`, по 150–500 мс.
+
+**Стоимость без сети** (`scripts/perf-fixtures/bug935_forced_reflow_stand.html`,
+1500 div, `--dump-layout`): чтение геометрии на чистом DOM — 0,005–0,06 мс/оп; но
+`style.width=…; el.offsetWidth` — **150–400 мс за цикл** (1700 мс, если страница уже
+читала `getComputedStyle`). Путь — инкрементальный (`dirty_roots=1`), но этот один корень —
+родитель `#root` со всеми 1500 детьми: `NodeChange::Unattributed` расширяет корень
+рестайла до родителя (`relayout`-прецедент BUG-341 S17), и пересчитывается ~110–140 мс
+раскладки + ~40 мс коллекторов. Узкое место — не маршрут и не каскад, а ширина корня.
+
+**Вывод.** Симптом BUG-935 (RTT `scroll`/`wait` растёт до десятков секунд на сайте с
+активным rAF/таймерным DOM-циклом) определяется стоимостью принудительного
+reflow'а из JS — это [BUG-1211](BUG-1211-OPEN.md) (корень и цифры добавлены туда же),
+а не порядком `try_relayout_raf_incremental`. Своп по умолчанию не включается и ничего
+не лечит, пока такие задачи занимают движковый поток. Следующий шаг — узкий корень
+рестайла для атрибуции «только `style`» (inline-стиль: элемент + потомки по наследованию,
+если нет `[style]`-селекторов и соседских комбинаторов) и измерение на этом стенде и на
+lenta.ru. Статус `OPEN (DEBTOR)` не меняется.
