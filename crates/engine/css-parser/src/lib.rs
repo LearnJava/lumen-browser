@@ -36,6 +36,16 @@ pub use parser::{
 /// and by the `CSS.supports()` JavaScript API. Matches the `match` arms of
 /// `layout::style::apply_declaration`.
 pub const SUPPORTED_PROPERTIES: &[&str] = &[
+    // SVG 2 §Geometry Properties / §Painting (BUG-1094).
+    "cx",
+    "cy",
+    "r",
+    "rx",
+    "ry",
+    "x",
+    "y",
+    "color-interpolation",
+    "path-length",
     "accent-color",
     "align-content",
     "align-items",

@@ -56,6 +56,15 @@ use crate::style::{
     WritingMode,
 };
 
+/// SVG 2 §Painting — `color-interpolation`. Inherited. Initial `sRGB`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgColorInterpolation {
+    Auto,
+    #[default]
+    Srgb,
+    LinearRgb,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -949,6 +958,21 @@ pub struct ComputedStyle {
     /// SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — `baseline-shift`. NOT inherited.
     /// Initial `baseline` (no shift). Positive lengths/percentages raise the text.
     pub baseline_shift: crate::box_tree::SvgBaselineShift,
+    /// SVG 2 §Geometry — `cx`/`cy`/`x`/`y` (`<length-percentage>`, initial 0)
+    /// and `r` (`<length-percentage [0,∞]>`). Not inherited. `em`-relative
+    /// values are resolved to `Px` at cascade time; `%`/`calc(%)` stay typed.
+    pub svg_cx: Length,
+    pub svg_cy: Length,
+    pub svg_r: Length,
+    pub svg_x: Length,
+    pub svg_y: Length,
+    /// SVG 2 §Geometry — `rx`/`ry` (`auto | <length-percentage [0,∞]>`). Not inherited.
+    pub svg_rx: LengthOrAuto,
+    pub svg_ry: LengthOrAuto,
+    /// SVG 2 §Painting — `color-interpolation`. Inherited. Initial `sRGB`.
+    pub svg_color_interpolation: SvgColorInterpolation,
+    /// SVG 2 §Geometry — `path-length` (`none | <number>`). Not inherited.
+    pub svg_path_length: Option<f32>,
     // CSS Logical Properties L1 §2 — temporary storage for logical properties.
     // These are resolved to physical properties in resolve_logical_properties().
     /// CSS Logical Properties L1 — `inline-size`. `None` = auto.
@@ -1355,6 +1379,15 @@ impl ComputedStyle {
             text_anchor: None,
             dominant_baseline: None,
             baseline_shift: crate::box_tree::SvgBaselineShift::Baseline,
+            svg_cx: Length::Px(0.0),
+            svg_cy: Length::Px(0.0),
+            svg_r: Length::Px(0.0),
+            svg_x: Length::Px(0.0),
+            svg_y: Length::Px(0.0),
+            svg_rx: LengthOrAuto::Auto,
+            svg_ry: LengthOrAuto::Auto,
+            svg_color_interpolation: SvgColorInterpolation::Srgb,
+            svg_path_length: None,
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
@@ -1743,6 +1776,15 @@ impl ComputedStyle {
             dominant_baseline: inherited.dominant_baseline,
             // SVG baseline-shift is NOT inherited — reset to initial each element.
             baseline_shift: crate::box_tree::SvgBaselineShift::Baseline,
+            svg_cx: Length::Px(0.0),
+            svg_cy: Length::Px(0.0),
+            svg_r: Length::Px(0.0),
+            svg_x: Length::Px(0.0),
+            svg_y: Length::Px(0.0),
+            svg_rx: LengthOrAuto::Auto,
+            svg_ry: LengthOrAuto::Auto,
+            svg_color_interpolation: inherited.svg_color_interpolation,
+            svg_path_length: None,
             // CSS Logical Properties L1 — not inherited. Initial values.
             inline_size: None,
             block_size: None,

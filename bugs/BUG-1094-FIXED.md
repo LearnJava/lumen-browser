@@ -1,6 +1,6 @@
 # BUG-1094 — SVG2 геометрические/красящие CSS-свойства (`cx`/`cy`/`r`/`rx`/`ry`/`x`/`y`, `color-interpolation`, `path-length`) не в `SUPPORTED_PROPERTIES`: `CSS.supports()` и интерполяция полностью не работают
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6)
 **Тип:** пробел реализации — SVG2 переопределил presentation-атрибуты геометрии как настоящие CSS-свойства, Lumen их не знает вовсе.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 53, `svg`)
 **Область:** css-parser — `crates/engine/css-parser/src/lib.rs::SUPPORTED_PROPERTIES` (нет `cx`/`cy`/`r`/`rx`/`ry`/`x`/`y`/`color-interpolation`/`path-length`; подтверждено `grep`, 0 совпадений на все девять имён)
@@ -40,3 +40,9 @@ SVG2 §Geometry Properties/§Presentation Attributes переносит `cx`/`cy
 
 - Работают ли эти девять свойств как presentation-атрибуты (`<circle cx="10">`, не CSS) — вероятно да (базовый рендеринг SVG в CAPABILITIES.md заявлен), но не переверено этой пробой: она бьёт только в CSS-путь.
 - Полная грамматика каждого свойства по спеке (проценты относительно viewport для `cx`/`r`/…, `auto` для `path-length`) — не выведена, только факт отсутствия в `SUPPORTED_PROPERTIES`.
+
+## Исправление (2026-10-01, P6)
+
+Девять имён добавлены в `SUPPORTED_PROPERTIES`; поля `ComputedStyle::svg_{cx,cy,r,x,y,rx,ry,color_interpolation,path_length}`; разбор — `set_svg_geometry` в `style/apply/paint.rs` (`em` → px на этапе вычисленного значения, `%`/`calc(%)` остаются типизированными, отрицательные `r`/`rx`/`ry` отбрасываются); CSS-wide ключевые слова — `apply/css_wide.rs`; `getComputedStyle` — `selector_query.rs`; `element.style` — `_LUMEN_LENGTH_PROPERTIES`/`_LUMEN_KEYWORD_PROPERTIES` в `web_api_shim_mid.js`.
+
+**Не сделано (вынесено):** WPT `*-composition.html`/`color-interpolation-animation.html`/`path-length-interpolation.tentative.html` по-прежнему падают — движок анимаций не интерполирует произвольные свойства (даже уже поддерживаемый `stroke-width` — 28/28 FAIL) → [BUG-1234](BUG-1234-OPEN.md). Свойства не подключены к отрисовке: `<circle cx>` по-прежнему берётся из атрибута, не из CSS; presentation-атрибуты `cx`/`r`/… в `presentational.rs` не отображаются в CSS.
