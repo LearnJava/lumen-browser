@@ -227,3 +227,10 @@ dump_golden" в корневом `CLAUDE.md`).
 и поиск корней ≈ 0. Живой след на lenta.ru (`LUMEN_JS_STALL_SAMPLE_MS`, см. BUG-935
 срез 53): 41 принудительный флаш за 75 с, баннерный цикл `_saveBannerSizes` — 46 % занятого
 времени движкового потока. Кандидат: атрибуция `style`-мутаций (узкий корень = сам узел).
+
+## Срез BUG-935 S54 (P1, 2026-10-01) — атрибуция `style`/`setAttribute` сужает корень
+
+`DomTouched::attr_gen`/`structural_gen` + `NodeChange::Attr` в `try_incremental_flush`:
+`style.width=…; offsetWidth` на стенде 1500 div — 388 → 97 мс/цикл (`dirty_roots` = сам узел).
+Остаток — линейные по документу раскладка (~55 мс) и коллекторы (~20 мс); подробности —
+[BUG-935 срез 54](BUG-935-OPEN.md). Баг остаётся OPEN (частично).

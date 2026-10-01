@@ -3678,3 +3678,21 @@ reflow'а из JS — это [BUG-1211](BUG-1211-OPEN.md) (корень и ци�
 рестайла для атрибуции «только `style`» (inline-стиль: элемент + потомки по наследованию,
 если нет `[style]`-селекторов и соседских комбинаторов) и измерение на этом стенде и на
 lenta.ru. Статус `OPEN (DEBTOR)` не меняется.
+
+## Срез 54 (P1, 2026-10-01) — узкий корень рестайла для плоских записей атрибутов
+
+`DomTouched` теперь хранит имена: `attr_gen: node → имя → эпоха` (запись через `setAttribute`/
+`removeAttribute`/инлайновый `style` — `record_dom_touch_attr`) и `structural_gen: node → эпоха`
+(всё остальное: список детей, `textContent`, dirty value/checked, namespaced-атрибуты).
+`try_incremental_flush` (`style_flush.rs`) отдаёт `restyle_root_set_for_node_change`
+`NodeChange::Attr(имя)` для узлов, у которых после базиса не было структурных касаний, —
+остальные идут как `Unattributed` (расширение до родителя, как раньше). Решение «нужен ли
+веер» принимает существующий `NodeRestyleIndex::attr_change_needs_fanout` (соседские
+комбинаторы, `[style]`, `:has()` и shadow-корни по-прежнему расширяют корень).
+
+**Измерено** (стенд `bug935_forced_reflow_stand.html`, 1500 div, `--dump-layout`,
+dev-release): `mutate+offsetWidth` 388 → 97 мс/цикл, `mutate+getBCR` 415 → 88,
+`mutate+gcs` 342 → 95; `dirty_roots=1` теперь сам узел, а не `#root`. Остаток ~55 мс — сборка
+box-дерева/раскладка при корне-листе и ~20 мс коллекторов (линейны по документу) — следующий
+срез: почему инкрементальная раскладка листового корня стоит 55 мс при 1500 братьях.
+lenta.ru живьём не перемерялся (нужен `--maximized`). Статус `OPEN (DEBTOR)` не меняется.

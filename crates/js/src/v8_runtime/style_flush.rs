@@ -640,15 +640,30 @@ impl FlushHandles {
         let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
         let tp_index = tp0.elapsed();
         let mut dirty_roots = std::collections::HashSet::new();
-        // BUG-341 S17: `DomTouched` records node ids without attribute names
-        // (same gap `relayout.rs` documents), so every page-side mutation
-        // stays `Unattributed` here too — the conservative widen-to-parent
-        // behaviour.
-        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
-            doc,
-            new_touched.iter().map(|&n| (n, lumen_layout::style::NodeChange::Unattributed)),
-            &node_index,
-        ));
+        // BUG-1211: a node whose every touch since the basis was a plain
+        // attribute write is reported by name, so the root-set can ask which
+        // selectors could react to it (`el.style.width = …` rarely widens);
+        // anything else (child list, text, dirty value) stays `Unattributed`
+        // and widens to the parent as before. The `Attr(&str)` borrows live
+        // in `touched`, which outlives this call.
+        let mut changes: Vec<(lumen_dom::NodeId, lumen_layout::style::NodeChange<'_>)> = Vec::new();
+        for &n in &new_touched {
+            let structural = touched.structural_gen.get(&n).copied().unwrap_or(0) > basis.touch_epoch;
+            let named: Vec<&str> = touched
+                .attr_gen
+                .get(&n)
+                .into_iter()
+                .flatten()
+                .filter(|&(_, &g)| g > basis.touch_epoch)
+                .map(|(name, _)| &**name)
+                .collect();
+            if structural || named.is_empty() {
+                changes.push((n, lumen_layout::style::NodeChange::Unattributed));
+            } else {
+                changes.extend(named.into_iter().map(|a| (n, lumen_layout::style::NodeChange::Attr(a))));
+            }
+        }
+        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(doc, changes, &node_index));
         let focus_changed = basis.focus != current_focus;
         if focus_changed {
             let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
