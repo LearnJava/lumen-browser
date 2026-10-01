@@ -968,11 +968,15 @@ const SVG_SHIM: &str = concat!(r#"
     unsuspendRedraw(suspendHandleID) {}
     unsuspendRedrawAll() {}
     forceRedraw() {}
-    pauseAnimations() {}
-    unpauseAnimations() {}
-    animationsPaused() { return false; }
-    getCurrentTime() { return 0; }
-    setCurrentTime(seconds) {}
+    pauseAnimations() { _lumen_smil_paused = true; }
+    unpauseAnimations() { _lumen_smil_paused = false; _lumen_smil_wake(); }
+    animationsPaused() { return _lumen_smil_paused; }
+    getCurrentTime() { return _lumen_smil_timeline_now(); }
+    setCurrentTime(seconds) {
+      var n = Number(seconds);
+      _lumen_smil_pending_seek = isFinite(n) ? Math.max(0, n) : 0;
+      _lumen_smil_wake();
+    }
   }
   _lumen_def_svg_lengths(SVGSVGElement, {
     x: ['x', 0], y: ['y', 0], width: ['width', 300], height: ['height', 150],
@@ -1506,7 +1510,37 @@ const SVG_SHIM: &str = concat!(r#"
   // any SMIL element. `begin="0s"` resolves relative to this, not to
   // wall-clock zero.
   var _lumen_smil_doc_epoch = null;
+  // Virtual timeline clock (same domain as `now_s`): advances with the real
+  // clock unless `pauseAnimations()` froze it; `setCurrentTime` queues a seek
+  // that the next tick applies (`_lumen_smil_seeked` for that whole tick).
   var _lumen_smil_last_now = 0;
+  var _lumen_smil_last_real = 0;
+  var _lumen_smil_paused = false;
+  var _lumen_smil_pending_seek = null;
+  var _lumen_smil_seeked = false;
+  // The shell only ticks SMIL on a redraw, and nothing else asks for one on a
+  // static page: an outstanding no-op rAF is what keeps frames coming while an
+  // animation is active/pending, a seek is queued, or a script/listener
+  // just started one. Not re-armed once everything is idle.
+  var _lumen_smil_raf = false;
+  var _lumen_smil_wanted = false;
+  function _lumen_smil_wake() {
+    if (typeof requestAnimationFrame !== 'function') return;
+    // A wake during the frame's own tick lands while the previous rAF is
+    // still outstanding: remember it so that callback re-arms.
+    if (_lumen_smil_raf) { _lumen_smil_wanted = true; return; }
+    _lumen_smil_raf = true;
+    requestAnimationFrame(function() {
+      _lumen_smil_raf = false;
+      if (_lumen_smil_wanted) { _lumen_smil_wanted = false; _lumen_smil_wake(); }
+    });
+  }
+  function _lumen_smil_timeline_now() {
+    if (_lumen_smil_pending_seek !== null) return _lumen_smil_pending_seek;
+    // epoch + s - epoch is not exactly s in floating point; µs is plenty.
+    return _lumen_smil_doc_epoch === null ? 0
+      : Math.round((_lumen_smil_last_now - _lumen_smil_doc_epoch) * 1e6) / 1e6;
+  }
   // Per-node (`__nid__`) timing state — begin/end instance times, repeat
   // count fired so far, one-shot latches so begin/end fire exactly once.
   var _lumen_smil_states = {};
@@ -1639,7 +1673,7 @@ const SVG_SHIM: &str = concat!(r#"
       st = {
         beginTime: null, cycle: 0, ended: false,
         beginFired: false, manualBegin: null, manualEnd: null,
-        endTime: null, terms: null,
+        endTime: null, terms: null, seekFloor: null,
       };
       _lumen_smil_states[nid] = st;
     }
@@ -1650,17 +1684,79 @@ const SVG_SHIM: &str = concat!(r#"
   // instance time resolved against "now" on the *next* tick, matching the
   // spec's "current time + offset" semantics closely enough for the
   // explicit-trigger case (`begin="indefinite"` + a script call).
-  function _lumen_smil_begin_now(nid, offset) { _lumen_smil_get_state(nid).manualBegin = offset || 0; }
-  function _lumen_smil_end_now(nid, offset) { _lumen_smil_get_state(nid).manualEnd = offset || 0; }
+  function _lumen_smil_begin_now(nid, offset) { _lumen_smil_get_state(nid).manualBegin = offset || 0; _lumen_smil_wake(); }
+  function _lumen_smil_end_now(nid, offset) { _lumen_smil_get_state(nid).manualEnd = offset || 0; _lumen_smil_wake(); }
 
   function _lumen_smil_dispatch(nid, type) {
     _lumen_dispatch(nid, new Event(type, { bubbles: false, cancelable: false }));
+  }
+
+  // Re-evaluates an animation whose `begin` is plain offsets at a seeked
+  // timeline position: the state is a pure function of time, so intervals
+  // skipped by the jump raise no events, repeat cycles are re-derived
+  // silently, and only active↔inactive transitions dispatch begin/end.
+  function _lumen_smil_seek_one(nid, st, now_s, epoch) {
+    if (st.terms === null) st.terms = _lumen_smil_parse_begin_terms(nid);
+    var offs = [];
+    for (var i = 0; i < st.terms.length; i++) {
+      if (st.terms[i].kind !== 'offset') return;
+      offs.push(epoch + st.terms[i].off);
+    }
+    offs.sort(function(a, b) { return a - b; });
+    var dur = _lumen_smil_parse_dur(nid);
+    var repeatCount = _lumen_smil_parse_repeat_count(nid);
+    var endOff = _lumen_smil_parse_end_offset(nid);
+    var endAbs = endOff === null ? Infinity : epoch + endOff;
+    var activeDur = (dur === Infinity || repeatCount === Infinity) ? Infinity : dur * repeatCount;
+    var act = null, pastEnded = false;
+    for (var k = 0; k < offs.length; k++) {
+      var b = offs[k];
+      var e = Math.min(b + activeDur, endAbs);
+      if (now_s >= b && now_s < e) act = b;
+      else if (e <= now_s) pastEnded = true;
+    }
+    var attrName = _lumen_u2n(_lumen_get_attr(nid, 'attributeName'));
+    var wasActive = st.beginFired && !st.ended && st.beginTime !== null;
+    var prevB = st.beginTime;
+    st.manualBegin = null;
+    if (act !== null) {
+      st.beginTime = act; st.ended = false; st.beginFired = true; st.seekFloor = null;
+      var cyc = 0, frac = 0;
+      if (dur !== Infinity) {
+        cyc = Math.floor((now_s - act) / dur);
+        if (repeatCount !== Infinity) cyc = Math.min(cyc, Math.ceil(repeatCount) - 1);
+        var wc = (now_s - act) - dur * Math.floor((now_s - act) / dur);
+        frac = Math.max(0, Math.min(1, wc / dur));
+      }
+      st.cycle = cyc;
+      if (attrName) {
+        var v = _lumen_smil_compute_value(nid, frac);
+        if (v !== null) _lumen_smil_overrides[nid + '|' + attrName] = v;
+      }
+      if (!(wasActive && prevB === act)) {
+        if (wasActive) _lumen_smil_dispatch(nid, 'endEvent');
+        _lumen_smil_dispatch(nid, 'beginEvent');
+      }
+      return;
+    }
+    st.beginTime = null; st.beginFired = false; st.cycle = 0;
+    st.ended = pastEnded; st.seekFloor = now_s;
+    if (attrName) {
+      if (pastEnded && _lumen_smil_parse_fill(nid) === 'freeze') {
+        var fv = _lumen_smil_compute_value(nid, 1);
+        if (fv !== null) _lumen_smil_overrides[nid + '|' + attrName] = fv;
+      } else {
+        delete _lumen_smil_overrides[nid + '|' + attrName];
+      }
+    }
+    if (wasActive) { st.endTime = now_s; _lumen_smil_dispatch(nid, 'endEvent'); }
   }
 
   function _lumen_smil_tick_one(el, now_s, epoch) {
     var nid = el.__nid__;
     if (nid == null) return;
     var st = _lumen_smil_get_state(nid);
+    if (_lumen_smil_seeked) { _lumen_smil_seek_one(nid, st, now_s, epoch); return; }
 
     if (st.manualBegin !== null) {
       var mb = now_s + st.manualBegin;
@@ -1677,6 +1773,7 @@ const SVG_SHIM: &str = concat!(r#"
         var cand = null;
         if (tm.kind === 'offset') {
           cand = epoch + tm.off;
+          if (st.seekFloor !== null && cand < st.seekFloor) cand = null;
         } else if (tm.kind === 'sync') {
           var refEl = document.getElementById(tm.id);
           var refSt = refEl && refEl.__nid__ != null ? _lumen_smil_states[refEl.__nid__] : null;
@@ -1689,6 +1786,7 @@ const SVG_SHIM: &str = concat!(r#"
             (function(t) {
               tgt.addEventListener(t.name, function() {
                 if (st.manualBegin === null) st.manualBegin = t.off;
+                _lumen_smil_wake();
               });
             })(tm);
           }
@@ -1754,13 +1852,34 @@ const SVG_SHIM: &str = concat!(r#"
   // same spec step CSS transitions/animations tick, before rAF callbacks.
   __lumen_C._lumen_tick_smil = function(now_s) {
     if (!_lumen_smil_seen) return;
-    if (_lumen_smil_doc_epoch === null) _lumen_smil_doc_epoch = now_s;
-    _lumen_smil_last_now = now_s;
+    if (_lumen_smil_doc_epoch === null) {
+      _lumen_smil_doc_epoch = now_s;
+      _lumen_smil_last_now = now_s;
+    } else if (!_lumen_smil_paused) {
+      _lumen_smil_last_now += now_s - _lumen_smil_last_real;
+    }
+    _lumen_smil_last_real = now_s;
+    if (_lumen_smil_pending_seek !== null) {
+      _lumen_smil_last_now = _lumen_smil_doc_epoch + _lumen_smil_pending_seek;
+      _lumen_smil_pending_seek = null;
+      _lumen_smil_seeked = true;
+    }
+    now_s = _lumen_smil_last_now;
     if (typeof document === 'undefined' || typeof document.getElementsByTagName !== 'function') return;
     var all = document.getElementsByTagName('*');
     for (var i = 0; i < all.length; i++) {
       if (all[i] instanceof SVGAnimationElement) {
         _lumen_smil_tick_one(all[i], now_s, _lumen_smil_doc_epoch);
+      }
+    }
+    _lumen_smil_seeked = false;
+    if (!_lumen_smil_paused) {
+      for (var j = 0; j < all.length; j++) {
+        var sst = all[j] instanceof SVGAnimationElement ? _lumen_smil_states[all[j].__nid__] : null;
+        if (!sst) continue;
+        var pending = sst.beginTime !== null ? !sst.ended
+          : (!sst.ended && sst.terms !== null && sst.terms.some(function(t) { return t.kind !== 'event'; }));
+        if (pending) { _lumen_smil_wake(); break; }
       }
     }
   };
@@ -1778,9 +1897,7 @@ const SVG_SHIM: &str = concat!(r#"
       return (st && st.beginTime !== null && _lumen_smil_doc_epoch !== null)
         ? st.beginTime - _lumen_smil_doc_epoch : 0;
     }
-    getCurrentTime() {
-      return _lumen_smil_doc_epoch === null ? 0 : _lumen_smil_last_now - _lumen_smil_doc_epoch;
-    }
+    getCurrentTime() { return _lumen_smil_timeline_now(); }
     getSimpleDuration() {
       var d = _lumen_smil_parse_dur(this.__nid__);
       return d === Infinity ? 0 : d;
@@ -2040,7 +2157,7 @@ const SVG_SHIM: &str = concat!(r#"
     // either markup or `createElementNS` origin) is resolved, so
     // `_lumen_tick_smil` can no-op in one boolean check on every other page.
     if (!_lumen_smil_seen && (ctor === SVGAnimationElement || ctor.prototype instanceof SVGAnimationElement)) {
-      _lumen_smil_seen = true;
+      _lumen_smil_seen = true; _lumen_smil_wake();
     }
     return ctor;
   };
@@ -2559,6 +2676,35 @@ mod tests_v8 {
         assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') === -1"));
         rt.eval("_lumen_tick_smil(3.0);").unwrap();
         assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') !== -1"));
+    }
+
+    #[test]
+    fn svg_smil_seek_silently_skips_past_intervals_and_dispatches_transitions() {
+        let rt = with_smil_node(
+            "set",
+            &[("attributeName", "fill"), ("begin", "5s"), ("dur", "1s"), ("repeatCount", "2"), ("to", "green"), ("fill", "freeze")],
+        );
+        rt.eval(
+            r#"
+            var svg = new (_lumen_svg_ctor_for_local("svg"))();
+            svg.pauseAnimations();
+            _lumen_tick_smil(100.0);
+            svg.setCurrentTime(10);
+            _lumen_tick_smil(100.1);
+            "#,
+        )
+        .unwrap();
+        // Interval 5..7 lies wholly before t=10: no events, freeze value kept.
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.length === 0"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|fill'] === 'green'"));
+        rt.eval("svg.setCurrentTime(5.5); _lumen_tick_smil(100.2);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.join() === 'beginEvent'"));
+        // Seeking into the second cycle: no repeatEvent, no new events.
+        rt.eval("svg.setCurrentTime(6.5); _lumen_tick_smil(100.3);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.join() === 'beginEvent'"));
+        rt.eval("svg.setCurrentTime(1); _lumen_tick_smil(100.4);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.join() === 'beginEvent,endEvent'"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|fill'] === undefined"));
     }
 
     #[test]
