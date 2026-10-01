@@ -216,6 +216,27 @@ pub(crate) type CssomDeltaLog = Arc<Mutex<Vec<(u32, lumen_css_parser::CssomOp)>>
 /// next full relayout.
 const FLUSH_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
 
+/// Test-only switch (BUG-935 S55): while set, [`FlushHandles::try_incremental_flush`]
+/// ignores the document's content journal and reports `ContentDirty::Untracked`,
+/// i.e. the behaviour before the journal. Lets a test run one script both ways and
+/// demand the same geometry. Process-global, so only a test that runs its two
+/// halves back to back (and tolerates a concurrent flush taking the old path,
+/// which is correct too) may flip it.
+#[cfg(test)]
+pub(crate) static CONTENT_JOURNAL_DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[inline]
+fn content_journal_disabled() -> bool {
+    #[cfg(test)]
+    {
+        CONTENT_JOURNAL_DISABLED.load(Ordering::Relaxed)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 impl FlushHandles {
     /// Recompute style+layout and refresh `layout_rects`/`computed_styles`/
     /// `custom_properties` in place if anything might be stale.
@@ -228,6 +249,7 @@ impl FlushHandles {
     /// to the pre-CSSOM-4 stale-snapshot behaviour rather than blocking or
     /// panicking.
     pub(crate) fn maybe_flush(&self) {
+        lumen_core::profile::claim_tree();
         // BUG-560: `element.focus()` changes `:focus`/`:focus-within` matching
         // without touching the DOM, so it never sets `flush_stale` — without
         // this check a same-tick `getComputedStyle()` right after `.focus()`
@@ -316,7 +338,7 @@ impl FlushHandles {
         if vw <= 0.0 || vh <= 0.0 {
             return;
         }
-        let Some(doc_guard) = lock_document_bounded(&self.doc) else {
+        let Some(mut doc_guard) = lock_document_bounded(&self.doc) else {
             return;
         };
         let Ok(font) = lumen_font::Font::parse(FLUSH_FONT) else {
@@ -349,7 +371,15 @@ impl FlushHandles {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let incr = self.try_incremental_flush(&doc_guard, &sheet, viewport, &measurer, current_focus, &touched);
+        // BUG-935 S55: what changed in the document since the previous flush's
+        // basis, from the document itself rather than from the JS bindings —
+        // drained under this guard, so nothing can mutate between here and the
+        // layout it licenses. `None` on the very first flush (starts the
+        // record) and for a replaced document; either way no reuse is licensed.
+        let content_journal = doc_guard.take_content_journal();
+        let incr = self.try_incremental_flush(
+            &doc_guard, &sheet, viewport, &measurer, current_focus, &touched, content_journal.as_ref(),
+        );
         // BUG-1211 (post-collectors): `incr_scope` is `Some((dirty_roots,
         // prev_node_ids))` only when the incremental cascade+layout path
         // above actually ran — `dirty_roots` is where the fresh tree changed
@@ -603,6 +633,7 @@ impl FlushHandles {
         measurer: &lumen_paint::FontMeasurer<'_>,
         current_focus: Option<u32>,
         touched: &super::runtime::DomTouched,
+        content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
         if touched.unattributed {
             return None;
@@ -672,10 +703,21 @@ impl FlushHandles {
             ));
         }
         let tp_roots = tp0.elapsed();
-        let content_dirty = if new_touched.is_empty() {
-            lumen_layout::counters::ContentDirty::Nothing
-        } else {
-            lumen_layout::counters::ContentDirty::Untracked
+        // BUG-935 S55: a complete per-node content record licenses reuse of
+        // every box subtree the cascade left alone (`clean_subtrees`) — before
+        // this, every flush rebuilt and re-compared the whole box tree even when
+        // one `style.width` had changed (26 + 25 ms of a 55 ms layout on the
+        // 1500-div stand). The journal is the document's own record; the JS
+        // tracker's nodes are added as a belt-and-braces union. Anything the
+        // journal cannot vouch for — no baseline, or a shadow tree / `<slot>`
+        // involved (see `journal_touches_shadow`) — stays `Untracked`.
+        let content_nodes: std::collections::HashSet<lumen_dom::NodeId>;
+        let content_dirty = match content_journal {
+            Some(journal) if !content_journal_disabled() && !doc.journal_touches_shadow(journal) => {
+                content_nodes = journal.iter().chain(new_touched.iter()).copied().collect();
+                lumen_layout::counters::ContentDirty::Nodes(&content_nodes)
+            }
+            _ => lumen_layout::counters::ContentDirty::Untracked,
         };
         // BUG-1211 (post-collectors): snapshot which nodes the touched
         // subtrees owned in the *previous* (`basis.layout`) tree before it
