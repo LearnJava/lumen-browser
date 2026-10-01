@@ -2057,7 +2057,7 @@ redirects 1`, редирект на `mailto:`] — промис `fetch()` рез
 корректно baseline-нуты с этим же `FAIL` на `redirects 1`. `.ini` для `.any.html`-варианта
 вручную приведён к тому же виду (`expected: ERROR` → `[Fetch: handling different schemes in
 redirects 1]` / `expected: FAIL`), подтверждено scoped `--check --root fetch/api/redirect
---recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-OPEN.md).
+--recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-FIXED.md).
 
 **Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `.https.`-подресурсы
 (166 файлов) ловят TLS-цепочку [BUG-1069](../../bugs/BUG-1069-FIXED.md)/
@@ -2433,7 +2433,7 @@ serviceworker), `fetch/metadata/*` верхнего уровня (9 файлов
 задокументирован. Baseline оставлен таким, каким его записал исходный `--update-expected`, не
 откачен, не сужен — новый экземпляр добавлен в [BUG-1022](../../bugs/BUG-1022-FIXED.md).
 
-**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-OPEN.md) (срез 55)
+**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-FIXED.md) (срез 55)
 держится** — файл не всплыл ни в одном из трёх `--check`, ручная правка среза 55 пережила
 регенерацию baseline.
 
