@@ -107,7 +107,7 @@ longer lined up with what actually loaded). `fetch_image_bytes`/
 test: `lumen-network`'s
 `fetch_subresource_reports_css_initiator_type_for_font_destination`.
 
-**Not fixed by this commit, filed separately as [BUG-1021](BUG-1021-OPEN.md):**
+**Not fixed by this commit, filed separately as [BUG-1021](BUG-1021-FIXED.md):**
 `fetch-resources.sub.html`'s own four subtests check CORS *request mode*
 (`Origin`/`Sec-Fetch-Mode` headers), which `fetch_subresource` has no concept
 of at all — `wait_for_resource()` (the test's sync helper) should now resolve

@@ -100,7 +100,7 @@ namespace — это HTML integration point, поэтому он не включ
 * `implicit_role` — `crates/engine/a11y/src/roles.rs:349`.
 * [BUG-398](BUG-398-FIXED.md) — тот же класс пробела (роль теряется → `Generic`),
   но по explicit `role="..."`-атрибуту, другая функция (`AXRole::parse`).
-* [BUG-685](BUG-685-OPEN.md) — соседний, но независимый SVG-гэп: HTML-парсер не
+* [BUG-685](BUG-685-FIXED.md) — соседний, но независимый SVG-гэп: HTML-парсер не
   реализует foreign content, поэтому `<svg>` внутри HTML-документа не получает
   SVG-специфичные JS-прототипы/namespace на уровне DOM/JS. Не проверялось,
   совпадает ли эта же namespace-неосведомлённость с тем, что `implicit_role`

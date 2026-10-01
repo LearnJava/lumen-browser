@@ -77,9 +77,9 @@ python scripts/split_proxy.py --bind <IP Wi-Fi> --port 8900 \
   соединение не прошло, — в туннель (`AUTO-TUNNEL` в логе). Стало больше NET_FAIL —
   обновить список `--probe` по хостам прошлого прогона.
 - **Lumen берёт прокси только из `data/fingerprint.toml`** (`proxy = "http://127.0.0.1:8900"`):
-  флаг `--proxy` не действует ([BUG-1210](../../../bugs/BUG-1210-OPEN.md)).
+  флаг `--proxy` не действует ([BUG-1210](../../../bugs/BUG-1210-FIXED.md)).
   `perf_audit.py --proxy <url>` проверяет, что строка на месте, и пишет URL в results.json.
-- Пока открыт [BUG-1209](../../../bugs/BUG-1209-OPEN.md), за прокси нет мультиплексирования
+- Пока открыт [BUG-1209](../../../bugs/BUG-1209-FIXED.md), за прокси нет мультиплексирования
   HTTP/2 и бывают ответы `421`: скорость и соединения — «Lumen за прокси», так и писать.
 - Прямой путь может рвать TLS (`peer closed connection without sending TLS close_notify`).
   NET_FAIL на первом документе → A/B `--dump-source` прокси против туннеля на этих

@@ -3204,7 +3204,7 @@ warnings` — чисто. `scripts/scoped-test.sh` — один красный �
 проводка переиспользует без изменений их собственной логики.
 
 Попутно найден и заведён отдельным дефектом (не в скоупе этого среза):
-[BUG-1067](BUG-1067-OPEN.md) — form GET-отправка ИЗ `<iframe>` с
+[BUG-1067](BUG-1067-FIXED.md) — form GET-отправка ИЗ `<iframe>` с
 `target="_top"`/`_parent` (`frame_form_submit.rs::frame_submit_navigate`,
 ветка `LinkTarget::Page`) резолвит `action` без апгрейда схемы и без UIR-
 заголовка вовсе, в отличие от соседней ветки `LinkTarget::Frame` той же

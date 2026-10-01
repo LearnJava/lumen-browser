@@ -46,7 +46,7 @@ Promise'ом с нужными полями, `toJSON()` отдаёт корре�
 ([BUG-672](BUG-672-FIXED.md)), `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)) и `FaceDetector`/`BarcodeDetector`/`TextDetector`
-([BUG-677](BUG-677-OPEN.md)) — интерфейс без спекового конструктора,
+([BUG-677](BUG-677-FIXED.md)) — интерфейс без спекового конструктора,
 подделываемый со страницы; здесь дополнительно совпадает и с отсутствующим
 `Symbol.toStringTag`, второй частью того же BUG-677. Функциональный WPT-сигнал
 по категории отсутствует целиком (TLS-гэп режет оба id до навигации),

@@ -15,7 +15,7 @@
   (`FF FE` …) — то же при делении 0/1.
 
 WPT: `streams/decode-ignore-bom.any.html` 5/12 (7 × `BOM should be stripped expected "abc" but got "﻿abc"`), `textdecoder-copy.any.html` 0/2 (одно из двух — `expected "@" but got "﻿@"`;
-второе — [BUG-1085](BUG-1085-OPEN.md)), `textdecoder-byte-order-marks.any.html` 1/3 (не разбирался — сообщение про «mismatching BOM», возможно другая причина).
+второе — [BUG-1085](BUG-1085-FIXED.md)), `textdecoder-byte-order-marks.any.html` 1/3 (не разбирался — сообщение про «mismatching BOM», возможно другая причина).
 
 ## Ожидание
 
