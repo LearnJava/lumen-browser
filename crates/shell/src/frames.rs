@@ -2332,6 +2332,23 @@ pub(crate) fn spawn_frame(
             lumen_html_parser::parse(&html)
         }
     };
+    // BUG-1231: `document.referrer` ребёнка — то же значение, что ушло в
+    // `Referer` запроса `<iframe src>` (`compute_referrer` от URL родителя
+    // по политике выше). Только для сетевого источника: у file:/about:/srcdoc
+    // запрос не шёл.
+    if !load_failed
+        && child_url != "about:blank"
+        && child_url != "about:srcdoc"
+        && let ResourceBase::Url(parent_url) = base
+        && let Ok(parent_parsed) = lumen_core::url::Url::parse(parent_url)
+        && let Ok(child_parsed) = lumen_core::url::Url::parse(&child_url)
+    {
+        child_doc.set_document_referrer(lumen_network::referrer_policy::compute_referrer(
+            referrer_policy,
+            &parent_parsed,
+            &child_parsed,
+        ));
+    }
     // СРЕЗ 11 BUG-480: подресурсы парсерных элементов ребёнка (`<img src>`,
     // `<link rel=stylesheet>`). Сеть стартует ДО скриптов — парсерный порядок
     // (источник запроса — шаг разбора, а не исполнение); исходы держим до
