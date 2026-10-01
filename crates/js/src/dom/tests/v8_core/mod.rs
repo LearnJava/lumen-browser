@@ -985,6 +985,20 @@ fn detached_document_has_node_mutation_members() {
     assert_eq!(throws, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-1161: the children of a detached document answer `parentNode`,
+/// sibling links and `ownerDocument` with that document, not `null`/the page.
+#[test]
+fn detached_document_children_link_back_to_document() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "var d = document.implementation.createHTMLDocument('t');                      var root = d.documentElement;                      var c = d.createComment('x'); d.insertBefore(c, root);                      var pi = d.createProcessingInstruction('a', 'b'); d.appendChild(pi);                      var el = d.createElement('p');                      root.parentNode === d && c.parentNode === d && pi.parentNode === d                      && c.nextSibling === root && root.previousSibling === c                      && root.nextSibling === pi && pi.previousSibling === root                      && c.previousSibling === d.doctype && pi.nextSibling === null \
+                     && d.doctype.parentNode === d && d.doctype.nextSibling === c                      && root.ownerDocument === d && el.ownerDocument === d                      && root.parentElement === null && root.getRootNode() === d                      && d.parentNode === null && d.previousSibling === null                      && d.textContent === null                      && (d.removeChild(c), c.parentNode === null && root.previousSibling === d.doctype)                      && document.createElement('b').ownerDocument === document                      && document.body.ownerDocument === document",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 /// BUG-415: `body` must be rooted at an HTML-namespace `html` element,
 /// and `readyState`/`title`/the tree accessors existed nowhere.
 #[test]
