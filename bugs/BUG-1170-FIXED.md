@@ -1,6 +1,6 @@
 # BUG-1170 — baseline `tests/wpt/metadata/pointerevents/` устарел: `--check` красный по 540 «регрессиям»
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Компонент:** WPT-baseline (`tests/wpt/metadata/pointerevents/*.ini`, снят 2026-09-21 коммитом `2c1e7560b`,
 WPT-RUN-7 срез 44)
 **Найден:** 2026-09-25, P6, BUG-1073 срез 6
@@ -40,3 +40,7 @@ have a property …`, `should not be enumerable`, `property has wrong .name`). �
 
 Перегенерировать baseline (`--update-expected`, затем `--check` с exit 0 — порядок WPT-RUN-7), разобрать
 новые `FAIL`-подтесты по причинам.
+
+## Исправление (P3, 2026-10-01)
+
+Бинарь `dev-release` от `main` `ef252d20e`: `--update-expected` — 113 .ini записано, 12 стали чистыми, 54 без изменений; затем `--check` — 0 регрессий, 0 unexpected pass, exit 0 (106/258 harness OK, 428/1079 подтестов). Код движка не менялся. Остаток `idlharness` — класс WebIDL-формы (BUG-912 и соседи).
