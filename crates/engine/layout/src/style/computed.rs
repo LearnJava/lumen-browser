@@ -1065,7 +1065,7 @@ impl ComputedStyle {
     }
 
     /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
-    /// насыщенность, letter/word-spacing, декорация, фон). Используется для слияния
+    /// насыщенность, letter/word-spacing, декорация, фон, `user-select`). Используется для слияния
     /// inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
@@ -1083,6 +1083,10 @@ impl ComputedStyle {
             && self.text_decoration_color == other.text_decoration_color
             && self.text_decoration_style == other.text_decoration_style
             && self.text_decoration_thickness == other.text_decoration_thickness
+            // CSS UI L4 §6.2: selectability is decided per fragment (caret,
+            // highlight, copy), so `user-select: none` text must not be glued
+            // to a selectable neighbour.
+            && self.user_select == other.user_select
     }
 
     /// Стартовые значения для корня документа.

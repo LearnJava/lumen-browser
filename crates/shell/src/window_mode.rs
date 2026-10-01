@@ -443,6 +443,7 @@ pub(crate) fn run_window_mode(
         frame_date_picker_month: 0,
         frame_select_dropdown: None,
         text_drag: None,
+        doc_select: None,
         active_frame: None,
         downloads: download::DownloadManager::open_history(
             adblock::browser_data_dir().join("downloads.db"),

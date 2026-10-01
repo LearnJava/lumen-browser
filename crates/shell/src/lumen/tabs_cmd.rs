@@ -69,6 +69,7 @@ impl Lumen {
         self.frame_text_cursor = HashMap::new();
         self.frame_text_selection_anchor = HashMap::new();
         self.text_drag = None;
+        self.doc_select = None;
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;
