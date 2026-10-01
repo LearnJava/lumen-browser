@@ -10974,7 +10974,7 @@ function _lumen_range_contents(r, extract) {
         var c0 = snode.cloneNode(false);
         c0.data = snode.substringData(so, eo - so);
         frag.appendChild(c0);
-        if (extract) snode.replaceData(so, eo - so, '');
+        if (extract) { snode.replaceData(so, eo - so, ''); r.__end_nid__ = sn; r.__end_off__ = so; }
         return frag;
     }
     var ca = _lumen_range_common_nid(sn, en);
@@ -11087,10 +11087,10 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         setEndBefore:   function(node) { var s = this.__side__(node, 'setEndBefore');   this.__set__(false, s[0], s[1]); },
         setEndAfter:    function(node) { var s = this.__side__(node, 'setEndAfter');    this.__set__(false, s[0], s[1] + 1); },
         collapse: function(toStart) {
-            if (toStart === false) {
-                this.__start_nid__ = this.__end_nid__; this.__start_off__ = this.__end_off__;
-            } else {
+            if (toStart) {
                 this.__end_nid__ = this.__start_nid__; this.__end_off__ = this.__start_off__;
+            } else {
+                this.__start_nid__ = this.__end_nid__; this.__start_off__ = this.__end_off__;
             }
         },
         selectNode: function(node) {
@@ -11191,7 +11191,7 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         },
         compareBoundaryPoints: function(how, other) {
             if (arguments.length < 2) throw new TypeError("Failed to execute 'compareBoundaryPoints' on 'Range': 2 arguments required.");
-            how = how >>> 0;
+            how = how & 0xFFFF;
             if (how > 3) throw new DOMException('The comparison method provided must be one of START_TO_START, START_TO_END, END_TO_END, END_TO_START.', 'NotSupportedError');
             if (!other || other.__start_nid__ === undefined) throw new TypeError("Failed to execute 'compareBoundaryPoints' on 'Range': parameter 2 is not of type 'Range'.");
             if (_lumen_range_root(this.__start_nid__) !== _lumen_range_root(other.__start_nid__)) {
@@ -11212,8 +11212,9 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         getClientRects:   function() { return new DOMRectList([this.getBoundingClientRect()]); },
         detach:           function() {},
         isPointInRange: function(node, offset) {
+            if (arguments.length >= 2 && _lumen_tree_nid(node) !== null &&
+                _lumen_range_root(_lumen_tree_nid(node)) !== _lumen_range_root(this.__start_nid__)) return false;
             var nid = _lumen_range_point_arg(node, offset, 'isPointInRange', arguments.length);
-            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) return false;
             offset = offset >>> 0;
             return _lumen_range_cmp(nid, offset, this.__start_nid__, this.__start_off__) >= 0 &&
                    _lumen_range_cmp(nid, offset, this.__end_nid__, this.__end_off__) <= 0;
@@ -11254,6 +11255,7 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
 function Range() { return _lumen_make_range(0, 0, 0, 0); }
 Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
 Range.prototype.END_TO_END  = 2; Range.prototype.END_TO_START  = 3;
+Range.START_TO_START = 0; Range.START_TO_END = 1; Range.END_TO_END = 2; Range.END_TO_START = 3;
 
 // ── StaticRange (WHATWG DOM §5.4) — BUG-533 ─────────────────────────────────
 // An immutable AbstractRange: unlike Range, its [nid, offset] boundary pair
