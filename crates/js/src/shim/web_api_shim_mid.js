@@ -3341,6 +3341,8 @@ function _lumen_get_root_node(nid, options) {
         }
         break;
     }
+    // BUG-1161: the top of a detached document's tree is the document itself.
+    if (cur !== _lumen_root_nid && _lumen_doc_edge[cur]) { return _lumen_doc_edge[cur]; }
     return cur === _lumen_root_nid ? document : _lumen_make_element(cur);
 }
 
@@ -4611,6 +4613,27 @@ function _lumen_make_node(nid) {
     return _lumen_make_element(nid);
 }
 
+// BUG-1161: the arena knows nothing of a detached document, so the two facts it
+// would carry live here, keyed by node id. `_lumen_doc_edge[nid]` — the detached
+// document that holds the (parentless) arena node `nid` as a direct child, which
+// is what `parentNode`/sibling links answer at the top of such a tree;
+// `_lumen_free_owner[nid]` — the detached document that created or adopted a
+// free-standing node. Both are consulted only when the node's tree has no live
+// root, so a node pulled into the page falls back to `document` untouched.
+var _lumen_doc_edge = Object.create(null);
+var _lumen_free_owner = Object.create(null);
+function _lumen_owner_doc(nid) {
+    var cur = nid, p;
+    while ((p = _lumen_u2n(_lumen_get_parent(cur))) !== null) { cur = p; }
+    if (cur === _lumen_root_nid) { return document; }
+    return _lumen_doc_edge[cur] || _lumen_free_owner[cur] || document;
+}
+// Sibling of a detached document's child, `delta` places away (-1 / +1).
+function _lumen_doc_sibling(node, nid, delta) {
+    var d = _lumen_doc_edge[nid];
+    return d ? d.__lumen_sibling(node, delta) : null;
+}
+
 // BUG-324: a DocumentType minted by `DOMImplementation.createDocumentType` —
 // detached (no arena backing, unlike the page's own `<!doctype>` wrapped by
 // `_lumen_make_doctype` above). DOM §4.5 sets its node document to the
@@ -4626,9 +4649,21 @@ function _lumen_make_detached_doctype(name, publicId, systemId, ownerDoc) {
     Object.defineProperty(obj, 'publicId',      { get: function() { return publicId; }, enumerable: true });
     Object.defineProperty(obj, 'systemId',      { get: function() { return systemId; }, enumerable: true });
     Object.defineProperty(obj, 'nodeValue',     { get: function() { return null; }, enumerable: true });
-    Object.defineProperty(obj, 'parentNode',    { get: function() { return null; }, enumerable: true });
+    var _docParent = null;
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return _docParent; }, enumerable: true });
+    Object.defineProperty(obj, 'parentElement', { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'previousSibling', {
+        get: function() { return _docParent ? _docParent.__lumen_sibling(obj, -1) : null; }, enumerable: true });
+    Object.defineProperty(obj, 'nextSibling', {
+        get: function() { return _docParent ? _docParent.__lumen_sibling(obj, 1) : null; }, enumerable: true });
+    Object.defineProperty(obj, 'firstChild',    { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'lastChild',     { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'textContent',   { get: function() { return null; }, enumerable: true });
     Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },   enumerable: true });
     Object.defineProperty(obj, 'ownerDocument', { get: function() { return _owner; }, enumerable: true });
+    Object.defineProperty(obj, '__lumen_docParent', {
+        value: function(d) { if (arguments.length > 0) { _docParent = d; } return _docParent; },
+        enumerable: false });
     Object.defineProperty(obj, '__lumen_setOwner', { value: function(doc) { _owner = doc; }, enumerable: false });
     // BUG-557: same three-field equality as the live doctype wrapper, so a
     // document and its deep clone compare equal even though their doctype
@@ -4803,12 +4838,14 @@ function _lumen_build_detached_document(proto, contentType) {
     doc.createElement = function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     doc.createElementNS = function(ns, qualifiedName) {
         var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
         var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     // BUG-689: the detached-document twins of the live `document`'s factories.
@@ -4821,11 +4858,13 @@ function _lumen_build_detached_document(proto, contentType) {
     doc.createTextNode = function(t) {
         var nid = _lumen_create_text_node(String(t));
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     doc.createComment = function(t) {
         var nid = _lumen_create_comment(t === undefined ? '' : String(t));
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     // GAP-XMLDOC срез 25 (BUG-786): was missing entirely on every detached
@@ -4866,22 +4905,56 @@ function _lumen_build_detached_document(proto, contentType) {
     }
     // DOM 4.2.3 pre-insert: a node is removed from wherever it currently hangs
     // before being inserted, be that an arena parent or this list.
+    // BUG-1161: the document->child edge, mirrored into the shared registry
+    // (arena nodes) or the node's own hook (doctype) so the child can answer
+    // `parentNode`/siblings/`ownerDocument` without the arena knowing the edge.
+    function _detached_link(node) {
+        var nid = _lumen_tree_nid(node);
+        if (nid !== null && node !== document) {
+            _lumen_doc_edge[nid] = doc;
+            _lumen_free_owner[nid] = doc;
+        } else if (typeof node.__lumen_docParent === 'function') { node.__lumen_docParent(doc); }
+    }
+    function _detached_unlink(node) {
+        var nid = _lumen_tree_nid(node);
+        if (nid !== null && node !== document) {
+            if (_lumen_doc_edge[nid] === doc) { delete _lumen_doc_edge[nid]; }
+        } else if (typeof node.__lumen_docParent === 'function' && node.__lumen_docParent() === doc) {
+            node.__lumen_docParent(null);
+        }
+    }
+    Object.defineProperty(doc, '__lumen_sibling', {
+        value: function(node, delta) {
+            var at = _detached_child_index(node);
+            if (at < 0) { return null; }
+            var other = _children[at + delta];
+            return other === undefined ? null : other;
+        },
+        enumerable: false });
     function _detached_adopt(node) {
         if (node === null || node === undefined) {
             throw new TypeError('the argument is not a Node');
         }
         if (typeof node.__lumen_setOwner === 'function') { node.__lumen_setOwner(doc); }
+        // A JS-only Text/Comment/PI gets its arena node here so the registry
+        // has an id to hang the edge on (same object, same identity).
+        _lumen_adopt_detached(node);
         var nid = _lumen_tree_nid(node);
         if (nid !== null) {
             var parent = _lumen_u2n(_lumen_get_parent(nid));
             if (parent !== null) { _lumen_remove_child(parent, nid); }
         }
+        // Held by another detached document: leave it first.
+        var prev = nid !== null ? _lumen_doc_edge[nid]
+            : (typeof node.__lumen_docParent === 'function' ? node.__lumen_docParent() : null);
+        if (prev && prev !== doc) { prev.removeChild(node); }
         var at = _detached_child_index(node);
         if (at >= 0) { _children.splice(at, 1); }
     }
     doc.appendChild = function(node) {
         _detached_adopt(node);
         _children.push(node);
+        _detached_link(node);
         return node;
     };
     doc.insertBefore = function(node, ref) {
@@ -4894,6 +4967,7 @@ function _lumen_build_detached_document(proto, contentType) {
         // The index is re-read after the adopt: removing `node` from this same
         // list may have shifted the reference node down by one.
         _children.splice(_detached_child_index(ref), 0, node);
+        _detached_link(node);
         return node;
     };
     doc.removeChild = function(node) {
@@ -4903,6 +4977,7 @@ function _lumen_build_detached_document(proto, contentType) {
                 'removeChild: the node is not a child of this document', 'NotFoundError');
         }
         _children.splice(at, 1);
+        _detached_unlink(node);
         return node;
     };
     doc.replaceChild = function(newChild, oldChild) {
@@ -4912,9 +4987,17 @@ function _lumen_build_detached_document(proto, contentType) {
         }
         _detached_adopt(newChild);
         _children.splice(_detached_child_index(oldChild), 1, newChild);
+        _detached_unlink(oldChild);
+        _detached_link(newChild);
         return oldChild;
     };
     doc.hasChildNodes = function() { return _children.length > 0; };
+    // DOM §4.4: a document has no parent and no siblings, and its text content
+    // is null — the inherited accessors read `undefined` for a JS-only node.
+    ['parentNode', 'parentElement', 'previousSibling', 'nextSibling', 'textContent'].forEach(function(k) {
+        Object.defineProperty(doc, k, { get: function() { return null; }, set: function() {},
+            enumerable: true, configurable: true });
+    });
     Object.defineProperty(doc, 'firstChild', {
         get: function() { return _children.length > 0 ? _children[0] : null; },
         enumerable: true, configurable: true,
@@ -9371,7 +9454,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'parentNode', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
+            if (pid === null) return _lumen_doc_edge[nid] || null;
             // BUG-557: the root element's parent is the document, and it has to
             // be the `document` singleton itself, not a fresh wrapper for the
             // same node id. A reconciler that hydrates into a document root
@@ -9505,7 +9588,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'nextSibling', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
+            if (pid === null) return _lumen_doc_sibling(this, nid, 1);
             var sibs = _lumen_get_children(pid);
             var idx = sibs.indexOf(nid);
             return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
@@ -9515,7 +9598,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'previousSibling', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
+            if (pid === null) return _lumen_doc_sibling(this, nid, -1);
             var sibs = _lumen_get_children(pid);
             var idx = sibs.indexOf(nid);
             return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
@@ -9585,7 +9668,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     // blow up code that walks own-enumerable properties (e.g. `eval()`'s return-value
     // serialization in lib.rs's `from_rq`).
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'ownerDocument', {
-        get: function() { var nid = this.__nid__; return document; },
+        get: function() { return _lumen_owner_doc(this.__nid__); },
         enumerable: false,
         configurable: true,
     });

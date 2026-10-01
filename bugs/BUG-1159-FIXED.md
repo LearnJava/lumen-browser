@@ -48,6 +48,6 @@ end», `comparePoint`/`isPointInRange`/`intersectsNode` по спековым ш
 по DOM §5.5, `collapse()` без аргумента — в конец. `node_length` в `selection.rs` знает Comment/PI.
 `dom/ranges`: 12262 → 31325 из 44063 сабтестов. Тесты — `bug1159_range_spec.rs`.
 
-Остаток (не про сравнение/операции): отсоединённые/XML-документы и Attr без nid — [BUG-1161](BUG-1161-OPEN.md);
+Остаток (не про сравнение/операции): отсоединённые/XML-документы и Attr без nid — [BUG-1161](BUG-1161-FIXED.md);
 живое обновление диапазонов при мутациях DOM — [BUG-1232](BUG-1232-OPEN.md).
 
