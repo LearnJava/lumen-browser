@@ -69,7 +69,7 @@ Reload: http://127.0.0.1:18300/html/browsers/windows/resources/post-to-opener.ht
   [BUG-1212](BUG-1212-OPEN.md);
 - `returns an opaque origin for a data URL source`: `postMessage` родителю из первого
   синхронного скрипта `data:`-фрейма не доходит (проба: родитель не получил ничего) — по
-  симптому это [BUG-1188](BUG-1188-OPEN.md); отложенную отправку из `data:`-фрейма проба не
+  симптому это [BUG-1188](BUG-1188-FIXED.md); отложенную отправку из `data:`-фрейма проба не
   проверяла.
 
 Регрессионный тест: `tabs::strip::tests::inactive_index_of_skips_active_and_closed_tabs`.
