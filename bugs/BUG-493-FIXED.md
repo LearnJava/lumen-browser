@@ -513,7 +513,7 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
   `Cannot read properties of null (reading 'eval')` и перезапускается по кругу;
 - [BUG-1177](BUG-1177-FIXED.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
   connection closing` после обрыва общего HTTP/2-соединения (1 прогон из 3);
-- [BUG-1178](BUG-1178-OPEN.md) — MCP `eval` на странице без `<script>` всегда отвечает
+- [BUG-1178](BUG-1178-FIXED.md) — MCP `eval` на странице без `<script>` всегда отвечает
   `JS context not available`: у такого документа рантайма нет вовсе;
 - [BUG-1179](BUG-1179-OPEN.md) — imdb: страница челленджа (13 узлов) остаётся текущим документом
   до 26–88 с после навигации, хотя HTML настоящей страницы и её скрипты получены к 9-й секунде;

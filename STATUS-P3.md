@@ -1,6 +1,6 @@
 BUGS.md:124
 BUGS.md:138
-BUGS.md:139
+BUGS.md:142
 BUGS.md:143
 BUGS.md:144
 BUGS.md:145
@@ -8,5 +8,4 @@ BUGS.md:146
 BUGS.md:147
 BUGS.md:148
 BUGS.md:149
-BUGS.md:150
-BUGS.md:159
+BUGS.md:158
