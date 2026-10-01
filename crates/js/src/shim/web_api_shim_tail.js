@@ -337,9 +337,7 @@ function _perf_observer_notify(entries) {
 // declares no constructor, so script-side `new` throws; the shell's entries
 // are built off the prototype instead. Fields stay own properties, as on every
 // other entry type in this shim; `toJSON` is the WebIDL `[Default]` one of
-// PerformanceEntry. PerformanceEntry itself is not exposed: every entry
-// interface here is a standalone function with no shared base prototype, so a
-// global that `instanceof` answered false for would lie about all of them.
+// PerformanceEntry. PerformanceEntry is the shared base (BUG-1189).
 function PerformancePaintTiming() { throw new TypeError('Illegal constructor'); }
 PerformancePaintTiming.prototype.toJSON = function() {
     return { name: this.name, entryType: this.entryType, startTime: this.startTime,
@@ -350,10 +348,10 @@ PerformancePaintTiming.prototype.toJSON = function() {
 // name = 'first-paint' | 'first-contentful-paint', start_ms = DOMHighResTimeStamp.
 function _lumen_deliver_paint_entry(name, start_ms) {
     var entry = Object.create(PerformancePaintTiming.prototype);
-    entry.entryType = 'paint';
-    entry.name = String(name);
-    entry.startTime = start_ms;
-    entry.duration = 0;
+    _perf_put(entry, 'entryType', 'paint');
+    _perf_put(entry, 'name', String(name));
+    _perf_put(entry, 'startTime', start_ms);
+    _perf_put(entry, 'duration', 0);
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }
@@ -377,17 +375,17 @@ LargestContentfulPaint.prototype.toJSON = function() {
 // start_ms = DOMHighResTimeStamp; render_time_ms = when rendering completed.
 function _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) {
     var entry = Object.create(LargestContentfulPaint.prototype);
-    entry.entryType = 'largest-contentful-paint';
-    entry.name = 'largest-contentful-paint';
-    entry.startTime = start_ms;
-    entry.duration = render_time_ms - start_ms;
-    entry.renderTime = render_time_ms;
-    entry.loadTime = start_ms;
-    entry.size = size;
-    entry.element = element_id >= 0 ? _lumen_make_element(element_id) : null;
-    entry.url = '';
-    entry.id = '';
-    entry.activationStart = 0;
+    _perf_put(entry, 'entryType', 'largest-contentful-paint');
+    _perf_put(entry, 'name', 'largest-contentful-paint');
+    _perf_put(entry, 'startTime', start_ms);
+    _perf_put(entry, 'duration', render_time_ms - start_ms);
+    _perf_put(entry, 'renderTime', render_time_ms);
+    _perf_put(entry, 'loadTime', start_ms);
+    _perf_put(entry, 'size', size);
+    _perf_put(entry, 'element', element_id >= 0 ? _lumen_make_element(element_id) : null);
+    _perf_put(entry, 'url', '');
+    _perf_put(entry, 'id', '');
+    _perf_put(entry, 'activationStart', 0);
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }
@@ -406,10 +404,10 @@ function LayoutShiftAttribution(node, previousRect, currentRect) {
     this.currentRect = currentRect;
 }
 function LayoutShift(init) {
-    this.entryType = 'layout-shift';
-    this.name = 'layout-shift';
-    this.startTime = init.startTime;
-    this.duration = 0;
+    _perf_put(this, 'entryType', 'layout-shift');
+    _perf_put(this, 'name', 'layout-shift');
+    _perf_put(this, 'startTime', init.startTime);
+    _perf_put(this, 'duration', 0);
     this.value = init.value;
     this.hadRecentInput = init.hadRecentInput;
     this.lastInputTime = init.lastInputTime || 0;
@@ -462,6 +460,11 @@ PerformanceNavigationTiming.prototype = Object.create(PerformanceResourceTiming.
 // for every supported entry type (BUG-687), and an entry built off a plain
 // function prototype answers `[object Object]`. Per prototype, so the
 // navigation entry does not inherit the resource tag.
+// BUG-1189: all entry interfaces share the PerformanceEntry base prototype
+Object.setPrototypeOf(PerformancePaintTiming.prototype, PerformanceEntry.prototype);
+Object.setPrototypeOf(LargestContentfulPaint.prototype, PerformanceEntry.prototype);
+Object.setPrototypeOf(LayoutShift.prototype, PerformanceEntry.prototype);
+Object.setPrototypeOf(PerformanceResourceTiming.prototype, PerformanceEntry.prototype);
 _lumen_idl_tag(PerformancePaintTiming, 'PerformancePaintTiming');
 _lumen_idl_tag(LargestContentfulPaint, 'LargestContentfulPaint');
 _lumen_idl_tag(LayoutShift, 'LayoutShift');
@@ -523,7 +526,7 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms, de
         renderBlockingStatus: 'non-blocking',
         contentType: det.contentType ? String(det.contentType) : '',
     };
-    for (var f in fields) { entry[f] = fields[f]; }
+    for (var f in fields) { _perf_put(entry, f, fields[f]); }
     // The buffer and the observer stream are separate sinks: an entry the
     // buffer refuses is still delivered to every interested observer.
     _perf_rt_add(entry);
@@ -569,15 +572,15 @@ function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, deta
     var entry = type === 'navigation' ? Object.create(PerformanceNavigationTiming.prototype)
               : type === 'resource' ? Object.create(PerformanceResourceTiming.prototype)
               : {};
-    entry.entryType = type;
-    entry.name = String(name);
-    entry.startTime = Number(start_ms);
-    entry.duration = Number(duration_ms);
+    _perf_put(entry, 'entryType', type);
+    _perf_put(entry, 'name', String(name));
+    _perf_put(entry, 'startTime', Number(start_ms));
+    _perf_put(entry, 'duration', Number(duration_ms));
     if (detail_json) {
         try {
             var extra = JSON.parse(String(detail_json));
             for (var k in extra) {
-                if (Object.prototype.hasOwnProperty.call(extra, k)) entry[k] = extra[k];
+                if (Object.prototype.hasOwnProperty.call(extra, k)) _perf_put(entry, k, extra[k]);
             }
         } catch(e) {}
     }
