@@ -1,6 +1,6 @@
 # BUG-1187 — `window.top` внутри фрейма возвращает сам фрейм
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3, перепроверка: исправлено до этого в 5c4b6a2fe под BUG-1198)
 **Заведён:** 2026-09-26 (P6, найден при закрытии [BUG-648](BUG-648-FIXED.md): WPT
 `performance-timeline/not-clonable.html` уходит в TIMEOUT).
 **Область:** js — [`crates/js/src/shim/web_api_shim_tail_b.js:5858`](../crates/js/src/shim/web_api_shim_tail_b.js)
@@ -32,3 +32,11 @@ BUG-587 сделал `top` собственным `[LegacyUnforgeable]` свой
 родителя, если она есть), оставаясь неконфигурируемым для BUG-587, либо устанавливаться один раз уже
 с правильным геттером. Критерий: в пробе выше `top===parent:true top===self:false`, WPT
 `not-clonable.html` доходит до своего утверждения, тесты BUG-587 (`html/browsers`) не регрессируют.
+
+## Перепроверка 2026-10-01 (P3)
+
+Дефект уже устранён коммитом 5c4b6a2fe (BUG-1198): неконфигурируемый геттер `top` в
+`web_api_shim_tail_b.js` читает хук `_lumen_frame_top`, который `installHierarchyAccessors`
+(`frame_bridge.rs`) ставит в `__lumen_C`. Тест
+`frame_bridge::tests::child_window_parent_reads_parent_document` (`top === parent`) зелёный
+на `dev-release`. Живая проба WPT `not-clonable.html` не гонялась.
