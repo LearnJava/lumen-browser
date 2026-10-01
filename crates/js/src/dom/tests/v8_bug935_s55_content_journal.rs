@@ -8,10 +8,8 @@
 //! once with it switched off (`CONTENT_JOURNAL_DISABLED`, the pre-journal
 //! `Untracked` behaviour), and the two must publish identical rects.
 //!
-//! Not compared against a single full layout on purpose: the scoped collectors
-//! of BUG-1211 refresh only the dirty-root subtrees, so a sibling that merely
-//! *moved* keeps its old rect in both modes (BUG-1238) — an independent defect
-//! that would drown this signal.
+//! Not compared against a single full layout here on purpose: that is the
+//! contract of the scoped collectors, covered by `v8_bug1238_scoped_collectors`.
 
 use super::*;
 use crate::v8_runtime::CONTENT_JOURNAL_DISABLED;
@@ -19,7 +17,7 @@ use crate::v8_runtime::V8JsRuntime;
 use lumen_dom::{Document, QualName};
 use std::sync::atomic::Ordering;
 
-fn page() -> Arc<Mutex<Document>> {
+pub(super) fn page() -> Arc<Mutex<Document>> {
     let mut doc = Document::new();
     let html = doc.create_element(QualName::html("html"));
     let body = doc.create_element(QualName::html("body"));
@@ -28,7 +26,7 @@ fn page() -> Arc<Mutex<Document>> {
     Arc::new(Mutex::new(doc))
 }
 
-fn runtime(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+pub(super) fn runtime(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)

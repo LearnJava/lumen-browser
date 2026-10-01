@@ -240,5 +240,13 @@ dump_golden" в корневом `CLAUDE.md`).
 `ContentDirty::Nodes(journal)` вместо `Untracked`: `build_box` 26 → ~1 мс, `graft_geometry`
 23–31 → 0,05 мс на стенде 1500 div, цикл `mutate+read` ~110 → ~30–45 мс. Подробности —
 [BUG-935 срез 55](BUG-935-OPEN.md). Попутно найден независимый дефект scoped-коллекторов —
-[BUG-1238](BUG-1238-OPEN.md) (следствие «post-collectors» этого бага: сдвинутые соседи получают
+[BUG-1238](BUG-1238-FIXED.md) (следствие «post-collectors» этого бага: сдвинутые соседи получают
 устаревший `getBoundingClientRect`). BUG-1211 остаётся OPEN.
+
+## Срез BUG-1238 (P1, 2026-10-02) — коллекторы заменены планом
+
+`collect_*_scoped` по `dirty_roots` удалены: они оставляли устаревшие записи у сдвинутых
+соседей и у предков корня ([BUG-1238](BUG-1238-FIXED.md)). Их заменил
+`lumen_layout::ScopedCollection` (`scoped_collect.rs`) — обход свежего дерева с отсечением по
+`clean_subtrees` и совпавшему rect; карту `computed_styles` чисто вертикальный сдвиг не
+затрагивает. Строка `maybe_flush done` теперь печатает время rect-коллекторов.
