@@ -1,6 +1,6 @@
 # BUG-1097 — `lumen-image` не умеет BMP: `<img>`/`<picture>` на общий WPT-хелпер `security-features/subresource/image.py` всегда падает с `error`
 
-**Статус:** OPEN (ДОРАБОТКА)
+**Статус:** FIXED 2026-10-01 (P1) — декодер BMP; остаток и сквозная проверка → [BUG-1235](BUG-1235-OPEN.md)
 **Тип:** нереализованная функциональность — `lumen-image` разбирает 8 форматов по сигнатуре (`crates/engine/image/src/lib.rs:120-152`: PNG/JPEG/GIF/WebP/AVIF/SVG/JXL/HEIC), BMP среди них нет
 **Область:** image (`crates/engine/image/src/lib.rs::decode_raw`), затрагивает WPT-инфраструктуру `common/security-features/subresource/image.py` (используется `img-tag`/`picture-tag` во ВСЕХ категориях `security-features`, не только `referrer-policy`)
 **Владелец:** P1 (`lumen-image`)
@@ -79,7 +79,7 @@ BUG-1096): **312 подтестов** только в семье `4K*` пада�
 `image/bmp` в `supported_mime_types()`. Юнит-тесты (5) включают байты, которые реально
 отдаёт `image.py` (3x2, 24 bpp, padding) — декодируются в ожидаемые RGB.
 
-**Не проверено сквозным прогоном** — команда из «Как проверить фикс» (`referrer-policy/4K`,
-многочасовая) не запускалась. Баг остаётся OPEN до неё: нужно убедиться, что 156 `img-tag`-подтестов
-стали unexpected PASS и перегенерировать baseline `referrer-policy`/`mixed-content`.
-Остаток `script-tag`/`sharedworker-classic`/`a-tag` — по-прежнему не объяснён.
+**Закрыт по решению владельца без сквозного прогона** `referrer-policy/4K` (многочасовой): дефект
+«нет BMP-декодера» устранён и покрыт юнит-тестом на байтах `image.py`. Проверка 156 `img-tag`-подтестов,
+регенерация baseline `referrer-policy`/`mixed-content` и необъяснённый остаток
+`script-tag`/`sharedworker-classic`/`a-tag` перенесены в [BUG-1235](BUG-1235-OPEN.md).
