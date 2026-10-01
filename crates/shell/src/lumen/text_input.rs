@@ -55,8 +55,16 @@ impl Lumen {
     /// (`"Space"` → `" "`, everything else passes through unchanged).
     /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
     pub(crate) fn inject_special_key(&mut self, code: &str) {
-        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = input::native::code_to_key(code);
+        self.inject_key_events(key, code, &["keydown", "keyup"]);
+    }
+
+    /// Dispatch the given key events (`keydown` / `keyup`) for an explicit
+    /// `key`/`code` pair at the focused element (BUG-1194: WebDriver sends
+    /// press and release as separate actions, with `key` != `code` for
+    /// modifiers such as `Shift` / `ShiftLeft`).
+    pub(crate) fn inject_key_events(&mut self, key: &str, code: &str, events: &[&str]) {
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         // ADR-016 M2.2c-2d (10): keyboard injection — `_lumen_dispatch_key_event`
         // (keydown → keyup) уходит fire-and-forget через `route_eval_js`, а
         // последующий `take_navigate_request` — через `route_query_js`. Под флагом
@@ -64,7 +72,7 @@ impl Lumen {
         // отправленных `task`, восстанавливая read-after-eval порядок; без флага
         // (по умолчанию) — прежние синхронные вызовы, байт-идентично (`js_ctx == None`
         // → `route_eval_js` no-op + `route_query_js` → `None`, как прежний early-`return`).
-        for event_type in &["keydown", "keyup"] {
+        for event_type in events {
             let script = format!(
                 "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
                 node_id, event_type, key, code,
