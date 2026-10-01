@@ -509,7 +509,7 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
 
 **Что вскрылось попутно** (заведено отдельно или дописано в существующие):
 
-- [BUG-1176](BUG-1176-OPEN.md) — quora: управляемый челлендж Cloudflare падает в Lumen с
+- [BUG-1176](BUG-1176-FIXED.md) — quora: управляемый челлендж Cloudflare падает в Lumen с
   `Cannot read properties of null (reading 'eval')` и перезапускается по кругу;
 - [BUG-1177](BUG-1177-FIXED.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
   connection closing` после обрыва общего HTTP/2-соединения (1 прогон из 3);

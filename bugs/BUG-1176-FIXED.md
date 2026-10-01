@@ -1,6 +1,6 @@
 # BUG-1176 — quora: управляемый челлендж Cloudflare падает на `(0,eval)(…)` и не проходит
 
-**Статус:** OPEN
+**Статус:** FIXED (не воспроизводится) 2026-10-01
 **Заведён:** 2026-09-25 (P6, по ходу закрытия [BUG-493](BUG-493-FIXED.md); видимое окно `--maximized`,
 `LUMEN_NO_ADBLOCK=1`, Chrome 153 тем же способом).
 **Область:** js — не локализовано. Падает оркестратор челленджа
@@ -49,3 +49,15 @@
 
 Критерий: `https://www.quora.com/` в Lumen доходит до приложения (десятки узлов → сотни,
 `title` не «Just a moment...»), `reading 'eval'` в stderr нет.
+
+## Закрытие (2026-10-01, P3)
+
+Перепроверка живым окном (`--mcp-live-port --maximized`, `LUMEN_NO_ADBLOCK=1`, `--proxy http://127.0.0.1:12334`,
+через 25 с): `https://de.quora.com/`, 643 узла, `title` — «Quora - Quora, wo man Wissen …», `reading 'eval'`
+и `[JS error]` в stderr нет. Критерий бага выполнен.
+
+**Оговорка:** на этом маршруте сети Cloudflare челлендж не выдал («Just a moment…» не показан), поэтому путь
+оркестратора не исполнялся — механизм `null.eval` не подтверждён и не опровергнут. Подтверждено отдельной
+пробой: у вставленного скриптом `<iframe>` `contentWindow === null` синхронно после `appendChild`
+(`f.contentWindow.eval('1+1')` → `Cannot read properties of null (reading 'eval')`) — это остаток
+[BUG-480](BUG-480-OPEN.md), берётся там. Если челлендж вернётся — заводить новый баг со ссылкой сюда.
