@@ -1,6 +1,6 @@
 # BUG-1093 — заведённые SVG-интерфейсы не той WebIDL-формы: члены не на прототипе, геттеры на инстансе не бросают, `enumerable`/`writable` не по спеке
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P6)
 **Тип:** пробел реализации — систематическое расхождение формы `svg.rs`-прототипов со спекой WebIDL (Web IDL §3.7 Operations, §3.6 Attributes).
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 53, `svg`)
 **Область:** js — `crates/js/src/svg.rs` (классы `SVGElement`, `SVGGraphicsElement`, `SVGGeometryElement`, `SVGSVGElement`, `SVGTextContentElement`, `SVGTransform`, `SVGMarkerElement`, `SVGAnimationElement`, `SVGGradientElement`, `SVGTextPathElement`, `SVGStringList`, `SVGTransformList`, `SVGPointList`, `SVGPatternElement`, `SVGPreserveAspectRatio`, `SVGLength`, `SVGAElement`-семейство и другие — десятки затронутых классов)
@@ -38,3 +38,22 @@
 ## Не проверялось
 
 - Точное сопоставление «какой конкретно член на каком конкретно классе» — таблица выше агрегирует по типу нарушения и по имени интерфейса, не по паре (интерфейс, член); экономически дешевле поднимать при самом фиксе, читая `svg.rs` для каждого класса напрямую, чем вручную расписывать все ~80 членов здесь.
+
+## Исправление
+
+`svg/idlharness.window.html`: 807/1709 → **1709/1709** подтестов (замер 2026-10-01 на dev-release; baseline `.ini` файла удалён целиком — файл проходит без ожиданий).
+
+Корень — не «часть членов на инстансе», а отсутствие единой формы: классы `svg.rs` писались вручную, члены WebIDL (атрибуты/операции/константы) добавлялись по одному. Починено двумя слоями в `crates/js/src/svg.rs`:
+
+1. **Значимые типы** (`SVGLength`, `SVGAnimated*`, `SVGTransform`, `SVG*List`, `SVGPreserveAspectRatio`, `SVGNumber`/`SVGAngle`) переписаны на WeakMap-слоты (`_slots`/`_slot`/`_def`): состояние не лежит в own-свойствах инстанса, каждый атрибут — enumerable-аксессор на **прототипе** с проверкой бренда (`TypeError` на самом прототипе), операции списков — на прототипе каждого интерфейса, не на общей базе. У интерфейсов без конструктора `new` бросает `TypeError` (`_gate`/`_new` — шим создаёт экземпляры через `_new`). `SVGRect`/`SVGPoint`/`SVGMatrix` теперь наследуют `DOMRect`/`DOMPoint`/`DOMMatrix`: `getBBox()` и др. — одновременно и `SVGRect`, и `DOMRect`.
+2. **Проход формы по WebIDL** (`crates/js/src/shim/svg_idl_shape.js`, в конце IIFE) по сгенерированной таблице `crates/js/src/shim/svg_idl_table.js` (`python scripts/gen_svg_idl_table.py` из `tests/wpt/interfaces/SVG.idl` + `svg-animations.idl`): для каждого интерфейса — `window.X` не enumerable, `@@toStringTag`, константы на интерфейсном объекте и прототипе (не writable), операции enumerable с подсчётом обязательных аргументов (`length`, `TypeError` при нехватке), геттеры/сеттеры с именами `get X`/`set X`; недостающие члены добавлены (`requiredExtensions`/`systemLanguage`, `className` как `SVGAnimatedString`, `pathLength`, `preserveAspectRatio`, `viewBox` на `view`/`symbol`/`marker`/`pattern`, атрибуты `text*`/`marker*`/`gradient*`/`pattern*`, URL-утилиты `<a>`, `relList`, `currentScale`/`currentTranslate`, `Document.rootElement`, …) — живое отражение content-атрибута (`_attr_get`/`_attr_set`, `_anim_*`). `[SameObject]` держится `_same_cached` (live-виды — всегда один объект, списки — пока атрибут не изменился).
+
+Побочные изменения поведения (в сторону реальных браузеров): `svgEl.className` — `SVGAnimatedString` (строка — `className.baseVal`), `SVGLength.value`/`valueAsString` учитывают абсолютные единицы (cm/mm/in/pt/pc), `SVGSetElement`/`SVGAnimateTransformElement` наследуют `SVGAnimationElement` (не `SVGAnimateElement`), `new SVGLength()` и т.п. бросают `Illegal constructor`, `createSVGPoint()`/`createSVGRect()`/`createSVGMatrix()` возвращают наследников `DOM*`.
+
+Тесты: `bug_1093_*` в `crates/js/src/svg.rs` (форма значимых типов; операции списков на прототипе каждого интерфейса).
+
+## Не сделано / остаток
+
+- `SVGAnimatedRect.animVal` — `DOMRect`, а не `DOMRectReadOnly`; `animVal` скалярных `SVGAnimated*` записываемый только через `baseVal` (запрет записи в `animVal` — не проверяется).
+- Списки (`points`, `rotate`, `x`/`y` у `<text>`, `requiredExtensions`, …) не пишут изменения обратно в content-атрибут (как и до исправления); перечитываются, когда атрибут изменён.
+- Относительные единицы `SVGLength` (`%`/`em`/`ex`) по-прежнему без контекста раскладки: `convertToSpecifiedUnits` меняет единицу, число не пересчитывает (`svg/types/scripted/SVGLength-*-percentage-*`, `-px-with-context` — отдельные подтесты остаются красными).

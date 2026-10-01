@@ -13,7 +13,7 @@ pub(crate) fn install_svg_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
 }
 
 #[cfg(feature = "v8-backend")]
-const SVG_SHIM: &str = r#"
+const SVG_SHIM: &str = concat!(r#"
 (function() {
   'use strict';
 
@@ -21,18 +21,97 @@ const SVG_SHIM: &str = r#"
 
   // ── Value types ──────────────────────────────────────────────────────────
 
-  // SVGRect — axis-aligned bounding box in local coordinate space
-  class SVGRect {
+  // ── WebIDL slots (BUG-1093) ──────────────────────────────────────────────
+  // Interface state lives in a WeakMap slot, never in own properties of the
+  // instance: every IDL attribute is an accessor on the interface PROTOTYPE
+  // (WebIDL §3.7.6) that brand-checks `this` through `_slot`, so reading it
+  // off the prototype itself throws `TypeError` and no state leaks as
+  // enumerable/writable own fields.
+  const _slots = new WeakMap();
+  // Interfaces without a WebIDL constructor throw when a page calls `new` on
+  // them; the shim itself builds instances through `_new`, which opens the gate.
+  var _ctor_gate = 0;
+  function _gate() { if (!_ctor_gate) throw new TypeError('Illegal constructor'); }
+  function _new(Cls) {
+    _ctor_gate++;
+    try { return Reflect.construct(Cls, Array.prototype.slice.call(arguments, 1)); }
+    finally { _ctor_gate--; }
+  }
+  function _rect(x, y, w, h) { return new SVGRect(x, y, w, h); }
+  function _pt(x, y) { return new SVGPoint(x, y); }
+  function _mat(a, b, c, d, e, f) { return new SVGMatrix(a, b, c, d, e, f); }
+  function _fn_name(f, n) {
+    if (typeof f === 'function') Object.defineProperty(f, 'name', { value: n, configurable: true });
+    return f;
+  }
+  function _slot(o) {
+    var s = (o !== null && typeof o === 'object') ? _slots.get(o) : undefined;
+    if (!s) throw new TypeError('Illegal invocation');
+    return s;
+  }
+  function _mk(Cls, state) {
+    var o = Object.create(Cls.prototype);
+    _slots.set(o, state);
+    return o;
+  }
+  function _def(Cls, name, get, set) {
+    Object.defineProperty(Cls.prototype, name, {
+      get: _fn_name(function() { return get(_slot(this), this); }, 'get ' + name),
+      set: set ? _fn_name(function(v) { set(_slot(this), v, this); }, 'set ' + name) : undefined,
+      enumerable: true, configurable: true,
+    });
+  }
+  // `baseVal`/`animVal` pair of an SVGAnimated* wrapper over object values.
+  function _def_pair(Cls) {
+    _def(Cls, 'baseVal', function(s) { return s.baseVal; });
+    _def(Cls, 'animVal', function(s) { return s.animVal; });
+  }
+  function _pair(o, base, anim) { _gate(); _slots.set(o, { baseVal: base, animVal: anim }); }
+
+  // Scalar SVGAnimated{String,Boolean,Enumeration,Integer,Number}: `baseVal`
+  // reads/writes through `get`/`set`, `animVal` through the optional `anim`.
+  const _str = function(v) { return String(v); };
+  const _bool = function(v) { return !!v; };
+  const _int = function(v) { return (+v) | 0; };
+  const _num = function(v) {
+    v = +v;
+    if (!isFinite(v)) throw new TypeError('The provided float value is non-finite');
+    return v;
+  };
+  function _init_scalar(o, coerce, dflt, v) {
+    _gate();
+    var c = coerce(v === undefined ? dflt : v);
+    _slots.set(o, { get: function() { return c; }, set: function(x) { c = x; }, anim: null });
+  }
+  function _def_scalar(Cls, coerce) {
+    _def(Cls, 'baseVal', function(s) { return s.get(); }, function(s, v) { s.set(coerce(v)); });
+    _def(Cls, 'animVal', function(s) { return s.anim ? s.anim() : s.get(); });
+  }
+  function _mk_scalar(Cls, get, set, anim) {
+    return _mk(Cls, { get: get, set: set, anim: anim || null });
+  }
+
+  // SVGRect / SVGPoint / SVGMatrix — legacy SVG 1.1 value types. They extend the
+  // geometry interfaces (`DOMRect`/`DOMPoint`/`DOMMatrix`, the SVG 2 types of
+  // `getBBox()`, `createSVGPoint()`, `SVGTransform.matrix`, ...) so one object is
+  // both, which keeps `instanceof SVGRect` working next to the IDL's DOMRect.
+  const _DR = typeof DOMRect === 'function' ? DOMRect : Object;
+  const _DP = typeof DOMPoint === 'function' ? DOMPoint : Object;
+  const _DM = typeof DOMMatrix === 'function' ? DOMMatrix : Object;
+  class SVGRect extends _DR {
     constructor(x, y, w, h) {
-      this.x = x || 0; this.y = y || 0;
-      this.width = w || 0; this.height = h || 0;
+      super(x || 0, y || 0, w || 0, h || 0);
+      if (_DR === Object) { this.x = x || 0; this.y = y || 0; this.width = w || 0; this.height = h || 0; }
     }
   }
   window.SVGRect = SVGRect;
 
   // SVGPoint — 2-D point; matrixTransform() returns a new SVGPoint
-  class SVGPoint {
-    constructor(x, y) { this.x = x || 0; this.y = y || 0; }
+  class SVGPoint extends _DP {
+    constructor(x, y) {
+      super(x || 0, y || 0, 0, 1);
+      if (_DP === Object) { this.x = x || 0; this.y = y || 0; }
+    }
     matrixTransform(matrix) {
       const m = matrix || {};
       return new SVGPoint(
@@ -43,22 +122,67 @@ const SVG_SHIM: &str = r#"
   }
   window.SVGPoint = SVGPoint;
 
-  // SVGLength — scalar length with unit type
-  class SVGLength {
-    constructor(v) {
-      this.value = v || 0;
-      this.valueInSpecifiedUnits = v || 0;
-      this.valueAsString = String(v || 0);
-      this.unitType = 1; // SVG_LENGTHTYPE_NUMBER
+  // SVGLength (SVG 2 §5.4) — state is `{u, v}` (unit type, value in those
+  // units) or, for a length reflected from a content attribute, an `io`
+  // `{get, set, dflt}` triple re-read/re-written on every access.
+  const _LEN_SUFFIX = ['', '', '%', 'em', 'ex', 'px', 'cm', 'mm', 'in', 'pt', 'pc'];
+  const _LEN_PX = [0, 1, 0, 0, 0, 1, 96 / 2.54, 96 / 25.4, 96, 4 / 3, 16];
+  function _len_parse(str) {
+    var m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(%|em|ex|px|cm|mm|in|pt|pc)?\s*$/.exec(String(str));
+    if (!m) return null;
+    return { u: m[2] ? _LEN_SUFFIX.indexOf(m[2]) : 1, v: parseFloat(m[1]) };
+  }
+  function _len_cur(s) {
+    if (s.io) {
+      var raw = s.io.get();
+      var p = raw == null ? null : _len_parse(raw);
+      return p || { u: 1, v: s.io.dflt };
     }
-    convertToSpecifiedUnits(unitType) { this.unitType = unitType; }
-    newValueSpecifiedUnits(unitType, value) {
-      this.unitType = unitType;
-      this.value = value;
-      this.valueInSpecifiedUnits = value;
-      this.valueAsString = String(value);
+    return s;
+  }
+  function _len_put(s, u, v) {
+    if (s.io) s.io.set(String(v) + _LEN_SUFFIX[u]);
+    else { s.u = u; s.v = v; }
+  }
+  function _len_px(c) { return _LEN_PX[c.u] ? c.v * _LEN_PX[c.u] : c.v; }
+  function _len_unit(u) {
+    u = +u;
+    if (!(u >= 1 && u <= 10)) throw new DOMException('Invalid unit type', 'NotSupportedError');
+    return u;
+  }
+  class SVGLength {
+    constructor() { _gate(); _slots.set(this, { u: 1, v: +arguments[0] || 0, io: null }); }
+    newValueSpecifiedUnits(unitType, valueInSpecifiedUnits) {
+      var s = _slot(this);
+      _len_put(s, _len_unit(unitType), _num(valueInSpecifiedUnits));
+    }
+    convertToSpecifiedUnits(unitType) {
+      var s = _slot(this), u = _len_unit(unitType);
+      var c = _len_cur(s);
+      // Relative units (%, em, ex) need layout context the shim does not have:
+      // the unit changes and the number is kept, as before BUG-1093.
+      if (!_LEN_PX[u] || (c.u !== 1 && !_LEN_PX[c.u])) _len_put(s, u, c.v);
+      else _len_put(s, u, _len_px(c) / _LEN_PX[u]);
     }
   }
+  _def(SVGLength, 'unitType', function(s) { return _len_cur(s).u; });
+  _def(SVGLength, 'value', function(s) { return _len_px(_len_cur(s)); }, function(s, v) {
+    v = _num(v);
+    var c = _len_cur(s);
+    if (_LEN_PX[c.u]) _len_put(s, c.u, v / _LEN_PX[c.u]);
+    else _len_put(s, 1, v);
+  });
+  _def(SVGLength, 'valueInSpecifiedUnits', function(s) { return _len_cur(s).v; }, function(s, v) {
+    _len_put(s, _len_cur(s).u, _num(v));
+  });
+  _def(SVGLength, 'valueAsString', function(s) {
+    var c = _len_cur(s);
+    return String(c.v) + _LEN_SUFFIX[c.u];
+  }, function(s, v) {
+    var p = _len_parse(v);
+    if (!p) throw new DOMException('Invalid length', 'SyntaxError');
+    _len_put(s, p.u, p.v);
+  });
   // Unit type constants (W3C SVG §5.4.1)
   SVGLength.SVG_LENGTHTYPE_UNKNOWN    = 0;
   SVGLength.SVG_LENGTHTYPE_NUMBER     = 1;
@@ -75,72 +199,106 @@ const SVG_SHIM: &str = r#"
 
   // SVGAnimatedLength — pair of base/animated SVGLength values
   class SVGAnimatedLength {
-    constructor(v) {
-      this.baseVal = new SVGLength(v);
-      this.animVal = new SVGLength(v);
-    }
+    constructor() { _pair(this, new SVGLength(arguments[0]), new SVGLength(arguments[0])); }
   }
+  _def_pair(SVGAnimatedLength);
   window.SVGAnimatedLength = SVGAnimatedLength;
 
   // SVGAnimatedString — pair of base/animated string values
   class SVGAnimatedString {
-    constructor(s) { this.baseVal = s || ''; this.animVal = s || ''; }
+    constructor() { _init_scalar(this, _str, '', arguments[0]); }
   }
+  _def_scalar(SVGAnimatedString, _str);
   window.SVGAnimatedString = SVGAnimatedString;
+
+  // Shared list state: `{items}` in a slot, operations on each interface's own
+  // prototype (`_def_list`) — WebIDL puts them on every interface, not on a
+  // common base. `check` validates/coerces an incoming item.
+  function _list_index(i, len) {
+    i = i >>> 0;
+    if (i >= len) throw new DOMException('Index out of range', 'IndexSizeError');
+    return i;
+  }
+  function _def_list(Cls, check, extra) {
+    var P = Cls.prototype;
+    function op(name, fn) {
+      Object.defineProperty(P, name, { value: fn, writable: true, enumerable: true, configurable: true });
+    }
+    _def(Cls, 'length', function(s) { return s.items.length; });
+    _def(Cls, 'numberOfItems', function(s) { return s.items.length; });
+    op('clear', function() { _slot(this).items.length = 0; });
+    op('initialize', function(x) {
+      var s = _slot(this); x = check(x); s.items.length = 0; s.items.push(x); return x;
+    });
+    op('getItem', function(i) { var s = _slot(this); return s.items[_list_index(i, s.items.length)]; });
+    op('insertItemBefore', function(x, i) {
+      var s = _slot(this); x = check(x); i = i >>> 0;
+      s.items.splice(Math.min(i, s.items.length), 0, x); return x;
+    });
+    op('replaceItem', function(x, i) {
+      var s = _slot(this); x = check(x);
+      s.items[_list_index(i, s.items.length)] = x; return x;
+    });
+    op('removeItem', function(i) {
+      var s = _slot(this);
+      return s.items.splice(_list_index(i, s.items.length), 1)[0];
+    });
+    op('appendItem', function(x) { var s = _slot(this); x = check(x); s.items.push(x); return x; });
+    if (extra) extra(op);
+  }
+  function _init_list(o) { _gate(); _slots.set(o, { items: [] }); }
 
   // SVGStringList — ordered list of strings
   class SVGStringList {
-    constructor() { this._items = []; this.length = 0; }
-    initialize(str) { this._items = [str]; this.length = 1; return str; }
-    getItem(i) { return this._items[i]; }
-    appendItem(str) { this._items.push(str); this.length = this._items.length; return str; }
-    removeItem(i) {
-      const r = this._items.splice(i, 1)[0];
-      this.length = this._items.length;
-      return r;
-    }
-    clear() { this._items = []; this.length = 0; }
+    constructor() { _init_list(this); }
   }
+  _def_list(SVGStringList, _str);
   window.SVGStringList = SVGStringList;
 
   // SVGAnimatedBoolean
   class SVGAnimatedBoolean {
-    constructor(v) { this.baseVal = !!v; this.animVal = !!v; }
+    constructor() { _init_scalar(this, _bool, false, arguments[0]); }
   }
+  _def_scalar(SVGAnimatedBoolean, _bool);
   window.SVGAnimatedBoolean = SVGAnimatedBoolean;
 
   // SVGAnimatedEnumeration
   class SVGAnimatedEnumeration {
-    constructor(v) { this.baseVal = v || 0; this.animVal = v || 0; }
+    constructor() { _init_scalar(this, _int, 0, arguments[0]); }
   }
+  _def_scalar(SVGAnimatedEnumeration, _int);
   window.SVGAnimatedEnumeration = SVGAnimatedEnumeration;
 
   // SVGAnimatedInteger
   class SVGAnimatedInteger {
-    constructor(v) { this.baseVal = v || 0; this.animVal = v || 0; }
+    constructor() { _init_scalar(this, _int, 0, arguments[0]); }
   }
+  _def_scalar(SVGAnimatedInteger, _int);
   window.SVGAnimatedInteger = SVGAnimatedInteger;
 
   // SVGAnimatedNumber
   class SVGAnimatedNumber {
-    constructor(v) { this.baseVal = v || 0; this.animVal = v || 0; }
+    constructor() { _init_scalar(this, _num, 0, arguments[0]); }
   }
+  _def_scalar(SVGAnimatedNumber, _num);
   window.SVGAnimatedNumber = SVGAnimatedNumber;
 
   // SVGAnimatedRect — pair of base/animated SVGRect values
   class SVGAnimatedRect {
-    constructor() {
-      this.baseVal = new SVGRect(); this.animVal = new SVGRect();
-    }
+    constructor() { _pair(this, _rect(), _rect()); }
   }
+  _def_pair(SVGAnimatedRect);
   window.SVGAnimatedRect = SVGAnimatedRect;
 
   // SVGMatrix (legacy, before DOMMatrix) — 2-D affine transform [a b c d e f]
-  class SVGMatrix {
+  class SVGMatrix extends _DM {
     constructor(a,b,c,d,e,f) {
-      this.a = a!=null?a:1; this.b = b!=null?b:0;
-      this.c = c!=null?c:0; this.d = d!=null?d:1;
-      this.e = e!=null?e:0; this.f = f!=null?f:0;
+      super([a!=null?a:1, b!=null?b:0, c!=null?c:0, d!=null?d:1, e!=null?e:0, f!=null?f:0]);
+      if (_DM === Object) {
+        this.a = a!=null?a:1; this.b = b!=null?b:0;
+        this.c = c!=null?c:0; this.d = d!=null?d:1;
+        this.e = e!=null?e:0; this.f = f!=null?f:0;
+      }
     }
     multiply(m) {
       return new SVGMatrix(
@@ -149,7 +307,6 @@ const SVG_SHIM: &str = r#"
         this.a*m.e+this.c*m.f+this.e, this.b*m.e+this.d*m.f+this.f
       );
     }
-    inverse() { return new SVGMatrix(); }
     translate(x,y) { return new SVGMatrix(this.a,this.b,this.c,this.d,this.e+x,this.f+y); }
     scale(s) { return new SVGMatrix(this.a*s,this.b*s,this.c*s,this.d*s,this.e,this.f); }
     scaleNonUniform(sx,sy) { return new SVGMatrix(this.a*sx,this.b*sx,this.c*sy,this.d*sy,this.e,this.f); }
@@ -165,31 +322,55 @@ const SVG_SHIM: &str = r#"
   }
   window.SVGMatrix = SVGMatrix;
 
-  // SVGTransform — single transform component
+  // SVGTransform — single transform component. `type`/`matrix`/`angle` are
+  // read-only attributes (SVG 2 §5.13): only the set*() operations (and the
+  // transform-list parser, via `_lumen_svg_transform_set`) change them.
   class SVGTransform {
-    constructor() {
-      this.type = 1; // SVG_TRANSFORM_MATRIX
-      this.matrix = new SVGMatrix();
-      this.angle = 0;
+    constructor() { _gate(); _slots.set(this, { type: 1, matrix: _mat(), angle: 0 }); }
+    setMatrix(m) {
+      var s = _slot(this), mm = m || {};
+      s.type = 1; s.angle = 0;
+      s.matrix = _mat(mm.a, mm.b, mm.c, mm.d, mm.e, mm.f);
     }
-    setMatrix(m) { this.type = 1; this.matrix = m; }
-    setTranslate(tx,ty) {
-      this.type = 2;
-      this.matrix = new SVGMatrix(1,0,0,1,tx,ty);
+    setTranslate(tx, ty) {
+      var s = _slot(this);
+      s.type = 2; s.angle = 0;
+      s.matrix = _mat(1, 0, 0, 1, _num(tx), _num(ty));
     }
-    setScale(sx,sy) {
-      this.type = 3;
-      this.matrix = new SVGMatrix(sx,0,0,sy,0,0);
+    setScale(sx, sy) {
+      var s = _slot(this);
+      s.type = 3; s.angle = 0;
+      s.matrix = _mat(_num(sx), 0, 0, _num(sy), 0, 0);
     }
-    setRotate(a,cx,cy) {
-      this.type = 4; this.angle = a;
-      const r=a*Math.PI/180, cos=Math.cos(r), sin=Math.sin(r);
-      cx=cx||0; cy=cy||0;
-      this.matrix = new SVGMatrix(cos,sin,-sin,cos,
-        (1-cos)*cx+sin*cy, (1-cos)*cy-sin*cx);
+    setRotate(a, cx, cy) {
+      var s = _slot(this);
+      a = _num(a);
+      s.type = 4; s.angle = a;
+      const r = a * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
+      cx = +cx || 0; cy = +cy || 0;
+      s.matrix = _mat(cos, sin, -sin, cos,
+        (1 - cos) * cx + sin * cy, (1 - cos) * cy - sin * cx);
     }
-    setSkewX(a) { this.type = 5; this.angle = a; }
-    setSkewY(a) { this.type = 6; this.angle = a; }
+    setSkewX(a) {
+      var s = _slot(this);
+      a = _num(a);
+      s.type = 5; s.angle = a;
+      s.matrix = _mat(1, 0, Math.tan(a * Math.PI / 180), 1, 0, 0);
+    }
+    setSkewY(a) {
+      var s = _slot(this);
+      a = _num(a);
+      s.type = 6; s.angle = a;
+      s.matrix = _mat(1, Math.tan(a * Math.PI / 180), 0, 1, 0, 0);
+    }
+  }
+  _def(SVGTransform, 'type', function(s) { return s.type; });
+  _def(SVGTransform, 'matrix', function(s) { return s.matrix; });
+  _def(SVGTransform, 'angle', function(s) { return s.angle; });
+  // Internal setter for the transform-list parser / consolidate().
+  function _lumen_svg_transform_set(t, type, matrix, angle) {
+    var s = _slot(t);
+    s.type = type; s.matrix = matrix; s.angle = angle || 0;
   }
   SVGTransform.SVG_TRANSFORM_UNKNOWN   = 0;
   SVGTransform.SVG_TRANSFORM_MATRIX    = 1;
@@ -202,50 +383,47 @@ const SVG_SHIM: &str = r#"
 
   // SVGTransformList — ordered list of SVGTransform
   class SVGTransformList {
-    constructor() { this._items = []; this.length = 0; }
-    get numberOfItems() { return this._items.length; }
-    clear() { this._items = []; this.length = 0; }
-    initialize(t) { this._items = [t]; this.length = 1; return t; }
-    getItem(i) { return this._items[i]; }
-    insertItemBefore(t,i) { this._items.splice(i,0,t); this.length=this._items.length; return t; }
-    replaceItem(t,i) { this._items[i]=t; return t; }
-    removeItem(i) { const r=this._items.splice(i,1)[0]; this.length=this._items.length; return r; }
-    appendItem(t) { this._items.push(t); this.length=this._items.length; return t; }
-    consolidate() {
-      const t = new SVGTransform();
-      t.type = 1;
-      t.matrix = this._items.reduce((acc, x) => acc.multiply(x.matrix), new SVGMatrix());
-      this._items = [t]; this.length = 1;
-      return t;
-    }
-    createSVGTransformFromMatrix(m) { const t=new SVGTransform(); t.setMatrix(m); return t; }
+    constructor() { _init_list(this); }
   }
+  _def_list(SVGTransformList, function(t) {
+    _slot(t);
+    return t;
+  }, function(op) {
+    op('createSVGTransformFromMatrix', function(m) {
+      const t = _new(SVGTransform); t.setMatrix(m); return t;
+    });
+    op('consolidate', function() {
+      var s = _slot(this);
+      if (s.items.length === 0) return null;
+      const t = _new(SVGTransform);
+      _lumen_svg_transform_set(t, 1,
+        s.items.reduce(function(acc, x) { return acc.multiply(_slot(x).matrix); }, _mat()), 0);
+      s.items.length = 0; s.items.push(t);
+      return t;
+    });
+  });
   window.SVGTransformList = SVGTransformList;
 
   // SVGAnimatedTransformList
   class SVGAnimatedTransformList {
-    constructor() {
-      this.baseVal = new SVGTransformList();
-      this.animVal = new SVGTransformList();
-    }
+    constructor() { _pair(this, new SVGTransformList(), new SVGTransformList()); }
   }
+  _def_pair(SVGAnimatedTransformList);
   window.SVGAnimatedTransformList = SVGAnimatedTransformList;
 
   // SVGPointList
   class SVGPointList {
-    constructor() { this._items = []; this.length = 0; }
-    get numberOfItems() { return this._items.length; }
-    clear() { this._items = []; this.length = 0; }
-    initialize(p) { this._items = [p]; this.length = 1; return p; }
-    getItem(i) { return this._items[i]; }
-    appendItem(p) { this._items.push(p); this.length=this._items.length; return p; }
-    removeItem(i) { const r=this._items.splice(i,1)[0]; this.length=this._items.length; return r; }
+    constructor() { _init_list(this); }
   }
+  _def_list(SVGPointList, function(p) {
+    if (p === null || typeof p !== 'object') throw new TypeError('Not a point');
+    return p;
+  });
   window.SVGPointList = SVGPointList;
 
   // SVGNumber (SVG 2 §5.8) — `value` is a coerced double.
   class SVGNumber {
-    constructor(v) { this._v = +v || 0; }
+    constructor() { _gate(); this._v = +arguments[0] || 0; }
     get value() { return this._v; }
     set value(v) { this._v = +v; }
   }
@@ -255,7 +433,7 @@ const SVG_SHIM: &str = r#"
   const _LUMEN_ANGLE_TO_DEG = [0, 1, 1, 180 / Math.PI, 0.9];
   const _LUMEN_ANGLE_SUFFIX = ['', '', 'deg', 'rad', 'grad'];
   class SVGAngle {
-    constructor() { this._unit = 1; this._value = 0; }
+    constructor() { _gate(); this._unit = 1; this._value = 0; }
     get unitType() { return this._unit; }
     get value() { return this._value * _LUMEN_ANGLE_TO_DEG[this._unit]; }
     set value(v) { this._value = +v / _LUMEN_ANGLE_TO_DEG[this._unit]; }
@@ -284,48 +462,41 @@ const SVG_SHIM: &str = r#"
   SVGAngle.SVG_ANGLETYPE_GRAD        = 4;
   window.SVGAngle = SVGAngle;
 
-  // Shared list base for SVGNumberList / SVGLengthList.
-  class _LumenSVGList {
-    constructor() { this._items = []; }
-    get length() { return this._items.length; }
-    get numberOfItems() { return this._items.length; }
-    clear() { this._items = []; }
-    initialize(x) { this._items = [x]; return x; }
-    getItem(i) {
-      if (i >= this._items.length || i < 0) throw new DOMException('Index out of range', 'IndexSizeError');
-      return this._items[i];
-    }
-    insertItemBefore(x, i) { this._items.splice(Math.min(i, this._items.length), 0, x); return x; }
-    replaceItem(x, i) {
-      if (i >= this._items.length || i < 0) throw new DOMException('Index out of range', 'IndexSizeError');
-      this._items[i] = x; return x;
-    }
-    removeItem(i) {
-      if (i >= this._items.length || i < 0) throw new DOMException('Index out of range', 'IndexSizeError');
-      return this._items.splice(i, 1)[0];
-    }
-    appendItem(x) { this._items.push(x); return x; }
+  class SVGNumberList {
+    constructor() { _init_list(this); }
   }
-  class SVGNumberList extends _LumenSVGList {}
+  _def_list(SVGNumberList, function(x) {
+    if (!(x instanceof SVGNumber)) throw new TypeError('Not an SVGNumber');
+    return x;
+  });
   window.SVGNumberList = SVGNumberList;
-  class SVGLengthList extends _LumenSVGList {}
+  class SVGLengthList {
+    constructor() { _init_list(this); }
+  }
+  _def_list(SVGLengthList, function(x) {
+    if (!(x instanceof SVGLength)) throw new TypeError('Not an SVGLength');
+    return x;
+  });
   window.SVGLengthList = SVGLengthList;
 
   class SVGAnimatedAngle {
-    constructor() { this.baseVal = new SVGAngle(); this.animVal = new SVGAngle(); }
+    constructor() { _pair(this, new SVGAngle(), new SVGAngle()); }
   }
+  _def_pair(SVGAnimatedAngle);
   window.SVGAnimatedAngle = SVGAnimatedAngle;
   class SVGAnimatedNumberList {
-    constructor() { this.baseVal = new SVGNumberList(); this.animVal = new SVGNumberList(); }
+    constructor() { _pair(this, new SVGNumberList(), new SVGNumberList()); }
   }
+  _def_pair(SVGAnimatedNumberList);
   window.SVGAnimatedNumberList = SVGAnimatedNumberList;
   class SVGAnimatedLengthList {
-    constructor() { this.baseVal = new SVGLengthList(); this.animVal = new SVGLengthList(); }
+    constructor() { _pair(this, new SVGLengthList(), new SVGLengthList()); }
   }
+  _def_pair(SVGAnimatedLengthList);
   window.SVGAnimatedLengthList = SVGAnimatedLengthList;
 
   // SVGUnitTypes (SVG 2 §5.11) — constants-only interface.
-  class SVGUnitTypes {}
+  class SVGUnitTypes { constructor() { _gate(); } }
   SVGUnitTypes.SVG_UNIT_TYPE_UNKNOWN           = 0;
   SVGUnitTypes.SVG_UNIT_TYPE_USERSPACEONUSE    = 1;
   SVGUnitTypes.SVG_UNIT_TYPE_OBJECTBOUNDINGBOX = 2;
@@ -336,7 +507,7 @@ const SVG_SHIM: &str = r#"
   // an ES class constructor — `_lumen_build_element` (web_api_shim_mid.js)
   // makes it with `Object.create(prototype)`, only re-pointing at the typed
   // `SVG*Element` prototype (BUG-889). Every field the constructors below
-  // used to set (`this.x = new SVGAnimatedLength(0)`, …) was therefore dead
+  // used to set (`this.x = _new(SVGAnimatedLength, 0)`, …) was therefore dead
   // for every element a page can actually touch — only the synthetic
   // `new SVGRectElement()` in this file's own tests ran it. The helpers here
   // replace those fields with PROTOTYPE accessors that read/write the live
@@ -361,39 +532,32 @@ const SVG_SHIM: &str = r#"
   // A live SVGLength whose `value`/`valueInSpecifiedUnits`/`valueAsString`
   // re-read the attribute on every get and write it back on every set.
   function _lumen_svg_reflected_length(nid, attr, dflt) {
-    var length = new SVGLength(_lumen_svg_length_value(nid, attr, dflt));
-    Object.defineProperty(length, 'value', {
-      get: function() { return _lumen_svg_length_value(nid, attr, dflt); },
-      set: function(v) { if (nid != null) _lumen_set_attr(nid, attr, String(v)); },
-      enumerable: true, configurable: true,
-    });
-    Object.defineProperty(length, 'valueAsString', {
-      get: function() { return String(this.value); },
-      set: function(v) { this.value = parseFloat(v); },
-      enumerable: true, configurable: true,
-    });
+    var length = _new(SVGLength, 0);
+    _slot(length).io = {
+      dflt: dflt,
+      get: function() { return nid != null ? _lumen_u2n(_lumen_get_attr(nid, attr)) : null; },
+      set: function(v) { if (nid != null) _lumen_set_attr(nid, attr, v); },
+    };
     return length;
   }
 
   function _lumen_svg_animated_length(nid, attr, dflt) {
-    var al = Object.create(SVGAnimatedLength.prototype);
-    al.baseVal = _lumen_svg_reflected_length(nid, attr, dflt);
+    var base = _lumen_svg_reflected_length(nid, attr, dflt);
     // GAP-SMIL: `animVal` is `baseVal` unless a running `<animate>`/`<set>`
     // targeting this exact attribute has a value queued in the SMIL override
     // map (`_lumen_smil_overrides`, populated by `_lumen_tick_smil`) — the
     // override never touches the content attribute, so `getAttribute`/
     // `baseVal` stay unaffected, matching the animVal/baseVal split SVG 2 §3
     // requires. No override map yet (SMIL never ticked) reads as `undefined`.
-    Object.defineProperty(al, 'animVal', {
-      get: function() {
+    return _mk(SVGAnimatedLength, {
+      baseVal: base,
+      get animVal() {
         var ov = (typeof _lumen_smil_overrides !== 'undefined')
           ? _lumen_smil_overrides[nid + '|' + attr] : undefined;
-        if (ov !== undefined) return new SVGLength(_lumen_svg_parse_number(ov, dflt));
-        return al.baseVal;
+        if (ov !== undefined) return _new(SVGLength, _lumen_svg_parse_number(ov, dflt));
+        return base;
       },
-      enumerable: true, configurable: true,
     });
-    return al;
   }
 
   // Defines a live SVGAnimatedLength getter for each `prop -> [attr, default]`
@@ -417,11 +581,9 @@ const SVG_SHIM: &str = r#"
   }
 
   function _lumen_svg_animated_rect_viewbox(nid) {
-    var ar = Object.create(SVGAnimatedRect.prototype);
     var v = _lumen_svg_parse_viewbox(nid);
-    var rect = new SVGRect(v[0], v[1], v[2], v[3]);
-    ar.baseVal = rect; ar.animVal = rect;
-    return ar;
+    var rect = _rect(v[0], v[1], v[2], v[3]);
+    return _mk(SVGAnimatedRect, { baseVal: rect, animVal: rect });
   }
 
   function _lumen_def_svg_viewbox(Ctor) {
@@ -436,7 +598,7 @@ const SVG_SHIM: &str = r#"
   // layout side's `parse_svg_transform` (`box_tree/svg.rs`) reads for paint —
   // this is a JS-side twin kept independent since the two never share state.
   function _lumen_svg_parse_transform_list(nid, attr) {
-    var list = new SVGTransformList();
+    var list = _new(SVGTransformList);
     var s = nid != null ? _lumen_u2n(_lumen_get_attr(nid, attr)) : null;
     if (!s) return list;
     var re = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/g;
@@ -445,25 +607,24 @@ const SVG_SHIM: &str = r#"
       var fn = m[1];
       var args = m[2].trim().split(/[\s,]+/).filter(function(x) { return x !== ''; })
         .map(function(x) { return parseFloat(x); });
-      var t = new SVGTransform();
+      var t = _new(SVGTransform);
       if (fn === 'matrix' && args.length === 6) {
-        t.type = SVGTransform.SVG_TRANSFORM_MATRIX;
-        t.matrix = new SVGMatrix(args[0], args[1], args[2], args[3], args[4], args[5]);
+        _lumen_svg_transform_set(t, SVGTransform.SVG_TRANSFORM_MATRIX,
+          _mat(args[0], args[1], args[2], args[3], args[4], args[5]), 0);
       } else if (fn === 'translate') {
         t.setTranslate(args[0] || 0, args[1] || 0);
       } else if (fn === 'scale') {
         var sx = args[0] != null ? args[0] : 1;
         var sy = args.length > 1 ? args[1] : sx;
-        t.type = SVGTransform.SVG_TRANSFORM_SCALE;
-        t.matrix = new SVGMatrix(sx, 0, 0, sy, 0, 0);
+        _lumen_svg_transform_set(t, SVGTransform.SVG_TRANSFORM_SCALE, _mat(sx, 0, 0, sy, 0, 0), 0);
       } else if (fn === 'rotate') {
         t.setRotate(args[0] || 0, args[1], args[2]);
       } else if (fn === 'skewX') {
-        t.type = SVGTransform.SVG_TRANSFORM_SKEWX; t.angle = args[0] || 0;
-        t.matrix = new SVGMatrix(1, 0, Math.tan((args[0] || 0) * Math.PI / 180), 1, 0, 0);
+        _lumen_svg_transform_set(t, SVGTransform.SVG_TRANSFORM_SKEWX,
+          _mat(1, 0, Math.tan((args[0] || 0) * Math.PI / 180), 1, 0, 0), args[0] || 0);
       } else if (fn === 'skewY') {
-        t.type = SVGTransform.SVG_TRANSFORM_SKEWY; t.angle = args[0] || 0;
-        t.matrix = new SVGMatrix(1, Math.tan((args[0] || 0) * Math.PI / 180), 0, 1, 0, 0);
+        _lumen_svg_transform_set(t, SVGTransform.SVG_TRANSFORM_SKEWY,
+          _mat(1, Math.tan((args[0] || 0) * Math.PI / 180), 0, 1, 0, 0), args[0] || 0);
       } else {
         continue;
       }
@@ -473,10 +634,8 @@ const SVG_SHIM: &str = r#"
   }
 
   function _lumen_svg_animated_transform_list(nid, attr) {
-    var atl = Object.create(SVGAnimatedTransformList.prototype);
     var list = _lumen_svg_parse_transform_list(nid, attr);
-    atl.baseVal = list; atl.animVal = list;
-    return atl;
+    return _mk(SVGAnimatedTransformList, { baseVal: list, animVal: list });
   }
 
   function _lumen_def_svg_transform(Ctor, prop, attr) {
@@ -488,13 +647,13 @@ const SVG_SHIM: &str = r#"
 
   // `points` (SVG L1 §9.7.1 `<list-of-points>`): "x1,y1 x2,y2 …".
   function _lumen_svg_parse_points(nid) {
-    var list = new SVGPointList();
+    var list = _new(SVGPointList);
     var s = nid != null ? _lumen_u2n(_lumen_get_attr(nid, 'points')) : null;
     if (!s) return list;
     var nums = s.trim().split(/[\s,]+/).filter(function(x) { return x !== ''; })
       .map(function(x) { return parseFloat(x); });
     for (var i = 0; i + 1 < nums.length; i += 2) {
-      list.appendItem(new SVGPoint(nums[i], nums[i + 1]));
+      list.appendItem(_pt(nums[i], nums[i + 1]));
     }
     return list;
   }
@@ -507,6 +666,199 @@ const SVG_SHIM: &str = r#"
     Object.defineProperty(Ctor.prototype, 'animatedPoints', {
       get: function() { return _lumen_svg_parse_points(this.__nid__); },
       enumerable: true, configurable: true,
+    });
+  }
+
+  // ── Attribute-reflection kit (BUG-1093) ─────────────────────────────────
+  // Live SVGAnimated*/list objects over one content attribute of element `el`
+  // (reached through its native node id `__nid__`). The WebIDL shape pass at
+  // the end of this file installs them as prototype accessors for every IDL
+  // attribute no hand-written definition above covers.
+  function _attr_get(el, name) {
+    var n = el.__nid__;
+    return n == null ? null : _lumen_u2n(_lumen_get_attr(n, name));
+  }
+  function _attr_set(el, name, v) {
+    var n = el.__nid__;
+    if (n != null) _lumen_set_attr(n, name, String(v));
+  }
+  function _attr_remove(el, name) {
+    var n = el.__nid__;
+    if (n != null) _lumen_remove_attr(n, name);
+  }
+  var _XLINK_NS = 'http://www.w3.org/1999/xlink';
+  function _href_get(el) {
+    var v = _attr_get(el, 'href');
+    if (v === null && typeof el.getAttributeNS === 'function') v = el.getAttributeNS(_XLINK_NS, 'href');
+    return v === null || v === undefined ? '' : v;
+  }
+
+  function _anim_string(el, attr) {
+    var get = attr === 'href' ? function() { return _href_get(el); }
+                              : function() { var v = _attr_get(el, attr); return v === null ? '' : v; };
+    return _mk_scalar(SVGAnimatedString, get, function(v) { _attr_set(el, attr, v); });
+  }
+  function _anim_enum(el, attr, keys, dflt) {
+    return _mk_scalar(SVGAnimatedEnumeration, function() {
+      var i = keys.indexOf(_attr_get(el, attr));
+      return i < 0 ? dflt : i + 1;
+    }, function(v) {
+      if (v < 1 || v > keys.length) throw new TypeError('The enumeration value is out of range');
+      _attr_set(el, attr, keys[v - 1]);
+    });
+  }
+  function _anim_bool(el, attr, dflt) {
+    return _mk_scalar(SVGAnimatedBoolean, function() {
+      var v = _attr_get(el, attr);
+      return v === null ? dflt : v === 'true';
+    }, function(v) { _attr_set(el, attr, v ? 'true' : 'false'); });
+  }
+  function _anim_int(el, attr, dflt) {
+    return _mk_scalar(SVGAnimatedInteger, function() {
+      var n = parseInt(_attr_get(el, attr), 10);
+      return isNaN(n) ? dflt : n;
+    }, function(v) { _attr_set(el, attr, v); });
+  }
+  function _anim_number(el, attr, dflt) {
+    return _mk_scalar(SVGAnimatedNumber, function() {
+      var raw = _attr_get(el, attr);
+      var n = parseFloat(raw);
+      if (isNaN(n)) return dflt;
+      return raw.trim().slice(-1) === '%' ? n / 100 : n;
+    }, function(v) { _attr_set(el, attr, v); });
+  }
+  function _split_list(raw) {
+    return raw == null ? [] : String(raw).trim().split(/[\s,]+/).filter(function(x) { return x !== ''; });
+  }
+  function _anim_number_list(el, attr) {
+    var list = _new(SVGNumberList);
+    _split_list(_attr_get(el, attr)).forEach(function(t) {
+      var n = parseFloat(t);
+      if (!isNaN(n)) _slot(list).items.push(_new(SVGNumber, n));
+    });
+    return _mk(SVGAnimatedNumberList, { baseVal: list, animVal: list });
+  }
+  function _anim_length_list(el, attr) {
+    var list = _new(SVGLengthList);
+    _split_list(_attr_get(el, attr)).forEach(function(t) {
+      var p = _len_parse(t);
+      if (!p) return;
+      var l = _new(SVGLength, 0);
+      _slot(l).u = p.u; _slot(l).v = p.v;
+      _slot(list).items.push(l);
+    });
+    return _mk(SVGAnimatedLengthList, { baseVal: list, animVal: list });
+  }
+  // `orient` (SVG 2 §11.10): "auto" | "auto-start-reverse" | <angle>.
+  function _marker_orient_type(el) {
+    var o = _attr_get(el, 'orient');
+    return o === 'auto' ? 1 : o === 'auto-start-reverse' ? 3 : 2;
+  }
+  function _anim_orient_type(el) {
+    return _mk_scalar(SVGAnimatedEnumeration, function() { return _marker_orient_type(el); },
+      function(v) {
+        if (v === 1) _attr_set(el, 'orient', 'auto');
+        else if (v === 2) _attr_set(el, 'orient', '0');
+        else if (v === 3) _attr_set(el, 'orient', 'auto-start-reverse');
+        else throw new TypeError('The enumeration value is out of range');
+      });
+  }
+  function _anim_orient_angle(el) {
+    var a = _new(SVGAngle);
+    if (_marker_orient_type(el) === 2) {
+      try { a.valueAsString = _attr_get(el, 'orient') || '0'; } catch (e) { /* keep 0 */ }
+    }
+    return _mk(SVGAnimatedAngle, { baseVal: a, animVal: a });
+  }
+  // `requiredExtensions` (space-separated) / `systemLanguage` (comma-separated).
+  function _string_list(el, attr) {
+    var list = _new(SVGStringList);
+    var raw = _attr_get(el, attr);
+    if (raw !== null) {
+      var parts = attr === 'systemLanguage' ? raw.split(',') : raw.split(/\s+/);
+      parts.forEach(function(p) { p = p.trim(); if (p) _slot(list).items.push(p); });
+    }
+    return list;
+  }
+
+  // Enumerated attributes: IDL name → [keyword list (1-based enum values), default].
+  const _ENUM_ATTRS = {
+    lengthAdjust: [['spacing', 'spacingAndGlyphs'], 1],
+    method: [['align', 'stretch'], 1],
+    spacing: [['auto', 'exact'], 1],
+    markerUnits: [['userSpaceOnUse', 'strokeWidth'], 2],
+    gradientUnits: [['userSpaceOnUse', 'objectBoundingBox'], 2],
+    patternUnits: [['userSpaceOnUse', 'objectBoundingBox'], 2],
+    patternContentUnits: [['userSpaceOnUse', 'objectBoundingBox'], 1],
+    spreadMethod: [['pad', 'reflect', 'repeat'], 1],
+  };
+  const _CONTENT_ATTR = { className: 'class', crossOrigin: 'crossorigin', referrerPolicy: 'referrerpolicy' };
+  const _LIVE_TYPES = {
+    SVGAnimatedLength: 1, SVGAnimatedString: 1, SVGAnimatedEnumeration: 1, SVGAnimatedBoolean: 1,
+    SVGAnimatedInteger: 1, SVGAnimatedNumber: 1, SVGAnimatedPreserveAspectRatio: 1,
+  };
+  const _same_object = new WeakMap();
+
+  // Builds the object an IDL attribute of `type` returns for element `el`.
+  // `opts` = `{dflt, keys}` overrides the per-name defaults.
+  function _animated_for(type, name, el, opts) {
+    var attr = _CONTENT_ATTR[name] || name;
+    var dflt = opts && opts.dflt !== undefined ? opts.dflt : undefined;
+    switch (type) {
+      case 'SVGAnimatedLength':
+        return _lumen_svg_animated_length(el.__nid__, attr,
+          dflt !== undefined ? dflt : (name === 'markerWidth' || name === 'markerHeight') ? 3 : 0);
+      case 'SVGAnimatedString': return _anim_string(el, attr);
+      case 'SVGAnimatedEnumeration':
+        if (name === 'orientType') return _anim_orient_type(el);
+        if (opts && opts.keys) return _anim_enum(el, attr, opts.keys, dflt);
+        var e = _ENUM_ATTRS[name] || [[], 0];
+        return _anim_enum(el, attr, e[0], e[1]);
+      case 'SVGAnimatedBoolean': return _anim_bool(el, attr, !!dflt);
+      case 'SVGAnimatedInteger': return _anim_int(el, attr, dflt || 0);
+      case 'SVGAnimatedNumber': return _anim_number(el, attr, dflt || 0);
+      case 'SVGAnimatedNumberList': return _anim_number_list(el, attr);
+      case 'SVGAnimatedLengthList': return _anim_length_list(el, attr);
+      case 'SVGAnimatedAngle': return _anim_orient_angle(el);
+      case 'SVGAnimatedTransformList': return _lumen_svg_animated_transform_list(el.__nid__, attr);
+      case 'SVGAnimatedRect': return _lumen_svg_animated_rect_viewbox(el.__nid__);
+      case 'SVGAnimatedPreserveAspectRatio': return _lumen_svg_animated_par(el.__nid__);
+      case 'SVGStringList': return _string_list(el, attr);
+      case 'SVGPointList': return _lumen_svg_parse_points(el.__nid__);
+    }
+    return undefined;
+  }
+  // Same object on every read (WebIDL [SameObject]). The live kinds read the
+  // attribute on each access, so one object serves forever; the list kinds are
+  // parsed snapshots, so the cached one is kept only while the content
+  // attribute is unchanged and rebuilt (new identity) once it differs.
+  const _RAW_ATTR = { orientAngle: 'orient', animatedPoints: 'points' };
+  function _same_cached(el, name, type, make) {
+    var m = _same_object.get(el);
+    if (!m) { m = Object.create(null); _same_object.set(el, m); }
+    var rec = m[name];
+    if (_LIVE_TYPES[type]) return (rec || (m[name] = { obj: make() })).obj;
+    var raw = _attr_get(el, _RAW_ATTR[name] || _CONTENT_ATTR[name] || name);
+    if (rec && rec.raw === raw) return rec.obj;
+    rec = m[name] = { raw: raw, obj: make() };
+    return rec.obj;
+  }
+  function _cached_animated(type, name, el, opts) {
+    return _same_cached(el, name, type, function() { return _animated_for(type, name, el, opts); });
+  }
+
+  // Installs live prototype accessors for `spec` entries
+  // `[name, 'Integer'|'Number'|'Enumeration'|'Boolean'|'String'|'NumberList', default, keywords?]`.
+  function _lumen_def_attrs(C, spec) {
+    spec.forEach(function(s) {
+      var name = s[0], type = 'SVGAnimated' + s[1], opts = { dflt: s[2], keys: s[3] };
+      Object.defineProperty(C.prototype, name, {
+        get: _fn_name(function() {
+          if (!(this instanceof C) || this === C.prototype) throw new TypeError('Illegal invocation');
+          return _cached_animated(type, name, this, opts);
+        }, 'get ' + name),
+        enumerable: true, configurable: true,
+      });
     });
   }
 
@@ -560,14 +912,14 @@ const SVG_SHIM: &str = r#"
     // from path data or laid-out glyphs needs real geometry the JS shim does
     // not have access to; left for follow-up.
     getBBox(options) {
-      return new SVGRect(0, 0, 0, 0);
+      return _rect(0, 0, 0, 0);
     }
 
     // Phase 0: returns identity matrix
-    getCTM() { return new SVGMatrix(); }
-    getScreenCTM() { return new SVGMatrix(); }
+    getCTM() { return _mat(); }
+    getScreenCTM() { return _mat(); }
 
-    getTransformToElement(element) { return new SVGMatrix(); }
+    getTransformToElement(element) { return _mat(); }
   }
   _lumen_def_svg_transform(SVGGraphicsElement, 'transform', 'transform');
   window.SVGGraphicsElement = SVGGraphicsElement;
@@ -576,10 +928,9 @@ const SVG_SHIM: &str = r#"
   class SVGGeometryElement extends SVGGraphicsElement {
     constructor() {
       super();
-      this.pathLength = new SVGAnimatedNumber(0);
     }
     getTotalLength() { return 0; }
-    getPointAtLength(distance) { return new SVGPoint(0, 0); }
+    getPointAtLength(distance) { return _pt(0, 0); }
     isPointInFill(point) { return false; }
     isPointInStroke(point) { return false; }
   }
@@ -592,23 +943,20 @@ const SVG_SHIM: &str = r#"
     constructor() {
       super();
       this.tagName = 'svg';
-      this.preserveAspectRatio = new SVGAnimatedPreserveAspectRatio();
-      this.currentScale = 1;
-      this.currentTranslate = new SVGPoint(0, 0);
       this.contentScriptType = 'text/ecmascript';
       this.contentStyleType = 'text/css';
     }
 
-    createSVGRect()   { return new SVGRect(); }
-    createSVGPoint()  { return new SVGPoint(); }
-    createSVGLength() { return new SVGLength(); }
-    createSVGMatrix() { return new SVGMatrix(); }
-    createSVGTransform() { return new SVGTransform(); }
+    createSVGRect()   { return _rect(); }
+    createSVGPoint()  { return _pt(); }
+    createSVGLength() { return _new(SVGLength); }
+    createSVGMatrix() { return _mat(); }
+    createSVGTransform() { return _new(SVGTransform); }
     createSVGTransformFromMatrix(m) {
-      const t = new SVGTransform(); t.setMatrix(m); return t;
+      const t = _new(SVGTransform); t.setMatrix(m); return t;
     }
-    createSVGNumber() { return new SVGNumber(); }
-    createSVGAngle()  { return new SVGAngle(); }
+    createSVGNumber() { return _new(SVGNumber); }
+    createSVGAngle()  { return _new(SVGAngle); }
 
     getElementById(id) { return null; }
     getIntersectionList(rect, referenceElement) { return []; }
@@ -632,10 +980,40 @@ const SVG_SHIM: &str = r#"
   _lumen_def_svg_viewbox(SVGSVGElement);
   window.SVGSVGElement = SVGSVGElement;
 
-  // SVGAnimatedPreserveAspectRatio (needed by SVGSVGElement)
-  class SVGPreserveAspectRatio {
-    constructor() { this.align = 8; this.meetOrSlice = 1; }
+  // SVGPreserveAspectRatio (SVG 2 §8.4) — `{align, meet}` slot, or an `io`
+  // `{get, set}` pair over the `preserveAspectRatio` content attribute.
+  const _PAR_ALIGN = ['', 'none', 'xMinYMin', 'xMidYMin', 'xMaxYMin', 'xMinYMid', 'xMidYMid',
+                      'xMaxYMid', 'xMinYMax', 'xMidYMax', 'xMaxYMax'];
+  function _par_parse(str) {
+    var out = { align: 6, meet: 1 };
+    if (str == null) return out;
+    var toks = String(str).trim().split(/\s+/);
+    if (toks[0] === 'defer') toks.shift();
+    var a = _PAR_ALIGN.indexOf(toks[0]);
+    if (a < 1) return out;
+    out.align = a;
+    if (toks[1] === 'slice') out.meet = 2;
+    return out;
   }
+  function _par_cur(s) { return s.io ? _par_parse(s.io.get()) : s; }
+  function _par_put(s, align, meet) {
+    if (s.io) s.io.set(_PAR_ALIGN[align] + (align === 1 || meet !== 2 ? '' : ' slice'));
+    else { s.align = align; s.meet = meet; }
+  }
+  class SVGPreserveAspectRatio {
+    constructor() { _gate(); _slots.set(this, { align: 6, meet: 1, io: null }); }
+  }
+  _def(SVGPreserveAspectRatio, 'align', function(s) { return _par_cur(s).align; }, function(s, v) {
+    v = (+v) | 0;
+    if (v < 1 || v > 10) throw new TypeError('Invalid alignment');
+    _par_put(s, v, _par_cur(s).meet);
+  });
+  _def(SVGPreserveAspectRatio, 'meetOrSlice', function(s) { return _par_cur(s).meet; }, function(s, v) {
+    v = (+v) | 0;
+    if (v < 1 || v > 2) throw new TypeError('Invalid meetOrSlice');
+    _par_put(s, _par_cur(s).align, v);
+  });
+  SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_UNKNOWN  = 0;
   SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE     = 1;
   SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMINYMIN = 2;
   SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMIN = 3;
@@ -652,12 +1030,20 @@ const SVG_SHIM: &str = r#"
   window.SVGPreserveAspectRatio = SVGPreserveAspectRatio;
 
   class SVGAnimatedPreserveAspectRatio {
-    constructor() {
-      this.baseVal = new SVGPreserveAspectRatio();
-      this.animVal = new SVGPreserveAspectRatio();
-    }
+    constructor() { _pair(this, _new(SVGPreserveAspectRatio), _new(SVGPreserveAspectRatio)); }
   }
+  _def_pair(SVGAnimatedPreserveAspectRatio);
   window.SVGAnimatedPreserveAspectRatio = SVGAnimatedPreserveAspectRatio;
+
+  // Live `preserveAspectRatio` over the content attribute of node `nid`.
+  function _lumen_svg_animated_par(nid) {
+    var par = _new(SVGPreserveAspectRatio);
+    _slot(par).io = {
+      get: function() { return nid != null ? _lumen_u2n(_lumen_get_attr(nid, 'preserveAspectRatio')) : null; },
+      set: function(v) { if (nid != null) _lumen_set_attr(nid, 'preserveAspectRatio', v); },
+    };
+    return _mk(SVGAnimatedPreserveAspectRatio, { baseVal: par, animVal: par });
+  }
 
   // SVGGElement — <g> grouping container
   class SVGGElement extends SVGGraphicsElement {
@@ -675,7 +1061,6 @@ const SVG_SHIM: &str = r#"
   class SVGSymbolElement extends SVGGraphicsElement {
     constructor() {
       super(); this.tagName = 'symbol';
-      this.preserveAspectRatio = new SVGAnimatedPreserveAspectRatio();
     }
   }
   _lumen_def_svg_viewbox(SVGSymbolElement);
@@ -685,7 +1070,6 @@ const SVG_SHIM: &str = r#"
   class SVGUseElement extends SVGGraphicsElement {
     constructor() {
       super(); this.tagName = 'use';
-      this.href = new SVGAnimatedString('');
     }
   }
   _lumen_def_svg_lengths(SVGUseElement, {
@@ -748,8 +1132,6 @@ const SVG_SHIM: &str = r#"
   class SVGImageElement extends SVGGraphicsElement {
     constructor() {
       super(); this.tagName = 'image';
-      this.href = new SVGAnimatedString('');
-      this.preserveAspectRatio = new SVGAnimatedPreserveAspectRatio();
     }
   }
   _lumen_def_svg_lengths(SVGImageElement, {
@@ -763,7 +1145,7 @@ const SVG_SHIM: &str = r#"
     // W3C SVG 2 §10.6.2: the untransformed bounding box of a <rect> is its
     // geometry rect itself.
     getBBox(options) {
-      return new SVGRect(this.x.baseVal.value, this.y.baseVal.value,
+      return _rect(this.x.baseVal.value, this.y.baseVal.value,
         this.width.baseVal.value, this.height.baseVal.value);
     }
   }
@@ -778,7 +1160,7 @@ const SVG_SHIM: &str = r#"
     constructor() { super(); this.tagName = 'circle'; }
     getBBox(options) {
       var cx = this.cx.baseVal.value, cy = this.cy.baseVal.value, r = this.r.baseVal.value;
-      return new SVGRect(cx - r, cy - r, 2 * r, 2 * r);
+      return _rect(cx - r, cy - r, 2 * r, 2 * r);
     }
   }
   _lumen_def_svg_lengths(SVGCircleElement, { cx: ['cx', 0], cy: ['cy', 0], r: ['r', 0] });
@@ -790,7 +1172,7 @@ const SVG_SHIM: &str = r#"
     getBBox(options) {
       var cx = this.cx.baseVal.value, cy = this.cy.baseVal.value;
       var rx = this.rx.baseVal.value, ry = this.ry.baseVal.value;
-      return new SVGRect(cx - rx, cy - ry, 2 * rx, 2 * ry);
+      return _rect(cx - rx, cy - ry, 2 * rx, 2 * ry);
     }
   }
   _lumen_def_svg_lengths(SVGEllipseElement, {
@@ -805,7 +1187,7 @@ const SVG_SHIM: &str = r#"
       var x1 = this.x1.baseVal.value, y1 = this.y1.baseVal.value;
       var x2 = this.x2.baseVal.value, y2 = this.y2.baseVal.value;
       var x = Math.min(x1, x2), y = Math.min(y1, y2);
-      return new SVGRect(x, y, Math.abs(x2 - x1), Math.abs(y2 - y1));
+      return _rect(x, y, Math.abs(x2 - x1), Math.abs(y2 - y1));
     }
   }
   _lumen_def_svg_lengths(SVGLineElement, {
@@ -815,14 +1197,14 @@ const SVG_SHIM: &str = r#"
 
   // Shared `points`-based bbox (SVG 2 §10.6.2) for polyline/polygon.
   function _lumen_svg_points_bbox(el) {
-    var pts = el.points._items;
-    if (!pts.length) return new SVGRect(0, 0, 0, 0);
+    var pts = _slot(el.points).items;
+    if (!pts.length) return _rect(0, 0, 0, 0);
     var minX = pts[0].x, maxX = pts[0].x, minY = pts[0].y, maxY = pts[0].y;
     for (var i = 1; i < pts.length; i++) {
       minX = Math.min(minX, pts[i].x); maxX = Math.max(maxX, pts[i].x);
       minY = Math.min(minY, pts[i].y); maxY = Math.max(maxY, pts[i].y);
     }
-    return new SVGRect(minX, minY, maxX - minX, maxY - minY);
+    return _rect(minX, minY, maxX - minX, maxY - minY);
   }
 
   // SVGPolylineElement — <polyline>
@@ -861,15 +1243,13 @@ const SVG_SHIM: &str = r#"
   class SVGTextContentElement extends SVGGraphicsElement {
     constructor() {
       super();
-      this.textLength = new SVGAnimatedLength(0);
-      this.lengthAdjust = new SVGAnimatedEnumeration(1); // spacingAndGlyphs
     }
     getNumberOfChars() { return 0; }
     getComputedTextLength() { return 0; }
     getSubStringLength(charNum, nChars) { return 0; }
-    getStartPositionOfChar(charNum) { return new SVGPoint(); }
-    getEndPositionOfChar(charNum) { return new SVGPoint(); }
-    getExtentOfChar(charNum) { return new SVGRect(); }
+    getStartPositionOfChar(charNum) { return _pt(); }
+    getEndPositionOfChar(charNum) { return _pt(); }
+    getExtentOfChar(charNum) { return _rect(); }
     getRotationOfChar(charNum) { return 0; }
     getCharNumAtPosition(point) { return -1; }
     selectSubString(charNum, nChars) {}
@@ -880,12 +1260,8 @@ const SVG_SHIM: &str = r#"
   class SVGTextPositioningElement extends SVGTextContentElement {
     constructor() {
       super();
-      this.rotate = new SVGAnimatedInteger(0);
     }
   }
-  _lumen_def_svg_lengths(SVGTextPositioningElement, {
-    x: ['x', 0], y: ['y', 0], dx: ['dx', 0], dy: ['dy', 0],
-  });
   window.SVGTextPositioningElement = SVGTextPositioningElement;
 
   // SVGTextElement — <text>
@@ -904,9 +1280,6 @@ const SVG_SHIM: &str = r#"
   class SVGTextPathElement extends SVGTextContentElement {
     constructor() {
       super(); this.tagName = 'textPath';
-      this.method = new SVGAnimatedEnumeration(1);
-      this.spacing = new SVGAnimatedEnumeration(1);
-      this.href = new SVGAnimatedString('');
     }
   }
   _lumen_def_svg_lengths(SVGTextPathElement, { startOffset: ['startOffset', 0] });
@@ -916,32 +1289,30 @@ const SVG_SHIM: &str = r#"
   class SVGClipPathElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'clipPath';
-      this.clipPathUnits = new SVGAnimatedEnumeration(1);
     }
   }
   _lumen_def_svg_transform(SVGClipPathElement, 'transform', 'transform');
+  _lumen_def_attrs(SVGClipPathElement, [['clipPathUnits', 'Enumeration', 1, ['userSpaceOnUse', 'objectBoundingBox']]]);
   window.SVGClipPathElement = SVGClipPathElement;
 
   // SVGMaskElement — <mask>
   class SVGMaskElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'mask';
-      this.maskUnits = new SVGAnimatedEnumeration(2);
-      this.maskContentUnits = new SVGAnimatedEnumeration(1);
     }
   }
   _lumen_def_svg_lengths(SVGMaskElement, {
     x: ['x', -10], y: ['y', -10], width: ['width', 120], height: ['height', 120],
   });
+  _lumen_def_attrs(SVGMaskElement, [
+    ['maskUnits', 'Enumeration', 2, ['userSpaceOnUse', 'objectBoundingBox']], ['maskContentUnits', 'Enumeration', 1, ['userSpaceOnUse', 'objectBoundingBox']],
+  ]);
   window.SVGMaskElement = SVGMaskElement;
 
   // SVGGradientElement — base for gradient elements
   class SVGGradientElement extends SVGElement {
     constructor() {
       super();
-      this.gradientUnits = new SVGAnimatedEnumeration(2);
-      this.spreadMethod = new SVGAnimatedEnumeration(1);
-      this.href = new SVGAnimatedString('');
     }
   }
   SVGGradientElement.SVG_SPREADMETHOD_UNKNOWN = 0;
@@ -973,7 +1344,6 @@ const SVG_SHIM: &str = r#"
   class SVGStopElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'stop';
-      this.offset = new SVGAnimatedNumber(0);
     }
   }
   window.SVGStopElement = SVGStopElement;
@@ -982,10 +1352,6 @@ const SVG_SHIM: &str = r#"
   class SVGPatternElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'pattern';
-      this.patternUnits = new SVGAnimatedEnumeration(2);
-      this.patternContentUnits = new SVGAnimatedEnumeration(1);
-      this.preserveAspectRatio = new SVGAnimatedPreserveAspectRatio();
-      this.href = new SVGAnimatedString('');
     }
   }
   _lumen_def_svg_lengths(SVGPatternElement, {
@@ -999,10 +1365,6 @@ const SVG_SHIM: &str = r#"
   class SVGMarkerElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'marker';
-      this.markerUnits = new SVGAnimatedEnumeration(2);
-      this.orientType = new SVGAnimatedEnumeration(1);
-      this.orientAngle = new SVGAnimatedNumber(0);
-      this.preserveAspectRatio = new SVGAnimatedPreserveAspectRatio();
     }
     setOrientToAuto() { this.orientType.baseVal = 1; }
     setOrientToAngle(angle) { this.orientType.baseVal = 2; this.orientAngle.baseVal = angle; }
@@ -1017,14 +1379,14 @@ const SVG_SHIM: &str = r#"
   class SVGFilterElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'filter';
-      this.filterUnits = new SVGAnimatedEnumeration(2);
-      this.primitiveUnits = new SVGAnimatedEnumeration(1);
-      this.href = new SVGAnimatedString('');
     }
   }
   _lumen_def_svg_lengths(SVGFilterElement, {
     x: ['x', -10], y: ['y', -10], width: ['width', 120], height: ['height', 120],
   });
+  _lumen_def_attrs(SVGFilterElement, [
+    ['filterUnits', 'Enumeration', 2, ['userSpaceOnUse', 'objectBoundingBox']], ['primitiveUnits', 'Enumeration', 1, ['userSpaceOnUse', 'objectBoundingBox']], ['href', 'String'],
+  ]);
   window.SVGFilterElement = SVGFilterElement;
 
   // SVGFEBlendElement — <feBlend>
@@ -1049,25 +1411,45 @@ const SVG_SHIM: &str = r#"
   class SVGFEGaussianBlurElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'feGaussianBlur';
-      this.in1 = new SVGAnimatedString('');
-      this.stdDeviationX = new SVGAnimatedNumber(0);
-      this.stdDeviationY = new SVGAnimatedNumber(0);
     }
     setStdDeviation(sdx, sdy) {
-      this.stdDeviationX.baseVal = sdx;
-      this.stdDeviationY.baseVal = sdy != null ? sdy : sdx;
+      _attr_set(this, 'stdDeviation', _num(sdx) + ' ' + _num(sdy != null ? sdy : sdx));
     }
   }
+  _lumen_def_attrs(SVGFEGaussianBlurElement, [['in1', 'String']]);
+  // `stdDeviation` is "<number> [<number>]": X is the first token, Y the second (or X).
+  [['stdDeviationX', 0], ['stdDeviationY', 1]].forEach(function(d) {
+    Object.defineProperty(SVGFEGaussianBlurElement.prototype, d[0], {
+      get: _fn_name(function() {
+        if (!(this instanceof SVGFEGaussianBlurElement) || this === SVGFEGaussianBlurElement.prototype) {
+          throw new TypeError('Illegal invocation');
+        }
+        var el = this;
+        function toks() {
+          var n = _split_list(_attr_get(el, 'stdDeviation')).map(parseFloat).filter(function(x) { return !isNaN(x); });
+          return n.length ? n : [0];
+        }
+        return _mk_scalar(SVGAnimatedNumber, function() {
+          var n = toks();
+          return d[1] === 1 && n.length > 1 ? n[1] : n[0];
+        }, function(v) {
+          var n = toks();
+          var x = d[1] === 0 ? v : n[0], y = d[1] === 1 ? v : (n.length > 1 ? n[1] : n[0]);
+          _attr_set(el, 'stdDeviation', x + ' ' + y);
+        });
+      }, 'get ' + d[0]),
+      enumerable: true, configurable: true,
+    });
+  });
   window.SVGFEGaussianBlurElement = SVGFEGaussianBlurElement;
 
   // SVGFEOffsetElement — <feOffset>
   class SVGFEOffsetElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'feOffset';
-      this.dx = new SVGAnimatedNumber(0);
-      this.dy = new SVGAnimatedNumber(0);
     }
   }
+  _lumen_def_attrs(SVGFEOffsetElement, [['dx', 'Number', 0], ['dy', 'Number', 0]]);
   window.SVGFEOffsetElement = SVGFEOffsetElement;
 
   // SVGFEMergeElement / SVGFEMergeNodeElement
@@ -1369,7 +1751,7 @@ const SVG_SHIM: &str = r#"
 
   // SVGAnimateTransformElement — <animateTransform> (events/timing only —
   // matrix composition onto the `transform` attribute is out of scope).
-  class SVGAnimateTransformElement extends SVGAnimateElement {}
+  class SVGAnimateTransformElement extends SVGAnimationElement {}
   window.SVGAnimateTransformElement = SVGAnimateTransformElement;
 
   // SVGAnimateMotionElement — <animateMotion> (events/timing only — path
@@ -1378,29 +1760,23 @@ const SVG_SHIM: &str = r#"
   window.SVGAnimateMotionElement = SVGAnimateMotionElement;
 
   // SVGSetElement — <set>
-  class SVGSetElement extends SVGAnimateElement {}
+  class SVGSetElement extends SVGAnimationElement {}
   window.SVGSetElement = SVGSetElement;
 
   // SVGMPathElement — <mpath> (SVGURIReference)
   class SVGMPathElement extends SVGElement {
-    constructor() { super(); this.tagName = 'mpath'; this.href = new SVGAnimatedString(''); }
+    constructor() { super(); this.tagName = 'mpath'; }
   }
   window.SVGMPathElement = SVGMPathElement;
 
   // TimeEvent (SMIL Animation §6) — begin/end/repeat events.
   if (typeof Event === 'function') {
+    // No WebIDL constructor: only the UA creates TimeEvents, so `new` throws.
     class TimeEvent extends Event {
-      constructor(type, init) {
-        super(type, init);
-        this._detail = (init && init.detail !== undefined) ? (init.detail | 0) : 0;
-        this._view = (init && init.view) || null;
-      }
-      get view() { return this._view; }
-      get detail() { return this._detail; }
-      initTimeEvent(type, view, detail) {
-        this.initEvent(type, false, false);
-        this._view = view || null; this._detail = detail | 0;
-      }
+      constructor() { throw new TypeError('Illegal constructor'); }
+      get view() { return null; }
+      get detail() { return 0; }
+      initTimeEvent(type, view, detail) {}
     }
     window.TimeEvent = TimeEvent;
   }
@@ -1427,64 +1803,67 @@ const SVG_SHIM: &str = r#"
   }
 
   // Remaining filter primitives (Filter Effects §15): typed prototypes with
-  // their SVGAnimated* attribute surface.
-  function _lumen_def_fe(ctorName, tag, init) {
+  // their SVGAnimated* attribute surface. `spec` entries are
+  // `[name, 'Integer'|'Number'|'Enumeration'|'Boolean'|'NumberList', default, keywords?]`,
+  // installed as live prototype accessors over the content attribute.
+  function _lumen_def_fe(ctorName, tag, spec) {
     var C = class extends SVGElement {
-      constructor() { super(); this.tagName = tag; if (init) init(this); }
+      constructor() { super(); this.tagName = tag; }
     };
     Object.defineProperty(C, 'name', { value: ctorName });
+    _lumen_def_attrs(C, spec || []);
     window[ctorName] = C;
     return C;
   }
-  const _N = function(v) { return new SVGAnimatedNumber(v); };
-  const _I = function(v) { return new SVGAnimatedInteger(v); };
-  const _E = function(v) { return new SVGAnimatedEnumeration(v); };
+  const _KUL = [['kernelUnitLengthX', 'Number', 0], ['kernelUnitLengthY', 'Number', 0]];
   var SVGFEComponentTransferElement = _lumen_def_fe('SVGFEComponentTransferElement', 'feComponentTransfer');
-  var SVGFEConvolveMatrixElement = _lumen_def_fe('SVGFEConvolveMatrixElement', 'feConvolveMatrix', function(e) {
-    e.orderX = _I(3); e.orderY = _I(3);
-    e.kernelMatrix = new SVGAnimatedNumberList(); e.divisor = _N(1);
-    e.bias = _N(0); e.targetX = _I(0); e.targetY = _I(0); e.edgeMode = _E(1);
-    e.kernelUnitLengthX = _N(0); e.kernelUnitLengthY = _N(0);
-    e.preserveAlpha = new SVGAnimatedBoolean(false);
-  });
-  var SVGFEDiffuseLightingElement = _lumen_def_fe('SVGFEDiffuseLightingElement', 'feDiffuseLighting', function(e) {
-    e.surfaceScale = _N(1); e.diffuseConstant = _N(1);
-    e.kernelUnitLengthX = _N(0); e.kernelUnitLengthY = _N(0);
-  });
-  var SVGFEDisplacementMapElement = _lumen_def_fe('SVGFEDisplacementMapElement', 'feDisplacementMap', function(e) {
-    e.scale = _N(0); e.xChannelSelector = _E(4); e.yChannelSelector = _E(4);
-  });
-  var SVGFEDistantLightElement = _lumen_def_fe('SVGFEDistantLightElement', 'feDistantLight', function(e) {
-    e.azimuth = _N(0); e.elevation = _N(0);
-  });
-  var SVGFEDropShadowElement = _lumen_def_fe('SVGFEDropShadowElement', 'feDropShadow', function(e) {
-    e.dx = _N(2); e.dy = _N(2); e.stdDeviationX = _N(2); e.stdDeviationY = _N(2);
-  });
-  var SVGFEMorphologyElement = _lumen_def_fe('SVGFEMorphologyElement', 'feMorphology', function(e) {
-    e.operator = _E(1); e.radiusX = _N(0); e.radiusY = _N(0);
-  });
-  var SVGFEPointLightElement = _lumen_def_fe('SVGFEPointLightElement', 'fePointLight', function(e) {
-    e.x = _N(0); e.y = _N(0); e.z = _N(0);
-  });
-  var SVGFESpecularLightingElement = _lumen_def_fe('SVGFESpecularLightingElement', 'feSpecularLighting', function(e) {
-    e.surfaceScale = _N(1); e.specularConstant = _N(1); e.specularExponent = _N(1);
-    e.kernelUnitLengthX = _N(0); e.kernelUnitLengthY = _N(0);
-  });
-  var SVGFESpotLightElement = _lumen_def_fe('SVGFESpotLightElement', 'feSpotLight', function(e) {
-    e.x = _N(0); e.y = _N(0); e.z = _N(0);
-    e.pointsAtX = _N(0); e.pointsAtY = _N(0); e.pointsAtZ = _N(0);
-    e.specularExponent = _N(1); e.limitingConeAngle = _N(0);
-  });
-  var SVGFETurbulenceElement = _lumen_def_fe('SVGFETurbulenceElement', 'feTurbulence', function(e) {
-    e.baseFrequencyX = _N(0); e.baseFrequencyY = _N(0);
-    e.numOctaves = _I(1); e.seed = _N(0); e.stitchTiles = _E(2); e.type = _E(2);
-  });
+  var SVGFEConvolveMatrixElement = _lumen_def_fe('SVGFEConvolveMatrixElement', 'feConvolveMatrix', [
+    ['orderX', 'Integer', 3], ['orderY', 'Integer', 3], ['kernelMatrix', 'NumberList'],
+    ['divisor', 'Number', 1], ['bias', 'Number', 0], ['targetX', 'Integer', 0],
+    ['targetY', 'Integer', 0], ['edgeMode', 'Enumeration', 1, ['duplicate', 'wrap', 'none']],
+    ['preserveAlpha', 'Boolean', false],
+  ].concat(_KUL));
+  var SVGFEDiffuseLightingElement = _lumen_def_fe('SVGFEDiffuseLightingElement', 'feDiffuseLighting', [
+    ['surfaceScale', 'Number', 1], ['diffuseConstant', 'Number', 1],
+  ].concat(_KUL));
+  var SVGFEDisplacementMapElement = _lumen_def_fe('SVGFEDisplacementMapElement', 'feDisplacementMap', [
+    ['scale', 'Number', 0],
+    ['xChannelSelector', 'Enumeration', 4, ['R', 'G', 'B', 'A']],
+    ['yChannelSelector', 'Enumeration', 4, ['R', 'G', 'B', 'A']],
+  ]);
+  var SVGFEDistantLightElement = _lumen_def_fe('SVGFEDistantLightElement', 'feDistantLight', [
+    ['azimuth', 'Number', 0], ['elevation', 'Number', 0],
+  ]);
+  var SVGFEDropShadowElement = _lumen_def_fe('SVGFEDropShadowElement', 'feDropShadow', [
+    ['dx', 'Number', 2], ['dy', 'Number', 2],
+    ['stdDeviationX', 'Number', 2], ['stdDeviationY', 'Number', 2],
+  ]);
+  var SVGFEMorphologyElement = _lumen_def_fe('SVGFEMorphologyElement', 'feMorphology', [
+    ['operator', 'Enumeration', 1, ['erode', 'dilate']],
+    ['radiusX', 'Number', 0], ['radiusY', 'Number', 0],
+  ]);
+  var SVGFEPointLightElement = _lumen_def_fe('SVGFEPointLightElement', 'fePointLight', [
+    ['x', 'Number', 0], ['y', 'Number', 0], ['z', 'Number', 0],
+  ]);
+  var SVGFESpecularLightingElement = _lumen_def_fe('SVGFESpecularLightingElement', 'feSpecularLighting', [
+    ['surfaceScale', 'Number', 1], ['specularConstant', 'Number', 1], ['specularExponent', 'Number', 1],
+  ].concat(_KUL));
+  var SVGFESpotLightElement = _lumen_def_fe('SVGFESpotLightElement', 'feSpotLight', [
+    ['x', 'Number', 0], ['y', 'Number', 0], ['z', 'Number', 0],
+    ['pointsAtX', 'Number', 0], ['pointsAtY', 'Number', 0], ['pointsAtZ', 'Number', 0],
+    ['specularExponent', 'Number', 1], ['limitingConeAngle', 'Number', 0],
+  ]);
+  var SVGFETurbulenceElement = _lumen_def_fe('SVGFETurbulenceElement', 'feTurbulence', [
+    ['baseFrequencyX', 'Number', 0], ['baseFrequencyY', 'Number', 0],
+    ['numOctaves', 'Integer', 1], ['seed', 'Number', 0],
+    ['stitchTiles', 'Enumeration', 2, ['stitch', 'noStitch']],
+    ['type', 'Enumeration', 2, ['fractalNoise', 'turbulence']],
+  ]);
 
   // SVGViewElement — <view>
   class SVGViewElement extends SVGElement {
     constructor() {
       super(); this.tagName = 'view';
-      this.preserveAspectRatio = new SVGAnimatedPreserveAspectRatio();
       this.zoomAndPan = 2; // SVG_ZOOMANDPAN_MAGNIFY
     }
   }
@@ -1496,7 +1875,6 @@ const SVG_SHIM: &str = r#"
     constructor() {
       super(); this.tagName = 'script';
       this.type = 'text/ecmascript';
-      this.href = new SVGAnimatedString('');
     }
   }
   window.SVGScriptElement = SVGScriptElement;
@@ -1647,8 +2025,16 @@ const SVG_SHIM: &str = r#"
 
   // Expose SVG namespace constant
   window.SVG_NAMESPACE = SVG_NS;
-})();
-"#;
+"#,
+  "
+  const _IDL = ",
+  include_str!("shim/svg_idl_table.js"),
+  ";
+",
+  include_str!("shim/svg_idl_shape.js"),
+  r#"})();
+"#
+);
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
@@ -1713,6 +2099,46 @@ mod tests_v8 {
         ] {
             assert!(bool_eval(&rt, &format!("typeof window.{n} === 'function'")), "{n}");
         }
+    }
+
+    #[test]
+    fn bug_1093_value_types_have_webidl_shape() {
+        let rt = with_svg();
+        assert!(bool_eval(&rt, r#"
+            const throwsType = f => { try { f(); return false; } catch (e) { return e instanceof TypeError; } };
+            const len = new SVGSVGElement().createSVGLength();
+            const d = Object.getOwnPropertyDescriptor(SVGLength.prototype, 'value');
+            len.valueAsString = '2cm';
+            const list = new SVGSVGElement().createSVGTransform();
+            Object.keys(globalThis).indexOf('SVGLength') < 0
+              && d.enumerable && d.get.name === 'get value' && d.set.name === 'set value'
+              && throwsType(() => d.get.call(SVGLength.prototype))
+              && !Object.prototype.hasOwnProperty.call(len, 'value')
+              && SVGLength.SVG_LENGTHTYPE_PX === 5 && SVGLength.prototype.SVG_LENGTHTYPE_PX === 5
+              && Object.getOwnPropertyDescriptor(SVGLength.prototype, 'newValueSpecifiedUnits').enumerable
+              && SVGLength.prototype.newValueSpecifiedUnits.length === 2
+              && throwsType(() => len.newValueSpecifiedUnits())
+              && throwsType(() => new SVGLength())
+              && len.unitType === SVGLength.SVG_LENGTHTYPE_CM
+              && Math.abs(len.value - 96 / 2.54 * 2) < 1e-9
+              && Object.prototype.toString.call(len) === '[object SVGLength]'
+              && Object.getOwnPropertyDescriptor(SVGTransform.prototype, 'type').set === undefined
+              && list.type === SVGTransform.SVG_TRANSFORM_MATRIX
+        "#));
+    }
+
+    #[test]
+    fn bug_1093_list_operations_live_on_each_interface_prototype() {
+        let rt = with_svg();
+        assert!(bool_eval(&rt, r#"
+            const sl = new SVGSVGElement().createSVGTransform();
+            const names = ['SVGNumberList', 'SVGLengthList', 'SVGStringList', 'SVGPointList', 'SVGTransformList'];
+            names.every(n => ['getItem', 'appendItem', 'clear', 'numberOfItems', 'length'].every(
+              m => Object.prototype.hasOwnProperty.call(window[n].prototype, m)))
+              && SVGStringList.prototype.getItem.length === 1
+              && SVGStringList.prototype.insertItemBefore.length === 2
+              && SVGTransformList.prototype.consolidate.length === 0
+        "#));
     }
 
     #[test]
@@ -1822,7 +2248,7 @@ mod tests_v8 {
     fn svg_transform_set_translate() {
         let rt = with_svg();
         let ok = bool_eval(&rt, r#"
-            const t = new SVGTransform();
+            const t = new SVGSVGElement().createSVGTransform();
             t.setTranslate(10, 20);
             t.type === 2 && t.matrix.e === 10 && t.matrix.f === 20
         "#);
@@ -1886,8 +2312,8 @@ mod tests_v8 {
     fn svg_animated_transform_list_consolidate() {
         let rt = with_svg();
         let ok = bool_eval(&rt, r#"
-            const atl = new SVGAnimatedTransformList();
-            const t = new SVGTransform();
+            const atl = new SVGRectElement().transform;
+            const t = new SVGSVGElement().createSVGTransform();
             t.setTranslate(5, 0);
             atl.baseVal.appendItem(t);
             const c = atl.baseVal.consolidate();
@@ -1960,8 +2386,8 @@ mod tests_v8 {
         let rt = with_svg();
         let ok = bool_eval(&rt, r#"
             (new SVGAnimateElement()) instanceof SVGAnimationElement &&
-            (new SVGSetElement()) instanceof SVGAnimateElement &&
-            (new SVGAnimateTransformElement()) instanceof SVGAnimateElement &&
+            (new SVGSetElement()) instanceof SVGAnimationElement &&
+            (new SVGAnimateTransformElement()) instanceof SVGAnimationElement &&
             (new SVGAnimateMotionElement()) instanceof SVGAnimationElement &&
             typeof SVGAnimationElement.prototype.beginElement === 'function' &&
             typeof SVGAnimationElement.prototype.beginElementAt === 'function' &&
