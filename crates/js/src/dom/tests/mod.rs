@@ -271,6 +271,9 @@ mod v8_bug493_sheet_registry;
 mod v8_bug504_scroll_flush;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug935_s55_content_journal;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug975_scroll_request_sync;
 
 #[cfg(feature = "v8-backend")]
