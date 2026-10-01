@@ -2364,7 +2364,7 @@ pub(crate) const WORKER_ATOB_BTOA_SHIM: &str = r#"(function() {
 /// `DOM_EXCEPTION_POLYFILL`), so the throw itself cannot live in this
 /// native (BUG-1016 — this used to throw a plain `TypeError` here).
 #[cfg(feature = "v8-backend")]
-fn atob_native_v8(
+pub(crate) fn atob_native_v8(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
     rv: &mut v8::ReturnValue,
@@ -2388,7 +2388,7 @@ fn atob_native_v8(
 /// [`atob_native_v8`] on why the throw for out-of-Latin1 input lives in
 /// [`WORKER_ATOB_BTOA_SHIM`], not here.
 #[cfg(feature = "v8-backend")]
-fn btoa_native_v8(
+pub(crate) fn btoa_native_v8(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
     rv: &mut v8::ReturnValue,
