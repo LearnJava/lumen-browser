@@ -4448,6 +4448,7 @@ ShadowRoot.prototype.appendChild = function(c) {
         try {
             _lumen_append_child(this.__nid__, c.__nid__);
             _lumen_ce_maybe_connected(c);
+            _lumen_ce_connect_descendants(c.__nid__);
         } finally { _lumen_ce_pop_current_element_queue(); }
     }
     return c;
@@ -8378,10 +8379,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     for (var _fi = 0; _fi < kids.length; _fi++) {
                         _lumen_append_child(nid, kids[_fi]);
                         _lumen_ce_maybe_connected(_lumen_make_element(kids[_fi]));
+                        _lumen_ce_connect_descendants(kids[_fi]);
                     }
                 } else {
                     _lumen_append_child(nid, c.__nid__);
                     _lumen_ce_maybe_connected(c);
+                    _lumen_ce_connect_descendants(c.__nid__);
                 }
                 _lumen_fire_slotchange(nid);
             } finally { _lumen_ce_pop_current_element_queue(); }
@@ -9084,10 +9087,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     for (var _ib = 0; _ib < kids.length; _ib++) {
                         _lumen_insert_before(nid, kids[_ib], refNode.__nid__);
                         _lumen_ce_maybe_connected(_lumen_make_element(kids[_ib]));
+                        _lumen_ce_connect_descendants(kids[_ib]);
                     }
                 } else {
                     _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
                     _lumen_ce_maybe_connected(newNode);
+                    _lumen_ce_connect_descendants(newNode.__nid__);
                 }
                 _lumen_fire_slotchange(nid);
             } finally { _lumen_ce_pop_current_element_queue(); }
@@ -15023,7 +15028,7 @@ function _lumen_ce_maybe_connected(el) {
     // `el` may be a wrapper script obtained before the upgrade replaced it;
     // the callback's `this` is the constructed element regardless.
     var inst = _lumen_ce_custom_element(nid);
-    if (inst && typeof entry.ctor.prototype.connectedCallback === 'function') {
+    if (inst && _lumen_resource_is_connected(nid) && typeof entry.ctor.prototype.connectedCallback === 'function') {
         _lumen_ce_enqueue_reaction(nid, function() {
             try { entry.ctor.prototype.connectedCallback.call(inst); } catch(e) {
                 _lumen_console_error('CE connectedCallback: ' + e);
@@ -15045,6 +15050,28 @@ function _lumen_ce_upgrade_subtree(nid) {
     var kids = _lumen_get_children(nid);
     for (var i = 0; i < kids.length; i++) {
         _lumen_ce_upgrade_subtree(kids[i]);
+    }
+}
+
+// BUG-1207: HTML LS §4.2.3 "insert" runs the connected/upgrade reaction for
+// every shadow-including inclusive descendant of the inserted node, but the
+// insertion methods call the shallow `_lumen_ce_maybe_connected` on the node
+// alone. A subtree assembled while detached and attached in one go — what
+// ShadyDOM does with a stamped template (youtube's `ytd-app` appends the whole
+// template, with `ytd-page-manager` several levels down) — left its nested
+// custom elements un-upgraded, so their `ready()` never ran. Walks the
+// descendants of `nid` (not `nid` itself) once the subtree is connected, and
+// only past a definition: a page without custom elements pays one comparison.
+var _lumen_ce_define_count = 0;
+function _lumen_ce_connect_descendants(nid) {
+    if (_lumen_ce_define_count === 0 || !_lumen_resource_is_connected(nid)) return;
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) {
+        var kid = kids[i];
+        if (String(_lumen_get_tag_name(kid) || '').indexOf('-') >= 0) {
+            _lumen_ce_maybe_connected(_lumen_make_element(kid));
+        }
+        _lumen_ce_connect_descendants(kid);
     }
 }
 
@@ -15191,6 +15218,7 @@ CustomElementRegistry.prototype.define = function(name, ctor, options) {
         ? ctor.observedAttributes.slice()
         : [];
     this._registry[name] = { ctor: ctor, observedAttributes: observed };
+    _lumen_ce_define_count++;
     _lumen_ce_definition_by_ctor.set(ctor, { name: name, registry: this._registry, pending: this._pending });
     _lumen_ce_upgrade_all(name, { registry: this._registry, pending: this._pending });
     var pending = this._pending[name];
