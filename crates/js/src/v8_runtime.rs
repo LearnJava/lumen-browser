@@ -87,6 +87,8 @@ mod script_attribution;
 mod sheet_sync;
 mod stall_sampler;
 mod style_flush;
+#[cfg(test)]
+pub(crate) use style_flush::CONTENT_JOURNAL_DISABLED;
 mod thread;
 
 pub use named_access::ensure_v8_platform;
