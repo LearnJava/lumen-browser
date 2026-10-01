@@ -3746,3 +3746,34 @@ lenta.ru живьём не перемерялся (нужен `--maximized`). С
 flush (`dirty_roots=0`, `layout_done=1,1 мс`) — вероятно, первая полная сборка `computed_styles`,
 не разбирали. lenta.ru живьём не перемерялся (нужен `--maximized`). Статус `OPEN (DEBTOR)`
 не меняется.
+
+## Срез 56 (P1, 2026-10-02) — базис следующего флаша передаётся перемещением, а не глубокой копией
+
+**Причина остатка среза 55.** Скоупы `LUMEN_PROFILE_TREE=1` вокруг стадий `maybe_flush`
+(`flush.touched_clone`, `flush.try_incremental`, `incr.*`, `flush.basis_clone`,
+`flush.collectors`, `flush.scroll_collect`; остаются постоянными) показали цикл
+`style.width=…; offsetWidth` на стенде как ~52 мс: раскладка 6, коллекторы 2–15, **клон
+базиса 25 мс** (`layout_root.clone()` — глубокая копия ~7500 боксов — и клон карты
+каскада), остальное — освобождение исходного дерева в конце вызова. Гипотеза среза 55
+(«клон дерева базиса») подтверждена, а две другие (scoped-коллекторы, drop) — вторичны.
+
+**Решение.** `IncrFlushBasis` публикуется в конце `maybe_flush`, после коллекторов, и
+получает `layout_root` и `counters.into_styles()` *перемещением*. Дерево теперь несёт
+восстановленные `scroll_x/scroll_y` (раньше базис копировался до `set_scroll_position`
+и хранил нули): следующий флаш всё равно восстанавливает смещения из `scroll_states`
+(операция идемпотентна), а `graft_geometry` переносит смещение неизменённого поддерева
+вперёд, так что наблюдаемого различия нет — `scroll_offsets_survive_a_chain_of_incremental_flushes`
+фиксирует это на цепочке флашей.
+
+**Измерено** (стенд `bug935_forced_reflow_stand.html`, 1500 div, `--dump-layout`,
+dev-release, одна и та же шумная машина: прогон до правки / два после):
+`mutate+offsetWidth` 72 → 17,3 / 17,0 мс/цикл, `mutate+getBCR` 68 → 13,3 / 12,5,
+`mutate+gcs` 54 → 13,6 / 13,7. `maybe_flush` 52 → 9,5 мс: `try_incremental` 7,9
+(из них `layout_mutation_incremental_restyle` ~6: `lay_out` 2,5, `build_box` 1,3,
+`post_build_tree_walks` 0,7, каскад 0,6), коллекторы ~1, клон/публикация базиса 25 → 0.
+
+**Остаток цикла ~10–13 мс**: раскладка листового корня (`lay_out` 2,5 мс при 1500 братьях),
+`post_build_tree_walks`/`post_layout_passes` (линейные обходы по ~0,7 мс), ещё
+~4–7 мс цикла вне `maybe_flush` (запись `style.width` через привязки, чтение — не разбирали). Разовые ~0,5 с на первом `offsetTop` после полного
+flush (`dirty_roots=0`) по-прежнему не разбирались. lenta.ru живьём не перемерялся
+(нужен `--maximized`). Статус `OPEN (DEBTOR)` не меняется.
