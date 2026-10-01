@@ -1262,7 +1262,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 let css_text = _serialize_style_map(&parsed);
                 set_attribute(&mut doc, node_id, "style", &css_text);
                 if old_style.as_deref() != Some(css_text.as_str()) {
-                    record_dom_touch(&touched, node_id);
+                    record_dom_touch_attr(&touched, node_id, "style");
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
@@ -1294,7 +1294,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 }
                 let new_style = if css_text.is_empty() { None } else { Some(css_text.as_str()) };
                 if old_style.as_deref() != new_style {
-                    record_dom_touch(&touched, node_id);
+                    record_dom_touch_attr(&touched, node_id, "style");
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);

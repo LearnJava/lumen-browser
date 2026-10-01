@@ -56,6 +56,18 @@ pub struct DomTouched {
     /// flush, defeating the whole point of the incremental path for the
     /// read-after-mutate-in-a-loop pattern BUG-1211 is about.
     pub(crate) touch_gen: HashMap<NodeId, u64>,
+    /// BUG-1211: `node → epoch` of the node's latest touch that is **not** a
+    /// plain attribute write (child-list change, `textContent`, dirty
+    /// value/checked…). Such a touch can reach siblings through
+    /// `:nth-child`/`:empty`/sibling combinators, so the same-tick flush
+    /// widens it to the parent. Never cleared, like [`Self::touch_gen`].
+    pub(crate) structural_gen: HashMap<NodeId, u64>,
+    /// BUG-1211: `node → attribute name → epoch` of the latest write to that
+    /// attribute through `setAttribute`/`removeAttribute`/inline `style`.
+    /// Lets the flush ask `restyle_root_set_for_node_change` which selectors
+    /// could react to *this* attribute (a `style` write rarely widens at all)
+    /// instead of treating every touch as `Unattributed`. Never cleared.
+    pub(crate) attr_gen: HashMap<NodeId, HashMap<Box<str>, u64>>,
 }
 
 /// Per-node snapshot of resolved CSS custom properties: node id → the map of
