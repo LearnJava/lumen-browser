@@ -588,7 +588,7 @@ the time — read dates.
   `EVENT_TARGET_SHIM`/`URL_SHIM` established for BUG-401) and are evaluated by both scopes; their
   publication switched from `window.X` to `globalThis.X`, which is the same object on the page
   (BUG-280) and the only one in a worker. `web_api_shim_splices_its_parts_in_source_order` guards
-  the reassembly. (3) *`atob` is not usable for response bodies here* — the SW's native decodes
+  the reassembly. (3) *the SW shim does not use `atob` for response bodies* — `atob` is now spec (binary string, BUG-1193) but historically the SW native decoded
   through `String::from_utf8` and answers `undefined` for anything else, so the shim carries its
   own base64→byte-string decoder and marks network/cache-born bodies `_binary`, decoding UTF-8
   only for those (a body the worker built itself must not be decoded twice). (4) *`importScripts`
