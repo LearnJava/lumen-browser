@@ -648,6 +648,21 @@ pub(super) fn dispatch_box(
         crate::incremental::translate_subtree(b, dx, dy);
         return DispatchOutcome::Done;
     }
+    // BUG-935 срез 65: a clean box whose placement is not `start + margin` (auto inline margins,
+    // `position: relative`, a centring `justify-self`) is laid out for real below — but its subtree
+    // is still the one `prev` laid out. A clean bit means "the whole subtree is reusable", and the
+    // graft honours a reuse claim by clearing the claimed root only (`REUSED_SUBTREE` is O(1) on
+    // purpose), so the boxes under it still carry the `SELF_SIZE` that `mark_subtree_dirty` gave
+    // every box of the fresh tree. Left alone they would each be laid out from scratch: on a
+    // `margin: 0 auto` page wrapper that is the whole document under it (7 800 boxes, 60 ms on
+    // `lenta.ru`) for a flush that changed one `<span>`. Clear one level — the children then
+    // translate like any clean child of a dirty parent, and a child that itself cannot be
+    // translated clears its own children the same way.
+    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+        for c in &mut b.children {
+            c.dirty = crate::incremental::DirtyBits::CLEAN;
+        }
+    }
 
     record_layout_key_occurrence(b.node, start_x, start_y, available_width, available_height, &b.style, used_size_override.as_ref());
 

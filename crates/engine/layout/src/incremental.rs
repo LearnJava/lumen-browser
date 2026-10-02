@@ -2091,6 +2091,69 @@ mod tests {
         assert_eq!(got, want, "the incremental run kept the segment styles from before the restyle");
     }
 
+    /// BUG-935 срез 65: a box that `lay_out` cannot just translate (`margin: 0 auto`, `position:
+    /// relative`) is laid out for real even when the graft proved it unchanged — and its
+    /// descendants, still marked dirty from the fresh tree, must not drag the whole subtree through
+    /// layout with it. A restyled inline element elsewhere dirties `body`; the centred wrapper full
+    /// of paragraphs next to it is the same as before and has to be moved, not recomputed.
+    #[test]
+    fn a_clean_untranslatable_box_does_not_relayout_its_clean_subtree() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{
+            layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, set_incremental_box_build,
+            set_layout_key_census, take_layout_key_census,
+        };
+        use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        fn rects(b: &LayoutBox, out: &mut Vec<(usize, [i32; 4])>) {
+            let r = b.rect;
+            out.push((b.node.index(), [(r.x * 100.0) as i32, (r.y * 100.0) as i32, (r.width * 100.0) as i32, (r.height * 100.0) as i32]));
+            for c in &b.children {
+                rects(c, out);
+            }
+        }
+
+        let mut html = String::from("<html><body><div class=\"w\">");
+        for i in 0..60 {
+            html.push_str(&format!("<p>paragraph {i} with <b>bold</b> and <i>italic</i> words in it</p>"));
+        }
+        html.push_str("</div><p id=\"t\">tail <span id=\"s\">span</span> end</p></body></html>");
+        let doc = parse_html(&html);
+        let base = "body { margin: 0; } .w { width: 600px; margin: 0 auto; } p { margin: 4px 0; }";
+        let old = parse_css(base);
+        let new = parse_css(&format!("{base} #s {{ font-size: 30px; }}"));
+        let vp = Size::new(800.0, 600.0);
+        let span = doc.find_by_id("s").expect("#s");
+
+        let (prev, prev_counters) =
+            layout_measured_hyp_with_counters(&doc, &old, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots: std::iter::once(span).collect(),
+            content_dirty: ContentDirty::Nothing,
+            shallow_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        set_layout_key_census(true);
+        let (incr, _) =
+            layout_mutation_incremental_restyle(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta);
+        let laid_out = take_layout_key_census().calls;
+        set_layout_key_census(false);
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        let (full, _) =
+            layout_measured_hyp_with_counters(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let (mut got, mut want) = (Vec::new(), Vec::new());
+        rects(&incr, &mut got);
+        rects(&full, &mut want);
+        assert_eq!(got, want, "incremental geometry differs from a full layout");
+        assert!(laid_out < 30, "{laid_out} boxes laid out for real; the centred wrapper's 60 paragraphs were recomputed");
+    }
+
     /// Boxes in `b`'s subtree, inclusive — gate bookkeeping only.
     fn gate_count_boxes(b: &LayoutBox) -> usize {
         1 + b.children.iter().map(gate_count_boxes).sum::<usize>()
