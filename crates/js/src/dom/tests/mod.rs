@@ -273,6 +273,7 @@ mod v8_bug504_scroll_flush;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1238_scoped_collectors;
 mod v8_bug935_s58_has_flush;
+mod v8_bug935_s59_style_skip;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s55_content_journal;
