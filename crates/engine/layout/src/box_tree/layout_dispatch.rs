@@ -655,7 +655,8 @@ pub(super) fn dispatch_box(
     let _font_ctx = FontContext::enter(b, measurer);
 
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
-    // flow position starts below the expanded viewport and the shell hasn't
+    // lies outside the expanded viewport (starts below it, or — with a height
+    // known up front — ends above it) and the shell hasn't
     // ratcheted the node relevant, drop the children for this pass: the element
     // keeps its own box and paint emits nothing for the subtree. While skipped,
     // the element is size-contained, so its auto block-size collapses to the
@@ -675,7 +676,12 @@ pub(super) fn dispatch_box(
     }
     let cv_auto_skipped = b.style.content_visibility == crate::style::ContentVisibility::Auto
         && !b.children.is_empty()
-        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height);
+        && crate::content_visibility::cv_should_skip(
+            b.node,
+            start_y,
+            crate::content_visibility::cv_bottom_estimate(&b.style, start_y, viewport),
+            viewport.height,
+        );
     if cv_auto_skipped {
         b.children.clear();
     }

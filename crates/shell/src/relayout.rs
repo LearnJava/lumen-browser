@@ -2074,7 +2074,7 @@ pub(crate) struct ContentVisibilityChange {
     pub(crate) skipped: bool,
 }
 
-/// Собрать `(node, top_y)` **всех** `content-visibility: auto` боксов в порядке
+/// Собрать `(node, top_y, bottom_y)` **всех** `content-visibility: auto` боксов в порядке
 /// дерева. top_y — страница-координаты бокса. Скан по дереву (а не thread-local)
 /// — работает и для layout-а, выполненного в фоновом потоке загрузки страницы.
 ///
@@ -2097,22 +2097,31 @@ pub(crate) struct ContentVisibilityChange {
 /// («already observed»). Первый бокс в порядке дерева — сам элемент, анонимный
 /// всегда его потомок. Layout решает ту же задачу тем же способом:
 /// `CV_SKIPPED` дедуплицируется по узлу.
-pub(crate) fn collect_cv_auto(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
+pub(crate) fn collect_cv_auto(
+    b: &lumen_layout::LayoutBox,
+    viewport: Size,
+    out: &mut Vec<(NodeId, f32, f32)>,
+) {
     fn walk(
         b: &lumen_layout::LayoutBox,
+        viewport: Size,
         seen: &mut std::collections::HashSet<NodeId>,
-        out: &mut Vec<(NodeId, f32)>,
+        out: &mut Vec<(NodeId, f32, f32)>,
     ) {
         if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
             && seen.insert(b.node)
         {
-            out.push((b.node, b.rect.y));
+            // `bottom` — та же оценка до layout, что и у самого layout-а
+            // (`cv_bottom_estimate`), иначе состояние в shell и решение о
+            // пропуске разойдутся для боксов с неизвестной высотой.
+            let bottom = lumen_layout::cv_bottom_estimate(&b.style, b.rect.y, viewport);
+            out.push((b.node, b.rect.y, bottom));
         }
         for c in &b.children {
-            walk(c, seen, out);
+            walk(c, viewport, seen, out);
         }
     }
-    walk(b, &mut std::collections::HashSet::new(), out);
+    walk(b, viewport, &mut std::collections::HashSet::new(), out);
 }
 
 /// Дифф skipped-состояния между двумя проходами → события
