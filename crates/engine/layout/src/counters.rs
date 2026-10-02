@@ -1210,6 +1210,13 @@ pub struct CascadeStats {
     /// left without a cascade entry, i.e. a rebuilt box rather than a reused
     /// one at best, and a wrong inherited chain at worst.
     pub confirm_misses: u32,
+    /// BUG-935 срез 66 — elements recomputed only because an ancestor was
+    /// (`force`), not because the delta named them.
+    pub forced: u32,
+    /// BUG-935 срез 66 — of [`Self::forced`], those whose fresh style and parent
+    /// equal what the previous pass had: the work a dependency-checked reuse of
+    /// a deep root's subtree could save. Diagnostic only.
+    pub forced_same: u32,
 }
 
 thread_local! {
@@ -1229,6 +1236,8 @@ thread_local! {
             skipped_subtrees: 0,
             confirmed: 0,
             confirm_misses: 0,
+            forced: 0,
+            forced_same: 0,
         })
     };
 }
@@ -1246,6 +1255,17 @@ fn note_cascade(recomputed: bool) {
         } else {
             v.reused += 1;
         }
+        s.set(v);
+    });
+}
+
+/// BUG-935 срез 66 — one element recomputed under an ancestor's `force`, and
+/// whether the result equals what the previous pass held for it.
+fn note_forced(same: bool) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.forced += 1;
+        v.forced_same += u32::from(same);
         s.set(v);
     });
 }
@@ -1427,6 +1447,11 @@ fn walk(
                 subtree_changed = displaced
                     .as_ref()
                     .is_none_or(|(prev, prev_parent)| *prev_parent != parent.raw() || **prev != *style);
+            }
+            if force {
+                note_forced(
+                    displaced.as_ref().is_some_and(|(prev, prev_parent)| *prev_parent == parent.raw() && **prev == *style),
+                );
             }
             if let Some((prev, _)) = displaced {
                 map.replaced_styles.insert(id, prev);
