@@ -23,52 +23,41 @@ pub(in crate::style) mod forms;
 
 pub(crate) fn matches_complex(complex: &ComplexSelector, doc: &Document, node: NodeId) -> bool {
     // Справа налево с back-tracking. Алгоритм:
-    //   1. Складываем (compounds, combinators) в массивы.
-    //   2. Рекурсивно: матчим последний compound на текущем `node`; если ОК
-    //      и осталось > 0 compound-ов левее, для combinator-а перед ним
-    //      перебираем ВСЕ возможные кандидаты (предки для descendant /
-    //      earlier-siblings для later-sibling) и рекурсивно матчим суффикс
-    //      в каждом. child / next-sibling имеют ровно одного кандидата.
-    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
-    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
-    compounds.push(&complex.head);
-    for (comb, comp) in &complex.tail {
-        combinators.push(*comb);
-        compounds.push(comp);
-    }
-    matches_chain(&compounds, &combinators, doc, node)
+    //   1. Матчим последний compound на текущем `node`; если ОК и осталось > 0
+    //      compound-ов левее, для combinator-а перед ним перебираем ВСЕ возможные
+    //      кандидаты (предки для descendant / earlier-siblings для later-sibling)
+    //      и рекурсивно матчим префикс в каждом. child / next-sibling имеют
+    //      ровно одного кандидата.
+    // BUG-935 срез 66: префикс — это `n` первых compound-ов самого селектора, без
+    // промежуточных `Vec` (два выделения на каждый вызов; на странице с 1500
+    // правилами их ~260 на элемент, 98% — отказы по первому compound-у).
+    matches_chain(complex, 1 + complex.tail.len(), doc, node)
 }
 
-/// Рекурсивный matcher с back-tracking. `compounds[last]` матчится на `node`;
-/// для левее идущих compound-ов перебираем кандидатов согласно combinator-у.
-fn matches_chain(
-    compounds: &[&CompoundSelector],
-    combinators: &[Combinator],
-    doc: &Document,
-    node: NodeId,
-) -> bool {
-    let n = compounds.len();
-    debug_assert_eq!(combinators.len(), n - 1);
+/// Compound номер `i` селектора: 0 — голова, дальше — хвост.
+fn compound_at(complex: &ComplexSelector, i: usize) -> &CompoundSelector {
+    if i == 0 { &complex.head } else { &complex.tail[i - 1].1 }
+}
 
-    if !matches_compound(compounds[n - 1], doc, node) {
+/// Рекурсивный matcher с back-tracking. Compound `n - 1` матчится на `node`;
+/// для левее идущих compound-ов перебираем кандидатов согласно combinator-у.
+fn matches_chain(complex: &ComplexSelector, n: usize, doc: &Document, node: NodeId) -> bool {
+    if !matches_compound(compound_at(complex, n - 1), doc, node) {
         return false;
     }
     if n == 1 {
         return true;
     }
 
-    let comb = combinators[n - 2];
-    let prev_compounds = &compounds[..n - 1];
-    let prev_combinators = &combinators[..n - 2];
+    // Combinator между compound-ами `n - 2` и `n - 1`.
+    let comb = complex.tail[n - 2].0;
 
     match comb {
         Combinator::Descendant => {
             // Перебираем всех предков как кандидатов.
             let mut cur = doc.get(node).parent;
             while let Some(p) = cur {
-                if is_element(doc, p)
-                    && matches_chain(prev_compounds, prev_combinators, doc, p)
-                {
+                if is_element(doc, p) && matches_chain(complex, n - 1, doc, p) {
                     return true;
                 }
                 cur = doc.get(p).parent;
@@ -81,18 +70,18 @@ fn matches_chain(
             if !is_element(doc, parent) {
                 return false;
             }
-            matches_chain(prev_compounds, prev_combinators, doc, parent)
+            matches_chain(complex, n - 1, doc, parent)
         }
         Combinator::NextSibling => {
             // Один кандидат: предыдущий element-sibling.
             let Some(prev) = previous_element_sibling(doc, node) else { return false; };
-            matches_chain(prev_compounds, prev_combinators, doc, prev)
+            matches_chain(complex, n - 1, doc, prev)
         }
         Combinator::LaterSibling => {
             // Перебираем все earlier-siblings как кандидатов.
             let mut sib = previous_element_sibling(doc, node);
             while let Some(s) = sib {
-                if matches_chain(prev_compounds, prev_combinators, doc, s) {
+                if matches_chain(complex, n - 1, doc, s) {
                     return true;
                 }
                 sib = previous_element_sibling(doc, s);
@@ -100,6 +89,61 @@ fn matches_chain(
             false
         }
     }
+}
+
+/// BUG-935 срез 66: прежняя реализация `matches_complex` (префикс — срезы двух `Vec`,
+/// собранных на каждый вызов) — эталон для дифференциального теста и стенда
+/// `bug935_cascade_bench`; в сборку не входит.
+#[cfg(test)]
+pub(crate) fn matches_complex_reference(complex: &ComplexSelector, doc: &Document, node: NodeId) -> bool {
+    fn chain(compounds: &[&CompoundSelector], combinators: &[Combinator], doc: &Document, node: NodeId) -> bool {
+        let n = compounds.len();
+        if !matches_compound(compounds[n - 1], doc, node) {
+            return false;
+        }
+        if n == 1 {
+            return true;
+        }
+        let (prev_compounds, prev_combinators) = (&compounds[..n - 1], &combinators[..n - 2]);
+        match combinators[n - 2] {
+            Combinator::Descendant => {
+                let mut cur = doc.get(node).parent;
+                while let Some(p) = cur {
+                    if is_element(doc, p) && chain(prev_compounds, prev_combinators, doc, p) {
+                        return true;
+                    }
+                    cur = doc.get(p).parent;
+                }
+                false
+            }
+            Combinator::Child => {
+                let Some(parent) = doc.get(node).parent else { return false };
+                is_element(doc, parent) && chain(prev_compounds, prev_combinators, doc, parent)
+            }
+            Combinator::NextSibling => {
+                let Some(prev) = previous_element_sibling(doc, node) else { return false };
+                chain(prev_compounds, prev_combinators, doc, prev)
+            }
+            Combinator::LaterSibling => {
+                let mut sib = previous_element_sibling(doc, node);
+                while let Some(s) = sib {
+                    if chain(prev_compounds, prev_combinators, doc, s) {
+                        return true;
+                    }
+                    sib = previous_element_sibling(doc, s);
+                }
+                false
+            }
+        }
+    }
+    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
+    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
+    compounds.push(&complex.head);
+    for (comb, comp) in &complex.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    chain(&compounds, &combinators, doc, node)
 }
 
 /// CSS Scoping L1 §6.2: true if `node` is a direct light-tree child of a shadow host,

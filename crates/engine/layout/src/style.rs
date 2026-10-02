@@ -333,6 +333,8 @@ use env::media_context_from_viewport;
 // потомок) — тот же реэкспорт, суженный до `crate::style`.
 // `complex_has_host`/`matches_slotted_complex` вызывает только сам `style.rs`.
 pub(crate) use matching::matches_complex;
+#[cfg(test)]
+pub(crate) use matching::matches_complex_reference;
 pub(in crate::style) use matching::matches_simple;
 use matching::{complex_has_host, matches_slotted_complex};
 

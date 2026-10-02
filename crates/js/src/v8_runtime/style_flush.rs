@@ -957,6 +957,7 @@ impl FlushHandles {
         lumen_layout::counters::set_incremental_restyle(true);
         lumen_layout::box_tree::set_incremental_box_build(true);
         let tp_prev = tp0.elapsed();
+        let _ = lumen_layout::counters::take_cascade_stats();
         let layout_scope = lumen_core::profile::scope("incr.layout_mutation");
         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
             doc, sheet, viewport, measurer, &null_hp, false, basis.layout, delta,
@@ -965,6 +966,8 @@ impl FlushHandles {
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
         if lumen_paint::frame_log_enabled() {
+            // BUG-935 срез 66: сколько элементов каскад пересчитал, а сколько взял из кэша.
+            eprintln!("[engine] incr cascade {:?}", lumen_layout::counters::take_cascade_stats());
             eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} sheet_roots={sheet_delta_count} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
         Some((result.0, result.1, scope_roots, prev_node_ids, prev_node_raw_ids, content_nodes))
