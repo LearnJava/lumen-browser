@@ -528,18 +528,16 @@ pub fn graft_geometry_with_cascade(
     }
 
     let common = new.children.len().min(prev.children.len());
-    // BUG-935 срез 64: an inline element owns no box — its style rides on the segments of
-    // the run it sits in, so a restyle of `<u>`/`<span>` leaves the run's own box (and its
-    // cascade entry) as it was. `segments_eq` leaves the segment styles out on purpose, so a
-    // clean graft copies the previous run — laid-out lines *and* the old segment styles — over
-    // the freshly built one, and `getComputedStyle(span)` keeps answering with the style from
-    // before the change. A flush whose restyle roots come from a changed stylesheet asks for
-    // the comparison ([`crate::counters::set_strict_inline_run_styles`]); the DOM-driven ones
-    // do not yet (BUG-1245: a run that really changed re-lays out its ancestors, 65 ms on
-    // `lenta.ru`'s font-detector loop).
+    // BUG-935 срез 64 / BUG-1245: an inline element owns no box — its style rides on the
+    // segments of the run it sits in, so a restyle of `<u>`/`<span>` leaves the run's own box
+    // (and its cascade entry) as it was. `segments_eq` leaves the segment styles out on purpose,
+    // so a clean graft would copy the previous run — laid-out lines *and* the old segment
+    // styles — over the freshly built one. A change confined to paint-only fields is adopted
+    // into the previous lines in place (below); any other change makes the run dirty.
+    let run_change = inline_run_style_change(&new.kind, &prev.kind);
     let mut all_clean = self_reusable
         && new.children.len() == prev.children.len()
-        && (!crate::counters::strict_inline_run_styles() || inline_segment_styles_eq(&new.kind, &prev.kind));
+        && run_change != RunStyleChange::Layout;
     // BUG-355: this box's own geometry-affecting fields changed, so every
     // in-flow child is about to be measured against a different containing
     // block even though its own style is untouched — grafting it clean would
@@ -571,7 +569,10 @@ pub fn graft_geometry_with_cascade(
         // post-layout payload e.g. InlineRun's laid-out `lines`, absent on the
         // freshly-built `new` side).
         new.rect = prev.rect;
-        new.kind = prev.kind.clone();
+        let fresh_kind = std::mem::replace(&mut new.kind, prev.kind.clone());
+        if run_change == RunStyleChange::PaintOnly {
+            adopt_fresh_segment_styles(&mut new.kind, fresh_kind);
+        }
         // `style` is deliberately NOT taken from `prev`, unlike `kind` above.
         // `kind` holds layout output paint reads back (`InlineRun`'s laid-out
         // `lines`); the used values in `prev`'s *style* are read by nothing
@@ -786,17 +787,80 @@ pub(crate) fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::
     }
 }
 
-/// Whether two `InlineRun` kinds carry segments cut in the same styles. Anything that is
-/// not a pair of runs has no segments to disagree. Only called once [`kind_layout_eq`]
-/// vouched for the pair, so the segment lists are aligned one to one.
-fn inline_segment_styles_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
+/// How the per-segment styles of two `InlineRun`s relate.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunStyleChange {
+    /// Same styles (or not an `InlineRun`).
+    None,
+    /// Styles differ only in fields that move no glyph or line box (colour, decoration, ...).
+    PaintOnly,
+    /// A style differs in a field that can change the run's geometry.
+    Layout,
+}
+
+/// Fields of a segment style that only paint reads. Copying them from `fresh` into a clone of
+/// `old` and comparing tells a paint-only change from a geometry-affecting one.
+fn paint_only_fields_eq(old: &crate::style::ComputedStyle, fresh: &crate::style::ComputedStyle) -> bool {
+    let mut probe = old.clone();
+    probe.color = fresh.color;
+    probe.background_color = fresh.background_color;
+    probe.text_decoration_color = fresh.text_decoration_color;
+    probe.text_decoration_line = fresh.text_decoration_line;
+    probe.text_decoration_style = fresh.text_decoration_style;
+    probe.text_decoration_skip_ink = fresh.text_decoration_skip_ink;
+    probe.text_shadow = fresh.text_shadow.clone();
+    probe.cursor = fresh.cursor;
+    probe.opacity = fresh.opacity;
+    probe == *fresh
+}
+
+fn inline_run_style_change(fresh: &crate::box_tree::BoxKind, prev: &crate::box_tree::BoxKind) -> RunStyleChange {
     use crate::box_tree::BoxKind::InlineRun;
-    match (a, b) {
-        (InlineRun { segments: sa, .. }, InlineRun { segments: sb, .. }) => sa
-            .iter()
-            .zip(sb)
-            .all(|(x, y)| x.style == y.style),
-        _ => true,
+    let (InlineRun { segments: sf, first_line_style: ff, .. }, InlineRun { segments: sp, lines: lp, .. }) = (fresh, prev) else {
+        return RunStyleChange::None;
+    };
+    let mut change = RunStyleChange::None;
+    for (f, p) in sf.iter().zip(sp) {
+        if f.style == p.style {
+            continue;
+        }
+        if ff.is_some() || !paint_only_fields_eq(&p.style, &f.style) {
+            return RunStyleChange::Layout;
+        }
+        change = RunStyleChange::PaintOnly;
+    }
+    // The in-place adoption needs every fragment traceable to exactly one segment.
+    if change == RunStyleChange::PaintOnly
+        && lp.iter().flatten().any(|frag| {
+            !frag.merged_sources.is_empty()
+                || !sp.iter().any(|s| s.source_node == frag.source_node && s.style == frag.style)
+        })
+    {
+        return RunStyleChange::Layout;
+    }
+    change
+}
+
+/// Puts the segment styles of `fresh` into `kind` (a clone of the previous run) — the segments
+/// themselves and every laid-out fragment that was cut from a changed one. Fragments keep their
+/// geometry: the caller established the change is paint-only.
+fn adopt_fresh_segment_styles(kind: &mut crate::box_tree::BoxKind, fresh: crate::box_tree::BoxKind) {
+    use crate::box_tree::BoxKind::InlineRun;
+    let InlineRun { segments: fresh_segments, .. } = fresh else { return };
+    let InlineRun { segments, lines, .. } = kind else { return };
+    for line in lines.iter_mut() {
+        for frag in line.iter_mut() {
+            let Some(i) = segments
+                .iter()
+                .position(|s| s.source_node == frag.source_node && s.style == frag.style)
+            else {
+                continue;
+            };
+            frag.style = fresh_segments[i].style.clone();
+        }
+    }
+    for (seg, f) in segments.iter_mut().zip(fresh_segments) {
+        seg.style = f.style;
     }
 }
 
@@ -1969,6 +2033,16 @@ mod tests {
     /// included, over the fresh one.
     #[test]
     fn restyling_an_inline_element_refreshes_the_segment_styles_of_its_run() {
+        restyled_inline_run_matches_full_layout("p u { color: rgb(255, 0, 0); }");
+    }
+
+    /// BUG-1245: a geometry-affecting change takes the dirty path, not the paint-only adoption.
+    #[test]
+    fn restyling_an_inline_element_with_a_layout_change_matches_full_layout() {
+        restyled_inline_run_matches_full_layout("p u { color: rgb(255, 0, 0); font-size: 30px; }");
+    }
+
+    fn restyled_inline_run_matches_full_layout(extra_rule: &str) {
         use lumen_css_parser::parse as parse_css;
         use lumen_html_parser::parse as parse_html;
         use crate::box_tree::{
@@ -1978,8 +2052,9 @@ mod tests {
         use lumen_core::ext::NullHyphenationProvider;
 
         fn run_colors(b: &LayoutBox, out: &mut Vec<(String, (u8, u8, u8))>) {
-            if let BoxKind::InlineRun { segments, .. } = &b.kind {
+            if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
                 out.extend(segments.iter().map(|s| (s.text.clone(), (s.style.color.r, s.style.color.g, s.style.color.b))));
+                out.extend(lines.iter().flatten().map(|f| (format!("frag {}", f.text), (f.style.color.r, f.style.color.g, f.style.color.b))));
             }
             for c in &b.children {
                 run_colors(c, out);
@@ -1988,7 +2063,7 @@ mod tests {
 
         let doc = parse_html("<html><body><p>plain <u id=\"u\">under</u> tail</p></body></html>");
         let old = parse_css("body { margin: 0; } u { text-decoration: underline; }");
-        let new = parse_css("body { margin: 0; } u { text-decoration: underline; } p u { color: rgb(255, 0, 0); }");
+        let new = parse_css(&format!("body {{ margin: 0; }} u {{ text-decoration: underline; }} {extra_rule}"));
         let vp = Size::new(800.0, 600.0);
         let u = doc.find_by_id("u").expect("#u must exist");
 
@@ -2002,10 +2077,8 @@ mod tests {
         };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
-        crate::counters::set_strict_inline_run_styles(true);
         let (incr, _) =
             layout_mutation_incremental_restyle(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta);
-        crate::counters::set_strict_inline_run_styles(false);
         set_incremental_box_build(false);
         set_incremental_restyle(false);
         let (full, _) =
