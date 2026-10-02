@@ -224,6 +224,16 @@ fn emit_background_layer(
     // call site above).
     radii: CornerRadii,
 ) {
+    // CSS Backgrounds L4 §3.8 `background-clip: text` — paint the layer as for
+    // `border-box`, then keep only what lies under the glyphs.
+    if layer.clip == BackgroundClip::Text {
+        let mut plain = layer.clone();
+        plain.clip = BackgroundClip::BorderBox;
+        emit_text_clipped(out, b, dpr, |inner| {
+            emit_background_layer(inner, b, &plain, dpr, suppress_blend, radii);
+        });
+        return;
+    }
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
@@ -423,6 +433,71 @@ fn emit_background_layer(
     }
 }
 
+/// Glyph runs of `b` and its in-flow descendants for a `background-clip: text`
+/// mask, as opaque-black `DrawText` commands (only their coverage matters to
+/// the alpha mask). Own positioned (absolute/fixed) and transformed
+/// descendants are left out — they paint in their own stacking layer, not as
+/// part of the element's text (CSS Backgrounds L4 §3.8: "the element's text,
+/// including that of its descendants"; Phase 0 keeps the flat-flow subset).
+fn collect_text_mask(b: &LayoutBox, dpr: f32, is_root: bool, out: &mut Vec<DisplayCommand>) {
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+    if !is_root
+        && (matches!(b.style.position, Position::Absolute | Position::Fixed)
+            || !b.style.transform.is_empty())
+    {
+        return;
+    }
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let mut tmp = Vec::new();
+        super::inline_frag::TEXT_MASK_BUILD.with(|f| f.set(true));
+        emit_inline_run(b, lines, None, dpr, &mut tmp);
+        super::inline_frag::TEXT_MASK_BUILD.with(|f| f.set(false));
+        for mut c in tmp {
+            if let DisplayCommand::DrawText { color, .. } = &mut c {
+                *color = Color { r: 0, g: 0, b: 0, a: 255 };
+                out.push(c);
+            }
+        }
+    }
+    for child in &b.children {
+        collect_text_mask(child, dpr, false, out);
+    }
+}
+
+/// CSS Backgrounds L4 §3.8 — runs `paint` (which emits the background content
+/// as for `border-box`) and clips the result to the element's glyphs.
+///
+/// Emitted as `PushOpacity(1)` · content · `PushMaskLayer(alpha)` · glyphs ·
+/// `PopMaskLayer` · `PopOpacity` — the same order `emit_svg_shape_masked` uses:
+/// the content goes to the level below the mask layer, `PopMaskLayer`
+/// multiplies it by the glyph alpha. With no text under the box nothing is
+/// painted at all (an empty mask hides the whole background).
+fn emit_text_clipped(
+    out: &mut Vec<DisplayCommand>,
+    b: &LayoutBox,
+    dpr: f32,
+    paint: impl FnOnce(&mut Vec<DisplayCommand>),
+) {
+    let mut glyphs = Vec::new();
+    collect_text_mask(b, dpr, true, &mut glyphs);
+    if glyphs.is_empty() {
+        return;
+    }
+    let mut content = Vec::new();
+    paint(&mut content);
+    if content.is_empty() {
+        return;
+    }
+    out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    out.extend(content);
+    out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode: MaskMode::Alpha });
+    out.extend(glyphs);
+    out.push(DisplayCommand::PopMaskLayer);
+    out.push(DisplayCommand::PopOpacity);
+}
+
 /// CSS Backgrounds L3 §3.10 — эмитит все фоновые слои элемента.
 ///
 /// CSS Backgrounds L3 §3: слои рисуются снизу вверх — последний в списке (Vec)
@@ -464,6 +539,17 @@ pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox
     // path uses (BUG-631: a gradient background must be clipped to the same
     // rounded box, not a square `PushClipRect`).
     let radii = CornerRadii::from_style_and_box(&b.style, b.rect.width, b.rect.height);
+    // CSS Backgrounds L4 §3.8: `background-color` follows the last layer's clip;
+    // with `text` the call sites skipped the box fill (empty `background_clip_rect`),
+    // so the colour is painted here, glyph-masked, beneath every image layer.
+    if background_color_clip(b) == BackgroundClip::Text
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        emit_text_clipped(out, b, dpr, |inner| {
+            inner.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+        });
+    }
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).

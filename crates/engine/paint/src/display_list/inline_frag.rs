@@ -5,6 +5,12 @@
 
 use super::*;
 
+thread_local! {
+    /// Set while `background_mask::collect_text_mask` runs the regular text
+    /// emitter to harvest glyph runs for a `background-clip: text` mask.
+    pub(super) static TEXT_MASK_BUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Если у box-а видимый `outline` — эмитит `DrawOutline`. Caller гарантирует
 /// правильный порядок (outline рисуется ПОВЕРХ контента box-а и его детей,
 /// но в **рамках своей stacking phase** — Phase 0 без точного разделения
@@ -52,9 +58,12 @@ pub(crate) fn emit_inline_frag_box(
     let radii = CornerRadii::from_style_and_box(s, box_w, box_h);
 
     // Background (CSS Backgrounds L3: painted over padding+border area).
+    // `background-clip: text` has no box painting area (L4 §3.8); inline
+    // fragments do not paint glyph-masked backgrounds yet, so no box fill.
     if let Some(CssColor::Rgba(bg)) = s.background_color
         && bg.a > 0
         && box_w > 0.0
+        && s.background_layers.last().is_none_or(|l| l.clip != BackgroundClip::Text)
     {
         let r = Rect::new(box_x, box_y, box_w, box_h);
         if radii.all_zero() {
@@ -108,7 +117,9 @@ pub(crate) fn emit_text_shadows(
     line_h: f32,
     frag: &InlineFrag,
 ) {
-    if frag.style.text_shadow.is_empty() {
+    // A `background-clip: text` glyph mask is the bare glyph shape — shadows
+    // are not part of it (CSS Backgrounds L4 §3.8).
+    if frag.style.text_shadow.is_empty() || TEXT_MASK_BUILD.with(std::cell::Cell::get) {
         return;
     }
     for shadow in frag.style.text_shadow.iter().rev() {
@@ -175,18 +186,23 @@ pub(crate) fn emit_text_shadows(
 /// * `BorderBox` (initial): `b.rect` без изменений.
 /// * `PaddingBox`: shrink на border-widths по всем сторонам.
 /// * `ContentBox`: shrink на border + padding.
-/// * `Text` (L4): Phase 0 fallback на `BorderBox` (реальный glyph-mask
-///   clip требует off-screen alpha-pass, P2 п.4+).
+/// * `Text` (L4): пустой rect — фон виден только сквозь глифы, он эмитится
+///   отдельно через `PushMaskLayer` (`emit_text_clipped`).
 ///
 /// `max(0.0)` страхует от negative-w/h на очень узких box-ах.
 /// Возвращает painting area для background с учётом `clip` значения.
 ///
 /// CSS Backgrounds L3 §3.8: border-box = b.rect; padding-box = rect без border-а;
-/// content-box = rect без border-а и padding-а. Text трактуется как border-box (Phase 0).
+/// content-box = rect без border-а и padding-а. Text — пустой rect (см. выше).
 pub(crate) fn background_clip_rect(b: &LayoutBox, clip: BackgroundClip) -> Rect {
     let s = &b.style;
     match clip {
-        BackgroundClip::BorderBox | BackgroundClip::Text => b.rect,
+        BackgroundClip::BorderBox => b.rect,
+        // CSS Backgrounds L4 §3.8 `text`: there is no box painting area — the
+        // background shows only through the glyphs. An empty rect makes every
+        // solid-`background-color` call site skip its box fill; the glyph-masked
+        // paint is emitted by `emit_background_image` / `emit_text_clipped`.
+        BackgroundClip::Text => Rect::new(b.rect.x, b.rect.y, 0.0, 0.0),
         BackgroundClip::PaddingBox => Rect::new(
             b.rect.x + s.border_left_width,
             b.rect.y + s.border_top_width,

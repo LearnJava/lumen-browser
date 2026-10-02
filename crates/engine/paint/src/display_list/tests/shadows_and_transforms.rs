@@ -973,17 +973,73 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
         assert!((bg.x - 25.0).abs() < 0.01, "got x {}", bg.x);
     }
 
+    fn names(dl: &DisplayList) -> Vec<&'static str> {
+        dl.iter().map(DisplayCommand::variant_name).collect()
+    }
+
     #[test]
-    fn background_clip_text_falls_back_to_border_box_phase0() {
-        // Phase 0 без glyph-mask: text-clip эмитим как border-box.
+    fn background_clip_text_masks_gradient_by_glyphs() {
+        // CSS Backgrounds L4 §3.8: the gradient is drawn into the level below
+        // `PushMaskLayer`, the element's glyphs form the alpha mask, no box fill.
+        let dl = build(
+            "<div>Hi</div>",
+            "div { width: 100px; background: linear-gradient(red, blue); \
+             background-clip: text; color: transparent; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").expect("PopMaskLayer");
+        let grad = n.iter().position(|c| *c == "DrawLinearGradient").expect("gradient");
+        assert!(grad < push, "gradient must precede the mask layer: {n:?}");
+        assert!(
+            n[push + 1..pop].iter().all(|c| *c == "DrawText") && pop > push + 1,
+            "mask layer must hold only glyph runs: {n:?}"
+        );
+        // Glyph mask is opaque black regardless of the (transparent) text colour.
+        assert!(dl[push + 1..pop].iter().all(|c| matches!(
+            c,
+            DisplayCommand::DrawText { color, .. } if color.a == 255 && color.r == 0
+        )));
+    }
+
+    #[test]
+    fn background_clip_text_color_is_glyph_masked_not_box_filled() {
+        let dl = build(
+            "<div>Hi</div>",
+            "div { width: 100px; height: 50px; background: red; \
+             background-clip: text; color: transparent; }",
+        );
+        let n = names(&dl);
+        assert!(n.contains(&"PushMaskLayer"), "{n:?}");
+        // The only FillRect is the one inside the isolated, masked group.
+        let fills = n.iter().filter(|c| **c == "FillRect").count();
+        assert_eq!(fills, 1, "{n:?}");
+        let fill = n.iter().position(|c| *c == "FillRect").unwrap();
+        let push = n.iter().position(|c| *c == "PushMaskLayer").unwrap();
+        assert!(fill < push, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_without_text_paints_nothing() {
         let dl = build(
             "<div></div>",
-            "div { width: 100px; height: 50px; background: red; \
-             background-clip: text; }",
+            "div { width: 100px; height: 50px; background: red; background-clip: text; }",
         );
-        let bg = first_bg_rect(&dl);
-        assert!((bg.width - 100.0).abs() < 0.01);
-        assert!((bg.height - 50.0).abs() < 0.01);
+        let n = names(&dl);
+        assert!(!n.contains(&"FillRect") && !n.contains(&"PushMaskLayer"), "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_collects_descendant_text() {
+        let dl = build(
+            "<div><p>a</p><p>b</p></div>",
+            "div { width: 100px; background: linear-gradient(red, blue); \
+             background-clip: text; color: transparent; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n[push + 1..pop].iter().filter(|c| **c == "DrawText").count(), 2, "{n:?}");
     }
 
     #[test]
