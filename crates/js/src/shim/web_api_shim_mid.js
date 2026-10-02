@@ -2931,7 +2931,10 @@ var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert
 // grammar (`env(10px)`, `env(x, {)` are invalid), via the same Rust validator
 // the cascade uses. Returns the trimmed value, `null` when invalid, or
 // `undefined` when `strVal` has no substitution function at all.
-var _LUMEN_SUBSTITUTION_FN_RE = /(^|[^\w-])(var|env)\(/i;
+// `--name(` custom function calls (CSS Functions and Mixins L1) are
+// substitution values too: their grammar is checked at call time, and only the
+// reserved named-argument pattern is a parse-time error (see Rust side).
+var _LUMEN_SUBSTITUTION_FN_RE = /(^|[^\w-])(var|env)\(|(^|[^\w-])--[\w-]+\(/i;
 function _lumen_pending_substitution_value(strVal) {
     if (!_LUMEN_SUBSTITUTION_FN_RE.test(strVal)) return undefined;
     return _lumen_css_env_well_formed(strVal) ? strVal.trim() : null;
