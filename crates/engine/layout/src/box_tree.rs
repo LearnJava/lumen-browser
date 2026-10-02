@@ -196,9 +196,14 @@ use intrinsic::{
 
 mod shapes_floats;
 use shapes_floats::{
+    register_shape_outside, shift_tree, shift_y_box, FloatContext, FloatShapeGeom,
+};
+// Used only by `mod tests` (super::super::X) — never called from this file's
+// own non-test code.
+#[cfg(test)]
+use shapes_floats::{
     parse_circle_px, parse_shape_ellipse_px, parse_shape_inset_px, parse_shape_path_px,
-    parse_shape_polygon_px, shift_tree, shift_y_box, FloatContext, ShapeEllipse, ShapeInset,
-    ShapePolygon,
+    parse_shape_polygon_px, polygon_edge_x_at_y_margin, ShapeEllipse, ShapeInset, ShapePolygon,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's
 // own non-test code.

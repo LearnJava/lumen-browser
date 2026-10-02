@@ -96,6 +96,7 @@ fn float_context_path_left_float() {
     let mut fc = super::super::FloatContext::new();
     fc.shape_polygons.push(super::super::ShapePolygon {
         top_y: 0.0, bottom_y: 100.0, is_left: true, points: pts,
+        margin: 0.0, bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
 }
@@ -122,6 +123,7 @@ fn float_context_polygon_left_float() {
     fc.shape_polygons.push(super::super::ShapePolygon {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
         points: vec![(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)],
+        margin: 0.0, bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
     // Outside float range: falls back to default.
@@ -156,7 +158,7 @@ fn float_context_ellipse_left_float() {
     let mut fc = super::super::FloatContext::new();
     fc.shape_ellipses.push(super::super::ShapeEllipse {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
-        cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0, bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
     assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
@@ -169,7 +171,7 @@ fn float_context_ellipse_right_float() {
     let mut fc = super::super::FloatContext::new();
     fc.shape_ellipses.push(super::super::ShapeEllipse {
         top_y: 0.0, bottom_y: 100.0, is_left: false,
-        cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0, bound_x: f32::NEG_INFINITY,
     });
     assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
 }
@@ -224,6 +226,8 @@ fn float_context_inset_left_float_sharp() {
     fc.shape_insets.push(super::super::ShapeInset {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
         left_x: 10.0, right_x: 90.0, radius: 0.0,
+        corner_top: 0.0, corner_bottom: 100.0,
+        bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(0.0, 0.0) - 90.0).abs() < 0.01);
     assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
@@ -238,6 +242,8 @@ fn float_context_inset_right_float_sharp() {
     fc.shape_insets.push(super::super::ShapeInset {
         top_y: 0.0, bottom_y: 100.0, is_left: false,
         left_x: 210.0, right_x: 290.0, radius: 0.0,
+        corner_top: 0.0, corner_bottom: 100.0,
+        bound_x: f32::NEG_INFINITY,
     });
     assert!((fc.right_edge_at(50.0, 400.0) - 210.0).abs() < 0.01);
 }
@@ -252,6 +258,8 @@ fn float_context_inset_rounded_corner() {
     fc.shape_insets.push(super::super::ShapeInset {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
         left_x: 0.0, right_x: 100.0, radius: 20.0,
+        corner_top: 0.0, corner_bottom: 100.0,
+        bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
     assert!((fc.left_edge_at(0.0, 0.0) - 80.0).abs() < 0.01);
@@ -271,6 +279,108 @@ fn inset_corner_inward_helper() {
     assert!((super::super::inset_corner_inward(0.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
     // Exactly at the bottom edge → full radius recession.
     assert!((super::super::inset_corner_inward(100.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
+}
+
+// ── CSS Shapes L1 §6.3 — shape-margin ─────────────────────────────────────
+
+use super::super::{FloatContext, FloatShapeGeom, register_shape_outside};
+
+/// A 100x100 left float at the origin: margin box == border box.
+fn left_geom() -> FloatShapeGeom {
+    FloatShapeGeom {
+        is_left: true, child_y: 0.0, top_y: 0.0, bot_y: 100.0,
+        box_left: 0.0, box_right: 100.0, center_x: 50.0, center_y: 50.0,
+    }
+}
+
+/// The same float on the right edge of a 400px container (x in [300, 400]).
+fn right_geom() -> FloatShapeGeom {
+    FloatShapeGeom {
+        is_left: false, child_y: 0.0, top_y: 0.0, bot_y: 100.0,
+        box_left: 300.0, box_right: 400.0, center_x: 350.0, center_y: 50.0,
+    }
+}
+
+#[test]
+fn shape_margin_zero_keeps_bare_polygon() {
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 0.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_grows_polygon_along_normal() {
+    // Hypotenuse x + y = 100: pushed out by 10px along its normal (1,1)/sqrt2
+    // it becomes x + y = 100 + 10*sqrt2, so at y = 50 the edge is at
+    // 50 + 14.142 = 64.142 (still inside the 100px margin box).
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 10.0);
+    let want = 50.0 + 10.0 * 2.0_f32.sqrt();
+    assert!((fc.left_edge_at(50.0, 0.0) - want).abs() < 0.05, "{}", fc.left_edge_at(50.0, 0.0));
+}
+
+#[test]
+fn shape_margin_never_exceeds_margin_box() {
+    // §6.3 note: the grown shape does not extend past the float's margin box.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 10.0);
+    // At y = 5 the bare edge is 95, grown ~109 -> clamped to the box edge 100.
+    assert!((fc.left_edge_at(5.0, 0.0) - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_vertex_disc_extends_past_polygon_top() {
+    // Vertex (50,20) of a triangle: a scanline 5px above it sits inside the
+    // 10px vertex disc, so the wrap edge exists there (bare polygon: none).
+    let pts = [(50.0_f32, 20.0), (90.0, 80.0), (10.0, 80.0)];
+    assert!(super::super::polygon_edge_x_at_y_margin(&pts, 15.0, 0.0, true).is_none());
+    let x = super::super::polygon_edge_x_at_y_margin(&pts, 15.0, 10.0, true).expect("disc");
+    assert!((x - (50.0 + (100.0_f32 - 25.0).sqrt())).abs() < 0.05, "{x}");
+}
+
+#[test]
+fn shape_margin_circle_becomes_larger_circle() {
+    // circle(30px) centred (50,50) + 10px margin == radius 40 at y = 50 -> 90.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "circle(30px)", &left_geom(), 10.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+    // Without margin it stays 80.
+    let mut fc0 = FloatContext::new();
+    register_shape_outside(&mut fc0, "circle(30px)", &left_geom(), 0.0);
+    assert!((fc0.left_edge_at(50.0, 0.0) - 80.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_ellipse_clamped_to_margin_box() {
+    // ellipse(40 40 at 50 50) + 20px margin = radius 60 -> 110, clamped to 100.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "ellipse(40px 40px at 50px 50px)", &left_geom(), 20.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_inset_grows_rect_and_rounds_corners() {
+    // inset(20px) on 100x100 = rect [20,80]^2; +10px margin = [10,90]^2 with
+    // a 10px corner radius. Flat band at y = 50 -> right edge 90; at the very
+    // top of the grown rect (y = 10) the corner recedes by the full radius.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "inset(20px)", &left_geom(), 10.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+    assert!((fc.left_edge_at(10.0, 0.0) - 80.0).abs() < 0.01);
+    // Above the grown rect: no shape boundary (default).
+    assert!((fc.left_edge_at(5.0, 0.0) - 0.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_right_float_mirrors() {
+    // Right float, circle(30px) at (350,50) + 10px -> left edge 350 - 40 = 310.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "circle(30px)", &right_geom(), 10.0);
+    assert!((fc.right_edge_at(50.0, 400.0) - 310.0).abs() < 0.01);
+    // Large margin clamps at the margin box's left edge (300).
+    let mut fc2 = FloatContext::new();
+    register_shape_outside(&mut fc2, "circle(30px)", &right_geom(), 40.0);
+    assert!((fc2.right_edge_at(50.0, 400.0) - 300.0).abs() < 0.01);
 }
 
 #[test]
