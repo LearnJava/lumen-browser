@@ -68,6 +68,7 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 | `/lumen-new-crate <name>` | new crate in the workspace |
 | `/lumen-health-check [target]` | P5 maintenance sweep |
 | `/lumen-perf-audit` | real-site performance audit (PERF track) |
+| `/lumen-queue-refill [roles]` | audit and refill `STATUS-P1…P4` with Sonnet-sized tasks — **explicit `/` invocation only** |
 
 ## Nested `CLAUDE.md` files
 
