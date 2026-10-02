@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-02",
  "counts": {
-  "open": 131,
+  "open": 133,
   "fixed": 1052,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1185,
+ "total_bugs": 1187,
  "phases": [
   {
    "id": "P0",
@@ -8215,6 +8215,20 @@
    "status": "open",
    "title": "`perf9_code_cache_hit_preserves_semantics` падает под нагрузкой полного `lumen-js --lib`, в одиночку зелёный. Найден P4, 2026-10-02.",
    "component": "js (`crates/js/src/v8_runtime/tests/mod.rs:98`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1245": {
+   "status": "open",
+   "title": "`getComputedStyle` inline-элемента (`<span>`/`<u>`/`<b>`) отдаёт стиль «до» после инкрементального флаша потока движка: у inline нет бокса, стиль едет в сегмент…",
+   "component": "layout (`crates/engine/layout/src/incremental.rs` — `graft_geometry_with_cascade`, `segments_eq`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1246": {
+   "status": "open",
+   "title": "MCP-сервер не по спецификации MCP: стандартные клиенты (Claude Desktop/Code, Cursor) не подключаются — `initialize` без `serverInfo` и с захардкоженной версией,…",
+   "component": "mcp (`crates/mcp/src/server.rs::on_initialize`/`on_tools_call`, `crates/mcp/src/protocol.rs:33`)",
    "date": null,
    "debtor": false
   },
@@ -16853,6 +16867,9 @@
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
+  "layout (`crates/engine/layout/src/incremental.rs` — `graft_geometry_with_cascade`, `segments_eq`)": [
+   "BUG-1245"
+  ],
   "layout (`crates/engine/layout/src/invariants.rs`)": [
    "BUG-1001"
   ],
@@ -16994,6 +17011,9 @@
   ],
   "mcp": [
    "BUG-071"
+  ],
+  "mcp (`crates/mcp/src/server.rs::on_initialize`/`on_tools_call`, `crates/mcp/src/protocol.rs:33`)": [
+   "BUG-1246"
   ],
   "network": [
    "BUG-050",
