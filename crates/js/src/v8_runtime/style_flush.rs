@@ -174,6 +174,32 @@ pub(crate) struct FlushHandles {
     /// mutation, `:hover`/`:active` change — this flush never tracks those,
     /// see the module doc comment's \"Known remaining approximation\").
     pub(crate) incr_basis: Arc<Mutex<Option<IncrFlushBasis>>>,
+    /// BUG-935 срез 58: the last [`Self::cssom_patched_sheet`] answer with the
+    /// inputs it was computed from, so a loop of same-tick reads over an
+    /// unchanged CSSOM reuses one sheet — and with it one
+    /// [`lumen_css_parser::StylesheetRevision`].
+    pub(crate) patched_sheet_cache: Arc<Mutex<Option<PatchedSheetCache>>>,
+    /// BUG-935 срез 58: same-tick flushes that took the incremental path; read through
+    /// `V8JsRuntime::incremental_flush_count`.
+    pub(crate) incremental_flushes: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// See [`FlushHandles::patched_sheet_cache`].
+///
+/// Every patched sheet is a fresh clone with a freshly minted revision, and
+/// the incremental flush refuses a basis whose revision differs from the sheet
+/// it is handed — so recomputing the patch on each flush made every flush on a
+/// page with any CSSOM edit (or script-inserted `<style>`) a full relayout.
+pub(crate) struct PatchedSheetCache {
+    base_revision: lumen_css_parser::StylesheetRevision,
+    /// [`super::sheet_sync::SheetSync::epoch`]: grows with every recorded or
+    /// dropped CSSOM edit.
+    epoch: u64,
+    /// The registry the patch was computed against; the `Arc`s are kept so a
+    /// reused address cannot pass for the same sheet.
+    nodes: Vec<(u32, Arc<lumen_css_parser::Stylesheet>)>,
+    shadow: std::collections::HashSet<u32>,
+    result: Option<Arc<lumen_css_parser::Stylesheet>>,
 }
 
 /// See [`FlushHandles::incr_basis`].
@@ -330,7 +356,9 @@ impl FlushHandles {
         // text by the shell whenever `<style>` content changes, and the same
         // log is replayed onto each new one, so an edit survives any number of
         // cascade rebuilds without ever being written back into the page CSS.
+        let patch_scope = lumen_core::profile::scope("flush.cssom_patch");
         let sheet = self.cssom_patched_sheet(&sheet).unwrap_or(sheet);
+        drop(patch_scope);
         let [vw, vh] = *self
             .viewport_size
             .lock()
@@ -452,15 +480,20 @@ impl FlushHandles {
         let collect_t0 = std::time::Instant::now();
         if let Some((dirty_roots, prev_node_ids, _)) = &incr_scope {
             let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
+            let plan_scope = lumen_core::profile::scope("flush.collect_plan");
             let plan = lumen_layout::ScopedCollection::plan(
                 &layout_root, dirty_roots, counters.clean_subtrees(), &lr, viewport,
             );
+            drop(plan_scope);
+            let rects_scope = lumen_core::profile::scope("flush.collect_layout_rects");
             for nid in prev_node_ids {
                 lr.remove(nid);
             }
             plan.collect_layout_rects(&doc_guard, &mut lr);
             drop(lr);
+            drop(rects_scope);
             {
+                let _client_scope = lumen_core::profile::scope("flush.collect_client_rects");
                 let mut cr = self.client_rects.lock().unwrap_or_else(|e| e.into_inner());
                 for nid in prev_node_ids {
                     cr.remove(nid);
@@ -468,6 +501,7 @@ impl FlushHandles {
                 plan.collect_client_rects(&doc_guard, &mut cr);
             }
             if self.computed_styles_needed.load(Ordering::Relaxed) {
+                let _styles_scope = lumen_core::profile::scope("flush.collect_computed_styles");
                 let mut cs = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
                 // BUG-1211 (post-collectors) regression: `computed_styles`
                 // is collected lazily (first read only, guarded by
@@ -514,6 +548,9 @@ impl FlushHandles {
         }
         let collect_ms = collect_t0.elapsed().as_secs_f64() * 1000.0;
         drop(collect_scope);
+        if incr_scope.is_some() {
+            self.incremental_flushes.fetch_add(1, Ordering::Relaxed);
+        }
         // BUG-935 S43: skip while the page has never read the corresponding
         // cache — see the fields' doc comments. Each of the two natives that
         // can set the flag calls `maybe_flush` right after, so a page's very
@@ -659,12 +696,29 @@ impl FlushHandles {
         touched: &super::runtime::DomTouched,
         content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
+        // BUG-935 срез 58: why a flush fell back to the full path — on a live
+        // page every flush was `path=full` and nothing said which of the
+        // preconditions below refused.
+        let declined = |why: &str| {
+            if lumen_paint::frame_log_enabled() {
+                eprintln!("[engine] incr declined: {why}");
+            }
+        };
         if touched.unattributed {
+            declined("unattributed mutation");
             return None;
         }
         let mut basis_guard = self.incr_basis.lock().unwrap_or_else(|e| e.into_inner());
-        let basis = basis_guard.take()?;
+        let Some(basis) = basis_guard.take() else {
+            declined("no basis");
+            return None;
+        };
         if basis.viewport != [viewport.width, viewport.height] || basis.sheet_revision != sheet.revision() {
+            declined(if basis.viewport != [viewport.width, viewport.height] {
+                "viewport changed"
+            } else {
+                "stylesheet revision changed"
+            });
             return None;
         }
         // BUG-1211: `touched.nodes`/`touched.touch_gen` are never drained by
@@ -723,6 +777,17 @@ impl FlushHandles {
                 changes.extend(named.into_iter().map(|a| (n, lumen_layout::style::NodeChange::Attr(a))));
             }
         }
+        let change_log: Vec<String> = if lumen_paint::frame_log_enabled() {
+            changes
+                .iter()
+                .map(|(n, c)| {
+                    let tag = doc.get(*n).element_name().map_or_else(|| "#node".to_string(), |q| q.local.to_string());
+                    format!("{tag}:{c:?}")
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(doc, changes, &node_index));
         let focus_changed = basis.focus != current_focus;
         if focus_changed {
@@ -770,6 +835,13 @@ impl FlushHandles {
                 .collect();
         drop(prev_ids_scope);
         let dirty_roots_for_return = dirty_roots.clone();
+        let has_dependency = node_index.has_has_dependency();
+        let root_tags: Vec<String> = dirty_roots
+            .iter()
+            .map(|&r| doc.get(r).element_name().map_or_else(|| "#node".to_string(), |n| n.local.to_string()))
+            .collect();
+        let content_tracked = matches!(content_dirty, lumen_layout::counters::ContentDirty::Nodes(_));
+        let journal_len = content_journal.map(|j| j.len());
         let delta = lumen_layout::counters::RestyleDelta {
             prev_styles: basis.cascade,
             dirty_roots,
@@ -787,7 +859,7 @@ impl FlushHandles {
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
         if lumen_paint::frame_log_enabled() {
-            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
+            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
         Some((result.0, result.1, dirty_roots_for_return, prev_node_ids, prev_node_raw_ids))
     }
@@ -834,12 +906,31 @@ impl FlushHandles {
             .shadow_owned
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        match super::sheet_sync::patched_cascade(&base, &nodes, &deltas, &shadow, true) {
+        let epoch = self.sheet_sync.epoch.load(Ordering::Relaxed);
+        let mut cache = self.patched_sheet_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = cache.as_ref()
+            && c.base_revision == base.revision()
+            && c.epoch == epoch
+            && c.shadow == *shadow
+            && c.nodes.len() == nodes.len()
+            && c.nodes.iter().zip(nodes.iter()).all(|((n, s), e)| *n == e.node && Arc::ptr_eq(s, &e.sheet))
+        {
+            return c.result.clone();
+        }
+        let result = match super::sheet_sync::patched_cascade(&base, &nodes, &deltas, &shadow, true) {
             Some(patched) => Some(Arc::new(patched)),
             // Nothing to replay onto the pristine sheet — the shell's patched
             // one carries edits that were since dropped, so use the pristine.
-            None if !Arc::ptr_eq(&base, sheet) => Some(base),
+            None if !Arc::ptr_eq(&base, sheet) => Some(base.clone()),
             None => None,
-        }
+        };
+        *cache = Some(PatchedSheetCache {
+            base_revision: base.revision(),
+            epoch,
+            nodes: nodes.iter().map(|e| (e.node, Arc::clone(&e.sheet))).collect(),
+            shadow: shadow.clone(),
+            result: result.clone(),
+        });
+        result
     }
 }

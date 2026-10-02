@@ -429,6 +429,98 @@ fn complex_selector_has_nth_of(c: &ComplexSelector) -> bool {
     compound_has_nth_of(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_nth_of(comp))
 }
 
+/// BUG-935 срез 58 — a compound that carries a `:has()`, and whether a flip of
+/// its result reaches outside the matched element's own subtree.
+struct HasSubject<'a> {
+    compound: &'a CompoundSelector,
+    /// A sibling combinator follows the compound in its selector (`E:has(x) + F`),
+    /// or the `:has()` sits inside a nested selector list whose own combinators
+    /// are not analysed: a flip then restyles the parent's subtree, not only `E`'s.
+    fanout: bool,
+}
+
+/// Visits the argument list of every `:has()` in `compound`: a direct part, or one
+/// nested in `:not()`/`:is()`/`:where()`/`:nth-child(… of …)` or in another
+/// `:has()`'s argument. `nested` is `false` only for the direct parts.
+fn for_each_has_arg<'a>(
+    compound: &'a CompoundSelector,
+    nested: bool,
+    f: &mut impl FnMut(&'a [lumen_css_parser::RelativeSelector], bool),
+) {
+    for part in &compound.parts {
+        let SimpleSelector::PseudoClass(pc) = part else { continue };
+        let lists: &[ComplexSelector] = match pc {
+            PseudoClass::Not(l) | PseudoClass::Is(l) | PseudoClass::Where(l) => l,
+            PseudoClass::NthChild(_, Some(l)) | PseudoClass::NthLastChild(_, Some(l)) => l,
+            PseudoClass::Has(rels) => {
+                f(rels, nested);
+                for r in rels {
+                    for_each_has_arg_in_complex(&r.selector, true, f);
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        for c in lists {
+            for_each_has_arg_in_complex(c, true, f);
+        }
+    }
+}
+
+fn for_each_has_arg_in_complex<'a>(
+    c: &'a ComplexSelector,
+    nested: bool,
+    f: &mut impl FnMut(&'a [lumen_css_parser::RelativeSelector], bool),
+) {
+    for_each_has_arg(&c.head, nested, f);
+    for (_, comp) in &c.tail {
+        for_each_has_arg(comp, nested, f);
+    }
+}
+
+fn is_sibling_combinator(c: Combinator) -> bool {
+    matches!(c, Combinator::NextSibling | Combinator::LaterSibling)
+}
+
+/// Whether any `:has()` argument in `complex` looks *forward* along siblings — a
+/// leading `+`/`~`, or a sibling combinator inside the argument. Such a `:has()`
+/// on `E` can flip when something changes in a sibling *after* `E`, so the
+/// elements whose result can flip include the previous siblings of the changed
+/// node's ancestors, not only the ancestors.
+fn complex_has_sibling_reach(complex: &ComplexSelector) -> bool {
+    let mut reach = false;
+    for_each_has_arg_in_complex(complex, false, &mut |rels, _| {
+        reach |= rels.iter().any(|r| {
+            r.combinator.is_some_and(is_sibling_combinator)
+                || r.selector.tail.iter().any(|(c, _)| is_sibling_combinator(*c))
+        });
+    });
+    reach
+}
+
+/// Registers every compound of `complex` that carries a `:has()` — see [`HasSubject`].
+fn collect_has_subjects<'a>(complex: &'a ComplexSelector, out: &mut Vec<HasSubject<'a>>) {
+    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
+    compounds.push(&complex.head);
+    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
+    for (comb, comp) in &complex.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    for (i, compound) in compounds.iter().enumerate() {
+        let mut has_any = false;
+        let mut nested_any = false;
+        for_each_has_arg(compound, false, &mut |_, nested| {
+            has_any = true;
+            nested_any |= nested;
+        });
+        if has_any {
+            let fanout = nested_any || combinators[i..].iter().copied().any(is_sibling_combinator);
+            out.push(HasSubject { compound, fanout });
+        }
+    }
+}
+
 /// BUG-341 S17 — collect every compound of `complex` that is followed, anywhere
 /// on the path to the subject, by a sibling combinator (`+`/`~`).
 ///
@@ -525,6 +617,18 @@ pub struct NodeRestyleIndex<'a> {
     /// `:has()`-dependency index exists yet to narrow this further (see
     /// BUG-349's suggested fix direction for that follow-up).
     has_dependent: bool,
+    /// BUG-935 срез 58 — every compound in `sheet` that carries a `:has()`. A
+    /// change on a node can flip the result only on an element that could match
+    /// one of these ([`Self::has_reach_roots`]), which is what lets the root-set
+    /// name those ancestors instead of the whole document.
+    has_subjects: Vec<HasSubject<'a>>,
+    /// Some `:has()` argument looks forward along siblings, so the previous
+    /// siblings of the changed node's ancestors can flip too.
+    has_sibling_reach: bool,
+    /// The document has an author shadow root. Shadow-tree sheets are not scanned
+    /// and `:has()` does not cross the boundary, so with a `:has()` in the sheet
+    /// the whole document is restyled, as before.
+    has_in_shadow_doc: bool,
 }
 
 impl NodeRestyleIndex<'_> {
@@ -538,6 +642,38 @@ impl NodeRestyleIndex<'_> {
     /// document.
     pub fn has_has_dependency(&self) -> bool {
         self.has_dependent
+    }
+
+    /// BUG-935 срез 58 — the elements whose `:has()` result a change on `node` can
+    /// flip, as restyle roots, added to `out`.
+    ///
+    /// `E:has(rel)` reads `E`'s descendants (and, for `+`/`~`, its following
+    /// siblings), so a change on `node` reaches `E` only when `E` is `node` or one
+    /// of its ancestors — or, with a forward-sibling argument, a previous sibling of
+    /// one of those. Of those, only an element that could match a compound carrying
+    /// a `:has()` can have a result to flip, which is decided structurally: its other
+    /// parts must match, while every pseudo-class is taken as possible.
+    fn has_reach_roots(&self, doc: &Document, node: NodeId, out: &mut HashSet<NodeId>) {
+        let mut consider = |a: NodeId| {
+            for subject in &self.has_subjects {
+                if compound_could_match_after_attr_change(subject.compound, doc, a, "") {
+                    out.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
+                }
+            }
+        };
+        let mut cur = Some(node);
+        while let Some(a) = cur {
+            consider(a);
+            let parent = doc.get(a).parent;
+            if self.has_sibling_reach
+                && let Some(p) = parent
+            {
+                for &sib in doc.get(p).children.iter().take_while(|&&c| c != a) {
+                    consider(sib);
+                }
+            }
+            cur = parent;
+        }
     }
 
     /// Number of sibling-reachable compounds the narrowing tests each changed
@@ -569,21 +705,33 @@ impl NodeRestyleIndex<'_> {
 /// [`restyle_state_index`]), then one structural match per changed node per
 /// sibling-reachable compound.
 pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRestyleIndex<'a> {
-    let mut conservative = document_has_shadow_roots(doc);
+    let has_in_shadow_doc = document_has_shadow_roots(doc);
+    let mut conservative = has_in_shadow_doc;
     let mut has_dependent = false;
+    let mut has_sibling_reach = false;
     let mut sibling_sources = Vec::new();
+    let mut has_subjects = Vec::new();
     for rules in stylesheet_rule_groups(sheet) {
         for rule in rules {
             for selector in &rule.selectors {
-                let has_has = complex_selector_has_any_has(selector);
-                has_dependent |= has_has;
-                conservative |= has_has;
+                if complex_selector_has_any_has(selector) {
+                    has_dependent = true;
+                    has_sibling_reach |= complex_has_sibling_reach(selector);
+                    collect_has_subjects(selector, &mut has_subjects);
+                }
                 conservative |= complex_selector_has_nth_of(selector);
                 collect_sibling_source_compounds(selector, &mut sibling_sources);
             }
         }
     }
-    NodeRestyleIndex { sibling_sources, conservative, has_dependent }
+    NodeRestyleIndex {
+        sibling_sources,
+        conservative,
+        has_dependent,
+        has_subjects,
+        has_sibling_reach,
+        has_in_shadow_doc,
+    }
 }
 
 /// BUG-341 S17 — one reported DOM mutation, as
@@ -626,11 +774,15 @@ pub enum NodeChange<'a> {
 /// implement (`PseudoClass::Has`, `style.rs`'s `matches_relative`) — lets a
 /// change on a node flip some ancestor `E`'s `:has(...)` result, where `E` can
 /// sit arbitrarily far above the node's own parent. The parent-only widening
-/// below cannot express that reach at any distance beyond one level up, so
-/// while [`NodeRestyleIndex::has_has_dependency`] is set (`sheet` contains a
-/// `:has()` selector anywhere), every reported change widens to the whole
-/// document instead — the conservative fallback the BUG-349 writeup calls for
-/// until a real `:has()`-dependency index narrows this further.
+/// below cannot express that reach, so while [`NodeRestyleIndex::has_has_dependency`]
+/// is set (`sheet` contains a `:has()` selector anywhere) each change also adds
+/// the ancestors (and, for forward-sibling arguments, their previous siblings)
+/// that could match a compound carrying a `:has()` — see
+/// [`NodeRestyleIndex::has_reach_roots`]. BUG-349 first widened every change to
+/// the whole document; BUG-935 s58 replaced that with this index, because on a
+/// real page every forced reflow restyled and re-collected all of it. A
+/// document with an author shadow root (shadow sheets are not scanned) still
+/// widens to the whole document.
 ///
 /// **Known gap, same family:** `:indeterminate` on a radio group and
 /// `:default` on a form's submit button read *other* elements' `name`/`checked`/
@@ -643,17 +795,19 @@ pub fn restyle_root_set_for_node_change<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
-    if index.has_has_dependency() {
+    if index.has_dependent && index.has_in_shadow_doc {
         return changes.into_iter().map(|_| doc.root()).collect();
     }
-    changes
-        .into_iter()
-        .map(|(n, change)| {
-            let needs_fanout = match change {
-                NodeChange::Unattributed => true,
-                NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
-            };
-            if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n }
-        })
-        .collect()
+    let mut roots = HashSet::new();
+    for (n, change) in changes {
+        let needs_fanout = match change {
+            NodeChange::Unattributed => true,
+            NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
+        };
+        roots.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
+        if index.has_dependent {
+            index.has_reach_roots(doc, n, &mut roots);
+        }
+    }
+    roots
 }

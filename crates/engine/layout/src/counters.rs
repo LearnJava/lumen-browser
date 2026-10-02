@@ -1328,6 +1328,11 @@ fn walk(
 
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {
+            // BUG-935 срез 58: the document node being a dirty root means "restyle
+            // everything" (a shadow-root document with a `:has()` in the sheet asks
+            // for that); it has no style of its own, so the force must be handed down
+            // here — the element branch below never sees this node.
+            let force = force || incr.is_some_and(|d| d.dirty_roots.contains(&id));
             let mut all_clean = true;
             for &child_id in flat.children_of(doc, id) {
                 if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, force) {
