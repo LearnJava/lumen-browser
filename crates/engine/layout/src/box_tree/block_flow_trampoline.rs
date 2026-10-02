@@ -652,40 +652,9 @@ fn place_float(
             let bot_y  = top_y + fh + fmb;
             let right_edge = lx + fml + fw + fmr;
             fc.add_left(bot_y, right_edge);
-            // CSS Shapes L1 — wire shape-outside for left float.
-            // Margin-box origin: (lx, child_y). Points are float-local.
-            if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
-                if let Some(r) = parse_circle_px(sv) {
-                    let cx = child.rect.x + fw / 2.0;
-                    let cy = top_y + fh / 2.0;
-                    fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
-                } else if let Some(local_pts) = parse_shape_path_px(sv)
-                    .or_else(|| parse_shape_polygon_px(sv))
-                {
-                    let pts = local_pts.into_iter()
-                        .map(|(px, py)| (px + lx, py + child_y))
-                        .collect();
-                    fc.shape_polygons.push(ShapePolygon {
-                        top_y, bottom_y: bot_y, is_left: true, points: pts,
-                    });
-                } else if let Some((rx, ry, ecx, ecy)) = parse_shape_ellipse_px(sv) {
-                    fc.shape_ellipses.push(ShapeEllipse {
-                        top_y, bottom_y: bot_y, is_left: true,
-                        cx: ecx + lx, cy: ecy + child_y, rx, ry,
-                    });
-                } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
-                    // Reference box = margin box: origin (lx, child_y), width
-                    // fml+fw+fmr, bottom bot_y.
-                    let shape_top = (child_y + it).min(bot_y);
-                    let shape_bot = (bot_y - ib).max(shape_top);
-                    fc.shape_insets.push(ShapeInset {
-                        top_y: shape_top, bottom_y: shape_bot, is_left: true,
-                        left_x: lx + il,
-                        right_x: lx + fml + fw + fmr - ir,
-                        radius: irad,
-                    });
-                }
-            }
+            wire_shape_outside(fc, child, true, ShapeBoxes {
+                child_y, top_y, bot_y, box_left: lx, box_right: right_edge,
+            }, content_width, viewport);
         }
         FloatSide::Right => {
             let rx = fc.right_edge_at(child_y, container_right);
@@ -695,43 +664,51 @@ fn place_float(
             let bot_y  = top_y + fh + fmb;
             let left_edge = rx - fmr - fw - fml;
             fc.add_right(bot_y, left_edge);
-            // CSS Shapes L1 — wire shape-outside for right float.
-            // Margin-box origin: (left_edge, child_y). Points are float-local.
-            if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
-                if let Some(r) = parse_circle_px(sv) {
-                    let cx = child.rect.x + fw / 2.0;
-                    let cy = top_y + fh / 2.0;
-                    fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
-                } else if let Some(local_pts) = parse_shape_path_px(sv)
-                    .or_else(|| parse_shape_polygon_px(sv))
-                {
-                    let pts = local_pts.into_iter()
-                        .map(|(px, py)| (px + left_edge, py + child_y))
-                        .collect();
-                    fc.shape_polygons.push(ShapePolygon {
-                        top_y, bottom_y: bot_y, is_left: false, points: pts,
-                    });
-                } else if let Some((rx_e, ry_e, ecx, ecy)) = parse_shape_ellipse_px(sv) {
-                    fc.shape_ellipses.push(ShapeEllipse {
-                        top_y, bottom_y: bot_y, is_left: false,
-                        cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
-                    });
-                } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
-                    // Reference box = margin box: origin (left_edge, child_y),
-                    // right edge rx, bottom bot_y.
-                    let shape_top = (child_y + it).min(bot_y);
-                    let shape_bot = (bot_y - ib).max(shape_top);
-                    fc.shape_insets.push(ShapeInset {
-                        top_y: shape_top, bottom_y: shape_bot, is_left: false,
-                        left_x: left_edge + il,
-                        right_x: rx - ir,
-                        radius: irad,
-                    });
-                }
-            }
+            wire_shape_outside(fc, child, false, ShapeBoxes {
+                child_y, top_y, bot_y, box_left: left_edge, box_right: rx,
+            }, content_width, viewport);
         }
         FloatSide::None => unreachable!(),
     }
+}
+
+/// Margin-box geometry of a just-placed float (see [`wire_shape_outside`]).
+struct ShapeBoxes {
+    child_y: f32,
+    top_y: f32,
+    bot_y: f32,
+    box_left: f32,
+    box_right: f32,
+}
+
+/// CSS Shapes L1 — record `child`'s `shape-outside` (grown by `shape-margin`,
+/// a percentage resolving against the containing block's inline size
+/// `cb_width`, §6.3) in the float context `fc`.
+fn wire_shape_outside(
+    fc: &mut FloatContext,
+    child: &LayoutBox,
+    is_left: bool,
+    bx: ShapeBoxes,
+    cb_width: f32,
+    viewport: Size,
+) {
+    let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside else {
+        return;
+    };
+    let margin = child.style.shape_margin
+        .resolve_or_zero(child.style.font_size, cb_width, viewport)
+        .max(0.0);
+    let g = FloatShapeGeom {
+        is_left,
+        child_y: bx.child_y,
+        top_y: bx.top_y,
+        bot_y: bx.bot_y,
+        box_left: bx.box_left,
+        box_right: bx.box_right,
+        center_x: child.rect.x + child.rect.width / 2.0,
+        center_y: bx.top_y + child.rect.height / 2.0,
+    };
+    register_shape_outside(fc, sv, &g, margin);
 }
 
 /// Runs once `frame.b`'s children are all processed — the CSS 2.1 §8.3.1

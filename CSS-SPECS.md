@@ -388,7 +388,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `float` | ✅ | left/right/none; FloatContext axis-aligned placement + shrink-to-fit |
 | `clear` | ✅ | left/right/both; FloatContext.clear_y() |
-| `shape-outside` | 🟡 | parsed; float shape wrapping ⬜ |
+| `shape-outside` | 🟡 | parsed; `FloatContext` carries circle/ellipse/inset/polygon/path geometry, `shape-margin` grows it (§6.3, clamped to the margin box; `register_shape_outside`, p4-shape-margin 2026-10-03); per-line wrapping of inline content around it ⬜ (an `InlineRun` is wrapped at one width, so lines do not yet follow the contour) |
 
 ### [T1] Lists
 
@@ -671,7 +671,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `shape-outside` / `shape-margin` / `shape-image-threshold` | 🟡 | parsed; float wrapping ⬜ |
+| `shape-outside` / `shape-margin` / `shape-image-threshold` | 🟡 | parsed; `shape-margin` grows the float geometry (see `shape-outside` above); per-line wrapping ⬜; `shape-outside: <image>` / `shape-image-threshold` ⬜ |
 | `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | `offset-path`/`offset-distance`/`offset-rotate`/`ray()` wired end-to-end (Tier4 #44); residual: `url()` motion paths ⬜ (`offset-anchor` + `offset` shorthand ✅ 2026-10-02) |
 
 ### [T4] Containment (advanced)
