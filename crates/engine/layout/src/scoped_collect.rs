@@ -11,7 +11,7 @@
 
 use crate::box_tree::BoxRole;
 use crate::resolved_geometry::{self, GeomCtx};
-use crate::style::ContainerType;
+use crate::style::{ContainerType, TransformFn};
 use crate::{
     box_published_rect, collect_boxed_node_ids, collect_client_rects_box, collect_client_rects_rec,
     collect_computed_styles_box, collect_computed_styles_parts, collect_layout_rects_box,
@@ -142,6 +142,8 @@ pub struct StyleCollectStats {
 pub struct Reasons {
     /// The geometry chain broke above the box.
     pub chain: u32,
+    /// Where the chain broke, counted once per breaking box: see [`ChainBreaks`].
+    pub breaks: ChainBreaks,
     /// The box has no published rect (new).
     pub unpublished: u32,
     /// The box publishes a rect that is not its own (transform / ruby base).
@@ -160,6 +162,41 @@ pub struct Reasons {
     pub restyled: u32,
     /// The box is not a principal element box (anonymous / pseudo) or a later box of a node.
     pub other: u32,
+}
+
+/// Which check of [`chain_through`] failed first at a box whose ancestors all passed it
+/// (BUG-935 срез 62): the box that tears the chain, not the ones under it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ChainBreaks {
+    /// Anonymous box narrower than / shifted from its parent's content box.
+    pub anon: u32,
+    /// The element box has no published rect.
+    pub unpublished: u32,
+    /// The element publishes a rect that is not its own (transform / ruby base).
+    pub transformed: u32,
+    /// Published `x` differs.
+    pub moved_x: u32,
+    /// Published `width` differs.
+    pub moved_w: u32,
+    /// `changed.context`: a style field the children resolve against changed.
+    pub context: u32,
+    /// `container-type: size` box whose height moved.
+    pub container_h: u32,
+}
+
+impl ChainBreaks {
+    fn count(&mut self, why: Break) {
+        let slot = match why {
+            Break::Anon => &mut self.anon,
+            Break::Unpublished => &mut self.unpublished,
+            Break::Transformed => &mut self.transformed,
+            Break::MovedX => &mut self.moved_x,
+            Break::MovedW => &mut self.moved_w,
+            Break::Context => &mut self.context,
+            Break::ContainerHeight => &mut self.container_h,
+        };
+        *slot += 1;
+    }
 }
 
 /// One box the collectors must visit.
@@ -248,7 +285,16 @@ impl<'a> ScopedCollection<'a> {
             seen.insert(b.node);
             let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
             let stable = published.is_some_and(|p| p[0] == r.x && p[2] == r.width);
-            let child_chain = changed.is_some_and(|c| chain && chain_through(b, &ctx, published, c));
+            let child_chain = match changed {
+                Some(c) if chain && !b.children.is_empty() => match chain_through(b, &ctx, published, c) {
+                    Ok(()) => true,
+                    Err(why) => {
+                        skips.reasons.breaks.count(why);
+                        false
+                    }
+                },
+                _ => false,
+            };
             let child_full = changed.is_some_and(|c| full && full_through(b, &ctx, published, c));
             stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, stable, child_chain, child_full)));
         }
@@ -363,19 +409,47 @@ impl<'a> ScopedCollection<'a> {
 /// style fields of [`context_style_eq`] fixes all three. Height is not in the chain — only a positioned box reads it,
 /// and those are never skipped — except for a `container-type: size` box, whose
 /// height can restyle its descendants after layout.
-fn chain_through(b: &LayoutBox, ctx: &GeomCtx, published: Option<&[f32; 4]>, changed: &ChangedNodes) -> bool {
+fn chain_through(
+    b: &LayoutBox,
+    ctx: &GeomCtx,
+    published: Option<&[f32; 4]>,
+    changed: &ChangedNodes,
+) -> Result<(), Break> {
     if b.origin.role != BoxRole::Element {
         // An anonymous box is its parent's content box — or narrower, and then
         // what it hands its children is not what the chain vouched for.
-        return b.rect.x == ctx.flow_cb.x && b.rect.width == ctx.flow_cb.width;
+        return if b.rect.x == ctx.flow_cb.x && b.rect.width == ctx.flow_cb.width { Ok(()) } else { Err(Break::Anon) };
     }
-    let Some(p) = published else { return false };
+    let Some(p) = published else { return Err(Break::Unpublished) };
     let r = box_published_rect(b);
-    r == b.rect
-        && p[0] == r.x
-        && p[2] == r.width
-        && !changed.context.contains(&b.node)
-        && (b.style.container_type != ContainerType::Size || p[3] == r.height)
+    if r != b.rect && !translated_in_place(b, r, p, changed) {
+        return Err(Break::Transformed);
+    }
+    if p[0] != r.x {
+        return Err(Break::MovedX);
+    }
+    if p[2] != r.width {
+        return Err(Break::MovedW);
+    }
+    if changed.context.contains(&b.node) {
+        return Err(Break::Context);
+    }
+    if b.style.container_type == ContainerType::Size && p[3] != r.height {
+        return Err(Break::ContainerHeight);
+    }
+    Ok(())
+}
+
+/// The failed check of [`chain_through`], for [`ChainBreaks`].
+#[derive(Clone, Copy)]
+enum Break {
+    Anon,
+    Unpublished,
+    Transformed,
+    MovedX,
+    MovedW,
+    Context,
+    ContainerHeight,
 }
 
 /// [`chain_through`] for a *positioned* box: its entry is read against the vertical
@@ -392,9 +466,32 @@ fn full_through(b: &LayoutBox, ctx: &GeomCtx, published: Option<&[f32; 4]>, chan
         return b.rect == ctx.flow_cb;
     }
     let Some(p) = published else { return false };
-    b.rect == box_published_rect(b)
-        && *p == [b.rect.x, b.rect.y, b.rect.width, b.rect.height]
+    let r = box_published_rect(b);
+    (r == b.rect && *p == [r.x, r.y, r.width, r.height] || translated_in_place(b, r, p, changed))
         && !changed.context.contains(&b.node)
+}
+
+/// Whether `b`, which publishes the rect `r` of its own `transform` instead of its
+/// border box, still has the border box it had when `published` was taken.
+///
+/// A box whose whole transform is a translation (`translateX(-310px)` on an
+/// off-canvas menu) publishes its border box shifted by a constant the style
+/// fixes, so with the style untouched (`changed.own`) `published == r` leaves
+/// exactly one border box that could have been there. Anything with a rotation
+/// or a scale publishes a bounding box that several border boxes share, and is
+/// not vouched for. The chain would otherwise break at such a box and every
+/// entry below it be rebuilt.
+fn translated_in_place(b: &LayoutBox, r: lumen_core::geom::Rect, published: &[f32; 4], changed: &ChangedNodes) -> bool {
+    *published == [r.x, r.y, r.width, r.height]
+        && !changed.own.contains(&b.node)
+        && !matches!(b.kind, BoxKind::Ruby { .. })
+        && b.style.rotate.is_none()
+        && b.style.scale.is_none()
+        && b.style.offset_path.is_none()
+        && b.style
+            .transform
+            .iter()
+            .all(|f| matches!(f, TransformFn::Translate(..) | TransformFn::TranslateX(_) | TransformFn::TranslateY(_)))
 }
 
 /// Fills `skips` for the subtree rooted at `root`, a whole item whose computed-style
@@ -448,7 +545,16 @@ fn plan_style_skips(
             skips.reasons.other += 1;
         }
         let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
-        let child_chain = chain && chain_through(b, &ctx, published, changed);
+        // A leaf hands nothing to anyone: its break is not one.
+        let child_chain = chain
+            && !b.children.is_empty()
+            && match chain_through(b, &ctx, published, changed) {
+                Ok(()) => true,
+                Err(why) => {
+                    skips.reasons.breaks.count(why);
+                    false
+                }
+            };
         let child_full = full && full_through(b, &ctx, published, changed);
         stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, child_chain, child_full)));
     }
@@ -718,6 +824,34 @@ mod tests {
             }
         };
         assert_eq!(kept_after(html, css, "p", grow, &["ab", "rel"]), [false, false]);
+    }
+
+    /// BUG-935 срез 62: a box whose transform is a translation still vouches for the
+    /// entries below it; a rotation or a scale does not.
+    #[test]
+    fn a_translated_box_does_not_break_the_chain() {
+        let html = "<body style=\"margin:0\"><div id=\"p\"><div id=\"t\" class=\"tr\"><div id=\"kid\" class=\"mid\"></div></div>                    <div id=\"r\" class=\"rot\"><div id=\"rkid\" class=\"mid\"></div></div><div id=\"other\" class=\"k\"></div></div></body>";
+        let css = ".tr { transform: translateX(-30px); } .rot { transform: rotate(5deg); } .k { height: 20px; }
+                   .mid { width: 50px; height: 10px; margin: 0 auto; } .hot { background-color: red; } .wide { width: 300px; }";
+        let hot = |doc: &mut lumen_dom::Document| {
+            let other = doc.find_by_id("other").unwrap();
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(other).data {
+                for attr in attrs.iter_mut().filter(|a| a.name.local == "class") {
+                    attr.value = "k hot".to_string();
+                }
+            }
+        };
+        assert_eq!(kept_after(html, css, "p", hot, &["kid", "rkid"]), [true, false]);
+        // The translated box itself is resized: what its child resolves in changed.
+        let widen = |doc: &mut lumen_dom::Document| {
+            let t = doc.find_by_id("t").unwrap();
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(t).data {
+                for attr in attrs.iter_mut().filter(|a| a.name.local == "class") {
+                    attr.value = "tr wide".to_string();
+                }
+            }
+        };
+        assert_eq!(kept_after(html, css, "p", widen, &["kid"]), [false]);
     }
 
     #[test]
