@@ -547,7 +547,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `column-count` / `column-width` / `columns` | ✅ | |
 | `column-gap` | ✅ | |
 | `column-rule` / `column-rule-*` | ✅ | rendered between columns (solid/dashed/dotted) |
-| `column-span` | 🟡 | parsed; spanning ⬜ |
+| `column-span` | ✅ | `none`/`all`; `all` breaks out of the columns for direct children and for descendants reached through plain block wrappers (wrapper split into slice fragments around the spanner, `box_tree/multicol_span.rs`); ignored on floats/abspos and blocked by scroll containers, nested multicols, `contain`, non-block wrappers (CSS Multicol L1 §6.1); P4 2026-10-02 |
 | `column-fill` | 🟡 | parsed; balancing ⬜ |
 | `break-before` / `break-after` / `break-inside` | ✅ | fragmentation algorithm in `pagination.rs` (Tier4 #45); paged media itself is out of project scope |
 | `orphans` / `widows` | ✅ | `pagination.rs` (Tier4 #45); paged-media output out of scope |

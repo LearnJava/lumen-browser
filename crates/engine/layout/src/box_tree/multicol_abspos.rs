@@ -150,6 +150,11 @@ pub(crate) fn build_multicol_init(
     // When no container height is known, auto behaves like balance.
     let balance = s.column_fill_balance || container_h.is_none();
 
+    // CSS Multicol §6.1: a `column-span: all` descendant reached through plain
+    // block wrappers spans the container too — split those wrappers around it so
+    // the spanner becomes a direct child (see `multicol_span`).
+    super::multicol_span::hoist_nested_spanners(children);
+
     // Collect flow (non-abs, non-skip) child indices, without moving `children`
     // yet — the empty case below must leave it completely untouched.
     let flow_idxs: Vec<usize> = children
@@ -174,7 +179,7 @@ pub(crate) fn build_multicol_init(
     let mut segments: Vec<SegmentInit> = Vec::new();
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
-        if work[i].style.column_span_all {
+        if super::multicol_span::is_column_spanner(&work[i]) {
             let sliceable = n_cols > 1 && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
