@@ -1226,6 +1226,7 @@ impl Lumen {
                 let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
                 let reduced_motion = self.a11y_store.reduced_motion();
+                let forced_colors_pref = self.a11y_store.forced_colors();
                 // CSSOM-7 (BUG-977): push the live cascade alongside the rest
                 // of this snapshot, same `Arc` `apply_relayout_result` already
                 // laid out against (`relayout_page`/`compute_layout` above) —
@@ -1318,7 +1319,7 @@ impl Lumen {
                         }
                         timed_step!(
                             "deliver_media_query_changes",
-                            js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion)
+                            js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion, forced_colors_pref)
                         );
                         timed_step!("deliver_lazy_images", js.deliver_lazy_images());
                         let reqs = timed_step!("take_lazy_image_requests", js.take_lazy_image_requests());
@@ -1370,7 +1371,7 @@ impl Lumen {
                         // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                         // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                         // read from winit at window creation / refreshed on ThemeChanged.
-                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
+                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion, forced_colors_pref);
                         // After fresh rects are in JS: fire lazy-load proximity check.
                         // Images that entered the viewport+margin are queued by JS via
                         // _lumen_request_lazy_image_load; we drain and fetch them below.
