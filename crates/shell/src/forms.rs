@@ -90,7 +90,7 @@ pub enum FormClickAction {
 /// below, kept separate so [`activation_target`] can ask «does this node have a
 /// behaviour» without running it.
 fn is_activatable(tag: &str) -> bool {
-    matches!(tag, "input" | "button" | "select" | "summary" | "label")
+    matches!(tag, "input" | "button" | "select" | "selectlist" | "summary" | "label")
 }
 
 /// Interactive content with no activation behaviour of its own. The walk stops
@@ -178,7 +178,10 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
     // could not come up before the walk above; now a click on the `<span>`
     // inside a `<button disabled>` reaches the button.
     if n.get_attr("disabled").is_some()
-        && matches!(tag, "input" | "select" | "textarea" | "button" | "option" | "optgroup" | "fieldset")
+        && matches!(
+            tag,
+            "input" | "select" | "selectlist" | "textarea" | "button" | "option" | "optgroup" | "fieldset"
+        )
     {
         return FormClickAction::Nothing;
     }
@@ -212,7 +215,8 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                 FormClickAction::Nothing
             }
         }
-        "select" => FormClickAction::OpenSelectDropdown(node),
+        // `<selectlist>` (Customizable Select) opens the same option popup.
+        "select" | "selectlist" => FormClickAction::OpenSelectDropdown(node),
         // HTML5 §4.11.1 — clicking <summary> toggles its parent <details>.
         "summary" => find_parent_details(doc, node)
             .map_or(FormClickAction::Nothing, FormClickAction::ToggleDetails),
@@ -1181,7 +1185,8 @@ const DROPDOWN_MIN_W: f32 = 120.0;
 const DROPDOWN_MAX_ROWS_VISIBLE: usize = 8;
 
 /// Collect all direct `<option>` children of a `<select>` DOM node.
-/// `<optgroup>` children are flattened (their `<option>` children are included).
+/// `<optgroup>` and `<listbox>` (the `<selectlist>` option container) children are
+/// flattened (their `<option>` children are included).
 pub fn collect_select_options(doc: &Document, select_id: NodeId) -> Vec<SelectOption> {
     let mut opts = Vec::new();
     collect_options_from(doc, select_id, &mut opts);
@@ -1211,7 +1216,7 @@ fn collect_options_from(doc: &Document, parent_id: NodeId, out: &mut Vec<SelectO
                     .unwrap_or_else(|| label.clone());
                 out.push(SelectOption { label, value, selected, disabled, node_id: child_id });
             }
-            "optgroup" => collect_options_from(doc, child_id, out),
+            "optgroup" | "listbox" => collect_options_from(doc, child_id, out),
             _ => {}
         }
     }
@@ -2318,6 +2323,18 @@ mod tests {
         assert!(opts[1].selected);
         assert!(!opts[1].disabled);
         assert!(opts[2].disabled);
+    }
+
+    #[test]
+    fn selectlist_opens_dropdown_and_collects_listbox_options() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><selectlist id="s"><listbox><option>A</option><option selected>B</option></listbox><option>C</option></selectlist></body>"#,
+        );
+        let sel = doc.find_by_id("s").unwrap_or_else(|| unreachable!());
+        assert!(matches!(classify_click(&doc, sel), FormClickAction::OpenSelectDropdown(_)));
+        let labels: Vec<_> =
+            collect_select_options(&doc, sel).into_iter().map(|o| o.label).collect();
+        assert_eq!(labels, ["A", "B", "C"]);
     }
 
     #[test]

@@ -1,4 +1,3 @@
-crates/engine/layout/src/box_tree/svg.rs:299
 crates/engine/layout/src/lib.rs:2271
 CSS-SPECS.md:391
 CSS-SPECS.md:223

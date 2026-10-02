@@ -727,9 +727,8 @@ fn build_box_inner(
                             let selected_text = collect_select_label(doc, id);
                             FormControlKind::Select { selected_text }
                         }
-                        // <selectlist> (Customizable Select, Phase 0) renders as a
-                        // native-select widget. P4 wires ::picker(select) appearance.
-                        // CSS: appearance: base-select
+                        // <selectlist> without `appearance: base-select` renders as a
+                        // native-select widget (the base-select path returns earlier).
                         "selectlist" => {
                             let selected_text = collect_selectlist_label(doc, id);
                             FormControlKind::Select { selected_text }
