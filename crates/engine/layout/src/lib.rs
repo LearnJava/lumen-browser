@@ -2430,6 +2430,41 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
     false
 }
 
+/// Apply every `(node raw id → [scroll_x, scroll_y, ..])` of `states` to the
+/// tree in ONE walk — what a loop of [`set_scroll_position`] over the map did in
+/// `O(containers × boxes)` (a DFS per container, ~2 ms per flush on lenta.ru).
+///
+/// Same result as the loop: a node's *first* box in pre-order takes the offset
+/// (a node shared by several boxes is not applied twice), clamped by
+/// [`set_scroll_position`]'s own rule. The one shortcut: a request for `(0, 0)`
+/// on a box already at `(0, 0)` is skipped — the clamp range always contains 0
+/// (`min ≤ 0 ≤ max`, and `clip` yields 0), so it would write the same value, but
+/// computing the scrollable extent walks the container's whole subtree.
+pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections::HashMap<u32, [f32; 4]>) {
+    if states.is_empty() {
+        return;
+    }
+    let mut pending = states.len();
+    let mut applied = std::collections::HashSet::new();
+    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        let node = b.node;
+        if let Some(s) = states.get(&node.raw())
+            && applied.insert(node.raw())
+        {
+            pending -= 1;
+            let at_origin = b.scroll_x == 0.0 && b.scroll_y == 0.0;
+            if !(at_origin && s[0] == 0.0 && s[1] == 0.0) {
+                set_scroll_position(b, node, s[0], s[1]);
+            }
+            if pending == 0 {
+                return;
+            }
+        }
+        stack.extend(b.children.iter_mut().rev());
+    }
+}
+
 /// Find the innermost scroll container whose `clip_rect` contains `(x, y)`.
 ///
 /// Returns the `NodeId` of the topmost (in DOM order, last in the list wins for nesting)

@@ -474,19 +474,13 @@ impl FlushHandles {
         // exact same rule a same-tick `scrollLeft`/`scrollTop` read after
         // e.g. `el.style.overflow = 'clip'` must observe.
         let scroll_scope = lumen_core::profile::scope("flush.scroll_restore");
-        let prev_scroll = self
-            .scroll_states
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        for (&nid, s) in &prev_scroll {
-            lumen_layout::set_scroll_position(
-                &mut layout_root,
-                lumen_dom::NodeId::from_raw(nid),
-                s[0],
-                s[1],
-            );
-        }
+        // BUG-935 срез 63: one walk for the whole map instead of one DFS per
+        // container (`restore_scroll_positions`); the map is read under its
+        // lock rather than cloned.
+        lumen_layout::restore_scroll_positions(
+            &mut layout_root,
+            &self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()),
+        );
         // BUG-1211 (post-collectors): when the incremental cascade+layout
         // path ran, the four collectors below re-walk only what could have
         // changed instead of the whole document — they were, until that slice,
