@@ -480,9 +480,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Must be called after `update_viewport_size` so JS reads consistent
     /// dimensions. Shell calls it after every `relayout_page` and any
-    /// `prefers-color-scheme` or `prefers-reduced-motion` toggle.
+    /// `prefers-color-scheme`, `prefers-reduced-motion` or `forced-colors` toggle.
     #[allow(dead_code)]
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool);
+    fn deliver_media_query_changes(
+        &self,
+        width: f32,
+        height: f32,
+        prefers_dark: bool,
+        reduced_motion: bool,
+        forced_colors: bool,
+    );
     /// Poll all live `WebSocket` instances and deliver queued events to JS.
     ///
     /// Must be called on every event-loop step so that `onopen`/`onmessage`/
@@ -1249,11 +1256,19 @@ impl PersistentJs for V8PersistentJs {
     fn notify_window_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('complete')");
     }
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool) {
+    fn deliver_media_query_changes(
+        &self,
+        width: f32,
+        height: f32,
+        prefers_dark: bool,
+        reduced_motion: bool,
+        forced_colors: bool,
+    ) {
         let dark = if prefers_dark { "true" } else { "false" };
         let rm = if reduced_motion { "true" } else { "false" };
+        let fc = if forced_colors { "true" } else { "false" };
         self.eval_js(&format!(
-            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm});"
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm},{fc});"
         ));
     }
     fn pump_websockets(&self) {
