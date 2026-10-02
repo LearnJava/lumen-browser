@@ -245,6 +245,11 @@ const PAGES: &[&str] = &[
     // against the 1024×720 viewport (scroll 0); gate for the emitter geometry.
     // The scroll pinning itself is renderer-side and not visible at scroll 0.
     "158-background-attachment",
+    // CSS Backgrounds L4 §3.8 — background-clip: text. Glyph-masked gradient/colour
+    // (PushMaskLayer alpha mask of the element's own and descendant text); the
+    // glyph shapes diverge from Edge (rule #3), so this deterministic CPU snapshot
+    // is the regression gate for the mask wiring.
+    "159-background-clip-text",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
