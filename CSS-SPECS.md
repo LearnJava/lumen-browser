@@ -534,7 +534,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `scroll-snap-type` / `scroll-snap-align` / `scroll-snap-stop` | ✅ | find_scroll_snap_y + proximity snapping |
-| `scroll-margin*` / `scroll-padding*` | 🟡 | parsed; block-axis (`*-top`/`*-bottom`) applied to snap geometry — `scroll-margin` outsets the target's snap area, `scroll-padding` (from `:root`) insets the snapport (`collect_snap_y`, CSS Scroll Snap L1 §5) 2026-07-18; inline (X) axis has no snap path yet, so `*-left`/`*-right` inert |
+| `scroll-margin*` / `scroll-padding*` | ✅ | parsed; both axes applied to snap geometry — `scroll-margin` outsets the target's snap area, `scroll-padding` (from `:root`) insets the snapport. Block axis (`*-top`/`*-bottom`): `find_scroll_snap_y` / `_proximity`; inline axis (`*-left`/`*-right`, `horizontal-tb` physical mapping): `find_scroll_snap_x` / `_proximity` (`collect_snap`, `crates/engine/paint/src/scroll_snap.rs`, CSS Scroll Snap L1 §5) 2026-10-02; the shell page-scroll path (`collect_snap_containers` → `find_snap_target`) already applied both axes. Logical `scroll-margin-inline/block*` / `scroll-padding-inline/block*` longhands and shorthands are not parsed (not covered by this row; ⬜) |
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
 | `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
 | `scroll-timeline` / `view-timeline` | ✅ | scroll-timeline-name/axis, view-timeline-name/axis shorthands+longhands; collect_named_* wired; P4 2026-06-10 |
