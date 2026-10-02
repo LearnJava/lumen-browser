@@ -575,6 +575,127 @@ use super::*;
         assert_eq!(s.layer_order, vec!["valid".to_string()]);
     }
 
+    // ── @import layer() / supports() — CSS Cascade L5 §6.5 ──
+
+    #[test]
+    fn at_import_without_modifiers_has_no_layer_or_supports() {
+        let s = parse(r#"@import "a.css";"#);
+        assert_eq!(s.imports[0].layer, None);
+        assert_eq!(s.imports[0].supports, None);
+    }
+
+    #[test]
+    fn at_import_named_layer() {
+        let s = parse(r#"@import url("a.css") layer(base);"#);
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "a.css");
+        assert_eq!(s.imports[0].layer, Some(ImportLayer::Named("base".to_string())));
+        assert!(s.imports[0].media.clauses.is_empty());
+    }
+
+    #[test]
+    fn at_import_dotted_layer_name() {
+        let s = parse(r#"@import "a.css" layer( framework.base );"#);
+        assert_eq!(s.imports[0].layer, Some(ImportLayer::Named("framework.base".to_string())));
+    }
+
+    #[test]
+    fn at_import_anonymous_layer() {
+        let s = parse(r#"@import "a.css" layer;"#);
+        assert_eq!(s.imports[0].layer, Some(ImportLayer::Anonymous));
+        let s = parse(r#"@import "a.css" LAYER print;"#);
+        assert_eq!(s.imports[0].layer, Some(ImportLayer::Anonymous));
+        assert_eq!(s.imports[0].media.clauses.len(), 1);
+    }
+
+    #[test]
+    fn at_import_layer_with_supports_and_media() {
+        let s = parse(r#"@import url(a.css) layer(x) supports(display: grid) screen and (min-width: 600px);"#);
+        let imp = &s.imports[0];
+        assert_eq!(imp.layer, Some(ImportLayer::Named("x".to_string())));
+        assert_eq!(
+            imp.supports,
+            Some(SupportsCondition::Decl { property: "display".into(), value: "grid".into() })
+        );
+        assert_eq!(imp.media.clauses.len(), 1);
+    }
+
+    #[test]
+    fn at_import_supports_condition_form() {
+        let s = parse(r#"@import "a.css" supports(not (display: grid));"#);
+        assert!(matches!(s.imports[0].supports, Some(SupportsCondition::Not(_))));
+        assert_eq!(s.imports[0].layer, None);
+    }
+
+    #[test]
+    fn at_import_invalid_layer_name_drops_import() {
+        let s = parse(r#"@import "a.css" layer(1bad); p { color: red; }"#);
+        assert!(s.imports.is_empty());
+        assert_eq!(s.rules.len(), 1, "following rule must survive");
+        let s = parse(r#"@import "a.css" layer(); p { color: red; }"#);
+        assert!(s.imports.is_empty());
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_import_layer_prefix_is_not_a_media_type() {
+        // `layered` — не модификатор `layer`, а обычный media-токен.
+        let s = parse(r#"@import "a.css" layered;"#);
+        assert_eq!(s.imports[0].layer, None);
+        assert_eq!(s.imports[0].media.clauses.len(), 1);
+    }
+
+    // ── @layer: вложенное содержимое ──
+
+    #[test]
+    fn nested_layer_gets_dotted_name() {
+        let s = parse("@layer outer { @layer inner { p { color: red; } } a { color: blue; } }");
+        assert_eq!(s.layer_order, vec!["outer".to_string(), "outer.inner".to_string()]);
+        assert_eq!(s.layers.len(), 2);
+        assert_eq!(s.layers[0].name, "outer");
+        assert_eq!(s.layers[0].rules.len(), 1);
+        assert_eq!(s.layers[1].name, "outer.inner");
+        assert_eq!(s.layers[1].rules.len(), 1);
+    }
+
+    #[test]
+    fn nested_layer_statement_form_declares_dotted_names() {
+        let s = parse("@layer outer { @layer a, b; }");
+        assert_eq!(
+            s.layer_order,
+            vec!["outer".to_string(), "outer.a".to_string(), "outer.b".to_string()]
+        );
+    }
+
+    #[test]
+    fn media_inside_layer_stays_in_layer() {
+        let s = parse("@layer base { p { color: red; } @media (min-width: 600px) { p { color: blue; } } }");
+        assert!(s.media_rules.is_empty());
+        assert_eq!(s.layers.len(), 2);
+        assert!(s.layers[0].condition.is_none());
+        assert_eq!(s.layers[1].name, "base");
+        assert!(matches!(s.layers[1].condition, Some(LayerCondition::Media(_))));
+        assert_eq!(s.layers[1].rules.len(), 1);
+    }
+
+    #[test]
+    fn supports_inside_layer_stays_in_layer() {
+        let s = parse("@layer base { @supports (display: grid) { p { color: blue; } } }");
+        assert!(s.supports_rules.is_empty());
+        assert!(matches!(s.layers[1].condition, Some(LayerCondition::Supports(_))));
+    }
+
+    #[test]
+    fn layer_independent_at_rules_inside_layer_are_hoisted() {
+        let s = parse(
+            "@layer base { @font-face { font-family: X; src: url(x.woff2); } \
+             @keyframes k { from { opacity: 0 } to { opacity: 1 } } p { color: red; } }",
+        );
+        assert_eq!(s.font_faces.len(), 1);
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.layers[0].rules.len(), 1);
+    }
+
     #[test]
     fn is_layer_name_basic() {
         assert!(is_layer_name("base"));

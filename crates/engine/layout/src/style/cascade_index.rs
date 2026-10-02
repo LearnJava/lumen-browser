@@ -49,6 +49,10 @@ pub(in crate::style) struct CascadeIndex {
     /// (0 when absent). Node-independent; used to be a linear string search of
     /// `layer_order` per block per node.
     pub(in crate::style) layer_order_pos: Vec<i32>,
+    /// Per `sheet.layers` block: whether its `@media`/`@supports` condition
+    /// (a group nested inside `@layer`, [`lumen_css_parser::LayerRule::condition`])
+    /// currently holds. Unconditional blocks are always `true`.
+    pub(in crate::style) layer_active: Vec<bool>,
     pub(in crate::style) media: Vec<RuleIndex>,
     pub(in crate::style) supports: Vec<RuleIndex>,
     /// Perf (docs/tasks/p3-cascade-perf.md Задача 1): whether each
@@ -106,6 +110,7 @@ impl CascadeIndex {
             layers: RuleIndex::empty(),
             layer_rules: Vec::new(),
             layer_order_pos: Vec::new(),
+            layer_active: Vec::new(),
             media: Vec::new(),
             supports: Vec::new(),
             active_media: Vec::new(),
@@ -148,6 +153,17 @@ impl CascadeIndex {
         let t = std::time::Instant::now();
         let active_media: Vec<bool> =
             sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect();
+        let layer_active: Vec<bool> = sheet
+            .layers
+            .iter()
+            .map(|l| match &l.condition {
+                None => true,
+                Some(lumen_css_parser::LayerCondition::Media(q)) => q.matches(media_ctx),
+                Some(lumen_css_parser::LayerCondition::Supports(c)) => {
+                    c.evaluate(SUPPORTED_PROPERTIES)
+                }
+            })
+            .collect();
         let active_supports: Vec<bool> = sheet
             .supports_rules
             .iter()
@@ -180,6 +196,7 @@ impl CascadeIndex {
             layers,
             layer_rules,
             layer_order_pos,
+            layer_active,
             media,
             supports,
             active_media,
