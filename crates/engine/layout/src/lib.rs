@@ -58,7 +58,7 @@ pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
 
-pub use scoped_collect::{ChangedNodes, Reasons, ScopedCollection, StyleCollectStats};
+pub use scoped_collect::{ChainBreaks, ChangedNodes, Reasons, ScopedCollection, StyleCollectStats};
 
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
