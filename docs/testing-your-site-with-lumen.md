@@ -320,7 +320,7 @@ class LumenMcpClient:
 
     def screenshot(self) -> bytes:
         result = self._call("resources/read", {"uri": "resource://screenshot"})
-        b64 = result["contents"][0]["data"]
+        b64 = result["contents"][0]["blob"]
         return base64.b64decode(b64)
 
     def close(self) -> None:
@@ -358,10 +358,10 @@ print("Тест пройден!")
 - **Одно соединение за раз** (`--mcp-live-port`) — для параллельных тестов
   запускайте отдельные процессы `lumen.exe` на разных портах, не пытайтесь
   расшарить одно окно между потоками/тестами.
-- **`eval` — то же ограничение, что и в BiDi**: работает только до первого
-  `navigate`. После него `eval` возвращает ошибку `"JS context not available"`.
-  Не полагайтесь на `eval` в многошаговых сценариях — `click`/`type`/`query`
-  проверены и работают после любого числа переходов.
+- **`eval`** в живом окне после `navigate` работает (проверено на сборке 0.5.0:
+  `eval` после `navigate` и `click` вернул результат). Ограничение «только до первого
+  `navigate`» относится к BiDi; для MCP при занятом движковом потоке `eval` падает по
+  `timeout_ms` (по умолчанию 5000).
 - `type` вводит текст ровно как пользователь: значение попадает в поле, поле
   перерисовывается, форма отправляет введённое (BUG-436). Цель обязана быть
   изменяемым `<input>` текстового типа или `<textarea>` — иначе инструмент
@@ -378,6 +378,113 @@ print("Тест пройден!")
 - `resource://layout`/`console`/`network` пока возвращают заглушки (пустой
   список) для live-window сессии — работают только в headless-режиме
   (`--mcp`/`--mcp-port`, `InProcessSession`).
+
+---
+
+## 2a. Подключение ИИ-агента (Claude Code, Claude Desktop, Cursor)
+
+Стандартные MCP-клиенты говорят по **stdio**. Для этого есть бинарь `lumen-mcp`
+(собирается `cargo build --profile dev-release -p lumen-mcp`, лежит рядом с
+`lumen.exe` в `target/dev-release/`). Два режима:
+
+| Режим | Команда | Когда брать |
+|---|---|---|
+| Headless, без окна | `lumen-mcp` | данные и DOM: быстро, окно не нужно (`InProcessSession`) |
+| Живое окно (мост) | `lumen-mcp --launch --lumen <путь к lumen.exe>` | реальный рендеринг, скриншоты того, что видит пользователь |
+| Уже запущенное окно | `lumen-mcp --attach <порт> --token-file <файл>` | окно запущено вами: `lumen.exe --mcp-live-port <порт>` |
+
+Мост `--launch` сам запускает `lumen --mcp-live-port`, читает токен из его stderr
+и подставляет в `initialize` (в stdout токен не попадает). Для `--attach` в
+`--token-file` положите строку `[mcp] token: …` из stderr окна (или голый токен).
+Дополнительные флаги окна передаются после `--`:
+`lumen-mcp --launch --lumen … -- --maximized`.
+
+### Конфиги
+
+Claude Code (CLI):
+
+```bash
+# headless
+claude mcp add lumen -- D:/path/to/lumen/target/dev-release/lumen-mcp.exe
+# живое окно
+claude mcp add lumen-live -- D:/path/to/lumen/target/dev-release/lumen-mcp.exe   --launch --lumen D:/path/to/lumen/target/dev-release/lumen.exe
+```
+
+Тот же результат через `.mcp.json` в корне проекта (Claude Code, Cursor —
+`.cursor/mcp.json`) или `claude_desktop_config.json` (Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "lumen": {
+      "command": "D:/path/to/lumen/target/dev-release/lumen-mcp.exe"
+    },
+    "lumen-live": {
+      "command": "D:/path/to/lumen/target/dev-release/lumen-mcp.exe",
+      "args": ["--launch", "--lumen", "D:/path/to/lumen/target/dev-release/lumen.exe"]
+    }
+  }
+}
+```
+
+> Обе формы конфигурации написаны по документации клиентов; из репозитория
+> проверена только сторона Lumen (сценарии ниже прогнаны через stdio тем же
+> протоколом, что использует клиент). Пути — абсолютные, со `/`.
+
+Агент получает `instructions` из `initialize` и описания инструментов — отдельно
+объяснять порядок вызовов не нужно: `navigate` → `wait` → `query`/`eval` →
+`click`/`type` → `wait`.
+
+### Сценарий 1: «протестировать сайт»
+
+Вызовы, которые агент делает по очереди (`tools/call`; `file://`-URL на Windows —
+`file:///D:/…`, не `/d/…`):
+
+| Шаг | Инструмент | Аргументы |
+|---|---|---|
+| 1 | `navigate` | `{"url": "file:///D:/site/index.html"}` |
+| 2 | `wait` | `{"condition": "document_ready"}` |
+| 3 | `type` | `{"target": "#u", "text": "Анна"}` |
+| 4 | `click` | `{"target": "#go"}` |
+| 5 | `wait` | `{"condition": "visible", "selector": "#out", "timeout_ms": 3000}` |
+| 6 | `query` | `{"selector": "#out"}` — проверить `text_content` |
+| 7 | `resources/read` | `{"uri": "resource://screenshot"}` — PNG в `contents[0].blob` (base64) |
+
+Страница, на которой это прогонялось (`<button onclick>` выставляет `#out`):
+
+```html
+<input id=u><button id=go onclick="var o=document.getElementById('out');o.hidden=false;o.textContent='Привет, '+document.getElementById('u').value">Войти</button>
+<p id=out hidden></p>
+```
+
+Результат в обоих режимах (headless и окно/мост): `wait visible` успешен,
+`query #out` вернул `text_content` = `Привет, Анна`, скриншот — валидный PNG.
+
+### Сценарий 2: «извлечь данные»
+
+`navigate` → `wait` (`document_ready`, а для страниц с активным JS —
+`network_idle`) → `eval` с `JSON.stringify`:
+
+```json
+{"name": "eval", "arguments": {"code": "JSON.stringify([...document.querySelectorAll('.item')].map(e => e.dataset.p))"}}
+```
+
+Ответ — текстовый блок `content[0].text` с JSON `{"result": "...", "success": true}`;
+поле `result` — **сериализованное значение**, и строка приходит в кавычках, то есть
+данные разбираются двумя `JSON.parse`: первый снимает кавычки, второй разбирает
+ваш `JSON.stringify`. Для `.item` с `data-p` 10 и 20 получается `["10","20"]`.
+Если данные проще взять без JS, `query` отдаёт `{nodes: [{node_id, tag_name,
+text_content, bounding_rect}]}` сразу структурой.
+
+### Ограничения именно для агента
+
+- Headless: клик по `<button type=submit>` не вызывает `onsubmit` формы (в прогоне
+  обработчик не сработал) — для headless-сценариев пользуйтесь `onclick` или
+  проверяйте формы в режиме окна.
+- Мост обслуживает одно окно и одного клиента; параллельные агенты — отдельные
+  процессы `lumen-mcp` с `--launch`.
+- Что движок умеет и чего нет — `CAPABILITIES.md` и `docs/engine-gaps.md`; перед
+  выводом «сайт сломан» сверьтесь с ними: это может быть пробел движка.
 
 ---
 
