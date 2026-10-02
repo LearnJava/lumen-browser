@@ -609,7 +609,7 @@ fn caret_color_named() {
     let root = lay("<p>x</p>", "p { caret-color: red; }");
     assert_eq!(
         first_p_style(&root).caret_color,
-        Some(Color { r: 255, g: 0, b: 0, a: 255 })
+        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
     );
 }
 
@@ -627,7 +627,69 @@ fn caret_color_inherited() {
     );
     let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
     let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-    assert_eq!(p.style.caret_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    assert_eq!(p.style.caret_color, Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })));
+}
+
+#[test]
+fn caret_color_currentcolor_follows_own_color() {
+    // CSS UI L4 §6.3: `<color>` включает `currentcolor`; used value — `color`
+    // самого элемента, а не унаследованный `caret-color`.
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-color: currentcolor; color: red; } p { color: blue; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(div.style.used_caret_color(), Color { r: 255, g: 0, b: 0, a: 255 });
+    assert_eq!(p.style.caret_color, Some(CssColor::CurrentColor));
+    assert_eq!(p.style.used_caret_color(), Color { r: 0, g: 0, b: 255, a: 255 });
+}
+
+#[test]
+fn caret_color_system_color_resolved() {
+    let root = lay("<p>x</p>", "p { caret-color: Highlight; }");
+    let st = first_p_style(&root);
+    assert!(
+        matches!(st.caret_color, Some(CssColor::Rgba(_))),
+        "системный цвет должен разрешиться постпассом: {:?}",
+        st.caret_color
+    );
+}
+
+#[test]
+fn caret_color_wide_gamut_color_function() {
+    let root = lay("<p>x</p>", "p { caret-color: color(display-p3 1 0 0); }");
+    let st = first_p_style(&root);
+    assert!(matches!(st.caret_color, Some(CssColor::Wide(_))));
+    assert_eq!(st.used_caret_color().r, 255);
+}
+
+#[test]
+fn caret_color_css_wide_keywords() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-color: red; } p { caret-color: initial; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert!(div.style.caret_color.is_some());
+    assert_eq!(p.style.caret_color, None, "initial = auto");
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-color: red; } p { caret-color: auto; } span { } p { caret-color: inherit; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.caret_color, div.style.caret_color);
+}
+
+#[test]
+fn caret_color_invalid_ignored() {
+    let root = lay("<p>x</p>", "p { caret-color: red; caret-color: 12px; }");
+    assert_eq!(
+        first_p_style(&root).caret_color,
+        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
+    );
 }
 
 #[test]

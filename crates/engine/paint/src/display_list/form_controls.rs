@@ -135,7 +135,7 @@ fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, out: &mut Vec
     // already true for `forced-colors`/`color-scheme` overrides applied
     // earlier in the cascade (see `style/adjust.rs`), so this is the same
     // resolution rule applied one more time at paint.
-    let color = s.caret_color.unwrap_or(s.color);
+    let color = s.used_caret_color();
 
     out.push(DisplayCommand::PushClipRect {
         rect: Rect::new(content_x, content_y, content_w, content_h),

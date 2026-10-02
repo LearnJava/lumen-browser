@@ -625,8 +625,10 @@ pub struct ComputedStyle {
     /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
     pub tab_size: f32,
     /// CSS UI L4 §6.3 — `caret-color: auto | <color>`. Inherited.
-    /// `None` = auto (UA выбирает). `Some(color)` — явный цвет.
-    pub caret_color: Option<Color>,
+    /// `None` = auto (каретка следует `color`). `Some(CssColor)` — явный цвет:
+    /// `currentcolor` / `color()` / системные цвета сохраняются как есть и
+    /// разрешаются в `used_caret_color` (системные — ещё и постпассом).
+    pub caret_color: Option<CssColor>,
     /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
     /// Inherited. Default `Normal`.
     pub overflow_wrap: OverflowWrap,
@@ -1071,6 +1073,12 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`
+    /// дают `color` элемента, остальное — явный цвет в sRGB.
+    pub fn used_caret_color(&self) -> Color {
+        self.caret_color.map_or(self.color, |c| c.resolve(self.color))
+    }
+
     /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
     /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).
     /// Computed `outline_width` хранится как есть (medium = 3 по UA convention),

@@ -609,7 +609,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `touch-action` | 🟡 | parsed + stored in `ComputedStyle`; gesture ⬜ — blocked on shell touch input, handed to P1 as ROADMAP.md `TOUCH-1` |
 | `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |
 | `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17) |
-| `caret-color` | 🟡 | page `<input>` caret ✅ (FRAME-7 срез 1); `<textarea>`/frame input ⬜ |
+| `caret-color` | ✅ | auto/`<color>` incl. `currentcolor`/`color()`/system colors (used value via `ComputedStyle::used_caret_color`), CSS-wide keywords; consumed by page `<input>` (FRAME-7 срез 1), `<textarea>` и frame input/textarea (срезы 3/6) |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 
 ### [T3] At-Rules
