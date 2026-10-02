@@ -64,6 +64,15 @@ Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--
 | `--bidi-port` | stderr: `[bidi] token: <token>` | `session.new` params: `capabilities.alwaysMatch.token`. No session (and so no browsing context) is created on mismatch — `session not created` error. |
 | `--ipc-server` | stdout: `LUMEN_IPC_TOKEN=<token>` (next to `LUMEN_IPC_PORT=<port>`) | First message on the connection must be `IpcRequest::Auth{token}` → `IpcResponse::AuthOk`/`AuthErr`. Any other request before a successful `Auth` gets `AuthErr`. |
 
+### stdio bridge to the live window (DEVX-18)
+
+Standard MCP clients speak stdio, the live window speaks token-gated TCP. `lumen-mcp` has a bridge mode that proxies stdio ⇄ `--mcp-live-port` and injects the token into the `initialize` params (nothing else is rewritten; the token never goes to stdout, and the `[mcp] token:` line of a launched window is not re-printed):
+
+- `lumen-mcp --attach <port> --token-file <path>` — attach to a running `lumen --mcp-live-port <port>`; the file holds the token (bare, or the `[mcp] token: …` line).
+- `lumen-mcp --launch [--lumen <path>] [url] [-- <lumen flags>]` — the bridge starts `lumen --maximized --mcp-live-port <free port>` itself (exe: `--lumen`, `$LUMEN_EXE`, or next to `lumen-mcp`), reads the token from its stderr, kills the window when stdin closes.
+
+Access model unchanged (no `--mcp-allow-anonymous`). Code: `crates/mcp/src/bridge.rs`.
+
 stdio-mode MCP (no `--port`) does **not** require a token — only the parent process that spawned it can reach its stdin/stdout, so a token adds nothing there. Same reasoning for the network-service IPC channel (PH1-4, child spawned by the shell itself) — out of ADR-024's scope, unauthenticated.
 
 Token generation/comparison: `lumen_core::auth` (`generate_token`, `tokens_match` — constant-time). All in-repo consumers of these ports were updated in the same commit: `graphic_tests/run.py` (`LumenIpcClient`, `LiveWindowClient`), `scripts/bench_scroll.py`+`scripts/miss_probe.py` (`mcp_rpc_factory`), `scripts/input_perf.py`/`scripts/mem_perf.py`/`scripts/mt_stall_bench.py`/`scripts/scroll_perf.py`/`scripts/perf_audit.py`/`scripts/scroll_blit_accept.py` (each script's own inline MCP client class), `tests/wpt/verify_s3_bidi_session.py`/`verify_devx6_bidi_scenarios.py`/`verify_s6_await_promise.py`, and `tools/wptrunner/wptrunner/browsers/lumen.py`+`executors/executorlumen.py` (`_TokenCapturingOutputHandler` taps the existing per-line output callback; `LumenBidiProtocol.connect()` merges the live token into `capabilities.alwaysMatch`).
