@@ -250,7 +250,7 @@ pub use container::{
 };
 pub use values::scroll::{
     FontSizeAdjust, OffsetRotate, OverscrollBehavior, PrintColorAdjust, ScrollBehavior,
-    ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
+    ScrollInitialTarget, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
     ScrollSnapType, ShapeOutside, TextOrientation, UserSelect, WritingMode,
 };
 pub use values::background::{

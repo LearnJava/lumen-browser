@@ -45,6 +45,7 @@ mod resolved_geometry;
 pub mod selection;
 pub mod selector_query;
 pub mod scoped_collect;
+pub mod scroll_initial_target;
 pub mod scroll_timeline;
 pub mod snapshot;
 pub mod inert;
@@ -59,6 +60,8 @@ pub mod text_iter;
 pub mod vertical;
 
 pub use scoped_collect::{ChainBreaks, ChangedNodes, Reasons, ScopedCollection, StyleCollectStats};
+
+pub use scroll_initial_target::{apply_scroll_initial_targets, InitialScroll};
 
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
@@ -2714,6 +2717,10 @@ mod layout_generation_misc;
 #[cfg(test)]
 #[path = "tests/scroll_interaction_misc.rs"]
 mod scroll_interaction_misc;
+
+#[cfg(test)]
+#[path = "tests/scroll_initial_target.rs"]
+mod scroll_initial_target_tests;
 
 #[cfg(test)]
 #[path = "tests/deep_traversal_stress.rs"]

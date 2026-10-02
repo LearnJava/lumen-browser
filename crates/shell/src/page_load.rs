@@ -770,6 +770,20 @@ impl Lumen {
     #[cfg(not(feature = "ffmpeg-video"))]
     pub(crate) fn tick_video_ffmpegs(&mut self, _elapsed_ms: u64) {}
 
+    /// CSS Scroll Snap L2 §4 — применить `scroll-initial-target: nearest` к свежей
+    /// странице: прокрутить контейнеры внутри `layout_box` и перерисовать display
+    /// list (`LoadedPage` собран с нулевыми смещениями). Возвращает смещение
+    /// вьюпорта страницы, уже зажатое по размеру документа.
+    fn apply_initial_scroll_targets(&self, page: &mut LoadedPage) -> Option<(f32, f32)> {
+        let vp = self.relayout_viewport()?;
+        let res = lumen_layout::apply_scroll_initial_targets(&mut page.layout_box, vp)?;
+        page.display_list = crate::display_list_metrics::paint_ordered_in(&page.layout_box, vp);
+        let (px, py) = res.page?;
+        let max_y = (content_height_of(&page.display_list) - vp.height).max(0.0);
+        let max_x = (content_width_of(&page.display_list) - vp.width).max(0.0);
+        Some((px.clamp(0.0, max_x), py.clamp(0.0, max_y)))
+    }
+
     /// Same-page fragment navigation: update `:target` CSS state and scroll to
     /// the target element. `fragment` is the id without the leading `#`; an empty
     /// string scrolls to the top and clears `:target`.
@@ -2037,7 +2051,7 @@ impl Lumen {
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
+    pub(crate) fn apply_loaded_page(&mut self, mut page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.set_js_ctx(None);
         self.layout_source = new_layout_source;
@@ -2054,6 +2068,13 @@ impl Lumen {
         if let Some((state_json, display_url)) = self.pending_post_reload_traversal.take() {
             self.apply_post_reload_traversal(state_json, display_url);
         }
+        // CSS Scroll Snap L2 §4: `scroll-initial-target: nearest` — прокрутить цели в
+        // видимость до первого paint. Back/forward-восстановление позиции главнее.
+        let initial_page_scroll = if self.pending_restore_scroll.is_none() {
+            self.apply_initial_scroll_targets(&mut page)
+        } else {
+            None
+        };
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
@@ -2227,7 +2248,7 @@ impl Lumen {
         // просят восстановить прежний scroll-offset через `pending_restore_scroll`,
         // т.к. навигация теперь асинхронна и сброс происходит здесь, в LoadDone,
         // а не сразу после `reload()`. Координаты докламплятся при первом redraw.
-        let (restore_x, restore_y) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
+        let (restore_x, restore_y) = self.pending_restore_scroll.take().unwrap_or(initial_page_scroll.unwrap_or((0.0, 0.0)));
         self.scroll_x = restore_x;
         self.scroll_y = restore_y;
         self.scroll_drag = None;

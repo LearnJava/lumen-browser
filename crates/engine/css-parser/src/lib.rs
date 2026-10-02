@@ -325,6 +325,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "row-gap",
     "scale",
     "scroll-behavior",
+    "scroll-initial-target",
     "scroll-margin",
     "scroll-margin-bottom",
     "scroll-margin-left",

@@ -156,6 +156,17 @@ pub enum ScrollSnapStop {
     Always,
 }
 
+/// CSS Scroll Snap L2 §4 — `scroll-initial-target: none | nearest`. NOT inherited.
+/// Initial: `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollInitialTarget {
+    #[default]
+    None,
+    /// The element is scrolled into its nearest scroll container when the
+    /// document loads (see `lumen_layout::apply_scroll_initial_targets`).
+    Nearest,
+}
+
 /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior: auto | contain | none`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OverscrollBehavior {

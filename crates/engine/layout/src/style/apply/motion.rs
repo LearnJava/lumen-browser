@@ -22,6 +22,7 @@ use crate::style::{
     OffsetRotate,
     PositionComponent,
     ScrollBehavior,
+    ScrollInitialTarget,
     ScrollSnapStop,
     TimingFunction,
     TouchAction,
@@ -355,6 +356,13 @@ pub(in crate::style) fn apply_decl_motion(
             match val.trim().to_ascii_lowercase().as_str() {
                 "normal" => style.scroll_snap_stop = ScrollSnapStop::Normal,
                 "always" => style.scroll_snap_stop = ScrollSnapStop::Always,
+                _ => {}
+            }
+        }
+        "scroll-initial-target" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "none" => style.scroll_initial_target = ScrollInitialTarget::None,
+                "nearest" => style.scroll_initial_target = ScrollInitialTarget::Nearest,
                 _ => {}
             }
         }
