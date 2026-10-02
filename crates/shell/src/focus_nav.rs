@@ -34,7 +34,7 @@ fn sequential_tab_index(node: &lumen_dom::Node) -> Option<i32> {
     let disabled = node.get_attr("disabled").is_some();
     let default_focusable = match name.local.as_ref() {
         "a" | "area" => node.get_attr("href").is_some(),
-        "button" | "select" | "textarea" => !disabled,
+        "button" | "select" | "selectlist" | "textarea" => !disabled,
         "input" => !disabled && node.input_type() != Some(InputType::Hidden),
         "iframe" | "embed" | "object" => true,
         _ => node

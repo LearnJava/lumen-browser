@@ -608,7 +608,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `pointer-events` | ✅ | inherited (CSS UI L4 §6.1) incl. `inherit`/`initial`/`unset`/`revert`; `none` skipped by `hit_test`/`hit_test_all` (shell click/hover/cursor, `elementFromPoint`) and `collect_clickable_elements`; inline elements gated by their own frag style, so a child `auto` inside a `none` parent is a target; SVG `visible*`/`painted`/`fill`/`stroke`/`all` parsed, treated as `auto` outside SVG geometry ⬜ |
 | `touch-action` | 🟡 | parsed + stored in `ComputedStyle`; gesture ⬜ — blocked on shell touch input, handed to P1 as ROADMAP.md `TOUCH-1` |
 | `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |
-| `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17) |
+| `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17); `<selectlist>` opens the same popup and its `<listbox>` options are collected (p4-selectlist-handoff) |
 | `caret-color` | ✅ | auto/`<color>` incl. `currentcolor`/`color()`/system colors (used value via `ComputedStyle::used_caret_color`), CSS-wide keywords; consumed by page `<input>` (FRAME-7 срез 1), `<textarea>` и frame input/textarea (срезы 3/6) |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 

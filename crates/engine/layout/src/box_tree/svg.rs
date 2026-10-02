@@ -295,8 +295,9 @@ pub(crate) fn collect_select_label(doc: &Document, select_id: NodeId) -> String 
 /// Returns the first `<option selected>` text, falling back to the first
 /// `<option>` text, or an empty string if no options are present.
 ///
-/// Phase 0 layout stub — renders like a native `<select>` widget.
-/// `// CSS: appearance: base-select` — P4 wires ::picker(select) styling.
+/// Renders like a native `<select>` widget; with `appearance: base-select` the
+/// box tree is built by `build_base_select_box` and the popup is the shell's
+/// `build_base_select_dropdown`.
 pub fn collect_selectlist_label(doc: &Document, sl_id: NodeId) -> String {
     // Gather direct <option> children and <option> children inside <listbox>.
     let mut option_ids: Vec<NodeId> = Vec::new();
