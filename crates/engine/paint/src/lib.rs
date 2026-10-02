@@ -363,7 +363,10 @@ pub use renderer::{
     SnapshotUploadError, DL_EPOCH_MISMATCHES, DL_FOLD_REUSED, FRAMES_RENDERED, FRAMES_SKIPPED,
     FRAME_LOG_NANOS, FRAME_PHASE_NANOS, POST_CACHE_NANOS, PRE_MARKS_NANOS, TAIL_NANOS,
 };
-pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
+pub use scroll_snap::{
+    find_scroll_snap_x, find_scroll_snap_x_proximity, find_scroll_snap_y,
+    find_scroll_snap_y_proximity,
+};
 pub use webgl::SoftwareWebGl;
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
