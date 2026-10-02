@@ -74,16 +74,17 @@ pub(in crate::style) struct CascadeIndex {
     /// such rule — every page that is not Lumen's own chrome — all three were
     /// pure waste. Node-independent, so it is decided once per sheet here.
     pub(in crate::style) has_webkit_scrollbar_rules: bool,
-    /// BUG-341 S10 — whether any declaration in the sheet mentions `quote`
-    /// (`content: open-quote`, `quotes: …`). `counters::walk` probes
-    /// `::before`/`::after` on every node solely to keep the CSS Generated
-    /// Content L3 §3.2 quote-nesting counter continuous; with no quote
-    /// anywhere in the sheet that probe cannot produce a depth, so it is
-    /// skipped. Deliberately a substring test over raw declaration values: it
-    /// over-approximates (a `--quote-color` custom property arms it) and must,
-    /// because a `var()` can smuggle `open-quote` in from anywhere. `attr()`
-    /// arms it too: that value comes from the DOM, which a sheet-level
-    /// predicate cannot see.
+    /// BUG-341 S10 — whether any `content` or custom-property (`--*`)
+    /// declaration in the sheet mentions `quote` (`content: open-quote`).
+    /// `counters::walk` probes `::before`/`::after` on every node solely to
+    /// keep the CSS Generated Content L3 §3.2 quote-nesting counter
+    /// continuous; with no quote in the sheet that probe cannot produce a
+    /// depth, so it is skipped. A substring test over raw declaration values:
+    /// it over-approximates (a `--quote-color` custom property arms it) and
+    /// must, because a `var()` can smuggle `open-quote` in from a custom
+    /// property. BUG-935 S67: other properties are out (`background:
+    /// url(quote.svg)` armed lenta.ru's probe on all ~1 900 elements), and so
+    /// is `attr()` — it resolves to the attribute's text, never a keyword.
     has_quote_content: bool,
     /// BUG-341 S23 — every pseudo-element name the sheet uses as the **subject**
     /// of a selector, lowercased and deduplicated.
@@ -174,11 +175,8 @@ impl CascadeIndex {
         let t = std::time::Instant::now();
         let has_webkit_scrollbar_rules =
             all_rules(sheet).any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar));
-        let has_quote_content = all_rules(sheet).any(|r| {
-            r.declarations
-                .iter()
-                .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
-        });
+        let has_quote_content =
+            all_rules(sheet).any(|r| r.declarations.iter().any(declaration_can_yield_quote));
         let mut pseudo_subjects: Vec<Box<str>> = Vec::new();
         for rule in all_rules(sheet) {
             for selector in &rule.selectors {
@@ -256,6 +254,18 @@ fn selector_pseudo_subjects(selector: &ComplexSelector) -> impl Iterator<Item = 
         SimpleSelector::PseudoElement(kind) => Some(pseudo_element_name(kind)),
         _ => None,
     })
+}
+
+/// Whether `decl` can put a quote keyword into some element's `content` — see
+/// [`CascadeIndex::has_quote_content`].
+///
+/// Only `content` itself and custom properties qualify: `content` is the one
+/// property whose value becomes `ContentItem::OpenQuote`/`CloseQuote`, and a
+/// `var()` reaches it only through a `--*` declaration. A `quote` in any other
+/// value (`url(quote.svg)`, `font-family: Blockquote`) never gets there.
+fn declaration_can_yield_quote(decl: &lumen_css_parser::Declaration) -> bool {
+    (decl.property.eq_ignore_ascii_case("content") || decl.property.starts_with("--"))
+        && value_mentions_quote(&decl.value)
 }
 
 /// Case-insensitive `value.contains("quote")` without allocating — see

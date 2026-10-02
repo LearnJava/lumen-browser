@@ -208,6 +208,23 @@ use super::*;
         assert!(sheet_has_quote_content(&indirect, vp, false));
     }
 
+    /// BUG-935 S67 — a `quote` outside `content`/`--*`, and `attr()`, cannot
+    /// reach a quote keyword, so they must not arm the per-node probe.
+    #[test]
+    fn sheet_quote_content_flag_ignores_unrelated_declarations() {
+        let vp = Size::new(800.0, 600.0);
+        for css in [
+            ".a { background: url(/img/quote.svg); }",
+            "blockquote { font-family: Quote Sans, serif; quotes: none; }",
+            "a::after { content: attr(data-x); }",
+        ] {
+            let sheet = lumen_css_parser::parse(css);
+            assert!(!sheet_has_quote_content(&sheet, vp, false), "{css}");
+        }
+        let upper = lumen_css_parser::parse("p::before { CONTENT: Open-Quote; }");
+        assert!(sheet_has_quote_content(&upper, vp, false));
+    }
+
     /// BUG-341 S23 — the predicate that lets callers skip a whole traversal.
     ///
     /// It must be exactly as wide as `matches_complex_for_pseudo`, which looks
