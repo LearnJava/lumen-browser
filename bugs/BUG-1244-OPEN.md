@@ -1,0 +1,17 @@
+# BUG-1244 — `skipped_computed_style_entries_equal_the_rebuilt_ones` падает в полном прогоне lumen-js
+
+**Статус:** OPEN
+**Тип:** флаки теста (или зависимость от порядка/нагрузки).
+**Заведён:** 2026-10-02 (P4, найден в гейте задачи `overscroll-behavior`, не относится к ней)
+**Область:** js (`crates/js/src/dom/tests/v8_bug935_s59_style_skip.rs:176`).
+
+## Симптом
+
+В `scripts/scoped-test.sh` (`-p lumen-js ... --lib`, ~4700 тестов параллельно) тест упал:
+`append_remove_on_body: no entry was left published — the skip never engaged`.
+В узком запуске (`cargo test -p lumen-js -p lumen-shell --lib -- v8_bug935_s59 ...`) проходит.
+Правки P4 (`resolve_scroll_chain_target`, shell/scrolling.rs) к этому пути не относятся.
+
+## Как проверить
+
+Полный `lumen-js --lib` прогон; затем `-- v8_bug935_s59` в одиночку.
