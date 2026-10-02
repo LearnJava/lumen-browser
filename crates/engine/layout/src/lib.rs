@@ -2539,6 +2539,63 @@ pub fn find_scroll_container_at(
     })
 }
 
+/// Result of walking the scroll chain for one wheel delta
+/// ([`resolve_scroll_chain_target`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollChainTarget {
+    /// The container that takes the gesture.
+    pub node: lumen_dom::NodeId,
+    /// Its new horizontal offset (CSS px, clamped).
+    pub new_x: f32,
+    /// Its new vertical offset (CSS px, clamped).
+    pub new_y: f32,
+    /// `false` ⇒ the container is at its boundary and the gesture ends here
+    /// without moving anything (`overscroll-behavior: contain | none`).
+    pub moved: bool,
+}
+
+/// CSS Overscroll Behavior L1 §3 — walk the scroll chain under the point
+/// `(x, y)` (CSS px, document-relative) from the innermost scroll container
+/// outwards and pick the one that takes the gesture.
+///
+/// A container takes the gesture when it can move on a delta-bearing axis or
+/// when its `overscroll-behavior` stops propagation at its boundary
+/// ([`overscroll_should_propagate`]). A container at its boundary with `auto`
+/// hands the delta to the next enclosing container. `None` ⇒ no container in
+/// the chain takes it, the caller scrolls the viewport / frame.
+#[must_use]
+pub fn resolve_scroll_chain_target(
+    containers: &[ScrollContainer],
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+) -> Option<ScrollChainTarget> {
+    // Later entries are deeper in the tree, so reverse order is innermost-first.
+    for c in containers.iter().rev() {
+        let r = &c.clip_rect;
+        if !(x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+            continue;
+        }
+        let new_x = (c.scroll_x + dx).clamp(0.0, (c.scroll_width - r.width).max(0.0));
+        let new_y = (c.scroll_y + dy).clamp(0.0, (c.scroll_height - r.height).max(0.0));
+        let moved_x = (new_x - c.scroll_x).abs() > f32::EPSILON;
+        let moved_y = (new_y - c.scroll_y).abs() > f32::EPSILON;
+        if overscroll_should_propagate(
+            c.overscroll_behavior_x,
+            c.overscroll_behavior_y,
+            dx,
+            dy,
+            moved_x,
+            moved_y,
+        ) {
+            continue;
+        }
+        return Some(ScrollChainTarget { node: c.node, new_x, new_y, moved: moved_x || moved_y });
+    }
+    None
+}
+
 /// Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
 /// walking up the DOM parent chain.
 ///

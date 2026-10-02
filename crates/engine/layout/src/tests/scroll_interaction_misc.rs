@@ -2214,6 +2214,51 @@ fn overscroll_consumed_when_container_moves() {
     assert!(!overscroll_should_propagate(Auto, Auto, 30.0, 30.0, true, false));
 }
 
+// CSS Overscroll Behavior L1 §3 — scroll chain across nested containers.
+#[test]
+fn scroll_chain_auto_at_boundary_hands_off_to_outer_container() {
+    use style::OverscrollBehavior::Auto;
+    let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+    let mut inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+    // Inner is already at its bottom boundary (max = 400).
+    inner.scroll_y = 400.0;
+    inner.overscroll_behavior_y = Auto;
+    let t = resolve_scroll_chain_target(&[outer, inner], 60.0, 60.0, 0.0, 30.0).unwrap();
+    assert_eq!(t.node, lumen_dom::NodeId::from_index(1));
+    assert!(t.moved);
+    assert_eq!(t.new_y, 30.0);
+}
+
+#[test]
+fn scroll_chain_contain_at_boundary_stops_on_inner_container() {
+    use style::OverscrollBehavior::Contain;
+    let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+    let mut inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+    inner.scroll_y = 400.0;
+    inner.overscroll_behavior_y = Contain;
+    let t = resolve_scroll_chain_target(&[outer, inner], 60.0, 60.0, 0.0, 30.0).unwrap();
+    assert_eq!(t.node, lumen_dom::NodeId::from_index(2));
+    assert!(!t.moved);
+}
+
+#[test]
+fn scroll_chain_all_auto_at_boundary_falls_through_to_viewport() {
+    let mut outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+    outer.scroll_y = 400.0;
+    let mut inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+    inner.scroll_y = 400.0;
+    assert_eq!(resolve_scroll_chain_target(&[outer, inner], 60.0, 60.0, 0.0, 30.0), None);
+}
+
+#[test]
+fn scroll_chain_moving_inner_wins_over_outer() {
+    let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+    let inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+    let t = resolve_scroll_chain_target(&[outer, inner], 60.0, 60.0, 0.0, 30.0).unwrap();
+    assert_eq!(t.node, lumen_dom::NodeId::from_index(2));
+    assert!(t.moved);
+}
+
 /// BUG-158: a `flex: 1` item (which sets `flex-basis: 0`) in an
 /// indefinite-height column flex container must not collapse to height 0 —
 /// CSS Flexbox §4.5 automatic minimum size keeps it at its content height.
