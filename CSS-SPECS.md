@@ -318,8 +318,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `padding-block*` / `padding-inline*` | ✅ | |
 | `border-block*` / `border-inline*` | ✅ | |
 | `inset-block*` / `inset-inline*` | ✅ | |
-| `block-size` / `inline-size` | 🟡 | LTR: height/width; RTL/vertical ⬜ |
-| `min/max-block-size` / `min/max-inline-size` | 🟡 | LTR only |
+| `block-size` / `inline-size` | ✅ | flow-relative, resolved to width/height by `writing-mode` (vertical-rl/lr, sideways-rl/lr swap axes; `direction` does not affect sizes), `resolve_logical_properties`; CSSOM `getComputedStyle` mirror follows the same swap |
+| `min/max-block-size` / `min/max-inline-size` | ✅ | own `ComputedStyle` fields, mapped onto min/max-width/height by `writing-mode` (same as `block-size`/`inline-size`) |
 
 ---
 

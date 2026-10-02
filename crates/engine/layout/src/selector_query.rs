@@ -1946,10 +1946,28 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // (`style::logical::resolve_logical_properties`) only resolves
     // horizontal-tb/LTR onto physical fields — gate the same way here rather
     // than fabricate a mapping the layout side never applied.
+    // Sizing longhands depend on `writing-mode` only (not `direction`):
+    // vertical modes swap inline/block onto height/width.
+    {
+        let vertical = matches!(
+            style.writing_mode,
+            WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+        );
+        let pairs: [(&str, &str); 6] = if vertical {
+            [("inline-size", "height"), ("min-inline-size", "min-height"), ("max-inline-size", "max-height"),
+             ("block-size", "width"), ("min-block-size", "min-width"), ("max-block-size", "max-width")]
+        } else {
+            [("inline-size", "width"), ("min-inline-size", "min-width"), ("max-inline-size", "max-width"),
+             ("block-size", "height"), ("min-block-size", "min-height"), ("max-block-size", "max-height")]
+        };
+        for (logical, physical) in pairs {
+            if let Some(v) = m.get(physical).cloned() {
+                m.insert(logical.into(), v);
+            }
+        }
+    }
     if style.writing_mode == WritingMode::HorizontalTb && style.direction == Direction::Ltr {
         const LOGICAL_LONGHANDS: &[(&str, &str)] = &[
-            ("inline-size", "width"), ("min-inline-size", "min-width"), ("max-inline-size", "max-width"),
-            ("block-size", "height"), ("min-block-size", "min-height"), ("max-block-size", "max-height"),
             ("inset-inline-start", "left"), ("inset-inline-end", "right"),
             ("inset-block-start", "top"), ("inset-block-end", "bottom"),
             ("margin-inline-start", "margin-left"), ("margin-inline-end", "margin-right"),
@@ -3112,14 +3130,26 @@ mod tests {
 
     #[test]
     fn computed_map_logical_properties_absent_outside_horizontal_tb_ltr() {
-        // Phase 0 (`resolve_logical_properties`) only resolves logical props
-        // onto physical fields for horizontal-tb/LTR — the CSSOM mirror gates
-        // the same way rather than serve a made-up value for vertical modes.
+        // Margin/padding/inset/border logical longhands are still only
+        // resolved onto physical fields for horizontal-tb/LTR — the CSSOM
+        // mirror gates the same way rather than serve a made-up value.
         let m = div_computed_map(
             "<div>x</div>",
-            "div { writing-mode: vertical-rl; inline-size: 120px; }",
+            "div { writing-mode: vertical-rl; margin-inline-start: 12px; }",
         );
-        assert_eq!(m.get("inline-size"), None);
+        assert_eq!(m.get("margin-inline-start"), None);
+    }
+
+    #[test]
+    fn computed_map_logical_sizing_swaps_in_vertical_writing_mode() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { writing-mode: vertical-rl; inline-size: 120px; block-size: 80px; }",
+        );
+        assert_eq!(m.get("inline-size").map(String::as_str), Some("120px"));
+        assert_eq!(m.get("block-size").map(String::as_str), Some("80px"));
+        assert_eq!(m.get("height").map(String::as_str), Some("120px"));
+        assert_eq!(m.get("width").map(String::as_str), Some("80px"));
     }
 
     // ── computed_style_to_map: CSSOM-3 slice 3 (BUG-537 family) ──────────────
