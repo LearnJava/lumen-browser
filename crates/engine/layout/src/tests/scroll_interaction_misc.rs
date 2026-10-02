@@ -1417,6 +1417,53 @@ fn set_scroll_position_sets_value() {
     assert_eq!(containers2[0].scroll_y, 10.0);
 }
 
+/// BUG-935 срез 63: the one-walk restore gives exactly what a `set_scroll_position`
+/// loop over the same map gave — nested containers, an offset above and below the
+/// scrollable range, a `(0, 0)` request, and a key that is not in the tree.
+#[test]
+fn restore_scroll_positions_matches_the_per_node_loop() {
+    let html = "<div id=\"a\"><div style=\"height:400px\"></div>        <div id=\"b\"><div style=\"height:300px\"></div></div></div>        <div id=\"c\"><div style=\"height:200px\"></div></div>";
+    let css = "#a, #b, #c { overflow: scroll; width: 100px; height: 50px; }";
+    let mut by_loop = lay_full(html, css);
+    let mut by_walk = lay_full(html, css);
+    let nodes: Vec<_> = collect_scroll_containers(&by_loop).iter().map(|c| c.node).collect();
+    assert_eq!(nodes.len(), 3);
+    let wanted = [[0.0, 25.0], [0.0, 9999.0], [0.0, 0.0]];
+    let mut states = std::collections::HashMap::new();
+    for (n, w) in nodes.iter().zip(wanted) {
+        states.insert(n.raw(), [w[0], w[1], 0.0, 0.0]);
+    }
+    states.insert(lumen_dom::NodeId::from_index(9999).raw(), [5.0, 5.0, 0.0, 0.0]);
+    for (&nid, s) in &states {
+        set_scroll_position(&mut by_loop, lumen_dom::NodeId::from_raw(nid), s[0], s[1]);
+    }
+    restore_scroll_positions(&mut by_walk, &states);
+    let offsets = |root: &LayoutBox| -> Vec<(u32, f32, f32)> {
+        collect_scroll_containers(root).iter().map(|c| (c.node.raw(), c.scroll_x, c.scroll_y)).collect()
+    };
+    assert_eq!(offsets(&by_walk), offsets(&by_loop));
+    let got = offsets(&by_walk);
+    assert_eq!(got[0].2, 25.0, "in-range offset applied");
+    assert!(got[1].2 > 0.0 && got[1].2 < 9999.0, "out-of-range offset clamped, got {}", got[1].2);
+    assert_eq!(got[2].2, 0.0);
+}
+
+/// A request for `(0, 0)` on a box that is not at the origin must still reset it
+/// (the skip only covers a box already there).
+#[test]
+fn restore_scroll_positions_resets_a_box_not_at_the_origin() {
+    let mut root = lay_full(
+        "<div id=\"s\"><div style=\"height:200px\"></div></div>",
+        "#s { overflow: scroll; width: 100px; height: 50px; }",
+    );
+    let node = collect_scroll_containers(&root)[0].node;
+    set_scroll_position(&mut root, node, 0.0, 30.0);
+    assert_eq!(collect_scroll_containers(&root)[0].scroll_y, 30.0);
+    let states = [(node.raw(), [0.0, 0.0, 0.0, 0.0])].into_iter().collect();
+    restore_scroll_positions(&mut root, &states);
+    assert_eq!(collect_scroll_containers(&root)[0].scroll_y, 0.0);
+}
+
 #[test]
 fn set_scroll_position_returns_false_for_unknown_node() {
     use lumen_dom::NodeId;
