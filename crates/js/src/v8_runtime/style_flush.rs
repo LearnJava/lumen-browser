@@ -62,6 +62,9 @@ type IncrFlushResult = (
     std::collections::HashSet<lumen_dom::NodeId>,
     std::collections::HashSet<u32>,
     std::collections::HashSet<u32>,
+    // BUG-935 срез 59: the content record this flush's cascade was licensed by
+    // (`None` — it had none), for the computed-style collector's change test.
+    Option<std::collections::HashSet<lumen_dom::NodeId>>,
 );
 
 /// Bundled embedder-pushed state a same-tick accessor native needs to force
@@ -182,6 +185,12 @@ pub(crate) struct FlushHandles {
     /// BUG-935 срез 58: same-tick flushes that took the incremental path; read through
     /// `V8JsRuntime::incremental_flush_count`.
     pub(crate) incremental_flushes: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 59: computed-style entries left published by the scoped collector;
+    /// read through `V8JsRuntime::style_entries_kept_count`.
+    pub(crate) style_entries_kept: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 59: this runtime's own `LUMEN_NO_STYLE_SKIP`, for a differential test
+    /// that runs one page with and without the skip in one process.
+    pub(crate) style_skip_off: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// See [`FlushHandles::patched_sheet_cache`].
@@ -261,6 +270,13 @@ fn content_journal_disabled() -> bool {
     {
         false
     }
+}
+
+/// BUG-935 срез 59: `LUMEN_NO_STYLE_SKIP=1` turns off the computed-style collector's
+/// reuse of unchanged entries (A/B switch for a live measurement).
+fn style_skip_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_STYLE_SKIP").is_some_and(|v| v != "0"))
 }
 
 impl FlushHandles {
@@ -424,8 +440,8 @@ impl FlushHandles {
         // whole-document map from scratch, same as before this slice.
         drop(incr_scope_guard);
         let (mut layout_root, counters, incr_scope) = match incr {
-            Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids)) => {
-                (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids)))
+            Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)) => {
+                (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)))
             }
             None => {
                 let (lr, c) =
@@ -478,11 +494,27 @@ impl FlushHandles {
         drop(scroll_scope);
         let collect_scope = lumen_core::profile::scope("flush.collectors");
         let collect_t0 = std::time::Instant::now();
-        if let Some((dirty_roots, prev_node_ids, _)) = &incr_scope {
+        if let Some((dirty_roots, prev_node_ids, _, content_nodes)) = &incr_scope {
             let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
             let plan_scope = lumen_core::profile::scope("flush.collect_plan");
+            // BUG-935 срез 59: which elements the cascade really changed, so the
+            // computed-style collector leaves the rest of a dirty root alone. Only
+            // worth building when that collector runs on the scoped path, and only
+            // with a complete content record (it names the nodes whose subtree
+            // changed without a style change of their own).
+            let changed = if self.computed_styles_needed.load(Ordering::Relaxed)
+                && self.computed_styles_collected.load(Ordering::Relaxed)
+                && !style_skip_disabled()
+                && !self.style_skip_off.load(Ordering::Relaxed)
+            {
+                content_nodes
+                    .as_ref()
+                    .and_then(|content| lumen_layout::ChangedNodes::new(&doc_guard, &counters, content))
+            } else {
+                None
+            };
             let plan = lumen_layout::ScopedCollection::plan(
-                &layout_root, dirty_roots, counters.clean_subtrees(), &lr, viewport,
+                &layout_root, dirty_roots, counters.clean_subtrees(), &lr, viewport, changed.as_ref(),
             );
             drop(plan_scope);
             let rects_scope = lumen_core::profile::scope("flush.collect_layout_rects");
@@ -519,9 +551,15 @@ impl FlushHandles {
                 // always-on `layout_rects`/`client_rects` above got for free
                 // by never being gated.
                 if self.computed_styles_collected.load(Ordering::Relaxed) {
+                    let mut kept = 0u64;
                     for nid in prev_node_ids {
-                        cs.remove(nid);
+                        if plan.keeps_computed_style(*nid) {
+                            kept += 1;
+                        } else {
+                            cs.remove(nid);
+                        }
                     }
+                    self.style_entries_kept.fetch_add(kept, Ordering::Relaxed);
                     plan.collect_computed_styles(&doc_guard, viewport, &mut cs);
                 } else {
                     *cs = lumen_layout::collect_computed_styles(
@@ -593,7 +631,7 @@ impl FlushHandles {
         // this cache unconditionally (no `_needed` gate), so it was paying
         // the full-document cost on every single incremental flush.
         let scroll_collect_scope = lumen_core::profile::scope("flush.scroll_collect");
-        if let Some((dirty_roots, _, prev_node_raw_ids)) = &incr_scope {
+        if let Some((dirty_roots, _, prev_node_raw_ids, _)) = &incr_scope {
             let scoped_roots = lumen_layout::find_dirty_root_boxes(&layout_root, dirty_roots);
             let mut ss = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
             for nid in prev_node_raw_ids {
@@ -653,7 +691,7 @@ impl FlushHandles {
                 flush_t0.elapsed().as_secs_f64() * 1000.0,
                 collect_ms,
                 if incr_scope.is_some() { "incremental" } else { "full" },
-                incr_scope.as_ref().map_or(0, |(roots, _, _)| roots.len()),
+                incr_scope.as_ref().map_or(0, |(roots, _, _, _)| roots.len()),
                 touched.nodes.len(),
             );
         }
@@ -806,13 +844,15 @@ impl FlushHandles {
         // tracker's nodes are added as a belt-and-braces union. Anything the
         // journal cannot vouch for — no baseline, or a shadow tree / `<slot>`
         // involved (see `journal_touches_shadow`) — stays `Untracked`.
-        let content_nodes: std::collections::HashSet<lumen_dom::NodeId>;
-        let content_dirty = match content_journal {
+        let content_nodes: Option<std::collections::HashSet<lumen_dom::NodeId>> = match content_journal {
             Some(journal) if !content_journal_disabled() && !doc.journal_touches_shadow(journal) => {
-                content_nodes = journal.iter().chain(new_touched.iter()).copied().collect();
-                lumen_layout::counters::ContentDirty::Nodes(&content_nodes)
+                Some(journal.iter().chain(new_touched.iter()).copied().collect())
             }
-            _ => lumen_layout::counters::ContentDirty::Untracked,
+            _ => None,
+        };
+        let content_dirty = match &content_nodes {
+            Some(nodes) => lumen_layout::counters::ContentDirty::Nodes(nodes),
+            None => lumen_layout::counters::ContentDirty::Untracked,
         };
         // BUG-1211 (post-collectors): snapshot which nodes the touched
         // subtrees owned in the *previous* (`basis.layout`) tree before it
@@ -861,7 +901,7 @@ impl FlushHandles {
         if lumen_paint::frame_log_enabled() {
             eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
-        Some((result.0, result.1, dirty_roots_for_return, prev_node_ids, prev_node_raw_ids))
+        Some((result.0, result.1, dirty_roots_for_return, prev_node_ids, prev_node_raw_ids, content_nodes))
     }
 
     /// CSSOM-8 вариант C: replay every recorded CSSOM write onto a throwaway

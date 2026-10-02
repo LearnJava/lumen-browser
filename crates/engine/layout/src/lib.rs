@@ -58,7 +58,7 @@ pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
 
-pub use scoped_collect::ScopedCollection;
+pub use scoped_collect::{ChangedNodes, ScopedCollection};
 
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
@@ -1723,13 +1723,32 @@ fn collect_computed_styles_box(
     viewport: lumen_core::geom::Size,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    // First box in tree order wins — see `collect_layout_rects_rec` for why
-    // several boxes can carry the same `NodeId`.
-    out.entry(b.node.index() as u32).or_insert_with(|| {
-        let mut m = computed_style_to_map(&b.style);
-        resolved_geometry::apply_used_geometry(&mut m, b, ctx, viewport);
-        m
-    });
+    collect_computed_styles_parts(doc, b, ctx, viewport, true, true, out);
+}
+
+/// [`collect_computed_styles_box`] with either half optional (BUG-935 срез 59):
+/// `own` is the box's own entry, `segments` the entries of the text and inline
+/// elements an `InlineRun` flattens. The caller passes `false` for a half whose
+/// published entries it has proved unchanged.
+fn collect_computed_styles_parts(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    ctx: &resolved_geometry::GeomCtx,
+    viewport: lumen_core::geom::Size,
+    own: bool,
+    segments: bool,
+    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+) {
+    if own {
+        out.entry(b.node.index() as u32).or_insert_with(|| {
+            let mut m = computed_style_to_map(&b.style);
+            resolved_geometry::apply_used_geometry(&mut m, b, ctx, viewport);
+            m
+        });
+    }
+    if !segments {
+        return;
+    }
     if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
         for seg in segments {
             // `NodeId(0)` is the document root, which `InlineSegment::source_node`

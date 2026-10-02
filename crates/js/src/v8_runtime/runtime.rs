@@ -228,6 +228,10 @@ pub struct V8JsRuntime {
     pub(super) computed_styles_collected: Arc<AtomicBool>,
     /// BUG-935 срез 58: mirrors [`super::style_flush::FlushHandles::incremental_flushes`].
     pub(super) incremental_flushes: Arc<AtomicU64>,
+    /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_entries_kept`].
+    pub(super) style_entries_kept: Arc<AtomicU64>,
+    /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_skip_off`].
+    pub(super) style_skip_off: Arc<AtomicBool>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -515,6 +519,8 @@ impl V8JsRuntime {
             computed_styles_needed: Arc::new(AtomicBool::new(false)),
             computed_styles_collected: Arc::new(AtomicBool::new(false)),
             incremental_flushes: Arc::new(AtomicU64::new(0)),
+            style_entries_kept: Arc::new(AtomicU64::new(0)),
+            style_skip_off: Arc::new(AtomicBool::new(false)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -869,6 +875,19 @@ impl V8JsRuntime {
     /// (as opposed to a full relayout) since the runtime was created.
     pub fn incremental_flush_count(&self) -> u64 {
         self.incremental_flushes.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 59: computed-style entries the same-tick flush left published
+    /// instead of rebuilding (see `ScopedCollection::keeps_computed_style`).
+    pub fn style_entries_kept_count(&self) -> u64 {
+        self.style_entries_kept.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 59: switch the computed-style reuse off for this runtime (what
+    /// `LUMEN_NO_STYLE_SKIP=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_style_skip_off(&self, off: bool) {
+        self.style_skip_off.store(off, Ordering::Relaxed);
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].
