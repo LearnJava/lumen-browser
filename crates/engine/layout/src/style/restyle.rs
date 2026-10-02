@@ -551,6 +551,64 @@ fn collect_sibling_source_compounds<'a>(
     }
 }
 
+/// BUG-935 срез 60 — can `pc`'s result on an element depend on *where the element
+/// sits among its siblings* (or on a sibling's/descendant's state)? Those are the
+/// pseudo-classes a change of the parent's child list can flip on an element whose
+/// own attributes and subtree did not move: the positional family, `:empty`, and
+/// `:has()` (a forward-sibling argument reads the following siblings).
+/// `:not()`/`:is()`/`:where()` are positional when anything inside them is.
+fn pseudo_class_is_positional(pc: &PseudoClass) -> bool {
+    match pc {
+        PseudoClass::FirstChild
+        | PseudoClass::LastChild
+        | PseudoClass::OnlyChild
+        | PseudoClass::Empty
+        | PseudoClass::FirstOfType
+        | PseudoClass::LastOfType
+        | PseudoClass::OnlyOfType
+        | PseudoClass::NthChild(..)
+        | PseudoClass::NthLastChild(..)
+        | PseudoClass::NthOfType(_)
+        | PseudoClass::NthLastOfType(_)
+        | PseudoClass::Has(_) => true,
+        PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list) => {
+            list.iter().any(complex_selector_is_structure_sensitive)
+        }
+        _ => false,
+    }
+}
+
+/// BUG-935 срез 60 — a selector *inside* a nested list (`:not(a + b)`) is treated as
+/// structure-sensitive when it has a sibling combinator or any positional compound.
+fn complex_selector_is_structure_sensitive(c: &ComplexSelector) -> bool {
+    std::iter::once(&c.head).chain(c.tail.iter().map(|(_, comp)| comp)).any(compound_is_positional)
+        || c.tail.iter().any(|(comb, _)| is_sibling_combinator(*comb))
+}
+
+fn compound_is_positional(compound: &CompoundSelector) -> bool {
+    compound.parts.iter().any(|p| matches!(p, SimpleSelector::PseudoClass(pc) if pseudo_class_is_positional(pc)))
+}
+
+/// BUG-935 срез 60 — every non-subject compound of `complex` whose match can change
+/// when its element's *siblings* change: it is positional, or a sibling combinator
+/// precedes it in the selector (`A + B`'s `B`).
+///
+/// A descendant of such an element can match through it (`li:first-child a`,
+/// `h2 + div p`), so when a child list changes, an existing child that could match
+/// one of these has to take its whole subtree with it. The subject compound is
+/// left out: its element is a child of the changed container (recascaded anyway)
+/// or untouched (its own siblings did not change).
+fn collect_structure_sensitive_compounds<'a>(complex: &'a ComplexSelector, out: &mut Vec<&'a CompoundSelector>) {
+    let subject = complex.tail.len();
+    for i in 0..subject {
+        let compound = if i == 0 { &complex.head } else { &complex.tail[i - 1].1 };
+        let after_sibling = i > 0 && is_sibling_combinator(complex.tail[i - 1].0);
+        if after_sibling || compound_is_positional(compound) {
+            out.push(compound);
+        }
+    }
+}
+
 /// True when `part` is keyed on the attribute named `attr` — i.e. writing that
 /// attribute is what could flip this simple selector's result.
 fn simple_selector_keys_on_attr(part: &SimpleSelector, attr: &str) -> bool {
@@ -629,6 +687,9 @@ pub struct NodeRestyleIndex<'a> {
     /// and `:has()` does not cross the boundary, so with a `:has()` in the sheet
     /// the whole document is restyled, as before.
     has_in_shadow_doc: bool,
+    /// BUG-935 срез 60 — the non-subject compounds a child-list change can flip
+    /// ([`collect_structure_sensitive_compounds`]).
+    structure_sensitive: Vec<&'a CompoundSelector>,
 }
 
 impl NodeRestyleIndex<'_> {
@@ -676,6 +737,16 @@ impl NodeRestyleIndex<'_> {
         }
     }
 
+    /// BUG-935 срез 60 — can a change of the parent's child list alter the style of
+    /// something *below* `child`, through `child`'s own position or siblings
+    /// (`li:first-child a`, `h2 + div p`)? Decided structurally, over-approximating:
+    /// every pseudo-class is taken as possible ([`compound_could_match_after_attr_change`]).
+    fn child_needs_deep_restyle(&self, doc: &Document, child: NodeId) -> bool {
+        self.structure_sensitive
+            .iter()
+            .any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
+    }
+
     /// Number of sibling-reachable compounds the narrowing tests each changed
     /// node against. Exposed for the count-based regression gates.
     pub fn sibling_source_count(&self) -> usize {
@@ -711,6 +782,7 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
     let mut has_sibling_reach = false;
     let mut sibling_sources = Vec::new();
     let mut has_subjects = Vec::new();
+    let mut structure_sensitive = Vec::new();
     for rules in stylesheet_rule_groups(sheet) {
         for rule in rules {
             for selector in &rule.selectors {
@@ -721,6 +793,7 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
                 }
                 conservative |= complex_selector_has_nth_of(selector);
                 collect_sibling_source_compounds(selector, &mut sibling_sources);
+                collect_structure_sensitive_compounds(selector, &mut structure_sensitive);
             }
         }
     }
@@ -731,6 +804,7 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
         has_subjects,
         has_sibling_reach,
         has_in_shadow_doc,
+        structure_sensitive,
     }
 }
 
@@ -741,6 +815,12 @@ pub enum NodeChange<'a> {
     /// The attribute named `.0` was written to, or removed from, the node. The
     /// name is what lets the root-set ask which selectors could possibly react.
     Attr(&'a str),
+    /// BUG-935 срез 60 — the node's child list changed (an element was appended,
+    /// removed, moved, or its text replaced) and nothing else about it did.
+    /// [`restyle_roots_for_node_changes`] can restyle the node and its direct
+    /// children instead of the parent's whole subtree; the single-set
+    /// [`restyle_root_set_for_node_change`] reads it as [`Self::Unattributed`].
+    ChildList,
     /// Something else changed, or the source cannot name what changed: a child
     /// list moved (`:nth-child`, `:empty` and sibling combinators all react to
     /// that, and no attribute name describes it), or the mutation came from a
@@ -795,18 +875,94 @@ pub fn restyle_root_set_for_node_change<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
+    root_set_impl(doc, changes, index, false).deep
+}
+
+/// BUG-935 срез 60 — the restyle roots of a batch of DOM changes, split by how much of
+/// the subtree each one has to take with it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RestyleRoots {
+    /// Nodes whose whole subtree is recascaded — [`restyle_root_set_for_node_change`]'s
+    /// answer, and what `RestyleDelta::dirty_roots` means.
+    pub deep: HashSet<NodeId>,
+    /// Nodes whose child list changed: the node and its direct children are
+    /// recascaded, and a child's subtree only when its style changed, it moved from
+    /// another parent, or it is in [`Self::deep`] (`RestyleDelta::shallow_roots`).
+    pub shallow: HashSet<NodeId>,
+}
+
+/// BUG-935 срез 60 — like [`restyle_root_set_for_node_change`], but a
+/// [`NodeChange::ChildList`] yields a shallow root instead of the parent's whole subtree.
+///
+/// A child-list change on `C` reaches only: `C` itself (`:empty`, `:has()`), its direct
+/// children (positional pseudo-classes, sibling combinators), and the subtree of a child
+/// whose own position a selector reads on the way down (`li:first-child a` —
+/// [`NodeRestyleIndex::child_needs_deep_restyle`], which lands such a child in `deep`).
+/// What goes beyond that is a sibling combinator on `C` (`C:empty + X`), answered by also
+/// making `C`'s parent a shallow root, and `:has()`, answered by the same
+/// [`NodeRestyleIndex::has_reach_roots`] as before. `:nth-child(… of S)` and shadow roots
+/// switch it off (`conservative`): the change then widens to the parent, as before.
+pub fn restyle_roots_for_node_changes<'a>(
+    doc: &Document,
+    changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
+    index: &NodeRestyleIndex<'_>,
+) -> RestyleRoots {
+    root_set_impl(doc, changes, index, true)
+}
+
+fn root_set_impl<'a>(
+    doc: &Document,
+    changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
+    index: &NodeRestyleIndex<'_>,
+    allow_shallow: bool,
+) -> RestyleRoots {
     if index.has_dependent && index.has_in_shadow_doc {
-        return changes.into_iter().map(|_| doc.root()).collect();
+        return RestyleRoots { deep: changes.into_iter().map(|_| doc.root()).collect(), shallow: HashSet::new() };
     }
-    let mut roots = HashSet::new();
+    let mut roots = RestyleRoots::default();
+    let shallow_ok = allow_shallow && !index.conservative;
     for (n, change) in changes {
-        let needs_fanout = match change {
-            NodeChange::Unattributed => true,
-            NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
-        };
-        roots.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
+        match change {
+            NodeChange::ChildList if shallow_ok => {
+                // A text/comment node reported for a data change: its parent's child
+                // list is what `:empty` and the siblings read.
+                let container = if matches!(doc.get(n).data, NodeData::Element { .. }) {
+                    Some(n)
+                } else {
+                    doc.get(n).parent
+                };
+                let Some(n) = container else {
+                    roots.deep.insert(n);
+                    continue;
+                };
+                let mut containers = vec![n];
+                if index.attr_change_needs_fanout(doc, n, "")
+                    && let Some(parent) = doc.get(n).parent
+                {
+                    containers.push(parent);
+                }
+                for c in containers {
+                    if roots.shallow.insert(c) {
+                        for &child in &doc.get(c).children {
+                            if matches!(doc.get(child).data, NodeData::Element { .. })
+                                && index.child_needs_deep_restyle(doc, child)
+                            {
+                                roots.deep.insert(child);
+                            }
+                        }
+                    }
+                }
+            }
+            other => {
+                let needs_fanout = match other {
+                    NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
+                    NodeChange::Unattributed | NodeChange::ChildList => true,
+                };
+                roots.deep.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
+            }
+        }
         if index.has_dependent {
-            index.has_reach_roots(doc, n, &mut roots);
+            index.has_reach_roots(doc, n, &mut roots.deep);
         }
     }
     roots

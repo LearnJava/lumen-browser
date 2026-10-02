@@ -1510,7 +1510,7 @@ fn take_dom_touched_clears_between_calls() {
 
 /// BUG-1211: плоская запись атрибута (`setAttribute`, `removeAttribute`,
 /// инлайновый `style`) запоминает имя в `attr_gen`, а не в `structural_gen`;
-/// всё остальное (смена списка детей) — структурное. Это то, по чему
+/// смена списка детей — в `child_list_gen`; всё остальное — структурное. Это то, по чему
 /// `try_incremental_flush` выбирает `NodeChange::Attr` против `Unattributed`.
 #[test]
 fn dom_touched_names_plain_attribute_writes() {
@@ -1527,9 +1527,12 @@ fn dom_touched_names_plain_attribute_writes() {
     assert_eq!(got, ["data-x", "style"]);
     assert!(!t.structural_gen.contains_key(&node), "plain attribute writes are not structural");
 
+    // BUG-935 срез 60: a change of the child list is its own kind of touch — the flush
+    // restyles the container and its direct children, not the parent's subtree.
     rt.eval("document.getElementById('main').appendChild(document.createElement('i'))").unwrap();
     let t = rt.take_dom_touched();
-    assert!(!t.structural_gen.is_empty(), "appendChild is a structural touch");
+    assert!(!t.child_list_gen.is_empty(), "appendChild is a child-list touch");
+    assert!(t.structural_gen.is_empty(), "appendChild is not an unattributed structural touch");
 }
 
 /// BUG-341 S7 part 2: end-to-end differential test for the page-pipeline
@@ -1600,7 +1603,7 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
             &node_index,
         )
     };
-    let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
+    let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked, shallow_roots: Default::default() };
 
     // BUG-341 S19: the incremental pass consumes `prev` (it moves the
     // reusable subtrees into the tree it returns), and the geometry

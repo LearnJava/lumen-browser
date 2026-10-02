@@ -182,6 +182,7 @@ fn bug341_s17_keystroke_restyle_census() {
                     prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                     dirty_roots,
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    shallow_roots: Default::default(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 lumen_layout::box_tree::set_incremental_box_build(true);
@@ -383,6 +384,7 @@ fn bug341_s18_keystroke_box_build_census() {
                     prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                     dirty_roots,
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    shallow_roots: Default::default(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 lumen_layout::box_tree::set_incremental_box_build(true);
@@ -599,6 +601,7 @@ fn bug341_s19_copy_census() {
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        shallow_roots: Default::default(),
                     };
                     lumen_layout::counters::set_incremental_restyle(true);
                     lumen_layout::box_tree::set_incremental_box_build(true);
@@ -736,6 +739,7 @@ fn bug341_s20_stage_census() {
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        shallow_roots: Default::default(),
                     };
                     lumen_layout::counters::set_incremental_restyle(true);
                     lumen_layout::box_tree::set_incremental_box_build(true);
@@ -1039,6 +1043,7 @@ fn bug341_s21_cascade_index_census() {
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        shallow_roots: Default::default(),
                     };
                     lumen_layout::counters::set_incremental_restyle(true);
                     lumen_layout::box_tree::set_incremental_box_build(true);
@@ -1228,6 +1233,7 @@ fn bug341_s27_walk_census() {
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        shallow_roots: Default::default(),
                     };
                     lumen_layout::counters::set_incremental_restyle(true);
                     lumen_layout::box_tree::set_incremental_box_build(true);
@@ -1831,6 +1837,7 @@ fn bug341_s3_incremental_cascade_precompute_share() {
             prev_styles: baseline.styles().clone(),
             dirty_roots: dirty_roots.clone(),
             content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(),
         };
         let t0 = std::time::Instant::now();
         let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
@@ -1966,6 +1973,7 @@ fn bug341_s4_incremental_box_build_share() {
             prev_styles: baseline.styles().clone(),
             dirty_roots: dirty_roots.clone(),
             content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(),
         };
         let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
         // See the full-rebuild loop above: one fresh `prev` per sample.

@@ -456,6 +456,7 @@ mod flex_align_content;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
+mod bug935_shallow_roots;
 mod bfc_margin_collapse;
 mod layout_box_drop;
 mod block_flow_trampoline;

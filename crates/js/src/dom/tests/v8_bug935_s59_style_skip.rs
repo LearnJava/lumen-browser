@@ -10,7 +10,7 @@
 //! with no read until the end (one full layout) is compared too, but only reported:
 //! the scoped collectors differ from it in ways that predate the skip.
 
-use super::v8_bug935_s55_content_journal::{page, runtime};
+use super::v8_bug935_s55_content_journal::{page, runtime, JOURNAL_SWITCH};
 use super::*;
 
 const SHEET: &str = "body { margin: 0; }
@@ -165,6 +165,8 @@ const SCENARIOS: &[(&str, &str, bool)] = &[
 
 #[test]
 fn skipped_computed_style_entries_equal_the_rebuilt_ones() {
+    // Needs the journal on throughout — see `JOURNAL_SWITCH`.
+    let _journal_on = JOURNAL_SWITCH.lock().unwrap_or_else(|e| e.into_inner());
     for (name, steps, must_keep) in SCENARIOS {
         let (full, _) = run(steps, Mode::Full);
         let (noskip, none_kept) = run(steps, Mode::NoSkip);

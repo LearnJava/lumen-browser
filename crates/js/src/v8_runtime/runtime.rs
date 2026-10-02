@@ -62,6 +62,12 @@ pub struct DomTouched {
     /// `:nth-child`/`:empty`/sibling combinators, so the same-tick flush
     /// widens it to the parent. Never cleared, like [`Self::touch_gen`].
     pub(crate) structural_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 60: `node → epoch` of the node's latest touch that changed *only its
+    /// child list* (`appendChild`/`removeChild`/`insertBefore` on it, `textContent`,
+    /// `innerHTML`). Such a touch is not in [`Self::structural_gen`]: the flush restyles
+    /// the node and its direct children instead of the parent's whole subtree
+    /// (`NodeChange::ChildList`). Never cleared, like [`Self::touch_gen`].
+    pub(crate) child_list_gen: HashMap<NodeId, u64>,
     /// BUG-1211: `node → attribute name → epoch` of the latest write to that
     /// attribute through `setAttribute`/`removeAttribute`/inline `style`.
     /// Lets the flush ask `restyle_root_set_for_node_change` which selectors
@@ -232,6 +238,10 @@ pub struct V8JsRuntime {
     pub(super) style_entries_kept: Arc<AtomicU64>,
     /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_skip_off`].
     pub(super) style_skip_off: Arc<AtomicBool>,
+    /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_used`].
+    pub(super) shallow_roots_used: Arc<AtomicU64>,
+    /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_off`].
+    pub(super) shallow_roots_off: Arc<AtomicBool>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -521,6 +531,8 @@ impl V8JsRuntime {
             incremental_flushes: Arc::new(AtomicU64::new(0)),
             style_entries_kept: Arc::new(AtomicU64::new(0)),
             style_skip_off: Arc::new(AtomicBool::new(false)),
+            shallow_roots_used: Arc::new(AtomicU64::new(0)),
+            shallow_roots_off: Arc::new(AtomicBool::new(false)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -888,6 +900,19 @@ impl V8JsRuntime {
     #[doc(hidden)]
     pub fn set_style_skip_off(&self, off: bool) {
         self.style_skip_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 60: shallow restyle roots the same-tick flush used — a child-list change
+    /// that restyled the container and its children instead of the parent's subtree.
+    pub fn shallow_roots_count(&self) -> u64 {
+        self.shallow_roots_used.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 60: switch the shallow roots off for this runtime (what
+    /// `LUMEN_NO_SHALLOW_ROOTS=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_shallow_roots_off(&self, off: bool) {
+        self.shallow_roots_off.store(off, Ordering::Relaxed);
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].

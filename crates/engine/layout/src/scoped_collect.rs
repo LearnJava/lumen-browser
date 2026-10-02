@@ -497,6 +497,7 @@ mod tests {
             prev_styles: prev_counters.into_styles(),
             dirty_roots: HashSet::from([p]),
             content_dirty: ContentDirty::Nodes(&content),
+            shallow_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let (after, counters) =

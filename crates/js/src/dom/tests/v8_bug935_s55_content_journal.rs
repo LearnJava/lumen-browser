@@ -17,6 +17,12 @@ use crate::v8_runtime::V8JsRuntime;
 use lumen_dom::{Document, QualName};
 use std::sync::atomic::Ordering;
 
+/// `CONTENT_JOURNAL_DISABLED` is process-wide, so the test below that flips it would switch the
+/// journal off under any concurrently running test that depends on it being on (the S59 gate
+/// counts reused entries and fails without one). Held by the flipper while the flag is set and
+/// by such a test for its whole run.
+pub(super) static JOURNAL_SWITCH: Mutex<()> = Mutex::new(());
+
 pub(super) fn page() -> Arc<Mutex<Document>> {
     let mut doc = Document::new();
     let html = doc.create_element(QualName::html("html"));
@@ -113,9 +119,13 @@ const SCENARIOS: &[(&str, &str)] = &[
 #[test]
 fn journal_driven_flush_publishes_the_same_rects_as_the_untracked_one() {
     for (name, steps) in SCENARIOS {
-        CONTENT_JOURNAL_DISABLED.store(true, Ordering::SeqCst);
-        let untracked = run(steps);
-        CONTENT_JOURNAL_DISABLED.store(false, Ordering::SeqCst);
+        let untracked = {
+            let _switch = JOURNAL_SWITCH.lock().unwrap_or_else(|e| e.into_inner());
+            CONTENT_JOURNAL_DISABLED.store(true, Ordering::SeqCst);
+            let untracked = run(steps);
+            CONTENT_JOURNAL_DISABLED.store(false, Ordering::SeqCst);
+            untracked
+        };
         let journaled = run(steps);
         assert_eq!(journaled, untracked, "{name}: the content journal changed the published geometry");
     }
