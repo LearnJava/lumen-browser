@@ -113,6 +113,53 @@ struct StyleSkips {
     /// Owners of an `InlineRun` whose subtree is untouched, so the entries it
     /// flattens (text and plain inline elements) are still right.
     runs: HashSet<u32>,
+    reasons: Reasons,
+}
+
+/// What one [`ScopedCollection::collect_computed_styles`] call did, for the frame log
+/// (BUG-935 срез 61): how much of the planned work was real and how much was skipped.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StyleCollectStats {
+    /// Items whose own box only (an ancestor of a dirty root).
+    pub partial_items: u32,
+    /// Items collected whole, and the boxes under them.
+    pub whole_items: u32,
+    pub whole_boxes: u32,
+    /// Boxes of whole items whose own entry was rebuilt / left published.
+    pub own_built: u32,
+    pub own_kept: u32,
+    /// `InlineRun` boxes whose flattened segment entries were rebuilt.
+    pub run_built: u32,
+    /// Entries actually built (after `or_insert` dedup).
+    pub built: u32,
+    /// Why the first box of a node in a whole item was not skipped, as counted by
+    /// [`plan_style_skips`]: see [`Reasons`].
+    pub reasons: Reasons,
+}
+
+/// Why a principal element box's entry could not be left published.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Reasons {
+    /// The geometry chain broke above the box.
+    pub chain: u32,
+    /// The box has no published rect (new).
+    pub unpublished: u32,
+    /// The box publishes a rect that is not its own (transform / ruby base).
+    pub transformed: u32,
+    /// Published `x` differs.
+    pub moved_x: u32,
+    /// Published `width` differs.
+    pub moved_w: u32,
+    /// Published `height` differs.
+    pub moved_h: u32,
+    /// `position: relative`.
+    pub relative: u32,
+    /// `position: absolute`/`fixed`.
+    pub absolute: u32,
+    /// The cascade gave it a different style.
+    pub restyled: u32,
+    /// The box is not a principal element box (anonymous / pseudo) or a later box of a node.
+    pub other: u32,
 }
 
 /// One box the collectors must visit.
@@ -176,12 +223,12 @@ impl<'a> ScopedCollection<'a> {
         // The fourth: the same holds for every ancestor and none of them changed
         // what the context is made of, so the context `apply_used_geometry` resolves this box in is the
         // one its published entry was resolved in ([`chain_through`]).
-        let mut stack = vec![(root, GeomCtx::root(viewport), true, true)];
-        while let Some((b, ctx, parent_stable, chain)) = stack.pop() {
+        let mut stack = vec![(root, GeomCtx::root(viewport), true, true, true)];
+        while let Some((b, ctx, parent_stable, chain, full)) = stack.pop() {
             if dirty_roots.contains(&b.node) {
                 items.push(Item { b, ctx, whole: true, styles: true });
                 if let Some(changed) = changed {
-                    plan_style_skips(b, ctx, chain, layout_rects, viewport, changed, &mut seen, &mut skips);
+                    plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                 }
                 continue;
             }
@@ -192,7 +239,7 @@ impl<'a> ScopedCollection<'a> {
                     let styles = !translation_keeps_styles(b, r, published, parent_stable);
                     items.push(Item { b, ctx, whole: true, styles });
                     if styles && let Some(changed) = changed {
-                        plan_style_skips(b, ctx, chain, layout_rects, viewport, changed, &mut seen, &mut skips);
+                        plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                     }
                 }
                 continue;
@@ -202,7 +249,8 @@ impl<'a> ScopedCollection<'a> {
             let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
             let stable = published.is_some_and(|p| p[0] == r.x && p[2] == r.width);
             let child_chain = changed.is_some_and(|c| chain && chain_through(b, &ctx, published, c));
-            stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, stable, child_chain)));
+            let child_full = changed.is_some_and(|c| full && full_through(b, &ctx, published, c));
+            stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, stable, child_chain, child_full)));
         }
         Self { items, skips }
     }
@@ -261,13 +309,16 @@ impl<'a> ScopedCollection<'a> {
         doc: &lumen_dom::Document,
         viewport: lumen_core::geom::Size,
         out: &mut StyleMaps,
-    ) {
+    ) -> StyleCollectStats {
+        let mut stats = StyleCollectStats::default();
         let mut fresh = HashMap::new();
         for it in self.items.iter().filter(|it| it.styles) {
             if !it.whole {
+                stats.partial_items += 1;
                 collect_computed_styles_box(doc, it.b, &it.ctx, viewport, &mut fresh);
                 continue;
             }
+            stats.whole_items += 1;
             let mut stack = vec![(it.b, it.ctx)];
             while let Some((b, ctx)) = stack.pop() {
                 let idx = b.node.index() as u32;
@@ -279,12 +330,27 @@ impl<'a> ScopedCollection<'a> {
                             .all(|s| s.source_node.index() == 0 || out.contains_key(&(s.source_node.index() as u32))),
                         _ => true,
                     });
+                stats.whole_boxes += 1;
+                if own {
+                    stats.own_built += 1;
+                } else {
+                    stats.own_kept += 1;
+                }
+                if !segments {
+                    // A run whose subtree is untouched: counted with the kept boxes.
+                } else if matches!(b.kind, BoxKind::InlineRun { .. }) {
+                    stats.run_built += 1;
+                }
                 collect_computed_styles_parts(doc, b, &ctx, viewport, own, segments, &mut fresh);
                 let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
                 stack.extend(b.children.iter().rev().map(|c| (c, child_ctx)));
             }
         }
+        let fresh_len = fresh.len() as u32;
         out.extend(fresh);
+        stats.built = fresh_len;
+        stats.reasons = self.skips.reasons;
+        stats
     }
 }
 
@@ -312,21 +378,40 @@ fn chain_through(b: &LayoutBox, ctx: &GeomCtx, published: Option<&[f32; 4]>, cha
         && (b.style.container_type != ContainerType::Size || p[3] == r.height)
 }
 
+/// [`chain_through`] for a *positioned* box: its entry is read against the vertical
+/// extent of its containing blocks too (`top: 10%`, `bottom` of an absolute box,
+/// the auto offsets recovered from where layout put it), and against their
+/// position. So the whole border box of every ancestor — not just `x`/`width` —
+/// must be where the published map says, and none may have changed what the
+/// context is made of.
+///
+/// An anonymous box has no entry of its own to compare with; it passes only when
+/// it is exactly its parent's content box.
+fn full_through(b: &LayoutBox, ctx: &GeomCtx, published: Option<&[f32; 4]>, changed: &ChangedNodes) -> bool {
+    if b.origin.role != BoxRole::Element {
+        return b.rect == ctx.flow_cb;
+    }
+    let Some(p) = published else { return false };
+    b.rect == box_published_rect(b)
+        && *p == [b.rect.x, b.rect.y, b.rect.width, b.rect.height]
+        && !changed.context.contains(&b.node)
+}
+
 /// Fills `skips` for the subtree rooted at `root`, a whole item whose computed-style
 /// entries the plan would otherwise rebuild in full.
 #[allow(clippy::too_many_arguments)]
 fn plan_style_skips(
     root: &LayoutBox,
     root_ctx: GeomCtx,
-    root_chain: bool,
+    root_chain: (bool, bool),
     layout_rects: &HashMap<u32, [f32; 4]>,
     viewport: lumen_core::geom::Size,
     changed: &ChangedNodes,
     seen: &mut HashSet<NodeId>,
     skips: &mut StyleSkips,
 ) {
-    let mut stack = vec![(root, root_ctx, root_chain)];
-    while let Some((b, ctx, chain)) = stack.pop() {
+    let mut stack = vec![(root, root_ctx, root_chain.0, root_chain.1)];
+    while let Some((b, ctx, chain, full)) = stack.pop() {
         let idx = b.node.index() as u32;
         let published = layout_rects.get(&idx);
         if matches!(b.kind, BoxKind::InlineRun { .. }) && !changed.closure.contains(&b.node) {
@@ -334,27 +419,73 @@ fn plan_style_skips(
         }
         // The entry comes from the first box of the node in tree order, and only a
         // principal element box is something `published` describes.
-        if seen.insert(b.node) && b.origin.role == BoxRole::Element && chain && entry_unchanged(b, published, changed) {
-            skips.own.insert(idx);
+        if seen.insert(b.node) && b.origin.role == BoxRole::Element {
+            if !chain {
+                skips.reasons.chain += 1;
+            } else {
+                match entry_unchanged(b, published, changed, full) {
+                    Ok(()) => {
+                        skips.own.insert(idx);
+                    }
+                    Err(Why::Unpublished) => skips.reasons.unpublished += 1,
+                    Err(Why::Transformed) => skips.reasons.transformed += 1,
+                    Err(Why::Geometry { x, w, h }) => {
+                        skips.reasons.moved_x += u32::from(x);
+                        skips.reasons.moved_w += u32::from(w);
+                        skips.reasons.moved_h += u32::from(h);
+                    }
+                    Err(Why::Positioned) => {
+                        if b.style.position == Position::Relative {
+                            skips.reasons.relative += 1;
+                        } else {
+                            skips.reasons.absolute += 1;
+                        }
+                    }
+                    Err(Why::Restyled) => skips.reasons.restyled += 1,
+                }
+            }
+        } else {
+            skips.reasons.other += 1;
         }
         let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
         let child_chain = chain && chain_through(b, &ctx, published, changed);
-        stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, child_chain)));
+        let child_full = full && full_through(b, &ctx, published, changed);
+        stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, child_chain, child_full)));
     }
 }
 
 /// Whether `b`'s own computed-style entry is what was published, given that the
 /// context it is resolved in is: same cascaded style, same size, same `x`, not
 /// positioned.
-fn entry_unchanged(b: &LayoutBox, published: Option<&[f32; 4]>, changed: &ChangedNodes) -> bool {
-    let Some(p) = published else { return false };
+fn entry_unchanged(
+    b: &LayoutBox,
+    published: Option<&[f32; 4]>,
+    changed: &ChangedNodes,
+    full: bool,
+) -> Result<(), Why> {
+    let Some(p) = published else { return Err(Why::Unpublished) };
     let r = box_published_rect(b);
-    r == b.rect
-        && p[0] == r.x
-        && p[2] == r.width
-        && p[3] == r.height
-        && matches!(b.style.position, Position::Static | Position::Sticky)
-        && !changed.own.contains(&b.node)
+    if r != b.rect {
+        return Err(Why::Transformed);
+    }
+    if !(p[0] == r.x && p[2] == r.width && p[3] == r.height) {
+        return Err(Why::Geometry { x: p[0] != r.x, w: p[2] != r.width, h: p[3] != r.height });
+    }
+    if !matches!(b.style.position, Position::Static | Position::Sticky) && !(full && p[1] == r.y) {
+        return Err(Why::Positioned);
+    }
+    if changed.own.contains(&b.node) {
+        return Err(Why::Restyled);
+    }
+    Ok(())
+}
+
+enum Why {
+    Unpublished,
+    Transformed,
+    Geometry { x: bool, w: bool, h: bool },
+    Positioned,
+    Restyled,
 }
 
 /// Whether the computed-style entries of a clean subtree rooted at `b` survive
@@ -525,6 +656,68 @@ mod tests {
         plan.collect_computed_styles(&doc, VIEWPORT, &mut styles);
         assert_eq!(styles[&(a.index() as u32)].get("sentinel").map(String::as_str), Some("kept"));
         assert_ne!(styles[&(b.index() as u32)], before_b, "b's entry was rebuilt with its new background");
+    }
+
+    /// Lays `html` out, applies `mutate` to the document, re-cascades `dirty` (an id)
+    /// as a whole and returns which of `probe` (ids) keep their computed-style entry.
+    fn kept_after(html: &str, css: &str, dirty: &str, mutate: impl FnOnce(&mut lumen_dom::Document), probe: &[&str]) -> Vec<bool> {
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let hp = NullHyphenationProvider;
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(&doc, &sheet, VIEWPORT, &Fixed, &hp, false);
+        let published = crate::collect_layout_rects(&prev, &doc);
+        mutate(&mut doc);
+        let root = doc.find_by_id(dirty).unwrap();
+        let content = HashSet::from([root]);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.into_styles(),
+            dirty_roots: HashSet::from([root]),
+            content_dirty: ContentDirty::Nodes(&content),
+            shallow_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        let (after, counters) =
+            layout_mutation_incremental_restyle(&doc, &sheet, VIEWPORT, &Fixed, &hp, false, prev, delta);
+        set_incremental_restyle(false);
+        let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
+        let plan = ScopedCollection::plan(
+            &after, &HashSet::from([root]), counters.clean_subtrees(), &published, VIEWPORT, Some(&changed),
+        );
+        probe.iter().map(|id| plan.keeps_computed_style(doc.find_by_id(id).unwrap().index() as u32)).collect()
+    }
+
+    /// BUG-935 срез 61: a positioned box's entry reads the extent and position of its
+    /// containing blocks, so it is left published exactly while every ancestor is where it was.
+    #[test]
+    fn a_positioned_entry_is_kept_while_every_ancestor_is_in_place() {
+        let html = "<body style=\"margin:0\"><div id=\"p\"><div id=\"cb\" class=\"cb\">                    <div id=\"ab\" class=\"ab\"></div><div id=\"rel\" class=\"rel\"></div></div>                    <div id=\"other\" class=\"k\"></div></div></body>";
+        let css = ".cb { position: relative; height: 80px; } .ab { position: absolute; right: 5px; bottom: 10%; width: 9px; height: 9px; }
+                   .rel { position: relative; top: 10%; height: 5px; } .k { height: 20px; } .hot { background-color: red; }
+                   .big { height: 140px; }";
+        let hot = |doc: &mut lumen_dom::Document| {
+            let other = doc.find_by_id("other").unwrap();
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(other).data {
+                for attr in attrs.iter_mut().filter(|a| a.name.local == "class") {
+                    attr.value = "k hot".to_string();
+                }
+            }
+        };
+        // Something elsewhere changes: nothing around the positioned boxes moved.
+        assert_eq!(kept_after(html, css, "p", hot, &["ab", "rel", "cb"]), [true, true, true]);
+        // The containing block itself is resized: both insets resolve against a new height.
+        let grow = |doc: &mut lumen_dom::Document| {
+            let cb = doc.find_by_id("cb").unwrap();
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(cb).data {
+                for attr in attrs.iter_mut().filter(|a| a.name.local == "class") {
+                    attr.value = "cb big".to_string();
+                }
+            }
+        };
+        assert_eq!(kept_after(html, css, "p", grow, &["ab", "rel"]), [false, false]);
     }
 
     #[test]

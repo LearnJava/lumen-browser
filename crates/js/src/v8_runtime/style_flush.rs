@@ -573,7 +573,14 @@ impl FlushHandles {
                         }
                     }
                     self.style_entries_kept.fetch_add(kept, Ordering::Relaxed);
-                    plan.collect_computed_styles(&doc_guard, viewport, &mut cs);
+                    let stats = plan.collect_computed_styles(&doc_guard, viewport, &mut cs);
+                    if lumen_paint::frame_log_enabled() {
+                        eprintln!(
+                            "[engine] style collect {stats:?} evicted_prev={} dirty_roots={}",
+                            prev_node_ids.len(),
+                            dirty_roots.len()
+                        );
+                    }
                 } else {
                     *cs = lumen_layout::collect_computed_styles(
                         &layout_root, &doc_guard, Some(&counters), viewport,
