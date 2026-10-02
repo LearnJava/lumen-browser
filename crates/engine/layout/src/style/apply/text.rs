@@ -704,7 +704,8 @@ pub(in crate::style) fn apply_decl_text(
                     Length::Percent(_)
                     | Length::MinContent
                     | Length::MaxContent
-                    | Length::FitContent(_) => None,
+                    | Length::FitContent(_)
+                    | Length::Stretch => None,
                     _ => len.resolve(em_basis, None, viewport),
                 };
                 if let Some(px) = px

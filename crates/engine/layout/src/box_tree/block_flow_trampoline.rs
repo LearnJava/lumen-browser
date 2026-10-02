@@ -778,7 +778,7 @@ fn finish_frame(
     finalize_block_height(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.available_height, viewport,
         frame.init.padding_top, frame.init.padding_bottom, frame.init.size_contained,
-        frame.init.field_intrinsic, content_height,
+        frame.init.field_intrinsic, content_height, frame.init.cb,
     );
     finish_after_match(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,

@@ -675,6 +675,7 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::MaxContent => "max-content".into(),
         Length::FitContent(None) => "fit-content".into(),
         Length::FitContent(Some(arg)) => format!("fit-content({})", length_to_css(arg)),
+        Length::Stretch => "stretch".into(),
     }
 }
 

@@ -2061,6 +2061,74 @@ fn min_fit_content_keywords_parsed() {
     assert!(matches!(b_style.width, Some(Length::FitContent(None))), "got {:?}", b_style.width);
 }
 
+/// CSS Sizing L4 §4.1: `stretch` and its legacy aliases parse to the dedicated
+/// `Length::Stretch`, not to `fit-content`.
+#[test]
+fn stretch_keywords_parse_to_stretch() {
+    use crate::style::Length;
+    let vp = Size { width: 800.0, height: 600.0 };
+    for kw in ["stretch", "-webkit-fill-available", "-moz-available"] {
+        let sheet = lumen_css_parser::parse(&format!(".x {{ width: {kw}; height: {kw}; }}"));
+        let doc = lumen_html_parser::parse("<div class='x'>a</div>");
+        let children = doc.get(doc.body().unwrap()).children.clone();
+        let id = children.into_iter().find(|&id| {
+            matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
+        }).unwrap();
+        let st = compute_style(&doc, id, &sheet, &ComputedStyle::root(), vp, false);
+        assert!(matches!(st.width, Some(Length::Stretch)), "{kw}: width={:?}", st.width);
+        assert!(matches!(st.height, Some(Length::Stretch)), "{kw}: height={:?}", st.height);
+    }
+}
+
+/// `width: stretch` fills the containing block minus margins, also for an
+/// inline-block that `auto` would shrink-wrap; `fit-content` still shrinks.
+#[test]
+fn stretch_width_fills_containing_block_minus_margins() {
+    let root = lay(
+        "<div class='wrap'><div class='s'>x</div></div>",
+        ".wrap { width: 300px; } .s { display: inline-block; width: stretch; margin: 0 10px; }",
+    );
+    let s = first_element_child(first_element_child(&root));
+    assert!((s.rect.width - 280.0).abs() < 0.5, "width={}", s.rect.width);
+    let root = lay(
+        "<div class='wrap'><div class='s'>x</div></div>",
+        ".wrap { width: 300px; } .s { display: inline-block; width: fit-content; margin: 0 10px; }",
+    );
+    let s = first_element_child(first_element_child(&root));
+    assert!(s.rect.width < 100.0, "fit-content must still shrink, width={}", s.rect.width);
+}
+
+/// `height: stretch` fills the containing block's definite height minus the
+/// box's own vertical margins; against an `auto`-height parent it is `auto`.
+#[test]
+fn stretch_height_fills_definite_containing_block() {
+    let root = lay(
+        "<div class='wrap'><div class='s'>x</div></div>",
+        ".wrap { width: 300px; height: 200px; } .s { height: stretch; margin: 10px 0 30px; }",
+    );
+    let s = first_element_child(first_element_child(&root));
+    assert!((s.rect.height - 160.0).abs() < 0.5, "height={}", s.rect.height);
+    let root = lay(
+        "<div class='wrap'><div class='s'>x</div></div>",
+        ".wrap { width: 300px; } .s { height: stretch; margin: 10px 0 30px; }",
+    );
+    let s = first_element_child(first_element_child(&root));
+    assert!(s.rect.height < 100.0, "indefinite parent → auto, height={}", s.rect.height);
+}
+
+/// `min-width: stretch` / `max-width: stretch` resolve against the containing block.
+#[test]
+fn stretch_in_min_and_max_width() {
+    let root = lay(
+        "<div class='wrap'><div class='a'>x</div><div class='b'>x</div></div>",
+        ".wrap { width: 300px; } .a { display: inline-block; min-width: stretch; }
+         .b { width: 500px; max-width: stretch; }",
+    );
+    let wrap = first_element_child(&root);
+    assert!((wrap.children[0].rect.width - 300.0).abs() < 0.5, "min: {}", wrap.children[0].rect.width);
+    assert!((wrap.children[1].rect.width - 300.0).abs() < 0.5, "max: {}", wrap.children[1].rect.width);
+}
+
 /// `fit-content(<length>)` functional form: parsed with inner length.
 #[test]
 fn fit_content_functional_form_parsed() {

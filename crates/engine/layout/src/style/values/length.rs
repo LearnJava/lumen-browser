@@ -142,6 +142,13 @@ pub enum Length {
     /// Bare `fit-content` = `min(available, max-content)`. With argument =
     /// `min(available, max(min-content, arg))`. Needs layout context.
     FitContent(Option<Box<Length>>),
+    /// CSS Sizing L4 §4.1 — `stretch` (and the legacy `-webkit-fill-available` /
+    /// `-moz-available` aliases): the margin box fills the containing block
+    /// along the axis, so the border box is `containing block − margins`.
+    /// Needs layout context; `resolve()` returns `None`, and it is *not*
+    /// `is_intrinsic()` — it does not depend on content, so the intrinsic
+    /// sizing helpers treat it as `auto`.
+    Stretch,
 }
 
 impl Length {
@@ -197,7 +204,7 @@ impl Length {
             }
             Length::Calc(node) => node.resolve(em_basis, percent_basis, viewport),
             // Intrinsic sizing keywords require layout context — not resolvable here.
-            Length::MinContent | Length::MaxContent | Length::FitContent(_) => None,
+            Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => None,
         }
     }
 
@@ -228,6 +235,7 @@ impl Length {
 /// - `auto` → `None`
 /// - `min-content` / `max-content` → `Some(Length::MinContent/MaxContent)`
 /// - `fit-content` → `Some(Length::FitContent(None))`
+/// - `stretch` / `-webkit-fill-available` / `-moz-available` → `Some(Length::Stretch)`
 /// - `fit-content(<length>)` → `Some(Length::FitContent(Some(l)))`
 /// - всё остальное → `parse_length_q()`
 pub(in crate::style) fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<Length> {
@@ -236,10 +244,11 @@ pub(in crate::style) fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<
         "auto" => None,
         "min-content" => Some(Length::MinContent),
         "max-content" => Some(Length::MaxContent),
-        "fit-content" | "stretch" | "-webkit-fill-available" | "-moz-available" => {
-            // CSS Sizing L3/L4 §4: stretch = fill available; treat same as fit-content.
-            Some(Length::FitContent(None))
-        }
+        "fit-content" => Some(Length::FitContent(None)),
+        // CSS Sizing L4 §4.1: `stretch` fills the containing block minus margins;
+        // Chrome/Safari `-webkit-fill-available` and Firefox `-moz-available`
+        // are the same keyword under legacy names.
+        "stretch" | "-webkit-fill-available" | "-moz-available" => Some(Length::Stretch),
         _ if v.starts_with("fit-content(") && v.ends_with(')') => {
             let inner = &v["fit-content(".len()..v.len() - 1];
             Some(Length::FitContent(parse_length_q(inner, is_quirks).map(Box::new)))
@@ -505,7 +514,7 @@ fn length_literal_is_negative(l: &Length) -> bool {
         | Length::Percent(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v)
         | Length::Cqw(v) | Length::Cqh(v) | Length::Cqi(v) | Length::Cqb(v)
         | Length::Cqmin(v) | Length::Cqmax(v) => *v < 0.0,
-        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => false,
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => false,
     }
 }
 
