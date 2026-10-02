@@ -554,7 +554,8 @@ const SVG_SHIM: &str = concat!(r#"
       get animVal() {
         var ov = (typeof _lumen_smil_overrides !== 'undefined')
           ? _lumen_smil_overrides[nid + '|' + attr] : undefined;
-        if (ov !== undefined) return _new(SVGLength, _lumen_svg_parse_number(ov, dflt));
+        // A non-numeric animated value is not a length: animation has no effect.
+        if (ov !== undefined && !isNaN(parseFloat(ov))) return _new(SVGLength, _lumen_svg_parse_number(ov, dflt));
         return base;
       },
     });
@@ -1492,8 +1493,7 @@ const SVG_SHIM: &str = concat!(r#"
   // BUG-1095: begin/end are `;` lists of offsets, syncbase (`id.begin|end`)
   // and event-base terms feeding an interval model (restart, several
   // intervals, cyclic syncbase); seeking replays it silently.
-  // Deliberately out of scope: `id.repeat(2)`, `min`/`max`, `restart` values
-  // other than always/never/whenNotActive nuances, <animateMotion> path following, <animateTransform> matrix composition —
+  // Deliberately out of scope: <animateMotion> path following, <animateTransform> matrix composition —
   // those two still fire correct begin/repeat/end events and IDL methods,
   // they just don't change what paints. All state lives in JS: the timing
   // model is DOM-structural (target = parentNode), not CSS-cascade-derived,
@@ -1553,17 +1553,29 @@ const SVG_SHIM: &str = concat!(r#"
   // can assert on it from a separate `rt.eval()` call — production code
   // only ever reaches it as the closed-over `_lumen_smil_overrides` above.
   var _lumen_smil_overrides = {};
+  // Key → nid of the animation that last wrote it (two animations of one
+  // attribute must not clear each other's value).
+  var _lumen_smil_owner = {};
   __lumen_C._lumen_smil_overrides = _lumen_smil_overrides;
 
-  // Minimal SMIL clock-value grammar: a plain number (seconds) or one with
-  // an `s`/`ms` suffix. `min`/`h`/`:`-clock forms are out of scope.
+  // SMIL clock-value grammar (Timing §Clock values): full (`h:mm:ss[.f]`),
+  // partial (`mm:ss[.f]`, minutes/seconds exactly two digits and < 60) and
+  // timecount (`n[.f][h|min|s|ms]`, default metric `s`).
   function _lumen_smil_parse_clock(tok) {
     if (tok == null) return null;
-    var m = /^([+-]?[0-9]*\.?[0-9]+)(ms|s)?$/.exec(String(tok).trim());
-    if (!m) return null;
-    var n = parseFloat(m[1]);
-    if (isNaN(n)) return null;
-    return m[2] === 'ms' ? n / 1000 : n;
+    var t = String(tok).trim();
+    var m = /^([+-]?)([0-9]+(?:\.[0-9]+)?|\.[0-9]+)(h|min|s|ms)?$/.exec(t);
+    if (m) {
+      var n = parseFloat(m[2]);
+      if (isNaN(n)) return null;
+      var mul = m[3] === 'h' ? 3600 : m[3] === 'min' ? 60 : m[3] === 'ms' ? 0.001 : 1;
+      return (m[1] === '-' ? -n : n) * mul;
+    }
+    m = /^([0-9]+):([0-9]{2}):([0-9]{2}(?:\.[0-9]+)?)$/.exec(t);
+    if (m && +m[2] < 60 && parseFloat(m[3]) < 60) return +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]);
+    m = /^([0-9]{2}):([0-9]{2}(?:\.[0-9]+)?)$/.exec(t);
+    if (m && +m[1] < 60 && parseFloat(m[2]) < 60) return +m[1] * 60 + parseFloat(m[2]);
+    return null;
   }
 
   // `begin`/`end` — list of `;`-separated terms (SMIL Timing §begin-value-list).
@@ -1598,7 +1610,10 @@ const SVG_SHIM: &str = concat!(r#"
       var id = dot >= 0 ? unesc(head.slice(0, dot)) : null;
       var name = unesc(dot >= 0 ? head.slice(dot + 1) : head).trim();
       if (!name || (dot >= 0 && id === '')) return;
-      if (id !== null && (name === 'begin' || name === 'end')) {
+      var rep = /^repeat\(\s*([0-9]+)\s*\)$/.exec(name);
+      if (rep && id !== null) {
+        terms.push({ kind: 'event', id: id, name: 'repeatEvent', iter: +rep[1], off: off, bound: false, times: [] });
+      } else if (id !== null && (name === 'begin' || name === 'end')) {
         terms.push({ kind: 'sync', id: id, which: name, off: off });
       } else {
         terms.push({ kind: 'event', id: id, name: name, off: off, bound: false, times: [] });
@@ -1632,13 +1647,27 @@ const SVG_SHIM: &str = concat!(r#"
   // or `from`/`to` (falling back to a single-value `to`-only list).
   function _lumen_smil_value_list(nid) {
     var raw = _lumen_u2n(_lumen_get_attr(nid, 'values'));
+    var items;
     if (raw != null) {
-      return raw.split(';').map(function(s) { return s.trim(); });
+      items = raw.split(';');
+      // One trailing `;` is a list terminator, not an empty last value.
+      if (items.length > 1 && items[items.length - 1].trim() === '') items.pop();
+    } else {
+      var toRaw = _lumen_u2n(_lumen_get_attr(nid, 'to'));
+      var fromRaw = _lumen_u2n(_lumen_get_attr(nid, 'from'));
+      if (toRaw == null) return null;
+      items = fromRaw != null ? [fromRaw, toRaw] : [toRaw];
     }
-    var toRaw = _lumen_u2n(_lumen_get_attr(nid, 'to'));
-    var fromRaw = _lumen_u2n(_lumen_get_attr(nid, 'from'));
-    if (toRaw == null) return null;
-    return fromRaw != null ? [fromRaw, toRaw] : [toRaw];
+    // SMIL Animation §ToAttribute: an illegal value makes the whole
+    // animation a no-op. A value that looks numeric must be one length
+    // (`100px`, no inner/outer whitespace) or a whitespace/comma list.
+    var NUM = '[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?';
+    var one = new RegExp('^' + NUM + '(?:px|em|ex|%|cm|mm|in|pt|pc)?$');
+    var many = new RegExp('^' + NUM + '(?:[\\s,]+' + NUM + ')+$');
+    for (var i = 0; i < items.length; i++) {
+      if (/^\s*[+-]?[0-9.]/.test(items[i]) && !one.test(items[i]) && !many.test(items[i])) return null;
+    }
+    return items.map(function(s) { return s.trim(); });
   }
 
   // Numeric attribute types get linear interpolation across the value list;
@@ -1688,8 +1717,11 @@ const SVG_SHIM: &str = concat!(r#"
   function _lumen_smil_begin_now(nid, offset) { _lumen_smil_get_state(nid).manualBegin = offset || 0; _lumen_smil_wake(); }
   function _lumen_smil_end_now(nid, offset) { _lumen_smil_get_state(nid).manualEnd = offset || 0; _lumen_smil_wake(); }
 
-  function _lumen_smil_dispatch(nid, type) {
-    _lumen_dispatch(nid, new Event(type, { bubbles: false, cancelable: false }));
+  function _lumen_smil_dispatch(nid, type, detail) {
+    var ev = new Event(type, { bubbles: false, cancelable: false });
+    // `repeatEvent.detail` is the iteration number (SVG Animations §Event).
+    if (detail !== undefined) ev.detail = detail;
+    _lumen_dispatch(nid, ev);
   }
 
   function _lumen_smil_bind_event(el, tm) {
@@ -1697,7 +1729,8 @@ const SVG_SHIM: &str = concat!(r#"
     var tgt = tm.id === null ? el.parentNode : document.getElementById(tm.id);
     if (tgt && typeof tgt.addEventListener === 'function') {
       tm.bound = true;
-      tgt.addEventListener(tm.name, function() {
+      tgt.addEventListener(tm.name, function(ev) {
+        if (tm.iter !== undefined && (ev.detail | 0) !== tm.iter) return;
         tm.times.push(_lumen_smil_last_now + tm.off);
         _lumen_smil_wake();
       });
@@ -1782,6 +1815,15 @@ const SVG_SHIM: &str = concat!(r#"
     if (st.endSpec && !found && st.endTerms.length > 0
         && st.endTerms.every(function(t) { return t.kind === 'offset'; })) return null;
     var e = Math.min(activeDur === Infinity ? Infinity : b + activeDur, ee);
+    // `min`/`max` clamp the active duration (an invalid pair — max < min —
+    // disables both, SMIL Timing §min-max).
+    var mn = _lumen_smil_parse_clock(_lumen_u2n(_lumen_get_attr(nid, 'min')));
+    var mx = _lumen_smil_parse_clock(_lumen_u2n(_lumen_get_attr(nid, 'max')));
+    if (mn === null || mn < 0) mn = 0;
+    if (mx === null || mx < 0) mx = Infinity;
+    if (mx < mn) { mn = 0; mx = Infinity; }
+    if (e - b > mx) e = b + mx;
+    else if (e - b < mn) e = b + mn;
     var restart = _lumen_u2n(_lumen_get_attr(nid, 'restart'));
     if (restart !== 'never' && restart !== 'whenNotActive') {
       for (var k = 0; k < beginInst.length; k++) {
@@ -1833,7 +1875,7 @@ const SVG_SHIM: &str = concat!(r#"
           var rep = st.cur.b + dur * (st.cycle + 1);
           if (rep < e && rep <= now_s && (rc === Infinity || st.cycle + 1 < Math.ceil(rc))) {
             st.cycle++;
-            if (!quiet) _lumen_smil_dispatch(nid, 'repeatEvent');
+            if (!quiet) _lumen_smil_dispatch(nid, 'repeatEvent', st.cycle);
           } else break;
         }
       }
@@ -1845,7 +1887,10 @@ const SVG_SHIM: &str = concat!(r#"
     if (st.manualEnd !== null && st.cur === null) st.manualEnd = null;
     var attrName = _lumen_u2n(_lumen_get_attr(nid, 'attributeName'));
     if (attrName) {
-      var key = nid + '|' + attrName;
+      // `animVal` reads the animated *target* (the parent element), so the
+      // override is keyed by it; a detached node keys by itself.
+      var tgt = el.parentNode;
+      var key = ((tgt && tgt.__nid__ != null) ? tgt.__nid__ : nid) + '|' + attrName;
       var frac = null;
       if (st.cur !== null) {
         var elapsed = now_s - st.cur.b;
@@ -1862,7 +1907,10 @@ const SVG_SHIM: &str = concat!(r#"
         }
       }
       var v = frac === null ? null : _lumen_smil_compute_value(nid, frac);
-      if (v !== null) _lumen_smil_overrides[key] = v; else delete _lumen_smil_overrides[key];
+      if (v !== null) { _lumen_smil_overrides[key] = v; _lumen_smil_owner[key] = nid; }
+      else if (_lumen_smil_owner[key] === nid || _lumen_smil_owner[key] === undefined) {
+        delete _lumen_smil_overrides[key]; delete _lumen_smil_owner[key];
+      }
     }
     return changed;
   }
@@ -1955,13 +2003,22 @@ const SVG_SHIM: &str = concat!(r#"
     endElementAt(offset) { _lumen_smil_end_now(this.__nid__, offset || 0); }
     getStartTime() {
       var st = _lumen_smil_states[this.__nid__];
-      return (st && st.beginTime !== null && _lumen_smil_doc_epoch !== null)
-        ? st.beginTime - _lumen_smil_doc_epoch : 0;
+      if (st && st.beginTime !== null && _lumen_smil_doc_epoch !== null) {
+        return st.beginTime - _lumen_smil_doc_epoch;
+      }
+      // Not started yet: a resolved clock-offset begin is still a start time.
+      var offs = _lumen_smil_parse_terms(this.__nid__, 'begin')
+        .filter(function(t) { return t.kind === 'offset'; })
+        .map(function(t) { return t.off; });
+      if (offs.length) return Math.min.apply(null, offs);
+      if (_lumen_u2n(_lumen_get_attr(this.__nid__, 'begin')) == null) return 0;
+      throw new DOMException('The element has no resolved begin time', 'InvalidStateError');
     }
     getCurrentTime() { return _lumen_smil_timeline_now(); }
     getSimpleDuration() {
       var d = _lumen_smil_parse_dur(this.__nid__);
-      return d === Infinity ? 0 : d;
+      if (d === Infinity) throw new DOMException('The simple duration is not defined', 'NotSupportedError');
+      return d;
     }
     get targetElement() { return this.parentNode; }
   }
@@ -2673,6 +2730,25 @@ mod tests_v8 {
     }
 
     #[test]
+    fn svg_smil_full_and_partial_clock_values() {
+        let cases = [
+            ("00:00:01.50", "1.5"), ("00:01.50", "1.5"), ("00:30:01", "1801"),
+            ("101:00:01", "363601"), ("2min", "120"), ("1h", "3600"), ("500ms", "0.5"),
+        ];
+        for (raw, secs) in cases {
+            let rt = with_smil_node("animate", &[("attributeName", "x"), ("dur", raw)]);
+            assert!(
+                bool_eval(&rt, &format!("_lumen_smil_node.getSimpleDuration() === {secs}")),
+                "dur={raw}"
+            );
+        }
+        for bad in ["01:99:01", "99:01", "00:59:59.", "00:59:9.9", "00:59:.9", "00:59:009", ":30:01", "01::01", "5:30"] {
+            let rt = with_smil_node("animate", &[("attributeName", "x"), ("dur", bad)]);
+            assert!(bool_eval(&rt, "(function(){ try { _lumen_smil_node.getSimpleDuration(); return false; } catch (e) { return true; } })()"), "dur={bad}");
+        }
+    }
+
+    #[test]
     fn svg_smil_begin_end_events_and_numeric_interpolation() {
         // `<animate attributeName="width" begin="0s" dur="2s" from="0" to="100">`
         let rt = with_smil_node(
@@ -2767,6 +2843,45 @@ mod tests_v8 {
         rt.eval("svg.setCurrentTime(1); _lumen_tick_smil(100.4);").unwrap();
         assert!(bool_eval(&rt, "_lumen_dispatch_log.join() === 'beginEvent,endEvent'"));
         assert!(bool_eval(&rt, "_lumen_smil_overrides['1|fill'] === undefined"));
+    }
+
+    #[test]
+    fn svg_smil_min_max_clamp_active_duration() {
+        // dur 1s, fill freeze: `max=0.5s` ends at 0.5s, `min=3s` at 3s.
+        for (attr, v, end_tick, still_active) in [("max", "0.5s", 0.6, false), ("min", "3s", 2.0, true)] {
+            let rt = with_smil_node(
+                "animate",
+                &[("attributeName", "x"), ("begin", "0s"), ("dur", "1s"), ("to", "10"), (attr, v)],
+            );
+            rt.eval("_lumen_tick_smil(0.0); _lumen_tick_smil(0.0);").unwrap();
+            rt.eval(&format!("_lumen_tick_smil({end_tick});")).unwrap();
+            let ended = bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') !== -1");
+            assert_eq!(ended, !still_active, "{attr}={v}");
+        }
+    }
+
+    #[test]
+    fn svg_smil_repeat_n_syncbase_reacts_to_that_iteration_only() {
+        let rt = with_smil_node("animate", &[("attributeName", "x"), ("begin", "indefinite"), ("to", "1")]);
+        rt.eval(
+            r#"
+            __lumen_C._lumen_smil_attrs[2] = {attributeName: "y", begin: "a.repeat(2)", to: "7"};
+            var b = new (_lumen_svg_ctor_for_local("set"))();
+            b.__nid__ = 2;
+            _allEls.push(b);
+            var a = __lumen_C._lumen_smil_node;
+            var listeners = {};
+            a.addEventListener = function(n, f) { listeners[n] = f; };
+            document.getElementById = function(id) { return id === 'a' ? a : null; };
+            _lumen_tick_smil(0.0);
+            listeners.repeatEvent({ detail: 1 });
+            _lumen_tick_smil(1.0);
+            "#,
+        )
+        .unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['2|y'] === undefined"));
+        rt.eval("listeners.repeatEvent({ detail: 2 }); _lumen_tick_smil(2.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['2|y'] === '7'"));
     }
 
     #[test]

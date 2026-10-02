@@ -1239,7 +1239,12 @@ function _lumen_invoke_at(nid, event, capture) {
     var onFn = null;
     if (!capture) {
         var onAttrName = _LUMEN_ON_ATTR_TYPE_ALIAS[event.type] || ('on' + event.type);
-        if (isDoc) {
+        // `onbegin`/`onrepeat`/`onend` belong to the `*Event` types only: a
+        // plain `end` event must not reach them.
+        if (event.type === 'begin' || event.type === 'repeat' || event.type === 'end') onAttrName = null;
+        if (onAttrName === null) {
+            onFn = null;
+        } else if (isDoc) {
             var docFn = document[onAttrName];
             onFn = (typeof docFn === 'function') ? docFn : null;
         } else {
