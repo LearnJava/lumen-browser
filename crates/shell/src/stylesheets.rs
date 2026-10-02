@@ -410,6 +410,13 @@ pub(crate) fn inline_css_imports(
         if !imp.media.matches(media_ctx) {
             continue;
         }
+        // CSS Cascade L5 §6.5: `supports(<condition>)` — ложное условие
+        // отключает импорт целиком, лист даже не запрашивается.
+        if let Some(cond) = &imp.supports
+            && !cond.evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
+        {
+            continue;
+        }
         // Цикл/дубликат: ключ = абсолютный резолв URL относительно текущего листа.
         let key = base.resolve_str(&imp.url);
         if !seen.insert(key.clone()) {
@@ -457,7 +464,19 @@ pub(crate) fn inline_css_imports(
             referrer_policy,
         );
         blocked.extend(nested_blocked);
-        prefix.push_str(&resolved);
+        // CSS Cascade L5 §6.5: `layer`/`layer(<name>)` помещает правила
+        // импортированного листа в cascade layer — оборачиваем текст в
+        // `@layer <name> { … }`. Имя уже проверено парсером (`is_layer_name`),
+        // так что в текст попадает только ident с точками.
+        match &imp.layer {
+            Some(lumen_css_parser::ImportLayer::Named(name)) => {
+                prefix.push_str(&format!("@layer {name} {{\n{resolved}\n}}"));
+            }
+            Some(lumen_css_parser::ImportLayer::Anonymous) => {
+                prefix.push_str(&format!("@layer {{\n{resolved}\n}}"));
+            }
+            None => prefix.push_str(&resolved),
+        }
         if !prefix.ends_with('\n') {
             prefix.push('\n');
         }

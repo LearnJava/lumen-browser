@@ -284,9 +284,21 @@ impl SupportsCondition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerRule {
     /// Имя layer-а. Анонимный блок (`@layer { ... }`) получает имя
-    /// `__anon_<n>__` где `n` — порядковый номер.
+    /// `__anon_<n>__` где `n` — порядковый номер. Вложенный layer хранится
+    /// под полным dotted-именем (`outer.inner`, Cascade L5 §6.4.2).
     pub name: String,
     pub rules: Vec<Rule>,
+    /// `Some` — это правила условной группы (`@media`/`@supports`) внутри
+    /// layer-а: они участвуют в каскаде этого layer-а, только пока условие
+    /// истинно. `None` — безусловные правила блока.
+    pub condition: Option<LayerCondition>,
+}
+
+/// Условие группы правил внутри `@layer` — см. [`LayerRule::condition`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerCondition {
+    Media(MediaQuery),
+    Supports(SupportsCondition),
 }
 
 /// `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
@@ -299,6 +311,23 @@ pub struct ImportRule {
     /// matches. Пустой Vec в `clauses` (=default) трактуется как
     /// «всегда применять» (= `@import url("...")` без media-фильтра).
     pub media: MediaQuery,
+    /// `layer` / `layer(<name>)` — CSS Cascade L5 §6.5: правила импортируемого
+    /// листа попадают в указанный (или анонимный) cascade layer. `None` — без
+    /// модификатора, правила остаются unlayered.
+    pub layer: Option<ImportLayer>,
+    /// `supports(<condition>)` — CSS Cascade L5 §6.5: импорт применяется,
+    /// только если условие истинно (вычисляет вызывающая сторона через
+    /// [`SupportsCondition::evaluate`]). `None` — модификатора нет.
+    pub supports: Option<SupportsCondition>,
+}
+
+/// Значение модификатора `layer` у `@import` (CSS Cascade L5 §6.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportLayer {
+    /// Голый `layer` — анонимный layer.
+    Anonymous,
+    /// `layer(<name>)` — именованный layer (имя может быть dotted).
+    Named(String),
 }
 
 /// `@font-face { font-family: ...; src: url(...) format(...); ... }`
@@ -373,6 +402,14 @@ pub(crate) enum AtRuleOutcome {
         /// `@layer` remains unsupported (pre-existing gap, unrelated to this
         /// bug — see `parse_layer_at_rule`'s doc comment).
         mixin_rules: Vec<MixinRule>,
+        /// Прочее содержимое блока: `@media`/`@supports` (остаются за этим
+        /// layer-ом), вложенные `@layer` (имена относительные — префиксуются
+        /// именем внешнего) и layer-независимые at-rules (`@font-face`,
+        /// `@keyframes`, `@property`, …), которые вызывающая сторона
+        /// поднимает на верхний уровень. Нужно для `@import … layer(x)`:
+        /// импортируемый лист оборачивается в `@layer x { … }` и не должен
+        /// терять свои `@font-face`/`@keyframes`/`@property`.
+        nested: Vec<AtRuleOutcome>,
     },
     Supports(SupportsRule),
     Keyframes(KeyframesRule),
@@ -415,6 +452,85 @@ pub(crate) fn parse_keyframe_selectors(s: &str) -> Vec<f32> {
         }
     }
     out
+}
+
+/// Снимает `(`-группу с начала `s` (который начинается сразу ПОСЛЕ `(`):
+/// возвращает `(содержимое, остаток после закрывающей ')')`. Скобки внутри
+/// строк в кавычках не считаются.
+fn take_paren_group(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((&s[..i], &s[i + 1..]));
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+/// Разбор прелюдии `@import` после URL (CSS Cascade L5 §6.5):
+/// `[layer | layer(<name>)]? [supports(<condition>)]? <media-query-list>?`.
+/// Возвращает `(layer, supports, остаток-media)`; `None` — прелюдия невалидна
+/// (пустое/некорректное имя layer, незакрытая скобка), импорт отбрасывается.
+fn parse_import_prelude(
+    prelude: &str,
+) -> Option<(Option<ImportLayer>, Option<SupportsCondition>, &str)> {
+    let mut rest = prelude.trim_start();
+    let mut layer = None;
+    let mut supports = None;
+    if let Some(tail) = strip_prefix_ci(rest, "layer") {
+        if let Some(inner_start) = tail.strip_prefix('(') {
+            let (inner, after) = take_paren_group(inner_start)?;
+            let name = inner.trim();
+            if !is_layer_name(name) {
+                return None;
+            }
+            layer = Some(ImportLayer::Named(name.to_string()));
+            rest = after.trim_start();
+        } else if tail.is_empty() || tail.starts_with(char::is_whitespace) {
+            layer = Some(ImportLayer::Anonymous);
+            rest = tail.trim_start();
+        }
+    }
+    if let Some(tail) = strip_prefix_ci(rest, "supports(") {
+        let (inner, after) = take_paren_group(tail)?;
+        let inner = inner.trim();
+        // `supports(display: grid)` — голая декларация; всё остальное
+        // (`(…)`, `not …`, `selector(…)`) — уже `<supports-condition>`.
+        let is_declaration = match (inner.find(':'), inner.find('(')) {
+            (Some(colon), Some(paren)) => colon < paren,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        supports = Some(if is_declaration {
+            parse_supports_condition(&format!("({inner})"))
+        } else {
+            parse_supports_condition(inner)
+        });
+        rest = after.trim_start();
+    }
+    Some((layer, supports, rest))
+}
+
+/// `s.strip_prefix(prefix)` без учёта ASCII-регистра.
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then(|| &s[prefix.len()..])
 }
 
 /// Layer-имя — CSS-ident, опционально с точками (sub-layers через
@@ -886,6 +1002,7 @@ impl<'a> Parser<'a> {
                 };
                 let mut rules = Vec::new();
                 let mut mixin_rules = Vec::new();
+                let mut nested = Vec::new();
                 loop {
                     self.skip_ws_and_comments();
                     match self.peek() {
@@ -906,8 +1023,29 @@ impl<'a> Parser<'a> {
                             // other outcome here is exactly as
                             // position-correct as the old blanket
                             // `skip_at_rule()`.
-                            if let AtRuleOutcome::Mixin(m) = self.parse_at_rule() {
-                                mixin_rules.push(m);
+                            match self.parse_at_rule() {
+                                AtRuleOutcome::Mixin(m) => mixin_rules.push(m),
+                                // Layer-независимые at-rules поднимаются на
+                                // верхний уровень; `@media`/`@supports` и
+                                // вложенные `@layer` остаются за layer-ом
+                                // (см. `LayerState::register`).
+                                // `@container`/`@scope` внутри `@layer`
+                                // по-прежнему отбрасываются: у них нет
+                                // layer-привязки в каскаде.
+                                o @ (AtRuleOutcome::Property(_)
+                                | AtRuleOutcome::FontFace(_)
+                                | AtRuleOutcome::FontPaletteValues(_)
+                                | AtRuleOutcome::Keyframes(_)
+                                | AtRuleOutcome::CounterStyle(_)
+                                | AtRuleOutcome::Page(_)
+                                | AtRuleOutcome::ColorProfile(_)
+                                | AtRuleOutcome::Function(_)
+                                | AtRuleOutcome::ViewTransition(_)
+                                | AtRuleOutcome::LayerNames(_)
+                                | AtRuleOutcome::LayerBlock { .. }
+                                | AtRuleOutcome::Media(_)
+                                | AtRuleOutcome::Supports(_)) => nested.push(o),
+                                _ => {}
                             }
                         }
                         Some(_) => {
@@ -921,7 +1059,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                AtRuleOutcome::LayerBlock { name, rules, mixin_rules }
+                AtRuleOutcome::LayerBlock { name, rules, mixin_rules, nested }
             }
             _ => AtRuleOutcome::None,
         }
@@ -1223,21 +1361,22 @@ impl<'a> Parser<'a> {
         // URL: либо `url("...")` / `url('...')` / `url(...)`, либо просто `"..."` / `'...'`.
         let url = self.parse_import_url()?;
         self.skip_ws_and_comments();
-        // Опциональный media-query до `;`.
-        let media_start = self.pos;
+        // Прелюдия до `;`: `[layer | layer(<name>)]? [supports(<cond>)]? <media>?`.
+        let prelude_start = self.pos;
         while let Some(c) = self.peek() {
             if c == ';' || c == '}' || c == '{' {
                 break;
             }
             self.consume();
         }
-        let media_str = self.input[media_start..self.pos].trim();
-        let media = parse_media_query(media_str);
+        let prelude = self.input[prelude_start..self.pos].trim();
         // Сжираем `;` если есть.
         if self.peek() == Some(';') {
             self.consume();
         }
-        Some(ImportRule { url, media })
+        let (layer, supports, media_str) = parse_import_prelude(prelude)?;
+        let media = parse_media_query(media_str);
+        Some(ImportRule { url, media, layer, supports })
     }
 
     /// Парсит URL для `@import` — `url("...")`, `url(...)`, или `"..."`/`'...'`.

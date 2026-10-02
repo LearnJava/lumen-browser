@@ -406,7 +406,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `@layer` declaration | ✅ | parsed; cascade ordering wired: layer_priority sort key in compute_style |
-| `@import layer()` | 🟡 | URL parsed; layer() modifier ⬜ |
+| `@import layer()` / `supports()` | ✅ | `ImportRule::{layer, supports}` (`ImportLayer::{Anonymous,Named}`); shell `inline_css_imports` wraps the fetched sheet in `@layer <name> { … }` / anonymous `@layer { … }` and skips the import when `supports()` is false (CSS Cascade L5 §6.5). Inside `@layer`: nested `@layer` → dotted `outer.inner`, `@media`/`@supports` stay layer-scoped (`LayerRule::condition`), `@font-face`/`@keyframes`/`@property` hoist to top level. Not done: layer-less `@container`/`@scope` inside `@layer` is still dropped; `@import` inside `@layer` is not fetched |
 | `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; reverts current cascade layer (P4 2026-06-13) |
 
 ### [T1] Selectors L4
