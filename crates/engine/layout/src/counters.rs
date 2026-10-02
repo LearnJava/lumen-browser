@@ -1157,6 +1157,28 @@ pub fn incremental_restyle_enabled() -> bool {
     INCREMENTAL_RESTYLE.with(|c| c.get())
 }
 
+thread_local! {
+    /// BUG-935 срез 64: see [`set_strict_inline_run_styles`].
+    static STRICT_INLINE_RUN_STYLES: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Makes the graft of an incremental layout compare the per-segment styles of an `InlineRun`
+/// before it treats the run as unchanged (on the current thread).
+///
+/// An inline element owns no box, so a restyle that changes only `<span>`'s style leaves the box
+/// of the run it sits in — and that box's cascade entry — as it was; the graft then copies the
+/// previous run, laid-out lines and old segment styles together, over the fresh one. The flush
+/// whose restyle roots come from a changed stylesheet turns the comparison on. It is off for the
+/// rest: a run that really changed re-lays out its ancestors (BUG-1245).
+pub fn set_strict_inline_run_styles(enabled: bool) {
+    STRICT_INLINE_RUN_STYLES.with(|c| c.set(enabled));
+}
+
+/// Whether [`set_strict_inline_run_styles`] is on for this thread.
+pub fn strict_inline_run_styles() -> bool {
+    STRICT_INLINE_RUN_STYLES.with(|c| c.get())
+}
+
 /// BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
 /// reused from `RestyleDelta::prev_styles`.
 ///

@@ -242,6 +242,10 @@ pub struct V8JsRuntime {
     pub(super) shallow_roots_used: Arc<AtomicU64>,
     /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_off`].
     pub(super) shallow_roots_off: Arc<AtomicBool>,
+    /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_used`].
+    pub(super) sheet_delta_used: Arc<AtomicU64>,
+    /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_off`].
+    pub(super) sheet_delta_off: Arc<AtomicBool>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -533,6 +537,8 @@ impl V8JsRuntime {
             style_skip_off: Arc::new(AtomicBool::new(false)),
             shallow_roots_used: Arc::new(AtomicU64::new(0)),
             shallow_roots_off: Arc::new(AtomicBool::new(false)),
+            sheet_delta_used: Arc::new(AtomicU64::new(0)),
+            sheet_delta_off: Arc::new(AtomicBool::new(false)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -913,6 +919,20 @@ impl V8JsRuntime {
     #[doc(hidden)]
     pub fn set_shallow_roots_off(&self, off: bool) {
         self.shallow_roots_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 64: restyle roots the same-tick flush took from a changed stylesheet — a
+    /// `<style>` inserted (or a sheet swapped) that the incremental path absorbed instead of
+    /// recascading the document.
+    pub fn sheet_delta_roots_count(&self) -> u64 {
+        self.sheet_delta_used.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 64: switch the stylesheet delta off for this runtime (what
+    /// `LUMEN_NO_SHEET_DELTA=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_sheet_delta_off(&self, off: bool) {
+        self.sheet_delta_off.store(off, Ordering::Relaxed);
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].

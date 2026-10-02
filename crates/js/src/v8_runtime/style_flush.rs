@@ -196,6 +196,11 @@ pub(crate) struct FlushHandles {
     pub(crate) shallow_roots_used: Arc<std::sync::atomic::AtomicU64>,
     /// BUG-935 срез 60: this runtime's own `LUMEN_NO_SHALLOW_ROOTS`, for a differential test.
     pub(crate) shallow_roots_off: Arc<std::sync::atomic::AtomicBool>,
+    /// BUG-935 срез 64: restyle roots the incremental flushes took from a changed stylesheet
+    /// rather than from the DOM; read through `V8JsRuntime::sheet_delta_roots_count`.
+    pub(crate) sheet_delta_used: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 64: this runtime's own `LUMEN_NO_SHEET_DELTA`, for a differential test.
+    pub(crate) sheet_delta_off: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// See [`FlushHandles::patched_sheet_cache`].
@@ -222,6 +227,9 @@ pub(crate) struct IncrFlushBasis {
     pub(crate) cascade: lumen_layout::CascadeStyles,
     pub(crate) viewport: [f32; 2],
     pub(crate) sheet_revision: lumen_css_parser::StylesheetRevision,
+    /// BUG-935 срез 64: the sheet itself, not only its revision — a flush that is handed a
+    /// different sheet diffs it against this one instead of recascading the whole document.
+    pub(crate) sheet: Arc<lumen_css_parser::Stylesheet>,
     /// Focus baked into `layout`/`cascade` — mirrors [`FlushHandles::
     /// last_flushed_focus`] at the moment this basis was produced, kept
     /// alongside it so a focus-only transition since then can still be
@@ -282,6 +290,14 @@ fn content_journal_disabled() -> bool {
 fn style_skip_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_STYLE_SKIP").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 64: `LUMEN_NO_SHEET_DELTA=1` sends every stylesheet revision change back to
+/// the full path (the cascade of the whole document) — A/B switch for a live measurement and
+/// the way back if a page shows a stale style after a `<style>` was inserted.
+fn sheet_delta_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SHEET_DELTA").is_some_and(|v| v != "0"))
 }
 
 /// BUG-935 срез 60: `LUMEN_NO_SHALLOW_ROOTS=1` reports a child-list change as an
@@ -680,6 +696,7 @@ impl FlushHandles {
             cascade: counters.into_styles(),
             viewport: [vw, vh],
             sheet_revision: sheet.revision(),
+            sheet: Arc::clone(&sheet),
             focus: current_focus,
             touch_epoch: touched.epoch,
         });
@@ -765,14 +782,29 @@ impl FlushHandles {
             declined("no basis");
             return None;
         };
-        if basis.viewport != [viewport.width, viewport.height] || basis.sheet_revision != sheet.revision() {
-            declined(if basis.viewport != [viewport.width, viewport.height] {
-                "viewport changed"
-            } else {
-                "stylesheet revision changed"
-            });
+        if basis.viewport != [viewport.width, viewport.height] {
+            declined("viewport changed");
             return None;
         }
+        // BUG-935 срез 64: a different sheet no longer forces the full path by itself — the
+        // plain rules that were added, removed or moved name the elements to restyle. A
+        // difference in anything but plain rules (`@media`, `@layer`, `@font-face`, …) still does.
+        let sheet_roots_scope = lumen_core::profile::scope("incr.sheet_delta");
+        let sheet_delta_roots: std::collections::HashSet<lumen_dom::NodeId> =
+            if basis.sheet_revision == sheet.revision() {
+                std::collections::HashSet::new()
+            } else {
+                let Some(roots) = (!sheet_delta_disabled() && !self.sheet_delta_off.load(Ordering::Relaxed))
+                    .then(|| basis.sheet.changed_plain_rules(sheet))
+                    .flatten()
+                    .and_then(|changed| lumen_layout::style::restyle_roots_for_rule_changes(doc, &changed))
+                else {
+                    declined("stylesheet revision changed");
+                    return None;
+                };
+                roots
+            };
+        drop(sheet_roots_scope);
         // BUG-1211: `touched.nodes`/`touched.touch_gen` are never drained by
         // this flush (see `FlushHandles::dom_touched`'s doc comment) — they
         // keep accruing every attributed mutation since the shell's own
@@ -849,6 +881,10 @@ impl FlushHandles {
         };
         let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &node_index);
         dirty_roots.extend(roots.deep);
+        let sheet_delta_count = sheet_delta_roots.len();
+        let strict_inline_runs = sheet_delta_count > 0;
+        self.sheet_delta_used.fetch_add(sheet_delta_count as u64, Ordering::Relaxed);
+        dirty_roots.extend(sheet_delta_roots);
         let shallow_roots = roots.shallow;
         self.shallow_roots_used.fetch_add(shallow_roots.len() as u64, Ordering::Relaxed);
         let focus_changed = basis.focus != current_focus;
@@ -921,6 +957,7 @@ impl FlushHandles {
         let null_hp = lumen_core::ext::NullHyphenationProvider;
         lumen_layout::counters::set_incremental_restyle(true);
         lumen_layout::box_tree::set_incremental_box_build(true);
+        lumen_layout::counters::set_strict_inline_run_styles(strict_inline_runs);
         let tp_prev = tp0.elapsed();
         let layout_scope = lumen_core::profile::scope("incr.layout_mutation");
         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
@@ -929,8 +966,9 @@ impl FlushHandles {
         drop(layout_scope);
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
+        lumen_layout::counters::set_strict_inline_run_styles(false);
         if lumen_paint::frame_log_enabled() {
-            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
+            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} sheet_roots={sheet_delta_count} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
         Some((result.0, result.1, scope_roots, prev_node_ids, prev_node_raw_ids, content_nodes))
     }
