@@ -528,7 +528,18 @@ pub fn graft_geometry_with_cascade(
     }
 
     let common = new.children.len().min(prev.children.len());
-    let mut all_clean = self_reusable && new.children.len() == prev.children.len();
+    // BUG-935 срез 64: an inline element owns no box — its style rides on the segments of
+    // the run it sits in, so a restyle of `<u>`/`<span>` leaves the run's own box (and its
+    // cascade entry) as it was. `segments_eq` leaves the segment styles out on purpose, so a
+    // clean graft copies the previous run — laid-out lines *and* the old segment styles — over
+    // the freshly built one, and `getComputedStyle(span)` keeps answering with the style from
+    // before the change. A flush whose restyle roots come from a changed stylesheet asks for
+    // the comparison ([`crate::counters::set_strict_inline_run_styles`]); the DOM-driven ones
+    // do not yet (BUG-1245: a run that really changed re-lays out its ancestors, 65 ms on
+    // `lenta.ru`'s font-detector loop).
+    let mut all_clean = self_reusable
+        && new.children.len() == prev.children.len()
+        && (!crate::counters::strict_inline_run_styles() || inline_segment_styles_eq(&new.kind, &prev.kind));
     // BUG-355: this box's own geometry-affecting fields changed, so every
     // in-flow child is about to be measured against a different containing
     // block even though its own style is untouched — grafting it clean would
@@ -772,6 +783,20 @@ pub(crate) fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::
             Marker { text: t2, position: p2, list_style_type: ls2, image: i2 },
         ) => t1 == t2 && p1 == p2 && ls1 == ls2 && i1 == i2,
         _ => false,
+    }
+}
+
+/// Whether two `InlineRun` kinds carry segments cut in the same styles. Anything that is
+/// not a pair of runs has no segments to disagree. Only called once [`kind_layout_eq`]
+/// vouched for the pair, so the segment lists are aligned one to one.
+fn inline_segment_styles_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
+    use crate::box_tree::BoxKind::InlineRun;
+    match (a, b) {
+        (InlineRun { segments: sa, .. }, InlineRun { segments: sb, .. }) => sa
+            .iter()
+            .zip(sb)
+            .all(|(x, y)| x.style == y.style),
+        _ => true,
     }
 }
 
@@ -1936,6 +1961,61 @@ mod tests {
              ({} built vs {full_built} full) — {stats:?}",
             stats.built,
         );
+    }
+
+    /// BUG-935 срез 64: an inline element owns no box, so restyling `<u>` leaves the box of
+    /// the run it sits in with the same style. The graft must still see that the run's
+    /// segments were cut in another one — a clean graft copies the previous run, segments
+    /// included, over the fresh one.
+    #[test]
+    fn restyling_an_inline_element_refreshes_the_segment_styles_of_its_run() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{
+            layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, set_incremental_box_build,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        fn run_colors(b: &LayoutBox, out: &mut Vec<(String, (u8, u8, u8))>) {
+            if let BoxKind::InlineRun { segments, .. } = &b.kind {
+                out.extend(segments.iter().map(|s| (s.text.clone(), (s.style.color.r, s.style.color.g, s.style.color.b))));
+            }
+            for c in &b.children {
+                run_colors(c, out);
+            }
+        }
+
+        let doc = parse_html("<html><body><p>plain <u id=\"u\">under</u> tail</p></body></html>");
+        let old = parse_css("body { margin: 0; } u { text-decoration: underline; }");
+        let new = parse_css("body { margin: 0; } u { text-decoration: underline; } p u { color: rgb(255, 0, 0); }");
+        let vp = Size::new(800.0, 600.0);
+        let u = doc.find_by_id("u").expect("#u must exist");
+
+        let (prev, prev_counters) =
+            layout_measured_hyp_with_counters(&doc, &old, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots: std::iter::once(u).collect(),
+            content_dirty: crate::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        crate::counters::set_strict_inline_run_styles(true);
+        let (incr, _) =
+            layout_mutation_incremental_restyle(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta);
+        crate::counters::set_strict_inline_run_styles(false);
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        let (full, _) =
+            layout_measured_hyp_with_counters(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let (mut got, mut want) = (Vec::new(), Vec::new());
+        run_colors(&incr, &mut got);
+        run_colors(&full, &mut want);
+        assert!(want.iter().any(|(t, c)| t.contains("under") && *c == (255, 0, 0)), "fixture: {want:?}");
+        assert_eq!(got, want, "the incremental run kept the segment styles from before the restyle");
     }
 
     /// Boxes in `b`'s subtree, inclusive — gate bookkeeping only.

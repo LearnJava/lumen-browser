@@ -42,6 +42,7 @@ mod declarations;
 mod media;
 mod mixins;
 mod selectors;
+mod sheet_diff;
 
 pub use at_rules::*;
 pub use declarations::*;
@@ -1949,3 +1950,7 @@ mod recovery_tests;
 #[cfg(test)]
 #[path = "parser/tests/view_transitions.rs"]
 mod view_transitions_tests;
+
+#[cfg(test)]
+#[path = "parser/tests/sheet_diff.rs"]
+mod sheet_diff_tests;
