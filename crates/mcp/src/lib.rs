@@ -23,6 +23,7 @@
 //! - `eval` — выполнить JS
 //! - `query` — поиск по селектору
 
+pub mod bridge;
 pub mod live;
 pub mod protocol;
 pub mod server;
