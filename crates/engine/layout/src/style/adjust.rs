@@ -142,6 +142,7 @@ pub(in crate::style) fn resolve_system_colors_in_style(style: &mut ComputedStyle
     }
 
     resolve_opt!(&mut style.background_color);
+    resolve_opt!(&mut style.caret_color);
     resolve!(&mut style.text_decoration_color);
     resolve!(&mut style.text_emphasis_color);
     resolve!(&mut style.border_top_color);
@@ -253,7 +254,7 @@ pub(in crate::style) fn apply_forced_colors_mode(
     style.text_emphasis_color = CssColor::Rgba(fg);
     if style.caret_color.is_some() {
         // `auto` (None) already follows the forced `color`.
-        style.caret_color = Some(fg);
+        style.caret_color = Some(CssColor::Rgba(fg));
     }
 
     // SVG geometry is painted from `fill`/`stroke` (§3.1 lists both).

@@ -105,6 +105,9 @@ fn apply_css_wide_keyword_with(
     match prop {
         // ──────── Inherited properties ────────
         "color" => style.color = if inh { inherited.color } else { init.color },
+        "caret-color" => {
+            style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
+        }
         // `font-size` сюда не доходит: `apply_declaration` отсекает его до
         // keyword-ветки (BUG-731) — размер целиком считает pre-pass
         // `apply_font_size`, который один видит весь каскад, включая

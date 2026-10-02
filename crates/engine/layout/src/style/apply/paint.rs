@@ -543,7 +543,7 @@ pub(in crate::style) fn apply_decl_paint(
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("auto") {
                 style.caret_color = None;
-            } else if let Some(c) = parse_color_legacy(trimmed, is_quirks) {
+            } else if let Some(c) = parse_css_color_legacy(trimmed, is_quirks) {
                 style.caret_color = Some(c);
             }
         }
