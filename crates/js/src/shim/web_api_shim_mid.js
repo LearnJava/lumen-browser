@@ -1274,6 +1274,8 @@ function _lumen_invoke_at(nid, event, capture) {
 // The single dispatch. `target_nid` is an arena node id, or one of the two
 // sentinels when the target is `document`/`window` itself.
 function _lumen_propagate(target_nid, event) {
+    // SMIL event-base `begin`/`end` listeners must exist before the event (svg.rs).
+    if (typeof _lumen_smil_prebind === 'function') _lumen_smil_prebind();
     if (!event || event.type === undefined || event.type === null) return true;
     var path = _lumen_event_path(target_nid);
     if (path.length === 0) return !event.defaultPrevented;
