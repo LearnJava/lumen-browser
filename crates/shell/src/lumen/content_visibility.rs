@@ -19,20 +19,21 @@ impl Lumen {
     /// Дренирует thread-local layout-крейта, чтобы записи не пережили проход.
     pub(crate) fn refresh_cv_state(&mut self) {
         let _ = lumen_layout::take_cv_skipped();
+        let scroll_y = self.scroll_y;
+        let viewport_h = self.viewport_height_css();
+        let viewport = Size::new(self.viewport_width_css(), viewport_h);
         let mut auto_boxes = Vec::new();
         if let Some(lb) = self.layout_box.as_ref() {
-            collect_cv_auto(lb, &mut auto_boxes);
+            collect_cv_auto(lb, viewport, &mut auto_boxes);
         }
         // BUG-852: состояние считается тем же правилом релевантности, что и в
         // layout (`cv_is_skipped`), а не выводится из «дети пусты» — иначе
         // пустой auto-элемент неотличим от пропущенного.
-        let scroll_y = self.scroll_y;
-        let viewport_h = self.viewport_height_css();
         let next: Vec<(NodeId, bool)> = auto_boxes
             .iter()
-            .map(|&(n, top)| {
+            .map(|&(n, top, bottom)| {
                 let relevant = self.cv_relevant.contains(&n);
-                (n, lumen_layout::cv_is_skipped(relevant, top, scroll_y, viewport_h))
+                (n, lumen_layout::cv_is_skipped(relevant, top, bottom, scroll_y, viewport_h))
             })
             .collect();
         self.cv_events.extend(diff_cv_state(&self.cv_auto_state, &next));
@@ -46,7 +47,7 @@ impl Lumen {
         self.cv_skipped = auto_boxes
             .into_iter()
             .zip(next)
-            .filter_map(|((n, top), (_, skipped))| skipped.then_some((n, top)))
+            .filter_map(|((n, top, bottom), (_, skipped))| skipped.then_some((n, top, bottom)))
             .collect();
     }
 
@@ -97,13 +98,19 @@ impl Lumen {
         if self.cv_skipped.is_empty() {
             return;
         }
-        let bound = self.scroll_y
-            + self.viewport_height_css() * (1.0 + lumen_layout::CV_SLACK_FACTOR);
+        // Тем же правилом, что и layout: бокс вошёл в расширенный viewport и
+        // снизу (`top` ≤ нижней границы), и сверху (`bottom` ≥ верхней —
+        // скролл вверх к боксу, пропущенному выше вьюпорта).
+        let scroll_y = self.scroll_y;
+        let viewport_h = self.viewport_height_css();
         let newly: Vec<NodeId> = self
             .cv_skipped
             .iter()
-            .filter(|(n, top)| *top <= bound && !self.cv_relevant.contains(n))
-            .map(|&(n, _)| n)
+            .filter(|(n, top, bottom)| {
+                !self.cv_relevant.contains(n)
+                    && !lumen_layout::cv_is_skipped(false, *top, *bottom, scroll_y, viewport_h)
+            })
+            .map(|&(n, _, _)| n)
             .collect();
         if newly.is_empty() {
             return;

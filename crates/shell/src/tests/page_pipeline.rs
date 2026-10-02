@@ -817,11 +817,11 @@ fn collect_cv_auto_reports_every_auto_box_with_its_state() {
     let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
     let _ = lumen_layout::take_cv_skipped();
     let mut found = Vec::new();
-    collect_cv_auto(&lb, &mut found);
+    collect_cv_auto(&lb, Size::new(300.0, 300.0), &mut found);
     assert_eq!(found.len(), 2, "оба auto-бокса, а не только пропущенный");
     let states: Vec<bool> = found
         .iter()
-        .map(|&(_, top)| lumen_layout::cv_is_skipped(false, top, 0.0, 300.0))
+        .map(|&(_, top, bottom)| lumen_layout::cv_is_skipped(false, top, bottom, 0.0, 300.0))
         .collect();
     assert_eq!(states, vec![false, true], "первый во вьюпорте, второй под ним");
 }
@@ -839,10 +839,10 @@ fn collect_cv_auto_reports_an_empty_auto_box_by_position() {
     let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
     let _ = lumen_layout::take_cv_skipped();
     let mut found = Vec::new();
-    collect_cv_auto(&lb, &mut found);
+    collect_cv_auto(&lb, Size::new(300.0, 300.0), &mut found);
     assert_eq!(found.len(), 1, "пустой auto-бокс тоже наблюдается");
     assert!(
-        !lumen_layout::cv_is_skipped(false, found[0].1, 0.0, 300.0),
+        !lumen_layout::cv_is_skipped(false, found[0].1, found[0].2, 0.0, 300.0),
         "он в начале страницы — значит relevant, а не пропущен"
     );
 }
@@ -863,8 +863,38 @@ fn collect_cv_auto_reports_an_element_with_inline_content_once() {
     let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
     let _ = lumen_layout::take_cv_skipped();
     let mut found = Vec::new();
-    collect_cv_auto(&lb, &mut found);
+    collect_cv_auto(&lb, Size::new(300.0, 300.0), &mut found);
     assert_eq!(found.len(), 1, "один элемент — одна запись, анонимный бокс не в счёт");
+}
+
+#[test]
+fn cv_auto_box_above_the_viewport_is_skipped_and_returns_on_scroll_up() {
+    // CSS Contain L2 §4.1: relevance is symmetric — a box that scrolled out
+    // over the TOP of the viewport (plus slack) is no longer relevant either.
+    // Needs its height before layout, which `contain-intrinsic-height` gives.
+    let viewport = Size::new(300.0, 300.0);
+    let html = r#"<div class="spacer"></div><div class="cv"><span>x</span></div>
+                  <div class="spacer"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        ".spacer { height: 3000px; } \
+         .cv { content-visibility: auto; contain-intrinsic-height: 100px; }",
+    );
+    // Scrolled far below the .cv box (it spans 3000..3100).
+    lumen_layout::set_cv_scroll(0.0, 5000.0);
+    lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+    let lb = lumen_layout::layout(&doc, &sheet, viewport);
+    let skipped = lumen_layout::take_cv_skipped();
+    assert_eq!(skipped.len(), 1, "бокс выше вьюпорта пропущен");
+    let mut found = Vec::new();
+    collect_cv_auto(&lb, viewport, &mut found);
+    assert_eq!(found.len(), 1);
+    let (_, top, bottom) = found[0];
+    assert_eq!(bottom - top, 100.0, "плейсхолдер = contain-intrinsic-height");
+    assert!(lumen_layout::cv_is_skipped(false, top, bottom, 5000.0, 300.0));
+    // Scrolling back up brings it into the expanded band again.
+    assert!(!lumen_layout::cv_is_skipped(false, top, bottom, 2900.0, 300.0));
+    lumen_layout::set_cv_scroll(0.0, 0.0);
 }
 
 fn expect_resolved_url(base: &str, href: &str) -> String {

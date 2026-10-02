@@ -679,7 +679,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `contain` | 🟡 | size/layout/paint enforcement ✅; content-visibility skip-content ⬜ |
-| `content-visibility` | 🟡 | hidden ✅ (P1 2026-06-03); auto ✅ below-viewport skip + shell ratchet/relayout (P1 BB-4 2026-06-13); CSSOM (`getComputedStyle`) + `contentvisibilityautostatechange` ✅ (P1 BUG-852 2026-08-25); above-viewport skip ⬜ |
+| `content-visibility` | 🟡 | hidden ✅ (P1 2026-06-03); auto ✅ below-viewport skip + shell ratchet/relayout (P1 BB-4 2026-06-13); CSSOM (`getComputedStyle`) + `contentvisibilityautostatechange` ✅ (P1 BUG-852 2026-08-25); above-viewport skip ✅ 2026-10-02 (P4: skip when the estimated bottom — absolute `height` or `contain-intrinsic-height` — is above the slack band; unknown height ⇒ laid out; shell ratchet symmetric on scroll-up) |
 
 ### [T4] Scroll-driven Animations
 

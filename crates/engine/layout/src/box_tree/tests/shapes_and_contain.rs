@@ -329,6 +329,41 @@ fn content_visibility_auto_below_viewport_skips_children() {
     assert!(skipped[0].1 >= 2000.0, "recorded top is the collapsed flow position");
 }
 
+#[test]
+fn content_visibility_auto_above_viewport_skips_children_when_height_is_known() {
+    // Scrolled to 5000: the auto box spans 3000..3100 (height from
+    // `contain-intrinsic-height`), well above 5000 − 300 * 0.5.
+    crate::content_visibility::set_cv_scroll(0.0, 5000.0);
+    crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    let html = r#"<div class="spacer"></div><div class="cv"><span>gone</span></div><div class="spacer"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        ".spacer { height: 3000px; }          .cv { content-visibility: auto; contain-intrinsic-height: 100px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+    let cv = find_cv_auto(&root).expect("auto box present in tree");
+    assert!(cv.children.is_empty(), "auto subtree above the viewport must be skipped");
+    assert_eq!(cv.rect.height, 100.0, "placeholder height keeps the page height stable");
+    crate::content_visibility::set_cv_scroll(0.0, 0.0);
+}
+
+#[test]
+fn content_visibility_auto_above_viewport_without_known_height_is_laid_out() {
+    // No height / placeholder: the bottom cannot be known before layout, so
+    // the box is not skipped from above.
+    crate::content_visibility::set_cv_scroll(0.0, 5000.0);
+    crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    let html = r#"<div class="spacer"></div><div class="cv"><span>kept</span></div><div class="spacer"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        ".spacer { height: 3000px; } .cv { content-visibility: auto; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+    let cv = find_cv_auto(&root).expect("auto box present in tree");
+    assert!(!cv.children.is_empty(), "unknown height ⇒ no above-viewport skip");
+    crate::content_visibility::set_cv_scroll(0.0, 0.0);
+}
+
 // ── contain-intrinsic-size under size containment (CSS Box Sizing L4 §5) ──
 
 /// Find the first box that is size-contained via `contain: size`.

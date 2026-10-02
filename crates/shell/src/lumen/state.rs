@@ -415,7 +415,10 @@ pub(crate) struct Lumen {
     /// последним layout-проходом из-за `content-visibility: auto` вне расширенного
     /// viewport. top_y — страница-координаты (scroll 0) схлопнутого бокса.
     /// Обновляется в `refresh_cv_state` после каждой смены `layout_box`.
-    pub(crate) cv_skipped: Vec<(NodeId, f32)>,
+    /// Третье поле — оценка нижней границы (`lumen_layout::cv_bottom_estimate`,
+    /// `INFINITY` если высота до layout неизвестна): бокс, пропущенный выше
+    /// вьюпорта, должен вернуться в работу при скролле вверх.
+    pub(crate) cv_skipped: Vec<(NodeId, f32, f32)>,
     /// Ratchet-набор auto-узлов, ставших relevant (вошли в расширенный viewport
     /// при скролле): прокидывается в layout через `set_cv_relevant`, такие узлы
     /// больше не пропускаются. Сбрасывается при загрузке страницы.
