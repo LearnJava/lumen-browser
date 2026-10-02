@@ -265,10 +265,11 @@ fn emit_background_layer(
     }
     match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
-            // CSS: image-set — resolve image-set() to the best URL for the
+            // image-set: resolve image-set() to the best URL for the
             // current device pixel ratio; plain urls pass through unchanged.
-            // P4 wires parsing: keep the raw `image-set(…)` string in
-            // BackgroundImage::Url so this resolution triggers (CSS Images L4 §5).
+            // Parsing keeps the raw `image-set(…)` string in BackgroundImage::Url
+            // (`style/parse/image.rs`, `style/apply/paint.rs`), so this resolution
+            // triggers (CSS Images L4 §5).
             let resolved = if is_image_set(src) {
                 select_image_set_url(src, dpr)
             } else {
