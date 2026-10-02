@@ -321,12 +321,24 @@ pub(super) fn finalize_block_height(
     size_contained: bool,
     field_intrinsic: Option<(f32, f32)>,
     content_height: f32,
+    cb: f32,
 ) {
+    // CSS Sizing L4 §4.1 — `stretch` on the block axis fills the containing
+    // block's definite content height minus this box's own vertical margins;
+    // `resolve_block_size` yields the full height, the margins come off here.
+    // An indefinite height leaves it `auto` (no resolution → content height).
+    let stretch_margins = |l: &Length| -> f32 {
+        if matches!(l, Length::Stretch) {
+            s.margin_top.resolve_or_zero(em, cb, viewport) + s.margin_bottom.resolve_or_zero(em, cb, viewport)
+        } else {
+            0.0
+        }
+    };
     // Явная высота (CSS height: Npx) перекрывает авто-высоту по содержимому.
     // box-sizing работает симметрично width: content-box прибавляет
     // padding+border, border-box оставляет h как итоговую высоту.
     b.rect.height = if let Some(h_len) = &s.height {
-        if let Some(h) = resolve_block_size(h_len, em, available_height, viewport) {
+        if let Some(h) = resolve_block_size(h_len, em, available_height, viewport).map(|h| (h - stretch_margins(h_len)).max(0.0)) {
             let specified = match s.box_sizing {
                 BoxSizing::ContentBox => h
                     + padding_top + padding_bottom
@@ -390,12 +402,12 @@ pub(super) fn finalize_block_height(
         BoxSizing::BorderBox => v,
     };
     if let Some(max_len) = &s.max_height
-        && let Some(max_h) = resolve_block_size(max_len, em, available_height, viewport)
+        && let Some(max_h) = resolve_block_size(max_len, em, available_height, viewport).map(|h| (h - stretch_margins(max_len)).max(0.0))
     {
         b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
     }
     if let Some(min_len) = &s.min_height
-        && let Some(min_h) = resolve_block_size(min_len, em, available_height, viewport)
+        && let Some(min_h) = resolve_block_size(min_len, em, available_height, viewport).map(|h| (h - stretch_margins(min_len)).max(0.0))
     {
         b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
     }
@@ -859,7 +871,14 @@ pub(super) fn dispatch_box(
     //   - content-box: width — это размер контента, padding+border прибавляются;
     //   - border-box: width — общий размер вместе с padding+border.
     if let Some(w_len) = &s.width {
-        if w_len.is_intrinsic() {
+        if matches!(w_len, Length::Stretch) {
+            // CSS Sizing L4 §4.1 — `stretch`: the margin box fills the containing
+            // block, so the border box is `containing block − margins` whatever
+            // the box type (unlike `auto`, this also applies to replaced,
+            // inline-block and floated boxes). `box-sizing` is irrelevant: the
+            // value is a border-box size by construction.
+            b.rect.width = (available_width - margin_left - margin_right).max(0.0);
+        } else if w_len.is_intrinsic() {
             // CSS Intrinsic Sizing L3 §4 — min-content / max-content / fit-content.
             // max_content_outer_width / min_content_outer_width already include
             // the box's own padding+border (border-box width), so we assign directly.
@@ -907,7 +926,9 @@ pub(super) fn dispatch_box(
         BoxSizing::BorderBox => v,
     };
     if let Some(max_len) = &s.max_width {
-        let max_bb = if max_len.is_intrinsic() {
+        let max_bb = if matches!(max_len, Length::Stretch) {
+            Some((available_width - margin_left - margin_right).max(0.0))
+        } else if max_len.is_intrinsic() {
             Some(max_content_outer_width(b, measurer, viewport))
         } else {
             max_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v).max(0.0))
@@ -917,7 +938,9 @@ pub(super) fn dispatch_box(
         }
     }
     if let Some(min_len) = &s.min_width {
-        let min_bb = if min_len.is_intrinsic() {
+        let min_bb = if matches!(min_len, Length::Stretch) {
+            Some((available_width - margin_left - margin_right).max(0.0))
+        } else if min_len.is_intrinsic() {
             Some(min_content_outer_width(b, measurer, viewport))
         } else {
             min_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v.max(0.0)))
@@ -1430,7 +1453,7 @@ pub(super) fn dispatch_box(
                     None => {
                         finalize_block_height(
                             b, &s, em, available_height, viewport, padding_top, padding_bottom,
-                            size_contained, field_intrinsic, 0.0,
+                            size_contained, field_intrinsic, 0.0, cb,
                         );
                         finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
                         return DispatchOutcome::Done;

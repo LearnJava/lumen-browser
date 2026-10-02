@@ -43,6 +43,7 @@ fn fmt_len(l: &Length) -> String {
         Length::MaxContent => "max-content".to_string(),
         Length::FitContent(None) => "fit-content".to_string(),
         Length::FitContent(Some(inner)) => format!("fit-content({})", fmt_len(inner)),
+        Length::Stretch => "stretch".to_string(),
     }
 }
 

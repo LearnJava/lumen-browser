@@ -159,7 +159,7 @@ fn resolve_font_size(
             FontSizeBasis::ParentRelative,
         ),
         // Intrinsic keywords not meaningful for font-size — ignore.
-        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return None,
+        Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => return None,
     };
     style.font_size = px;
     Some(basis)
@@ -231,7 +231,7 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
                 }
             }
             // Intrinsic keywords not meaningful for line-height — ignore.
-            Length::MinContent | Length::MaxContent | Length::FitContent(_) => {}
+            Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => {}
         }
     }
 }

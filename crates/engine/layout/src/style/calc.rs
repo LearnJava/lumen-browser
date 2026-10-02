@@ -240,7 +240,7 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Cqb(v) => (13, *v),
         Length::Cqmin(v) => (14, *v),
         Length::Cqmax(v) => (15, *v),
-        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => {
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => {
             return None;
         }
     })
@@ -276,7 +276,7 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         // path in prod code for a case that can only be a logic error here,
         // not attacker/page-controlled input (docs/conventions.md — no
         // panic!/unwrap in production code).
-        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => {
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => {
             template.clone()
         }
     }
