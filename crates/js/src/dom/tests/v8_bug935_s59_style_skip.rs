@@ -22,7 +22,7 @@ const SHEET: &str = "body { margin: 0; }
      .box { height: 20px; }";
 
 #[derive(Clone, Copy, PartialEq)]
-enum Mode {
+pub(super) enum Mode {
     /// No read until the end: one full layout.
     Full,
     /// A read after every step, the skip on.
@@ -32,6 +32,10 @@ enum Mode {
 }
 
 fn run(steps: &str, mode: Mode) -> (String, u64) {
+    run_on(SHEET, steps, mode)
+}
+
+pub(super) fn run_on(sheet: &str, steps: &str, mode: Mode) -> (String, u64) {
     let reads = if mode == Mode::Full {
         ""
     } else {
@@ -39,7 +43,7 @@ fn run(steps: &str, mode: Mode) -> (String, u64) {
     };
     let rt = runtime(page());
     rt.set_style_skip_off(mode == Mode::NoSkip);
-    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(SHEET)));
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(sheet)));
     let script = format!(
         "(function() {{
             var root = document.createElement('div');
@@ -53,11 +57,6 @@ fn run(steps: &str, mode: Mode) -> (String, u64) {
             }}
             var els = Array.prototype.slice.call(root.children);
             {reads}
-            var steps = {steps};
-            for (var k = 0; k < steps.length; k++) {{
-                steps[k]();
-                {reads}
-            }}
             var out = [];
             function props(name, e) {{
                 var entries = JSON.parse(_lumen_get_computed_style_entries(e.__nid__, false));
@@ -66,14 +65,26 @@ fn run(steps: &str, mode: Mode) -> (String, u64) {
                 if (!entries.length) out.push(name + ' <no entry>');
                 for (var i = 0; i < entries.length; i++) out.push(name + ' ' + entries[i][0] + ': ' + entries[i][1]);
             }}
-            props('root', root);
-            props('body', document.body);
-            var all = root.querySelectorAll('*');
-            for (var j = 0; j < all.length; j++) props(all[j].tagName + j, all[j]);
+            function snapshot(tag) {{
+                out.push('== ' + tag);
+                props('root', root);
+                props('body', document.body);
+                var all = root.querySelectorAll('*');
+                for (var j = 0; j < all.length; j++) props(all[j].tagName + j, all[j]);
+            }}
+            var steps = {steps};
+            for (var k = 0; k < steps.length; k++) {{
+                steps[k]();
+                {reads}
+                // Every step is compared, not only the last: a later step can repair what an earlier one left stale.
+                if ({per_step}) snapshot('step ' + k);
+            }}
+            snapshot('end');
             return out.join('\\n');
         }})()",
         steps = steps,
         reads = reads,
+        per_step = mode != Mode::Full,
     );
     let out = match rt.eval(&script).unwrap_or_else(|e| panic!("{e:?}\n{script}")) {
         lumen_core::JsValue::String(s) => s,
@@ -82,7 +93,7 @@ fn run(steps: &str, mode: Mode) -> (String, u64) {
     (out, rt.style_entries_kept_count())
 }
 
-fn diff(a: &str, b: &str) -> Vec<String> {
+pub(super) fn diff(a: &str, b: &str) -> Vec<String> {
     let (a, b): (Vec<_>, Vec<_>) = (a.lines().collect(), b.lines().collect());
     let mut out: Vec<String> =
         a.iter().zip(&b).filter(|(x, y)| x != y).take(5).map(|(x, y)| format!("  {x}\n  {y}")).collect();

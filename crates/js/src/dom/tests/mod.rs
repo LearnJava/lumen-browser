@@ -275,6 +275,7 @@ mod v8_bug1238_scoped_collectors;
 mod v8_bug935_s58_has_flush;
 mod v8_bug935_s59_style_skip;
 mod v8_bug935_s60_shallow_roots;
+mod v8_bug935_s61_positioned_skip;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s55_content_journal;
