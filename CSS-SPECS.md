@@ -104,7 +104,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | layout (axis swap + vertical inline flow) ✅; paint glyph rotation ✅ CPU+wgpu (mixed/upright/sideways, P3-vertical срезы 1–4); femtovg fallback backend ⬜ | **#41** |
 | CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry — Edge-parity fallback to a regular grid (BUG-105/143; `masonry.rs` waterfall kept unwired) | **#42** |
 | CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03; polygon/ellipse ✅ (`shape_polygons`/`shape_ellipses`); inset() ✅ 2026-06-10 (`shape_insets`, `parse_shape_inset_px`, rounded corners); `clip-path: path()` ✅ 2026-06-14 (p4-clip-path-path); `path()`/`polygon()` `<fill-rule>` evenodd/nonzero ✅ 2026-06-14 (p4-clip-path-fill-rule); `shape-outside: path()` ✅ 2026-06-14 (p4-shape-outside-path: `parse_shape_path_px` flattens SVG path → wrapping polygon) | **#43** |
-| Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
+| Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ✅ 2026-10-02 (anchor-on-path, p4-offset-anchor); `offset` shorthand ✅ 2026-10-02; `offset-rotate` `auto <angle>`/`reverse <angle>` + angle units fixed (deg, not rad) 2026-10-02; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values ✅ 2026-07-29 (p4-font-palette-colr: parse → ComputedStyle → resolve → DrawText.font_palette → COLR v0 + CPAL в wgpu-рендере; COLR v1 paint graph отложен) | **#47** |
@@ -672,7 +672,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `shape-outside` / `shape-margin` / `shape-image-threshold` | 🟡 | parsed; float wrapping ⬜ |
-| `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | `offset-path`/`offset-distance`/`offset-rotate`/`ray()` wired end-to-end (Tier4 #44); residual: `offset-anchor` and `url()` motion paths ⬜ |
+| `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | `offset-path`/`offset-distance`/`offset-rotate`/`ray()` wired end-to-end (Tier4 #44); residual: `url()` motion paths ⬜ (`offset-anchor` + `offset` shorthand ✅ 2026-10-02) |
 
 ### [T4] Containment (advanced)
 

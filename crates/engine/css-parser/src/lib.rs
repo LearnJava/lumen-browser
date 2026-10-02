@@ -273,6 +273,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "mix-blend-mode",
     "object-fit",
     "object-position",
+    "offset",
     "offset-anchor",
     "offset-distance",
     "offset-path",
