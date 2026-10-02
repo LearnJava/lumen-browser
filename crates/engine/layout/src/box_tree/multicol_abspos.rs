@@ -146,9 +146,26 @@ pub(crate) fn build_multicol_init(
 
     let col_w = ((content_width - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
 
-    // column-fill: balance distributes content equally; auto fills columns to container height.
-    // When no container height is known, auto behaves like balance.
-    let balance = s.column_fill_balance || container_h.is_none();
+    // CSS Multicol L1 §7: `column-fill: balance` distributes content equally
+    // (capped by the column height limit); `auto` fills each column up to the
+    // limit before opening the next. The limit is the definite content-box
+    // `height`, else a definite `max-height` (§7.1 — an auto-height multicol is
+    // as tall as its content up to `max-height`). With no limit at all,
+    // `column-fill: auto` keeps everything in the first column.
+    let container_h = container_h.or_else(|| {
+        let max_len = s.max_height.as_ref()?;
+        let max_h = resolve_block_size(max_len, em, available_height, viewport)?;
+        Some(match s.box_sizing {
+            BoxSizing::ContentBox => max_h,
+            BoxSizing::BorderBox => (max_h
+                - padding_top
+                - padding_bottom
+                - s.border_top_width
+                - s.border_bottom_width)
+                .max(0.0),
+        })
+    });
+    let balance = s.column_fill_balance;
 
     // CSS Multicol §6.1: a `column-span: all` descendant reached through plain
     // block wrappers spans the container too — split those wrappers around it so

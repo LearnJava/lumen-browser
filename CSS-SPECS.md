@@ -82,7 +82,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | ✅ | scroll-snap-type (y/x/both mandatory+proximity), scroll-snap-align (start/end/center), scroll-snap-stop (always); shell integration: collect_snap_containers + find_snap_target wired to start_smooth_scroll/scroll_x_by with viewport snap-port 2026-06-03 | **#26** |
-| CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
+| CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | ✅ | column-rule rendering; column-span; column-fill | **#27** |
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | ✅ | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ✅ (CounterStyleRegistry) | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
@@ -548,7 +548,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `column-gap` | ✅ | |
 | `column-rule` / `column-rule-*` | ✅ | rendered between columns (solid/dashed/dotted) |
 | `column-span` | ✅ | `none`/`all`; `all` breaks out of the columns for direct children and for descendants reached through plain block wrappers (wrapper split into slice fragments around the spanner, `box_tree/multicol_span.rs`); ignored on floats/abspos and blocked by scroll containers, nested multicols, `contain`, non-block wrappers (CSS Multicol L1 §6.1); P4 2026-10-02 |
-| `column-fill` | 🟡 | parsed; balancing ⬜ |
+| `column-fill` | ✅ | `balance` (default) / `auto`; column height limit = definite `height`, else definite `max-height` (CSS Multicol L1 §7.1); balance is capped by the limit, content beyond it flows into overflow columns past the inline end; `auto` without a limit stays in column 1 (`box_tree/multicol_trampoline.rs`); P4 2026-10-02 |
 | `break-before` / `break-after` / `break-inside` | ✅ | fragmentation algorithm in `pagination.rs` (Tier4 #45); paged media itself is out of project scope |
 | `orphans` / `widows` | ✅ | `pagination.rs` (Tier4 #45); paged-media output out of scope |
 

@@ -83,8 +83,13 @@ fn check_containment(b: &LayoutBox) {
     let parent_is_plain_block =
         matches!(b.kind, BoxKind::Block) && b.style.display == Display::Block;
     let parent_unclipped_x = b.style.overflow_x == Overflow::Visible;
+    // CSS Multicol L1 §7.1: content that exceeds the column height limit flows
+    // into overflow columns past the container's inline end — a legitimate
+    // horizontal escape, so multicol parents are exempt.
+    let parent_is_multicol = b.style.column_count.is_some() || b.style.column_width.is_some();
     for child in &b.children {
         if parent_is_plain_block
+            && !parent_is_multicol
             && parent_unclipped_x
             && child.style.position == Position::Static
             && child.style.width.is_none()
@@ -151,8 +156,13 @@ fn count_finite(b: &LayoutBox, counts: &mut GeometryViolationCounts) {
 fn count_containment(b: &LayoutBox, counts: &mut GeometryViolationCounts) {
     let parent_is_plain_block = matches!(b.kind, BoxKind::Block) && b.style.display == Display::Block;
     let parent_unclipped_x = b.style.overflow_x == Overflow::Visible;
+    // CSS Multicol L1 §7.1: content that exceeds the column height limit flows
+    // into overflow columns past the container's inline end — a legitimate
+    // horizontal escape, so multicol parents are exempt.
+    let parent_is_multicol = b.style.column_count.is_some() || b.style.column_width.is_some();
     for child in &b.children {
         if parent_is_plain_block
+            && !parent_is_multicol
             && parent_unclipped_x
             && child.style.position == Position::Static
             && child.style.width.is_none()

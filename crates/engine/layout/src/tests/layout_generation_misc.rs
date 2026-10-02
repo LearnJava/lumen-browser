@@ -2078,3 +2078,60 @@ fn fit_content_functional_form_parsed() {
         "expected FitContent(Some(200px)), got {:?}", style.width
     );
 }
+
+/// CSS Multicol L1 §7: lays out `n` 30px blocks in a 3-column container
+/// (`width: 300px`, no gap) with the given extra container style and returns
+/// the container box.
+fn multicol_30px_items(extra: &str, n: usize) -> LayoutBox {
+    let items = "<div></div>".repeat(n);
+    let root = lay_measured(
+        &format!("<div id='c'>{items}</div>"),
+        &format!("#c {{ width: 300px; column-count: 3; column-gap: 0px; {extra} }} #c div {{ height: 30px; }}"),
+        800.0,
+    );
+    first_element_child(&root).clone()
+}
+
+#[test]
+fn multicol_column_fill_auto_without_height_stays_in_first_column() {
+    // Edge: `column-fill: auto` with no height limit never opens a second
+    // column — three 30px blocks stack to a 90px-tall container.
+    let c = multicol_30px_items("column-fill: auto;", 3);
+    assert!((c.rect.height - 90.0).abs() < 0.5, "height={}", c.rect.height);
+    assert!(c.children.iter().all(|f| f.rect.x < 1.0), "all fragments in column 0");
+}
+
+#[test]
+fn multicol_column_fill_auto_uses_max_height_as_limit() {
+    // Edge: auto-height container, `max-height: 50px` — column 0 fills to 50px,
+    // the rest flows on; the container is exactly 50px tall.
+    let c = multicol_30px_items("column-fill: auto; max-height: 50px;", 6);
+    assert!((c.rect.height - 50.0).abs() < 0.5, "height={}", c.rect.height);
+    let col0: f32 = c.children.iter().filter(|f| f.rect.x < 1.0).map(|f| f.rect.height).sum();
+    assert!((col0 - 50.0).abs() < 0.5, "column 0 filled to the limit, got {col0}");
+}
+
+#[test]
+fn multicol_column_fill_balance_is_capped_by_max_height() {
+    // Edge: balanced content would need 60px per column, `max-height: 40px`
+    // caps the column height, extra content overflows into further columns.
+    let c = multicol_30px_items("max-height: 40px;", 6);
+    assert!((c.rect.height - 40.0).abs() < 0.5, "height={}", c.rect.height);
+    let max_x = c.children.iter().map(|f| f.rect.x).fold(0.0f32, f32::max);
+    assert!(max_x > 200.5, "overflow column expected beyond the 3rd, max_x={max_x}");
+}
+
+#[test]
+fn multicol_column_fill_auto_atomic_items_fill_to_height() {
+    // Atomic (bordered) items with `column-fill: auto; height: 100px`: the
+    // first column takes as many whole items as fit (3 × 30px = 90px).
+    let root = lay_measured(
+        "<div id='c'><div></div><div></div><div></div><div></div><div></div></div>",
+        "#c { width: 300px; column-count: 3; column-gap: 0px; column-fill: auto; height: 100px; } \
+         #c div { height: 30px; border: 1px solid #000; }",
+        800.0,
+    );
+    let c = first_element_child(&root);
+    let col0 = c.children.iter().filter(|f| f.rect.x < 1.0).count();
+    assert_eq!(col0, 3, "column 0 holds 3 atomic items");
+}

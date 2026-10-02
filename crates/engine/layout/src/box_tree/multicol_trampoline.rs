@@ -376,6 +376,29 @@ fn finish_measure_phase(frame: &mut Frame, viewport: Size) {
     }
 }
 
+/// CSS Multicol L1 §7 — used column height for a sliceable segment.
+/// `limit` is the column height limit (definite `height`, else `max-height`).
+/// `balance` spreads `total_h` over `n_cols` and never exceeds the limit;
+/// `column-fill: auto` fills up to the limit, or — with no limit — keeps the
+/// whole segment in one column.
+fn column_height(balance: bool, limit: Option<f32>, total_h: f32, n_cols: usize) -> f32 {
+    let h = if balance {
+        let even = (total_h / n_cols as f32).ceil();
+        limit.map_or(even, |l| even.min(l))
+    } else {
+        limit.unwrap_or(total_h)
+    };
+    h.max(1.0)
+}
+
+/// Number of columns needed for `total_h` of content at column height
+/// `col_h` — never fewer than `column-count`; more only when the height limit
+/// forces overflow columns.
+fn overflow_columns(total_h: f32, col_h: f32, n_cols: usize) -> usize {
+    let needed = ((total_h - 0.01) / col_h).ceil().max(1.0) as usize;
+    needed.max(n_cols)
+}
+
 /// CSS Multicol §3.4 — geometric column slicing for a sliceable segment,
 /// copied verbatim from the removed code's `all_sliceable` branch. Pure
 /// post-processing of the Measure pass's results — every item here is a
@@ -394,11 +417,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     let outer_hs = frame.outer_hs.clone();
 
     let total_h: f32 = outer_hs.iter().sum();
-    let col_h = if balance {
-        (total_h / n_cols as f32).ceil().max(1.0)
-    } else {
-        container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
-    };
+    let col_h = column_height(balance, container_h, total_h, n_cols as usize);
 
     // Virtual single-column stack: each box's border-box occupies
     // [virtual_top, virtual_top + height), with margins as gaps.
@@ -411,9 +430,12 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
         v += oh;
     }
 
-    // Emit one clipped fragment per (column, box) overlap.
+    // Emit one clipped fragment per (column, box) overlap. Content that does
+    // not fit into `n_cols` columns of `col_h` flows into overflow columns
+    // laid out further along the inline axis (CSS Multicol L1 §7.1).
+    let used_cols = overflow_columns(total_h, col_h, n_cols as usize);
     let mut seg_extent = 0.0f32;
-    for c in 0..n_cols as usize {
+    for c in 0..used_cols {
         let col_lo = c as f32 * col_h;
         let col_hi = col_lo + col_h;
         let col_x = content_x + c as f32 * (col_w + col_gap);
@@ -451,9 +473,10 @@ fn compute_col_assignment(frame: &mut Frame) {
     let outer_hs = &frame.outer_hs;
     let total_h: f32 = outer_hs.iter().sum();
     let target_h = if balance {
-        balanced_column_height(outer_hs, n_cols)
+        let balanced = balanced_column_height(outer_hs, n_cols);
+        container_h.map_or(balanced, |limit| balanced.min(limit.max(1.0)))
     } else {
-        container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
+        column_height(false, container_h, total_h, n_cols)
     };
 
     let mut col_assignment = vec![0usize; outer_hs.len()];
@@ -466,14 +489,18 @@ fn compute_col_assignment(frame: &mut Frame) {
         // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
         // box is filled in order, starting from the first).
         let col_nonempty = col_fill[cur_col] > 0.0;
-        if cur_col + 1 < n_cols && col_nonempty && height_overflow {
+        if col_nonempty && height_overflow {
             cur_col += 1;
+            // Overflow column beyond `column-count` (CSS Multicol L1 §7.1).
+            if cur_col >= col_fill.len() {
+                col_fill.push(0.0);
+            }
         }
         col_assignment[j] = cur_col;
         col_fill[cur_col] += oh;
     }
+    frame.col_y = vec![cur_y; col_fill.len()];
     frame.col_assignment = col_assignment;
-    frame.col_y = vec![cur_y; n_cols];
 }
 
 /// Runs right after an item finishes its Place-phase dispatch — per-column
