@@ -464,7 +464,11 @@ class Mcp:
         resp = json.loads(line)
         if resp.get("error") is not None:
             raise RuntimeError(f"{method}: {resp['error']}")
-        return resp.get("result") or {}
+        result = resp.get("result") or {}
+        # MCP: сбой инструмента приходит как isError-результат, не JSON-RPC-ошибка (BUG-1246)
+        if result.get("isError"):
+            raise RuntimeError(f"{method}: {result.get("content")}")
+        return result
 
     def tool(self, name: str, arguments: dict) -> dict:
         return self.call("tools/call", {"name": name, "arguments": arguments})
