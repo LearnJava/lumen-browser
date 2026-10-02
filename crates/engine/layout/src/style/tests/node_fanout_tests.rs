@@ -115,31 +115,31 @@
     }
 
     #[test]
-    fn has_anywhere_in_the_sheet_widens_to_the_whole_document() {
+    fn has_names_the_ancestors_it_can_flip_not_the_whole_document() {
         // BUG-349: `:has()` binds an ancestor's match to a descendant's state,
         // and that ancestor can sit arbitrarily far above the mutated node's
-        // parent — parent-only widening (S17's pre-BUG-349 fallback) is not
-        // enough to catch it, so the root-set must cover the whole document.
+        // parent. BUG-935 s58: the root-set names exactly the ancestors that
+        // could match a `:has()`-carrying compound (`ul` here), plus the usual
+        // `#a` itself — not the document.
         let doc = fixture();
         let sheet = parse_css("ul:has(.item) { color: green; }");
         let index = restyle_node_index(&doc, &sheet);
-        assert!(index.is_conservative(), ":has() anywhere must force the conservative path");
+        assert!(!index.is_conservative(), "`:has()` has its own reach analysis");
         assert!(index.has_has_dependency(), ":has() anywhere must set the has-dependency flag");
         let a = doc.find_by_id("a").expect("#a");
-        assert_eq!(
-            roots(&doc, &sheet, a, "data-x"),
-            [doc.root()].into_iter().collect::<HashSet<_>>(),
-            "a `:has()`-affected ancestor can be more than one level up, so the whole \
-             document must widen, not just #a's parent",
-        );
+        let got = roots(&doc, &sheet, a, "data-x");
+        assert!(got.contains(&a));
+        assert!(!got.contains(&doc.root()), "the document must not be the root: {got:?}");
+        let uls: Vec<_> = got.iter().filter(|&&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")).collect();
+        assert_eq!(uls.len(), 1, "the `ul` ancestor that could match `ul:has(.item)` is a root: {got:?}");
     }
 
     #[test]
-    fn has_far_above_the_mutated_node_is_caught_by_the_document_wide_widening() {
+    fn has_far_above_the_mutated_node_is_caught() {
         // The exact shape BUG-349 documents: `article:has(.expanded)` reacts to
-        // a class toggle on a node several levels below `<article>`, which the
-        // old parent-only widening (still correct for plain sibling-reach
-        // selectors) could never reach.
+        // a class toggle on a node several levels below `<article>`, which a
+        // parent-only widening (still correct for plain sibling-reach selectors)
+        // could never reach.
         let doc = parse_html(
             r#"<article id="art">
                 <section><div><span id="leaf" class="collapsed"></span></div></section>
@@ -150,12 +150,46 @@
         let art = doc.find_by_id("art").expect("#art");
         let index = restyle_node_index(&doc, &sheet);
         let got = restyle_root_set_for_node_change(&doc, [(leaf, NodeChange::Attr("class"))], &index);
-        assert_eq!(got, [doc.root()].into_iter().collect::<HashSet<_>>());
-        assert!(
-            got.contains(&doc.root()) && doc.root() != art,
-            "the whole-document root-set must cover #art even though it is three levels \
-             above #leaf, well outside #leaf's parent's subtree",
+        assert_eq!(got, [leaf, art].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_has_subject_followed_by_a_sibling_combinator_widens_to_its_parent() {
+        // `.card:has(.x) + .after` — `.after` restyles when `.card`'s result flips,
+        // and it is not in `.card`'s subtree.
+        let doc = parse_html(
+            r#"<div id="wrap"><div class="card" id="c"><i id="leaf"></i></div><p class="after"></p></div>"#,
         );
+        let sheet = parse_css(".card:has(.x) + .after { color: red; }");
+        let leaf = doc.find_by_id("leaf").expect("#leaf");
+        let wrap = doc.find_by_id("wrap").expect("#wrap");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_root_set_for_node_change(&doc, [(leaf, NodeChange::Attr("class"))], &index);
+        assert!(got.contains(&wrap), "{got:?}");
+    }
+
+    #[test]
+    fn a_forward_sibling_has_argument_reaches_previous_siblings_of_ancestors() {
+        // `.a:has(+ .b)` flips when `.b` (a later sibling of `.a`) changes.
+        let doc = parse_html(r#"<div><i class="a" id="a"></i><i class="b" id="b"></i></div>"#);
+        let sheet = parse_css(".a:has(+ .b) { color: red; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let b = doc.find_by_id("b").expect("#b");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_root_set_for_node_change(&doc, [(b, NodeChange::Attr("class"))], &index);
+        assert!(got.contains(&a), "{got:?}");
+    }
+
+    #[test]
+    fn has_with_a_shadow_root_in_the_document_still_widens_to_the_whole_document() {
+        let mut doc = fixture();
+        let host = doc.find_by_id("a").expect("#a");
+        doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let sheet = parse_css("ul:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative());
+        let got = restyle_root_set_for_node_change(&doc, [(host, NodeChange::Attr("class"))], &index);
+        assert_eq!(got, [doc.root()].into_iter().collect::<HashSet<_>>());
     }
 
     #[test]

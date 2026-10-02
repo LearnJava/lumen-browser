@@ -226,6 +226,8 @@ pub struct V8JsRuntime {
     pub(super) computed_styles_needed: Arc<AtomicBool>,
     /// BUG-935 S44: mirrors [`super::style_flush::FlushHandles::computed_styles_collected`].
     pub(super) computed_styles_collected: Arc<AtomicBool>,
+    /// BUG-935 срез 58: mirrors [`super::style_flush::FlushHandles::incremental_flushes`].
+    pub(super) incremental_flushes: Arc<AtomicU64>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -512,6 +514,7 @@ impl V8JsRuntime {
             custom_props_collected: Arc::new(AtomicBool::new(false)),
             computed_styles_needed: Arc::new(AtomicBool::new(false)),
             computed_styles_collected: Arc::new(AtomicBool::new(false)),
+            incremental_flushes: Arc::new(AtomicU64::new(0)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -860,6 +863,12 @@ impl V8JsRuntime {
     /// BUG-935 S43: shared, lock-free handle to [`Self::custom_props_needed`].
     pub fn custom_props_needed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.custom_props_needed)
+    }
+
+    /// BUG-935 срез 58: how many same-tick flushes took the incremental path
+    /// (as opposed to a full relayout) since the runtime was created.
+    pub fn incremental_flush_count(&self) -> u64 {
+        self.incremental_flushes.load(Ordering::Relaxed)
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].

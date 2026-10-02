@@ -382,6 +382,8 @@ impl V8JsRuntime {
                 text_frags_collected: Arc::clone(&self.text_frags_collected),
                 dom_touched: Arc::clone(&dom_touched),
                 incr_basis: Arc::new(Mutex::new(None)),
+                incremental_flushes: Arc::clone(&self.incremental_flushes),
+                patched_sheet_cache: Arc::new(Mutex::new(None)),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
