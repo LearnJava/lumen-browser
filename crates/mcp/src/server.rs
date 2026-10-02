@@ -30,6 +30,9 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
     authenticated: bool,
 }
 
+/// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
     /// или тесты — недоступен другим локальным процессам).
@@ -121,6 +124,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
 
         let response = json!({
             "protocolVersion": protocol_version,
+            "instructions": SERVER_INSTRUCTIONS,
             "serverInfo": {
                 "name": "lumen",
                 "version": env!("CARGO_PKG_VERSION"),
@@ -198,7 +202,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         let tools = vec![
             McpTool {
                 name: "navigate".to_string(),
-                description: "Navigate to a URL (supports file://, http://, https://)".to_string(),
+                description: "Navigate the active tab to a URL (file://, http://, https://) and return once the navigation has been started. Returns {success, url}. The page may still be loading: follow with `wait` (document_ready or network_idle) before reading the DOM. Fails with an error for an unparsable URL or a failed load.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["url"],
@@ -213,7 +217,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "new_tab".to_string(),
-                description: "Open a new tab (it becomes active) and navigate it to a URL".to_string(),
+                description: "Open a new tab, make it the active one and navigate it to a URL. Returns {success, url}. Subsequent tools act on this tab; call `wait` before reading the page.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["url"],
@@ -228,7 +232,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "click".to_string(),
-                description: "Click on an element".to_string(),
+                description: "Click an element or a point. `target` is a CSS selector string, {selector}, {node_id} (from `query`) or {point: {x, y}} in document coordinates. Returns {success: true}. Errors if the selector matches nothing or the target is not in the layout (e.g. display:none) — `wait` for `visible` first.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["target"],
@@ -243,7 +247,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "type".to_string(),
-                description: "Type text into an input field".to_string(),
+                description: "Type text into an input or textarea: focuses the target and sends the characters. `target` has the same forms as for `click`. Returns {success, text}. Errors if the target does not exist; does not clear the existing value.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["target", "text"],
@@ -262,7 +266,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "scroll".to_string(),
-                description: "Scroll the page".to_string(),
+                description: "Scroll the page or an element by a delta in logical pixels (positive y scrolls down). `target` has the same forms as for `click`. Returns {success, delta}. Content added by scrolling (lazy loading) appears asynchronously: `wait` afterwards.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["target", "delta"],
@@ -290,7 +294,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "wait".to_string(),
-                description: "Wait for a condition (document ready, element visible, etc)".to_string(),
+                description: "Block until a condition holds: document_ready (document parsed and load finished), network_idle (no requests in flight), js_idle (no pending JS tasks), visible / stable (need `selector`: element has a box / its box stopped moving). Returns {success, condition}; errors on timeout (`timeout_ms`, default 30000). Typical order: navigate, then wait document_ready or network_idle, then query / eval.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["condition"],
@@ -314,7 +318,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "eval".to_string(),
-                description: "Execute JavaScript code".to_string(),
+                description: "Run JavaScript in the page and return {success, result}, where `result` is a string. Evaluate an expression and serialize structured data yourself, e.g. `JSON.stringify(...)`, then parse it. Errors carry the JS exception text. In the live window a busy engine thread makes the call fail after `timeout_ms` (default 5000).".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["code"],
@@ -333,7 +337,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "query".to_string(),
-                description: "Find DOM elements by CSS selector".to_string(),
+                description: "Find all DOM elements matching a CSS selector. Returns {nodes: [{node_id, tag_name, text_content, bounding_rect}]} (empty array when nothing matches; rect in document coordinates). Use node_id as `target` of click/type. Run after `wait`, otherwise the DOM may be incomplete.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["selector"],
@@ -1126,6 +1130,20 @@ mod tests {
         match msg {
             McpMessage::Request(req) => server.handle_request(&req),
             _ => panic!("expected Request"),
+        }
+    }
+
+    #[test]
+    fn initialize_returns_instructions_and_tools_are_described() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let resp = run_one(&mut server, &make_request("initialize", serde_json::json!({})));
+        let result = resp.result.unwrap();
+        assert!(!result["instructions"].as_str().unwrap_or("").is_empty());
+        let resp = run_one(&mut server, &make_request("tools/list", serde_json::json!({})));
+        let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
+        for t in tools {
+            let d = t["description"].as_str().unwrap_or("");
+            assert!(d.ends_with('.') || d.contains(". "), "tool {} lacks a full sentence: {d}", t["name"]);
         }
     }
 
