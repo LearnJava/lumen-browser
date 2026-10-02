@@ -170,6 +170,38 @@ pub(super) fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
     // basis" — see `DomTouched::touch_gen`'s doc comment.
     let touch_gen = t.epoch;
     t.touch_gen.insert(nid, touch_gen);
+    t.structural_gen.insert(nid, touch_gen);
+}
+
+/// BUG-935 срез 60: like [`record_dom_touch`], for a change of `nid`'s child list and
+/// nothing else — the flush restyles `nid` and its direct children, not the parent's
+/// whole subtree.
+pub(super) fn record_dom_touch_child_list(tracker: &Mutex<DomTouched>, nid: NodeId) {
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    t.child_list_gen.insert(nid, touch_gen);
+}
+
+/// BUG-1211: like [`record_dom_touch`], for a plain write to (or removal of)
+/// the attribute `attr` on `nid`. Remembers the name, so the same-tick flush
+/// can narrow the restyle root with `NodeChange::Attr` instead of widening to
+/// the parent.
+pub(super) fn record_dom_touch_attr(tracker: &Mutex<DomTouched>, nid: NodeId, attr: &str) {
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    let names = t.attr_gen.entry(nid).or_default();
+    match names.get_mut(attr) {
+        Some(g) => *g = touch_gen,
+        None => {
+            names.insert(attr.into(), touch_gen);
+        }
+    }
 }
 
 /// BUG-341 S7: mark this cycle's DOM mutations as unattributable — a mutation

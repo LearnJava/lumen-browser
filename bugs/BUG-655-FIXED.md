@@ -78,9 +78,9 @@ reject'иться, `document.pointerLockElement` — оставаться `null`
 10/20 harness OK, 2/22 сабтестов) в основном упирается в отдельные, уже
 заведённые дефекты: [BUG-622](BUG-622-DUPLICATE.md) (`document.defaultView`
 отсутствует — доминирующая причина `Error: Browsing context for element was
-detached` в половине FAIL), [BUG-462](BUG-462-OPEN.md)/[BUG-574](BUG-574-OPEN.md)
+detached` в половине FAIL), [BUG-462](BUG-462-FIXED.md)/[BUG-574](BUG-574-FIXED.md)
 (`Node.prototype.contains` — `elementDocument.contains is not a function`),
-[BUG-596](BUG-596-OPEN.md) (`Event.prototype.initEvent` отсутствует —
+[BUG-596](BUG-596-FIXED.md) (`Event.prototype.initEvent` отсутствует —
 переподтверждено живой пробой: `"initEvent" in new MouseEvent(...)` → `false`).
 Часть id (`idlharness.window.html`, `mouse_buttons_back_forward.html`,
 `movementX_Y_basic.html`, обе вариации `pointerlock-maintains-mousedown.html`,

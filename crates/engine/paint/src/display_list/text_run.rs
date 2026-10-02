@@ -197,6 +197,10 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
     if range.is_collapsed() {
         return None;
     }
+    // CSS UI L4 §6.2: `user-select: none` text is never highlighted.
+    if frag.style.user_select == lumen_layout::UserSelect::None {
+        return None;
+    }
     let frag_end = frag.source_char_offset + frag.text.len() as u32;
     let same_start = range.start.container == frag.source_node;
     let same_end = range.end.container == frag.source_node;
@@ -219,9 +223,12 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
         if e == 0 { return None; }
         (0, e)
     } else {
-        // Frag node is between range endpoints: fully selected, but multi-node
-        // selection depth is not tracked in Phase 0 without tree traversal.
-        return None;
+        // Neither endpoint lives in this node: the whole fragment is selected
+        // when its node sits between them in document order.
+        if !lumen_layout::node_between(frag.source_node, range) {
+            return None;
+        }
+        (0, frag.text.len() as u32)
     };
 
     let total = frag.text.len() as f32;

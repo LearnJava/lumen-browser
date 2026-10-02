@@ -1071,6 +1071,20 @@ fn zero_duration_animation_finishes_after_delay() {
     assert_eq!(r, lumen_core::JsValue::String("finished".into()));
 }
 
+/// BUG-1192: `fill: forwards|both` must not keep the animation `running`
+/// after the active interval; it finishes, stays in `getAnimations()` and
+/// leaves the directed last frame (not a bare progress 1).
+#[test]
+fn fill_forwards_animation_finishes_and_stays_relevant() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div');              _wa_current_time = 0;              var a = el.animate({opacity:[0, 1]}, {duration: 100, fill: 'forwards', direction: 'reverse'});              var b = el.animate({width:['0px', '10px']}, {duration: 100});              _wa_current_time = 500; a._tick(500); b._tick(500);              [a.playState, b.playState, el.getAnimations().indexOf(a) >= 0,               el.getAnimations().indexOf(b) >= 0, el.style.opacity].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("finished,finished,true,false,0".into()));
+}
+
 // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ──
 //
 // V8 twin note: the originals interleaved write/close/read().then()/assert
@@ -1395,4 +1409,26 @@ fn decompression_stream_multi_chunk_matches_single_chunk() {
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// ── BUG-1195: смешивание единиц в _wa_lerp_scalar ───────────────────────────
+
+/// Разные единицы одного измерения приводятся к каноническим (s/px/deg),
+/// несовместимые — дискретно; одинаковые остаются как есть; прогресс вне
+/// [0,1] экстраполирует.
+#[test]
+fn wa_lerp_scalar_converts_units_and_extrapolates() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "[_wa_lerp_scalar('1s','2000ms',0.5), _wa_lerp_scalar('1s','2000ms',-0.3), \
+              _wa_lerp_scalar('1in','96px',0.5), _wa_lerp_scalar('1turn','90deg',0.5), \
+              _wa_lerp_scalar('10px','20px',0.5), _wa_lerp_scalar('10px','50%',0.2), \
+              _wa_lerp_scalar('1s','2px',0.7)].join()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("1.5s,0.7s,96px,225deg,15px,10px,2px".into())
+    );
 }

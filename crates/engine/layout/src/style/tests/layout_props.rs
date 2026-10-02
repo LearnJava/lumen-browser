@@ -1132,3 +1132,56 @@ use super::*;
         assert_eq!(s.overflow_x, Overflow::Visible);
         assert_eq!(s.overflow_y, Overflow::Auto);
     }
+
+    // --- inline-size / block-size (+ min-/max-) follow writing-mode ---
+
+    fn logical_size_style(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn logical_sizes_horizontal_tb_map_to_width_height() {
+        let s = logical_size_style(
+            "div { inline-size: 100px; block-size: 50px; min-inline-size: 10px;              max-inline-size: 200px; min-block-size: 5px; max-block-size: 90px; }",
+        );
+        assert_eq!(s.width, Some(Length::Px(100.0)));
+        assert_eq!(s.height, Some(Length::Px(50.0)));
+        assert_eq!(s.min_width, Some(Length::Px(10.0)));
+        assert_eq!(s.max_width, Some(Length::Px(200.0)));
+        assert_eq!(s.min_height, Some(Length::Px(5.0)));
+        assert_eq!(s.max_height, Some(Length::Px(90.0)));
+    }
+
+    #[test]
+    fn logical_sizes_vertical_modes_swap_axes() {
+        for wm in ["vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"] {
+            let s = logical_size_style(&format!(
+                "div {{ writing-mode: {wm}; inline-size: 100px; block-size: 50px;                  min-inline-size: 10px; max-inline-size: 200px;                  min-block-size: 5px; max-block-size: 90px; }}"
+            ));
+            assert_eq!(s.height, Some(Length::Px(100.0)), "{wm}");
+            assert_eq!(s.width, Some(Length::Px(50.0)), "{wm}");
+            assert_eq!(s.min_height, Some(Length::Px(10.0)), "{wm}");
+            assert_eq!(s.max_height, Some(Length::Px(200.0)), "{wm}");
+            assert_eq!(s.min_width, Some(Length::Px(5.0)), "{wm}");
+            assert_eq!(s.max_width, Some(Length::Px(90.0)), "{wm}");
+        }
+    }
+
+    #[test]
+    fn logical_sizes_initial_and_invalid_ignored() {
+        let s = logical_size_style("div { min-inline-size: -5px; max-block-size: bogus; }");
+        assert_eq!(s.min_width, None);
+        assert_eq!(s.max_height, None);
+        assert_eq!(s.logical_min_max_sizes, None);
+    }
+
+    #[test]
+    fn logical_sizes_physical_wins_over_logical() {
+        let s = logical_size_style("div { width: 40px; inline-size: 100px; }");
+        assert_eq!(s.width, Some(Length::Px(40.0)));
+    }
+

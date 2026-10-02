@@ -554,6 +554,15 @@ impl Lumen {
                         .unwrap_or(find::TARGET_TEXT_HIGHLIGHT_DEFAULT),
                 );
                 (Some(page), Vec::new())
+            } else if let Some((rects, color)) = self.doc_selection_overlay() {
+                // CSS UI L4 §6.2: mouse/JS page-text selection. Shown only
+                // when no find / `::target-text` highlight is active.
+                let page = crate::lumen::build_page_with_selection_highlight(
+                    &self.display_list,
+                    &rects,
+                    color,
+                );
+                (Some(page), Vec::new())
             } else {
                 (None, Vec::new())
             };
@@ -1429,7 +1438,7 @@ impl Lumen {
             let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
             // CSS UI L4 §6.3 `caret-color: auto` follows the text color —
             // same resolution `emit_input_caret` applies for `<input>`.
-            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let color = field_lb.style.used_caret_color();
             let mut caret_cmd = vec![
                 lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
                 lumen_paint::DisplayCommand::FillRect { rect, color },
@@ -1505,7 +1514,7 @@ impl Lumen {
             && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
         {
             let rect = forms::input_caret_rect(field_lb, &value, cursor);
-            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let color = field_lb.style.used_caret_color();
             let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
                 x: r.x + ox,
                 y: r.y + oy,
@@ -1597,7 +1606,7 @@ impl Lumen {
                 s.chars().map(|c| m.char_width(c, fs)).sum()
             };
             let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
-            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let color = field_lb.style.used_caret_color();
             let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
                 x: r.x + ox,
                 y: r.y + oy,

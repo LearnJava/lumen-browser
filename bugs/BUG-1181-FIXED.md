@@ -56,4 +56,4 @@ CSP3 §6.8.2 «Get the effective directive for request»: у запроса с d
 
 Не сделано: парсерный `<script src>` по-прежнему сообщает `script-src`, а директивы
 `style-src-elem`/`script-src-elem`/`script-src-attr` в самой политике не участвуют в
-принятии решения — это [BUG-1183](BUG-1183-OPEN.md).
+принятии решения — это [BUG-1183](BUG-1183-FIXED.md).

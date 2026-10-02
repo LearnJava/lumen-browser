@@ -85,8 +85,30 @@ fn detail_enabled() -> bool {
 /// are therefore ignored; their time still shows up in the enclosing stage on
 /// the owning thread, which is where it belongs.
 fn owns_tree() -> bool {
+    if CLAIMED.with(std::cell::Cell::get) {
+        return true;
+    }
     static OWNER: OnceLock<std::thread::ThreadId> = OnceLock::new();
     *OWNER.get_or_init(|| std::thread::current().id()) == std::thread::current().id()
+}
+
+thread_local! {
+    static CLAIMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes the current thread print its own call trees as well (BUG-935 slice 55).
+///
+/// The first thread to open a scope owns the tree ([`owns_tree`]). The engine
+/// thread (ADR-023) runs the page's forced-reflow flush, which is the cost
+/// worth profiling, but the shell's main thread has usually opened a scope
+/// first, so every flush scope on the engine thread was silently dropped.
+/// Claiming is per-thread and idempotent; a no-op unless `LUMEN_PROFILE_TREE`
+/// is set. Only call it from a thread that is not a worker pool member, or the
+/// per-call-tree print flood described above returns.
+pub fn claim_tree() {
+    if enabled() {
+        CLAIMED.with(|c| c.set(true));
+    }
 }
 
 /// One in-progress scope on the current thread's call stack.

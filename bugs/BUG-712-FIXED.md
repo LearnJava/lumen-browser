@@ -119,6 +119,6 @@ decision — the file's own doc comment (`webgpu.rs:3`) describes
 `cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
 — чист. `scripts/scoped-test.sh` дал два красных теста, оба посторонние:
 `credentials::tests::create_and_get_through_installed_provider` (TOCTOU-флак
-[BUG-759](BUG-759-OPEN.md), прошёл на повторном запуске в изоляции) и
+[BUG-759](BUG-759-FIXED.md), прошёл на повторном запуске в изоляции) и
 `cases::snapshot_cpu::cpu_snapshots_match_references` (чужой дрейф эталонов
 [BUG-1008](BUG-1008-OPEN.md)). Только JS-шим, пиксели не затронуты.

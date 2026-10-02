@@ -183,6 +183,49 @@ var _PERF_TIMING_ATTR_NAMES = [
     'domContentLoadedEventStart', 'domContentLoadedEventEnd', 'domComplete',
     'loadEventStart', 'loadEventEnd',
 ];
+// Entry fields are set with [[DefineOwnProperty]], not assignment: the
+// PerformanceEntry accessors below have no setter, so `entry.name = x` on an
+// object that inherits from it would silently not create the field (BUG-1189).
+function _perf_put(o, k, v) {
+    Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+}
+// Performance Timeline L2 §3 `interface PerformanceEntry` (BUG-1189) — the
+// common base every entry interface below and in web_api_shim_tail.js chains
+// its prototype to. No IDL constructor. Entries keep `name`/`entryType`/
+// `startTime`/`duration` as own data properties (they shadow the accessors
+// here); the accessors answer only for an entry that lacks the own field
+// (`id`/`navigationId`, which no entry sets) and throw on anything that is not
+// a PerformanceEntry, the prototype object included. A function *expression*
+// published as a non-enumerable global, as `_perf_mark_iface` explains.
+var _perf_entry_iface = function PerformanceEntry() { throw new TypeError('Illegal constructor'); };
+function _perf_entry_getter(attr, dflt) {
+    var g = {};
+    g[attr] = function() {
+        if (this === _perf_entry_iface.prototype || !(this instanceof _perf_entry_iface)) {
+            throw new TypeError("Failed to read the '" + attr + "' property from 'PerformanceEntry': Illegal invocation");
+        }
+        return dflt;
+    };
+    Object.defineProperty(g[attr], 'name', { value: 'get ' + attr, configurable: true });
+    return g[attr];
+}
+['id', 'name', 'entryType', 'startTime', 'duration', 'navigationId'].forEach(function(attr) {
+    Object.defineProperty(_perf_entry_iface.prototype, attr, {
+        get: _perf_entry_getter(attr, attr === 'name' || attr === 'entryType' ? '' : 0),
+        enumerable: true, configurable: true });
+});
+_perf_entry_iface.prototype.toJSON = function toJSON() {
+    if (this === _perf_entry_iface.prototype || !(this instanceof _perf_entry_iface)) {
+        throw new TypeError("Failed to execute 'toJSON' on 'PerformanceEntry': Illegal invocation");
+    }
+    return { id: this.id, name: this.name, entryType: this.entryType, startTime: this.startTime,
+             duration: this.duration, navigationId: this.navigationId };
+};
+Object.defineProperty(_perf_entry_iface, 'prototype', { writable: false });
+Object.defineProperty(_perf_entry_iface.prototype, Symbol.toStringTag,
+    { value: 'PerformanceEntry', configurable: true });
+Object.defineProperty(globalThis, 'PerformanceEntry',
+    { value: _perf_entry_iface, writable: true, enumerable: false, configurable: true });
 // User Timing L3 §4.2 `interface PerformanceMark : PerformanceEntry` with
 // `constructor(DOMString markName, optional PerformanceMarkOptions markOptions = {})`
 // (BUG-687) — unlike the other entry interfaces in this shim it IS
@@ -228,10 +271,10 @@ var _perf_mark_iface = function PerformanceMark(markName) {
     } else {
         start = performance.now();
     }
-    this.entryType = 'mark';
-    this.name = name;
-    this.startTime = start;
-    this.duration = 0;
+    _perf_put(this, 'entryType', 'mark');
+    _perf_put(this, 'name', name);
+    _perf_put(this, 'startTime', start);
+    _perf_put(this, 'duration', 0);
     _perf_set_detail(this, _perf_clone_detail(opts.detail));
 };
 _perf_mark_iface.prototype.toJSON = _perf_user_timing_to_json;
@@ -243,6 +286,8 @@ var _perf_measure_iface = function PerformanceMeasure() { throw new TypeError('I
 _perf_measure_iface.prototype.toJSON = _perf_user_timing_to_json;
 Object.defineProperty(_perf_measure_iface.prototype, 'detail',
     { get: _perf_detail_getter(_perf_measure_iface), enumerable: true, configurable: true });
+Object.setPrototypeOf(_perf_mark_iface.prototype, _perf_entry_iface.prototype);
+Object.setPrototypeOf(_perf_measure_iface.prototype, _perf_entry_iface.prototype);
 // An interface object's `prototype` is non-writable (WebIDL §3.7.1).
 Object.defineProperty(_perf_mark_iface, 'prototype', { writable: false });
 Object.defineProperty(_perf_measure_iface, 'prototype', { writable: false });
@@ -357,10 +402,10 @@ Performance.prototype.measure = function measure(measureName) {
         start = 0;
     }
     var entry = Object.create(_perf_measure_iface.prototype);
-    entry.entryType = 'measure';
-    entry.name = String(name);
-    entry.startTime = start;
-    entry.duration = end - start;
+    _perf_put(entry, 'entryType', 'measure');
+    _perf_put(entry, 'name', String(name));
+    _perf_put(entry, 'startTime', start);
+    _perf_put(entry, 'duration', end - start);
     _perf_set_detail(entry, _perf_clone_detail(detail));
     _perf_entries.push(entry);
     if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);

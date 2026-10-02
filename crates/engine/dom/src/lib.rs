@@ -30,6 +30,8 @@ pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_
 pub mod vtt;
 pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_tracks, parse_vtt};
 
+mod journal;
+use journal::ContentJournal;
 mod forms;
 pub use forms::{
     check_form_gate, check_validity_form, collect_dom_form_fields, element_validity,
@@ -42,7 +44,7 @@ use forms::collect_forms;
 mod selection;
 pub use selection::{
     delete_range, insert_paragraph_break, insert_text_at, locate_text_offset_range,
-    node_child_count, node_length, node_text_content, range_text, split_text_node,
+    node_child_count, node_length, node_text_content, range_text, range_text_filtered, split_text_node,
     DomPosition, Range, Selection,
 };
 
@@ -703,6 +705,9 @@ pub struct Document {
     /// stay that way across tab hibernation.
     #[serde(default)]
     dirty_checkedness: HashMap<NodeId, bool>,
+    /// See [`ContentJournal`]. Not serialised.
+    #[serde(skip)]
+    content_journal: ContentJournal,
     /// `document.designMode` (HTML LS §6.6.3): when `true`, the whole document
     /// becomes an editing host even though no element carries an explicit
     /// `contenteditable` attribute — see [`find_editing_host`].
@@ -838,6 +843,7 @@ impl Document {
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
+            content_journal: ContentJournal::default(),
             design_mode: false,
             character_set: default_character_set(),
             content_type: default_content_type(),
@@ -1081,12 +1087,14 @@ impl Document {
     /// forbids reflecting the IDL value into it, and it must keep holding the
     /// default value for `defaultValue`/`form.reset()`.
     pub fn set_control_value(&mut self, id: NodeId, value: impl Into<String>) {
+        self.content_journal.note(id);
         self.dirty_values.insert(id, value.into());
     }
 
     /// Drop the control's dirty value, so it falls back to its default —
     /// what `form.reset()` does to every control it owns (HTML LS §4.10.21.3).
     pub fn clear_control_value(&mut self, id: NodeId) {
+        self.content_journal.note(id);
         self.dirty_values.remove(&id);
     }
 
@@ -1117,6 +1125,7 @@ impl Document {
     /// The `checked` content attribute is deliberately left untouched: it
     /// stays the default that `defaultChecked`/`form.reset()` restore.
     pub fn set_control_checked(&mut self, id: NodeId, checked: bool) {
+        self.content_journal.note(id);
         self.dirty_checkedness.insert(id, checked);
     }
 
@@ -1124,6 +1133,7 @@ impl Document {
     /// `checked` attribute — what `form.reset()` does to every checkbox/radio
     /// it owns (HTML LS §4.10.21.3).
     pub fn clear_control_checked(&mut self, id: NodeId) {
+        self.content_journal.note(id);
         self.dirty_checkedness.remove(&id);
     }
 
@@ -1158,6 +1168,7 @@ impl Document {
     ///
     /// Shadow DOM spec §4.2 «Attaching a shadow root».
     pub fn attach_shadow(&mut self, host: NodeId, mode: ShadowRootMode) -> NodeId {
+        self.content_journal.note(host);
         let sr = self.alloc(NodeData::ShadowRoot { mode });
         self.shadow_roots.insert(host, sr);
         sr
@@ -1260,6 +1271,7 @@ impl Document {
 
     /// Bounds-checked [`Self::get_mut`]; see [`Self::try_get`].
     pub fn try_get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.content_journal.note(id);
         self.nodes.get_mut(id.index())
     }
 
@@ -1280,6 +1292,7 @@ impl Document {
         if !self.contains_id(id) {
             self.foreign_id_panic(id);
         }
+        self.content_journal.note(id);
         &mut self.nodes[id.index()]
     }
 
@@ -1657,6 +1670,7 @@ impl Document {
         {
             return false;
         }
+        self.content_journal.note(id);
         self.embedded_images.insert(key, (url.to_string(), width, height));
         true
     }
@@ -1686,6 +1700,7 @@ impl Document {
         {
             return false;
         }
+        self.content_journal.note(id);
         self.embedded_documents.insert(key, (url.to_string(), is_document));
         true
     }
@@ -1716,6 +1731,7 @@ impl Document {
     /// Overwrites any previous mapping. Caller must ensure `fragment` was
     /// created with [`create_fragment`][Self::create_fragment].
     pub fn set_template_content(&mut self, template: NodeId, fragment: NodeId) {
+        self.content_journal.note(template);
         self.template_contents.insert(template, fragment);
     }
 
@@ -1762,6 +1778,8 @@ impl Document {
              child is already an ancestor of parent"
         );
         self.detach(child);
+        self.content_journal.note(parent);
+        self.content_journal.note(child);
         self.nodes[child.index()].parent = Some(parent);
         self.nodes[parent.index()].children.push(child);
     }
@@ -1782,6 +1800,8 @@ impl Document {
         }
         self.detach(new_node);
         let Some(parent) = parent else { return };
+        self.content_journal.note(parent);
+        self.content_journal.note(new_node);
         let siblings = &mut self.nodes[parent.index()].children;
         let pos = siblings.iter().position(|&n| n == reference).unwrap_or(siblings.len() - 1);
         siblings.insert(pos + 1, new_node);
@@ -1799,6 +1819,8 @@ impl Document {
     pub fn detach(&mut self, node: NodeId) {
         let parent = self.nodes[node.index()].parent.take();
         if let Some(parent) = parent {
+            self.content_journal.note(parent);
+            self.content_journal.note(node);
             let siblings = &mut self.nodes[parent.index()].children;
             if let Some(pos) = siblings.iter().position(|&n| n == node) {
                 siblings.remove(pos);
@@ -1821,6 +1843,8 @@ impl Document {
         }
         self.detach(new_node);
         let Some(parent) = parent else { return };
+        self.content_journal.note(parent);
+        self.content_journal.note(new_node);
         let siblings = &mut self.nodes[parent.index()].children;
         let pos = siblings
             .iter()

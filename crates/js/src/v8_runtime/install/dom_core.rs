@@ -725,7 +725,7 @@ pub(crate) fn install_node_properties(
                 // whether the value changed).
                 let changed = old.as_deref() != Some(value.as_str());
                 if changed {
-                    record_dom_touch(&touched, nid);
+                    record_dom_touch_attr(&touched, nid, &name);
                 }
                 // BUG-1118: HTML LS §4.8.4.3 "update the image data" — a
                 // script assigning `<img>.src`/`setAttribute('src', …)` must
@@ -755,7 +755,7 @@ pub(crate) fn install_node_properties(
             let had = doc.get(nid).get_attr(&name).is_some();
             remove_attribute(&mut doc, nid, &name);
             if had {
-                record_dom_touch(&touched, nid);
+                record_dom_touch_attr(&touched, nid, &name);
             }
             dirty.store(true, Ordering::Relaxed);
             stale.store(true, Ordering::Relaxed);
@@ -944,7 +944,7 @@ pub(crate) fn install_node_properties(
                 set_text_content(&mut doc, nid, &text);
                 // BUG-341 S7: record `nid` itself (not just its parent) —
                 // a text/childList change here can flip `:empty` for `nid`.
-                record_dom_touch(&touched, nid);
+                record_dom_touch_child_list(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -1044,7 +1044,7 @@ pub(crate) fn install_node_properties(
                         queue_pending_img_loads(&doc, c, hook.as_ref());
                     }
                 }
-                record_dom_touch(&touched, nid);
+                record_dom_touch_child_list(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -1327,12 +1327,18 @@ pub(crate) fn install_tree_mutation(
                     log_foreign_node_id(&doc, "_lumen_append_child child", child_id);
                     return;
                 }
+                // BUG-935 срез 60: moving a node out of another parent changes *that*
+                // parent's child list too (`:first-child`, `+` of its remaining children).
+                let old_parent = doc.get(child).parent.filter(|&o| o != parent);
                 doc.append_child(parent, child);
+                if let Some(old) = old_parent {
+                    record_dom_touch_child_list(&touched, old);
+                }
                 // BUG-341 S7: record the container — covers `parent`'s own
                 // `:empty`/nth-child-of-its-parent state plus the reconciled
                 // children (all within `restyle_root_set_for_node_change`'s
                 // parent-subtree invalidation).
-                record_dom_touch(&touched, parent);
+                record_dom_touch_child_list(&touched, parent);
                 // BUG-1118 срез 2: `child` may already be a fully-built
                 // `<img src>` subtree (cloneNode(true), or a fragment from
                 // `_lumen_parse_html_fragment`) — see `queue_pending_img_loads`.
@@ -1362,7 +1368,7 @@ pub(crate) fn install_tree_mutation(
                 let parent = doc.get(child).parent;
                 doc.detach(child);
                 if let Some(parent) = parent {
-                    record_dom_touch(&touched, parent);
+                    record_dom_touch_child_list(&touched, parent);
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
@@ -1564,9 +1570,14 @@ pub(crate) fn install_shadow_dom(
                     return;
                 }
                 let parent = doc.get(reference).parent;
+                // BUG-935 срез 60: see `_lumen_append_child` — the old parent's list changed too.
+                let old_parent = doc.get(child).parent.filter(|&o| Some(o) != parent);
                 doc.insert_before(child, reference);
+                if let Some(old) = old_parent {
+                    record_dom_touch_child_list(&touched, old);
+                }
                 if let Some(parent) = parent {
-                    record_dom_touch(&touched, parent);
+                    record_dom_touch_child_list(&touched, parent);
                 }
                 // BUG-1118 срез 2: same rationale as `_lumen_append_child`.
                 if let Some(hook) = &img_hook {

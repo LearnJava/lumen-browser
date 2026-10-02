@@ -1866,9 +1866,13 @@ _CaretPosition.prototype.getClientRects = function() { return new DOMRectList([]
 // Pure-JS shim on top of the native binding `_lumen_match_media` (parses + matches
 // a media query against an ad-hoc MediaContext). The registry keeps strong refs
 // while the user-side MQL is reachable; shell pumps changes via
-// `_lumen_deliver_media_changes(w, h, dark, reducedMotion)` after each relayout
+// `_lumen_deliver_media_changes(w, h, dark, reducedMotion, forcedColors)` after each relayout
 // or preference flip.
 var _mqlRegistry = [];
+// Last user-preference snapshot the shell delivered. A freshly created list
+// evaluates against it, so `matchMedia('(forced-colors: active)')` created after
+// the a11y toggle agrees with the cascade instead of assuming all-false.
+var _mqlPrefs = { dark: false, reducedMotion: false, forcedColors: false };
 
 function MediaQueryListEvent(type, init) {
     Event.call(this, type, init || {});
@@ -1886,7 +1890,7 @@ function MediaQueryList(media) {
     // canonical serialization (whitespace collapsed, invalid clauses folded
     // into `not all`), not an echo of the constructor argument.
     this.media       = _lumen_serialize_media_query(raw);
-    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], false, false);
+    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], _mqlPrefs.dark, _mqlPrefs.reducedMotion, _mqlPrefs.forcedColors);
     this.onchange    = null;
     this._listeners  = [];
 }
@@ -1931,13 +1935,17 @@ MediaQueryList.prototype._fire = function(matches) {
 
 // Shell entry point: re-evaluate every registered MediaQueryList against the
 // new context. Fires `change` only when `matches` actually flipped (spec).
-function _lumen_deliver_media_changes(w, h, dark, reducedMotion) {
+function _lumen_deliver_media_changes(w, h, dark, reducedMotion, forcedColors) {
     var darkB = !!dark;
     var rmB   = !!reducedMotion;
+    var fcB   = !!forcedColors;
+    _mqlPrefs.dark = darkB;
+    _mqlPrefs.reducedMotion = rmB;
+    _mqlPrefs.forcedColors = fcB;
     for (var i = 0; i < _mqlRegistry.length; i++) {
         var mql = _mqlRegistry[i];
         if (!mql) continue;
-        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB);
+        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB, fcB);
         if (mql.matches !== newM) mql._fire(newM);
     }
 }

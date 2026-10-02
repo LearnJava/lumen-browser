@@ -1,6 +1,6 @@
 # BUG-1193 — `atob`/`btoa` в Service Worker не по спецификации
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-26 (P6, по ходу BUG-1133 — вне выданного пункта).
 **Область:** js — [`crates/js/src/sw_worker.rs`](../crates/js/src/sw_worker.rs) `install_sw_globals_v8`,
 регистрация нативов `atob`/`btoa` (`base64_decode` + `String::from_utf8`, `base64_encode(s.as_bytes())`).

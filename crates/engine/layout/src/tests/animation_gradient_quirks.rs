@@ -609,7 +609,7 @@ fn caret_color_named() {
     let root = lay("<p>x</p>", "p { caret-color: red; }");
     assert_eq!(
         first_p_style(&root).caret_color,
-        Some(Color { r: 255, g: 0, b: 0, a: 255 })
+        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
     );
 }
 
@@ -627,7 +627,69 @@ fn caret_color_inherited() {
     );
     let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
     let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-    assert_eq!(p.style.caret_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    assert_eq!(p.style.caret_color, Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })));
+}
+
+#[test]
+fn caret_color_currentcolor_follows_own_color() {
+    // CSS UI L4 §6.3: `<color>` включает `currentcolor`; used value — `color`
+    // самого элемента, а не унаследованный `caret-color`.
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-color: currentcolor; color: red; } p { color: blue; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(div.style.used_caret_color(), Color { r: 255, g: 0, b: 0, a: 255 });
+    assert_eq!(p.style.caret_color, Some(CssColor::CurrentColor));
+    assert_eq!(p.style.used_caret_color(), Color { r: 0, g: 0, b: 255, a: 255 });
+}
+
+#[test]
+fn caret_color_system_color_resolved() {
+    let root = lay("<p>x</p>", "p { caret-color: Highlight; }");
+    let st = first_p_style(&root);
+    assert!(
+        matches!(st.caret_color, Some(CssColor::Rgba(_))),
+        "системный цвет должен разрешиться постпассом: {:?}",
+        st.caret_color
+    );
+}
+
+#[test]
+fn caret_color_wide_gamut_color_function() {
+    let root = lay("<p>x</p>", "p { caret-color: color(display-p3 1 0 0); }");
+    let st = first_p_style(&root);
+    assert!(matches!(st.caret_color, Some(CssColor::Wide(_))));
+    assert_eq!(st.used_caret_color().r, 255);
+}
+
+#[test]
+fn caret_color_css_wide_keywords() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-color: red; } p { caret-color: initial; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert!(div.style.caret_color.is_some());
+    assert_eq!(p.style.caret_color, None, "initial = auto");
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-color: red; } p { caret-color: auto; } span { } p { caret-color: inherit; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.caret_color, div.style.caret_color);
+}
+
+#[test]
+fn caret_color_invalid_ignored() {
+    let root = lay("<p>x</p>", "p { caret-color: red; caret-color: 12px; }");
+    assert_eq!(
+        first_p_style(&root).caret_color,
+        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
+    );
 }
 
 #[test]
@@ -733,6 +795,30 @@ fn user_select_none() {
 }
 
 #[test]
+fn user_select_webkit_alias() {
+    let root = lay("<p>x</p>", "p { -webkit-user-select: none; }");
+    assert_eq!(first_p_style(&root).user_select, UserSelect::None);
+}
+
+#[test]
+fn user_select_none_text_does_not_merge_with_neighbours() {
+    // `bb` is `user-select: none`; it must stay its own fragment so selection
+    // and copy can treat it separately from "aa " / " cc".
+    let root = lay("<p>aa <span>bb</span> cc</p>", "span { user-select: none; }");
+    fn frags(b: &crate::LayoutBox, out: &mut Vec<String>) {
+        if let crate::BoxKind::InlineRun { lines, .. } = &b.kind {
+            out.extend(lines.iter().flatten().map(|f| f.text.clone()));
+        }
+        for c in &b.children {
+            frags(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    frags(&root, &mut out);
+    assert_eq!(out.len(), 3, "{out:?}");
+}
+
+#[test]
 fn user_select_text() {
     let root = lay("<p>x</p>", "p { user-select: text; }");
     assert_eq!(first_p_style(&root).user_select, UserSelect::Text);
@@ -768,16 +854,52 @@ fn scroll_behavior_inherited() {
 }
 
 #[test]
-fn pointer_events_not_inherited() {
+fn pointer_events_inherited() {
     let root = lay(
         "<div><p>x</p></div>",
         "div { pointer-events: none; }",
     );
     let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
     let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-    // НЕ наследуется — у p default Auto.
-    assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+    // Наследуется (CSS UI L4 §6.1: Inherited: yes) — p видит none от div.
+    assert_eq!(p.style.pointer_events, PointerEvents::None);
     assert_eq!(div.style.pointer_events, PointerEvents::None);
+}
+
+#[test]
+fn pointer_events_child_can_override_inherited_none() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: auto; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+}
+
+#[test]
+fn pointer_events_css_wide_keywords() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: auto; }          p { pointer-events: inherit; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::None);
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: initial; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { pointer-events: none; } p { pointer-events: unset; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.pointer_events, PointerEvents::None, "unset на inherited = inherit");
 }
 
 #[test]

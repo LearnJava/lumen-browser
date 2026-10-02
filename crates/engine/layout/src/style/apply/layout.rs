@@ -381,42 +381,45 @@ pub(in crate::style) fn apply_decl_layout(
                 style.max_height = Some(len);
             }
         }
-        // CSS Logical Properties L1 — min/max inline-size / block-size.
-        // Phase 0: horizontal-tb writing mode maps these to physical properties.
-        "min-inline-size" => {
-            if val.trim() == "auto" {
-                style.min_width = None;
+        // CSS Logical Properties L1 §2 — min/max inline-size / block-size.
+        // Stored logically; `resolve_logical_properties` maps them onto
+        // min/max-width/height by `writing-mode` after the cascade.
+        "min-inline-size" | "min-block-size" => {
+            let parsed = if val.trim() == "auto" {
+                Some(None)
             } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
-                style.min_width = Some(len);
+                Some(Some(len))
+            } else {
+                None
+            };
+            if let Some(v) = parsed {
+                let sizes = style.logical_min_max_sizes.get_or_insert_with(Default::default);
+                if prop == "min-inline-size" {
+                    sizes.min_inline = v;
+                } else {
+                    sizes.min_block = v;
+                }
             }
         }
-        "max-inline-size" => {
-            if val.trim() == "none" {
-                style.max_width = None;
+        "max-inline-size" | "max-block-size" => {
+            let parsed = if val.trim() == "none" {
+                Some(None)
             } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
-                style.max_width = Some(len);
-            }
-        }
-        "min-block-size" => {
-            if val.trim() == "auto" {
-                style.min_height = None;
-            } else if let Some(len) = parse_sizing_length(val, is_quirks)
-                && !matches!(&len, Length::Px(v) if *v < 0.0)
-            {
-                style.min_height = Some(len);
-            }
-        }
-        "max-block-size" => {
-            if val.trim() == "none" {
-                style.max_height = None;
-            } else if let Some(len) = parse_sizing_length(val, is_quirks)
-                && !matches!(&len, Length::Px(v) if *v < 0.0)
-            {
-                style.max_height = Some(len);
+                Some(Some(len))
+            } else {
+                None
+            };
+            if let Some(v) = parsed {
+                let sizes = style.logical_min_max_sizes.get_or_insert_with(Default::default);
+                if prop == "max-inline-size" {
+                    sizes.max_inline = v;
+                } else {
+                    sizes.max_block = v;
+                }
             }
         }
         "overflow" => {

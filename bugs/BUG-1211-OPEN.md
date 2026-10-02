@@ -216,3 +216,37 @@ dump_golden" в корневом `CLAUDE.md`).
 коллектор на флаш) и/или реальный прогон на cnn/udemy/dailymail для измерения итогового эффекта.
 
 
+## Срез 2026-10-01 (P1, BUG-935 срез 53) — замер без сети и реальный след
+
+Стенд `scripts/perf-fixtures/bug935_forced_reflow_stand.html` (1500 div, `--dump-layout`)
+воспроизводит квадратичность без внешнего сайта: чтение геометрии на чистом DOM 0,005–0,06
+мс/оп, а `el.style.width=…; el.offsetWidth` — 150–400 мс за цикл. `LUMEN_FRAME_LOG=1`:
+`maybe_flush done … path=incremental dirty_roots=1` — путь инкрементальный, но единственный
+корень — родитель всех 1500 элементов (`NodeChange::Unattributed` расширяется до родителя),
+из ~155–185 мс на флаш раскладка корня 110–140 мс, коллекторы ~40 мс, `restyle_node_index`
+и поиск корней ≈ 0. Живой след на lenta.ru (`LUMEN_JS_STALL_SAMPLE_MS`, см. BUG-935
+срез 53): 41 принудительный флаш за 75 с, баннерный цикл `_saveBannerSizes` — 46 % занятого
+времени движкового потока. Кандидат: атрибуция `style`-мутаций (узкий корень = сам узел).
+
+## Срез BUG-935 S54 (P1, 2026-10-01) — атрибуция `style`/`setAttribute` сужает корень
+
+`DomTouched::attr_gen`/`structural_gen` + `NodeChange::Attr` в `try_incremental_flush`:
+`style.width=…; offsetWidth` на стенде 1500 div — 388 → 97 мс/цикл (`dirty_roots` = сам узел).
+Остаток — линейные по документу раскладка (~55 мс) и коллекторы (~20 мс); подробности —
+[BUG-935 срез 54](BUG-935-OPEN.md). Баг остаётся OPEN (частично).
+
+## Срез BUG-935 S55 (P1, 2026-10-01) — журнал содержимого документа
+
+`ContentDirty::Nodes(journal)` вместо `Untracked`: `build_box` 26 → ~1 мс, `graft_geometry`
+23–31 → 0,05 мс на стенде 1500 div, цикл `mutate+read` ~110 → ~30–45 мс. Подробности —
+[BUG-935 срез 55](BUG-935-OPEN.md). Попутно найден независимый дефект scoped-коллекторов —
+[BUG-1238](BUG-1238-FIXED.md) (следствие «post-collectors» этого бага: сдвинутые соседи получают
+устаревший `getBoundingClientRect`). BUG-1211 остаётся OPEN.
+
+## Срез BUG-1238 (P1, 2026-10-02) — коллекторы заменены планом
+
+`collect_*_scoped` по `dirty_roots` удалены: они оставляли устаревшие записи у сдвинутых
+соседей и у предков корня ([BUG-1238](BUG-1238-FIXED.md)). Их заменил
+`lumen_layout::ScopedCollection` (`scoped_collect.rs`) — обход свежего дерева с отсечением по
+`clean_subtrees` и совпавшему rect; карту `computed_styles` чисто вертикальный сдвиг не
+затрагивает. Строка `maybe_flush done` теперь печатает время rect-коллекторов.

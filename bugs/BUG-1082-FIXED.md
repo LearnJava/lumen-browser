@@ -28,4 +28,4 @@ WPT (baseline `encoding`, окно): `api-surrogates-utf8.any.html` 1/6, `texten
 
 ## Не проверялось
 
-- `TextEncoder.encodeInto` с суррогатами (`encodeInto.any.html` 30/111 — смешано с [BUG-1085](BUG-1085-OPEN.md), 54 подтеста упираются в `SharedArrayBuffer`).
+- `TextEncoder.encodeInto` с суррогатами (`encodeInto.any.html` 30/111 — смешано с [BUG-1085](BUG-1085-FIXED.md), 54 подтеста упираются в `SharedArrayBuffer`).

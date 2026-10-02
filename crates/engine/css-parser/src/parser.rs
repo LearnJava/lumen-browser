@@ -42,6 +42,7 @@ mod declarations;
 mod media;
 mod mixins;
 mod selectors;
+mod sheet_diff;
 
 pub use at_rules::*;
 pub use declarations::*;
@@ -1076,6 +1077,89 @@ pub fn parse_apply_call(input: &str) -> Option<ApplyRule> {
     Parser::new(input).parse_apply_rule()
 }
 
+/// Накопитель `@layer`-данных одного прохода [`Parser::parse_stylesheet`]:
+/// порядок объявления layer-ов, их блоки и счётчик анонимных имён.
+#[derive(Default)]
+struct LayerState {
+    order: Vec<String>,
+    blocks: Vec<LayerRule>,
+    anon_counter: usize,
+    /// `@mixin`-ы из `@layer`-блоков, уже с проставленным `layer`; вызывающая
+    /// сторона забирает их через [`Self::take_outputs`] после `register`.
+    mixins: Vec<MixinRule>,
+    /// Layer-независимые at-rules из `@layer`-блоков (`@font-face` и т.п.) —
+    /// вызывающая сторона обрабатывает их как верхнеуровневые.
+    hoisted: Vec<AtRuleOutcome>,
+}
+
+impl LayerState {
+    /// Забирает накопленные `register`-ом `@mixin`-ы и поднятые at-rules.
+    fn take_outputs(&mut self) -> (Vec<MixinRule>, Vec<AtRuleOutcome>) {
+        (std::mem::take(&mut self.mixins), std::mem::take(&mut self.hoisted))
+    }
+
+    /// Регистрирует имя в порядке объявления (первое упоминание побеждает).
+    fn declare(&mut self, name: String) {
+        if !self.order.iter().any(|e| e == &name) {
+            self.order.push(name);
+        }
+    }
+
+    /// Блок `@layer [name] { … }`. `prefix` — полное имя внешнего layer-а
+    /// (`None` на верхнем уровне): вложенный layer получает dotted-имя
+    /// `outer.inner` (Cascade L5 §6.4.2). Содержимое `nested`:
+    /// `@media`/`@supports` превращаются в [`LayerRule`] с условием, вложенные
+    /// `@layer` регистрируются рекурсивно, всё прочее уходит в `hoisted` —
+    /// вызывающая сторона обрабатывает это как обычные верхнеуровневые
+    /// at-rules.
+    fn register(
+        &mut self,
+        prefix: Option<&str>,
+        name: Option<String>,
+        rules: Vec<Rule>,
+        mixins: Vec<MixinRule>,
+        nested: Vec<AtRuleOutcome>,
+    ) {
+        let local = name.unwrap_or_else(|| {
+            self.anon_counter += 1;
+            format!("__anon_{}__", self.anon_counter)
+        });
+        let full = match prefix {
+            Some(p) => format!("{p}.{local}"),
+            None => local,
+        };
+        self.declare(full.clone());
+        for mut m in mixins {
+            m.layer = Some(full.clone());
+            self.mixins.push(m);
+        }
+        self.blocks.push(LayerRule { name: full.clone(), rules, condition: None });
+        for o in nested {
+            match o {
+                AtRuleOutcome::Media(m) => self.blocks.push(LayerRule {
+                    name: full.clone(),
+                    rules: m.rules,
+                    condition: Some(LayerCondition::Media(m.query)),
+                }),
+                AtRuleOutcome::Supports(sr) => self.blocks.push(LayerRule {
+                    name: full.clone(),
+                    rules: sr.rules,
+                    condition: Some(LayerCondition::Supports(sr.condition)),
+                }),
+                AtRuleOutcome::LayerNames(names) => {
+                    for n in names {
+                        self.declare(format!("{full}.{n}"));
+                    }
+                }
+                AtRuleOutcome::LayerBlock { name, rules, mixin_rules: lmr, nested } => {
+                    self.register(Some(&full), name, rules, lmr, nested);
+                }
+                other => self.hoisted.push(other),
+            }
+        }
+    }
+}
+
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
@@ -1157,8 +1241,7 @@ impl<'a> Parser<'a> {
         let mut imports = Vec::new();
         let mut font_faces = Vec::new();
         let mut font_palette_values: Vec<FontPaletteValuesRule> = Vec::new();
-        let mut layer_order: Vec<String> = Vec::new();
-        let mut layers: Vec<LayerRule> = Vec::new();
+        let mut layer_state = LayerState::default();
         let mut supports_rules: Vec<SupportsRule> = Vec::new();
         let mut keyframes: Vec<KeyframesRule> = Vec::new();
         let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
@@ -1172,7 +1255,6 @@ impl<'a> Parser<'a> {
         let mut mixin_rules: Vec<MixinRule> = Vec::new();
         let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
         let mut top_level_spans: Vec<usize> = Vec::new();
-        let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
             // CSSOM-8 вариант C: one `rule_start` per top-level construct,
@@ -1191,7 +1273,11 @@ impl<'a> Parser<'a> {
                     // conditional-group rule (сейчас @container) через `bubbled`.
                     let mut outcomes = std::mem::take(&mut self.bubbled);
                     outcomes.insert(0, primary);
-                    for outcome in outcomes {
+                    // Очередь, а не просто список: содержимое `@layer`-блока,
+                    // не привязанное к layer-у (`@font-face` и т.п.),
+                    // возвращается сюда и идёт тем же путём.
+                    let mut queue: std::collections::VecDeque<AtRuleOutcome> = outcomes.into();
+                    while let Some(outcome) = queue.pop_front() {
                         match outcome {
                             AtRuleOutcome::Property(p) => properties.push(p),
                             AtRuleOutcome::Media(m) => {
@@ -1217,27 +1303,14 @@ impl<'a> Parser<'a> {
                             }
                             AtRuleOutcome::LayerNames(names) => {
                                 for n in names {
-                                    if !layer_order.iter().any(|e| e == &n) {
-                                        layer_order.push(n);
-                                    }
+                                    layer_state.declare(n);
                                 }
                             }
-                            AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr } => {
-                                let resolved_name = name.unwrap_or_else(|| {
-                                    anon_counter += 1;
-                                    format!("__anon_{anon_counter}__")
-                                });
-                                if !layer_order.iter().any(|e| e == &resolved_name) {
-                                    layer_order.push(resolved_name.clone());
-                                }
-                                for mut m in lmr {
-                                    m.layer = Some(resolved_name.clone());
-                                    mixin_rules.push(m);
-                                }
-                                layers.push(LayerRule {
-                                    name: resolved_name,
-                                    rules: lr,
-                                });
+                            AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr, nested } => {
+                                layer_state.register(None, name, lr, lmr, nested);
+                                let (mixins, hoisted) = layer_state.take_outputs();
+                                mixin_rules.extend(mixins);
+                                queue.extend(hoisted);
                             }
                             AtRuleOutcome::Supports(s) => supports_rules.push(s),
                             AtRuleOutcome::Keyframes(k) => keyframes.push(k),
@@ -1278,24 +1351,16 @@ impl<'a> Parser<'a> {
                                 AtRuleOutcome::Supports(s) => supports_rules.push(s),
                                 AtRuleOutcome::LayerNames(names) => {
                                     for n in names {
-                                        if !layer_order.iter().any(|e| e == &n) {
-                                            layer_order.push(n);
-                                        }
+                                        layer_state.declare(n);
                                     }
                                 }
-                                AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr } => {
-                                    let resolved = name.unwrap_or_else(|| {
-                                        anon_counter += 1;
-                                        format!("__anon_{anon_counter}__")
-                                    });
-                                    if !layer_order.iter().any(|e| e == &resolved) {
-                                        layer_order.push(resolved.clone());
-                                    }
-                                    for mut m in lmr {
-                                        m.layer = Some(resolved.clone());
-                                        mixin_rules.push(m);
-                                    }
-                                    layers.push(LayerRule { name: resolved, rules: lr });
+                                AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr, nested } => {
+                                    // CSS Nesting: тело `@layer` внутри
+                                    // style-правила не несёт at-rules, так
+                                    // что `hoisted` здесь всегда пуст.
+                                    layer_state.register(None, name, lr, lmr, nested);
+                                    let (mixins, _) = layer_state.take_outputs();
+                                    mixin_rules.extend(mixins);
                                 }
                                 AtRuleOutcome::Container(c) => container_rules.push(c),
                                 AtRuleOutcome::Scope(s) => scope_rules.push(s),
@@ -1324,8 +1389,8 @@ impl<'a> Parser<'a> {
             imports,
             font_faces,
             font_palette_values,
-            layer_order,
-            layers,
+            layer_order: layer_state.order,
+            layers: layer_state.blocks,
             supports_rules,
             keyframes,
             counter_styles,
@@ -1701,6 +1766,7 @@ impl<'a> Parser<'a> {
                 // only covers the latter; a `@mixin` here remains
                 // unsupported, same as before this change.
                 mixin_rules: Vec::new(),
+                nested: Vec::new(),
             }];
             outcomes.extend(inner_at);
             return outcomes;
@@ -1949,3 +2015,7 @@ mod recovery_tests;
 #[cfg(test)]
 #[path = "parser/tests/view_transitions.rs"]
 mod view_transitions_tests;
+
+#[cfg(test)]
+#[path = "parser/tests/sheet_diff.rs"]
+mod sheet_diff_tests;

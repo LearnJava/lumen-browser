@@ -35,6 +35,6 @@
 
 ## Связанное
 
-- [BUG-946](BUG-946-OPEN.md) — sink'и не читают политику.
-- [BUG-1086](BUG-1086-OPEN.md) — в воркерах нет Trusted Types вообще.
+- [BUG-946](BUG-946-FIXED.md) — sink'и не читают политику.
+- [BUG-1086](BUG-1086-FIXED.md) — в воркерах нет Trusted Types вообще.
 - `docs/tasks/p2-test-track.md#test-3-срез-51-2026-09-22`.

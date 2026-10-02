@@ -56,6 +56,24 @@ pub struct DomTouched {
     /// flush, defeating the whole point of the incremental path for the
     /// read-after-mutate-in-a-loop pattern BUG-1211 is about.
     pub(crate) touch_gen: HashMap<NodeId, u64>,
+    /// BUG-1211: `node → epoch` of the node's latest touch that is **not** a
+    /// plain attribute write (child-list change, `textContent`, dirty
+    /// value/checked…). Such a touch can reach siblings through
+    /// `:nth-child`/`:empty`/sibling combinators, so the same-tick flush
+    /// widens it to the parent. Never cleared, like [`Self::touch_gen`].
+    pub(crate) structural_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 60: `node → epoch` of the node's latest touch that changed *only its
+    /// child list* (`appendChild`/`removeChild`/`insertBefore` on it, `textContent`,
+    /// `innerHTML`). Such a touch is not in [`Self::structural_gen`]: the flush restyles
+    /// the node and its direct children instead of the parent's whole subtree
+    /// (`NodeChange::ChildList`). Never cleared, like [`Self::touch_gen`].
+    pub(crate) child_list_gen: HashMap<NodeId, u64>,
+    /// BUG-1211: `node → attribute name → epoch` of the latest write to that
+    /// attribute through `setAttribute`/`removeAttribute`/inline `style`.
+    /// Lets the flush ask `restyle_root_set_for_node_change` which selectors
+    /// could react to *this* attribute (a `style` write rarely widens at all)
+    /// instead of treating every touch as `Unattributed`. Never cleared.
+    pub(crate) attr_gen: HashMap<NodeId, HashMap<Box<str>, u64>>,
 }
 
 /// Per-node snapshot of resolved CSS custom properties: node id → the map of
@@ -214,6 +232,20 @@ pub struct V8JsRuntime {
     pub(super) computed_styles_needed: Arc<AtomicBool>,
     /// BUG-935 S44: mirrors [`super::style_flush::FlushHandles::computed_styles_collected`].
     pub(super) computed_styles_collected: Arc<AtomicBool>,
+    /// BUG-935 срез 58: mirrors [`super::style_flush::FlushHandles::incremental_flushes`].
+    pub(super) incremental_flushes: Arc<AtomicU64>,
+    /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_entries_kept`].
+    pub(super) style_entries_kept: Arc<AtomicU64>,
+    /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_skip_off`].
+    pub(super) style_skip_off: Arc<AtomicBool>,
+    /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_used`].
+    pub(super) shallow_roots_used: Arc<AtomicU64>,
+    /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_off`].
+    pub(super) shallow_roots_off: Arc<AtomicBool>,
+    /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_used`].
+    pub(super) sheet_delta_used: Arc<AtomicU64>,
+    /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_off`].
+    pub(super) sheet_delta_off: Arc<AtomicBool>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -500,6 +532,13 @@ impl V8JsRuntime {
             custom_props_collected: Arc::new(AtomicBool::new(false)),
             computed_styles_needed: Arc::new(AtomicBool::new(false)),
             computed_styles_collected: Arc::new(AtomicBool::new(false)),
+            incremental_flushes: Arc::new(AtomicU64::new(0)),
+            style_entries_kept: Arc::new(AtomicU64::new(0)),
+            style_skip_off: Arc::new(AtomicBool::new(false)),
+            shallow_roots_used: Arc::new(AtomicU64::new(0)),
+            shallow_roots_off: Arc::new(AtomicBool::new(false)),
+            sheet_delta_used: Arc::new(AtomicU64::new(0)),
+            sheet_delta_off: Arc::new(AtomicBool::new(false)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -848,6 +887,52 @@ impl V8JsRuntime {
     /// BUG-935 S43: shared, lock-free handle to [`Self::custom_props_needed`].
     pub fn custom_props_needed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.custom_props_needed)
+    }
+
+    /// BUG-935 срез 58: how many same-tick flushes took the incremental path
+    /// (as opposed to a full relayout) since the runtime was created.
+    pub fn incremental_flush_count(&self) -> u64 {
+        self.incremental_flushes.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 59: computed-style entries the same-tick flush left published
+    /// instead of rebuilding (see `ScopedCollection::keeps_computed_style`).
+    pub fn style_entries_kept_count(&self) -> u64 {
+        self.style_entries_kept.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 59: switch the computed-style reuse off for this runtime (what
+    /// `LUMEN_NO_STYLE_SKIP=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_style_skip_off(&self, off: bool) {
+        self.style_skip_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 60: shallow restyle roots the same-tick flush used — a child-list change
+    /// that restyled the container and its children instead of the parent's subtree.
+    pub fn shallow_roots_count(&self) -> u64 {
+        self.shallow_roots_used.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 60: switch the shallow roots off for this runtime (what
+    /// `LUMEN_NO_SHALLOW_ROOTS=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_shallow_roots_off(&self, off: bool) {
+        self.shallow_roots_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 64: restyle roots the same-tick flush took from a changed stylesheet — a
+    /// `<style>` inserted (or a sheet swapped) that the incremental path absorbed instead of
+    /// recascading the document.
+    pub fn sheet_delta_roots_count(&self) -> u64 {
+        self.sheet_delta_used.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 64: switch the stylesheet delta off for this runtime (what
+    /// `LUMEN_NO_SHEET_DELTA=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_sheet_delta_off(&self, off: bool) {
+        self.sheet_delta_off.store(off, Ordering::Relaxed);
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].

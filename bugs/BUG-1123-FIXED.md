@@ -96,6 +96,6 @@ EventTarget.prototype.addEventListener`. На youtube это следующий 
 EventTarget`, `window.addEventListener === EventTarget.prototype.addEventListener` — `true`,
 `ShadyDOM.inUse`. Контент по-прежнему пуст (`ytd-app` без `shadowRoot`). Оставшиеся ошибки заведены
 отдельно: ``CE connectedCallback (upgrade): Error: md`InjectionToken(PAGE_TOKEN)`` —
-[BUG-1207](BUG-1207-OPEN.md) (была и до исправления, так что не следствие BUG-1123);
+[BUG-1207](BUG-1207-FIXED.md) (была и до исправления, так что не следствие BUG-1123);
 `EvalError: Code generation from strings disallowed` во фрейме accounts.google.com —
 [BUG-1206](BUG-1206-OPEN.md).

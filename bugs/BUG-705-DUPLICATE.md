@@ -26,7 +26,7 @@ document.scripts.length -> TypeError: Cannot read properties of undefined (readi
 `grep -n "'images'\|'forms'\|'links'\|'scripts'\|'embeds'\|'plugins'\|'anchors'"` over
 `crates/js/src/dom.rs` returns zero hits — the `Document` object literal
 (`var document = {...}`, `dom.rs:4386`) never defines any of these seven
-properties. Unlike `document.applets` ([BUG-606](BUG-606-OPEN.md)), which is
+properties. Unlike `document.applets` ([BUG-606](BUG-606-FIXED.md)), which is
 spec-mandated to be an always-empty legacy collection, these seven are
 **live, non-obsolete** HTML Standard collections (`§4.3.2 The Document
 object`) that reflect actual document content and are used by ordinary

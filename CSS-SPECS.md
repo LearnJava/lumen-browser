@@ -82,7 +82,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | ✅ | scroll-snap-type (y/x/both mandatory+proximity), scroll-snap-align (start/end/center), scroll-snap-stop (always); shell integration: collect_snap_containers + find_snap_target wired to start_smooth_scroll/scroll_x_by with viewport snap-port 2026-06-03 | **#26** |
-| CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
+| CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | ✅ | column-rule rendering; column-span; column-fill | **#27** |
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | ✅ | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ✅ (CounterStyleRegistry) | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
@@ -109,7 +109,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values ✅ 2026-07-29 (p4-font-palette-colr: parse → ComputedStyle → resolve → DrawText.font_palette → COLR v0 + CPAL в wgpu-рендере; COLR v1 paint graph отложен) | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
-| CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
+| CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | ✅ | scroll-chain boundary handling across nested containers (`resolve_scroll_chain_target`, 2026-10-02) | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | 🟡 | Rendering engine works (`collect_gap_segments()` in display_list.rs, flex+grid wired, p4-gap-rule 2026-06-10) but shipped under non-spec property names -- own `gap-rule-width/style/color`, not spec's per-axis `column-rule*`/`row-rule*`/`rule*`; row axis entirely missing; `<gap-rule-list>` grammar (`repeat()`, inset/outset/cap) unparsed. BUG-553 (found WPT-RUN-3 slice 37, 2026-08-04) | **#50** |
 | CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ✅ | `env()` + fallback + nested `calc(env(...)+...)` implemented in `style/substitute.rs` (`expand_env_vars`); parse-time `env()`/`var()` grammar check (`env_calls_well_formed`, `substitution_value_well_formed`), unresolvable `var()`/`env()` → property `unset` (IACVT), inline-`style` CSSOM keeps `var()`/`env()` values (BUG-514); `safe-area-inset-*` returns fallback when not set | **#51** |
 | CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ✅ | `:nth-child(An+B of S)` selector filter implemented in `style.rs:6464` + `css-parser` parser; 4 layout tests | **#52** |
@@ -318,8 +318,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `padding-block*` / `padding-inline*` | ✅ | |
 | `border-block*` / `border-inline*` | ✅ | |
 | `inset-block*` / `inset-inline*` | ✅ | |
-| `block-size` / `inline-size` | 🟡 | LTR: height/width; RTL/vertical ⬜ |
-| `min/max-block-size` / `min/max-inline-size` | 🟡 | LTR only |
+| `block-size` / `inline-size` | ✅ | flow-relative, resolved to width/height by `writing-mode` (vertical-rl/lr, sideways-rl/lr swap axes; `direction` does not affect sizes), `resolve_logical_properties`; CSSOM `getComputedStyle` mirror follows the same swap |
+| `min/max-block-size` / `min/max-inline-size` | ✅ | own `ComputedStyle` fields, mapped onto min/max-width/height by `writing-mode` (same as `block-size`/`inline-size`) |
 
 ---
 
@@ -395,7 +395,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `list-style` / `list-style-type` | ✅ | disc/circle/square → geometric marker boxes; decimal/roman/alpha → text glyphs; `emit_list_marker` display_list.rs:4927 |
-| `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
+| `list-style-position` | ✅ | inside/outside (CSS Lists L3 §2.4); `inside` marker shares line 0 of an inline first child (that line alone is inset by the marker width via `BoxKind::InlineRun::first_line_inset`, wrapped lines return to the content edge); a block-level first child starts one marker line lower at full width |
 | `list-style-image` | ✅ | url() parsed; image marker rendered (DrawImage replaces bullet, CSS Lists L3 §2.3) |
 | `counter-reset` / `counter-increment` | ✅ | resolution done — `precompute_counters()` pre-order DOM walk (see T3 Counters) |
 | `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |
@@ -406,7 +406,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `@layer` declaration | ✅ | parsed; cascade ordering wired: layer_priority sort key in compute_style |
-| `@import layer()` | 🟡 | URL parsed; layer() modifier ⬜ |
+| `@import layer()` / `supports()` | ✅ | `ImportRule::{layer, supports}` (`ImportLayer::{Anonymous,Named}`); shell `inline_css_imports` wraps the fetched sheet in `@layer <name> { … }` / anonymous `@layer { … }` and skips the import when `supports()` is false (CSS Cascade L5 §6.5). Inside `@layer`: nested `@layer` → dotted `outer.inner`, `@media`/`@supports` stay layer-scoped (`LayerRule::condition`), `@font-face`/`@keyframes`/`@property` hoist to top level. Not done: layer-less `@container`/`@scope` inside `@layer` is still dropped; `@import` inside `@layer` is not fetched |
 | `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; reverts current cascade layer (P4 2026-06-13) |
 
 ### [T1] Selectors L4
@@ -478,7 +478,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `background-image` | ✅ | url() ✅; linear/radial/repeating gradient GPU ✅; conic-gradient ✅; multiple layers ✅ (WQ#18) |
 | `background-repeat` / `background-position` / `background-size` | ✅ | `repeat`/`no-repeat`/`repeat-x`/`repeat-y` ✅; `round` ✅ (§3.4 tile rescale to whole count, `bg_tile_geometry` 2026-07-12); `space` ✅ (§3.4 whole tiles pinned to both edges, leftover distributed as equal gaps via `space_axis_geometry`; all tiling paths — femtovg/CPU/wgpu bg+mask; 2026-07-18, test 147) |
 | `background-attachment` | ✅ | `scroll` ✅; `fixed` ✅ — positioning area = viewport (`with_fixed_background_viewport`), `BeginFixedBackground` bracket pinned against page scroll in wgpu/femtovg (2026-09-26, test 158); `local` = `scroll` (no own-content scrolling of backgrounds) |
-| `background-origin` / `background-clip` | 🟡 | parsed; text clip ⬜ |
+| `background-origin` / `background-clip` | ✅ | origin/clip boxes wired; `background-clip: text` (CSS Backgrounds L4 §3.8, p4-background-clip-text): the box fill is skipped (`background_clip_rect` → empty) and each layer / the colour is emitted as `PushOpacity` · content · `PushMaskLayer(alpha)` · glyph `DrawText` runs of the element and its in-flow descendants (opaque black, no text-shadow) · `PopMaskLayer` (`emit_text_clipped`, background_mask.rs); no text under the box → nothing painted. Deferred: inline-element (`<span>`) backgrounds with `text` paint no fill, glyph runs of absolutely-positioned/transformed descendants and of vertical writing-mode are not in the mask, femtovg backend only scissors the mask layer |
 | `image-rendering` | ✅ | bilinear/nearest sampler |
 | `object-fit` / `object-position` | ✅ | |
 | `image-set()` | ✅ | CSS Images L4; `image_set.rs` module + DPR candidate selection (2026-06-02) |
@@ -534,9 +534,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `scroll-snap-type` / `scroll-snap-align` / `scroll-snap-stop` | ✅ | find_scroll_snap_y + proximity snapping |
-| `scroll-margin*` / `scroll-padding*` | 🟡 | parsed; block-axis (`*-top`/`*-bottom`) applied to snap geometry — `scroll-margin` outsets the target's snap area, `scroll-padding` (from `:root`) insets the snapport (`collect_snap_y`, CSS Scroll Snap L1 §5) 2026-07-18; inline (X) axis has no snap path yet, so `*-left`/`*-right` inert |
+| `scroll-margin*` / `scroll-padding*` | ✅ | parsed; both axes applied to snap geometry — `scroll-margin` outsets the target's snap area, `scroll-padding` (from `:root`) insets the snapport. Block axis (`*-top`/`*-bottom`): `find_scroll_snap_y` / `_proximity`; inline axis (`*-left`/`*-right`, `horizontal-tb` physical mapping): `find_scroll_snap_x` / `_proximity` (`collect_snap`, `crates/engine/paint/src/scroll_snap.rs`, CSS Scroll Snap L1 §5) 2026-10-02; the shell page-scroll path (`collect_snap_containers` → `find_snap_target`) already applied both axes. Logical `scroll-margin-inline/block*` / `scroll-padding-inline/block*` longhands and shorthands are not parsed (not covered by this row; ⬜) |
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
-| `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
+| `overscroll-behavior*` | ✅ | parsed; scroll chain wheel/keyboard — `resolve_scroll_chain_target` (nested containers, page and frame), `auto` at the boundary hands off outward, `contain`/`none` stop; overscroll glow/bounce effects n/a |
 | `scroll-timeline` / `view-timeline` | ✅ | scroll-timeline-name/axis, view-timeline-name/axis shorthands+longhands; collect_named_* wired; P4 2026-06-10 |
 | `scroll-initial-target` | ⬜ | CSS Scroll Snap L2, не парсится вовсе — «прокрутить цель в видимость при загрузке страницы» не выполняется никогда. Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `scroll-initial-target-shadow-dom.tentative.html`, [BUG-944](bugs/BUG-944-OPEN.md)) |
 
@@ -547,8 +547,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `column-count` / `column-width` / `columns` | ✅ | |
 | `column-gap` | ✅ | |
 | `column-rule` / `column-rule-*` | ✅ | rendered between columns (solid/dashed/dotted) |
-| `column-span` | 🟡 | parsed; spanning ⬜ |
-| `column-fill` | 🟡 | parsed; balancing ⬜ |
+| `column-span` | ✅ | `none`/`all`; `all` breaks out of the columns for direct children and for descendants reached through plain block wrappers (wrapper split into slice fragments around the spanner, `box_tree/multicol_span.rs`); ignored on floats/abspos and blocked by scroll containers, nested multicols, `contain`, non-block wrappers (CSS Multicol L1 §6.1); P4 2026-10-02 |
+| `column-fill` | ✅ | `balance` (default) / `auto`; column height limit = definite `height`, else definite `max-height` (CSS Multicol L1 §7.1); balance is capped by the limit, content beyond it flows into overflow columns past the inline end; `auto` without a limit stays in column 1 (`box_tree/multicol_trampoline.rs`); P4 2026-10-02 |
 | `break-before` / `break-after` / `break-inside` | ✅ | fragmentation algorithm in `pagination.rs` (Tier4 #45); paged media itself is out of project scope |
 | `orphans` / `widows` | ✅ | `pagination.rs` (Tier4 #45); paged-media output out of scope |
 
@@ -604,12 +604,12 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `cursor` | ✅ | 17 keywords; OS cursor via winit |
-| `user-select` | 🟡 | HitTestResult wire-up ✅; text selection enforcement ⬜ |
-| `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
-| `touch-action` | 🟡 | parsed; gesture ⬜ |
+| `user-select` | ✅ | inherited; `-webkit-user-select` alias. Enforced end-to-end: `none` — no caret/anchor (`caret_at_point`), no `::selection` highlight (`selection_rects`, paint `frag_selection_highlight`), dropped from Ctrl+C (`user_select_none_text_nodes` → `range_text_filtered`), never merged into a selectable inline fragment (`text_rendering_eq`); `all` — a press selects the whole element (`select_scope_at_point`); `contain` — a drag that starts inside is clamped to the element (`clamp_to_range`); `auto`/`text` — plain. Mouse drag over page text (`shell/lumen/doc_select.rs`) drives `Document::selection`; highlight painted before the glyphs. Gap: the field-internal text of `<input>`/`<textarea>` keeps its own caret model (ignores `user-select`) |
+| `pointer-events` | ✅ | inherited (CSS UI L4 §6.1) incl. `inherit`/`initial`/`unset`/`revert`; `none` skipped by `hit_test`/`hit_test_all` (shell click/hover/cursor, `elementFromPoint`) and `collect_clickable_elements`; inline elements gated by their own frag style, so a child `auto` inside a `none` parent is a target; SVG `visible*`/`painted`/`fill`/`stroke`/`all` parsed, treated as `auto` outside SVG geometry ⬜ |
+| `touch-action` | 🟡 | parsed + stored in `ComputedStyle`; gesture ⬜ — blocked on shell touch input, handed to P1 as ROADMAP.md `TOUCH-1` |
 | `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |
 | `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17) |
-| `caret-color` | 🟡 | page `<input>` caret ✅ (FRAME-7 срез 1); `<textarea>`/frame input ⬜ |
+| `caret-color` | ✅ | auto/`<color>` incl. `currentcolor`/`color()`/system colors (used value via `ComputedStyle::used_caret_color`), CSS-wide keywords; consumed by page `<input>` (FRAME-7 срез 1), `<textarea>` и frame input/textarea (срезы 3/6) |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 
 ### [T3] At-Rules
@@ -734,7 +734,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 8 | `list-style-type` marker rendering | ✅ | done — `MarkerBox` in `box_tree.rs` |
 | 9 | `@layer` cascade ordering | ✅ | done 2026-05-22 |
 | 10 | `:is()` / `:where()` / `:has()` matching | ✅ | done — `Is`/`Where`/`Has` variants in `PseudoClass` (`parser.rs`), `matches_relative`/`any_descendant` for forward-looking `:has()`, specificity per spec (`Where`→0, `Is`/`Has`→max of list) 2026-05-24 |
-| 11 | `@media` resize hook re-evaluation | S | shell event — JS `matchMedia` shim still not wired (CAPABILITIES.md) |
+| 11 | `@media` resize hook re-evaluation | ✅ | `_lumen_deliver_media_changes(w,h,dark,reducedMotion,forcedColors)` after every relayout (`relayout.rs`) and a11y-panel close (`a11y_media.rs`); new `MediaQueryList` evaluates against the last delivered prefs, `(forced-colors)` included (p4-matchmedia-live-prefs 2026-10-02) |
 | 12 | `filter` GPU offscreen pass | ✅ | done — GPU color-matrix + Gaussian blur (CAPABILITIES.md) |
 | 13 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | ✅ | done (bbox approximation; exact polygon clip still ⬜, tracked separately in CAPABILITIES.md) |
 | 14 | `mix-blend-mode` + `background-blend-mode` | ✅ | 17 GPU blend modes + comma-list cycling 2026-05-27 |

@@ -62,34 +62,20 @@ impl Lumen {
         let x_css = (cursor.x as f32) / dpr + self.scroll_x;
         let y_css = (cursor.y as f32) / dpr + self.scroll_y;
 
-        let Some(target) = find_scroll_container_at(&self.scroll_containers, x_css, y_css) else {
+        // CSS Overscroll Behavior L1 §3 — ход по цепочке скролла от самого
+        // глубокого контейнера наружу: на границе с `auto` дельта уходит к
+        // охватывающему контейнеру, `contain`/`none` глушат жест на месте,
+        // а если цепочка исчерпана — вызывающий крутит фрейм/страницу.
+        let Some(chain) = lumen_layout::resolve_scroll_chain_target(
+            &self.scroll_containers, x_css, y_css, dx, dy,
+        ) else {
             return false;
         };
+        let (target, new_x, new_y) = (chain.node, chain.new_x, chain.new_y);
         let target_nid = target.index() as u32;
-
-        // Find current position and compute new target.
-        let current = self.scroll_containers.iter()
-            .find(|c| c.node == target)
-            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
-                      c.clip_rect.width, c.clip_rect.height,
-                      c.overscroll_behavior_x, c.overscroll_behavior_y));
-        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
-
-        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
-        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
-
-        // CSS Overscroll Behavior L1 §3 — scroll-chain stop. If the container is
-        // at its boundary on every axis and `overscroll-behavior` permits it, let
-        // the residual delta propagate to the page; otherwise the chain stops
-        // here (event consumed even if the container did not move).
-        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
-        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
-        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
-            return false;
-        }
-        if !moved_x && !moved_y {
-            // Boundary reached but propagation is blocked (contain/none) — consume
-            // the gesture without a relayout/redraw.
+        if !chain.moved {
+            // Граница достигнута, но распространение запрещено (contain/none) —
+            // гасим жест без relayout/redraw.
             return true;
         }
 
@@ -192,31 +178,17 @@ impl Lumen {
         let x_css = hit.client.x + self.frames[idx].scroll_x;
         let y_css = hit.client.y + self.frames[idx].scroll_y;
 
-        let Some(target_node) =
-            find_scroll_container_at(&self.frames[idx].scroll_containers, x_css, y_css)
-        else {
+        // CSS Overscroll Behavior L1 §3 — та же chain-семантика, что у
+        // страничных контейнеров (`resolve_scroll_chain_target`): на границе с
+        // `auto` жест уходит к внешнему контейнеру фрейма, а когда цепочка
+        // исчерпана — к прокрутке всего фрейма; `contain`/`none` глушат его.
+        let Some(chain) = lumen_layout::resolve_scroll_chain_target(
+            &self.frames[idx].scroll_containers, x_css, y_css, dx, dy,
+        ) else {
             return false;
         };
-
-        let current = self.frames[idx].scroll_containers.iter()
-            .find(|c| c.node == target_node)
-            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
-                      c.clip_rect.width, c.clip_rect.height,
-                      c.overscroll_behavior_x, c.overscroll_behavior_y));
-        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
-
-        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
-        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
-
-        // CSS Overscroll Behavior L1 §3 — та же chain-семантика, что у
-        // страничных контейнеров: на границе с `auto` жест уходит дальше
-        // (к прокрутке всего фрейма), `contain`/`none` его глушит на месте.
-        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
-        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
-        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
-            return false;
-        }
-        if !moved_x && !moved_y {
+        let (target_node, new_x, new_y) = (chain.node, chain.new_x, chain.new_y);
+        if !chain.moved {
             return true;
         }
 

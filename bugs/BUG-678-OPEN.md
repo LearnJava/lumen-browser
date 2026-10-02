@@ -98,7 +98,7 @@ durationMs)` из shell/driver в точке, где обнаружено (a) `p
 момент детекции, чтобы `getLargestInteractionContentfulPaint()`-класс тестов
 тоже мог пройти. `LargestContentfulPaint`-конструктор — отдельная, меньшая
 правка в `dom.rs` (аналогично шаблону `Symbol.toStringTag`/WebIDL-обёртки из
-[BUG-677](BUG-677-OPEN.md)/[BUG-673](BUG-673-FIXED.md)).
+[BUG-677](BUG-677-FIXED.md)/[BUG-673](BUG-673-FIXED.md)).
 
 ## Ревизия P3 2026-09-28: дефекты закрыты, остаток — ДОРАБОТКА → GAP-SOFTNAV
 

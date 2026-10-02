@@ -540,7 +540,8 @@ pub(in crate::style) fn apply_decl_text(
                 style.math_depth = n;
             }
         }
-        "user-select" => {
+        // `-webkit-user-select` — the prefixed alias every real-world sheet still ships.
+        "user-select" | "-webkit-user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
             }

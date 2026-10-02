@@ -14,8 +14,9 @@
 //!
 //! Hit-тест поочерёдно проверяет каждую группу; первое попадание возвращается.
 //! Внутри ребёнка спускаемся рекурсивно. Если все дети промахнулись — пробуем
-//! сам бокс. `pointer-events: none` пропускает бокс (но дети остаются
-//! hit-testable, как и в Chrome). `display: none` и `Skip`-боксы исключены
+//! сам бокс. `pointer-events: none` пропускает бокс; дети остаются
+//! hit-testable (свойство наследуется, так что без явного `auto` на ребёнке
+//! они тоже пропускаются, но `auto` на потомке возвращает его в игру). `display: none` и `Skip`-боксы исключены
 //! целиком вместе со своим поддеревом.
 //!
 //! Transform inversion: если бокс имеет CSS `transform`, forward-матрица для
@@ -167,10 +168,10 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if !rect_contains(b.rect, child_point) {
         return None;
     }
-    if matches!(b.style.pointer_events, PointerEvents::None) {
+    let (source_node, frag_pe) = find_inline_source(b, child_point);
+    if matches!(frag_pe.unwrap_or(b.style.pointer_events), PointerEvents::None) {
         return None;
     }
-    let source_node = find_inline_source(b, child_point);
     Some(HitTestResult {
         node: b.node,
         source_node,
@@ -235,10 +236,10 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
     if !rect_contains(b.rect, child_point) {
         return;
     }
-    if matches!(b.style.pointer_events, PointerEvents::None) {
+    let (source_node, frag_pe) = find_inline_source(b, child_point);
+    if matches!(frag_pe.unwrap_or(b.style.pointer_events), PointerEvents::None) {
         return;
     }
-    let source_node = find_inline_source(b, child_point);
     out.push(HitTestResult {
         node: b.node,
         source_node,
@@ -258,34 +259,43 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 /// фрагмент не попал под точку. `source_node == NodeId(0)` используется в
 /// layout как маркер анонимного/сгенерированного контента — такие узлы не
 /// несут реального DOM-предка и тоже заменяются на `b.node`.
-fn find_inline_source(b: &LayoutBox, point: Point) -> NodeId {
+///
+/// Вторым элементом — `pointer-events` фрагмента под точкой (`None`, если
+/// бокс не `InlineRun` или фрагмента нет): стиль самого инлайнового элемента,
+/// а не блок-контейнера.
+fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEvents>) {
     let BoxKind::InlineRun { lines, .. } = &b.kind else {
-        return b.node;
+        return (b.node, None);
     };
     let line_h = b.used_line_height;
     if line_h <= 0.0 || lines.is_empty() {
-        return b.node;
+        return (b.node, None);
     }
     let rel_y = point.y - b.rect.y;
     let line_idx = (rel_y / line_h).floor().max(0.0) as usize;
     let line = lines.get(line_idx).or_else(|| lines.last());
-    let Some(line) = line else { return b.node; };
+    let Some(line) = line else { return (b.node, None); };
     let rel_x = point.x - b.rect.x;
+    // `InlineRun` несёт стиль блок-контейнера, а `pointer-events` инлайнового
+    // элемента может отличаться (`<span style="pointer-events:auto">` внутри
+    // блока с `none`), поэтому значение берётся с попавшего под точку фрагмента.
     for frag in line {
         let start = frag.x - frag.padding_left;
         let end = frag.x + frag.width + frag.padding_right;
         if rel_x >= start && rel_x < end {
             let src = frag.source_node;
             if src.index() != 0 {
-                return src;
+                return (src, Some(frag.style.pointer_events));
             }
+            return (b.node, Some(frag.style.pointer_events));
         }
     }
     // Fallback: return source_node of the last frag on the line (closest to right edge).
-    if let Some(last) = line.last() && last.source_node.index() != 0 {
-        return last.source_node;
+    if let Some(last) = line.last() {
+        let src = if last.source_node.index() != 0 { last.source_node } else { b.node };
+        return (src, Some(last.style.pointer_events));
     }
-    b.node
+    (b.node, None)
 }
 
 /// `Rect::contains(Point)`. Включаем левую/верхнюю границы, исключаем
@@ -433,6 +443,33 @@ mod tests {
                 "outer может быть только ancestor в path, не target"
             );
         }
+    }
+
+    #[test]
+    fn pointer_events_none_is_inherited_by_child_box() {
+        // Наследуется: у .inner своей декларации нет, значит он тоже `none`
+        // и под курсором не остаётся ни одной цели, кроме предков вне outer.
+        let (doc, root) = build(
+            r#"<div class="outer"><div class="inner"></div></div>"#,
+            ".outer { pointer-events: none; } .inner { height: 50px; }",
+        );
+        let outer = by_class(&doc, "outer");
+        let inner = by_class(&doc, "inner");
+        if let Some(res) = hit_test(Point::new(10.0, 10.0), &root) {
+            assert_ne!(res.node, outer);
+            assert_ne!(res.node, inner, "унаследованный none: inner не цель");
+        }
+    }
+
+    #[test]
+    fn pointer_events_auto_child_is_target_inside_none_parent() {
+        let (doc, root) = build(
+            r#"<div class="outer"><div class="inner"></div></div>"#,
+            ".outer { pointer-events: none; } .inner { pointer-events: auto; height: 50px; }",
+        );
+        let inner = by_class(&doc, "inner");
+        let res = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(res.node, inner, "auto на потомке возвращает его в hit-тест");
     }
 
     #[test]

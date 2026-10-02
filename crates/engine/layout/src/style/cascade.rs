@@ -570,6 +570,9 @@ pub(crate) fn compute_style_shareable(
             .into_iter()
             .filter_map(|flat| {
                 let (block, rule_idx) = *idx.layer_rules.get(flat)?;
+                if !*idx.layer_active.get(block)? {
+                    return None;
+                }
                 Some((flat, block, rule_idx, *idx.layer_order_pos.get(block)?))
             })
             .collect::<Vec<_>>()

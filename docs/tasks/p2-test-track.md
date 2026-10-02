@@ -1735,7 +1735,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | harness `ERROR` без https в имени: `modules/{dedicated,shared}-worker-import-{csp,referrer}.html`, `semantics/structured-clone/{dedicated,shared}.html` | 6 | не разбирались |
 | harness `TIMEOUT` | 58 | 18 из них — `SharedWorker`/`.any.sharedworker.html`, 11 — модульные воркеры/`import`; причина по файлам не устанавливалась. Строки лога не привязаны к id при `--processes 4` |
 
-Известные открытые дефекты того же слоя: [BUG-866](../../bugs/BUG-866-OPEN.md), [BUG-867](../../bugs/BUG-867-OPEN.md), [BUG-1000](../../bugs/BUG-1000-OPEN.md) (SharedWorker),
+Известные открытые дефекты того же слоя: [BUG-866](../../bugs/BUG-866-OPEN.md), [BUG-867](../../bugs/BUG-867-OPEN.md), [BUG-1000](../../bugs/BUG-1000-FIXED.md) (SharedWorker),
 [BUG-1071](../../bugs/BUG-1071-FIXED.md) (`WebSocket` в воркере). В логе есть ещё `[shared-worker] v8 script error: Runtime("Unexpected token '<'")` и
 `network error: unsupported scheme: blob` — не диагностировались; в одиночном прогоне `baseurl/alpha` (`importScripts-in-sharedworker`, `xhr-in-sharedworker`, оба 1/1) `<` не воспроизвёлся,
 то есть при `--processes 4` строку нельзя приписать конкретному файлу.
@@ -1915,9 +1915,9 @@ baseline получить не могут; правка `executorlumen.py` по�
 | Причина | Масштаб | Доказательство |
 |---|---|---|
 | `document.createAttributeNS`/`createAttribute` отсутствуют, [BUG-689](../../bugs/BUG-689-FIXED.md) | 372 сообщения (360 + 12), главная масса `FAIL` | `set-attributes-*`, `Element-setAttribute-setAttributeNS-sinks`, `trusted-types-event-handlers` |
-| Ни один sink не спрашивает политику, [BUG-946](../../bugs/BUG-946-OPEN.md) | `setAttribute(name, "2+2")` не бросает (95), `elem[attr] = value` не бросает (32), `expected "safe_output" but got "unsafe_input"` (60) — sink не звал политику; `Node-multiple-arguments*` (40 сообщений `expected "'createScript';" but got ""`) — вероятно тот же корень, не проверялось | `trusted-types-event-handlers.html`, `set-attributes-mutations-in-callback.tentative.html` |
+| Ни один sink не спрашивает политику, [BUG-946](../../bugs/BUG-946-FIXED.md) | `setAttribute(name, "2+2")` не бросает (95), `elem[attr] = value` не бросает (32), `expected "safe_output" but got "unsafe_input"` (60) — sink не звал политику; `Node-multiple-arguments*` (40 сообщений `expected "'createScript';" but got ""`) — вероятно тот же корень, не проверялось | `trusted-types-event-handlers.html`, `set-attributes-mutations-in-callback.tentative.html` |
 | CSP-репорты и enforcement, [BUG-811](../../bugs/BUG-811-FIXED.md) | `a single violation reported expected 1 but got 0` — 92 сообщения (`trusted-types-reporting-*`, `-report-only`) — по природе CSP, каждый файл отдельно не проверялся | — |
-| В воркерах нет `trustedTypes`, **новый** [BUG-1086](../../bugs/BUG-1086-OPEN.md) | 23 из 28 не-service-worker воркерных id — `TIMEOUT`, ни одного проходящего подтеста | сырой лог `--log-raw`: `[worker-0] v8 script error: Runtime("trustedTypes is not defined")`, `[shared-worker] [ERR] trustedTypes is not defined` |
+| В воркерах нет `trustedTypes`, **новый** [BUG-1086](../../bugs/BUG-1086-FIXED.md) | 23 из 28 не-service-worker воркерных id — `TIMEOUT`, ни одного проходящего подтеста | сырой лог `--log-raw`: `[worker-0] v8 script error: Runtime("trustedTypes is not defined")`, `[shared-worker] [ERR] trustedTypes is not defined` |
 | Интерфейсы Trusted Types не WebIDL-формы, **новый** [BUG-1087](../../bugs/BUG-1087-FIXED.md) | `idlharness.window.html` 39/100 (61 `FAIL`) | проба `--dump-layout`: `typeof self.TrustedTypePolicyFactory` → `undefined`, `trustedTypes.constructor.name` → `Object` |
 | harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 20 `.https.` id, из них 15 `*ServiceWorker*` (120 строк `certificate not valid for name "localhost"` в логе) | service-worker-варианты до кода движка не доходят |
 
@@ -2036,7 +2036,7 @@ baseline получить не могут; правка `executorlumen.py` по�
 **Три `--check`, один невалиден.** Прогон 1: **13 регрессий**, 26 unexpected pass, 54 other
 deviations — чисто. Прогон 2 оборвался инфраструктурным сбоем раннера
 (`lumen --bidi-port did not print [bidi] token`, 111/906 файлов остались `MISSING`) — тот же
-класс, что [BUG-1072](../../bugs/BUG-1072-OPEN.md) (заметка добавлена туда, не новый баг);
+класс, что [BUG-1072](../../bugs/BUG-1072-FIXED.md) (заметка добавлена туда, не новый баг);
 прогон отброшен, не участвует в сравнении. Прогон 3 (повтор, чистый): **34 регрессии**, 54
 unexpected pass, 53 other deviations. Оба чистых прогона (1 и 3) пересекаются лишь частично
 на кластере `fetch/orb/tentative/*`/`fetch/metadata/generated/*` (TIMEOUT/NOTRUN, состав и
@@ -2057,7 +2057,7 @@ redirects 1`, редирект на `mailto:`] — промис `fetch()` рез
 корректно baseline-нуты с этим же `FAIL` на `redirects 1`. `.ini` для `.any.html`-варианта
 вручную приведён к тому же виду (`expected: ERROR` → `[Fetch: handling different schemes in
 redirects 1]` / `expected: FAIL`), подтверждено scoped `--check --root fetch/api/redirect
---recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-OPEN.md).
+--recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-FIXED.md).
 
 **Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `.https.`-подресурсы
 (166 файлов) ловят TLS-цепочку [BUG-1069](../../bugs/BUG-1069-FIXED.md)/
@@ -2225,7 +2225,7 @@ https.html`) + 1 status-change. Три непересекающихся набо
 подряд: 0 регрессий, 0 unexpected pass, 0 других отклонений.** Baseline 245 → 245
 (перегенерация, не новая категория).
 
-**Найден [BUG-1099](../../bugs/BUG-1099-OPEN.md).** Два файла (`service-worker-dedicated-
+**Найден [BUG-1099](../../bugs/BUG-1099-FIXED.md).** Два файла (`service-worker-dedicated-
 worker`, `service-worker-shared-worker`, оба `.https.`) падают в `cleanup` с
 `worker.terminate is not a function`/`Cannot read properties of undefined (reading
 'close')`. Корень найден по исходнику, не предположение: оба теста создают воркер через
@@ -2433,7 +2433,7 @@ serviceworker), `fetch/metadata/*` верхнего уровня (9 файлов
 задокументирован. Baseline оставлен таким, каким его записал исходный `--update-expected`, не
 откачен, не сужен — новый экземпляр добавлен в [BUG-1022](../../bugs/BUG-1022-FIXED.md).
 
-**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-OPEN.md) (срез 55)
+**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-FIXED.md) (срез 55)
 держится** — файл не всплыл ни в одном из трёх `--check`, ручная правка среза 55 пережила
 регенерацию baseline.
 

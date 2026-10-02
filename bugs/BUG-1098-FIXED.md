@@ -1,6 +1,6 @@
 # BUG-1098 — `fetch()` к редиректу на не-HTTP(S) схему детерминированно резолвится `undefined` вместо `TypeError` для первого теста серии
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-02 (P3)
 **Тип:** дефект реализованного кода — синхронный путь `fetch()` (`_lumen_fetch` в
 `crates/js/src/shim/web_api_shim_mid_b3.js`) либо `require_http_scheme`/
 redirect-loop в `crates/network` не пробрасывают ошибку схемы в Promise для
@@ -98,3 +98,13 @@ target/dev-release/lumen.exe /fetch/api/redirect/redirect-schemes.any.html`
 `Subtests passed 6/6`, включая `redirects 1` (mailto) с корректным
 `TypeError`, и лог должен содержать 6 строк
 `unsupported scheme: <schema>` (добавляется `data`), не 5.
+
+## Исправление
+
+`fetch_with_redirect` (`crates/network/src/lib.rs`) обслуживает `data:`/`file:` без сети
+как стартовый URL, но тот же код отрабатывал и redirect-hop на `data:` — тело
+декодировалось вместо network error (Fetch §4.4: не-HTTP(S) location → network error).
+Теперь после `resolve(location)` схема цели проверяется: не `http`/`https` →
+`unsupported scheme: <схема>`. Тест `redirect_to_non_http_scheme_is_network_error`.
+`run_smoke.py` на `redirect-schemes.any.html`: 6/6, `redirects 1` (mailto) больше не падает
+(в прогоне был UNEXPECTED-PASS — expectation-метаданные подлежат обновлению срезом WPT).

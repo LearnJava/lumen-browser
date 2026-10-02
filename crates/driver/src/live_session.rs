@@ -65,6 +65,26 @@ impl LiveWindowSession {
         Self { handle, current_url: Mutex::new(String::new()) }
     }
 
+    /// Move the pointer to viewport CSS-pixel `(x, y)` without pressing
+    /// anything (BUG-1194).
+    pub fn pointer_move(&self, x: f32, y: f32) -> Result<()> {
+        self.execute(AutomationCommand::PointerMove { x, y })?;
+        Ok(())
+    }
+
+    /// Dispatch one `keydown` (`down`) or `keyup` for a non-text key at the
+    /// focused element, without clicking (BUG-1194).
+    pub fn press_key(&self, key: &str, code: &str, down: bool) -> Result<()> {
+        self.execute(AutomationCommand::Key { key: key.to_owned(), code: code.to_owned(), down })?;
+        Ok(())
+    }
+
+    /// Type `text` into the focused element without clicking first (BUG-1194).
+    pub fn type_focused(&self, text: &str) -> Result<()> {
+        self.execute(AutomationCommand::TypeFocused(text.to_owned()))?;
+        Ok(())
+    }
+
     /// Send `command` and unwrap the expected reply variant, mapping
     /// `AutomationReply::Error` and any other unexpected reply to `Err`.
     fn execute(&self, command: AutomationCommand) -> Result<AutomationReply> {

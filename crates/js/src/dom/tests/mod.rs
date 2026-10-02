@@ -271,6 +271,18 @@ mod v8_bug493_sheet_registry;
 mod v8_bug504_scroll_flush;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1238_scoped_collectors;
+mod v8_bug935_s58_has_flush;
+mod v8_bug935_s59_style_skip;
+mod v8_bug935_s60_shallow_roots;
+mod v8_bug935_s64_sheet_delta;
+mod v8_bug935_s61_positioned_skip;
+mod v8_bug935_s62_translated_chain;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s55_content_journal;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug975_scroll_request_sync;
 
 #[cfg(feature = "v8-backend")]
@@ -424,6 +436,7 @@ mod v8_bug1123_event_target_chain;
 #[cfg(feature = "v8-backend")]
 mod v8_bug688_touch_events;
 mod v8_bug1167_ce_wrapper_gc;
+mod v8_bug1207_ce_nested_insert;
 mod v8_bug1158_raw_text_inner_html;
 
 #[cfg(feature = "v8-backend")]

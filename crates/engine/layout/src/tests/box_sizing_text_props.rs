@@ -112,6 +112,24 @@ use super::*;
         }
     }
 
+    /// BUG-1190: соседние inline-элементы с разным `background` не сливаются
+    /// в один фрагмент (фон рисуется по стилю фрагмента).
+    #[test]
+    fn adjacent_spans_with_different_background_stay_separate_frags() {
+        let root = lay_measured(
+            "<p><span>a</span><span>b</span></p>",
+            "p span:first-child { background: #fc0; } p span:last-child { background: blue; }",
+            100.0,
+        );
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines[0].len(), 2, "разный фон — два фрагмента");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
     /// text-align: right сдвигает фрагменты к правому краю.
     /// "ab" = 16px в контейнере 100px: offset = 100-16 = 84px.
     #[test]

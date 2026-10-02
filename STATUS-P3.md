@@ -1,8 +1,0 @@
-BUGS.md:140
-BUGS.md:141
-BUGS.md:142
-BUGS.md:143
-BUGS.md:144
-BUGS.md:145
-BUGS.md:146
-BUGS.md:155

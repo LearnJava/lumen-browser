@@ -416,11 +416,11 @@ pub(crate) fn install_match_media(
     // ── window.matchMedia (CSS Media Queries L4 §4.2) ────────────────────────
     // Parses `query` as a media query and evaluates it against an ad-hoc
     // MediaContext built from the supplied viewport size + user-preference
-    // flags. Pure function — no captures: parse_media_query and MediaQuery::matches
+    // flags (dark, reduced-motion, forced-colors). Pure function — no captures: parse_media_query and MediaQuery::matches
     // are stateless. Returns `true` when the query currently matches.
     reg!(scope, ctx, store, 
         "_lumen_match_media",
-        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool| -> bool {
+        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool, forced_colors: bool| -> bool {
             let mq = lumen_css_parser::parse_media_query(&query);
             let ctx = lumen_css_parser::MediaContext {
                 media_type: "screen".to_owned(),
@@ -428,7 +428,7 @@ pub(crate) fn install_match_media(
                 height: h as f32,
                 prefers_dark: dark,
                 prefers_reduced_motion: reduced_motion,
-                forced_colors: false,
+                forced_colors,
                 ..Default::default()
             };
             mq.matches(&ctx)
@@ -931,7 +931,7 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
             needed.store(true, Ordering::Relaxed);
             // CSSOM-9: the snapshot's stashed computed values are not properties.
-            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) {
+            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) && prop != lumen_layout::BOXLESS_KEY {
                 return String::new();
             }
             flush.maybe_flush();
@@ -1262,7 +1262,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 let css_text = _serialize_style_map(&parsed);
                 set_attribute(&mut doc, node_id, "style", &css_text);
                 if old_style.as_deref() != Some(css_text.as_str()) {
-                    record_dom_touch(&touched, node_id);
+                    record_dom_touch_attr(&touched, node_id, "style");
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
@@ -1294,7 +1294,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 }
                 let new_style = if css_text.is_empty() { None } else { Some(css_text.as_str()) };
                 if old_style.as_deref() != new_style {
-                    record_dom_touch(&touched, node_id);
+                    record_dom_touch_attr(&touched, node_id, "style");
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);

@@ -2886,7 +2886,7 @@ mod tests {
             rect,
             used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
-            kind: BoxKind::InlineRun { segments: vec![], lines: vec![], first_line_style: None, row_continuation_width: None },
+            kind: BoxKind::InlineRun { segments: vec![], lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
             children: vec![],
             col_span: 1,
             row_span: 1,

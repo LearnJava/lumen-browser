@@ -251,3 +251,52 @@ fn match_media_event_is_media_query_list_event() {
     let r = rt.eval("_mm_ev_is_event").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+#[test]
+fn match_media_forced_colors_flips_on_shell_delivery() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        r"
+                var _fc_calls = 0;
+                var _fc_last = null;
+                var _fc = matchMedia('(forced-colors: active)');
+                var _fc_none = matchMedia('(forced-colors: none)');
+                _fc.addEventListener('change', function(ev) { _fc_calls++; _fc_last = ev.matches; });
+                ",
+    )
+    .unwrap();
+    assert_eq!(rt.eval("_fc.matches").unwrap(), lumen_core::JsValue::Bool(false));
+    assert_eq!(rt.eval("_fc_none.matches").unwrap(), lumen_core::JsValue::Bool(true));
+    rt.eval("_lumen_deliver_media_changes(800, 600, false, false, true)").unwrap();
+    assert_eq!(rt.eval("_fc.matches").unwrap(), lumen_core::JsValue::Bool(true));
+    assert_eq!(rt.eval("_fc_none.matches").unwrap(), lumen_core::JsValue::Bool(false));
+    assert_eq!(rt.eval("_fc_calls").unwrap(), lumen_core::JsValue::Number(1.0));
+    assert_eq!(rt.eval("_fc_last").unwrap(), lumen_core::JsValue::Bool(true));
+    // Same state again: no flip, no event.
+    rt.eval("_lumen_deliver_media_changes(800, 600, false, false, true)").unwrap();
+    assert_eq!(rt.eval("_fc_calls").unwrap(), lumen_core::JsValue::Number(1.0));
+    // Back off.
+    rt.eval("_lumen_deliver_media_changes(800, 600, false, false, false)").unwrap();
+    assert_eq!(rt.eval("_fc_calls").unwrap(), lumen_core::JsValue::Number(2.0));
+    assert_eq!(rt.eval("_fc_last").unwrap(), lumen_core::JsValue::Bool(false));
+}
+
+#[test]
+fn match_media_created_after_delivery_uses_delivered_prefs() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval("_lumen_deliver_media_changes(800, 600, true, true, true)").unwrap();
+    assert_eq!(
+        rt.eval("matchMedia('(forced-colors: active)').matches").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    assert_eq!(
+        rt.eval("matchMedia('(prefers-color-scheme: dark)').matches").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    assert_eq!(
+        rt.eval("matchMedia('(prefers-reduced-motion: reduce)').matches").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}

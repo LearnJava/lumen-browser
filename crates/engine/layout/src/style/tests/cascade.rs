@@ -130,6 +130,51 @@ use super::*;
     }
 
     #[test]
+    fn at_layer_media_inside_layer_applies_when_matching() {
+        // `@media` внутри `@layer`: правило остаётся в layer-е (unlayered
+        // выигрывает), а условие учитывается. `all` всегда истинно.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media all { p { color: red; } } } \
+             @layer top { p { color: blue; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media all { p { color: red; } } } p { color: blue; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media all { p { color: red; } } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_media_inside_layer_ignored_when_not_matching() {
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media print { p { color: red; } } p { color: green; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_supports_inside_layer_gated_by_condition() {
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { p { color: green; } @supports not (display: grid) { p { color: red; } } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
     fn at_layer_later_layer_beats_earlier_layer() {
         // layer `components` declared after `base` → higher priority.
         let s = cascade_at(

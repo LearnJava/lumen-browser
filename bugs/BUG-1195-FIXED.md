@@ -1,6 +1,6 @@
 # BUG-1195 — Web Animations: `_wa_lerp_scalar` смешивает единицы и не экстраполирует
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-01 (P3)
 **Заведён:** 2026-09-26 (P1, по ходу GAP-INTERESTINVOKER — вне выданного пункта).
 **Область:** js — Web Animations в
 [`web_api_shim_tail_b.js`](../crates/js/src/shim/web_api_shim_tail_b.js)
@@ -32,3 +32,11 @@ WPT `html/semantics/interestfor/interestfor-css-properties.tentative.html`: вс
 до смешивания, а несовместимые пары оставить дискретными (`t < 0.5 ? a : b`). Зажимать
 прогресс только там, где тип значения этого требует (неотрицательные `<time>`/`opacity`),
 а не весь сегмент.
+
+## Исправление
+
+`_wa_lerp_scalar` приводит разные единицы одного измерения (время → `s`, длина → `px`,
+угол → `deg`) к канонической до смешивания; несовместимые пары — дискретно. Одинаковые
+единицы сохраняются. Зажим прогресса сегмента для `linear`/`cubic-bezier` к тому моменту уже
+снят (`_wa_compute_at_p`), экстраполяция `-0.3 → 0.7s` работает. Тест —
+`wa_lerp_scalar_converts_units_and_extrapolates`.

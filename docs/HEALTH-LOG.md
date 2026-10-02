@@ -9,6 +9,100 @@ Append-only журнал свипов здоровья кодовой базы (
 
 ---
 
+## 2026-10-01 — `full` (clippy + stubs + branches + docs + deps) + дрейф очередей
+
+Ветка: `p5-health-2026-10-01`. Холодный слот, clippy-свип — 35 мин (сборка
+шла параллельно с чужими слотами).
+
+### clippy — OK
+`cargo clippy --workspace --all-targets -- -D warnings`: 0 ошибок, 0
+предупреждений. Все `crates/*/Cargo.toml` и `crates/engine/*/Cargo.toml`
+несут `[lints] workspace = true`.
+
+### stubs — 0 todo!/unimplemented!, 85 unreachable!(), 103 `// CSS:`, 137 OPEN
+`unreachable!()` выросло 46 → 85, но прирост почти целиком тестовый: let-else
+в тестах `html-parser/src/tree_builder.rs` (GAP-XMLDOC срезы 5–40) и
+`paint/.../tests/background_and_layers.rs`. Новые production-места
+(`html-parser/src/picture.rs`, `network/src/referrer_policy.rs`,
+`js/src/credentials.rs`, `network/src/lib.rs`) — структурно недостижимые
+ветки после предшествующей проверки. `// CSS:` — 103, без изменений.
+`OPEN` в `BUGS.md` — 137 строк (было 390: разгрузка `BUGS-FIXED.md`).
+
+### Реестр `#[allow]` (строка 0 очереди P5) — растёт
+С прошлого прогона нетто **+25** атрибутов `#[allow(clippy::unwrap_used)]`
+уровня функции в production-коде (30 добавлено, 5 снято). 27 из них помечены
+«унаследовано, docs/lint-policy.md §10», хотя код новый: 10 — в **новом**
+файле `crates/js/src/window_messaging.rs` (GAP-NAVCTX срез 4, 2026-09-12),
+остальные — на функциях в `shell/src/prefetch.rs` (5), `shell/src/app/about_to_wait.rs`,
+`js/src/worker.rs`, `js/src/shared_worker.rs` (по 2) и ещё 8 файлах по одному.
+Идиома почти везде `Mutex::lock().unwrap()`. Храповик рассчитан на то, что
+новая функция без `unwrap()` обходится (`lint-policy.md` §10, строка
+`expect_used`) — метка «унаследовано» на новом коде его обходит. Сама
+`lint-policy.md` называет отравление мьютекса кандидатом на постоянное
+исключение; решение (постоянное исключение для этой идиомы или обязательная
+обработка) — за пользователем, P5 чужой код не правит.
+
+### branches — 167 убрано
+Удалено 166 влитых веток (`git branch -d`, ни одна не держалась worktree) и
+влитый чистый detached-worktree `.claude/worktrees/p1-trustedtypes1-srez6`.
+Не тронуто:
+- `p1-ph3-gc-js-dom`, `p3-bug1112-srez10-subject-fingerprint`,
+  `p3-bug639-navigation-api` — влиты в `main`, но `-d` отказывает из-за
+  устаревшего upstream на `origin` (ветки на `origin` отстают); удаление —
+  только с `-D` или после снятия upstream, на усмотрение пользователя.
+- `p6-perf14-async-fetch` — невлитый WIP-черновик PERF-14.
+- слот `p2-work` держит влитую `p2-perf-audit-skill` — чужой слот, не освобождали.
+- ad-hoc `lumen-context-space-model-d8cc75` — 5 незакоммиченных записей, чужой.
+- `.kilo/worktrees/mewing-lake`, `queue-work` (detached, влиты) — внешний
+  инструмент и служебный слот, не трогали.
+
+### docs — генераторы OK, указатели живые
+`gen_symbols.py` (6117 символов) и `gen_roadmap.py` — без ошибок; дерево не
+обрезано (`docs/roadmap-B-twotrees.html`: 888 → 916 `"id":`), вьюверы
+перегенерены (open 130 / fixed 1044). Все 38 указателей `STATUS-P1..P6`
+ведут на живые строки (OPEN / `ready` / `planned` / `active` / 🟡⬜ в
+`CSS-SPECS.md`), ни одного на `done`/FIXED.
+
+`check_doc_links.py` на `main` был красным: **97 новых битых ссылок**. 96 —
+`[stale-status-suffix]`: ссылка на `bugs/BUG-NNN-OPEN.md`, когда баг уже
+закрыт и файл переименован в `-FIXED`/`-DUPLICATE` (59 файлов: `BUGS-FIXED.md`
+15, `ROADMAP.md` 14, карточки `bugs/`, `docs/wpt-vendor-notes/`,
+`subsystems/js.md`, `subsystems/network.md`, скилл `lumen-perf-audit`).
+Закрывающие коммиты переименовывают карточку, но не обходят входящие ссылки.
+Починено побайтовой заменой суффикса (CR в таблицах сохранены, число строк
+не изменилось — указатели STATUS не сдвинуты). Одна `[wrong-relative-path]`
+в `docs/plan/privacy.md:120` (ADR-031 без `../`). Базовая линия ужата на 30
+уже починенных записей (`--update`, 427 известных).
+
+### Дрейф статусов очередей (строка 6 очереди P5)
+В `ROADMAP.md` всего две строки в `blocked`/`wait`:
+- `FONTLOAD` (`wait`, BUG-467 OPEN) — ожидание законное.
+- **`E2E-4` (`wait`)** — оба блокера в колонке `bugs` (BUG-926, BUG-1044)
+  FIXED, локальный остаток исчерпан итерацией 6 (2026-09-11); ждёт внешнего
+  стенда Keycloak + Next.js вне репозитория. Колонка `bugs` устарела, а
+  `wait` фактически означает «вне репозитория» — сообщено пользователю,
+  статус чужой очереди P5 не меняет.
+Пустых `STATUS-P<N>.md` нет.
+
+### deps — OK
+`cargo tree -d`: 24 группы дублей версий (было 25), все транзитивные.
+Новые зависимости с 2026-09-11 (`zune-bmp`, `ed25519-dalek`, `getrandom`,
+`serde_json`, `jxl-oxide`, `p256`, `ffmpeg`, `cc`) — обоснование есть в теле
+каждого коммита; у `p256` (`0895814bd0`) и `ed25519-dalek` в `lumen-shell`
+(`dc5d8fbe40`) — свободным текстом вместо маркера `Why this dependency:`
+(оба крейта уже были в дереве).
+
+### Сделано безопасно
+- 166 влитых веток и 1 worktree удалены (см. выше).
+- `docs/roadmap-B-twotrees.html`, `docs/roadmap-svg-cleaves.html` перегенерены.
+- 97 битых ссылок починены, `scripts/doc-links-baseline.tsv` ужат до 427.
+
+### Заведено задач
+_(нет)_ — рост реестра `#[allow]` и устаревший статус `E2E-4` вынесены на
+решение пользователю.
+
+---
+
 ## 2026-09-11 — `full` (clippy + stubs + branches + docs + deps)
 
 Ветка: `p5-health-2026-09-11`. Холодный слот (`target/` пуст) — свип занял

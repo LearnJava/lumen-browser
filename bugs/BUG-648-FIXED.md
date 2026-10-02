@@ -94,7 +94,7 @@ synchronous `_perf_entries` push.
 
 - `PerformanceObserverEntryList is not defined` (`po-observe.any.html`) —
   same class as [BUG-645](BUG-645-FIXED.md)/[BUG-624](BUG-624-FIXED.md)/
-  [BUG-637](BUG-637-OPEN.md)/[BUG-589](BUG-589-FIXED.md): WebIDL
+  [BUG-637](BUG-637-FIXED.md)/[BUG-589](BUG-589-FIXED.md): WebIDL
   interface objects absent as globals even where the underlying behavior
   (the plain-object "list" passed to callbacks, `dom.rs:8319-8326`) works.
 - `case-sensitivity.any.html` (`resources/square.png?id=1` never loads,
@@ -234,11 +234,11 @@ connection without sending TLS close_notify` без повтора на ново
 
 - 13 подтестов `PerformanceEntry interface: …` в `idlharness.any.html`. Раньше `idl_test setup`
   падал до них, и baseline записал их PASS в тихом режиме. Теперь они выполняются и падают, потому что
-  интерфейса `PerformanceEntry` нет. Заведено [BUG-1189](BUG-1189-OPEN.md).
+  интерфейса `PerformanceEntry` нет. Заведено [BUG-1189](BUG-1189-FIXED.md).
 - `not-clonable.html` и `idlharness.any.serviceworker.html` → TIMEOUT. Проверено A/B на бинаре с
   текущего `main` (`run_smoke.py`): там оба теста так же TIMEOUT, так что это не результат этого фикса.
   `not-clonable` висит, потому что ребёнок шлёт ответ через `window.top.postMessage`, а во фрейме
   `window.top === window` ([BUG-1187](BUG-1187-FIXED.md)). Попутно найдено: `postMessage` из
-  синхронного скрипта фрейма родителю не доходит ([BUG-1188](BUG-1188-OPEN.md)).
+  синхронного скрипта фрейма родителю не доходит ([BUG-1188](BUG-1188-FIXED.md)).
 - Подтесты операций (`getEntries*`, `disconnect`, `takeRecords`) требовали проверки бренда — сделана
   (см. выше).

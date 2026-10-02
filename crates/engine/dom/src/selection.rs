@@ -369,6 +369,18 @@ pub fn node_length(doc: &Document, node: NodeId) -> usize {
 /// Cross-container ranges: walks node indices (arena insertion order ≈ document
 /// order for parsed documents; valid for typical selection scenarios).
 pub fn range_text(doc: &Document, range: &Range) -> String {
+    range_text_filtered(doc, range, &|_| false)
+}
+
+/// [`range_text`] that leaves out the text nodes for which `skip` returns
+/// `true`.
+///
+/// The DOM has no styles, so «which text is not selectable» is supplied by the
+/// caller: the shell collects the nodes whose computed `user-select` is `none`
+/// from the layout tree (`lumen_layout::user_select_none_text_nodes`) and
+/// passes them here, so copying a selection drops that text exactly as the
+/// highlight does (CSS UI L4 §6.2).
+pub fn range_text_filtered(doc: &Document, range: &Range, skip: &dyn Fn(NodeId) -> bool) -> String {
     if range.is_collapsed() {
         return String::new();
     }
@@ -379,6 +391,9 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
     // Fast path: shared container
     if start.container == end.container {
         if let NodeData::Text(s) = &doc.get(start.container).data {
+            if skip(start.container) {
+                return String::new();
+            }
             let from = utf8_floor(s, start.offset as usize);
             let to = utf8_floor(s, end.offset as usize);
             let (from, to) = if from <= to { (from, to) } else { (to, from) };
@@ -395,11 +410,7 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
         let to = to.min(children.len());
         let mut out = String::new();
         for &child in children.iter().take(to).skip(from) {
-            match &doc.get(child).data {
-                NodeData::Text(s) => out.push_str(s),
-                NodeData::Element { .. } => dom_collect_text(doc, child, &mut out),
-                _ => {}
-            }
+            collect_text_filtered(doc, child, skip, &mut out);
         }
         return out;
     }
@@ -419,6 +430,9 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
         // GAP-P3GCJSDOM), losing the offset-trim for that endpoint.
         let nid = doc.node_id_at(idx);
         if let NodeData::Text(s) = &doc.get(nid).data {
+            if skip(nid) {
+                continue;
+            }
             if nid == first.container {
                 let off = utf8_floor(s, first.offset as usize);
                 out.push_str(&s[off..]);
@@ -431,6 +445,24 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
         }
     }
     out
+}
+
+/// Appends the text of `node` (a text node, or an element's whole subtree)
+/// minus the text nodes `skip` rejects.
+fn collect_text_filtered(doc: &Document, node: NodeId, skip: &dyn Fn(NodeId) -> bool, out: &mut String) {
+    match &doc.get(node).data {
+        NodeData::Text(s) => {
+            if !skip(node) {
+                out.push_str(s);
+            }
+        }
+        NodeData::Element { .. } => {
+            for &child in &doc.get(node).children {
+                collect_text_filtered(doc, child, skip, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn utf8_floor(s: &str, mut off: usize) -> usize {
@@ -447,6 +479,30 @@ mod tests {
     use crate::QualName;
 
     // ── BUG-620: Element-container Range (selectAllChildren) must stringify ──
+
+    #[test]
+    fn range_text_filtered_drops_skipped_text_nodes() {
+        let mut doc = Document::new();
+        let root = doc.root();
+        let a = doc.create_text("alpha ");
+        let b = doc.create_text("beta ");
+        let c = doc.create_text("gamma");
+        doc.append_child(root, a);
+        doc.append_child(root, b);
+        doc.append_child(root, c);
+        let range = Range {
+            start: DomPosition { container: a, offset: 2 },
+            end: DomPosition { container: c, offset: 3 },
+        };
+        assert_eq!(range_text(&doc, &range), "pha beta gam");
+        assert_eq!(range_text_filtered(&doc, &range, &|n| n == b), "pha gam");
+        // A fully skipped single-node range yields nothing.
+        let single = Range {
+            start: DomPosition { container: b, offset: 0 },
+            end: DomPosition { container: b, offset: 4 },
+        };
+        assert_eq!(range_text_filtered(&doc, &single, &|n| n == b), "");
+    }
 
     #[test]
     fn range_text_same_text_container_still_works() {

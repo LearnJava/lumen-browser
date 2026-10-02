@@ -85,7 +85,10 @@ mod named_access;
 mod promise_reject;
 mod script_attribution;
 mod sheet_sync;
+mod stall_sampler;
 mod style_flush;
+#[cfg(test)]
+pub(crate) use style_flush::CONTENT_JOURNAL_DISABLED;
 mod thread;
 
 pub use named_access::ensure_v8_platform;
@@ -379,6 +382,14 @@ impl V8JsRuntime {
                 text_frags_collected: Arc::clone(&self.text_frags_collected),
                 dom_touched: Arc::clone(&dom_touched),
                 incr_basis: Arc::new(Mutex::new(None)),
+                incremental_flushes: Arc::clone(&self.incremental_flushes),
+                style_entries_kept: Arc::clone(&self.style_entries_kept),
+                style_skip_off: Arc::clone(&self.style_skip_off),
+                shallow_roots_used: Arc::clone(&self.shallow_roots_used),
+                shallow_roots_off: Arc::clone(&self.shallow_roots_off),
+                sheet_delta_used: Arc::clone(&self.sheet_delta_used),
+                sheet_delta_off: Arc::clone(&self.sheet_delta_off),
+                patched_sheet_cache: Arc::new(Mutex::new(None)),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);

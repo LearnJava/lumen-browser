@@ -588,7 +588,7 @@ the time — read dates.
   `EVENT_TARGET_SHIM`/`URL_SHIM` established for BUG-401) and are evaluated by both scopes; their
   publication switched from `window.X` to `globalThis.X`, which is the same object on the page
   (BUG-280) and the only one in a worker. `web_api_shim_splices_its_parts_in_source_order` guards
-  the reassembly. (3) *`atob` is not usable for response bodies here* — the SW's native decodes
+  the reassembly. (3) *the SW shim does not use `atob` for response bodies* — `atob` is now spec (binary string, BUG-1193) but historically the SW native decoded
   through `String::from_utf8` and answers `undefined` for anything else, so the shim carries its
   own base64→byte-string decoder and marks network/cache-born bodies `_binary`, decoding UTF-8
   only for those (a body the worker built itself must not be decoded twice). (4) *`importScripts`
@@ -1560,7 +1560,7 @@ the time — read dates.
   resolved same-origin URL now, so the snapshot rests on the spec rule alone rather than on working
   around a defect. The snapshot lives in a closure rather than a `_lumen_…` global, since
   `seal_internal_globals_v8` leaves engine state writable. `WorkerGlobalScope` has no such property
-  at all ([BUG-766](../bugs/BUG-766-OPEN.md)).
+  at all ([BUG-766](../bugs/BUG-766-FIXED.md)).
 - **`[SecureContext]`-gated surfaces are absent, not throwing, on an insecure origin (BUG-765,
   2026-09-07).** `_lumen_secure_context` (`web_api_shim_mid_b.js`, computed once from the same
   `_lumen_url_is_potentially_trustworthy`, and reused by `isSecureContext`'s own getter rather than

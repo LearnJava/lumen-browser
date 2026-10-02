@@ -65,6 +65,20 @@ pub enum SvgColorInterpolation {
     LinearRgb,
 }
 
+/// Storage for the logical min/max size longhands, resolved onto
+/// `min-`/`max-` `width`/`height` by `writing-mode` after the cascade.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LogicalMinMaxSizes {
+    /// `min-inline-size`. `None` = auto.
+    pub min_inline: Option<Length>,
+    /// `max-inline-size`. `None` = none.
+    pub max_inline: Option<Length>,
+    /// `min-block-size`. `None` = auto.
+    pub min_block: Option<Length>,
+    /// `max-block-size`. `None` = none.
+    pub max_block: Option<Length>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -556,7 +570,9 @@ pub struct ComputedStyle {
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
-    /// CSS Pointer Events L1. Default `auto`. Не наследуется.
+    /// CSS UI L4 §6.1 / Pointer Events L1. Default `auto`. **Наследуется**
+    /// (`Inherited: yes`): потомок `pointer-events: none` тоже не цель, пока
+    /// сам не вернёт `auto`/`all`.
     pub pointer_events: PointerEvents,
     /// CSS Pointer Events L3 / Touch Events — `touch-action`. NOT inherited. Initial: `Auto`.
     /// Phase 0: parse + store; обработка touch-жестов — P3 task.
@@ -609,8 +625,10 @@ pub struct ComputedStyle {
     /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
     pub tab_size: f32,
     /// CSS UI L4 §6.3 — `caret-color: auto | <color>`. Inherited.
-    /// `None` = auto (UA выбирает). `Some(color)` — явный цвет.
-    pub caret_color: Option<Color>,
+    /// `None` = auto (каретка следует `color`). `Some(CssColor)` — явный цвет:
+    /// `currentcolor` / `color()` / системные цвета сохраняются как есть и
+    /// разрешаются в `used_caret_color` (системные — ещё и постпассом).
+    pub caret_color: Option<CssColor>,
     /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
     /// Inherited. Default `Normal`.
     pub overflow_wrap: OverflowWrap,
@@ -979,6 +997,11 @@ pub struct ComputedStyle {
     pub inline_size: Option<Length>,
     /// CSS Logical Properties L1 — `block-size`. `None` = auto.
     pub block_size: Option<Length>,
+    /// CSS Logical Properties L1 §2 — `min-`/`max-` `inline-size`/`block-size`.
+    /// Boxed and `None` unless one of the four is declared: four inline
+    /// `Option<Length>`s would grow `ComputedStyle` enough to overflow the stack
+    /// in deeply nested layout recursion (`deep_grid_chain` test).
+    pub logical_min_max_sizes: Option<Box<LogicalMinMaxSizes>>,
     /// CSS Logical Properties L1 — `inset-inline-start`.
     pub inset_inline_start: LengthOrAuto,
     /// CSS Logical Properties L1 — `inset-inline-end`.
@@ -1050,6 +1073,12 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`
+    /// дают `color` элемента, остальное — явный цвет в sRGB.
+    pub fn used_caret_color(&self) -> Color {
+        self.caret_color.map_or(self.color, |c| c.resolve(self.color))
+    }
+
     /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
     /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).
     /// Computed `outline_width` хранится как есть (medium = 3 по UA convention),
@@ -1063,10 +1092,11 @@ impl ComputedStyle {
     }
 
     /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
-    /// насыщенность, letter/word-spacing, декорация). Используется для слияния
+    /// насыщенность, letter/word-spacing, декорация, фон, `user-select`). Используется для слияния
     /// inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
+            && self.background_color == other.background_color
             && (self.font_size - other.font_size).abs() < f32::EPSILON
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
@@ -1080,6 +1110,10 @@ impl ComputedStyle {
             && self.text_decoration_color == other.text_decoration_color
             && self.text_decoration_style == other.text_decoration_style
             && self.text_decoration_thickness == other.text_decoration_thickness
+            // CSS UI L4 §6.2: selectability is decided per fragment (caret,
+            // highlight, copy), so `user-select: none` text must not be glued
+            // to a selectable neighbour.
+            && self.user_select == other.user_select
     }
 
     /// Стартовые значения для корня документа.
@@ -1391,6 +1425,7 @@ impl ComputedStyle {
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
+            logical_min_max_sizes: None,
             inset_inline_start: LengthOrAuto::Auto,
             inset_inline_end: LengthOrAuto::Auto,
             inset_block_start: LengthOrAuto::Auto,
@@ -1601,9 +1636,9 @@ impl ComputedStyle {
             justify_content: AlignValue::Auto,
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
-            // Will Change / Pointer Events — не наследуются.
+            // Will Change — не наследуется; Pointer Events — наследуется.
             will_change: Vec::new(),
-            pointer_events: PointerEvents::Auto,
+            pointer_events: inherited.pointer_events,
             touch_action: TouchAction::Auto,
             appearance: Appearance::Auto,
             field_sizing: FieldSizing::Fixed,
@@ -1788,6 +1823,7 @@ impl ComputedStyle {
             // CSS Logical Properties L1 — not inherited. Initial values.
             inline_size: None,
             block_size: None,
+            logical_min_max_sizes: None,
             inset_inline_start: LengthOrAuto::Auto,
             inset_inline_end: LengthOrAuto::Auto,
             inset_block_start: LengthOrAuto::Auto,
