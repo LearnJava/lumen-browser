@@ -191,6 +191,11 @@ pub(crate) struct FlushHandles {
     /// BUG-935 срез 59: this runtime's own `LUMEN_NO_STYLE_SKIP`, for a differential test
     /// that runs one page with and without the skip in one process.
     pub(crate) style_skip_off: Arc<std::sync::atomic::AtomicBool>,
+    /// BUG-935 срез 60: shallow restyle roots the incremental flushes used; read through
+    /// `V8JsRuntime::shallow_roots_count`.
+    pub(crate) shallow_roots_used: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 60: this runtime's own `LUMEN_NO_SHALLOW_ROOTS`, for a differential test.
+    pub(crate) shallow_roots_off: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// See [`FlushHandles::patched_sheet_cache`].
@@ -277,6 +282,14 @@ fn content_journal_disabled() -> bool {
 fn style_skip_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_STYLE_SKIP").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 60: `LUMEN_NO_SHALLOW_ROOTS=1` reports a child-list change as an
+/// unattributed one again (the parent's whole subtree is restyled) — A/B switch for a live
+/// measurement and the way back if a page shows a stale style.
+fn shallow_roots_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SHALLOW_ROOTS").is_some_and(|v| v != "0"))
 }
 
 impl FlushHandles {
@@ -809,9 +822,16 @@ impl FlushHandles {
                 .filter(|&(_, &g)| g > basis.touch_epoch)
                 .map(|(name, _)| &**name)
                 .collect();
-            if structural || named.is_empty() {
+            // BUG-935 срез 60: a touch that changed only the child list is its own kind of
+            // change — the node and its direct children are restyled, not the parent's subtree.
+            let child_list = touched.child_list_gen.get(&n).copied().unwrap_or(0) > basis.touch_epoch;
+            let shallow_off = shallow_roots_disabled() || self.shallow_roots_off.load(Ordering::Relaxed);
+            if structural || (child_list && shallow_off) || (named.is_empty() && !child_list) {
                 changes.push((n, lumen_layout::style::NodeChange::Unattributed));
             } else {
+                if child_list {
+                    changes.push((n, lumen_layout::style::NodeChange::ChildList));
+                }
                 changes.extend(named.into_iter().map(|a| (n, lumen_layout::style::NodeChange::Attr(a))));
             }
         }
@@ -826,7 +846,10 @@ impl FlushHandles {
         } else {
             Vec::new()
         };
-        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(doc, changes, &node_index));
+        let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &node_index);
+        dirty_roots.extend(roots.deep);
+        let shallow_roots = roots.shallow;
+        self.shallow_roots_used.fetch_add(shallow_roots.len() as u64, Ordering::Relaxed);
         let focus_changed = basis.focus != current_focus;
         if focus_changed {
             let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
@@ -862,21 +885,27 @@ impl FlushHandles {
         // *fresh* tree's subtree scan below can never see) before
         // re-inserting from the fresh subtree. Taken against `dirty_roots`
         // before it moves into `delta`.
+        //
+        // BUG-935 срез 60: the *scope* of the flush — what the collectors and the cache
+        // eviction treat as changed — is the deep roots plus the shallow ones' whole
+        // subtrees; the cascade itself restyles less than that.
+        let scope_roots: std::collections::HashSet<lumen_dom::NodeId> =
+            dirty_roots.iter().chain(shallow_roots.iter()).copied().collect();
         let prev_ids_scope = lumen_core::profile::scope("incr.prev_node_ids");
         let prev_node_ids: std::collections::HashSet<u32> =
-            lumen_layout::find_dirty_root_boxes(&basis.layout, &dirty_roots)
+            lumen_layout::find_dirty_root_boxes(&basis.layout, &scope_roots)
                 .into_iter()
                 .flat_map(lumen_layout::collect_subtree_node_indices)
                 .collect();
         let prev_node_raw_ids: std::collections::HashSet<u32> =
-            lumen_layout::find_dirty_root_boxes(&basis.layout, &dirty_roots)
+            lumen_layout::find_dirty_root_boxes(&basis.layout, &scope_roots)
                 .into_iter()
                 .flat_map(lumen_layout::collect_subtree_node_raw_ids)
                 .collect();
         drop(prev_ids_scope);
-        let dirty_roots_for_return = dirty_roots.clone();
+        let (deep_count, shallow_count) = (dirty_roots.len(), shallow_roots.len());
         let has_dependency = node_index.has_has_dependency();
-        let root_tags: Vec<String> = dirty_roots
+        let root_tags: Vec<String> = scope_roots
             .iter()
             .map(|&r| doc.get(r).element_name().map_or_else(|| "#node".to_string(), |n| n.local.to_string()))
             .collect();
@@ -885,6 +914,7 @@ impl FlushHandles {
         let delta = lumen_layout::counters::RestyleDelta {
             prev_styles: basis.cascade,
             dirty_roots,
+            shallow_roots,
             content_dirty,
         };
         let null_hp = lumen_core::ext::NullHyphenationProvider;
@@ -899,9 +929,9 @@ impl FlushHandles {
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
         if lumen_paint::frame_log_enabled() {
-            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
+            eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
-        Some((result.0, result.1, dirty_roots_for_return, prev_node_ids, prev_node_raw_ids, content_nodes))
+        Some((result.0, result.1, scope_roots, prev_node_ids, prev_node_raw_ids, content_nodes))
     }
 
     /// CSSOM-8 вариант C: replay every recorded CSSOM write onto a throwaway

@@ -550,6 +550,35 @@ fn lay_out_inner_impl(
     }
 }
 
+/// BUG-1242 — how far a clean box moves to land where a fresh layout at `start_*` would
+/// put it, or `None` when its placement is not just `start + margin` (auto inline
+/// margins, a non-start `justify-self`, `position: relative`).
+fn clean_box_shift(
+    b: &LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    viewport: Size,
+    used_size_override: Option<&UsedSizeOverride>,
+    parent_justify_items: AlignValue,
+) -> Option<(f32, f32)> {
+    let s = &b.style;
+    let effective_justify =
+        if matches!(s.justify_self, AlignValue::Auto) { parent_justify_items } else { s.justify_self };
+    if s.margin_left.is_auto()
+        || s.margin_right.is_auto()
+        || matches!(effective_justify, AlignValue::Center | AlignValue::End)
+        || matches!(s.position, Position::Relative)
+    {
+        return None;
+    }
+    let em = s.font_size;
+    let cb = used_size_override.and_then(|ov| ov.percentage_base).unwrap_or(available_width);
+    let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
+    let margin_top = s.margin_top.resolve_or_zero(em, cb, viewport);
+    Some((start_x + margin_left - b.rect.x, start_y + margin_top - b.rect.y))
+}
+
 /// LAYOUT-2 срез 1: `pub(super)` so `block_flow_trampoline` can call it once per
 /// child at the explicit-stack driver's one recursion point, exactly where this
 /// function's own plain-block branch used to call `lay_out_inner` on each child
@@ -593,9 +622,18 @@ pub(super) fn dispatch_box(
     // the existing rect to the new (start_x, start_y) without re-running layout.
     // The block-children loop in the parent already advanced child_y using the
     // existing height, so the position is consistent across siblings.
-    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+    //
+    // BUG-1242: `start_*` is the margin-box origin the parent hands down; the box's
+    // own `rect` sits `margin_left`/`margin_top` inside it (`lay_out_inner` below), so
+    // the shift is to `start + margin`, not to `start`. Placements the margins alone do
+    // not explain (auto margins, `justify-self`, a `position: relative` offset) are not
+    // reconstructed here — such a box is laid out for real.
+    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get())
+        && b.dirty.is_clean()
+        && let Some((dx, dy)) = clean_box_shift(b, start_x, start_y, available_width, viewport, used_size_override.as_ref(), parent_justify_items)
+    {
         let _prof = lumen_core::profile::scope_detail("lo_translate");
-        crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
+        crate::incremental::translate_subtree(b, dx, dy);
         return DispatchOutcome::Done;
     }
 

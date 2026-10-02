@@ -385,6 +385,8 @@ impl V8JsRuntime {
                 incremental_flushes: Arc::clone(&self.incremental_flushes),
                 style_entries_kept: Arc::clone(&self.style_entries_kept),
                 style_skip_off: Arc::clone(&self.style_skip_off),
+                shallow_roots_used: Arc::clone(&self.shallow_roots_used),
+                shallow_roots_off: Arc::clone(&self.shallow_roots_off),
                 patched_sheet_cache: Arc::new(Mutex::new(None)),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);

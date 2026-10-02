@@ -1,6 +1,6 @@
 # BUG-1242 — инкрементальный флаш теряет `margin-left`/`margin-top` у неизменённых боксов
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-02 (P1)
 **Тип:** корректность раскладки (геометрия, видимая JS: `getBoundingClientRect`, `getComputedStyle`, observers).
 **Найден:** P1 при [BUG-935](BUG-935-OPEN.md) срезе 59, 2026-10-02. Не связан со срезом: воспроизводится с
 `LUMEN_NO_STYLE_SKIP=1`, с отключённым журналом содержимого (`CONTENT_JOURNAL_DISABLED`) и с
@@ -65,3 +65,22 @@ CSSOM или `:has()` такие флаши стали инкременталь�
 ту же страницу: ветка `gap` в `skipped_computed_style_entries_equal_the_rebuilt_ones` печатает
 расхождение при `--nocapture`). Исправление проверять добавлением `margin: 3px` и `.c:first-child
 { margin-left: 7px }` в сценарии `v8_bug1238_scoped_collectors.rs`.
+
+## Исправление (BUG-935 срез 60)
+
+Гипотеза подтвердилась, а «проба на уровне крейта даёт верный результат» объяснилась: проба не имела
+чистых боксов с полями. Воспроизведение на уровне layout нашлось, когда срез 60 оставил чистые коробки под
+перестроенным родителем (`box_tree::tests::bug935_shallow_roots`, карточки с `margin: 1px`).
+
+* `layout_dispatch.rs::clean_box_shift` — быстрый путь чистого бокса переносит его не в `start_*`, а в
+  `start_* + margin-left/top` (то, что `lay_out_inner` прибавляет: `rect.x = start_x + margin_left`).
+  Боксы, чьё положение поля не объясняют, — `auto`-поля, `justify-self: center|end`, `position: relative` —
+  раскладываются по-настоящему, а не переносятся.
+* `incremental.rs::containing_block_style_changed` не знал про `margin-left`/`margin-right` (ширина,
+  которую автоширинный бокс отдаёт детям), `position`, `float`, `left`/`right`: ребёнок-`InlineRun` брал
+  устаревшую ширину после смены поля у родителя.
+
+Тесты: `clean_boxes_keep_their_margins_centering_and_relative_offsets` (layout, поля/`auto`/`relative`/
+`justify-self`) и `a_flush_after_an_unrelated_write_keeps_the_margins` (JS, проба из «Симптома»; падает на
+старом быстром пути — проверено). Симптом 2 [BUG-1240](BUG-1240-OPEN.md) (смещение `relative` у чистого
+поддерева пропадает) этим тоже снят; симптом 1 (смещение утекает в поток при полной раскладке) — нет.

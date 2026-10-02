@@ -185,6 +185,7 @@ impl Lumen {
                     // document unstable the way S4-S15 had to — one changed
                     // omnibox character no longer costs all 318 boxes.
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    shallow_roots: Default::default(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 // BUG-341 S15: reuse whole box subtrees from `prev` too, not

@@ -55,6 +55,10 @@ pub enum QuoteSlot {
     After,
 }
 
+/// [`CascadeStyles`] entry parent marker: written without a parent, or by a hand-assembled
+/// cascade that has none to record. Never equal to a real parent, so it reads as "moved".
+const NO_PARENT: u32 = u32::MAX;
+
 /// BUG-341 S24 — the per-node cascade cache, carried from one pass to the next.
 ///
 /// Before this slice every pass built its own map: a hover flip reused all 828
@@ -86,8 +90,14 @@ pub enum QuoteSlot {
 /// walked, all stamped with its ordinal.
 #[derive(Debug, Default, Clone)]
 pub struct CascadeStyles {
-    /// `NodeId` → (style, ordinal of the pass that last wrote or confirmed it).
-    entries: HashMap<NodeId, (Arc<ComputedStyle>, u32)>,
+    /// `NodeId` → (style, ordinal of the pass that last wrote or confirmed it, raw id
+    /// of the composed-tree parent the style was cascaded under — [`NO_PARENT`] when
+    /// unknown).
+    ///
+    /// BUG-935 срез 60: the parent is what tells a shallow restyle that a child was
+    /// *moved* — a moved node keeps its entry (every pass visits it) but its
+    /// descendants were matched against a different ancestor chain.
+    entries: HashMap<NodeId, (Arc<ComputedStyle>, u32, u32)>,
     /// Ordinal of the pass currently writing into this map, or of the last one
     /// to have finished. Wraps; see [`Self::reuse`] for why that is harmless.
     pass: u32,
@@ -191,9 +201,14 @@ impl CascadeStyles {
     ///
     /// The displaced value is what [`CounterMap::replaced_styles`] keeps for the
     /// graft — see that field.
-    fn write(&mut self, id: NodeId, style: Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> {
+    ///
+    /// Alongside the style, the raw id of the parent it was cascaded under
+    /// ([`NO_PARENT`] when there was none).
+    fn write(&mut self, id: NodeId, style: Arc<ComputedStyle>, parent: NodeId) -> Option<(Arc<ComputedStyle>, u32)> {
         self.visited += 1;
-        self.entries.insert(id, (style, self.pass)).map(|(prev, _)| prev)
+        self.entries
+            .insert(id, (style, self.pass, parent.raw()))
+            .map(|(prev, _, prev_parent)| (prev, prev_parent))
     }
 
     /// Close the pass: drop every entry it did not visit.
@@ -208,7 +223,7 @@ impl CascadeStyles {
             return;
         }
         let pass = self.pass;
-        self.entries.retain(|_, (_, stamp)| *stamp == pass);
+        self.entries.retain(|_, (_, stamp, _)| *stamp == pass);
     }
 
     /// How many passes have written into this cache — 0 for one that has only
@@ -243,7 +258,7 @@ impl CascadeStyles {
 
     /// The style this cache holds for `id`, if any.
     pub fn get(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
-        self.entries.get(id).map(|(style, _)| style)
+        self.entries.get(id).map(|(style, _, _)| style)
     }
 
     /// Whether this cache holds an entry for `id`.
@@ -268,7 +283,7 @@ impl CascadeStyles {
 
     /// Iterate `(node, style)` pairs in arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &Arc<ComputedStyle>)> {
-        self.entries.iter().map(|(id, (style, _))| (id, style))
+        self.entries.iter().map(|(id, (style, _, _))| (id, style))
     }
 
     /// This cache's contents as a plain map, dropping the pass stamps.
@@ -277,7 +292,7 @@ impl CascadeStyles {
     /// flag-off fallback in [`incremental_precompute_counters`]. Carrying the
     /// map is the whole point everywhere else.
     fn into_plain(self) -> HashMap<NodeId, Arc<ComputedStyle>> {
-        self.entries.into_iter().map(|(id, (style, _))| (id, style)).collect()
+        self.entries.into_iter().map(|(id, (style, _, _))| (id, style)).collect()
     }
 
     /// A cache holding exactly `styles`, as though one pass had just written it.
@@ -286,7 +301,7 @@ impl CascadeStyles {
     /// document — the graft's unit gates, which care about one or two nodes.
     pub fn from_plain(styles: HashMap<NodeId, Arc<ComputedStyle>>) -> Self {
         Self {
-            entries: styles.into_iter().map(|(id, style)| (id, (style, 0))).collect(),
+            entries: styles.into_iter().map(|(id, style)| (id, (style, 0, NO_PARENT))).collect(),
             pass: 0,
             visited: 0,
             swept: false,
@@ -326,7 +341,7 @@ impl PartialEq for CascadeStyles {
             && self
                 .entries
                 .iter()
-                .all(|(id, (style, _))| other.get(id).is_some_and(|o| style == o))
+                .all(|(id, (style, _, _))| other.get(id).is_some_and(|o| style == o))
     }
 }
 
@@ -679,7 +694,7 @@ pub fn precompute_counters(
     };
     let mut map = CounterMap::with_capacity(doc.node_count());
     let t = std::time::Instant::now();
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false);
     note_walk_ns(t.elapsed().as_nanos() as u64);
     map.record_generated_content();
     map
@@ -711,6 +726,17 @@ pub struct RestyleDelta<'a> {
     pub prev_styles: CascadeStyles,
     /// Root nodes whose entire subtree must be re-cascaded.
     pub dirty_roots: HashSet<NodeId>,
+    /// BUG-935 срез 60 — nodes whose *child list* changed and nothing else did. Each is
+    /// re-cascaded together with its direct children; the walk descends below a child
+    /// only when that child's style came out different, when it was *moved* here from
+    /// another parent (its descendants were matched against another ancestor chain), or
+    /// when the child is itself in [`Self::dirty_roots`]. The caller lists in
+    /// `dirty_roots` the children a selector reads through their own position
+    /// ([`crate::style::restyle_roots_for_node_changes`] does).
+    ///
+    /// Only sound together with a complete content record — see [`restyle_spine`], which
+    /// is where an unlisted container would otherwise be skipped.
+    pub shallow_roots: HashSet<NodeId>,
     /// BUG-341 S16: which nodes had their *content* — the things `build_box`
     /// reads that the cascade cannot see (text-node data, child lists,
     /// attributes) — mutated since `prev_styles` was taken. See
@@ -750,6 +776,7 @@ impl RestyleDelta<'_> {
     /// walking rather than merely similar.
     fn is_noop(&self) -> bool {
         self.dirty_roots.is_empty()
+            && self.shallow_roots.is_empty()
             && self.content_dirty.nothing_changed()
             && !self.prev_styles.is_empty()
             && !self.prev_styles.generated_content()
@@ -890,7 +917,7 @@ pub fn incremental_precompute_counters(
         // how many entries this one will hold — closer than `node_count`, which
         // counts text and comment nodes too. S24: and it *is* this pass's cache.
         let elements = delta.prev_styles.len();
-        let RestyleDelta { prev_styles, dirty_roots, content_dirty } = delta;
+        let RestyleDelta { prev_styles, dirty_roots, shallow_roots, content_dirty } = delta;
         // BUG-341 S27: read off the carried cache before it is moved into the
         // map — it is the previous walking pass's report, and the licence to
         // skip depends on it.
@@ -898,18 +925,18 @@ pub fn incremental_precompute_counters(
         let spine = restyle_spine(
             doc,
             flat,
-            &dirty_roots,
+            dirty_roots.iter().chain(shallow_roots.iter()).copied(),
             &content_dirty,
             ctx.quotes_possible,
             prev_generated_content,
         );
         let map = CounterMap::continuing(prev_styles, elements);
-        (ctx, map, IncrRestyle { dirty_roots, content_dirty, spine })
+        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, content_dirty, spine })
     };
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
         let t = std::time::Instant::now();
-        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false);
+        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false, doc.root(), false);
         note_walk_ns(t.elapsed().as_nanos() as u64);
     }
     {
@@ -930,6 +957,8 @@ pub fn incremental_precompute_counters(
 struct IncrRestyle<'a> {
     /// See [`RestyleDelta::dirty_roots`].
     dirty_roots: HashSet<NodeId>,
+    /// See [`RestyleDelta::shallow_roots`].
+    shallow_roots: HashSet<NodeId>,
     /// See [`RestyleDelta::content_dirty`].
     content_dirty: ContentDirty<'a>,
     /// BUG-341 S27 — every ancestor of a dirty root or a content-mutated node,
@@ -981,7 +1010,7 @@ struct IncrRestyle<'a> {
 fn restyle_spine(
     doc: &Document,
     flat: &FlatTree,
-    dirty_roots: &HashSet<NodeId>,
+    roots: impl Iterator<Item = NodeId>,
     content_dirty: &ContentDirty<'_>,
     quotes_possible: bool,
     prev_generated_content: bool,
@@ -994,8 +1023,8 @@ fn restyle_spine(
         // `Nothing` names nobody; `Untracked` was rejected above.
         _ => &[],
     };
-    let mut spine: HashSet<NodeId> = HashSet::with_capacity(dirty_roots.len() + content.len() + 16);
-    for &seed in dirty_roots.iter().chain(content.iter()) {
+    let mut spine: HashSet<NodeId> = HashSet::with_capacity(roots.size_hint().0 + content.len() + 16);
+    for seed in roots.chain(content.iter().copied()) {
         let mut cur = Some(seed);
         // Stops at the first node already on the spine: everything above it was
         // put there by an earlier seed, so the chains share their tails.
@@ -1079,6 +1108,7 @@ fn skip_clean_subtree(
     let Some(delta) = incr else { return false };
     let Some(spine) = delta.spine.as_ref() else { return false };
     if spine.contains(&child)
+        || delta.shallow_roots.contains(&parent)
         || delta.content_dirty.contains(parent)
         // A slotted node's DOM parent is the host, a shadow tree's top-level
         // node's is the shadow root — neither is `parent` here, yet a content
@@ -1307,6 +1337,12 @@ fn walk(
     // recompute — propagates down the rest of the subtree unconditionally
     // (brief §4: "root-set and their style-descendants").
     force: bool,
+    // BUG-935 срез 60: the composed-tree parent `id` is walked under — recorded
+    // with the style so a later shallow restyle can tell a moved node from a stayer.
+    parent: NodeId,
+    // BUG-935 срез 60: `id` is a direct child of a [`RestyleDelta::shallow_roots`]
+    // node — its own style is recomputed, its subtree only if that changes things.
+    shallow_child: bool,
     // BUG-341 S4: returns `true` when this node's own style AND its entire
     // descendant subtree are unchanged from `prev_styles` (vacuously `true`
     // for non-element nodes, which carry no style of their own). Aggregated
@@ -1332,13 +1368,13 @@ fn walk(
             // everything" (a shadow-root document with a `:has()` in the sheet asks
             // for that); it has no style of its own, so the force must be handed down
             // here — the element branch below never sees this node.
-            let force = force || incr.is_some_and(|d| d.dirty_roots.contains(&id));
+            let force = force || incr.is_some_and(|d| d.dirty_roots.contains(&id) || d.shallow_roots.contains(&id));
             let mut all_clean = true;
             for &child_id in flat.children_of(doc, id) {
                 if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, force) {
                     continue;
                 }
-                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force);
+                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false);
             }
             return all_clean;
         }
@@ -1353,13 +1389,29 @@ fn walk(
     // one. `None` here means "nothing to reuse" for either reason — no entry, or
     // one the immediately preceding pass did not write (see
     // `CascadeStyles::reuse`).
+    //
+    // BUG-935 срез 60: a *shallow* node — a direct child of a shallow root, or a shallow
+    // root itself, neither forced nor a dirty root — is recomputed like a root but does
+    // not take its subtree with it unless something about it changed.
+    //
+    // A shallow root whose composed children differ from its DOM children (a shadow host:
+    // `<select>`, `<details>`) is walked deep — the root-set looked at DOM children, and a
+    // slotted child sits one level further down the composed tree.
+    let mut is_shallow_root = incr.is_some_and(|d| d.shallow_roots.contains(&id));
+    let host_override = is_shallow_root && !std::ptr::eq(flat.children_of(doc, id), doc.get(id).children.as_slice());
+    is_shallow_root &= !host_override;
+    let deep = force || host_override || incr.is_some_and(|d| d.dirty_roots.contains(&id));
+    let shallow = !deep && (shallow_child || is_shallow_root);
     let reused = match incr {
         None => None,
-        Some(delta) if force || delta.dirty_roots.contains(&id) => None,
+        Some(_) if deep || shallow => None,
         Some(_) => map.styles.reuse(id),
     };
     let must_recompute = reused.is_none();
     note_cascade(must_recompute);
+    // Whether the subtree below has to be recascaded: for everything but a shallow node,
+    // exactly "this node was recomputed".
+    let mut subtree_changed = must_recompute;
     let style: Arc<ComputedStyle> = match reused {
         Some(style) => style,
         None => {
@@ -1367,8 +1419,17 @@ fn walk(
             let style = map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode);
             // BUG-341 S24: keep whatever this displaced — the graft still needs
             // to see the style `prev`'s box was built from (`replaced_styles`).
-            if let Some(displaced) = map.styles.write(id, Arc::clone(&style)) {
-                map.replaced_styles.insert(id, displaced);
+            let displaced = map.styles.write(id, Arc::clone(&style), parent);
+            if shallow {
+                // Unchanged style under the same parent: the descendants' inherited
+                // chain and ancestor matching are what they were. A new node, a moved
+                // one or a changed style says nothing of the kind.
+                subtree_changed = displaced
+                    .as_ref()
+                    .is_none_or(|(prev, prev_parent)| *prev_parent != parent.raw() || **prev != *style);
+            }
+            if let Some((prev, _)) = displaced {
+                map.replaced_styles.insert(id, prev);
             }
             style
         }
@@ -1414,7 +1475,7 @@ fn walk(
         }
     }
 
-    let child_force = force || must_recompute;
+    let child_force = force || subtree_changed;
     let mut children_clean = true;
     for &child_id in flat.children_of(doc, id) {
         // BUG-341 S27: nothing in the delta can reach this child's subtree, so
@@ -1422,7 +1483,8 @@ fn walk(
         if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, child_force) {
             continue;
         }
-        let child_clean = walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force);
+        let child_clean =
+            walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force, id, is_shallow_root);
         children_clean &= child_clean;
     }
 
@@ -2404,6 +2466,7 @@ mod tests {
                 prev_styles: full.into_styles(),
                 dirty_roots: HashSet::new(),
                 content_dirty: ContentDirty::Nothing,
+                shallow_roots: Default::default(),
             };
             set_incremental_restyle(true);
             let _ = take_cascade_stats();
@@ -2489,6 +2552,7 @@ mod tests {
             prev_styles: full.into_styles(),
             dirty_roots,
             content_dirty: ContentDirty::Nothing,
+            shallow_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let _ = take_cascade_stats();
@@ -2523,6 +2587,7 @@ mod tests {
             prev_styles: prev,
             dirty_roots,
             content_dirty: ContentDirty::Nodes(content),
+            shallow_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let _ = take_cascade_stats();
