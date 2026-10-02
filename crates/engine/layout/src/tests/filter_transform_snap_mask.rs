@@ -387,6 +387,52 @@ fn motion_path_centres_anchor_on_path_point() {
     );
 }
 
+/// Явный `offset-anchor: left top` садит на точку пути верхний-левый угол
+/// бокса (а не центр, как при `auto`).
+#[test]
+fn motion_path_explicit_anchor_places_corner_on_path_point() {
+    let root = lay(
+        "<div>x</div>",
+        r#"div { width: 40px; height: 40px; offset-path: path("M 0 0 L 960 0"); offset-distance: 480px; offset-rotate: 0deg; offset-anchor: left top; }"#,
+    );
+    let div = root
+        .children
+        .iter()
+        .find(|c| matches!(&c.kind, BoxKind::Block))
+        .expect("div box");
+    let m = forward_box_transform(div).expect("motion-path box has a matrix");
+    let (mx, my) = m.transform_point_2d(div.rect.x, div.rect.y);
+    let (ex, ey) = (div.rect.x + 480.0, div.rect.y);
+    assert!(
+        (mx - ex).abs() < 0.05 && (my - ey).abs() < 0.05,
+        "top-left anchor must map to path point ({ex}, {ey}); got ({mx}, {my})"
+    );
+}
+
+/// `offset-rotate: 90deg` вращает бокс вокруг `offset-anchor`: точка справа
+/// от центра уезжает вниз от точки пути (CW в Y-down).
+#[test]
+fn motion_path_rotate_angle_turns_box_around_anchor() {
+    let root = lay(
+        "<div>x</div>",
+        r#"div { width: 40px; height: 40px; offset-path: path("M 0 0 L 960 0"); offset-distance: 480px; offset-rotate: 90deg; }"#,
+    );
+    let div = root
+        .children
+        .iter()
+        .find(|c| matches!(&c.kind, BoxKind::Block))
+        .expect("div box");
+    let m = forward_box_transform(div).expect("motion-path box has a matrix");
+    let cx = div.rect.x + div.rect.width / 2.0;
+    let cy = div.rect.y + div.rect.height / 2.0;
+    let (mx, my) = m.transform_point_2d(cx + 20.0, cy);
+    let (ex, ey) = (div.rect.x + 480.0, div.rect.y + 20.0);
+    assert!(
+        (mx - ex).abs() < 0.05 && (my - ey).abs() < 0.05,
+        "90deg must rotate right-edge point below the path point ({ex}, {ey}); got ({mx}, {my})"
+    );
+}
+
 #[test]
 fn filter_blur() {
     let root = lay("<p>x</p>", "p { filter: blur(5px); }");

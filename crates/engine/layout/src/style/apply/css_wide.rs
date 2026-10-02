@@ -491,6 +491,20 @@ fn apply_css_wide_keyword_with(
         "shape-image-threshold" => {
             style.shape_image_threshold = if inh_only_inherit { inherited.shape_image_threshold } else { init.shape_image_threshold };
         }
+        "offset" => {
+            // Шортхенд: сбрасывает/наследует все четыре хранимых лонгхенда.
+            if inh_only_inherit {
+                style.offset_path = inherited.offset_path.clone();
+                style.offset_distance = inherited.offset_distance.clone();
+                style.offset_rotate = inherited.offset_rotate;
+                style.offset_anchor = inherited.offset_anchor;
+            } else {
+                style.offset_path = init.offset_path.clone();
+                style.offset_distance = init.offset_distance.clone();
+                style.offset_rotate = init.offset_rotate;
+                style.offset_anchor = init.offset_anchor;
+            }
+        }
         "offset-path" => {
             style.offset_path = if inh_only_inherit {
                 inherited.offset_path.clone()

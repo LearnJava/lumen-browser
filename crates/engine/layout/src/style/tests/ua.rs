@@ -1151,10 +1151,105 @@ use super::*;
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
-        if let OffsetRotate::Angle(rad) = style.offset_rotate {
-            assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        // Углы offset-rotate хранятся в градусах (их ждёт motion_path).
+        if let OffsetRotate::Angle(deg) = style.offset_rotate {
+            assert!((deg - 90.0).abs() < 1e-3, "deg={deg}");
         } else {
             panic!("expected OffsetRotate::Angle");
+        }
+    }
+
+    #[test]
+    fn offset_rotate_auto_angle_and_reverse_angle() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let rot = |css: &str| {
+            let sheet = lumen_css_parser::parse(css);
+            compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false).offset_rotate
+        };
+        let near = |r: OffsetRotate, want: f32| match r {
+            OffsetRotate::AutoAngle(a) => assert!((a - want).abs() < 1e-3, "a={a}"),
+            other => panic!("expected AutoAngle, got {other:?}"),
+        };
+        near(rot("div { offset-rotate: auto 30deg; }"), 30.0);
+        near(rot("div { offset-rotate: 30deg auto; }"), 30.0);
+        near(rot("div { offset-rotate: reverse 30deg; }"), 210.0);
+        near(rot("div { offset-rotate: 0.25turn auto; }"), 90.0);
+    }
+
+    fn offset_style(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn offset_shorthand_path_distance_rotate_anchor() {
+        let st = offset_style(
+            r#"div { offset: path("M 0 0 L 100 0") 30px 45deg / left top; }"#,
+        );
+        assert_eq!(st.offset_path.as_deref(), Some(r#"path("M 0 0 L 100 0")"#));
+        assert_eq!(st.offset_distance, Length::Px(30.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::Angle(45.0));
+        let a = st.offset_anchor.expect("anchor");
+        assert_eq!(a.x, PositionComponent::Percent(0.0));
+        assert_eq!(a.y, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn offset_shorthand_orders_and_position_prefix() {
+        // rotate перед distance; ведущая offset-position разбирается и отбрасывается.
+        let st = offset_style(r#"div { offset: left top ray(90deg closest-side) reverse 10px; }"#);
+        assert_eq!(st.offset_path.as_deref(), Some("ray(90deg closest-side)"));
+        assert_eq!(st.offset_distance, Length::Px(10.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::Reverse);
+        assert_eq!(st.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_shorthand_resets_omitted_longhands() {
+        let st = offset_style(
+            r#"div { offset-distance: 50px; offset-rotate: 10deg; offset-anchor: 0 0; offset: none; }"#,
+        );
+        assert_eq!(st.offset_path, None);
+        assert_eq!(st.offset_distance, Length::Px(0.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::Auto);
+        assert_eq!(st.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_shorthand_invalid_ignored() {
+        let st = offset_style(
+            r#"div { offset-distance: 7px; offset: path("M 0 0 L 1 1") bogus; }"#,
+        );
+        assert_eq!(st.offset_path, None);
+        assert_eq!(st.offset_distance, Length::Px(7.0));
+    }
+
+    #[test]
+    fn offset_shorthand_percent_distance_and_auto_angle() {
+        let st = offset_style(r#"div { offset: path("M 0 0 L 1 1") 25% auto 90deg; }"#);
+        assert_eq!(st.offset_distance, Length::Percent(25.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::AutoAngle(90.0));
+    }
+
+    #[test]
+    fn offset_rotate_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        for css in [
+            "div { offset-rotate: bogus; }",
+            "div { offset-rotate: auto reverse; }",
+            "div { offset-rotate: 10deg 20deg; }",
+            "div { offset-rotate: auto 10deg 20deg; }",
+        ] {
+            let sheet = lumen_css_parser::parse(css);
+            let st = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(st.offset_rotate, OffsetRotate::Auto, "{css}");
         }
     }
 

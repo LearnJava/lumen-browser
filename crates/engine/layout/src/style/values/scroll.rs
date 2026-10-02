@@ -19,6 +19,7 @@ pub enum ShapeOutside {
 }
 
 /// CSS Motion Path L1 §3 — `offset-rotate`. NOT inherited. Initial: `Auto`.
+/// Углы хранятся в градусах.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum OffsetRotate {
     #[default]
