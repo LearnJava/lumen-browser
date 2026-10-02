@@ -76,12 +76,45 @@ pub(in crate::style) fn resolve_logical_properties(style: &mut ComputedStyle) {
     // inline-start = left, inline-end = right, block-start = top, block-end = bottom.
     // For other writing modes, mapping differs; Phase 1+ will implement full support.
 
-    // CSS Logical Properties L1 §2 — inline-size / block-size → width / height.
-    if style.inline_size.is_some() && style.width.is_none() {
-        style.width = style.inline_size.clone();
+    // CSS Logical Properties L1 §2 — inline-size / block-size (+ min-/max-) map
+    // onto width/height by `writing-mode`: horizontal-tb → inline=width,
+    // block=height; every vertical mode swaps the axes. `direction` does not
+    // matter for sizes. Same "physical still unset" presence heuristic as the
+    // rest of this module.
+    let vertical_wm = matches!(
+        style.writing_mode,
+        WritingMode::VerticalRl
+            | WritingMode::VerticalLr
+            | WritingMode::SidewaysRl
+            | WritingMode::SidewaysLr
+    );
+    let (inline_sz, block_sz) = (style.inline_size.clone(), style.block_size.clone());
+    let (min_i, max_i, min_b, max_b) = match style.logical_min_max_sizes.as_deref() {
+        Some(x) => (x.min_inline.clone(), x.max_inline.clone(), x.min_block.clone(), x.max_block.clone()),
+        None => (None, None, None, None),
+    };
+    let (w, h, min_w, max_w, min_h, max_h) = if vertical_wm {
+        (block_sz, inline_sz, min_b, max_b, min_i, max_i)
+    } else {
+        (inline_sz, block_sz, min_i, max_i, min_b, max_b)
+    };
+    if w.is_some() && style.width.is_none() {
+        style.width = w;
     }
-    if style.block_size.is_some() && style.height.is_none() {
-        style.height = style.block_size.clone();
+    if h.is_some() && style.height.is_none() {
+        style.height = h;
+    }
+    if min_w.is_some() && style.min_width.is_none() {
+        style.min_width = min_w;
+    }
+    if max_w.is_some() && style.max_width.is_none() {
+        style.max_width = max_w;
+    }
+    if min_h.is_some() && style.min_height.is_none() {
+        style.min_height = min_h;
+    }
+    if max_h.is_some() && style.max_height.is_none() {
+        style.max_height = max_h;
     }
 
     // CSS Logical Properties L1 §4 — inset-inline-* / inset-block-* → top/right/bottom/left.

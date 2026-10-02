@@ -65,6 +65,20 @@ pub enum SvgColorInterpolation {
     LinearRgb,
 }
 
+/// Storage for the logical min/max size longhands, resolved onto
+/// `min-`/`max-` `width`/`height` by `writing-mode` after the cascade.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LogicalMinMaxSizes {
+    /// `min-inline-size`. `None` = auto.
+    pub min_inline: Option<Length>,
+    /// `max-inline-size`. `None` = none.
+    pub max_inline: Option<Length>,
+    /// `min-block-size`. `None` = auto.
+    pub min_block: Option<Length>,
+    /// `max-block-size`. `None` = none.
+    pub max_block: Option<Length>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -981,6 +995,11 @@ pub struct ComputedStyle {
     pub inline_size: Option<Length>,
     /// CSS Logical Properties L1 — `block-size`. `None` = auto.
     pub block_size: Option<Length>,
+    /// CSS Logical Properties L1 §2 — `min-`/`max-` `inline-size`/`block-size`.
+    /// Boxed and `None` unless one of the four is declared: four inline
+    /// `Option<Length>`s would grow `ComputedStyle` enough to overflow the stack
+    /// in deeply nested layout recursion (`deep_grid_chain` test).
+    pub logical_min_max_sizes: Option<Box<LogicalMinMaxSizes>>,
     /// CSS Logical Properties L1 — `inset-inline-start`.
     pub inset_inline_start: LengthOrAuto,
     /// CSS Logical Properties L1 — `inset-inline-end`.
@@ -1398,6 +1417,7 @@ impl ComputedStyle {
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
+            logical_min_max_sizes: None,
             inset_inline_start: LengthOrAuto::Auto,
             inset_inline_end: LengthOrAuto::Auto,
             inset_block_start: LengthOrAuto::Auto,
@@ -1795,6 +1815,7 @@ impl ComputedStyle {
             // CSS Logical Properties L1 — not inherited. Initial values.
             inline_size: None,
             block_size: None,
+            logical_min_max_sizes: None,
             inset_inline_start: LengthOrAuto::Auto,
             inset_inline_end: LengthOrAuto::Auto,
             inset_block_start: LengthOrAuto::Auto,

@@ -550,6 +550,22 @@ fn apply_css_wide_keyword_with(
         // CSS Logical Properties L1 — inline-size / block-size.
         "inline-size" => style.inline_size = if inh_only_inherit { inherited.inline_size.clone() } else { init.inline_size.clone() },
         "block-size" => style.block_size = if inh_only_inherit { inherited.block_size.clone() } else { init.block_size.clone() },
+        // min-/max- inline-size/block-size share one boxed side-struct.
+        "min-inline-size" | "max-inline-size" | "min-block-size" | "max-block-size" => {
+            let src = if inh_only_inherit { inherited.logical_min_max_sizes.clone() } else { init.logical_min_max_sizes.clone() };
+            // Only the named longhand resets; keep the other three as cascaded.
+            let (new_min_i, new_max_i, new_min_b, new_max_b) = src
+                .as_deref()
+                .map(|x| (x.min_inline.clone(), x.max_inline.clone(), x.min_block.clone(), x.max_block.clone()))
+                .unwrap_or((None, None, None, None));
+            let sizes = style.logical_min_max_sizes.get_or_insert_with(Default::default);
+            match prop {
+                "min-inline-size" => sizes.min_inline = new_min_i,
+                "max-inline-size" => sizes.max_inline = new_max_i,
+                "min-block-size" => sizes.min_block = new_min_b,
+                _ => sizes.max_block = new_max_b,
+            }
+        }
         "min-width" => style.min_width = if inh_only_inherit { inherited.min_width.clone() } else { init.min_width.clone() },
         "max-width" => style.max_width = if inh_only_inherit { inherited.max_width.clone() } else { init.max_width.clone() },
         "min-height" => style.min_height = if inh_only_inherit { inherited.min_height.clone() } else { init.min_height.clone() },
