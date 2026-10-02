@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-02",
  "counts": {
-  "open": 131,
+  "open": 132,
   "fixed": 1052,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1185,
+ "total_bugs": 1186,
  "phases": [
   {
    "id": "P0",
@@ -8197,6 +8197,13 @@
    "status": "open",
    "title": "`perf9_code_cache_hit_preserves_semantics` падает под нагрузкой полного `lumen-js --lib`, в одиночку зелёный. Найден P4, 2026-10-02.",
    "component": "js (`crates/js/src/v8_runtime/tests/mod.rs:98`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1245": {
+   "status": "open",
+   "title": "MCP-сервер не по спецификации MCP: стандартные клиенты (Claude Desktop/Code, Cursor) не подключаются — `initialize` без `serverInfo` и с захардкоженной версией,…",
+   "component": "mcp (`crates/mcp/src/server.rs::on_initialize`/`on_tools_call`, `crates/mcp/src/protocol.rs:33`)",
    "date": null,
    "debtor": false
   },
@@ -16976,6 +16983,9 @@
   ],
   "mcp": [
    "BUG-071"
+  ],
+  "mcp (`crates/mcp/src/server.rs::on_initialize`/`on_tools_call`, `crates/mcp/src/protocol.rs:33`)": [
+   "BUG-1245"
   ],
   "network": [
    "BUG-050",
