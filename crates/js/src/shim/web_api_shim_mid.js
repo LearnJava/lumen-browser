@@ -2536,6 +2536,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'overscroll-behavior-x': ['auto', 'contain', 'none'],
     'overscroll-behavior-y': ['auto', 'contain', 'none'],
     'scroll-snap-stop': ['normal', 'always'],
+    // CSS Scroll Snap L2 §4: `scroll-initial-target: none | nearest` — the
+    // strict two-keyword `match` in `style/apply/motion.rs`.
+    'scroll-initial-target': ['none', 'nearest'],
 };
 
 // CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |

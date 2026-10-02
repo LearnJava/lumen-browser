@@ -46,7 +46,7 @@ use crate::style::{
     ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowAnchor, OverflowClipMarginBox, OverflowWrap,
     OverscrollBehavior, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     Resize, ScrollMarkerGroup, ScrollTargetGroup, ScrollbarGutter, ScrollbarWidth, ScrollBehavior,
-    ScrollSnapAlign, ScrollSnapStop, ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin,
+    ScrollInitialTarget, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin,
     SvgPaint, SvgPaintOrder,
     TextAlign, TextAlignLast, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
@@ -597,6 +597,8 @@ pub struct ComputedStyle {
     pub scroll_snap_align: ScrollSnapAlign,
     /// CSS Scroll Snap L1 §6.2 — `scroll-snap-stop`. Не наследуется.
     pub scroll_snap_stop: ScrollSnapStop,
+    /// CSS Scroll Snap L2 §4 — `scroll-initial-target`. Не наследуется.
+    pub scroll_initial_target: ScrollInitialTarget,
     /// CSS Scroll Snap L1 §4 — `scroll-margin-*` (resolved px).
     pub scroll_margin_top: f32,
     pub scroll_margin_right: f32,
@@ -1287,6 +1289,7 @@ impl ComputedStyle {
             scroll_snap_type: ScrollSnapType::default(),
             scroll_snap_align: ScrollSnapAlign::default(),
             scroll_snap_stop: ScrollSnapStop::default(),
+            scroll_initial_target: ScrollInitialTarget::default(),
             scroll_margin_top: 0.0,
             scroll_margin_right: 0.0,
             scroll_margin_bottom: 0.0,
@@ -1651,6 +1654,7 @@ impl ComputedStyle {
             scroll_snap_type: ScrollSnapType::default(),
             scroll_snap_align: ScrollSnapAlign::default(),
             scroll_snap_stop: ScrollSnapStop::default(),
+            scroll_initial_target: ScrollInitialTarget::default(),
             scroll_margin_top: 0.0,
             scroll_margin_right: 0.0,
             scroll_margin_bottom: 0.0,
