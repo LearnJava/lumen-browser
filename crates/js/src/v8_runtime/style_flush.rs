@@ -882,7 +882,6 @@ impl FlushHandles {
         let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &node_index);
         dirty_roots.extend(roots.deep);
         let sheet_delta_count = sheet_delta_roots.len();
-        let strict_inline_runs = sheet_delta_count > 0;
         self.sheet_delta_used.fetch_add(sheet_delta_count as u64, Ordering::Relaxed);
         dirty_roots.extend(sheet_delta_roots);
         let shallow_roots = roots.shallow;
@@ -957,7 +956,6 @@ impl FlushHandles {
         let null_hp = lumen_core::ext::NullHyphenationProvider;
         lumen_layout::counters::set_incremental_restyle(true);
         lumen_layout::box_tree::set_incremental_box_build(true);
-        lumen_layout::counters::set_strict_inline_run_styles(strict_inline_runs);
         let tp_prev = tp0.elapsed();
         let layout_scope = lumen_core::profile::scope("incr.layout_mutation");
         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
@@ -966,7 +964,6 @@ impl FlushHandles {
         drop(layout_scope);
         lumen_layout::box_tree::set_incremental_box_build(false);
         lumen_layout::counters::set_incremental_restyle(false);
-        lumen_layout::counters::set_strict_inline_run_styles(false);
         if lumen_paint::frame_log_enabled() {
             eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} sheet_roots={sheet_delta_count} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
