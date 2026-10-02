@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 /// MCP resource describing a read-only data snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpResource {
     /// Уникальный URI ресурса (e.g. "resource://screenshot", "resource://a11y_tree").
     pub uri: String,
@@ -24,6 +25,7 @@ pub struct McpResource {
 
 /// MCP tool describing a callable action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpTool {
     /// Имя инструмента (e.g. "navigate", "click").
     pub name: String,

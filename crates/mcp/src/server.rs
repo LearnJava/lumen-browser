@@ -8,6 +8,9 @@ use lumen_core::error::Result;
 use crate::protocol::{McpMessage, McpRequest, McpResource, McpResponse, McpTool};
 use crate::transport::Transport;
 
+/// Версии протокола MCP, которые понимает сервер; первая — новейшая.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
 /// MCP сервер для Lumen браузера.
 ///
 /// Обворачивает [`BrowserSession`] и предоставляет ресурсы и инструменты
@@ -48,6 +51,11 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
 
             match msg {
                 McpMessage::Request(req) => {
+                    // Уведомление (нет `id`) — ответа не бывает: ни успешного,
+                    // ни ошибки (JSON-RPC 2.0 §4.1, MCP §Lifecycle).
+                    if req.id.is_none() {
+                        continue;
+                    }
                     let response = self.handle_request(&req);
                     self.transport.write_message(&McpMessage::Response(response))?;
                 }
@@ -77,6 +85,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         match req.method.as_str() {
             // ── Инициализация ──
             "initialize" => self.on_initialize(&id, &req.params),
+            "ping" => McpResponse::ok(id, json!({})),
             "resources/list" => self.on_resources_list(&id),
             "tools/list" => self.on_tools_list(&id),
 
@@ -102,15 +111,25 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         }
         self.authenticated = true;
 
+        // Версия протокола: эхо версии клиента, если мы её знаем, иначе
+        // наша новейшая (MCP §Lifecycle, version negotiation).
+        let requested = params.get("protocolVersion").and_then(|v| v.as_str());
+        let protocol_version = match requested {
+            Some(v) if SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
+            _ => SUPPORTED_PROTOCOL_VERSIONS[0],
+        };
+
         let response = json!({
-            "serverVersion": "0.1.0",
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": protocol_version,
+            "serverInfo": {
+                "name": "lumen",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
             "capabilities": {
                 "resources": {
                     "subscribe": false,
                 },
                 "tools": {},
-                "sampling": {}
             }
         });
 
@@ -488,8 +507,30 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         McpResponse::ok(id.clone(), response)
     }
 
-    /// Чтение ресурса.
+    /// Чтение ресурса: приводит элементы `contents` к форме спецификации —
+    /// `uri` + `text` либо `uri` + `blob` (base64) + `mimeType`.
     fn on_resources_read(&self, id: &Value, params: &Value) -> McpResponse {
+        let mut response = self.read_resource(id, params);
+        let uri = params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(Value::Array(items)) = response
+            .result
+            .as_mut()
+            .and_then(|r| r.get_mut("contents"))
+        {
+            for item in items {
+                let Some(obj) = item.as_object_mut() else { continue };
+                obj.remove("type");
+                if let Some(data) = obj.remove("data") {
+                    obj.insert("blob".to_string(), data);
+                }
+                obj.insert("uri".to_string(), json!(uri));
+            }
+        }
+        response
+    }
+
+    /// Чтение ресурса (внутренняя форма, до приведения к спецификации).
+    fn read_resource(&self, id: &Value, params: &Value) -> McpResponse {
         let uri = match params.get("uri").and_then(|v| v.as_str()) {
             Some(u) => u,
             None => return McpResponse::err(id.clone(), -32602, "Missing uri parameter"),
@@ -551,8 +592,44 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         }
     }
 
-    /// Вызов инструмента.
+    /// Вызов инструмента. Результат — по спецификации MCP: `content` + `isError`.
+    ///
+    /// Ошибка выполнения инструмента (код -32603) уходит как `isError: true`
+    /// результат, а не JSON-RPC-ошибка; JSON-RPC-ошибкой остаются только
+    /// неизвестный инструмент и неверные параметры. Прежние поля результата
+    /// (`success`, `url`, `nodes`, …) сохранены рядом с `content` — на них
+    /// завязаны скрипты репозитория.
     fn on_tools_call(&mut self, id: &Value, params: &Value) -> McpResponse {
+        let raw = self.dispatch_tool(id, params);
+        if let Some(err) = &raw.error {
+            if err.code != -32603 {
+                return raw;
+            }
+            return McpResponse::ok(
+                id.clone(),
+                json!({
+                    "content": [{ "type": "text", "text": err.message }],
+                    "isError": true,
+                }),
+            );
+        }
+        let mut result = raw.result.unwrap_or_else(|| json!({}));
+        let text = serde_json::to_string(&result).unwrap_or_default();
+        let mut content = vec![json!({ "type": "text", "text": text })];
+        if let Some(b64) = result.get("png_base64").and_then(|v| v.as_str()) {
+            content = vec![json!({ "type": "image", "data": b64, "mimeType": "image/png" })];
+        }
+        let Some(obj) = result.as_object_mut() else {
+            // Результат-не-объект (не бывает у нынешних инструментов) — оборачиваем.
+            return McpResponse::ok(id.clone(), json!({ "content": content, "isError": false }));
+        };
+        obj.insert("content".to_string(), Value::Array(content));
+        obj.insert("isError".to_string(), json!(false));
+        McpResponse::ok(id.clone(), result)
+    }
+
+    /// Диспетчер инструментов (внутренняя форма результата).
+    fn dispatch_tool(&mut self, id: &Value, params: &Value) -> McpResponse {
         let name = match params.get("name").and_then(|v| v.as_str()) {
             Some(n) => n,
             None => return McpResponse::err(id.clone(), -32602, "Missing tool name"),
@@ -941,7 +1018,10 @@ mod tests {
             "about:blank".to_string()
         }
 
-        fn navigate(&mut self, _url: &str) -> lumen_core::error::Result<()> {
+        fn navigate(&mut self, url: &str) -> lumen_core::error::Result<()> {
+            if url.starts_with("fail://") {
+                return Err(lumen_core::error::Error::Network("boom".to_string()));
+            }
             Ok(())
         }
 
@@ -1056,7 +1136,7 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
-        assert_eq!(result["protocolVersion"], "2024-11-05");
+        assert_eq!(result["protocolVersion"], "2025-06-18");
         assert!(result["capabilities"].is_object());
     }
 
@@ -1286,9 +1366,10 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let contents = &resp.result.unwrap()["contents"];
-        assert_eq!(contents[0]["type"], "image");
+        assert_eq!(contents[0]["uri"], "resource://screenshot");
+        assert_eq!(contents[0]["mimeType"], "image/png");
         // "UE5H" is base64("PNG")
-        assert_eq!(contents[0]["data"], "UE5H");
+        assert_eq!(contents[0]["blob"], "UE5H");
     }
 
     #[test]
@@ -1397,6 +1478,82 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["success"], true);
+    }
+
+    /// BUG-1246: полное рукопожатие стандартного MCP-клиента.
+    #[test]
+    fn spec_handshake_initialize_ping_list_call() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let init = make_request(
+            "initialize",
+            serde_json::json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } }),
+        );
+        let result = run_one(&mut server, &init).result.unwrap();
+        assert_eq!(result["protocolVersion"], "2024-11-05");
+        assert_eq!(result["serverInfo"]["name"], "lumen");
+        assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(result["capabilities"].get("sampling").is_none());
+        assert!(result.get("serverVersion").is_none());
+
+        // Уведомление и ping, затем tools/list — за один проход run().
+        server.transport.push_incoming(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        server.transport.push_incoming(&make_request("ping", serde_json::json!({})));
+        server.transport.push_incoming(&make_request("tools/list", serde_json::json!({})));
+        let _ = server.run(); // завершится ошибкой пустого транспорта
+        let out = server.transport.take_outgoing();
+        assert_eq!(out.len(), 2, "на уведомление ответа быть не должно: {out:?}");
+        let ping: serde_json::Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(ping["result"], serde_json::json!({}));
+        let list: serde_json::Value = serde_json::from_str(&out[1]).unwrap();
+        for tool in list["result"]["tools"].as_array().unwrap() {
+            assert!(tool["inputSchema"].is_object(), "{tool}");
+            assert!(tool.get("input_schema").is_none());
+        }
+
+        let res = run_one(
+            &mut server,
+            &make_request("resources/list", serde_json::json!({})),
+        )
+        .result
+        .unwrap();
+        assert!(res["resources"][0]["mimeType"].is_string());
+    }
+
+    #[test]
+    fn initialize_unknown_protocol_version_falls_back_to_latest() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("initialize", serde_json::json!({ "protocolVersion": "1999-01-01" }));
+        let result = run_one(&mut server, &req).result.unwrap();
+        assert_eq!(result["protocolVersion"], "2025-06-18");
+    }
+
+    #[test]
+    fn tools_call_result_has_content_and_is_error_false() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "eval", "arguments": { "code": "1" } }),
+        );
+        let result = run_one(&mut server, &req).result.unwrap();
+        assert_eq!(result["content"][0]["type"], "text");
+        assert_eq!(result["isError"], false);
+        // прежние поля остаются для скриптов репозитория
+        assert_eq!(result["success"], true);
+    }
+
+    #[test]
+    fn tools_call_execution_failure_is_is_error_result_not_rpc_error() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "navigate", "arguments": { "url": "fail://x" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["content"][0]["type"], "text");
+        assert!(result["content"][0]["text"].as_str().unwrap().contains("boom"));
     }
 
     #[test]
