@@ -242,9 +242,14 @@ const FUNCTION_CALL_MAX_DEPTH: u32 = 16;
 /// has no `result` descriptor, or recursion exceeds `FUNCTION_CALL_MAX_DEPTH`
 /// (cycle guard, e.g. `--a() { result: --b(); }` / `--b() { result: --a(); }`).
 ///
+/// A call argument that begins `<dashed-ident> :` (whitespace allowed around
+/// the colon) is the reserved named-argument pattern and invalidates the call
+/// (csswg-drafts#11749, WPT `dashed-function-named-arg.tentative.html`).
+/// Actual named-argument binding stays unimplemented — the spec reserves it.
+///
 /// Deferred (CSS Functions and Mixins L1, not yet implemented): `returns`
 /// type-checking, conditional group rules inside the function body
-/// (`@media`, `@container`), named/keyword arguments.
+/// (`@media`, `@container`).
 ///
 /// Single-scope form: every call resolves against `functions` alone. A
 /// declaration written inside a shadow tree needs the tree-scoped lookup of
@@ -297,6 +302,12 @@ pub(in crate::style) fn expand_custom_functions_scoped(
         .find_map(|(i, s)| s.iter().find(|f| f.name == name).map(|f| (i, f)))?;
     let body_scopes = &scopes[def_scope..];
     let args = split_call_args(args_str);
+    // CSS Functions and Mixins L1 §2.1 (csswg-drafts#11749): an argument that
+    // begins `<dashed-ident> :` is reserved for future named arguments, so the
+    // call is invalid at computed-value time. `{ --x: 1 }`-wrapped is fine.
+    if args.iter().any(|a| is_named_arg_syntax(a)) {
+        return None;
+    }
 
     let mut local: HashMap<String, String> = custom.clone();
     for (i, param) in func.parameters.iter().enumerate() {
@@ -568,8 +579,23 @@ fn expand_mixin_result_items(
     out
 }
 
+/// `true` if `arg` starts with a dashed-ident followed (after optional
+/// whitespace) by `:` — the reserved named-argument pattern.
+fn is_named_arg_syntax(arg: &str) -> bool {
+    let arg = arg.trim_start();
+    let bytes = arg.as_bytes();
+    if !arg.starts_with("--") {
+        return false;
+    }
+    let mut j = 2;
+    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'-' || bytes[j] == b'_' || bytes[j] >= 0x80) {
+        j += 1;
+    }
+    j > 2 && arg[j..].trim_start().starts_with(':')
+}
+
 /// Splits `--name(<here>)` call arguments on top-level commas (nested
-/// parens and quoted strings are not split points). An all-whitespace `s`
+/// parens, `{}`/`[]` blocks and quoted strings are not split points). An all-whitespace `s`
 /// (zero-argument call, `--foo()`) yields an empty `Vec` rather than one
 /// blank element.
 fn split_call_args(s: &str) -> Vec<&str> {
@@ -590,8 +616,8 @@ fn split_call_args(s: &str) -> Vec<&str> {
             }
             None => match b {
                 b'"' | b'\'' => in_string = Some(b),
-                b'(' => depth += 1,
-                b')' => depth = depth.saturating_sub(1),
+                b'(' | b'{' | b'[' => depth += 1,
+                b')' | b'}' | b']' => depth = depth.saturating_sub(1),
                 b',' if depth == 0 => {
                     out.push(s[start..i].trim());
                     start = i + 1;
@@ -698,6 +724,9 @@ pub(crate) fn contains_env_call(value: &str) -> bool {
 /// Значение без `env(` всегда `true`.
 pub fn env_calls_well_formed(value: &str) -> bool {
     let cleaned = strip_css_comments(value);
+    if !custom_function_calls_well_formed(&cleaned) {
+        return false;
+    }
     let has_env = find_env_open(&cleaned).is_some();
     let has_var = find_var_open(&cleaned).is_some();
     if !has_env && !has_var {
@@ -708,6 +737,31 @@ pub fn env_calls_well_formed(value: &str) -> bool {
     }
     calls_well_formed(&cleaned, find_env_open, env_head_is_valid)
         && calls_well_formed(&cleaned, find_var_open, var_head_is_valid)
+}
+
+/// Parse-time check of every `--name(<args>)` custom function call in `value`
+/// (CSS Functions and Mixins L1): an argument that begins `<dashed-ident> :`
+/// is the grammar reserved for named arguments (csswg-drafts#11749) and makes
+/// the whole declaration a parse error (`--func(--myident:)`), while the same
+/// text wrapped in `{}` is a valid argument. Arguments are checked
+/// recursively (`--a(--b(--x:))`). A value with no custom function call is
+/// always `true`.
+fn custom_function_calls_well_formed(value: &str) -> bool {
+    let mut rest = value;
+    while let Some((_, name_end)) = find_custom_function_call(rest) {
+        let Some((args, after)) = parse_balanced_to_close(&rest[name_end + 1..]) else {
+            // Unbalanced — reported by the bracket-balance checks, not here.
+            return true;
+        };
+        if split_call_args(args).iter().any(|a| is_named_arg_syntax(a)) {
+            return false;
+        }
+        if !custom_function_calls_well_formed(args) {
+            return false;
+        }
+        rest = after;
+    }
+    true
 }
 
 /// Все вызовы, найденные `find_open` (`env(` / `var(`, 4 байта), имеют

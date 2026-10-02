@@ -925,6 +925,35 @@ fn var_unknown_without_fallback_computes_to_unset() {
 }
 
 #[test]
+fn custom_function_named_argument_syntax_grammar() {
+    // CSS Functions and Mixins L1 / csswg-drafts#11749 (WPT
+    // `dashed-function-named-arg.tentative.html`).
+    use crate::style::env_calls_well_formed as ok;
+    for good in [
+        "--func(myident)",
+        "--func(--myident)",
+        "--func(--)",
+        "--func(50px --myident:)",
+        "--func({--myident:})",
+        "--func({ --myident : })",
+        "--func(10px, { --myident : })",
+    ] {
+        assert!(ok(good), "{good} must be accepted");
+    }
+    for bad in [
+        "--func(--myident:)",
+        "--func( --myident:)",
+        "--func(--myident :)",
+        "--func(--myident: )",
+        "--func( --myident : )",
+        "--func(10px, --myident : )",
+        "--a(--b(--x: 1))",
+    ] {
+        assert!(!ok(bad), "{bad} must be rejected");
+    }
+}
+
+#[test]
 fn env_calls_well_formed_grammar() {
     use crate::style::env_calls_well_formed as ok;
     for good in [

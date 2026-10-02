@@ -1652,6 +1652,37 @@ use super::*;
     }
 
     #[test]
+    fn css_function_named_argument_syntax_invalidates_call() {
+        // csswg-drafts#11749: an argument starting `--ident:` is reserved for
+        // named arguments → invalid at computed-value time, not bound
+        // positionally as the text "--x: 10px".
+        for call in ["--id(--x: 10px)", "--id( --x : 10px)", "--id(1px, --x:)"] {
+            let s = cascade_at(
+                "<div class=\"box\"></div>",
+                &format!(
+                    "@function --id(--x, --y: 0px) {{ result: var(--x); }} .box {{ width: {call}; }}"
+                ),
+                &[0],
+            );
+            assert_eq!(s.width, None, "{call}");
+        }
+    }
+
+    #[test]
+    fn css_function_dashed_ident_not_followed_by_colon_is_positional() {
+        // `--id(--v)` / `--id(50px --v:)`-style args are NOT named syntax;
+        // a `{...}`-wrapped `--x: ...` is an ordinary argument.
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --id(--x) { result: var(--x); } \
+             .box { --v: 7px; width: --id(var(--v)); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(7.0));
+    }
+
+    #[test]
     fn css_function_unknown_call_invalidates_declaration() {
         let s = cascade_at(
             "<div class=\"box\"></div>",
