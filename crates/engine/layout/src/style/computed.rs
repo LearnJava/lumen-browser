@@ -494,21 +494,21 @@ pub struct ComputedStyle {
     /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. Typed.
     /// `None` = `auto`. Phase 0: parsing only.
     pub column_width: Option<Length>,
-    /// CSS Multi-column L1 §4.1 — `column-rule-width` (px). Default 0.
+    /// CSS Multi-column L1 §4.1 — `column-rule-width` (px). Default 3 (`medium`).
     pub column_rule_width: f32,
     /// CSS Multi-column L1 §4.2 — `column-rule-style`. Default `None`
     /// (без линии — линия рисуется только если style != None и width > 0).
     pub column_rule_style: BorderStyle,
     /// CSS Multi-column L1 §4.3 — `column-rule-color`. Initial = `CurrentColor`.
     pub column_rule_color: CssColor,
-    /// CSS Gap Decorations L1 — `gap-rule-width` (px). Default 0. Non-inherited.
-    /// Thickness of the visual rule drawn in flex/grid/multicol gaps.
-    pub gap_rule_width: f32,
-    /// CSS Gap Decorations L1 — `gap-rule-style`. Default `None`. Non-inherited.
-    /// Rule is only visible when style != None and width > 0.
-    pub gap_rule_style: BorderStyle,
-    /// CSS Gap Decorations L1 — `gap-rule-color`. Default `CurrentColor`. Non-inherited.
-    pub gap_rule_color: CssColor,
+    /// CSS Gap Decorations L1 §3 — `row-rule-width` (px). Default 3 (`medium`). Non-inherited.
+    /// Горизонтальные линии между строками flex-wrap/grid-контейнера; ось колонок
+    /// использует `column_rule_*` выше (одни и те же поля для multicol и gap decorations).
+    pub row_rule_width: f32,
+    /// CSS Gap Decorations L1 §3 — `row-rule-style`. Default `None`. Non-inherited.
+    pub row_rule_style: BorderStyle,
+    /// CSS Gap Decorations L1 §3 — `row-rule-color`. Default `CurrentColor`. Non-inherited.
+    pub row_rule_color: CssColor,
     /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
     /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
     pub border_collapse: BorderCollapse,
@@ -1276,12 +1276,12 @@ impl ComputedStyle {
             column_gap: Length::Px(0.0),
             column_count: None,
             column_width: None,
-            column_rule_width: 0.0,
+            column_rule_width: 3.0,
             column_rule_style: BorderStyle::None,
             column_rule_color: CssColor::CurrentColor,
-            gap_rule_width: 0.0,
-            gap_rule_style: BorderStyle::None,
-            gap_rule_color: CssColor::CurrentColor,
+            row_rule_width: 3.0,
+            row_rule_style: BorderStyle::None,
+            row_rule_color: CssColor::CurrentColor,
             border_collapse: BorderCollapse::Separate,
             empty_cells: EmptyCells::Show,
             caption_side: CaptionSide::Top,
@@ -1647,12 +1647,12 @@ impl ComputedStyle {
             // CSS Multi-column — не наследуются.
             column_count: None,
             column_width: None,
-            column_rule_width: 0.0,
+            column_rule_width: 3.0,
             column_rule_style: BorderStyle::None,
             column_rule_color: CssColor::CurrentColor,
-            gap_rule_width: 0.0,
-            gap_rule_style: BorderStyle::None,
-            gap_rule_color: CssColor::CurrentColor,
+            row_rule_width: 3.0,
+            row_rule_style: BorderStyle::None,
+            row_rule_color: CssColor::CurrentColor,
             column_span_all: false,
             column_fill_balance: true,
             break_before: BreakValue::Auto,

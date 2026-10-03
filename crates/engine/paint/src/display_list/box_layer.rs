@@ -182,6 +182,16 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         overflow_pre.extend(perspective_pre);
         overflow_post.insert(0, DisplayCommand::PopTransform);
     }
+    // CSS Gap Decorations L1 — gap rules are the container's own painting, drawn
+    // after the children inside the overflow clip and flat (after the perspective
+    // pop), exactly where `walk`'s epilogue emits them. The ordered path never
+    // drew them at all, so the live window and `--screenshot` lost every rule.
+    if is_paint_visible(b) && !is_hidden_empty_cell(b) {
+        let at = usize::from(matches!(overflow_post.first(), Some(DisplayCommand::PopTransform)));
+        for (i, cmd) in gap_decoration_commands(b).into_iter().enumerate() {
+            overflow_post.insert(at + i, cmd);
+        }
+    }
     if s.mix_blend_mode != LayoutBlendMode::Normal {
         pre.push(DisplayCommand::PushBlendMode {
             mode: map_blend_mode(s.mix_blend_mode),

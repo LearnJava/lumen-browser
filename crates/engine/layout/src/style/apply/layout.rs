@@ -58,16 +58,17 @@ use crate::style::parse::box_sides::{
     parse_anchor_size_func,
     parse_border_style_opt,
     parse_break_value,
+    parse_line_width,
     parse_inset_area_keyword,
     parse_margin_shorthand,
     parse_padding_shorthand,
-    resolve_box_length,
     set_inset_side,
     set_margin_side,
     set_padding_side,
     split_box_tokens,
 };
 use crate::style::parse::color::parse_css_color_legacy;
+use crate::style::values::length::split_top_level_ws;
 use crate::style::shorthand::{
     apply_flex_flow_shorthand,
     apply_flex_shorthand,
@@ -640,98 +641,13 @@ pub(in crate::style) fn apply_decl_layout(
                 style.column_count = count;
             }
         }
-        "column-rule-width" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.column_rule_width = px.max(0.0);
-            }
-        }
-        "column-rule-style" => {
-            style.column_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
-        }
-        "column-rule-color" => {
-            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
-                style.column_rule_color = c;
-            }
-        }
-        "column-rule" => {
-            // Shorthand: <width> || <style> || <color>. Любой порядок.
-            let mut rest = val.trim().to_string();
-            let mut color_set = false;
-            // Color может содержать пробелы (rgba(...)), но в Phase 0 — простой
-            // word-by-word проход.
-            for tok in val.split_whitespace() {
-                if let Some(s) = parse_border_style_opt(tok) {
-                    style.column_rule_style = s;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
-                }
-                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
-                    && px >= 0.0
-                {
-                    style.column_rule_width = px;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
-                }
-                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
-                    style.column_rule_color = c;
-                    color_set = true;
-                    rest = rest.replacen(tok, "", 1);
-                }
-            }
-            // Если в rest осталось что-то с скобками (`rgba(...)`) — пытаемся
-            // парсить как цвет.
-            let rest = rest.trim();
-            if !rest.is_empty()
-                && !color_set
-                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
-            {
-                style.column_rule_color = c;
-            }
-        }
-        // CSS Gap Decorations L1 — visual rules inside flex/grid/multicol gaps.
-        "gap-rule-width" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.gap_rule_width = px.max(0.0);
-            }
-        }
-        "gap-rule-style" => {
-            style.gap_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
-        }
-        "gap-rule-color" => {
-            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
-                style.gap_rule_color = c;
-            }
-        }
-        "gap-rule" => {
-            // Shorthand: <width> || <style> || <color>. Any order (mirrors column-rule).
-            let mut rest = val.trim().to_string();
-            let mut color_set = false;
-            for tok in val.split_whitespace() {
-                if let Some(s) = parse_border_style_opt(tok) {
-                    style.gap_rule_style = s;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
-                }
-                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
-                    && px >= 0.0
-                {
-                    style.gap_rule_width = px;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
-                }
-                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
-                    style.gap_rule_color = c;
-                    color_set = true;
-                    rest = rest.replacen(tok, "", 1);
-                }
-            }
-            let rest = rest.trim();
-            if !rest.is_empty()
-                && !color_set
-                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
-            {
-                style.gap_rule_color = c;
-            }
+        // CSS Multi-column L1 §4 + CSS Gap Decorations L1 §3: `column-rule*` / `row-rule*`
+        // / `rule*`. `column_rule_*` — одни и те же поля для multicol и для вертикальных
+        // линий flex/grid; `row_rule_*` — горизонтальные линии между строками.
+        "column-rule" | "column-rule-width" | "column-rule-style" | "column-rule-color"
+        | "row-rule" | "row-rule-width" | "row-rule-style" | "row-rule-color" | "rule"
+        | "rule-width" | "rule-style" | "rule-color" => {
+            apply_gap_rule_declaration(style, prop, val, em_basis, viewport, is_quirks);
         }
         "column-span" => {
             match val.trim().to_ascii_lowercase().as_str() {
@@ -1188,6 +1104,133 @@ pub(in crate::style) fn apply_decl_layout(
     }
     true
 }
+
+/// Ось, к которой относится декларация `*-rule*`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuleAxis {
+    Column,
+    Row,
+}
+
+/// Одна `<line-width> || <line-style> || <color>`-тройка шортхенда `*-rule`.
+/// `None` у компонента — он не задан и сбрасывается в initial.
+struct RuleTriplet {
+    width: Option<f32>,
+    style: Option<BorderStyle>,
+    color: Option<crate::style::CssColor>,
+}
+
+/// Разбор значения шортхенда `column-rule` / `row-rule` / `rule`:
+/// `<line-width> || <line-style> || <color>` в любом порядке. Повтор
+/// компонента или нераспознанный токен делает всю декларацию невалидной
+/// (CSS Cascade L4 §7) — тогда `None`, ничего не применяется.
+fn parse_rule_triplet(
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> Option<RuleTriplet> {
+    let mut t = RuleTriplet { width: None, style: None, color: None };
+    let tokens = split_top_level_ws(val);
+    if tokens.is_empty() {
+        return None;
+    }
+    for tok in tokens {
+        if let Some(s) = parse_border_style_opt(tok) {
+            if t.style.replace(s).is_some() {
+                return None;
+            }
+        } else if let Some(px) = parse_line_width(tok, em_basis, viewport, is_quirks)
+            && px >= 0.0
+        {
+            if t.width.replace(px).is_some() {
+                return None;
+            }
+        } else {
+            let c = parse_css_color_legacy(tok, is_quirks)?;
+            if t.color.replace(c).is_some() {
+                return None;
+            }
+        }
+    }
+    Some(t)
+}
+
+/// `column-rule*` / `row-rule*` / `rule*` (CSS Multi-column L1 §4, CSS Gap
+/// Decorations L1 §3). `rule*` задаёт обе оси сразу. Поля `column_rule_*`
+/// общие для multicol-контейнера и вертикальных линий flex/grid.
+fn apply_gap_rule_declaration(
+    style: &mut ComputedStyle,
+    prop: &str,
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) {
+    let (axes, part): (&[RuleAxis], &str) = match prop {
+        "rule" => (&[RuleAxis::Column, RuleAxis::Row], ""),
+        "rule-width" => (&[RuleAxis::Column, RuleAxis::Row], "width"),
+        "rule-style" => (&[RuleAxis::Column, RuleAxis::Row], "style"),
+        "rule-color" => (&[RuleAxis::Column, RuleAxis::Row], "color"),
+        "column-rule" => (&[RuleAxis::Column], ""),
+        "column-rule-width" => (&[RuleAxis::Column], "width"),
+        "column-rule-style" => (&[RuleAxis::Column], "style"),
+        "column-rule-color" => (&[RuleAxis::Column], "color"),
+        "row-rule" => (&[RuleAxis::Row], ""),
+        "row-rule-width" => (&[RuleAxis::Row], "width"),
+        "row-rule-style" => (&[RuleAxis::Row], "style"),
+        "row-rule-color" => (&[RuleAxis::Row], "color"),
+        _ => return,
+    };
+    let v = val.trim();
+    let triplet = match part {
+        "" => match parse_rule_triplet(v, em_basis, viewport, is_quirks) {
+            Some(t) => RuleTriplet {
+                // Пропущенные компоненты шортхенда — initial: medium / none / currentColor.
+                width: Some(t.width.unwrap_or(3.0)),
+                style: Some(t.style.unwrap_or(BorderStyle::None)),
+                color: Some(t.color.unwrap_or(crate::style::CssColor::CurrentColor)),
+            },
+            None => return,
+        },
+        "width" => match parse_line_width(v, em_basis, viewport, is_quirks) {
+            Some(px) if px >= 0.0 => RuleTriplet { width: Some(px), style: None, color: None },
+            _ => return,
+        },
+        "style" => match parse_border_style_opt(v) {
+            Some(s) => RuleTriplet { width: None, style: Some(s), color: None },
+            None => return,
+        },
+        _ => match parse_css_color_legacy(v, is_quirks) {
+            Some(c) => RuleTriplet { width: None, style: None, color: Some(c) },
+            None => return,
+        },
+    };
+    for axis in axes {
+        let (w, st, c) = match axis {
+            RuleAxis::Column => (
+                &mut style.column_rule_width,
+                &mut style.column_rule_style,
+                &mut style.column_rule_color,
+            ),
+            RuleAxis::Row => (
+                &mut style.row_rule_width,
+                &mut style.row_rule_style,
+                &mut style.row_rule_color,
+            ),
+        };
+        if let Some(px) = triplet.width {
+            *w = px;
+        }
+        if let Some(s) = triplet.style {
+            *st = s;
+        }
+        if let Some(col) = triplet.color {
+            *c = col;
+        }
+    }
+}
+
 
 /// CSS Rhythmic Sizing L1 §3.1 (BUG-517): `block-step` shorthand — `[
 /// <'block-step-size'> || <'block-step-insert'> || <'block-step-align'> ||
