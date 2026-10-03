@@ -298,3 +298,44 @@ fn keyframes_animation_ignores_other_properties_and_none() {
     // `rule-width` задаёт обе оси; `opacity` ключевого кадра значения не меняет.
     assert_eq!(eval_str(&rt, &script), "3px 20px 3px");
 }
+
+/// `element.getAnimations()` для `@keyframes` этих свойств: `_wa_gap_an_sync` заводит
+/// `Animation` с таймингом из `animation-*`, а его `currentTime` читает и сдвигает те же часы,
+/// по которым `getComputedStyle()` считает значение.
+#[test]
+fn keyframes_animation_is_listed_and_seekable() {
+    let rt = rt();
+    let script = format!(
+        "{AN_PRELUDE}
+        __vals['animation-play-state'] = 'paused';
+        var tgt = {{ __nid__: 1 }};
+        _wa_gap_tr_clock_ms = null; _wa_gap_an_sync(tgt);
+        var a = _wa_animations.filter(function(x) {{ return x.id === 'a'; }});
+        var r = [a.length, a[0].playState, a[0].currentTime, a[0].effect.getComputedTiming().duration];
+        __now = 3000; _wa_gap_tr_clock_ms = null;
+        a[0].currentTime = 5000;
+        r.push(__an('3px'));
+        r.push(a[0].currentTime);
+        _wa_gap_an_sync(tgt);
+        r.push(_wa_animations.filter(function(x) {{ return x.id === 'a'; }}).length);
+        r.join(' ')"
+    );
+    // Один элемент списка, на паузе в нуле; после seek на 5 с значение 20px и часы стоят на 5 с.
+    assert_eq!(eval_str(&rt, &script), "1 paused 0 10000 20px 5000 1");
+}
+
+#[test]
+fn keyframes_animation_leaves_the_list_after_its_end_without_forwards_fill() {
+    let rt = rt();
+    let script = format!(
+        "{AN_PRELUDE}
+        var tgt = {{ __nid__: 1 }};
+        _wa_gap_tr_clock_ms = null; _wa_gap_an_sync(tgt);
+        var n = function() {{ return _wa_animations.filter(function(x) {{ return x.id === 'a'; }}).length; }};
+        var r = [n()];
+        __now = 11000; _wa_gap_tr_clock_ms = null; _wa_gap_an_sync(tgt);
+        r.push(n());
+        r.join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "1 0");
+}
