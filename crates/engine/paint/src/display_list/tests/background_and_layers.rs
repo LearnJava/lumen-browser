@@ -1274,3 +1274,56 @@ use super::text_and_images::{build, images};
         assert_eq!(lines[4], "PopClip");
     }
 
+    // ── cross-fade() с градиентной стороной (CSS Images L4 §4) ─────────────
+
+    fn cross_fade_names(dl: &DisplayList) -> Vec<&'static str> {
+        dl.iter().map(|c| c.variant_name()).collect()
+    }
+
+    /// `cross-fade(url, gradient)`: `DrawCrossFade` смешивает только две
+    /// текстуры, поэтому сторона `a` рисуется слоем, а `b` — поверх, в
+    /// opacity-группе с альфой `t`.
+    #[test]
+    fn cross_fade_url_and_gradient_emits_layer_plus_opacity_group() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image:              cross-fade(url(a.png) 25%, linear-gradient(red, blue) 75%); }",
+        );
+        let names = cross_fade_names(&dl);
+        assert!(!names.contains(&"DrawCrossFade"), "{names:?}");
+        let img = names.iter().position(|n| *n == "DrawBackgroundImage").expect("сторона a");
+        let open = names.iter().position(|n| *n == "PushOpacity").expect("opacity-группа");
+        let grad = names.iter().position(|n| *n == "DrawLinearGradient").expect("сторона b");
+        let close = names.iter().position(|n| *n == "PopOpacity").expect("закрытие группы");
+        assert!(img < open && open < grad && grad < close, "{names:?}");
+        let alpha = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushOpacity { alpha, .. } => Some(*alpha),
+            _ => None,
+        });
+        assert!((alpha.unwrap() - 0.75).abs() < 1e-4, "alpha={alpha:?}");
+    }
+
+    /// Две градиентные стороны: оба градиента эмитятся, `b` внутри группы.
+    #[test]
+    fn cross_fade_two_gradients_emits_both_sides() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image:              cross-fade(linear-gradient(red, red) 50%, linear-gradient(blue, blue) 50%); }",
+        );
+        let names = cross_fade_names(&dl);
+        let grads = names.iter().filter(|n| **n == "DrawLinearGradient").count();
+        assert_eq!(grads, 2, "{names:?}");
+        assert_eq!(names.iter().filter(|n| **n == "PushOpacity").count(), 1, "{names:?}");
+    }
+
+    /// Две URL-стороны по-прежнему идут одной командой `DrawCrossFade`.
+    #[test]
+    fn cross_fade_two_urls_still_single_command() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image: cross-fade(url(a.png), url(b.png)); }",
+        );
+        let names = cross_fade_names(&dl);
+        assert_eq!(names.iter().filter(|n| **n == "DrawCrossFade").count(), 1, "{names:?}");
+        assert!(!names.contains(&"PushOpacity"), "{names:?}");
+    }
