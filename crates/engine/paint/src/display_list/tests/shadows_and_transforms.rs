@@ -1043,6 +1043,80 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
     }
 
     #[test]
+    fn background_clip_text_excludes_absolute_descendant_text() {
+        // L4 §3.8: only "in-flow and floated descendants" contribute glyphs.
+        let dl = build(
+            "<div>a<span class=\"o\">b</span></div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; }              .o { position: absolute; left: 50px; top: 0; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n[push + 1..pop].iter().filter(|c| **c == "DrawText").count(), 1, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_includes_floated_descendant_text() {
+        let dl = build(
+            "<div>a<p class=\"f\">b</p></div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; }              .f { float: left; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n[push + 1..pop].iter().filter(|c| **c == "DrawText").count(), 2, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_transformed_descendant_carries_its_transform() {
+        // The descendant's glyphs sit inside its own PushTransform inside the
+        // mask layer, so the background shows through them where they are drawn.
+        let dl = build(
+            "<div>a<p>b</p></div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; }              p { transform: translate(30px, 5px); }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        let inner = &n[push + 1..pop];
+        assert_eq!(inner.iter().filter(|c| **c == "DrawText").count(), 2, "{n:?}");
+        let pt = inner.iter().position(|c| *c == "PushTransform").expect("PushTransform in mask");
+        let pp = inner.iter().position(|c| *c == "PopTransform").expect("PopTransform in mask");
+        let text_in = inner.iter().enumerate().filter(|(_, c)| **c == "DrawText").map(|(i, _)| i);
+        assert_eq!(text_in.filter(|i| *i > pt && *i < pp).count(), 1, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_own_transform_not_repeated_in_mask() {
+        // The root's transform wraps the whole group already — repeating it
+        // inside the mask would apply it twice.
+        let dl = build(
+            "<div>Hi</div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; transform: rotate(5deg); }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert!(!n[push + 1..pop].contains(&"PushTransform"), "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_vertical_writing_mode_in_mask() {
+        // Vertical runs need a text measurer to be laid out at all (`build`
+        // has none), hence `layout_measured` with the fixed-width stub.
+        let doc = lumen_html_parser::parse("<div>Hi</div>");
+        let sheet = lumen_css_parser::parse(
+            "div { height: 100px; writing-mode: vertical-lr;              background: linear-gradient(red, blue);              background-clip: text; color: transparent; }",
+        );
+        let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let dl = build_display_list(&tree);
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert!(n[push + 1..pop].contains(&"DrawText"), "{n:?}");
+    }
+
+    #[test]
     fn background_clip_collapsed_rect_skipped() {
         // Если border + padding больше box-а → clip rect collapses to 0 → skip.
         // box-sizing:border-box + width:50 + border:30 → content = 50 - 60 = -10,

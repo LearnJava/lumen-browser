@@ -436,19 +436,33 @@ fn emit_background_layer(
 
 /// Glyph runs of `b` and its in-flow descendants for a `background-clip: text`
 /// mask, as opaque-black `DrawText` commands (only their coverage matters to
-/// the alpha mask). Own positioned (absolute/fixed) and transformed
-/// descendants are left out — they paint in their own stacking layer, not as
-/// part of the element's text (CSS Backgrounds L4 §3.8: "the element's text,
-/// including that of its descendants"; Phase 0 keeps the flat-flow subset).
+/// the alpha mask).
+///
+/// CSS Backgrounds L4 §3.8: the mask is "the geometry of the text in the
+/// element and its in-flow and floated descendants" — so own absolutely
+/// positioned / fixed descendants are left out (they are out of flow), while a
+/// transformed in-flow descendant stays in the mask **at its transformed
+/// position**: its glyphs are wrapped in the descendant's own
+/// `PushTransform`/`PopTransform`, the same matrix `box_layer` puts around the
+/// box's normal paint. The root's own transform is not repeated here — the
+/// whole background group is already emitted inside it.
 fn collect_text_mask(b: &LayoutBox, dpr: f32, is_root: bool, out: &mut Vec<DisplayCommand>) {
     if matches!(b.kind, BoxKind::Skip) {
         return;
     }
-    if !is_root
-        && (matches!(b.style.position, Position::Absolute | Position::Fixed)
-            || !b.style.transform.is_empty())
-    {
+    if !is_root && matches!(b.style.position, Position::Absolute | Position::Fixed) {
         return;
+    }
+    // Only boxes that own a stacking context carry a transform of their own:
+    // anonymous `InlineRun` wrappers hold a clone of the parent's style (and
+    // so its `transform`), but `box_layer` never re-applies it to them.
+    let transform = if is_root || !box_can_own_stacking_context(b) {
+        None
+    } else {
+        forward_box_transform(b)
+    };
+    if let Some(matrix) = transform {
+        out.push(DisplayCommand::PushTransform { matrix });
     }
     if let BoxKind::InlineRun { lines, .. } = &b.kind {
         let mut tmp = Vec::new();
@@ -464,6 +478,9 @@ fn collect_text_mask(b: &LayoutBox, dpr: f32, is_root: bool, out: &mut Vec<Displ
     }
     for child in &b.children {
         collect_text_mask(child, dpr, false, out);
+    }
+    if transform.is_some() {
+        out.push(DisplayCommand::PopTransform);
     }
 }
 
@@ -483,7 +500,9 @@ fn emit_text_clipped(
 ) {
     let mut glyphs = Vec::new();
     collect_text_mask(b, dpr, true, &mut glyphs);
-    if glyphs.is_empty() {
+    // A transformed descendant leaves Push/PopTransform behind even when it
+    // holds no text, so test for actual glyph runs, not for an empty list.
+    if !glyphs.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. })) {
         return;
     }
     let mut content = Vec::new();
