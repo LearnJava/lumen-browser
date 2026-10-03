@@ -154,3 +154,9 @@ CSS `@keyframes`-анимации `*-rule-width`/`-color`/`-inset-*` как ан
 `el.getAnimations()` отдаёт `@keyframes`-анимацию `*-rule-*`: `_wa_gap_an_sync` (`web_api_shim_tail_b.js`, зовётся из `_wa_get_animations_for`) заводит `Animation` под тем же ключом реестра `a:`, что и `animationstart` планировщика, кладёт в эффект вычисленный тайминг `animation-*` (`getComputedTiming().duration`), а `currentTime` читает и сдвигает ту же запись часов, по которой `getComputedStyle()` считает значение — перемотка видна следующему чтению. Завершённая анимация без `forwards`/`both` из списка уходит. `css-gaps/animation`: 2380 → 2384 из 2396; четыре `rule-{color,width}-interpolation-conversion-00{1,2}.html` зелёные (`.ini` удалены). Юнит-тесты — `v8_gap_rule_interp.rs`.
 
 **Остаток (12 подтестов):** `-0%` в `calc()` (8), `repeat(auto, …)` при `t=1.5` с незакрытой скобкой (4; решение по `RuleList::parse` ждёт ответа). Вне `css-gaps`: `getAnimations()` не возвращает `CSSAnimation` для остальных свойств (BUG-536).
+
+## Срез 13 (P4, 2026-10-03, p4-gap-rule-eof-paren)
+
+Решение по незакрытой скобке: права CSS Syntax §5.4.7 (конец значения закрывает открытые функции), а не тест `repeat(2, 1` в `invalid_lists_are_rejected` — он был написан до WPT и переведён на `repeat(2, 1))` (лишняя `)` по-прежнему невалидна). `RuleList::parse` дописывает недостающие `)` (`close_open_parens`), JS `CSSStyleDeclaration.prototype.setProperty` делает то же для `rule*`/`{column,row}-rule*` (`_lumen_close_open_parens`, `web_api_shim_mid.js`): раньше открытая `(` проглатывала `;` при сериализации атрибута `style`, и значение терялось при перечитывании. `rule-color-interpolation-repeaters-001.html` полностью зелёный (`.ini` удалён), `css-gaps/animation`: 2384 → 2388 из 2396.
+
+**Остаток (8 подтестов):** `-0%` в `calc()` для `cap-end` (WPT ждёт знаковый ноль Chrome, для `cap-start`/`junction-*` — беззнаковый, арифметика одна).

@@ -339,3 +339,21 @@ fn keyframes_animation_leaves_the_list_after_its_end_without_forwards_fill() {
     );
     assert_eq!(eval_str(&rt, &script), "1 0");
 }
+
+/// CSS Syntax §5.4.7: конец значения закрывает открытую функцию — `setProperty` с
+/// `repeat(auto, …` без `)` сохраняет закрытый список, а не отбрасывает значение.
+#[test]
+fn set_property_closes_unclosed_function_of_gap_rule_list() {
+    let rt = rt();
+    let script = "(function() {
+        var d = document.createElement('div');
+        d.style.setProperty('column-rule-color', 'repeat(2, black, red)');
+        d.style.setProperty('column-rule-color', 'repeat(auto, rgb(0, 0, 255), rgb(255, 0, 0)');
+        var a = d.style.getPropertyValue('column-rule-color');
+        return a;
+    })()";
+    assert_eq!(
+        eval_str(&rt, script),
+        "repeat(auto, rgb(0, 0, 255), rgb(255, 0, 0))"
+    );
+}
