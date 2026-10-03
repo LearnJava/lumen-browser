@@ -1915,3 +1915,161 @@ fn grid_dense_column_fills_gap() {
     assert!((c.rect.y - 100.0).abs() < 1.0, "c.y={}: dense col must back-fill col1 row3", c.rect.y);
 }
 
+
+// ──────────────── `grid-template` / `grid` shorthand (CSS Grid L1 §7.4, §8.2) ────────────────
+
+/// Стиль контейнера `<div>` после каскада с заданным CSS.
+fn grid_div_style(css: &str) -> std::sync::Arc<crate::style::ComputedStyle> {
+    let root = lay("<body><div></div></body>", css);
+    first_element_child(&root).style.clone()
+}
+
+/// `grid-template: <rows> / <columns>` — обе оси, areas пусты.
+#[test]
+fn grid_template_rows_slash_columns() {
+    let s = grid_div_style("div { display: grid; grid-template: 50px auto / 1fr 2fr; }");
+    assert_eq!(s.grid_template_rows, vec![GridTrackSize::Length(Length::Px(50.0)), GridTrackSize::Auto]);
+    assert_eq!(s.grid_template_columns, vec![GridTrackSize::Fr(1.0), GridTrackSize::Fr(2.0)]);
+    assert!(s.grid_template_areas.is_empty());
+}
+
+/// `grid-template` со строками: areas + размер ряда + колонки после `/`.
+#[test]
+fn grid_template_areas_rows_and_columns() {
+    let s = grid_div_style(
+        r#"div { display: grid; grid-template: "a a" 40px "b c" 1fr / 100px 200px; }"#,
+    );
+    assert_eq!(s.grid_template_areas, vec![vec!["a", "a"], vec!["b", "c"]]);
+    assert_eq!(s.grid_template_rows, vec![GridTrackSize::Length(Length::Px(40.0)), GridTrackSize::Fr(1.0)]);
+    assert_eq!(
+        s.grid_template_columns,
+        vec![GridTrackSize::Length(Length::Px(100.0)), GridTrackSize::Length(Length::Px(200.0))]
+    );
+}
+
+/// Ряды без размера — `auto`; колонки без `/` остаются initial.
+#[test]
+fn grid_template_areas_only_rows_default_auto() {
+    let s = grid_div_style(r#"div { display: grid; grid-template: "a b" "c d"; }"#);
+    assert_eq!(s.grid_template_areas.len(), 2);
+    assert_eq!(s.grid_template_rows, vec![GridTrackSize::Auto, GridTrackSize::Auto]);
+    assert!(s.grid_template_columns.is_empty());
+}
+
+/// Шортхенд сбрасывает ранее заданные longhand-ы (в т.ч. areas).
+#[test]
+fn grid_template_resets_previous_longhands() {
+    let s = grid_div_style(
+        r#"div { display: grid; grid-template-areas: "x y"; grid-template-columns: 9px;
+                 grid-template: none; }"#,
+    );
+    assert!(s.grid_template_areas.is_empty());
+    assert!(s.grid_template_columns.is_empty());
+    assert!(s.grid_template_rows.is_empty());
+}
+
+/// Невалидное значение (нет `/` и нет строк) — декларация игнорируется.
+#[test]
+fn grid_template_invalid_is_ignored() {
+    let s = grid_div_style(
+        "div { display: grid; grid-template-columns: 10px 20px; grid-template: 1fr 1fr; }",
+    );
+    assert_eq!(s.grid_template_columns.len(), 2);
+    assert_eq!(s.grid_template_columns[0], GridTrackSize::Length(Length::Px(10.0)));
+}
+
+/// Непрямоугольные areas — декларация целиком невалидна.
+#[test]
+fn grid_template_ragged_areas_ignored() {
+    let s = grid_div_style(r#"div { display: grid; grid-template: "a b" "c"; }"#);
+    assert!(s.grid_template_areas.is_empty());
+    assert!(s.grid_template_rows.is_empty());
+}
+
+/// Имена линий `[a]` пропускаются и не ломают разбор.
+#[test]
+fn grid_template_line_names_skipped() {
+    let s = grid_div_style(
+        r#"div { display: grid; grid-template: [r1] "a b" 30px [r2] / [c1] 1fr [c2] 2fr; }"#,
+    );
+    assert_eq!(s.grid_template_rows, vec![GridTrackSize::Length(Length::Px(30.0))]);
+    assert_eq!(s.grid_template_columns, vec![GridTrackSize::Fr(1.0), GridTrackSize::Fr(2.0)]);
+}
+
+/// `grid: <rows> / auto-flow dense <auto-cols>` — колоночный поток.
+#[test]
+fn grid_shorthand_auto_flow_columns_form() {
+    let s = grid_div_style("div { display: grid; grid: 100px 200px / auto-flow dense 40px; }");
+    assert_eq!(s.grid_template_rows.len(), 2);
+    assert!(s.grid_template_columns.is_empty());
+    assert_eq!(s.grid_auto_flow, GridAutoFlow::ColumnDense);
+    assert_eq!(s.grid_auto_columns, GridTrackSize::Length(Length::Px(40.0)));
+    assert_eq!(s.grid_auto_rows, GridTrackSize::Auto);
+}
+
+/// `grid: auto-flow <auto-rows> / <columns>` — рядный поток.
+#[test]
+fn grid_shorthand_auto_flow_rows_form() {
+    let s = grid_div_style("div { display: grid; grid: auto-flow 60px / 1fr 1fr 1fr; }");
+    assert_eq!(s.grid_auto_flow, GridAutoFlow::Row);
+    assert_eq!(s.grid_auto_rows, GridTrackSize::Length(Length::Px(60.0)));
+    assert_eq!(s.grid_template_columns.len(), 3);
+    assert!(s.grid_template_rows.is_empty());
+}
+
+/// `grid: auto-flow` без размера — `grid-auto-rows: auto`; `dense` в любом порядке.
+#[test]
+fn grid_shorthand_auto_flow_dense_any_order() {
+    let s = grid_div_style("div { display: grid; grid: dense auto-flow / 1fr; }");
+    assert_eq!(s.grid_auto_flow, GridAutoFlow::RowDense);
+    assert_eq!(s.grid_auto_rows, GridTrackSize::Auto);
+}
+
+/// `grid: <template>` форма сбрасывает `grid-auto-*`.
+#[test]
+fn grid_shorthand_template_form_resets_auto() {
+    let s = grid_div_style(
+        r#"div { display: grid; grid-auto-flow: column dense; grid-auto-rows: 7px;
+                 grid-auto-columns: 8px; grid: "a b" 20px / 1fr 1fr; }"#,
+    );
+    assert_eq!(s.grid_auto_flow, GridAutoFlow::Row);
+    assert_eq!(s.grid_auto_rows, GridTrackSize::Auto);
+    assert_eq!(s.grid_auto_columns, GridTrackSize::Auto);
+    assert_eq!(s.grid_template_areas, vec![vec!["a", "b"]]);
+    assert_eq!(s.grid_template_columns.len(), 2);
+}
+
+/// `auto-flow` с обеих сторон `/` — невалидно, ничего не меняется.
+#[test]
+fn grid_shorthand_auto_flow_both_sides_ignored() {
+    let s = grid_div_style(
+        "div { display: grid; grid-auto-rows: 7px; grid: auto-flow / auto-flow; }",
+    );
+    assert_eq!(s.grid_auto_rows, GridTrackSize::Length(Length::Px(7.0)));
+}
+
+/// `grid: none` сбрасывает всё.
+#[test]
+fn grid_shorthand_none_resets_all() {
+    let s = grid_div_style(
+        "div { display: grid; grid-template-columns: 5px; grid-auto-flow: column; grid: none; }",
+    );
+    assert!(s.grid_template_columns.is_empty());
+    assert_eq!(s.grid_auto_flow, GridAutoFlow::Row);
+}
+
+/// Сквозной layout: `grid: "a b" 50px / 100px 100px` + `grid-area` размещает элементы.
+#[test]
+fn grid_shorthand_areas_layout_placement() {
+    let root = lay(
+        "<body><div><span id='a'></span><span id='b'></span></div></body>",
+        r#"div { display: grid; grid: "a b" 50px / 100px 100px; width: 200px; }
+           #a { grid-area: a; } #b { grid-area: b; }"#,
+    );
+    let div = first_element_child(&root);
+    let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+    assert_eq!(items.len(), 2);
+    assert!((items[0].rect.x - 0.0).abs() < 1.0, "a.x={}", items[0].rect.x);
+    assert!((items[1].rect.x - 100.0).abs() < 1.0, "b.x={}", items[1].rect.x);
+    assert!((items[0].rect.height - 50.0).abs() < 1.0, "a.h={}", items[0].rect.height);
+}
