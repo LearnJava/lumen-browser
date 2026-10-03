@@ -5,6 +5,7 @@
 //! (анкер `fn grid_content_distribution`) без правок тел.
 
 use super::*;
+use crate::style::{GridRepeat, RepeatCount};
 
 /// CSS Box Alignment L3 §5 — content distribution along one axis of a grid container.
 ///
@@ -58,6 +59,100 @@ pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize) 
         }
         _ => (0.0, 0.0),
     }
+}
+
+/// CSS Grid L1 §7.2.3.2 — number of repetitions of an auto `repeat()` that fit `avail`
+/// (the container's definite content size on the axis; `None` → the list repeats once).
+///
+/// Every track counts at its definite minimum size (`minmax(100px, 1fr)` → 100px), the
+/// tracks around the repeat (`rep.before` / `rep.after`) and the gutters between all
+/// tracks take their space first; at least one repetition is always produced.
+fn auto_repeat_count(rep: &GridRepeat, avail: Option<f32>, gap: f32, em: f32, viewport: Size) -> usize {
+    let Some(avail) = avail.filter(|a| *a > 0.0) else {
+        return 1;
+    };
+    let min_px = |t: &GridTrackSize| match t {
+        GridTrackSize::FitContent(limit) => limit.resolve_fixed(em, avail, viewport).unwrap_or(0.0),
+        other => other.resolve_fixed(em, avail, viewport).unwrap_or(0.0).max(0.0),
+    };
+    let fixed_sum: f32 = rep.before.iter().chain(&rep.after).map(min_px).sum();
+    let fixed_n = rep.before.len() + rep.after.len();
+    let unit_sum: f32 = rep.tracks.iter().map(min_px).sum();
+    let unit_n = rep.tracks.len();
+    // k · (unit_sum + unit_n · gap) ≤ avail − fixed_sum − (fixed_n − 1) · gap
+    let per_unit = unit_sum + unit_n as f32 * gap;
+    if per_unit <= 0.0 {
+        return 1;
+    }
+    let room = avail - fixed_sum - (fixed_n as f32 - 1.0) * gap;
+    ((room / per_unit).floor().max(1.0)) as usize
+}
+
+/// The track list with the auto `repeat()` expanded `count` times between the tracks
+/// written around it.
+fn expand_auto_repeat(rep: &GridRepeat, count: usize) -> Vec<GridTrackSize> {
+    let mut out = Vec::with_capacity(rep.before.len() + rep.after.len() + count * rep.tracks.len());
+    out.extend_from_slice(&rep.before);
+    for _ in 0..count {
+        out.extend_from_slice(&rep.tracks);
+    }
+    out.extend_from_slice(&rep.after);
+    out
+}
+
+/// CSS Grid L1 §7.2.3.2 — `repeat(auto-fit, …)`: tracks produced by the repeat that hold no
+/// item are collapsed (sized `0`, the gutters on both sides merge into one). Returns the
+/// track list with those tracks replaced by `0px` and the per-track collapsed flags; for
+/// any other template (no `auto-fit`) the flags are all `false` and the list is unchanged.
+///
+/// `used(t)` — whether some item covers 0-based track `t`.
+fn collapse_auto_fit(
+    template: &[GridTrackSize],
+    rep: Option<&GridRepeat>,
+    count: usize,
+    used: impl Fn(usize) -> bool,
+) -> (Vec<GridTrackSize>, Vec<bool>) {
+    let mut collapsed = vec![false; template.len()];
+    let mut tracks = template.to_vec();
+    if let Some(rep) = rep.filter(|r| r.count == RepeatCount::AutoFit) {
+        let first = rep.before.len();
+        for t in first..(first + count * rep.tracks.len()).min(template.len()) {
+            if !used(t) {
+                collapsed[t] = true;
+                tracks[t] = GridTrackSize::Length(Length::Px(0.0));
+            }
+        }
+    }
+    (tracks, collapsed)
+}
+
+/// Start offsets of tracks sized `sizes` along one axis: one `gap` between consecutive
+/// non-collapsed tracks, so the gutters on both sides of a collapsed track (or run of
+/// them) merge into a single one and no gutter is left at the container edges. `start` is
+/// where the first track begins; the content-distribution extra is added per gutter.
+pub(super) fn track_offsets(sizes: &[f32], collapsed: &[bool], gap: f32, extra: f32, start: f32) -> Vec<f32> {
+    let mut offsets = Vec::with_capacity(sizes.len());
+    let mut pos = start;
+    let mut any_visible = false;
+    for (t, &size) in sizes.iter().enumerate() {
+        if collapsed.get(t).copied().unwrap_or(false) {
+            offsets.push(pos);
+            continue;
+        }
+        if any_visible {
+            pos += gap + extra;
+        }
+        offsets.push(pos);
+        pos += size;
+        any_visible = true;
+    }
+    offsets
+}
+
+/// Number of gutters on an axis: one between each pair of consecutive non-collapsed tracks.
+pub(super) fn gutter_count(collapsed: &[bool], n: usize) -> usize {
+    let visible = (0..n).filter(|&t| !collapsed.get(t).copied().unwrap_or(false)).count();
+    visible.saturating_sub(1)
 }
 
 /// Size of the cell spanning tracks `t0..t1` (0-based, end-exclusive), measured from
@@ -162,21 +257,34 @@ pub(crate) fn build_grid_init(
 
     // CSS Grid L1 §7.2.3.4 — Phase 2: expand repeat(auto-fill|auto-fit, ...) at layout time.
     // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
-    let auto_fill_col_tracks: Vec<GridTrackSize> =
-        if let Some(ref rep) = s.grid_template_col_auto_repeat {
-            let n = resolve_auto_fill_fit_count(content_width, &rep.tracks, col_gap).max(1);
-            let mut tracks = Vec::with_capacity(n * rep.tracks.len());
-            for _ in 0..n {
-                tracks.extend_from_slice(&rep.tracks);
-            }
-            tracks
-        } else {
-            Vec::new()
-        };
+    // CSS Grid L1 §7.2.3.2: the repeat is expanded between the fixed tracks written around it;
+    // `auto-fit` tracks that end up empty are collapsed after placement (below).
+    let col_repeat_count = s
+        .grid_template_col_auto_repeat
+        .as_ref()
+        .map(|rep| auto_repeat_count(rep, Some(content_width), col_gap, em, viewport));
+    let auto_fill_col_tracks: Vec<GridTrackSize> = match (&s.grid_template_col_auto_repeat, col_repeat_count) {
+        (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
+        _ => Vec::new(),
+    };
     let eff_col_template: &[GridTrackSize] = if s.grid_template_col_auto_repeat.is_some() {
         &auto_fill_col_tracks
     } else {
         &s.grid_template_columns
+    };
+    // Rows repeat against the container's definite content height; an indefinite one repeats once.
+    let row_repeat_count = s
+        .grid_template_row_auto_repeat
+        .as_ref()
+        .map(|rep| auto_repeat_count(rep, definite_content_height, row_gap, em, viewport));
+    let auto_fill_row_tracks: Vec<GridTrackSize> = match (&s.grid_template_row_auto_repeat, row_repeat_count) {
+        (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
+        _ => Vec::new(),
+    };
+    let src_row_template: &[GridTrackSize] = if s.grid_template_row_auto_repeat.is_some() {
+        &auto_fill_row_tracks
+    } else {
+        &s.grid_template_rows
     };
 
     // CSS Masonry Layout (CSS Grid L3 §14) is not shipped by any stable browser —
@@ -185,9 +293,9 @@ pub(crate) fn build_grid_init(
     // strip the `masonry` sentinel from the effective track list on whichever axis
     // carries it, then fall through to the normal grid placement algorithm below.
     let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
-    let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
+    let row_is_masonry = src_row_template.first() == Some(&GridTrackSize::Masonry);
     let eff_col_template: &[GridTrackSize] = if col_is_masonry { &[] } else { eff_col_template };
-    let eff_row_template: &[GridTrackSize] = if row_is_masonry { &[] } else { &s.grid_template_rows };
+    let eff_row_template: &[GridTrackSize] = if row_is_masonry { &[] } else { src_row_template };
 
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
@@ -422,6 +530,31 @@ pub(crate) fn build_grid_init(
         .max(n_explicit_cols as u32);
     let n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
 
+    // CSS Grid L1 §7.2.3.2: `repeat(auto-fit, …)` tracks that hold no item collapse to zero
+    // (the gutters on both sides merge into one). Placement above used the full expanded list.
+    let covers = |track: usize, axis_col: bool| {
+        placements.iter().any(|&(cs, ce, rs, re)| {
+            let (a, b) = if axis_col { (cs, ce) } else { (rs, re) };
+            a != 0 && (a as usize - 1) <= track && track < (b.max(a + 1) as usize - 1)
+        })
+    };
+    let (col_tracks_collapsed, col_collapsed) = collapse_auto_fit(
+        eff_col_template,
+        s.grid_template_col_auto_repeat.as_ref(),
+        col_repeat_count.unwrap_or(0),
+        |t| covers(t, true),
+    );
+    let eff_col_template: &[GridTrackSize] = &col_tracks_collapsed;
+    let (row_tracks_collapsed, row_collapsed) = collapse_auto_fit(
+        eff_row_template,
+        s.grid_template_row_auto_repeat.as_ref(),
+        row_repeat_count.unwrap_or(0),
+        |t| covers(t, false),
+    );
+    let eff_row_template: &[GridTrackSize] = &row_tracks_collapsed;
+    // Collapsed tracks have no gutters: `col_gutters` / `row_gutters` count the real ones.
+    let col_gutters = gutter_count(&col_collapsed, n_cols as usize);
+
     // --- Step 3: Compute column widths ---
     // If the column axis is subgridded, use the inherited track sizes directly;
     // otherwise compute from the style as usual (CSS Grid L2 §9).
@@ -447,7 +580,7 @@ pub(crate) fn build_grid_init(
             .collect();
 
         // Total gap between columns.
-        let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
+        let total_col_gap = col_gap * col_gutters as f32;
         let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
         let free_col = (content_width - fixed_col_total).max(0.0);
 
@@ -487,17 +620,11 @@ pub(crate) fn build_grid_init(
         let (jc_start, jc_extra) = grid_content_distribution(
             s.justify_content,
             content_width - used_col_total,
-            n_cols as usize,
+            col_gutters + 1,
         );
 
-        // Column start offsets.
-        let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
-        let mut x_off = jc_start;
-        for c in 0..n_cols {
-            col_offsets.push(x_off);
-            x_off += col_widths[c as usize]
-                + if c < n_cols - 1 { col_gap + jc_extra } else { 0.0 };
-        }
+        // Column start offsets (a collapsed track takes no gutter).
+        let col_offsets = track_offsets(&col_widths, &col_collapsed, col_gap, jc_extra, jc_start);
 
         (col_widths, col_offsets)
     };
@@ -552,6 +679,7 @@ pub(crate) fn build_grid_init(
         col_widths,
         col_offsets,
         eff_row_template: eff_row_template.to_vec(),
+        row_collapsed,
         inherited_rows,
         row_heights,
         row_offsets: Vec::new(),

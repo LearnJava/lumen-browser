@@ -1506,3 +1506,38 @@ fn parent_first_child_margin_blocked_by_bfc() {
         expected_child_y, child.rect.y
     );
 }
+
+// CSS Grid L1 §7.2.3.2: fixed tracks around an auto repeat and `auto-fit` collapse (BUG-553 срез 17).
+
+#[test]
+fn grid_auto_repeat_keeps_fixed_tracks_around_repeat() {
+    // `50px repeat(auto-fill, 100px) 50px` in 400px: 50 + 3·100 + 50 = 400 → three repetitions.
+    let html = "<div class='grid'><div>A</div><div>B</div><div>C</div><div>D</div><div>E</div></div>";
+    let css = ".grid { display: grid; width: 400px; \
+               grid-template-columns: 50px repeat(auto-fill, 100px) 50px; }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(400.0, 300.0));
+    let items = collect_grid_item_rects(&root);
+    let widths: Vec<f32> = items.iter().map(|i| i.2.round()).collect();
+    assert_eq!(widths, vec![50.0, 100.0, 100.0, 100.0, 50.0], "{items:?}");
+}
+
+#[test]
+fn grid_auto_fit_collapses_empty_row_tracks_and_their_gutters() {
+    // Rows `100px repeat(auto-fit, 100px) 100px` in a 440px tall grid: the repeat expands to
+    // three tracks, all empty → collapsed. The items in the first and the last track are
+    // separated by a single 10px gutter.
+    let html = "<div class='grid'><div class='a'></div><div class='b'></div></div>";
+    let css = ".grid { display: grid; width: 100px; height: 440px; gap: 10px; align-content: start; \
+               grid-template-columns: 100px; \
+               grid-template-rows: 100px repeat(auto-fit, 100px) 100px; } \
+               .a { grid-row: 1; height: 100px } .b { grid-row: -2; height: 100px }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(400.0, 600.0));
+    let items = collect_grid_item_rects(&root);
+    assert_eq!(items.len(), 2, "{items:?}");
+    let dy = items[1].1 - items[0].1;
+    assert!((dy - 110.0).abs() < 0.5, "empty auto-fit tracks must collapse: {items:?}");
+}
