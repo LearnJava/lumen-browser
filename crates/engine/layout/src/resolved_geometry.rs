@@ -17,9 +17,11 @@
 //! Known gaps (keep the computed value, as before this slice):
 //! * `auto` margins outside block flow (flex/grid items, floats, abspos) —
 //!   their used value depends on sibling placement, not just the parent box.
-//! * `position: fixed` insets that are `auto` — the fixed box's page-space
-//!   `rect` includes the scroll offset at layout time, which this walk does
-//!   not know.
+//! * `position: fixed` insets that are `auto` under the viewport — the fixed
+//!   box's page-space `rect` includes the scroll offset at layout time, which
+//!   this walk does not know. Under an ancestor that contains fixed
+//!   descendants ([`GeomCtx::fixed_cb`]) the box moves with that ancestor, so
+//!   the geometry is exact and `auto` reports used px.
 //! * `position: sticky` insets — the used offset depends on the scroll
 //!   position at read time.
 
@@ -28,7 +30,7 @@ use lumen_core::geom::{Rect, Size};
 
 use crate::box_tree::{BoxKind, BoxRole, LayoutBox};
 use crate::style_map::StyleMap;
-use crate::style::{BoxSizing, ComputedStyle, Display, FloatSide, LengthOrAuto, Overflow, Position};
+use crate::style::{BoxSizing, ComputedStyle, ContainFlags, Display, FloatSide, LengthOrAuto, Overflow, Position};
 
 /// Key prefix under which [`apply_used_geometry`] keeps the *computed* value
 /// of every property it overwrites with a used one: `"computed:width"` →
@@ -75,6 +77,12 @@ pub(crate) struct GeomCtx {
     /// viewport — the scrollport `position: sticky` percentage insets resolve
     /// against (css-position §sticky-pos, csswg-drafts #3115).
     pub scrollport: Rect,
+    /// Padding box of the nearest ancestor that is a containing block for
+    /// fixed-position descendants (`transform`, `perspective`, `filter`,
+    /// `contain: layout|paint`, …), `None` when the viewport is — the
+    /// containing block of `position: fixed` children (css-transforms-1 §2,
+    /// css-position-3 §3.1).
+    pub fixed_cb: Option<Rect>,
 }
 
 impl GeomCtx {
@@ -83,7 +91,7 @@ impl GeomCtx {
     /// at the canvas origin.
     pub(crate) fn root(viewport: Size) -> Self {
         let icb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-        GeomCtx { flow_cb: icb, abs_cb: icb, parent_block_flow: true, scrollport: icb }
+        GeomCtx { flow_cb: icb, abs_cb: icb, parent_block_flow: true, scrollport: icb, fixed_cb: None }
     }
 }
 
@@ -107,6 +115,24 @@ fn reports_used_geometry(b: &LayoutBox) -> bool {
                 | BoxKind::FormControl { .. }
                 | BoxKind::SvgRoot { .. }
         )
+}
+
+/// Whether `s` makes its box the containing block of `position: fixed`
+/// descendants instead of the viewport: a transform (also the individual
+/// `translate`/`rotate`/`scale`), `perspective`, `filter`, `backdrop-filter`,
+/// `contain: layout|paint` or a `will-change` naming one of those
+/// (css-transforms-1 §2, filter-effects-1 §2, css-contain-2 §3.2/§3.3,
+/// css-will-change-1 §3).
+fn contains_fixed_descendants(s: &ComputedStyle) -> bool {
+    !s.transform.is_empty()
+        || s.translate.is_some()
+        || s.rotate.is_some()
+        || s.scale.is_some()
+        || s.perspective.is_some()
+        || !s.filter.is_empty()
+        || !s.backdrop_filter.is_empty()
+        || s.contain.0 & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0) != 0
+        || s.will_change.iter().any(|p| matches!(p.as_str(), "transform" | "perspective" | "filter"))
 }
 
 fn lays_out_block_flow(display: Display) -> bool {
@@ -158,7 +184,7 @@ fn relative_pair(start: Option<f32>, end: Option<f32>) -> (f32, f32) {
 fn containing_block(s: &ComputedStyle, ctx: &GeomCtx, vp: Size) -> Rect {
     match s.position {
         Position::Absolute => ctx.abs_cb,
-        Position::Fixed => Rect::new(0.0, 0.0, vp.width, vp.height),
+        Position::Fixed => ctx.fixed_cb.unwrap_or_else(|| Rect::new(0.0, 0.0, vp.width, vp.height)),
         _ => ctx.flow_cb,
     }
 }
@@ -169,7 +195,13 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
     let s = &b.style;
     let r = b.rect;
     if b.origin.role != BoxRole::Element {
-        return GeomCtx { flow_cb: r, abs_cb: ctx.abs_cb, parent_block_flow: ctx.parent_block_flow, scrollport: ctx.scrollport };
+        return GeomCtx {
+            flow_cb: r,
+            abs_cb: ctx.abs_cb,
+            parent_block_flow: ctx.parent_block_flow,
+            scrollport: ctx.scrollport,
+            fixed_cb: ctx.fixed_cb,
+        };
     }
     let (bt, br, bb, bl) = (s.border_top_width, s.border_right_width, s.border_bottom_width, s.border_left_width);
     let [pt, pr, pb, pl] = used_padding(s, containing_block(s, ctx, vp).width, vp);
@@ -187,6 +219,7 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
         abs_cb: if positioned { padding_box } else { ctx.abs_cb },
         parent_block_flow: lays_out_block_flow(s.display),
         scrollport: if scrolls(s.overflow_x) || scrolls(s.overflow_y) { padding_box } else { ctx.scrollport },
+        fixed_cb: if contains_fixed_descendants(s) { Some(padding_box) } else { ctx.fixed_cb },
     }
 }
 
@@ -244,20 +277,33 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
         Position::Absolute | Position::Fixed => {
             let margins = [&s.margin_top, &s.margin_right, &s.margin_bottom, &s.margin_left]
                 .map(|mg| resolve_opt(mg, em, cb.width, vp).unwrap_or(0.0));
-            let auto_geom = s.position == Position::Absolute;
+            // A fixed box under the viewport keeps `auto`: its page-space rect carries
+            // the scroll offset of layout time (module docs).
+            let auto_geom = s.position == Position::Absolute || ctx.fixed_cb.is_some();
             let sides: [(&str, &LengthOrAuto, f32, f32); 4] = [
                 ("top", &s.top, cb.height, r.y - margins[0] - cb.y),
                 ("right", &s.right, cb.width, cb.x + cb.width - (r.x + r.width) - margins[1]),
                 ("bottom", &s.bottom, cb.height, cb.y + cb.height - (r.y + r.height) - margins[2]),
                 ("left", &s.left, cb.width, r.x - margins[3] - cb.x),
             ];
-            for (name, val, basis, from_geom) in sides {
-                match resolve_opt(val, em, basis, vp) {
+            let spec = sides.map(|(_, val, basis, _)| resolve_opt(val, em, basis, vp));
+            for (i, (name, _, _, from_geom)) in sides.iter().enumerate() {
+                match spec[i] {
                     Some(v) => {
                         set_used(m, name, px(v));
                     }
                     None if auto_geom => {
-                        set_used(m, name, px(from_geom));
+                        // A fixed box is still laid out against the viewport, so its
+                        // `rect` says nothing about an inset whose opposite side is set:
+                        // that side follows from CSS 2.1 §10.6.4 against the real
+                        // containing block instead.
+                        let opposite = spec[(i + 2) % 4];
+                        let used = match (s.position, opposite, i % 2) {
+                            (Position::Fixed, Some(o), 0) => cb.height - o - r.height - margins[0] - margins[2],
+                            (Position::Fixed, Some(o), _) => cb.width - o - r.width - margins[1] - margins[3],
+                            _ => *from_geom,
+                        };
+                        set_used(m, name, px(used));
                     }
                     None => {}
                 }

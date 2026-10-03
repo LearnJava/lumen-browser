@@ -582,6 +582,29 @@ use super::*;
         assert_eq!(prop(&s, "left"), "200px", "25% of the 800px viewport width");
     }
 
+    /// CSSOM-9-S2 (BUG-472): the containing block of `position: fixed` under an
+    /// ancestor with `transform` is that ancestor's padding box, not the viewport
+    /// (css-transforms-1 §2) — percentage insets resolve against it and `auto`
+    /// insets report used px. Mirrors `#container-for-fixed` of
+    /// `getComputedStyle-insets.js`: padding box 600x300.
+    #[test]
+    fn resolved_fixed_insets_use_transformed_ancestor_padding_box() {
+        let html = "<html><body><div id=c style=\"position:absolute;transform:scale(1);height:172px;width:344px;padding:64px 128px;border:solid;border-width:128px 256px;margin:256px 512px\"><div id=a style=\"position:fixed;top:10%;height:20px;width:20px\"></div></div></body></html>";
+        let s = resolved_style_of(html, "body{margin:0}", "#a");
+        assert_eq!(prop(&s, "top"), "30px", "10% of the 300px padding box, not the 600px viewport");
+        assert_eq!(prop(&s, "left"), "128px", "auto: static position, the container's left padding");
+        assert_eq!(prop(&s, "right"), "452px", "600 - 128 - 20");
+        assert_eq!(prop(&s, "bottom"), "250px", "300 - 30 - 20");
+
+        let html = "<html><body><div style=\"height:400px;contain:paint\"><div id=a style=\"position:fixed;top:10%;height:20px;width:20px\"></div></div></body></html>";
+        let s = resolved_style_of(html, "body{margin:0}", "#a");
+        assert_eq!(prop(&s, "top"), "40px", "contain: paint is a fixed containing block too: 10% of 400px");
+
+        let html = "<html><body><div style=\"height:400px\"><div id=a style=\"position:fixed;top:10%;height:20px;width:20px\"></div></div></body></html>";
+        let s = resolved_style_of(html, "body{margin:0}", "#a");
+        assert_eq!(prop(&s, "top"), "60px", "no transformed ancestor: 10% of the 600px viewport");
+    }
+
     /// CSSOM-9 (BUG-472): a non-replaced inline element has no box of its own
     /// and `width` does not apply to it — the computed `auto` stays.
     #[test]
