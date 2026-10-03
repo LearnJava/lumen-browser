@@ -456,6 +456,7 @@ mod flex_align_content;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
+mod bug935_attr_local_roots;
 mod bug935_shallow_roots;
 mod bug935_cascade_bench;
 mod bfc_margin_collapse;
