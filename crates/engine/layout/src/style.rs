@@ -221,7 +221,7 @@ pub use values::dynamic_range_limit::{DynamicRangeLimit, DynamicRangeLimitKeywor
 // module for the same reason as `dynamic_range_limit` above.
 pub use values::text_size_adjust::TextSizeAdjust;
 pub use values::box_model::{
-    BorderCollapse, BorderStyle, BoxSizing, BreakValue, ClearSide, EmptyCells, FillRule,
+    BorderCollapse, BorderStyle, BoxSizing, BreakValue, CaptionSide, ClearSide, EmptyCells, FillRule, TableLayout,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,
     StrokeLinecap, StrokeLinejoin, SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPaintOrder,
     VerticalAlign,

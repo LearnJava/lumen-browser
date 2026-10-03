@@ -2025,7 +2025,7 @@ pub(super) fn dispatch_box(
             // explicit heap stack instead of recursing.
             let init = table::build_table_init(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb,
-                em, available_height, padding_top, padding_bottom,
+                em, available_height, padding_top, padding_bottom, hp,
             );
             return DispatchOutcome::NeedsTableLoop(init);
         }

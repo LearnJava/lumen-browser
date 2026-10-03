@@ -70,6 +70,9 @@ pub(super) struct TableInit {
     pub(super) available_height: Option<f32>,
     pub(super) padding_top: f32,
     pub(super) padding_bottom: f32,
+    /// Indices (into the table's `children`) of `caption-side: bottom` captions, placed by
+    /// `finish_table` once the rows' extent is known.
+    pub(super) bottom_captions: Vec<usize>,
 }
 
 /// One level of the explicit stack `run` maintains in place of the native
@@ -156,7 +159,7 @@ pub(super) fn run(
 
     loop {
         if current.t >= current.init.top_level.len() {
-            finish_table(&mut current, viewport);
+            finish_table(&mut current, measurer, viewport, hp);
             match stack.pop() {
                 None => {
                     *b = current.b;
@@ -440,7 +443,12 @@ fn finish_entry(frame: &mut Frame, viewport: Size) {
 /// (matching the removed `lay_out_table`'s tail), then the explicit-`height`
 /// override (either mode), then non-collapse content-derived auto height.
 /// Copied from the removed code's tail plus the dispatch arm.
-fn finish_table(frame: &mut Frame, viewport: Size) {
+fn finish_table(
+    frame: &mut Frame,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
     for &(group, row, child_idx, start_flat, span) in &frame.init.span_fixes {
         let end_flat = (start_flat + span as usize).min(frame.init.flat_row_rects.len());
         if end_flat == 0 {
@@ -457,6 +465,25 @@ fn finish_table(frame: &mut Frame, viewport: Size) {
 
     let s = Arc::clone(&frame.init.s);
 
+    // CSS Tables L2 §17.4 — `caption-side: bottom` captions stack below the last row. Collapse
+    // mode ends at the last row's bottom edge; separate mode at `cur_y` (which already includes
+    // the trailing `border-spacing` slot).
+    let mut bottom_caption_h = 0.0_f32;
+    if !frame.init.bottom_captions.is_empty() {
+        let grid_bottom = if frame.init.collapse {
+            frame.init.flat_row_rects.last().map_or(frame.init.cur_y, |&(y, h)| y + h)
+        } else {
+            frame.init.cur_y
+        };
+        let (x, w, pcb) = (frame.init.content_x, frame.init.content_width, frame.init.children_pcb);
+        for k in 0..frame.init.bottom_captions.len() {
+            let idx = frame.init.bottom_captions[k];
+            let y = grid_bottom + bottom_caption_h;
+            bottom_caption_h +=
+                super::table::lay_out_caption(&mut frame.b.children[idx], x, y, w, measurer, viewport, pcb, hp);
+        }
+    }
+
     if frame.init.collapse {
         if s.width.is_none() && frame.init.n_cols > 0 {
             frame.b.rect.width = frame.init.collapse_width;
@@ -467,7 +494,8 @@ fn finish_table(frame: &mut Frame, viewport: Size) {
                 .flat_row_rects
                 .last()
                 .map(|&(y, h)| (y + h - frame.b.rect.y).max(0.0))
-                .unwrap_or(0.0);
+                .unwrap_or(frame.init.cur_y - frame.b.rect.y)
+                + bottom_caption_h;
         }
     }
 
@@ -484,7 +512,7 @@ fn finish_table(frame: &mut Frame, viewport: Size) {
             ),
         };
     } else if !frame.init.collapse {
-        let content_height = (frame.init.cur_y - frame.init.content_y).max(0.0);
+        let content_height = (frame.init.cur_y - frame.init.content_y).max(0.0) + bottom_caption_h;
         frame.b.rect.height = content_height
             + frame.init.padding_top + frame.init.padding_bottom
             + s.border_top_width + s.border_bottom_width;

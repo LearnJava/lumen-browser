@@ -866,6 +866,12 @@ fn apply_css_wide_keyword_with(
         "border-collapse" => {
             style.border_collapse = if inh_only_inherit { inherited.border_collapse } else { init.border_collapse };
         }
+        "caption-side" => {
+            style.caption_side = if inh { inherited.caption_side } else { init.caption_side };
+        }
+        "table-layout" => {
+            style.table_layout = if inh_only_inherit { inherited.table_layout } else { init.table_layout };
+        }
         "empty-cells" => {
             style.empty_cells = if inh_only_inherit { inherited.empty_cells } else { init.empty_cells };
         }

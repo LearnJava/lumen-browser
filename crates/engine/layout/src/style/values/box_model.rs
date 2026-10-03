@@ -178,6 +178,50 @@ impl EmptyCells {
     }
 }
 
+/// CSS Tables L2 §17.4.1 — `caption-side`. Inherited. Initial: `Top`.
+/// Which side of the table grid box a `display: table-caption` box is placed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionSide {
+    /// Caption above the table grid box.
+    #[default]
+    Top,
+    /// Caption below the table grid box.
+    Bottom,
+}
+
+impl CaptionSide {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "top" => Some(Self::Top),
+            "bottom" => Some(Self::Bottom),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Tables L2 §17.5.2 — `table-layout`. Not inherited. Initial: `Auto`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableLayout {
+    /// Automatic algorithm: column widths depend on cell content.
+    #[default]
+    Auto,
+    /// Fixed algorithm: column widths come from the table `width`, `<col>`s and the
+    /// first row only; content never widens a column (applies only when `width` is not `auto`).
+    Fixed,
+}
+
+impl TableLayout {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "auto" => Some(Self::Auto),
+            "fixed" => Some(Self::Fixed),
+            _ => None,
+        }
+    }
+}
+
 /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
 /// Controls how the interior of a shape is determined for overlapping contours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
