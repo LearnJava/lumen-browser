@@ -457,15 +457,10 @@ impl<'a> ScopedCollection<'a> {
     /// The boxes whose scroll containers the scroll-state cache has to re-read: a collected
     /// whole item brings its subtree, a spine box only itself.
     pub fn scroll_containers(&self) -> Vec<crate::ScrollContainer> {
-        let mut out = Vec::new();
-        for it in &self.items {
-            if it.whole {
-                crate::collect_scroll_containers_for_js_state_scoped(&[it.b]).into_iter().for_each(|c| out.push(c));
-            } else {
-                out.extend(crate::scroll_container_of(it.b));
-            }
-        }
-        out
+        // BUG-935 срез 75: one walk from the topmost item. A spine box's extent used to be a walk of
+        // its own subtree, so a chain `html > body > …` walked the document once per link.
+        let items: Vec<_> = self.items.iter().map(|it| (it.b, it.whole)).collect();
+        crate::scroll_rollup::collect_for_items(&items)
     }
 
     /// Rebuilds the planned boxes' `getBoundingClientRect` entries and overwrites
@@ -854,6 +849,35 @@ mod tests {
         let plan = ScopedCollection::plan(&after, &dirty, &clean, &published(&before), VIEWPORT, None);
         assert!(planned(&plan, 50.0).is_empty(), "the unmoved clean sibling is skipped");
         assert_eq!(planned(&plan, 20.0), [(true, true)]);
+    }
+
+    /// BUG-935 срез 75: the plan's scroll containers come from one rollup walk; they are what the
+    /// item-by-item collection (each spine box walking its own subtree) published.
+    #[test]
+    fn the_planned_scroll_containers_are_what_the_item_by_item_collection_published() {
+        let doc = lumen_html_parser::parse(
+            "<body style=\"margin:0\"><div id=\"o\" style=\"width:100px;height:40px\">             <div id=\"s\" style=\"overflow:hidden;width:50px;height:20px\"><div style=\"height:300px;width:400px\"></div></div>             <div id=\"d\" style=\"height:10px\"></div><div id=\"e\" style=\"margin-left:-30px;width:300px;height:10px\"></div></div></body>",
+        );
+        let after = crate::layout(&doc, &lumen_css_parser::parse(""), VIEWPORT);
+        let dirty = HashSet::from([doc.find_by_id("d").unwrap()]);
+        let plan = ScopedCollection::plan(&after, &dirty, &HashSet::new(), &published(&after), VIEWPORT, None);
+        assert!(plan.items.iter().any(|it| it.whole) && plan.items.iter().any(|it| !it.whole), "needs a spine and a whole item");
+        let mut old = Vec::new();
+        for it in &plan.items {
+            if it.whole {
+                old.extend(crate::collect_scroll_containers_for_js_state_scoped(&[it.b]));
+            } else {
+                let mut one = Vec::new();
+                crate::scroll_container_into(it.b, &mut one, true);
+                old.extend(one);
+            }
+        }
+        let key = |c: &crate::ScrollContainer| {
+            (c.node, c.clip_rect.width.to_bits(), c.clip_rect.height.to_bits(), c.scroll_width.to_bits(), c.scroll_height.to_bits())
+        };
+        let new = plan.scroll_containers();
+        assert!(!new.is_empty());
+        assert_eq!(new.iter().map(key).collect::<Vec<_>>(), old.iter().map(key).collect::<Vec<_>>());
     }
 
     struct Fixed;
