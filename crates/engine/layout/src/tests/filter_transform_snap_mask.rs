@@ -770,7 +770,7 @@ fn env_fallback_used_when_unknown() {
     // env() с unknown name + fallback → fallback применяется.
     let root = lay(
         "<p>x</p>",
-        "p { padding: env(safe-area-inset-top, 12px); }",
+        "p { padding: env(unknown-name, 12px); }",
     );
     assert_eq!(first_p_style(&root).padding_top, Length::Px(12.0));
 }
@@ -780,14 +780,14 @@ fn env_without_fallback_invalidates_decl() {
     // env() с unknown name и без fallback — декларация невалидна.
     let root = lay(
         "<p>x</p>",
-        "p { padding: env(safe-area-inset-top); }",
+        "p { padding: env(unknown-name); }",
     );
     assert_eq!(first_p_style(&root).padding_top, Length::Px(0.0));
 }
 
 #[test]
-fn env_with_indices_ignored_phase0() {
-    // `env(name 0, fallback)` — индекс игнорируется, имя = name.
+fn env_with_indices_unknown_name_uses_fallback() {
+    // `viewport-segment-*` в реестре нет (один сегмент) → fallback.
     let root = lay(
         "<p>x</p>",
         "p { padding: env(viewport-segment-width 0 0, 25px); }",
@@ -796,11 +796,78 @@ fn env_with_indices_ignored_phase0() {
 }
 
 #[test]
+fn env_safe_area_inset_is_zero_and_ignores_fallback() {
+    // UA-реестр: safe-area-inset-* определены (0px на десктопе) —
+    // fallback не используется (Chrome: `env(safe-area-inset-top, 20px)` = 0).
+    let root = lay(
+        "<p>x</p>",
+        "p { padding-top: env(safe-area-inset-top, 20px);            padding-right: env(safe-area-inset-right, 21px);            padding-bottom: env(safe-area-inset-bottom, 22px);            padding-left: env(safe-area-inset-left, 23px); }",
+    );
+    let st = first_p_style(&root);
+    assert_eq!(st.padding_top, Length::Px(0.0));
+    assert_eq!(st.padding_right, Length::Px(0.0));
+    assert_eq!(st.padding_bottom, Length::Px(0.0));
+    assert_eq!(st.padding_left, Length::Px(0.0));
+}
+
+#[test]
+fn env_safe_area_without_fallback_resolves_to_zero() {
+    let root = lay("<p>x</p>", "p { padding: env(safe-area-inset-top); }");
+    assert_eq!(first_p_style(&root).padding_top, Length::Px(0.0));
+    let root = lay(
+        "<p>x</p>",
+        "p { padding-top: 7px; padding-top: calc(env(safe-area-inset-top) + 3px); }",
+    );
+    let vp = Size::new(800.0, 600.0);
+    let v = first_p_style(&root).padding_top.resolve_or_zero(16.0, 0.0, vp);
+    assert!((v - 3.0).abs() < 1e-6, "got {v}");
+}
+
+#[test]
+fn env_keyboard_inset_is_zero_when_keyboard_hidden() {
+    for name in [
+        "keyboard-inset-top",
+        "keyboard-inset-right",
+        "keyboard-inset-bottom",
+        "keyboard-inset-left",
+        "keyboard-inset-width",
+        "keyboard-inset-height",
+    ] {
+        let css = format!("p {{ padding-top: env({name}, 9px); }}");
+        let root = lay("<p>x</p>", &css);
+        assert_eq!(first_p_style(&root).padding_top, Length::Px(0.0), "{name}");
+    }
+}
+
+#[test]
+fn env_titlebar_area_falls_back_outside_window_controls_overlay() {
+    // titlebar-area-* определены только в режиме window-controls-overlay.
+    let root = lay("<p>x</p>", "p { padding-top: env(titlebar-area-height, 11px); }");
+    assert_eq!(first_p_style(&root).padding_top, Length::Px(11.0));
+}
+
+#[test]
+fn env_indexed_access_to_non_indexed_variable_uses_fallback() {
+    // safe-area-inset-top — скаляр: лишний индекс = несовпадение размерности.
+    let root = lay("<p>x</p>", "p { padding-top: env(safe-area-inset-top 0, 13px); }");
+    assert_eq!(first_p_style(&root).padding_top, Length::Px(13.0));
+}
+
+#[test]
+fn env_safe_area_inside_var_fallback_and_custom_property() {
+    let root = lay(
+        "<p>x</p>",
+        "p { --inset: env(safe-area-inset-left, 4px); padding-left: var(--inset); }",
+    );
+    assert_eq!(first_p_style(&root).padding_left, Length::Px(0.0));
+}
+
+#[test]
 fn env_inside_calc() {
     // calc(env(...) + 5px) — env разворачивается до calc(); resolve = 15px.
     let root = lay(
         "<p>x</p>",
-        "p { padding: calc(env(safe-area-inset-top, 10px) + 5px); }",
+        "p { padding: calc(env(unknown-name, 10px) + 5px); }",
     );
     let vp = Size::new(800.0, 600.0);
     let v = first_p_style(&root).padding_top.resolve_or_zero(16.0, 0.0, vp);
@@ -812,7 +879,7 @@ fn env_inside_var_fallback() {
     // var(--foo, env(name, 8px)) — env как fallback внутри var().
     let root = lay(
         "<p>x</p>",
-        "p { padding: var(--missing, env(safe-area-inset-top, 8px)); }",
+        "p { padding: var(--missing, env(unknown-name, 8px)); }",
     );
     assert_eq!(first_p_style(&root).padding_top, Length::Px(8.0));
 }
