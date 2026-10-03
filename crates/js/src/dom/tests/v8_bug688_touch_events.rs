@@ -109,3 +109,27 @@ fn touch_globals_are_non_enumerable_and_handlers_stay_hidden() {
         "false,false,false"
     );
 }
+
+/// TOUCH-1-S3: `_lumen_dispatch_touch_event` builds the three lists from
+/// descriptors and delivers a trusted, bubbling `TouchEvent` to the ancestor.
+#[test]
+fn dispatch_touch_event_builds_lists_and_bubbles_to_ancestor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = s(
+        &rt,
+        "(function(){            var parent = document.createElement('div'); document.body.appendChild(parent);            var a = document.createElement('span'); parent.appendChild(a);            var b = document.createElement('span'); parent.appendChild(b);            var got = null;            parent.addEventListener('touchstart', function(e) { got = e; });            var da = {identifier: 7, target_nid: a.__nid__, clientX: 10, clientY: 20, radiusX: 3, radiusY: 4, force: 0.5};            var db = {identifier: 8, target_nid: b.__nid__, clientX: 30, clientY: 40};            var notCancelled = _lumen_dispatch_touch_event(a.__nid__, 'touchstart', [da, db], [db], [da], 2);            return [got instanceof TouchEvent, got.isTrusted, got.bubbles, got.cancelable, notCancelled,                    got.touches.length, got.changedTouches.length, got.targetTouches.length,                    got.changedTouches[0].identifier, got.changedTouches[0].target === b,                    got.targetTouches[0].target === a, got.touches[0].clientX, got.touches[0].radiusY,                    got.touches[0].force, got.touches[1].radiusX, got.shiftKey, got.ctrlKey].join();          })()",
+    );
+    assert_eq!(r, "true,true,true,true,true,2,1,1,8,true,true,10,4,0.5,0,true,false");
+}
+
+/// A listener's `preventDefault()` shows as `false` (the `dispatchEvent`
+/// result); `touchcancel` is the one type that is not cancelable (L2 §5).
+#[test]
+fn dispatch_touch_event_reports_cancellation_and_touchcancel_is_not_cancelable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = s(
+        &rt,
+        "(function(){            var el = document.createElement('div'); document.body.appendChild(el);            var d = {identifier: 1, target_nid: el.__nid__, clientX: 1, clientY: 2};            var cancelable = {};            ['touchstart', 'touchmove', 'touchend', 'touchcancel'].forEach(function(t) {              el.addEventListener(t, function(e) { cancelable[t] = e.cancelable; e.preventDefault(); });            });            var res = ['touchstart', 'touchend', 'touchcancel'].map(function(t) {              return _lumen_dispatch_touch_event(el.__nid__, t, [d], [d], [d], 0); });            return [res.join(), cancelable.touchstart, cancelable.touchend, cancelable.touchcancel].join('|');          })()",
+    );
+    assert_eq!(r, "false,false,true|true|true|false");
+}
