@@ -104,3 +104,7 @@ keywords) in the parser, and (4) re-verifying `CAPABILITIES.md`/
 ## Срез 2 (P4, 2026-10-03, p4-gap-rule-visibility)
 
 Разобраны, каскадируются (non-inherited, CSS-wide, `getComputedStyle`) `column-rule-break`/`row-rule-break`/`rule-break`, `*-rule-visibility-items`/`rule-visibility-items` и `rule-overlap`; `rule-overlap` уже задаёт порядок рисования осей. `*-rule-break` и `*-rule-visibility-items` хранятся, но paint их не читает — нужна геометрия сегментов по таблицам треков grid (`col_offsets`/`row_offsets` в `grid_trampoline.rs`), сейчас `collect_gap_segments` восстанавливает щели по краям детей. Остаток: `<gap-rule-list>`/`repeat()`, `*-rule-inset*`, paint для break/visibility, интерполяция.
+
+## Срез 3 (P4, 2026-10-03, p4-gap-rule-inset)
+
+Разобраны, каскадируются (non-inherited, CSS-wide, `getComputedStyle`) все `*-rule-inset*`: восемь longhand-ов `{column,row}-rule-inset-{cap,junction}-{start,end}`, шортхенды `-start`/`-end`/`-cap`/`-junction`, `{column,row}-rule-inset` (`cap-start cap-end? [/ junction-start junction-end?]?`) и `rule-inset*` (обе оси); значение `<length-percentage> | overlap-join`. Paint применяет **cap**-вставки: отрезки идут на всю длину контейнера, их концы — края контейнера, где ширина пересекающей щели 0 (`%` и `overlap-join` → 0); ось строк зеркалится при `direction: rtl`. **Junction**-вставки хранятся, но не читаются — нужны посегментные разрывы (`*-rule-break`) по таблицам треков. Остаток: `<gap-rule-list>`/`repeat()`, paint для break/visibility/junction-inset, интерполяция.

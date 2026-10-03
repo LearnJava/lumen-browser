@@ -5,6 +5,7 @@
 //! (анкер `fn apply_css_wide_keyword`) без правок тела: изменены только
 //! видимость функции и пути импортов.
 
+use crate::style::values::misc::RuleInsetProp;
 use crate::style::{ComputedStyle, CssWideKeyword, Display, WhiteSpace};
 
 
@@ -737,6 +738,19 @@ fn apply_css_wide_keyword_with(
         }
         "rule-overlap" => {
             style.rule_overlap = if inh_only_inherit { inherited.rule_overlap } else { init.rule_overlap };
+        }
+        p if RuleInsetProp::of(p).is_some() => {
+            let src = if inh_only_inherit { inherited } else { init };
+            if let Some(rp) = RuleInsetProp::of(p) {
+                for &slot in rp.slots() {
+                    if rp.cols {
+                        *style.column_rule_inset.slot_mut(slot) = src.column_rule_inset.slot(slot).clone();
+                    }
+                    if rp.rows {
+                        *style.row_rule_inset.slot_mut(slot) = src.row_rule_inset.slot(slot).clone();
+                    }
+                }
+            }
         }
         "opacity" => {
             style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };

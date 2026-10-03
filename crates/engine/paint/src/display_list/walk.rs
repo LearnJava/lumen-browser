@@ -658,6 +658,20 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     let mut segments: Vec<GapSegment> = Vec::new();
     const EPS: f32 = 1.5; // tolerance for float layout rounding
 
+    // CSS Gap Decorations L1 §3.3: segments run the full container length, so their
+    // only endpoints are container edges — cap endpoints, where the crossing gap width
+    // is 0 (a percentage resolves to 0, `overlap-join` is treated as 0). Junction insets
+    // need per-segment breaks (`*-rule-break`) and are not consulted yet.
+    let cap_px = |inset: &lumen_layout::RuleInset| match inset {
+        lumen_layout::RuleInset::Length(l) => l.resolve_or_zero(em, 0.0, vp),
+        lumen_layout::RuleInset::OverlapJoin => 0.0,
+    };
+    let (col_start, col_end) =
+        (cap_px(&s.column_rule_inset.cap_start), cap_px(&s.column_rule_inset.cap_end));
+    let (row_start, row_end) =
+        (cap_px(&s.row_rule_inset.cap_start), cap_px(&s.row_rule_inset.cap_end));
+    let rtl = s.direction == lumen_layout::Direction::Rtl;
+
     if column_rule_visible && col_gap_px > 0.0 {
         // Collect unique right-edges of children.
         let mut rights: Vec<f32> =
@@ -669,9 +683,11 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
         let lefts: Vec<f32> = children.iter().map(|c| c.rect.x).collect();
         for right in &rights {
             let expected = right + col_gap_px;
-            if lefts.iter().any(|l| (*l - expected).abs() < EPS) {
+            if lefts.iter().any(|l| (*l - expected).abs() < EPS)
+                && let Some((y, h)) = inset_span(cy, ch, col_start, col_end, false)
+            {
                 segments.push(GapSegment {
-                    rect: Rect::new(*right, cy, col_gap_px, ch),
+                    rect: Rect::new(*right, y, col_gap_px, h),
                     horizontal: false,
                 });
             }
@@ -688,9 +704,11 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
         let tops: Vec<f32> = children.iter().map(|c| c.rect.y).collect();
         for bottom in &bottoms {
             let expected = bottom + row_gap_px;
-            if tops.iter().any(|t| (*t - expected).abs() < EPS) {
+            if tops.iter().any(|t| (*t - expected).abs() < EPS)
+                && let Some((x, w)) = inset_span(cx, cw, row_start, row_end, rtl)
+            {
                 segments.push(GapSegment {
-                    rect: Rect::new(cx, *bottom, cw, row_gap_px),
+                    rect: Rect::new(x, *bottom, w, row_gap_px),
                     horizontal: true,
                 });
             }

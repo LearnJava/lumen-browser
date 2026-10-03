@@ -39,6 +39,18 @@ pub struct GapSegment {
     pub horizontal: bool,
 }
 
+/// CSS Gap Decorations L1 §3.3 — сдвигает концы отрезка щели вдоль её оси.
+///
+/// `origin`/`len` — протяжённость отрезка по оси щели; `start`/`end` — вычисленные
+/// `*-rule-inset-cap-start/-end` в px (положительное укорачивает, отрицательное
+/// удлиняет). `reversed` — ось идёт справа налево (`row-rule` при `direction: rtl`):
+/// «начало» тогда у правого края. Возвращает `None`, если отрезок схлопнулся.
+pub fn inset_span(origin: f32, len: f32, start: f32, end: f32, reversed: bool) -> Option<(f32, f32)> {
+    let (lo, hi) = if reversed { (end, start) } else { (start, end) };
+    let new_len = len - lo - hi;
+    (new_len > 0.0).then_some((origin + lo, new_len))
+}
+
 /// Emits [`DisplayCommand::DrawBorder`] entries for gap decorations between
 /// flex/grid/multicol cells.
 ///
@@ -214,5 +226,18 @@ mod tests {
         } else {
             panic!("expected DrawBorder");
         }
+    }
+
+    #[test]
+    fn inset_span_shortens_and_extends() {
+        assert_eq!(inset_span(10.0, 100.0, 0.0, 0.0, false), Some((10.0, 100.0)));
+        assert_eq!(inset_span(10.0, 100.0, 5.0, 15.0, false), Some((15.0, 80.0)));
+        // Negative insets extend past the edges.
+        assert_eq!(inset_span(10.0, 100.0, -5.0, -5.0, false), Some((5.0, 110.0)));
+        // Reversed axis: the start inset applies at the far (right) edge.
+        assert_eq!(inset_span(10.0, 100.0, 5.0, 15.0, true), Some((25.0, 80.0)));
+        // A collapsed span disappears.
+        assert_eq!(inset_span(10.0, 100.0, 50.0, 50.0, false), None);
+        assert_eq!(inset_span(10.0, 100.0, 60.0, 60.0, false), None);
     }
 }

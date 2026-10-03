@@ -1249,6 +1249,12 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         style.row_rule_visibility_items.to_css().into(),
     );
     m.insert("rule-overlap".into(), style.rule_overlap.to_css().into());
+    // §3.3 — `<inset-value>` longhands, computed = specified.
+    for (axis, insets) in [("column", &style.column_rule_inset), ("row", &style.row_rule_inset)] {
+        for (i, part) in ["cap-start", "cap-end", "junction-start", "junction-end"].iter().enumerate() {
+            m.insert(format!("{axis}-rule-inset-{part}"), insets.slot(i).to_css());
+        }
+    }
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
