@@ -5245,9 +5245,51 @@ function _wa_lerp_dynamic_range_limit(a, b, t) {
     ]);
 }
 
+// CSS Gap Decorations L1 §4.7 — `column-rule-*`/`row-rule-*` width, color and
+// inset longhands interpolate as `<gap-rule-list>`s (repeat() expansion, lcm of
+// list lengths, premultiplied colours); the arithmetic lives in Rust
+// (`style/values/rule_interp.rs`, native `_lumen_css_interpolate_gap_rule`).
+var _wa_gap_prop_re = /^(column|row)Rule(Width|Color|Inset(Cap|Junction)(Start|End))$/;
+function _wa_is_gap_prop(p) { return _wa_gap_prop_re.test(p); }
+
+// Specified value -> something the Rust interpolator can parse: CSS-wide
+// keywords become their value (all gap properties are non-inherited, so `unset`
+// is `initial`), `currentcolor` becomes the target's computed `color`.
+function _wa_gap_resolve(eff, prop, v) {
+    if (v == null) return v;
+    v = String(v).trim();
+    var tgt = eff && eff.target;
+    var kw = v.toLowerCase();
+    var isColor = /Color$/.test(prop);
+    var initial = /Width$/.test(prop) ? '3px' : (isColor ? 'currentcolor' : '0px');
+    if (kw === 'initial' || kw === 'unset') {
+        v = initial;
+    } else if (kw === 'inherit') {
+        v = initial;
+        try {
+            var par = tgt && tgt.parentElement;
+            if (par) v = getComputedStyle(par)[prop] || initial;
+        } catch (e) {}
+    }
+    if (isColor && /currentcolor/i.test(v)) {
+        var cc = 'rgb(0, 0, 0)';
+        try { cc = getComputedStyle(tgt).color || cc; } catch (e) {}
+        v = v.replace(/currentcolor/gi, cc);
+    }
+    return v;
+}
+
+function _wa_gap_interp(prop, from, to, t) {
+    var kebab = prop.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
+    var r = _lumen_css_interpolate_gap_rule(kebab, String(from), String(to), t);
+    if (r == null) return t < 0.5 ? from : to;
+    return r;
+}
+
 // Interpolate a single CSS property value between two string values.
 function _wa_interp_prop(prop, from, to, t) {
     if (from === to) return from;
+    if (_wa_gap_prop_re.test(prop)) return _wa_gap_interp(prop, from, to, t);
     if (_wa_color_props[prop]) return _wa_lerp_color(from, to, t);
     if (prop === 'opacity') {
         var fa2 = parseFloat(from), fb2 = parseFloat(to);
@@ -5333,6 +5375,16 @@ function _wa_composite_value(prop, under, v, mode) {
 function _wa_compute_at_p(effect, p) {
     var kfs = effect._keyframes;
     if (!kfs || !kfs.length) return {};
+    // §5.3 implicit 0%/100% keyframes (the "neutral keyframe"): a gap-decoration
+    // property with no keyframe at an end interpolates to/from the underlying value.
+    var hasGap = false;
+    for (var gi = 0; gi < kfs.length && !hasGap; gi++) {
+        for (var gk in kfs[gi]) { if (_wa_gap_prop_re.test(gk)) { hasGap = true; break; } }
+    }
+    if (hasGap) {
+        if (kfs[0].offset > 0) kfs = [{ offset: 0, easing: 'linear', composite: 'auto' }].concat(kfs);
+        if (kfs[kfs.length - 1].offset < 1) kfs = kfs.concat([{ offset: 1, easing: 'linear', composite: 'auto' }]);
+    }
     // Find surrounding keyframe pair.
     var from = kfs[0], to = kfs[kfs.length - 1];
     for (var i = 0; i < kfs.length - 1; i++) {
@@ -5352,13 +5404,33 @@ function _wa_compute_at_p(effect, p) {
         var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
         return _wa_composite_value(prop, under[prop], kf[prop], mode);
     }
+    // Gap-decoration values are resolved (keywords, currentcolor) before they meet
+    // the interpolator; an end without the property takes the underlying value.
+    function val(kf, prop) {
+        var v = comp(kf, prop);
+        return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : v;
+    }
+    function under_val(prop) {
+        return _wa_gap_resolve(effect, prop, under[prop]);
+    }
     for (var fp in from) {
         if (fp === 'offset' || fp === 'easing' || fp === 'composite') continue;
-        result[fp] = (fp in to) ? _wa_interp_prop(fp, comp(from, fp), comp(to, fp), lt) : comp(from, fp);
+        if (fp in to) {
+            result[fp] = _wa_interp_prop(fp, val(from, fp), val(to, fp), lt);
+        } else if (_wa_gap_prop_re.test(fp) && under[fp]) {
+            result[fp] = _wa_interp_prop(fp, val(from, fp), under_val(fp), lt);
+        } else {
+            result[fp] = comp(from, fp);
+        }
     }
     for (var tp in to) {
         if (tp === 'offset' || tp === 'easing' || tp === 'composite') continue;
-        if (!(tp in result)) result[tp] = comp(to, tp);
+        if (tp in result) continue;
+        if (_wa_gap_prop_re.test(tp) && under[tp]) {
+            result[tp] = _wa_interp_prop(tp, under_val(tp), val(to, tp), lt);
+        } else {
+            result[tp] = comp(to, tp);
+        }
     }
     return result;
 }
@@ -5836,7 +5908,7 @@ function _wa_capture_underlying(anim, eff) {
     for (var pr in props) {
         var iv = '';
         try { iv = tgt.style[pr]; } catch (e) {}
-        if (!iv && composites) {
+        if (!iv && (composites || _wa_gap_prop_re.test(pr))) {
             try {
                 if (!cs) cs = getComputedStyle(tgt);
                 iv = cs[pr];
