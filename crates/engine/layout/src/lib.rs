@@ -48,6 +48,7 @@ pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
+pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
 pub mod scroll_initial_target;
@@ -2357,9 +2358,9 @@ pub fn find_box_by_node(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&La
 /// `NodeId` labels more than one box (an anonymous wrapper and the element's
 /// own box) — pre-order visits the outer/element box first, matching
 /// `collect_layout_rects_rec`'s BUG-382 "first box in tree order wins" rule.
-pub fn find_dirty_root_boxes<'a>(
+pub fn find_dirty_root_boxes<'a, S: std::hash::BuildHasher>(
     root: &'a LayoutBox,
-    roots: &std::collections::HashSet<lumen_dom::NodeId>,
+    roots: &std::collections::HashSet<lumen_dom::NodeId, S>,
 ) -> Vec<&'a LayoutBox> {
     let mut out = Vec::new();
     if roots.is_empty() {
@@ -2391,12 +2392,12 @@ pub fn find_dirty_root_boxes<'a>(
 ///
 /// BUG-935 срез 74: one search and one walk of each subtree for both sets (they were built by four
 /// walks over the same boxes: 0,36 мс of a 5 мс flush on `lenta.ru`, where the dirty root is `body`).
-pub fn collect_dirty_subtree_ids(
+pub fn collect_dirty_subtree_ids<S: std::hash::BuildHasher>(
     root: &LayoutBox,
-    roots: &std::collections::HashSet<lumen_dom::NodeId>,
-) -> (std::collections::HashSet<u32>, std::collections::HashSet<u32>) {
-    let mut indices = std::collections::HashSet::new();
-    let mut raws = std::collections::HashSet::new();
+    roots: &std::collections::HashSet<lumen_dom::NodeId, S>,
+) -> (lumen_core::id_hash::IdSet<u32>, lumen_core::id_hash::IdSet<u32>) {
+    let mut indices = lumen_core::id_hash::IdSet::default();
+    let mut raws = lumen_core::id_hash::IdSet::default();
     let mut stack: Vec<&LayoutBox> = find_dirty_root_boxes(root, roots);
     while let Some(b) = stack.pop() {
         indices.insert(b.node.index() as u32);

@@ -20,8 +20,16 @@
 //! The result is bit-identical to the per-box walks (`min`/`max` are associative, and the padding
 //! box origin is subtracted from the folded edge exactly as it was from each edge), which the
 //! differential tests in this file compare against [`crate::collect_scroll_containers_inner`].
+//!
+//! BUG-935 срез 77: the pass is still one visit per box of the document, and on a flush whose dirty
+//! root is `body` the document is almost entirely subtrees the plan proved untouched and unmoved
+//! ([`crate::scoped_collect::ScopedCollection`]). What such a subtree adds to its parent's extent is a
+//! function of its own boxes only, so the rollup computed for it is kept ([`RollupCache`]) and the
+//! next flush folds it in instead of walking it.
 
 use lumen_core::geom::Rect;
+use lumen_core::id_hash::{IdMap, IdSet};
+use lumen_dom::NodeId;
 
 use crate::style::{Overflow, Position};
 use crate::{
@@ -30,6 +38,7 @@ use crate::{
 
 /// What the descendants of a box (reached through boxes that do not clip) add to the
 /// scrollable-overflow extent of whichever box is asked — see the module doc.
+#[derive(Clone)]
 pub(crate) struct OverflowRollup {
     /// Left-most / right-most / top-most / bottom-most edge of the in-flow members, in the
     /// coordinates of the tree (not relative to any padding box). `±∞` while there are none.
@@ -144,14 +153,78 @@ enum Wanted<'x, 'a> {
     Items { items: &'x [(&'a LayoutBox, bool)], next: usize, whole_depth: u32 },
 }
 
+/// The rollups of the subtrees an incremental flush left alone, by the node of the subtree's top
+/// box: what [`Walk`] folds in for a skipped subtree instead of walking it. Kept with the layout tree
+/// the subtrees were taken from, so an entry is only ever read against the tree it was computed on.
+#[derive(Default)]
+pub struct RollupCache(IdMap<NodeId, OverflowRollup>);
+
+impl RollupCache {
+    /// How many subtrees have a rollup kept.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no subtree has a rollup kept.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// The subtrees a walk may take from the cache, and the cache it leaves for the next flush.
+pub(crate) struct Skips {
+    /// Addresses of the top boxes of the subtrees the plan left alone.
+    tops: IdSet<usize>,
+    cached: RollupCache,
+    kept: RollupCache,
+    /// How many tops were served from `cached` / had to be walked.
+    pub(crate) hits: u32,
+    pub(crate) misses: u32,
+}
+
+impl Skips {
+    pub(crate) fn new(tops: &[&LayoutBox], cached: RollupCache) -> Self {
+        Self {
+            tops: tops.iter().map(|b| std::ptr::from_ref::<LayoutBox>(b) as usize).collect(),
+            cached,
+            kept: RollupCache::default(),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    pub(crate) fn into_kept(self) -> RollupCache {
+        self.kept
+    }
+
+    fn is_top(&self, b: &LayoutBox) -> bool {
+        !self.tops.is_empty() && self.tops.contains(&(std::ptr::from_ref::<LayoutBox>(b) as usize))
+    }
+}
+
 struct Walk<'x, 'a> {
     wanted: Wanted<'x, 'a>,
+    /// `None` for a walk that visits every box.
+    skips: Option<&'x mut Skips>,
     /// Entries with the pre-order index of their box, so the result can be put back in tree order.
     out: Vec<(u32, ScrollContainer)>,
     visited: u32,
 }
 
 impl Walk<'_, '_> {
+    /// What the descendants of `b` add to the extent of whichever box is asked.
+    fn fold_children(&mut self, b: &LayoutBox) -> OverflowRollup {
+        let mut rollup = OverflowRollup::empty();
+        for c in &b.children {
+            rollup.add_member(c);
+            let below = self.visit(c);
+            if !box_clips_own_overflow(c) {
+                rollup.merge(below);
+            }
+        }
+        rollup
+    }
+
     fn visit(&mut self, b: &LayoutBox) -> OverflowRollup {
         let index = self.visited;
         self.visited += 1;
@@ -173,14 +246,29 @@ impl Walk<'_, '_> {
                 wanted
             }
         };
-        let mut rollup = OverflowRollup::empty();
-        for c in &b.children {
-            rollup.add_member(c);
-            let below = self.visit(c);
-            if !box_clips_own_overflow(c) {
-                rollup.merge(below);
+        // A subtree the plan left alone publishes nothing and its extent is what it was.
+        if !wanted && self.skips.as_ref().is_some_and(|s| s.is_top(b)) {
+            let cached = self.skips.as_mut().and_then(|s| s.cached.0.remove(&b.node));
+            let rollup = match cached {
+                Some(rollup) => {
+                    if let Some(s) = self.skips.as_mut() {
+                        s.hits += 1;
+                    }
+                    rollup
+                }
+                None => {
+                    if let Some(s) = self.skips.as_mut() {
+                        s.misses += 1;
+                    }
+                    self.fold_children(b)
+                }
+            };
+            if let Some(s) = self.skips.as_mut() {
+                s.kept.0.insert(b.node, rollup.clone());
             }
+            return rollup;
         }
+        let rollup = self.fold_children(b);
         if wanted {
             let mut one = Vec::new();
             publish(b, &rollup, &mut one);
@@ -203,7 +291,7 @@ impl Walk<'_, '_> {
 pub(crate) fn collect_for_js_state(roots: &[&LayoutBox]) -> Vec<ScrollContainer> {
     let mut all = Vec::new();
     for root in roots {
-        let mut walk = Walk { wanted: Wanted::All, out: Vec::new(), visited: 0 };
+        let mut walk = Walk { wanted: Wanted::All, skips: None, out: Vec::new(), visited: 0 };
         walk.visit(root);
         all.extend(walk.finish());
     }
@@ -213,11 +301,16 @@ pub(crate) fn collect_for_js_state(roots: &[&LayoutBox]) -> Vec<ScrollContainer>
 /// The entries for the planned `items` of an incremental flush — a `whole` item and everything
 /// under it, a spine item only itself — computed in one walk from the topmost item. `items` must
 /// be in tree pre-order, as [`crate::scoped_collect::ScopedCollection`] builds them.
-pub(crate) fn collect_for_items(items: &[(&LayoutBox, bool)]) -> Vec<ScrollContainer> {
+pub(crate) fn collect_for_items(items: &[(&LayoutBox, bool)], mut skips: Option<&mut Skips>) -> Vec<ScrollContainer> {
     let mut all = Vec::new();
     let mut next = 0;
     while let Some(&(top, _)) = items.get(next) {
-        let mut walk = Walk { wanted: Wanted::Items { items, next, whole_depth: 0 }, out: Vec::new(), visited: 0 };
+        let mut walk = Walk {
+            wanted: Wanted::Items { items, next, whole_depth: 0 },
+            skips: skips.as_deref_mut(),
+            out: Vec::new(),
+            visited: 0,
+        };
         walk.visit(top);
         // The walk consumed `top` at least; items it did not meet (not under `top`, or out of
         // order) get a walk of their own.
@@ -351,7 +444,7 @@ mod tests {
                             scroll_container_into(b, &mut old, true);
                         }
                     }
-                    assert_eq!(keys(&collect_for_items(&items)), keys(&old), "{html} whole={whole:?}");
+                    assert_eq!(keys(&collect_for_items(&items, None)), keys(&old), "{html} whole={whole:?}");
                     compared += 1;
                 }
             }
@@ -367,7 +460,7 @@ mod tests {
         let root = lay_full(&html, "");
         let boxes = preorder(&root);
         let items: Vec<(&LayoutBox, bool)> = boxes.iter().map(|(b, _)| (*b, false)).collect();
-        let mut walk = Walk { wanted: Wanted::Items { items: &items, next: 0, whole_depth: 0 }, out: Vec::new(), visited: 0 };
+        let mut walk = Walk { wanted: Wanted::Items { items: &items, next: 0, whole_depth: 0 }, skips: None, out: Vec::new(), visited: 0 };
         walk.visit(items[0].0);
         assert_eq!(walk.visited as usize, boxes.len(), "every box visited exactly once for {} items", items.len());
     }

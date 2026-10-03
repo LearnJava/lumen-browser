@@ -324,6 +324,12 @@ pub struct V8JsRuntime {
     pub(super) scope_prune_off: Arc<AtomicBool>,
     /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_pruned`].
     pub(super) scope_pruned: Arc<AtomicU64>,
+    /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_off`].
+    pub(super) scroll_rollup_off: Arc<AtomicBool>,
+    /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_served`].
+    pub(super) scroll_rollup_served: Arc<AtomicU64>,
+    /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_walked`].
+    pub(super) scroll_rollup_walked: Arc<AtomicU64>,
     /// BUG-935 срез 74: mirrors [`super::style_flush::FlushHandles::node_index_builds`].
     pub(super) node_index_builds: Arc<AtomicU64>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
@@ -621,6 +627,9 @@ impl V8JsRuntime {
             sheet_delta_off: Arc::new(AtomicBool::new(false)),
             scope_prune_off: Arc::new(AtomicBool::new(false)),
             scope_pruned: Arc::new(AtomicU64::new(0)),
+            scroll_rollup_off: Arc::new(AtomicBool::new(false)),
+            scroll_rollup_served: Arc::new(AtomicU64::new(0)),
+            scroll_rollup_walked: Arc::new(AtomicU64::new(0)),
             node_index_builds: Arc::new(AtomicU64::new(0)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
@@ -1024,6 +1033,18 @@ impl V8JsRuntime {
     #[doc(hidden)]
     pub fn set_scope_prune_off(&self, off: bool) {
         self.scope_prune_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 77: disables the scroll-extent rollup cache for this runtime (differential tests).
+    #[doc(hidden)]
+    pub fn set_scroll_rollup_off(&self, off: bool) {
+        self.scroll_rollup_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 77: `(served from the cache, walked)` skipped subtrees, summed over flushes.
+    #[doc(hidden)]
+    pub fn scroll_rollup_counts(&self) -> (u64, u64) {
+        (self.scroll_rollup_served.load(Ordering::Relaxed), self.scroll_rollup_walked.load(Ordering::Relaxed))
     }
 
     /// BUG-935 срез 70: boxes the same-tick flush left alone inside a dirty root (summed over flushes).
