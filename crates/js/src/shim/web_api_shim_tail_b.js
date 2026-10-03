@@ -56,7 +56,17 @@ window.getComputedStyle = function(element, pseudoElt) {
     function readProp(name) {
         if (nid == null) return '';
         if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
-        return _lumen_computed_property(nid, name);
+        var base = _lumen_computed_property(nid, name);
+        // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
+        // settled value; a running transition of a rule property is applied here.
+        if (_wa_gap_tr_name_re.test(name)) {
+            // `currentcolor` is a used value: resolve it so colours can interpolate.
+            if (/-color$/.test(name) && /currentcolor/i.test(base)) {
+                base = base.replace(/currentcolor/gi, _lumen_computed_property(nid, 'color') || 'rgb(0, 0, 0)');
+            }
+            return _wa_gap_tr_value(nid, name, base);
+        }
+        return base;
     }
     var handler = {
         get: function(target, prop) {
@@ -5284,6 +5294,117 @@ function _wa_gap_interp(prop, from, to, t) {
     var r = _lumen_css_interpolate_gap_rule(kebab, String(from), String(to), t);
     if (r == null) return t < 0.5 ? from : to;
     return r;
+}
+
+// CSS Transitions L1 for the gap-decoration properties. The Rust
+// `TransitionScheduler` only knows opacity/color/background-color/transform/
+// height, so a transition of `*-rule-width|color|inset-*` is tracked here, in the
+// one place that observes the value: `getComputedStyle()` reads. The first read
+// of a property records its settled value (the before-change style); a later read
+// that finds a different settled value starts a transition when the element's
+// computed `transition-*` lists ask for one for this property, and until it ends
+// the read answers the interpolated value (`_wa_gap_interp`, same arithmetic as
+// Web Animations). Limits: a change nobody read in between is not seen, and the
+// painted rules are not animated frame by frame (only the computed value is).
+var _wa_gap_tr_name_re = /^(column|row)-rule-(width|color|inset-(cap|junction)-(start|end))$/;
+var _wa_gap_tr = {};
+var _wa_gap_tr_clock_ms = null;
+
+// One `performance.now()` per task: every read of one script turn sees one time.
+function _wa_gap_tr_clock() {
+    if (_wa_gap_tr_clock_ms === null) {
+        _wa_gap_tr_clock_ms = performance.now();
+        Promise.resolve().then(function() { _wa_gap_tr_clock_ms = null; });
+    }
+    return _wa_gap_tr_clock_ms;
+}
+
+// Longhand name -> every `transition-property` token that covers it, longhand
+// last (shorthands `rule`, `column-rule`, `rule-width`, `row-rule-inset-cap`, ...).
+function _wa_gap_tr_tokens(kebab) {
+    var m = /^(column|row)-rule-(.*)$/.exec(kebab);
+    var part = m[2], isInset = part.indexOf('inset-') === 0, p = part.split('-');
+    var out = ['all'], axes = [m[1] + '-rule', 'rule'];
+    for (var i = 0; i < axes.length; i++) {
+        var pre = axes[i];
+        if (isInset) {
+            out.push(pre + '-inset', pre + '-inset-' + p[1], pre + '-inset-' + p[2]);
+        } else {
+            out.push(pre);
+        }
+        out.push(pre + '-' + part);
+    }
+    return out;
+}
+
+function _wa_gap_tr_split(list) {
+    var out = [], depth = 0, cur = '';
+    for (var i = 0; i < list.length; i++) {
+        var c = list.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        if (c === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += c;
+    }
+    out.push(cur.trim());
+    return out;
+}
+
+function _wa_gap_tr_seconds(tok) {
+    var m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i.exec(tok || '');
+    if (!m) return 0;
+    return m[2].toLowerCase() === 'ms' ? parseFloat(m[1]) / 1000 : parseFloat(m[1]);
+}
+
+// Timing of the transition for `kebab` from the element's computed lists, or null.
+function _wa_gap_tr_timing(nid, kebab) {
+    var props = _wa_gap_tr_split(_lumen_computed_property(nid, 'transition-property').toLowerCase());
+    var cover = _wa_gap_tr_tokens(kebab), idx = -1;
+    for (var i = 0; i < props.length; i++) {
+        if (cover.indexOf(props[i]) >= 0) idx = i;   // the last match wins
+    }
+    if (idx < 0) return null;
+    var pick = function(name) {
+        var l = _wa_gap_tr_split(_lumen_computed_property(nid, name));
+        return l[idx % l.length];
+    };
+    var dur = _wa_gap_tr_seconds(pick('transition-duration'));
+    var delay = _wa_gap_tr_seconds(pick('transition-delay'));
+    if (!(dur > 0)) return null;   // a zero duration never starts a transition
+    return { dur: dur, delay: delay, easing: pick('transition-timing-function') || 'ease' };
+}
+
+function _wa_gap_tr_value(nid, kebab, base) {
+    var key = nid + ':' + kebab, rec = _wa_gap_tr[key];
+    if (!rec) { _wa_gap_tr[key] = { seen: base, run: null }; return base; }
+    var now = _wa_gap_tr_clock();
+    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    if (base !== rec.seen) {
+        var from = rec.run ? _wa_gap_tr_current(rec, now, camel) : rec.seen;
+        var timing = null;
+        // Pairs that do not interpolate (overlap-join, mismatched lists) are
+        // discrete and do not transition without `transition-behavior: allow-discrete`.
+        if (from !== base && _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) != null) {
+            timing = _wa_gap_tr_timing(nid, kebab);
+        }
+        rec.seen = base;
+        rec.run = timing ? { from: from, to: base, start: now, dur: timing.dur * 1000,
+                             delay: timing.delay * 1000, easing: timing.easing } : null;
+    }
+    if (!rec.run) return base;
+    var cur = _wa_gap_tr_current(rec, now, camel);
+    if (rec.run && rec.run.done) rec.run = null;
+    return cur;
+}
+
+function _wa_gap_tr_current(rec, now, camel) {
+    var r = rec.run;
+    var raw = (now - r.start - r.delay) / r.dur;
+    if (raw >= 1) { r.done = true; return r.to; }
+    if (raw < 0) return r.from;   // inside the delay the effect fills backwards
+    // The Rust side serialises `cubic-bezier()` through f32 (0.23333333 for 0.2333...), so
+    // the eased progress is off by up to ~1e-6; snap it before the width is floored to a pixel.
+    var eased = Math.round(_wa_ease(raw, r.easing) * 1e5) / 1e5;
+    return _wa_gap_interp(camel, r.from, r.to, eased);
 }
 
 // Interpolate a single CSS property value between two string values.
