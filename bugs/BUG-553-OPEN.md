@@ -160,3 +160,9 @@ CSS `@keyframes`-анимации `*-rule-width`/`-color`/`-inset-*` как ан
 Решение по незакрытой скобке: права CSS Syntax §5.4.7 (конец значения закрывает открытые функции), а не тест `repeat(2, 1` в `invalid_lists_are_rejected` — он был написан до WPT и переведён на `repeat(2, 1))` (лишняя `)` по-прежнему невалидна). `RuleList::parse` дописывает недостающие `)` (`close_open_parens`), JS `CSSStyleDeclaration.prototype.setProperty` делает то же для `rule*`/`{column,row}-rule*` (`_lumen_close_open_parens`, `web_api_shim_mid.js`): раньше открытая `(` проглатывала `;` при сериализации атрибута `style`, и значение терялось при перечитывании. `rule-color-interpolation-repeaters-001.html` полностью зелёный (`.ini` удалён), `css-gaps/animation`: 2384 → 2388 из 2396.
 
 **Остаток (8 подтестов):** `-0%` в `calc()` для `cap-end` (WPT ждёт знаковый ноль Chrome, для `cap-start`/`junction-*` — беззнаковый, арифметика одна).
+
+## Срез 14 (P4, 2026-10-04, p4-gap-rule-anim-evt2)
+
+События `animationstart/iteration/end/cancel` для `@keyframes`, трогающих только `*-rule-*`, закрыты тестами: `AnimationScheduler::tick` ведёт их общим конечным автоматом без привязки к свойству (`tick_fires_lifecycle_events_for_gap_rule_only_keyframes`, `tick_fires_cancel_for_gap_rule_only_keyframes` в `crates/shell/src/animation_scheduler.rs`), покадровое перекрытие `gap_rules` между событиями проверено на втором витке (6px при середине витка 2→10px). Кода это не меняет — снят пункт «не проверено» из срезов 9/11.
+
+**Остаток:** `-0%` в `calc()` для `cap-end` (8 подтестов, Chrome-специфика); `*-rule-inset-*` и multicol не рисуются покадрово; нумерация щелей по схлопнутым/фрагментированным желобам и строкам flex-wrap.
