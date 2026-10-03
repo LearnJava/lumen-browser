@@ -58,3 +58,95 @@ fn wa_interp_prop_routes_gap_properties_and_flips_when_not_interpolable() {
         "4px"
     );
 }
+
+/// CSS Transitions L1 для `*-rule-*`: `_wa_gap_tr_value` ведёт переход по чтениям
+/// `getComputedStyle()`. `_lumen_computed_property` подменяется таблицей, `performance.now` —
+/// управляемыми часами, чтобы не зависеть от реального времени.
+const TR_PRELUDE: &str = "
+var __vals = {}, __now = 0;
+_lumen_computed_property = function(nid, name) { return __vals[name] || ''; };
+performance.now = function() { return __now; };
+function __read(name) { _wa_gap_tr_clock_ms = null; return _wa_gap_tr_value(1, name, __vals[name]); }
+__vals['transition-property'] = 'row-rule-width';
+__vals['transition-duration'] = '10s';
+__vals['transition-delay'] = '0s';
+__vals['transition-timing-function'] = 'linear';
+";
+
+#[test]
+fn transition_covering_tokens_include_shorthands() {
+    let rt = rt();
+    assert_eq!(
+        eval_str(&rt, "_wa_gap_tr_tokens('column-rule-inset-cap-end').join(' ')"),
+        // `column-rule`/`rule` покрывают только width/style/color — inset у них свои шортхенды.
+        "all column-rule-inset column-rule-inset-cap column-rule-inset-end \
+         column-rule-inset-cap-end rule-inset rule-inset-cap rule-inset-end rule-inset-cap-end"
+    );
+    assert_eq!(
+        eval_str(&rt, "_wa_gap_tr_tokens('row-rule-width').join(' ')"),
+        "all row-rule row-rule-width rule rule-width"
+    );
+}
+
+#[test]
+fn transition_runs_between_two_reads() {
+    let rt = rt();
+    let script = format!(
+        "{TR_PRELUDE}
+        __vals['row-rule-width'] = '10px'; var a = __read('row-rule-width');
+        __vals['row-rule-width'] = '20px'; var b = __read('row-rule-width');
+        __now = 5000; var c = __read('row-rule-width');
+        __now = 10000; var d = __read('row-rule-width');
+        [a, b, c, d].join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "10px 10px 15px 20px");
+}
+
+#[test]
+fn transition_needs_a_duration_and_a_listed_property() {
+    let rt = rt();
+    let no_duration = format!(
+        "{TR_PRELUDE}
+        __vals['transition-duration'] = '0s';
+        __vals['row-rule-width'] = '10px'; __read('row-rule-width');
+        __vals['row-rule-width'] = '20px'; __read('row-rule-width')"
+    );
+    assert_eq!(eval_str(&rt, &no_duration), "20px");
+    let unlisted = format!(
+        "{TR_PRELUDE}
+        __vals['transition-property'] = 'opacity';
+        __vals['row-rule-width'] = '10px'; __read('row-rule-width');
+        __vals['row-rule-width'] = '20px'; __read('row-rule-width')"
+    );
+    assert_eq!(eval_str(&rt, &unlisted), "20px");
+}
+
+#[test]
+fn transition_honours_delay_and_restarts_from_the_current_value() {
+    let rt = rt();
+    let script = format!(
+        "{TR_PRELUDE}
+        __vals['transition-delay'] = '2s';
+        __vals['row-rule-width'] = '10px'; __read('row-rule-width');
+        __vals['row-rule-width'] = '20px'; var a = __read('row-rule-width');
+        __now = 7000; var b = __read('row-rule-width');
+        __vals['transition-delay'] = '0s';
+        __vals['row-rule-width'] = '40px'; var c = __read('row-rule-width');
+        [a, b, c].join(' ')"
+    );
+    // t = 0: в задержке — значение `from`; через 7 с (5 с после задержки) — 15px;
+    // прерывание на 15px начинает новый переход от него же.
+    assert_eq!(eval_str(&rt, &script), "10px 15px 15px");
+}
+
+#[test]
+fn transition_does_not_start_for_non_interpolable_pair() {
+    let rt = rt();
+    let script = format!(
+        "{TR_PRELUDE}
+        __vals['transition-property'] = 'row-rule-inset-cap-start';
+        __vals['row-rule-inset-cap-start'] = 'overlap-join'; __read('row-rule-inset-cap-start');
+        __vals['row-rule-inset-cap-start'] = '4px'; __read('row-rule-inset-cap-start')"
+    );
+    assert_eq!(eval_str(&rt, &script), "4px");
+}
