@@ -119,6 +119,114 @@
         assert_eq!(f.fallback, Some(Length::Px(10.0)));
     }
 
+    // ── GAP-ANCHORCSSOM-S1: `&&` grammar, new sides, `anchor-size()` ──────────
+
+    #[test]
+    fn anchor_func_side_before_name_equals_name_before_side() {
+        let a = first_div_style("<div></div>", "div { position: absolute; top: anchor(--a top); }");
+        let b = first_div_style("<div></div>", "div { position: absolute; top: anchor(top --a); }");
+        assert_eq!(a.anchor_top, b.anchor_top);
+        let f = b.anchor_top.as_ref().expect("anchor(top --a) not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.side, crate::anchor::AnchorSide::Top);
+    }
+
+    #[test]
+    fn anchor_func_side_before_name_keeps_fallback() {
+        let s = first_div_style("<div></div>", "div { position: absolute; left: anchor(50% --a, 4px); }");
+        let f = s.anchor_left.as_ref().expect("anchor() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.side, crate::anchor::AnchorSide::Percentage(50.0));
+        assert_eq!(f.fallback, Some(Length::Px(4.0)));
+    }
+
+    #[test]
+    fn anchor_func_new_sides_parsed() {
+        use crate::anchor::AnchorSide;
+        for (kw, want) in [
+            ("inside", AnchorSide::Inside),
+            ("outside", AnchorSide::Outside),
+            ("self-start", AnchorSide::SelfStart),
+            ("self-end", AnchorSide::SelfEnd),
+            ("OUTSIDE", AnchorSide::Outside),
+        ] {
+            let s = first_div_style(
+                "<div></div>",
+                &format!("div {{ position: absolute; top: anchor({kw}); }}"),
+            );
+            let f = s.anchor_top.as_ref().unwrap_or_else(|| panic!("anchor({kw}) not parsed"));
+            assert_eq!(f.side, want, "{kw}");
+        }
+    }
+
+    #[test]
+    fn anchor_func_repeated_or_missing_component_is_invalid() {
+        for arg in ["--a --b top", "top left", "top bottom --a", "--a", "--a --b", "bogus", "top top"] {
+            let s = first_div_style(
+                "<div></div>",
+                &format!("div {{ position: absolute; top: anchor({arg}); }}"),
+            );
+            assert!(s.anchor_top.is_none(), "anchor({arg}) must not parse");
+            assert!(s.top.is_auto(), "anchor({arg}) must leave top auto");
+        }
+    }
+
+    #[test]
+    fn anchor_size_name_then_dimension_parsed() {
+        use crate::anchor::AnchorSizeDimension;
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(--a width); }");
+        let f = s.anchor_size_w.as_ref().expect("anchor-size() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.dimension, AnchorSizeDimension::Width);
+        assert!(f.fallback.is_none());
+        assert!(s.width.is_none(), "plain width must stay auto when anchor-size() is used");
+    }
+
+    #[test]
+    fn anchor_size_dimension_then_name_parsed() {
+        use crate::anchor::AnchorSizeDimension;
+        let s = first_div_style("<div></div>", "div { position: absolute; height: anchor-size(block --a); }");
+        let f = s.anchor_size_h.as_ref().expect("anchor-size() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.dimension, AnchorSizeDimension::Block);
+    }
+
+    #[test]
+    fn anchor_size_dimension_only_parsed() {
+        use crate::anchor::AnchorSizeDimension;
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(inline); }");
+        let f = s.anchor_size_w.as_ref().expect("anchor-size() not parsed");
+        assert!(f.anchor_name.is_none());
+        assert_eq!(f.dimension, AnchorSizeDimension::Inline);
+    }
+
+    #[test]
+    fn anchor_size_fallback_parsed() {
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(--a width, 10px); }");
+        let f = s.anchor_size_w.as_ref().expect("anchor-size() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.fallback, Some(Length::Px(10.0)));
+    }
+
+    #[test]
+    fn anchor_size_legacy_comma_form_is_invalid() {
+        // `anchor-size(--a, width)`: after the comma the spec wants a
+        // `<length-percentage>` fallback, and `width` is not one.
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(--a, width); }");
+        assert!(s.anchor_size_w.is_none());
+    }
+
+    #[test]
+    fn anchor_size_repeated_component_is_invalid() {
+        for arg in ["--a --b width", "width height", "--a", ""] {
+            let s = first_div_style(
+                "<div></div>",
+                &format!("div {{ position: absolute; width: anchor-size({arg}); }}"),
+            );
+            assert!(s.anchor_size_w.is_none(), "anchor-size({arg}) must not parse");
+        }
+    }
+
     #[test]
     fn anchor_func_cleared_by_plain_length() {
         // A later declaration without anchor() must clear the previously

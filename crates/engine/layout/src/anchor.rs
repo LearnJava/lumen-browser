@@ -59,6 +59,18 @@ pub enum AnchorSide {
     Start,
     /// Inline-end edge (right in LTR writing modes).  CSS: `anchor(end)`.
     End,
+    /// The anchor edge on the same side as the inset property being resolved
+    /// (`top: anchor(inside)` → anchor's top edge).  CSS: `anchor(inside)`.
+    Inside,
+    /// The anchor edge opposite to the inset property being resolved
+    /// (`top: anchor(outside)` → anchor's bottom edge).  CSS: `anchor(outside)`.
+    Outside,
+    /// Start edge of the positioned element's own writing mode.  Resolved like
+    /// [`AnchorSide::Start`] (horizontal-tb + ltr).  CSS: `anchor(self-start)`.
+    SelfStart,
+    /// End edge of the positioned element's own writing mode.  Resolved like
+    /// [`AnchorSide::End`] (horizontal-tb + ltr).  CSS: `anchor(self-end)`.
+    SelfEnd,
     /// Percentage along the anchor's inline axis.  CSS: `anchor(25%)`.
     /// `0.0` = left/top, `100.0` = right/bottom.
     Percentage(f32),
@@ -150,6 +162,9 @@ pub struct AnchorSizeFunc {
     pub anchor_name: Option<Box<str>>,
     /// Which dimension of the anchor to use.
     pub dimension: AnchorSizeDimension,
+    /// Trailing `<length-percentage>` fallback, used when the anchor can't be
+    /// resolved.  CSS: `anchor-size(--a width, 10px)`.
+    pub fallback: Option<Length>,
 }
 
 // ─── AnchorFunc ──────────────────────────────────────────────────────────────
@@ -316,6 +331,8 @@ pub fn register_anchor_scoped(
 /// - `side` — which edge or percentage of the anchor to reference.
 /// - `is_horizontal` — true when resolving `left`/`right` (anchors x-axis
 ///   values); false when resolving `top`/`bottom` (anchors y-axis values).
+/// - `is_end_edge` — true when resolving `right`/`bottom`; decides which anchor
+///   edge `inside` / `outside` name.
 ///
 /// Returns `None` when the anchor is not in the registry (the `anchor()`
 /// function makes the property behave as `auto`).
@@ -325,9 +342,10 @@ pub fn resolve_anchor_function(
     anchor_name: &str,
     side: AnchorSide,
     is_horizontal: bool,
+    is_end_edge: bool,
 ) -> Option<f32> {
     let entry = registry.get(anchor_name)?;
-    anchor_side_value(entry, side, is_horizontal)
+    anchor_side_value(entry, side, is_horizontal, is_end_edge)
 }
 
 /// Scope-aware variant of [`resolve_anchor_function`].
@@ -340,14 +358,36 @@ pub fn resolve_anchor_function_scoped(
     anchor_name: &str,
     side: AnchorSide,
     is_horizontal: bool,
+    is_end_edge: bool,
     ancestor_ids: &[NodeId],
 ) -> Option<f32> {
     let entry = registry.get_scoped(anchor_name, ancestor_ids)?;
-    anchor_side_value(entry, side, is_horizontal)
+    anchor_side_value(entry, side, is_horizontal, is_end_edge)
 }
 
-fn anchor_side_value(entry: &AnchorEntry, side: AnchorSide, is_horizontal: bool) -> Option<f32> {
+fn anchor_side_value(
+    entry: &AnchorEntry,
+    side: AnchorSide,
+    is_horizontal: bool,
+    is_end_edge: bool,
+) -> Option<f32> {
     let r = entry.rect;
+    // `inside` names the anchor edge on the inset property's own side, `outside`
+    // the opposite one; both reduce to the physical near/far edge on this axis.
+    let side = match side {
+        AnchorSide::Inside | AnchorSide::Outside => {
+            let far = (side == AnchorSide::Outside) != is_end_edge;
+            match (is_horizontal, far) {
+                (true, false) => AnchorSide::Left,
+                (true, true) => AnchorSide::Right,
+                (false, false) => AnchorSide::Top,
+                (false, true) => AnchorSide::Bottom,
+            }
+        }
+        AnchorSide::SelfStart => AnchorSide::Start,
+        AnchorSide::SelfEnd => AnchorSide::End,
+        other => other,
+    };
     if is_horizontal {
         match side {
             AnchorSide::Left | AnchorSide::Start => Some(r.x),
@@ -355,6 +395,7 @@ fn anchor_side_value(entry: &AnchorEntry, side: AnchorSide, is_horizontal: bool)
             AnchorSide::Center => Some(r.x + r.width * 0.5),
             AnchorSide::Top | AnchorSide::Bottom => None,
             AnchorSide::Percentage(pct) => Some(r.x + r.width * pct / 100.0),
+            AnchorSide::Inside | AnchorSide::Outside | AnchorSide::SelfStart | AnchorSide::SelfEnd => None,
         }
     } else {
         match side {
@@ -363,6 +404,7 @@ fn anchor_side_value(entry: &AnchorEntry, side: AnchorSide, is_horizontal: bool)
             AnchorSide::Center => Some(r.y + r.height * 0.5),
             AnchorSide::Left | AnchorSide::Right => None,
             AnchorSide::Percentage(pct) => Some(r.y + r.height * pct / 100.0),
+            AnchorSide::Inside | AnchorSide::Outside | AnchorSide::SelfStart | AnchorSide::SelfEnd => None,
         }
     }
 }
@@ -403,7 +445,7 @@ pub fn resolve_anchor_func(
     viewport: Size,
 ) -> Option<f32> {
     if let Some(name) = func.anchor_name.as_deref().or(default_anchor)
-        && let Some(v) = resolve_anchor_function(registry, name, func.side, is_horizontal)
+        && let Some(v) = resolve_anchor_function(registry, name, func.side, is_horizontal, is_end_edge)
     {
         return Some(if is_end_edge { cb_far - v } else { v - cb_near });
     }
@@ -428,7 +470,7 @@ pub fn resolve_anchor_func_scoped(
 ) -> Option<f32> {
     if let Some(name) = func.anchor_name.as_deref().or(default_anchor)
         && let Some(v) =
-            resolve_anchor_function_scoped(registry, name, func.side, is_horizontal, ancestor_ids)
+            resolve_anchor_function_scoped(registry, name, func.side, is_horizontal, is_end_edge, ancestor_ids)
     {
         return Some(if is_end_edge { cb_far - v } else { v - cb_near });
     }
@@ -519,6 +561,22 @@ pub fn resolve_anchor_size(
         | AnchorSizeDimension::SelfBlock => r.height,
     };
     Some(value)
+}
+
+/// [`resolve_anchor_size`] with the `anchor-size()` fallback applied: when the
+/// anchor can't be resolved, a declared `<length-percentage>` fallback is used
+/// (`basis` is the percentage basis, `em` the element's font size).
+// CSS: anchor-size()
+pub fn resolve_anchor_size_or_fallback(
+    registry: &AnchorRegistry,
+    func: &AnchorSizeFunc,
+    default_anchor: Option<&str>,
+    em: f32,
+    basis: f32,
+    viewport: Size,
+) -> Option<f32> {
+    resolve_anchor_size(registry, func, default_anchor)
+        .or_else(|| func.fallback.as_ref().and_then(|len| len.resolve(em, Some(basis), viewport)))
 }
 
 // ─── AxisSize ────────────────────────────────────────────────────────────────
@@ -963,59 +1021,125 @@ mod tests {
     #[test]
     fn anchor_function_top_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Top, false), Some(200.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Top, false, false), Some(200.0));
     }
 
     #[test]
     fn anchor_function_bottom_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Bottom, false), Some(240.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Bottom, false, false), Some(240.0));
     }
 
     #[test]
     fn anchor_function_left_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Left, true), Some(100.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Left, true, false), Some(100.0));
     }
 
     #[test]
     fn anchor_function_right_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Right, true), Some(180.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Right, true, false), Some(180.0));
     }
 
     #[test]
     fn anchor_function_center_vertical() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Center, false), Some(220.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Center, false, false), Some(220.0));
     }
 
     #[test]
     fn anchor_function_center_horizontal() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Center, true), Some(140.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Center, true, false), Some(140.0));
     }
 
     #[test]
     fn anchor_function_percentage() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
         assert_eq!(
-            resolve_anchor_function(&reg, "--a", AnchorSide::Percentage(25.0), true),
+            resolve_anchor_function(&reg, "--a", AnchorSide::Percentage(25.0), true, false),
             Some(120.0)
         );
+    }
+
+    // ── GAP-ANCHORCSSOM-S1: inside / outside / self-start / self-end ─────────
+
+    #[test]
+    fn anchor_function_inside_is_the_insets_own_side() {
+        let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
+        let f = |side, horiz, end| resolve_anchor_function(&reg, "--a", side, horiz, end);
+        // `top: anchor(inside)` → anchor top; `bottom: anchor(inside)` → anchor bottom.
+        assert_eq!(f(AnchorSide::Inside, false, false), Some(200.0));
+        assert_eq!(f(AnchorSide::Inside, false, true), Some(240.0));
+        // `left: anchor(inside)` → anchor left; `right: anchor(inside)` → anchor right.
+        assert_eq!(f(AnchorSide::Inside, true, false), Some(100.0));
+        assert_eq!(f(AnchorSide::Inside, true, true), Some(180.0));
+    }
+
+    #[test]
+    fn anchor_function_outside_is_the_opposite_side() {
+        let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
+        let f = |side, horiz, end| resolve_anchor_function(&reg, "--a", side, horiz, end);
+        assert_eq!(f(AnchorSide::Outside, false, false), Some(240.0));
+        assert_eq!(f(AnchorSide::Outside, false, true), Some(200.0));
+        assert_eq!(f(AnchorSide::Outside, true, false), Some(180.0));
+        assert_eq!(f(AnchorSide::Outside, true, true), Some(100.0));
+    }
+
+    #[test]
+    fn anchor_function_self_start_end_match_start_end_in_horizontal_ltr() {
+        let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
+        for horiz in [true, false] {
+            for (own, plain) in [(AnchorSide::SelfStart, AnchorSide::Start), (AnchorSide::SelfEnd, AnchorSide::End)] {
+                assert_eq!(
+                    resolve_anchor_function(&reg, "--a", own, horiz, false),
+                    resolve_anchor_function(&reg, "--a", plain, horiz, false),
+                );
+            }
+        }
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::SelfEnd, false, false), Some(240.0));
+    }
+
+    #[test]
+    fn anchor_func_outside_resolves_to_cb_relative_inset() {
+        // `top: anchor(outside)` places the element's top at the anchor's bottom;
+        // `bottom: anchor(outside)` places its bottom at the anchor's top.
+        let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
+        let func = AnchorFunc { anchor_name: Some("--a".into()), side: AnchorSide::Outside, fallback: None };
+        let vp = Size { width: 800.0, height: 600.0 };
+        let top = resolve_anchor_func(&reg, &func, None, false, false, 50.0, 550.0, 16.0, 500.0, vp);
+        assert_eq!(top, Some(190.0)); // 240 - 50
+        let bottom = resolve_anchor_func(&reg, &func, None, false, true, 50.0, 550.0, 16.0, 500.0, vp);
+        assert_eq!(bottom, Some(350.0)); // 550 - 200
+    }
+
+    #[test]
+    fn anchor_size_fallback_used_only_when_anchor_unresolved() {
+        let vp = Size { width: 800.0, height: 600.0 };
+        let reg = make_registry("--a", rect(0.0, 0.0, 80.0, 40.0));
+        let func = |name: &str| AnchorSizeFunc {
+            anchor_name: Some(name.into()),
+            dimension: AnchorSizeDimension::Width,
+            fallback: Some(Length::Px(10.0)),
+        };
+        assert_eq!(resolve_anchor_size_or_fallback(&reg, &func("--a"), None, 16.0, 500.0, vp), Some(80.0));
+        assert_eq!(resolve_anchor_size_or_fallback(&reg, &func("--missing"), None, 16.0, 500.0, vp), Some(10.0));
+        let no_fb = AnchorSizeFunc { fallback: None, ..func("--missing") };
+        assert_eq!(resolve_anchor_size_or_fallback(&reg, &no_fb, None, 16.0, 500.0, vp), None);
     }
 
     #[test]
     fn anchor_function_cross_axis_returns_none() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        assert!(resolve_anchor_function(&reg, "--a", AnchorSide::Top, true).is_none());
-        assert!(resolve_anchor_function(&reg, "--a", AnchorSide::Left, false).is_none());
+        assert!(resolve_anchor_function(&reg, "--a", AnchorSide::Top, true, false).is_none());
+        assert!(resolve_anchor_function(&reg, "--a", AnchorSide::Left, false, false).is_none());
     }
 
     #[test]
     fn anchor_function_missing_anchor_returns_none() {
         let reg = AnchorRegistry::default();
-        assert!(resolve_anchor_function(&reg, "--missing", AnchorSide::Top, false).is_none());
+        assert!(resolve_anchor_function(&reg, "--missing", AnchorSide::Top, false, false).is_none());
     }
 
     // ── resolve_anchor_size (BB-8: 8 new unit tests) ─────────────────────────
@@ -1023,14 +1147,14 @@ mod tests {
     #[test]
     fn anchor_size_width_from_default_anchor() {
         let reg = make_registry("--btn", rect(100.0, 200.0, 80.0, 40.0));
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width, fallback: None };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--btn")), Some(80.0));
     }
 
     #[test]
     fn anchor_size_height_from_default_anchor() {
         let reg = make_registry("--btn", rect(100.0, 200.0, 80.0, 40.0));
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Height };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Height, fallback: None };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--btn")), Some(40.0));
     }
 
@@ -1043,6 +1167,7 @@ mod tests {
         let func = AnchorSizeFunc {
             anchor_name: Some("--other".into()),
             dimension: AnchorSizeDimension::Width,
+            fallback: None,
         };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--btn")), Some(120.0));
     }
@@ -1050,35 +1175,35 @@ mod tests {
     #[test]
     fn anchor_size_inline_maps_to_width() {
         let reg = make_registry("--a", rect(0.0, 0.0, 90.0, 45.0));
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Inline };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Inline, fallback: None };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(90.0));
     }
 
     #[test]
     fn anchor_size_block_maps_to_height() {
         let reg = make_registry("--a", rect(0.0, 0.0, 90.0, 45.0));
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Block };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Block, fallback: None };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(45.0));
     }
 
     #[test]
     fn anchor_size_missing_anchor_returns_none() {
         let reg = AnchorRegistry::default();
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width, fallback: None };
         assert!(resolve_anchor_size(&reg, &func, Some("--missing")).is_none());
     }
 
     #[test]
     fn anchor_size_no_default_and_no_explicit_returns_none() {
         let reg = make_registry("--a", rect(0.0, 0.0, 100.0, 50.0));
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width, fallback: None };
         assert!(resolve_anchor_size(&reg, &func, None).is_none());
     }
 
     #[test]
     fn anchor_size_self_inline_maps_to_width() {
         let reg = make_registry("--a", rect(0.0, 0.0, 75.0, 25.0));
-        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::SelfInline };
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::SelfInline, fallback: None };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(75.0));
     }
 

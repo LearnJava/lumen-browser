@@ -343,62 +343,78 @@ pub(in crate::style) fn parse_inset_area_keyword(s: &str) -> Option<crate::ancho
 
 /// CSS Anchor Positioning L1 §4 — parse `anchor-size(<anchor-el>? <anchor-size>)`.
 ///
+/// The `<anchor-name>` and `<anchor-size>` components combine with `&&`, in any
+/// order; the comma only separates the trailing `<length-percentage>` fallback.
 /// Accepts forms:
 /// - `anchor-size(width)` / `anchor-size(height)` / `anchor-size(block)` / etc.
-/// - `anchor-size(--name, width)` / `anchor-size(--name, height)` / etc.
+/// - `anchor-size(--name width)` / `anchor-size(height --name)`.
+/// - `anchor-size(--name width, 10px)` — with a fallback.
 ///
-/// Returns `None` when `val` is not an `anchor-size()` expression.
-pub(in crate::style) fn parse_anchor_size_func(val: &str) -> Option<crate::anchor::AnchorSizeFunc> {
+/// Returns `None` when `val` is not an `anchor-size()` expression, repeats a
+/// component, or uses the pre-spec `anchor-size(--name, width)` form.
+pub(in crate::style) fn parse_anchor_size_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorSizeFunc> {
     use crate::anchor::{AnchorSizeDimension, AnchorSizeFunc};
     let v = val.trim();
     let inner = v.strip_prefix("anchor-size(")?.strip_suffix(')')?;
-    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
-    let (anchor_name, dim_str) = if parts.len() == 2 {
-        let name = parts[0];
-        let anchor_name = if name.starts_with("--") { Some(name.into()) } else { return None };
-        (anchor_name, parts[1])
-    } else {
-        (None, parts[0])
-    };
-    let dimension = match dim_str.to_ascii_lowercase().as_str() {
-        "width"       => AnchorSizeDimension::Width,
-        "height"      => AnchorSizeDimension::Height,
-        "block"       => AnchorSizeDimension::Block,
-        "inline"      => AnchorSizeDimension::Inline,
-        "self-block"  => AnchorSizeDimension::SelfBlock,
-        "self-inline" => AnchorSizeDimension::SelfInline,
-        _ => return None,
-    };
-    Some(AnchorSizeFunc { anchor_name, dimension })
+    let (head, fallback) = split_anchor_fallback(inner, is_quirks)?;
+    let mut anchor_name = None;
+    let mut dimension = None;
+    for tok in head.split_whitespace() {
+        if tok.starts_with("--") {
+            anchor_name.replace(tok.into()).is_none().then_some(())?;
+            continue;
+        }
+        let dim = match tok.to_ascii_lowercase().as_str() {
+            "width"       => AnchorSizeDimension::Width,
+            "height"      => AnchorSizeDimension::Height,
+            "block"       => AnchorSizeDimension::Block,
+            "inline"      => AnchorSizeDimension::Inline,
+            "self-block"  => AnchorSizeDimension::SelfBlock,
+            "self-inline" => AnchorSizeDimension::SelfInline,
+            _ => return None,
+        };
+        dimension.replace(dim).is_none().then_some(())?;
+    }
+    Some(AnchorSizeFunc { anchor_name, dimension: dimension?, fallback })
+}
+
+/// Splits the inside of `anchor()` / `anchor-size()` at the first comma into the
+/// space-separated head and the optional `<length-percentage>` fallback.
+fn split_anchor_fallback(inner: &str, is_quirks: bool) -> Option<(&str, Option<crate::style::Length>)> {
+    match inner.split_once(',') {
+        Some((head, fb)) => Some((head.trim(), Some(parse_length_q(fb.trim(), is_quirks)?))),
+        None => Some((inner.trim(), None)),
+    }
 }
 
 /// CSS Anchor Positioning L1 §3.1 — parse `anchor(<anchor-el>? <anchor-side>, <fallback>?)`.
 ///
-/// Accepts forms:
+/// The `<anchor-name>` and `<anchor-side>` components combine with `&&`, in any
+/// order; the side is required. Accepts forms:
 /// - `anchor(top)` / `anchor(50%)` / `anchor(start)` — anchor-side only, uses the
 ///   element's `position-anchor` default anchor.
-/// - `anchor(--name top)` / `anchor(--name 25%)` — explicit anchor-element argument.
+/// - `anchor(--name top)` / `anchor(top --name)` / `anchor(--name 25%)` — explicit
+///   anchor-element argument.
 /// - `anchor(top, 10px)` / `anchor(--name left, 1em)` — trailing `<length-percentage>`
 ///   fallback, used when the anchor can't be resolved.
 ///
-/// Returns `None` when `val` is not an `anchor()` expression.
+/// Returns `None` when `val` is not an `anchor()` expression or repeats a component
+/// (`anchor(--a --b top)`, `anchor(top left)`).
 fn parse_anchor_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorFunc> {
     use crate::anchor::AnchorFunc;
     let v = val.trim();
     let inner = v.strip_prefix("anchor(")?.strip_suffix(')')?;
-    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
-    let fallback = match parts.get(1) {
-        Some(fb) => Some(parse_length_q(fb, is_quirks)?),
-        None => None,
-    };
-    let head_parts: Vec<&str> = parts[0].split_whitespace().collect();
-    let (anchor_name, side_str) = match head_parts.as_slice() {
-        [side] => (None, *side),
-        [name, side] if name.starts_with("--") => (Some((*name).into()), *side),
-        _ => return None,
-    };
-    let side = parse_anchor_side(side_str)?;
-    Some(AnchorFunc { anchor_name, side, fallback })
+    let (head, fallback) = split_anchor_fallback(inner, is_quirks)?;
+    let mut anchor_name = None;
+    let mut side = None;
+    for tok in head.split_whitespace() {
+        if tok.starts_with("--") {
+            anchor_name.replace(tok.into()).is_none().then_some(())?;
+        } else {
+            side.replace(parse_anchor_side(tok)?).is_none().then_some(())?;
+        }
+    }
+    Some(AnchorFunc { anchor_name, side: side?, fallback })
 }
 
 /// CSS Anchor Positioning L1 §3.1 — parse a single `<anchor-side>` keyword or
@@ -413,6 +429,10 @@ fn parse_anchor_side(s: &str) -> Option<crate::anchor::AnchorSide> {
         "center" => Some(AnchorSide::Center),
         "start" => Some(AnchorSide::Start),
         "end" => Some(AnchorSide::End),
+        "inside" => Some(AnchorSide::Inside),
+        "outside" => Some(AnchorSide::Outside),
+        "self-start" => Some(AnchorSide::SelfStart),
+        "self-end" => Some(AnchorSide::SelfEnd),
         other => other.strip_suffix('%')?.trim().parse::<f32>().ok().map(AnchorSide::Percentage),
     }
 }
