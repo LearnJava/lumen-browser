@@ -385,8 +385,8 @@ pub fn fit_image_quad(
 /// None уже фильтруется emit-side, но обрабатываем для устойчивости.
 pub(crate) fn border_style_short(s: BorderStyle) -> &'static str {
     match s {
-        BorderStyle::None => "n",
-        BorderStyle::Solid => "s",
+        BorderStyle::None | BorderStyle::Hidden => "n",
+        BorderStyle::Solid | BorderStyle::Groove | BorderStyle::Ridge | BorderStyle::Inset | BorderStyle::Outset => "s",
         BorderStyle::Dashed => "da",
         BorderStyle::Dotted => "do",
         BorderStyle::Double => "db",

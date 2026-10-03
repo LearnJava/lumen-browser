@@ -58,9 +58,10 @@ use crate::style::{
     parse_sizing_length,
     resolve_block_step_size,
 };
+use crate::style::calc::looks_like_function_call;
 use crate::style::parse::box_sides::{
     parse_anchor_size_func,
-    parse_border_style_opt,
+    parse_rule_style_opt,
     parse_break_value,
     parse_line_width,
     parse_inset_area_keyword,
@@ -1184,7 +1185,7 @@ fn parse_rule_triplet(
         return None;
     }
     for tok in tokens {
-        if let Some(s) = parse_border_style_opt(tok) {
+        if let Some(s) = parse_rule_style_opt(tok) {
             if t.style.replace(s).is_some() {
                 return None;
             }
@@ -1231,8 +1232,13 @@ fn apply_gap_rule_declaration(
         _ => return,
     };
     let v = val.trim();
-    let width_item = |t: &str| parse_line_width(t, em_basis, viewport, is_quirks).filter(|px| *px >= 0.0);
-    let style_item = parse_border_style_opt;
+    // `<line-width>` не бывает отрицательной, но результат `calc()`/`min()`/… зажимается
+    // в 0 (CSS Values L4 §10.1), а не отбрасывает значение: `calc(10px - 0.5em)` → `0px`.
+    let width_item = |t: &str| {
+        let px = parse_line_width(t, em_basis, viewport, is_quirks)?;
+        (px >= 0.0 || looks_like_function_call(t.trim())).then(|| px.max(0.0))
+    };
+    let style_item = parse_rule_style_opt;
     let color_item = |t: &str| parse_css_color_legacy(t.trim(), is_quirks);
     // CSS Gap Decorations L1 §4.4: шортхенд — список `<gap-rule>` (с `repeat()`); каждый
     // элемент раскладывается в три списка одинаковой формы, пропущенное — initial.

@@ -131,7 +131,13 @@ impl FemtovgBackend {
                     self.draw_fill_rect(side_rect.x + width - line, side_rect.y, line, side_rect.height, color);
                 }
             }
-            BorderStyle::Solid | BorderStyle::None => {
+            BorderStyle::Solid
+            | BorderStyle::None
+            | BorderStyle::Hidden
+            | BorderStyle::Groove
+            | BorderStyle::Ridge
+            | BorderStyle::Inset
+            | BorderStyle::Outset => {
                 self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, side_rect.height, color);
             }
         }

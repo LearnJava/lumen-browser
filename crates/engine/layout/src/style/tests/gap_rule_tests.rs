@@ -374,9 +374,13 @@ fn rule_shorthand_accepts_gap_rule_lists() {
     assert_eq!(rule_css(&s, "column-rule-color"), "rgb(255, 0, 0), repeat(auto, rgb(0, 0, 255))");
     assert_eq!(
         rule_css(&s, "column-rule"),
-        "", // repeat() не сворачивается в шортхенд-строку
+        "1px solid rgb(255, 0, 0), repeat(auto, 2px dashed rgb(0, 0, 255))"
     );
-    assert_eq!(rule_css(&s, "row-rule"), "4px dotted currentcolor");
+    // `currentcolor` в computed value — уже цвет элемента.
+    assert_eq!(rule_css(&s, "row-rule"), "4px dotted rgb(0, 0, 0)");
+    // Стиль `none` в тройке опускается (круг через `style.rule`).
+    let s = parse_gap_rule("");
+    assert_eq!(rule_css(&s, "column-rule"), "3px rgb(0, 0, 0)");
     let s = parse_gap_rule("rule: 2px solid red, 3px dashed blue;");
     for axis in ["column", "row"] {
         assert_eq!(
@@ -418,4 +422,69 @@ fn rule_lists_css_wide_keywords_and_reset() {
     assert_eq!(rule_css(&span_style, "column-rule-width"), "1px, 2px");
     assert_eq!(rule_css(&span_style, "row-rule-width"), "3px");
     assert_eq!(rule_css(&span_style, "row-rule-style"), "solid");
+}
+
+#[test]
+fn rule_computed_shorthands_merge_axes_or_stay_empty() {
+    let s = parse_gap_rule("column-rule: 5px solid lime; row-rule: 5px solid lime;");
+    assert_eq!(rule_css(&s, "rule"), "5px solid rgb(0, 255, 0)");
+    assert_eq!(rule_css(&s, "rule-width"), "5px");
+    assert_eq!(rule_css(&s, "rule-color"), "rgb(0, 255, 0)");
+    // Оси расходятся — шортхенд обеих осей не собрать, шортхенд оси — собирается.
+    let s = parse_gap_rule("column-rule: 5px solid lime; row-rule: 6px solid lime;");
+    assert_eq!(rule_css(&s, "rule"), "");
+    assert_eq!(rule_css(&s, "rule-width"), "");
+    assert_eq!(rule_css(&s, "rule-style"), "solid");
+    assert_eq!(rule_css(&s, "column-rule"), "5px solid rgb(0, 255, 0)");
+    // Списки разной формы по трём свойствам — шортхенд пуст, лонгхенды целы.
+    let s = parse_gap_rule("column-rule-width: 1px, 2px; column-rule-style: solid;");
+    assert_eq!(rule_css(&s, "column-rule"), "");
+    assert_eq!(rule_css(&s, "column-rule-width"), "1px, 2px");
+}
+
+#[test]
+fn rule_computed_keywords_and_extended_line_styles() {
+    let s = parse_gap_rule(
+        "column-rule-style: groove, hidden, inset, outset, ridge; column-rule-break: none; row-rule-break: none;          column-rule-visibility-items: around; row-rule-visibility-items: around;",
+    );
+    assert_eq!(rule_css(&s, "column-rule-style"), "groove, hidden, inset, outset, ridge");
+    assert_eq!(rule_css(&s, "rule-break"), "none");
+    assert_eq!(rule_css(&s, "rule-visibility-items"), "around");
+    let s = parse_gap_rule("column-rule-break: none; row-rule-break: intersection;");
+    assert_eq!(rule_css(&s, "rule-break"), "");
+    // `hidden` и `none` линии не рисуют, `groove` рисуется сплошной.
+    assert!(!BorderStyle::Hidden.is_visible());
+    assert!(BorderStyle::Ridge.is_visible());
+    assert_eq!(BorderStyle::Outset.painted_as(), BorderStyle::Solid);
+}
+
+#[test]
+fn rule_computed_widths_clamp_and_repeat_count_calc() {
+    let s = parse_gap_rule(
+        "font-size: 40px; column-rule-width: calc(10px - 0.5em); row-rule-width: repeat(calc(5 + 3), 10px);",
+    );
+    assert_eq!(rule_css(&s, "column-rule-width"), "0px");
+    assert_eq!(rule_css(&s, "row-rule-width"), "repeat(8, 10px)");
+    // Отрицательная простая длина по-прежнему невалидна.
+    let s = parse_gap_rule("column-rule-width: -1px;");
+    assert_eq!(rule_css(&s, "column-rule-width"), "3px");
+}
+
+#[test]
+fn rule_computed_inset_resolves_font_relative_units() {
+    let s = parse_gap_rule(
+        "font-size: 40px; column-rule-inset: 0.5em 5% / calc(10px + 0.5em) overlap-join;          row-rule-inset-cap: calc(25% + 10px);",
+    );
+    assert_eq!(rule_css(&s, "column-rule-inset-cap-start"), "20px");
+    assert_eq!(rule_css(&s, "column-rule-inset-cap-end"), "5%");
+    assert_eq!(rule_css(&s, "column-rule-inset-junction-start"), "30px");
+    assert_eq!(rule_css(&s, "column-rule-inset"), "20px 5% / 30px overlap-join");
+    assert_eq!(rule_css(&s, "column-rule-inset-cap"), "20px 5%");
+    // Слоты `start` расходятся — шортхенд `*-inset-start` не собрать.
+    assert_eq!(rule_css(&s, "column-rule-inset-start"), "");
+    assert_eq!(rule_css(&s, "row-rule-inset-cap"), "calc(25% + 10px)");
+    assert_eq!(rule_css(&s, "rule-inset"), "");
+    let s = parse_gap_rule("rule-inset: 10px 20px;");
+    assert_eq!(rule_css(&s, "rule-inset"), "10px 20px / 10px 20px");
+    assert_eq!(rule_css(&s, "rule-inset-cap"), "10px 20px");
 }

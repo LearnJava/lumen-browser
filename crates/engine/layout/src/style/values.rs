@@ -10,6 +10,7 @@ pub mod length;
 pub mod misc;
 pub mod named_colors;
 pub mod rule_anim;
+pub mod rule_computed;
 pub mod rule_cssom;
 pub mod rule_interp;
 pub mod rule_list;

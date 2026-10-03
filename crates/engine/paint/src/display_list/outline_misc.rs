@@ -157,7 +157,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         // (геометрия multicol-колонок здесь слева направо при любом `direction`).
         let gap_idx = i as usize;
         let rule_w = *s.column_rule_width.value_for_gap(gap_idx, total);
-        let rule_style = *s.column_rule_style.value_for_gap(gap_idx, total);
+        let rule_style = s.column_rule_style.value_for_gap(gap_idx, total).painted_as();
         let rule_color = s.column_rule_color.value_for_gap(gap_idx, total).resolve(s.color);
         if !rule_style.is_visible() || rule_w <= 0.0 {
             continue;
