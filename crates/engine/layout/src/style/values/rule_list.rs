@@ -124,6 +124,10 @@ impl<T: Clone> RuleList<T> {
     /// `<gap-rule>`). `None` — невалидно: пустой элемент, `repeat(0, …)`, два `auto`,
     /// вложенный `repeat()`.
     pub fn parse(val: &str, item: &impl Fn(&str) -> Option<T>) -> Option<Self> {
+        // CSS Syntax §5.4.7: конец значения закрывает открытые функции, так что
+        // `repeat(auto, red, blue` — то же значение, что `repeat(auto, red, blue)`.
+        let closed = close_open_parens(val)?;
+        let val = closed.as_str();
         let mut items = Vec::new();
         let mut has_auto = false;
         for part in split_commas(val) {
@@ -200,6 +204,19 @@ fn parse_repeat<T>(
     Some(Some((n, vs)))
 }
 
+/// Дописывает `)` для функций, не закрытых до конца значения; `None` — лишняя `)`.
+fn close_open_parens(s: &str) -> Option<String> {
+    let mut depth = 0usize;
+    for c in s.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+    }
+    Some(format!("{s}{}", ")".repeat(depth)))
+}
+
 /// Делит по запятым вне скобок.
 fn split_commas(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
@@ -269,6 +286,14 @@ mod tests {
     }
 
     #[test]
+    fn unclosed_function_is_closed_at_end_of_value() {
+        let l = list("repeat(2, 1").unwrap();
+        assert_eq!(l.to_css(|v| v.to_string()), "repeat(2, 1)");
+        let l = list("9, repeat(auto, 1, 2").unwrap();
+        assert_eq!(l.to_css(|v| v.to_string()), "9, repeat(auto, 1, 2)");
+    }
+
+    #[test]
     fn invalid_lists_are_rejected() {
         for bad in [
             "",
@@ -282,7 +307,7 @@ mod tests {
             "repeat(2,)",
             "repeat(auto, 1), repeat(auto, 2)",
             "repeat(2, repeat(2, 1))",
-            "repeat(2, 1",
+            "repeat(2, 1))",
             "1 2",
             "repeat(x, 1)",
         ] {

@@ -3166,10 +3166,31 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     }
     return '';
 };
+// CSS Syntax §5.4.7: the end of the value closes every function still open, so
+// `repeat(auto, red, blue` is the value `repeat(auto, red, blue)`. Without the
+// closing here the unclosed `(` would swallow the `;` the style attribute is
+// serialized with and the whole declaration would be lost on re-parse. Applied to
+// the CSS Gap Decorations properties (`rule*`, `{column,row}-rule*`) whose lists
+// are the only grammar with a function that tests feed an unclosed value.
+var _lumen_gap_rule_key_re = /^(rule|(column|row)-rule)(-|$)/;
+function _lumen_close_open_parens(v) {
+    var depth = 0, quote = '';
+    for (var i = 0; i < v.length; i++) {
+        var c = v[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+        else if (c === '"' || c === "'") quote = c;
+        else if (c === '(') depth++;
+        else if (c === ')') { if (depth === 0) return v; depth--; }
+    }
+    if (quote) return v;
+    for (var d = 0; d < depth; d++) v += ')';
+    return v;
+}
 CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
     var strVal = String(val);
+    if (_lumen_gap_rule_key_re.test(key)) strVal = _lumen_close_open_parens(strVal);
     var obj = _lumen_style_get_parsed(nid);
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property.
