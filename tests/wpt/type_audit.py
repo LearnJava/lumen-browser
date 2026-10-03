@@ -86,7 +86,8 @@ def id_score(result: dict) -> float:
     return 1.0 if result.get("status") == "PASS" else 0.0
 
 
-def decompose(manifest: dict, results: dict, scope: set = None) -> dict:
+def decompose(manifest: dict, results: dict, scope: set = None,
+              prefixes: list = None, exclude_prefixes: list = None) -> dict:
     """Split the run's score by manifest type, and each type by scheme."""
     per_type = collections.defaultdict(lambda: {
         "ids": 0, "ran": 0, "score": 0.0, "harness_ok": 0, "pass": 0,
@@ -100,6 +101,8 @@ def decompose(manifest: dict, results: dict, scope: set = None) -> dict:
         if test_type in corpus_stats.NON_AUTOMATABLE_TYPES:
             continue
         if scope is not None and category not in scope:
+            continue
+        if not run_corpus.id_selected(test_id, prefixes or [], exclude_prefixes or []):
             continue
         row = per_type[test_type]
         cat = per_category[category]
@@ -163,7 +166,8 @@ def like_for_like(split: dict, denominator: int) -> dict:
     }
 
 
-def reftest_cdata(results: dict, manifest: dict, scope: set = None) -> dict:
+def reftest_cdata(results: dict, manifest: dict, scope: set = None,
+                  prefixes: list = None, exclude_prefixes: list = None) -> dict:
     """Reftest verdicts split by what BUG-786 does to the pair (slice 14's classes).
 
     `both_cdata` is the class slice 14 priced as possibly inflated: with the
@@ -175,6 +179,8 @@ def reftest_cdata(results: dict, manifest: dict, scope: set = None) -> dict:
         if test_type != "reftest":
             continue
         if scope is not None and category not in scope:
+            continue
+        if not run_corpus.id_selected(test_id, prefixes or [], exclude_prefixes or []):
             continue
         result = results.get(test_id)
         if result is None:
@@ -296,10 +302,22 @@ def main() -> int:
         with open(args.scope_from, encoding="utf-8") as fh:
             scope = set(json.load(fh).get("scope") or []) or None
 
+    # A `run_corpus.py --prefixes` run records its filter in state.json; the
+    # denominator is the ids under it, not the whole category (WPT-RUN-14).
+    prefixes, exclude_prefixes = [], []
+    state_path = os.path.join(args.out_dir, "state.json")
+    if os.path.isfile(state_path):
+        with open(state_path, encoding="utf-8") as fh:
+            recorded = json.load(fh)
+        prefixes = recorded.get("prefixes") or []
+        exclude_prefixes = recorded.get("exclude_prefixes") or []
+        if prefixes and scope is None:
+            scope = {p.split("/")[0] for p in prefixes}
+
     results, _recovered, _empty = run_corpus.load_results(args.out_dir)
-    split = decompose(manifest, results, scope)
+    split = decompose(manifest, results, scope, prefixes, exclude_prefixes)
     lfl = like_for_like(split, split["totals"]["ids"])
-    cdata = reftest_cdata(results, manifest, scope)
+    cdata = reftest_cdata(results, manifest, scope, prefixes, exclude_prefixes)
 
     total_score = split["totals"]["score"] or 1.0
     print(f"\n== {args.out_dir}: {split['totals']['ids']} automatable ids, "
