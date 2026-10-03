@@ -245,6 +245,17 @@ fn dispatch_pointer_event_delivers_to_element() {
 }
 
 #[test]
+fn dispatch_pointer_event_carries_touch_identity_and_keeps_mouse_default() {
+    // TOUCH-1-S3: the optional trailing arguments set pointerId/pointerType/
+    // isPrimary/width/height/pressure; the old 7-argument call stays a mouse.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var div = document.createElement('div'); document.body.appendChild(div);                  var got = [];                  div.addEventListener('pointermove', function(e) { got.push(e); });                  _lumen_dispatch_pointer_event(div.__nid__, 'pointermove', 5, 6, 0, 1, 0,                      [[1, 2]], 2, 'touch', false, 30, 40, 0.25);                  _lumen_dispatch_pointer_event(div.__nid__, 'pointermove', 5, 6, 0, 1, 0);                  var t = got[0], m = got[1], c = t.getCoalescedEvents()[0];                  t.pointerType === 'touch' && t.pointerId === 2 && t.isPrimary === false &&                  t.width === 30 && t.height === 40 && t.pressure === 0.25 &&                  c.pointerType === 'touch' && c.pointerId === 2 &&                  t.getPredictedEvents()[0].pointerType === 'touch' &&                  m.pointerType === 'mouse' && m.pointerId === 1 && m.isPrimary === true &&                  m.width === 1 && m.pressure === 0.5"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn dispatch_pointer_event_bubbles_for_bubbling_types() {
     // pointerdown / pointermove / pointerup must bubble through ancestor chain.
     let doc = make_doc();

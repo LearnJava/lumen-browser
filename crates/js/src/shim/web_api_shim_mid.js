@@ -1425,7 +1425,8 @@ function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
 // sample for _lumen_dispatch_pointer_event's getCoalescedEvents()/
 // getPredictedEvents() arrays (Pointer Events L3 §4.1). Mirrors the main
 // event's fields except position.
-function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles) {
+function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles, ident) {
+    ident = ident || _lumen_pointer_identity(buttons);
     var cev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
         clientX: cx, clientY: cy,
@@ -1434,10 +1435,10 @@ function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod,
         button: button, buttons: buttons,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
-        pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0,
+        pointerId: ident.pointerId, pointerType: ident.pointerType, isPrimary: ident.isPrimary,
+        pressure: ident.pressure,
         altitudeAngle: Math.PI / 2, azimuthAngle: 0,
-        width: 1, height: 1,
+        width: ident.width, height: ident.height,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
     cev.getCoalescedEvents = function() { return [cev]; };
@@ -1458,14 +1459,30 @@ function _lumen_predict_pointer_events(coalesced) {
     var dy = last.clientY - prev.clientY;
     var mod = (last.ctrlKey ? 1 : 0) | (last.shiftKey ? 2 : 0) |
               (last.altKey  ? 4 : 0) | (last.metaKey  ? 8 : 0);
+    var ident = _lumen_pointer_identity(last.buttons, last.pointerId, last.pointerType,
+        last.isPrimary, last.width, last.height, last.pressure);
     var out = [];
     for (var i = 1; i <= 2; i++) {
         out.push(_lumen_make_coalesced_pointer_event(
             last.type, last.clientX + dx * i, last.clientY + dy * i,
-            last.button, last.buttons, mod, last.bubbles
+            last.button, last.buttons, mod, last.bubbles, ident
         ));
     }
     return out;
+}
+
+// The pointer-identity members of a PointerEvent. Every argument is optional:
+// an omitted one (`undefined`) takes the mouse default, so callers that only
+// ever sent mouse events are unchanged.
+function _lumen_pointer_identity(buttons, pointerId, pointerType, isPrimary, width, height, pressure) {
+    return {
+        pointerId: pointerId === undefined ? 1 : pointerId,
+        pointerType: pointerType === undefined ? 'mouse' : pointerType,
+        isPrimary: isPrimary === undefined ? true : !!isPrimary,
+        width: width === undefined ? 1 : width,
+        height: height === undefined ? 1 : height,
+        pressure: pressure === undefined ? (buttons ? 0.5 : 0.0) : pressure
+    };
 }
 
 // Called from shell for pointer events (W3C Pointer Events Level 2/3).
@@ -1475,8 +1492,19 @@ function _lumen_predict_pointer_events(coalesced) {
 // coalesced: optional array of [x,y] CSS-pixel positions buffered since the
 // last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
 // (clientX, clientY). Omitted/empty for non-move event types.
-function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
-    _lumen_note_activation_input(type);
+// pointerId / pointerType / isPrimary / width / height / pressure: optional
+// identity of the pointer, default 1 / 'mouse' / true / 1 / 1 / 0.5 while a
+// button is down (else 0). A touch contact passes pointerType 'touch' and its
+// own id. HTML LS §6.4.3 makes `pointerdown` activation-triggering only for a
+// mouse and `pointerup` only for the other types, hence the type shuffle below.
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced,
+                                       pointerId, pointerType, isPrimary, width, height, pressure) {
+    var ident = _lumen_pointer_identity(buttons, pointerId, pointerType, isPrimary, width, height, pressure);
+    if (ident.pointerType === 'mouse') {
+        _lumen_note_activation_input(type);
+    } else if (type === 'pointerup') {
+        _lumen_mark_user_activation();
+    }
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -1486,11 +1514,11 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         button: button, buttons: buttons,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
-        pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0,
-        // Pointer Events Level 3 §4.1 — mouse always perpendicular to surface
+        pointerId: ident.pointerId, pointerType: ident.pointerType, isPrimary: ident.isPrimary,
+        pressure: ident.pressure,
+        // Pointer Events Level 3 §4.1 — perpendicular to the surface
         altitudeAngle: Math.PI / 2, azimuthAngle: 0,
-        width: 1, height: 1,
+        width: ident.width, height: ident.height,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
     // Level 3 §4.1: intermediate samples buffered since the last dispatch,
@@ -1502,13 +1530,50 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
     if (Array.isArray(coalesced)) {
         for (var i = 0; i < coalesced.length; i++) {
             coalescedEvents.push(_lumen_make_coalesced_pointer_event(
-                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles
+                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles, ident
             ));
         }
     }
     coalescedEvents.push(ev);
     ev.getCoalescedEvents = function() { return coalescedEvents; };
     ev.getPredictedEvents = function() { return _lumen_predict_pointer_events(coalescedEvents); };
+    return _lumen_dispatch_rich(start_nid, ev);
+}
+
+// Touch Events L2 §5 — called from the shell for one touch contact change.
+// `touches` / `changedTouches` / `targetTouches` are arrays of descriptors
+// `{identifier, target_nid, clientX, clientY, radiusX, radiusY, force}` (the
+// shell owns the contact state, S4/S5). `touches` = every contact on the
+// surface, `targetTouches` = those that started on this event's target,
+// `changedTouches` = those this event is about. The event goes to `start_nid`
+// and bubbles; per L2 §5 only `touchcancel` is not cancelable. Returns the
+// `dispatchEvent` result: false when a listener called preventDefault().
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_touch_event(start_nid, type, touches, changedTouches, targetTouches, mod) {
+    if (type === 'touchend') _lumen_mark_user_activation();
+    function build(descs) {
+        var out = [];
+        for (var i = 0; descs && i < descs.length; i++) {
+            var d = descs[i];
+            out.push(new Touch({
+                identifier: d.identifier,
+                target: _lumen_make_element(d.target_nid),
+                clientX: d.clientX, clientY: d.clientY,
+                screenX: d.clientX, screenY: d.clientY,
+                pageX: d.clientX + (window.scrollX || 0), pageY: d.clientY + (window.scrollY || 0),
+                radiusX: d.radiusX || 0, radiusY: d.radiusY || 0,
+                force: d.force || 0
+            }));
+        }
+        return out;
+    }
+    var ev = new TouchEvent(type, {
+        bubbles: true, cancelable: type !== 'touchcancel', isTrusted: true,
+        touches: build(touches), targetTouches: build(targetTouches),
+        changedTouches: build(changedTouches),
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
     return _lumen_dispatch_rich(start_nid, ev);
 }
 

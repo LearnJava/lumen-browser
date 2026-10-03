@@ -772,6 +772,7 @@ the time — read dates.
   non-coalescing event. 3 new tests (`dom::tests::pointer_move_coalesced_*`),
   green under both QuickJS (default) and `--features v8-backend`. See
   `subsystems/shell.md` for the shell-side buffering; `docs/tasks/ph3-pointer-events-l3.md`.
+- **Touch dispatch (TOUCH-1-S3, 2026-10-04).** `_lumen_dispatch_pointer_event` takes optional trailing `pointerId, pointerType, isPrimary, width, height, pressure` (defaults `1`/`'mouse'`/`true`/`1`/`1`/`0.5` while a button is down; `_lumen_pointer_identity`), carried into the coalesced and predicted events; for a non-mouse pointer `pointerup`, not `pointerdown`, is the activation trigger (HTML LS). `_lumen_dispatch_touch_event(nid, type, touches, changedTouches, targetTouches, mod)` builds `Touch`/`TouchList`/`TouchEvent` from `{identifier, target_nid, clientX, clientY, radiusX, radiusY, force}` descriptors (trusted, bubbling, cancelable except `touchcancel`) and returns the `dispatchEvent` result; `touchend` marks user activation. Nothing in the shell calls it yet (S4/S5); `ontouch*`/`maxTouchPoints` are untouched. Tests in `v8_bug688_touch_events.rs`, `v8_event_classes.rs`.
 - **`window` is now the engine's real global object (BUG-280 fix, [P2] P2-wpt S4, 2026-07-16).**
   `WEB_API_SHIM` copies every own property of `window` onto `globalThis` (values via plain
   assignment — required because some quickjs-ng built-ins like `addEventListener` are
