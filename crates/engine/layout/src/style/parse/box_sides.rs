@@ -355,7 +355,7 @@ pub(in crate::style) fn parse_inset_area_keyword(s: &str) -> Option<crate::ancho
 pub(in crate::style) fn parse_anchor_size_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorSizeFunc> {
     use crate::anchor::{AnchorSizeDimension, AnchorSizeFunc};
     let v = val.trim();
-    let inner = v.strip_prefix("anchor-size(")?.strip_suffix(')')?;
+    let inner = strip_function_call(v, "anchor-size")?;
     let (head, fallback) = split_anchor_fallback(inner, is_quirks)?;
     let mut anchor_name = None;
     let mut dimension = None;
@@ -376,6 +376,17 @@ pub(in crate::style) fn parse_anchor_size_func(val: &str, is_quirks: bool) -> Op
         dimension.replace(dim).is_none().then_some(())?;
     }
     Some(AnchorSizeFunc { anchor_name, dimension: dimension?, fallback })
+}
+
+/// Returns the text between the parentheses of `name( … )` — the function name
+/// matches ASCII-case-insensitively (CSS Syntax §function), `v` must end at the
+/// closing parenthesis.
+fn strip_function_call<'a>(v: &'a str, name: &str) -> Option<&'a str> {
+    let head = v.get(..name.len())?;
+    if !head.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    v[name.len()..].strip_prefix('(')?.strip_suffix(')')
 }
 
 /// Splits the inside of `anchor()` / `anchor-size()` at the first comma into the
@@ -400,10 +411,10 @@ fn split_anchor_fallback(inner: &str, is_quirks: bool) -> Option<(&str, Option<c
 ///
 /// Returns `None` when `val` is not an `anchor()` expression or repeats a component
 /// (`anchor(--a --b top)`, `anchor(top left)`).
-fn parse_anchor_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorFunc> {
+pub(in crate::style) fn parse_anchor_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorFunc> {
     use crate::anchor::AnchorFunc;
     let v = val.trim();
-    let inner = v.strip_prefix("anchor(")?.strip_suffix(')')?;
+    let inner = strip_function_call(v, "anchor")?;
     let (head, fallback) = split_anchor_fallback(inner, is_quirks)?;
     let mut anchor_name = None;
     let mut side = None;
@@ -433,8 +444,65 @@ fn parse_anchor_side(s: &str) -> Option<crate::anchor::AnchorSide> {
         "outside" => Some(AnchorSide::Outside),
         "self-start" => Some(AnchorSide::SelfStart),
         "self-end" => Some(AnchorSide::SelfEnd),
-        other => other.strip_suffix('%')?.trim().parse::<f32>().ok().map(AnchorSide::Percentage),
+        other => other
+            .strip_suffix('%')?
+            .parse::<f32>()
+            .ok()
+            .filter(|p| p.is_finite())
+            .map(AnchorSide::Percentage),
     }
+}
+
+/// CSSOM-2 (BUG-563, GAP-ANCHORCSSOM-S2): validates and canonicalizes a
+/// top-level `anchor()` / `anchor-size()` specified value for the JS
+/// `element.style` object (`_lumen_canonicalize_longhand`), through the same
+/// parsers the cascade uses ([`parse_anchor_func`], [`parse_anchor_size_func`]).
+/// Same role as [`crate::style::canonical_specified_length`].
+///
+/// Serialization (CSS Anchor Positioning L1 §3.1/§4): the `<anchor-name>`
+/// comes first and the `<anchor-side>`/`<anchor-size>` second regardless of the
+/// authored order, a fallback follows after `, ` and is a canonical
+/// `<length-percentage>` (`0` → `0px`). `allow_anchor` is `false` for the
+/// properties that accept `anchor-size()` but not `anchor()` (sizing, margin).
+/// `None` = invalid or not a top-level anchor function.
+///
+/// `anchor()`/`anchor-size()` nested in `calc()`/`min()`/`max()` or in a
+/// fallback are not parsed by the cascade either — they stay `None` (S3/S4).
+pub fn canonical_specified_anchor(s: &str, allow_anchor: bool) -> Option<String> {
+    use crate::anchor::{AnchorSide, AnchorSizeDimension};
+    use crate::selector_query::length_to_css;
+    let fallback_css = |fb: &Option<Length>| fb.as_ref().map(|l| format!(", {}", length_to_css(l))).unwrap_or_default();
+    let name_css = |n: &Option<Box<str>>| n.as_ref().map(|n| format!("{n} ")).unwrap_or_default();
+    if let Some(f) = parse_anchor_size_func(s, false) {
+        let dim = match f.dimension {
+            AnchorSizeDimension::Width => "width",
+            AnchorSizeDimension::Height => "height",
+            AnchorSizeDimension::Block => "block",
+            AnchorSizeDimension::Inline => "inline",
+            AnchorSizeDimension::SelfBlock => "self-block",
+            AnchorSizeDimension::SelfInline => "self-inline",
+        };
+        return Some(format!("anchor-size({}{dim}{})", name_css(&f.anchor_name), fallback_css(&f.fallback)));
+    }
+    if !allow_anchor {
+        return None;
+    }
+    let f = parse_anchor_func(s, false)?;
+    let side = match f.side {
+        AnchorSide::Top => "top".to_string(),
+        AnchorSide::Right => "right".to_string(),
+        AnchorSide::Bottom => "bottom".to_string(),
+        AnchorSide::Left => "left".to_string(),
+        AnchorSide::Center => "center".to_string(),
+        AnchorSide::Start => "start".to_string(),
+        AnchorSide::End => "end".to_string(),
+        AnchorSide::Inside => "inside".to_string(),
+        AnchorSide::Outside => "outside".to_string(),
+        AnchorSide::SelfStart => "self-start".to_string(),
+        AnchorSide::SelfEnd => "self-end".to_string(),
+        AnchorSide::Percentage(p) => length_to_css(&Length::Percent(p)),
+    };
+    Some(format!("anchor({}{side}{})", name_css(&f.anchor_name), fallback_css(&f.fallback)))
 }
 
 pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {

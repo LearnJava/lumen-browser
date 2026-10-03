@@ -1953,12 +1953,12 @@ function _lumen_shorthand_value(obj, shorthand) {
 // `_LUMEN_KEYWORD_PROPERTIES` below) — its canon fn reuses that same
 // `border-top-style` keyword list rather than duplicating it.
 var _LUMEN_TRBL_SHORTHAND_CANON = {
-    'margin':       function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'margin':       function(v) { return _lumen_length_or_anchor_canon(1, v, true, false); },
     'padding':      function(v) { return _lumen_css_canonical_length(v, false, true); },
     'border-width': function(v) { return _lumen_css_canonical_line_width(v); },
     'border-style': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['border-top-style']); },
     'border-color': function(v) { return _lumen_css_canonical_color(v); },
-    'inset':        function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'inset':        function(v) { return _lumen_length_or_anchor_canon(2, v, true, false); },
     'scroll-margin':  function(v) { return _lumen_css_canonical_scroll_offset(v, false, false); },
     'scroll-padding': function(v) { return _lumen_css_canonical_scroll_offset(v, true, true); },
 };
@@ -1982,7 +1982,7 @@ function _lumen_expand_trbl_shorthand(canonFn, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { top: lowerVal, right: lowerVal, bottom: lowerVal, left: lowerVal };
     }
-    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    var tokens = _lumen_split_top_level_ws(strVal);
     if (tokens.length < 1 || tokens.length > 4) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
@@ -2168,12 +2168,12 @@ var _LUMEN_2V_SHORTHANDS = {
 // list, `align-content`/`align-items`/`align-self` already need to exist
 // there for the plain longhand assignment path (`style.alignContent = …`).
 var _LUMEN_2V_SHORTHAND_CANON = {
-    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_length_or_anchor_canon(1, v, g.allowAuto, g.nonNegative); },
+    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_length_or_anchor_canon(1, v, g.allowAuto, g.nonNegative); },
     'padding-inline': function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-inline-start']; return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
     'padding-block':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-block-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_length_or_anchor_canon(2, v, g.allowAuto, g.nonNegative); },
+    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_length_or_anchor_canon(2, v, g.allowAuto, g.nonNegative); },
     'place-content':  function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-content']); },
     'place-items':    function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-items']); },
     'place-self':     function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-self']); },
@@ -2199,7 +2199,7 @@ function _lumen_expand_2v_shorthand(canonFn, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { start: lowerVal, end: lowerVal };
     }
-    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    var tokens = _lumen_split_top_level_ws(strVal);
     if (tokens.length < 1 || tokens.length > 2) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
@@ -2958,6 +2958,53 @@ function _lumen_css_canonical_zoom(strVal) {
     return v;
 }
 
+// CSS Anchor Positioning L1 (BUG-563, GAP-ANCHORCSSOM-S2): a value that starts
+// with `anchor(` / `anchor-size(` is canonicalized by the real parser
+// (`_lumen_css_canonical_anchor`) instead of the length grammar, which has no
+// notion of either function. `anchor()` is valid only in the inset properties,
+// `anchor-size()` also in margin and sizing ones (padding takes neither); the
+// per-property mode is 2 / 1 / 0 for those three cases. `anchor()` nested in
+// `calc()`/`min()`/`max()` is not a top-level call and keeps going through the
+// regular grammar (S3/S4).
+var _LUMEN_ANCHOR_FN_RE = /^\s*anchor(?:-size)?\(/i;
+var _LUMEN_ANCHOR_INSET_KEY_RE = /^(?:top|right|bottom|left|inset-(?:block|inline)-(?:start|end))$/;
+var _LUMEN_ANCHOR_SIZE_ONLY_KEY_RE = /^(?:margin-.+|(?:min-|max-)?(?:width|height|block-size|inline-size))$/;
+function _lumen_anchor_fn_mode(key) {
+    if (_LUMEN_ANCHOR_INSET_KEY_RE.test(key)) return 2;
+    if (_LUMEN_ANCHOR_SIZE_ONLY_KEY_RE.test(key)) return 1;
+    return 0;
+}
+// Returns `undefined` when `strVal` is not a top-level anchor function (or the
+// property takes none), so the caller continues with its own grammar; else the
+// canonical string or `null` for an invalid value.
+function _lumen_anchor_fn_canon(mode, strVal) {
+    if (mode === 0 || !_LUMEN_ANCHOR_FN_RE.test(strVal)) return undefined;
+    return _lumen_css_canonical_anchor(strVal, mode === 2);
+}
+// `<length-percentage>` grammar of a shorthand with `mode` as above.
+function _lumen_length_or_anchor_canon(mode, strVal, allowAuto, nonNegative) {
+    var a = _lumen_anchor_fn_canon(mode, strVal);
+    return a !== undefined ? a : _lumen_css_canonical_length(strVal, allowAuto, nonNegative);
+}
+// Splits a shorthand value on whitespace outside parentheses, so
+// `anchor(--a top)` / `calc(1px + 2px)` stay one token.
+function _lumen_split_top_level_ws(strVal) {
+    var tokens = [], depth = 0, start = -1;
+    var s = strVal.trim();
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')' && depth > 0) depth--;
+        if (depth === 0 && /\s/.test(c)) {
+            if (start >= 0) { tokens.push(s.substring(start, i)); start = -1; }
+        } else if (start < 0) {
+            start = i;
+        }
+    }
+    if (start >= 0) tokens.push(s.substring(start));
+    return tokens;
+}
+
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
 // longhand value", shared by `setProperty` and `_lumen_parse_style`'s
 // per-declaration loop above — previously each had its own copy of this
@@ -2975,6 +3022,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     var pending = _lumen_pending_substitution_value(strVal);
     if (pending !== undefined) return pending;
+    var anchorFn = _lumen_anchor_fn_canon(_lumen_anchor_fn_mode(key), strVal);
+    if (anchorFn !== undefined) return anchorFn;
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_color(strVal);
     }
