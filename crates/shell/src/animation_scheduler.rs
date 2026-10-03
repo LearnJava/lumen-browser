@@ -1114,4 +1114,61 @@ mod tests {
         assert!(rules.column_color.is_some() && rules.row_color.is_some());
         assert!(rules.row_width.is_none());
     }
+
+    // BUG-553 срез 14: `animationstart/iteration/end/cancel` of an animation whose
+    // `@keyframes` touch only `*-rule-*` properties come from the same lifecycle
+    // state machine as every other animation (no property-specific gate), and the
+    // frame still carries the painted gap-rule override in between.
+    #[test]
+    fn tick_fires_lifecycle_events_for_gap_rule_only_keyframes() {
+        let mut sched = AnimationScheduler::new();
+        let mut root = make_animated_box(1, "pulse", 1.0, IterationCount::Finite(2.0));
+        std::sync::Arc::make_mut(&mut root.style).animation_timing_functions =
+            vec![TimingFunction::Linear];
+        let sheet = lumen_css_parser::parse(
+            "@keyframes pulse { from { column-rule-width: 2px; } to { column-rule-width: 10px; } }",
+        );
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        let (frame, events) = sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp);
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec![AnimationEventKind::Start]);
+        assert_eq!(events[0].animation_name, "pulse");
+        assert!(frame.has_active);
+
+        // 1.5s: one loop done, second in progress — `animationiteration`, and the
+        // override is the second loop's midpoint (6px).
+        let (frame, events) = sched.tick(1500.0, &root, &sheet, 0.0, 0.0, vp);
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec![AnimationEventKind::Iteration]);
+        assert!((events[0].elapsed_time - 1.0).abs() < 1e-4);
+        let rules = frame
+            .overrides
+            .get(&node(1))
+            .and_then(|s| s.gap_rules.as_ref())
+            .expect("gap-rule override mid-loop");
+        assert!((*rules.column_width.as_ref().expect("width").first() - 6.0).abs() < 1e-3);
+
+        // 2.5s: past the end — `animationend` once, then silence.
+        let (_, events) = sched.tick(2500.0, &root, &sheet, 0.0, 0.0, vp);
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec![AnimationEventKind::End]);
+        assert!((events[0].elapsed_time - 2.0).abs() < 1e-4);
+        let (_, events) = sched.tick(3000.0, &root, &sheet, 0.0, 0.0, vp);
+        assert!(events.is_empty(), "end must fire once, got {events:?}");
+    }
+
+    #[test]
+    fn tick_fires_cancel_for_gap_rule_only_keyframes() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "pulse", 2.0, IterationCount::Finite(1.0));
+        let sheet = lumen_css_parser::parse(
+            "@keyframes pulse { to { row-rule-color: rgb(0, 0, 255); } }",
+        );
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp); // Start.
+        let plain_root = make_box(1, 0.0, 0.0, 50.0, 50.0);
+        let (_, events) = sched.tick(500.0, &plain_root, &sheet, 0.0, 0.0, vp);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimationEventKind::Cancel);
+    }
 }
