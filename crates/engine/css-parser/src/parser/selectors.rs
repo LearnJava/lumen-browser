@@ -409,6 +409,23 @@ pub enum PseudoElementKind {
     /// `inline-end`/`block-end`/`*` (lower-cased); validity of the argument
     /// itself is checked by `pseudo_element_is_valid`, not here.
     ScrollButton(String),
+    /// `::view-transition` (CSS View Transitions L1 §6.1) — the root of the
+    /// view-transition pseudo-tree, originating from the document element.
+    ViewTransition,
+    /// `::view-transition-group(<name>)` (CSS View Transitions L1 §6.2) — the
+    /// morphing group of the captured element named `<name>`. The argument is
+    /// the `view-transition-name` it targets or `*` (every name); stored as
+    /// written (names are case-sensitive `<custom-ident>`s).
+    ViewTransitionGroup(String),
+    /// `::view-transition-image-pair(<name>)` (CSS View Transitions L1 §6.3) —
+    /// the isolating container holding the old and new snapshots of a group.
+    ViewTransitionImagePair(String),
+    /// `::view-transition-old(<name>)` (CSS View Transitions L1 §6.4) — the
+    /// snapshot of the element as it was before the DOM update.
+    ViewTransitionOld(String),
+    /// `::view-transition-new(<name>)` (CSS View Transitions L1 §6.5) — the
+    /// live representation of the element after the DOM update.
+    ViewTransitionNew(String),
     /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
     /// Хранится имя для диагностики.
     Unknown(String),
@@ -759,6 +776,11 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::ScrollMarker => "::scroll-marker".into(),
         PseudoElementKind::ScrollMarkerGroup => "::scroll-marker-group".into(),
         PseudoElementKind::ScrollButton(dir) => format!("::scroll-button({dir})"),
+        PseudoElementKind::ViewTransition => "::view-transition".into(),
+        PseudoElementKind::ViewTransitionGroup(n) => format!("::view-transition-group({n})"),
+        PseudoElementKind::ViewTransitionImagePair(n) => format!("::view-transition-image-pair({n})"),
+        PseudoElementKind::ViewTransitionOld(n) => format!("::view-transition-old({n})"),
+        PseudoElementKind::ViewTransitionNew(n) => format!("::view-transition-new({n})"),
         PseudoElementKind::Unknown(name) => format!("::{name}"),
     }
 }
@@ -1384,6 +1406,7 @@ impl<'a> Parser<'a> {
                 "picker-icon" => PseudoElementKind::PickerIcon,
                 "scroll-marker" => PseudoElementKind::ScrollMarker,
                 "scroll-marker-group" => PseudoElementKind::ScrollMarkerGroup,
+                "view-transition" => PseudoElementKind::ViewTransition,
                 _ => PseudoElementKind::Unknown(name),
             };
             return Some(SimpleSelector::PseudoElement(pe));
@@ -1696,6 +1719,41 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoElementKind::ScrollButton(arg))
+            }
+            "view-transition-group"
+            | "view-transition-image-pair"
+            | "view-transition-old"
+            | "view-transition-new" => {
+                // CSS View Transitions L1 §6.2–6.5: the argument is a
+                // `<custom-ident>` (the `view-transition-name` to target) or
+                // `*`. The CSS-wide keywords and `none` are not valid
+                // `<custom-ident>`s here (`none` is excluded from
+                // `view-transition-name`'s ident too). The L2 `name.class`
+                // form needs `view-transition-class`, which is not modeled —
+                // it is rejected like any other trailing junk.
+                self.skip_ws_and_comments();
+                let arg = if self.peek() == Some('*') {
+                    self.consume();
+                    "*".to_string()
+                } else {
+                    self.parse_ident().unwrap_or_default()
+                };
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')')
+                    || arg.is_empty()
+                    || matches!(
+                        arg.to_ascii_lowercase().as_str(),
+                        "none" | "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "default"
+                    )
+                {
+                    return None;
+                }
+                Some(match name_lower {
+                    "view-transition-group" => PseudoElementKind::ViewTransitionGroup(arg),
+                    "view-transition-image-pair" => PseudoElementKind::ViewTransitionImagePair(arg),
+                    "view-transition-old" => PseudoElementKind::ViewTransitionOld(arg),
+                    _ => PseudoElementKind::ViewTransitionNew(arg),
+                })
             }
             _ => None,
         }

@@ -117,7 +117,10 @@ pub use selection::{
     user_select_none_text_nodes, SelectScope,
 };
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
-pub use style::{compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style};
+pub use style::{
+    compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
+    compute_view_transition_pseudo_style, ViewTransitionPart,
+};
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
     computed_style_to_map, find_all_by_selector, find_box_by_selector, find_first_dom_node_by_selector,
@@ -2523,11 +2526,10 @@ fn collect_vt_names_rec(root: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<
 /// collector returns every occurrence as-is (mirroring
 /// [`collect_view_transition_names`]); the shell deduplicates by name, keeping
 /// the first, when it pairs old↔new snapshots.
-// CSS: ::view-transition / ::view-transition-group(name) / -image-pair / -old / -new —
-// P4 to add PseudoElementKind variants + functional-pseudo parsing
-// (css-parser/src/parser.rs:345) so author animation-duration /
-// animation-timing-function on these pseudos can override the morph's hardcoded
-// 300 ms per group. Until then the shell uses the default duration for every group.
+// The `::view-transition-*` pseudo-elements are parsed and cascaded
+// ([`compute_view_transition_pseudo_style`]); the shell reads the whole-page
+// (`root`) `animation-duration`/`-timing-function` from them. Per-name group
+// morphing is not driven by this collector yet.
 pub fn collect_view_transition_groups(
     root: &LayoutBox,
 ) -> Vec<(lumen_dom::NodeId, Box<str>, lumen_core::geom::Rect)> {

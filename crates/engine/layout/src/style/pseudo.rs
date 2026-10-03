@@ -57,13 +57,45 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::ScrollMarker => "scroll-marker",
         PseudoElementKind::ScrollMarkerGroup => "scroll-marker-group",
         PseudoElementKind::ScrollButton(_) => "scroll-button",
+        PseudoElementKind::ViewTransition => "view-transition",
+        PseudoElementKind::ViewTransitionGroup(_) => "view-transition-group",
+        PseudoElementKind::ViewTransitionImagePair(_) => "view-transition-image-pair",
+        PseudoElementKind::ViewTransitionOld(_) => "view-transition-old",
+        PseudoElementKind::ViewTransitionNew(_) => "view-transition-new",
         PseudoElementKind::Unknown(s) => s.as_str(),
     }
 }
 
+/// Splits a pseudo-element request into its bare name and, for the
+/// functional forms the caller asks about by argument, that argument:
+/// `"view-transition-old(hero)"` → `("view-transition-old", Some("hero"))`.
+fn split_pseudo_request(pseudo: &str) -> (&str, Option<&str>) {
+    match pseudo.split_once('(') {
+        Some((base, rest)) => (base, Some(rest.strip_suffix(')').unwrap_or(rest))),
+        None => (pseudo, None),
+    }
+}
+
 /// Helper: check if a pseudo-element name matches a PseudoElementKind.
+///
+/// `name` is either a bare name (`"before"`) or, for the `::view-transition-*`
+/// family, `"<name>(<ident>)"`: the selector's own argument must then be that
+/// ident (case-sensitive, it is a `<custom-ident>`) or the `*` wildcard (CSS
+/// View Transitions L1 §6.2–6.5). A bare `"view-transition-group"` matches any
+/// argument. Other functional kinds keep the old contract — name only.
 fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
-    pseudo_element_name(kind).eq_ignore_ascii_case(name)
+    let (base, wanted) = split_pseudo_request(name);
+    if !pseudo_element_name(kind).eq_ignore_ascii_case(base) {
+        return false;
+    }
+    let own = match kind {
+        PseudoElementKind::ViewTransitionGroup(a)
+        | PseudoElementKind::ViewTransitionImagePair(a)
+        | PseudoElementKind::ViewTransitionOld(a)
+        | PseudoElementKind::ViewTransitionNew(a) => a.as_str(),
+        _ => return true,
+    };
+    wanted.is_none_or(|w| own == "*" || own == w)
 }
 
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -350,7 +382,7 @@ fn compute_pseudo_element_style_inner(
     // Lists L3 §2.1, the `matched.is_empty()` branch), so it must never be
     // short-circuited here.
     if !pseudo.eq_ignore_ascii_case("marker")
-        && !sheet_targets_pseudo(sheet, viewport, dark_mode, pseudo)
+        && !sheet_targets_pseudo(sheet, viewport, dark_mode, split_pseudo_request(pseudo).0)
     {
         return None;
     }
@@ -527,7 +559,10 @@ fn compute_pseudo_element_style_inner(
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-thumb")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-track")
+        || split_pseudo_request(pseudo).0.starts_with("view-transition")
     {
+        // CSS View Transitions L1 §6: the `::view-transition-*` tree is built
+        // by the UA, not by `content:` — no `content` required.
         Some(style)
     } else if pseudo.eq_ignore_ascii_case("marker") {
         match &style.content {
@@ -577,4 +612,65 @@ pub fn compute_target_text_style(
     dark_mode: bool,
 ) -> Option<ComputedStyle> {
     compute_pseudo_element_style(doc, node, "target-text", sheet, parent, viewport, dark_mode)
+}
+
+/// Which part of the `::view-transition` pseudo-tree a rule targets (CSS View
+/// Transitions L1 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewTransitionPart {
+    /// `::view-transition-group(<name>)`.
+    Group,
+    /// `::view-transition-image-pair(<name>)`.
+    ImagePair,
+    /// `::view-transition-old(<name>)`.
+    Old,
+    /// `::view-transition-new(<name>)`.
+    New,
+}
+
+impl ViewTransitionPart {
+    fn request(self, name: &str) -> String {
+        let base = match self {
+            Self::Group => "view-transition-group",
+            Self::ImagePair => "view-transition-image-pair",
+            Self::Old => "view-transition-old",
+            Self::New => "view-transition-new",
+        };
+        format!("{base}({name})")
+    }
+}
+
+/// Computes the author style of one `::view-transition-*` pseudo-element for
+/// the capture named `name` (`"root"` for the whole-page capture).
+///
+/// The pseudo-tree originates from the document element, so `doc`'s root
+/// element is the node the rules' originating compound is matched against
+/// (`:root::view-transition-old(root)` and the bare
+/// `::view-transition-old(root)` both match; `.x::view-transition-old(root)`
+/// matches only when the root element has that class). Rules whose argument
+/// is `*` apply to every name.
+///
+/// `None` when no rule targets this part/name — the caller keeps the UA
+/// default (the shell's 300 ms linear fade). The pseudo-tree has no real
+/// parent style available here, so inherited properties come from the initial
+/// style: only the non-inherited `animation-*` longhands are meaningful to
+/// callers today.
+pub fn compute_view_transition_pseudo_style(
+    doc: &Document,
+    sheet: &Stylesheet,
+    part: ViewTransitionPart,
+    name: &str,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    let root = doc.document_element()?;
+    compute_pseudo_element_style(
+        doc,
+        root,
+        &part.request(name),
+        sheet,
+        &ComputedStyle::root(),
+        viewport,
+        dark_mode,
+    )
 }

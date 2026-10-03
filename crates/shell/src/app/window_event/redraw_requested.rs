@@ -925,7 +925,9 @@ impl Lumen {
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         if let Some(ref vt) = self.view_transition {
             let elapsed = now_ms - vt.start_ms;
-            let progress = (elapsed / vt.duration_ms).clamp(0.0, 1.0) as f32;
+            // `animation-duration: 0s` (or `animation: none`) skips the fade.
+            let linear = if vt.duration_ms > 0.0 { (elapsed / vt.duration_ms).clamp(0.0, 1.0) as f32 } else { 1.0 };
+            let progress = vt.easing.progress(linear).clamp(0.0, 1.0);
             let alpha = 1.0 - progress;
             if alpha > 0.0 {
                 let mut vt_cmds = Vec::with_capacity(vt.old_dl.len() + 2);
