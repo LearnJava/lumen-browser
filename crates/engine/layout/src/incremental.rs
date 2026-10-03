@@ -194,7 +194,7 @@ pub(crate) type ReuseIndex = std::collections::HashMap<NodeId, std::sync::Mutex<
 /// see that flag for why the graft must be able to recognise one.
 pub(crate) fn extract_clean_subtrees(
     prev: &mut LayoutBox,
-    clean: &std::collections::HashSet<NodeId>,
+    clean: &lumen_core::id_hash::IdSet<NodeId>,
 ) -> (ReuseIndex, u64) {
     let mut out = ReuseIndex::default();
     let mut visited = 0u64;
@@ -210,7 +210,7 @@ pub(crate) fn extract_clean_subtrees(
 
 fn extract_clean_subtrees_inner(
     b: &mut LayoutBox,
-    clean: &std::collections::HashSet<NodeId>,
+    clean: &lumen_core::id_hash::IdSet<NodeId>,
     out: &mut ReuseIndex,
     visited: &mut u64,
 ) {

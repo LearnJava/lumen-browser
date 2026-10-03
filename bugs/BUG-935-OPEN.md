@@ -4648,3 +4648,36 @@ BUG-960 запись публикуется и для `visible`-бокса, че
 **Что осталось.** По убыванию на стенде, мс/флаш: `try_incremental` 1,26 (`layout_mutation` 0,92: `precompute_counters` 0,23, `cascade_walk` 0,2, `build_box` 0,17,
 `post_layout_passes` 0,13), `flush.collectors` 0,54 (`collect_plan` 0,47), `scroll_collect` 0,47, `incr.prev_node_ids` 0,32 — корень сбора это `body` целиком (`appendChild` в `body`),
 поэтому сбор идентификаторов идёт по всему дереву; сузить можно только вместе со сменой того, что считается «областью» флаша. Статус `OPEN (DEBTOR)` не меняется.
+
+## Срез 77 (P1, 2026-10-03) — списки идентификаторов на быстром хешере, а свёртка scroll-extent переиспользованных поддеревьев хранится между флашами
+
+**Вопрос из среза 76.** Остаток устойчивого флаша на стенде 2 200 элементов (`v8_bug935_s76_stand`), мс на 601 флаш: `maybe_flush` 1 465, `flush.scroll_collect` 288,
+`flush.collect_plan` 292, `incr.prev_node_ids` 205. Корень сбора — `body`, поэтому всё это O(документ).
+
+**Что нашлось.** (1) Все множества идентификаторов — `prev_node_ids`/`prev_node_raw_ids`, `pruned_ids`/`pruned_raw_ids`, `closure` и `own` в `ChangedNodes`, `clean_subtrees`,
+`seen` в плане — `std::collections::HashSet` на SipHash-1-3. Ключи выдаёт сам движок (индекс арены, `NodeId::raw`), защита от hash-flooding им не нужна, а на плотных
+последовательных числах SipHash стоит ~40 нс на вставку. (2) `flush.scroll_collect` (0,45 мс на флаш) — не цикл вытеснения (6,8 мс на 601 флаш), а `ScopedCollection::scroll_containers`:
+свёртка среза 75 всё ещё заходит в каждый бокс документа, потому что extent `body` зависит от потомков, а переиспользованных поддеревьев под ним — почти весь документ.
+
+**Что сделано.**
+- `lumen_core::id_hash` (`IdHasher`, `IdSet`, `IdMap`) — множитель Фибоначчи со сворачиванием старшей половины, без зависимостей. Переведены: `CounterMap::clean_subtrees`,
+  `ChangedNodes`, `StyleSkips`, `ScopedCollection::{pruned_ids, pruned_raw_ids, style_kept_ids}`, `collect_dirty_subtree_ids`, `scope_roots` в `try_incremental_flush`.
+  `plan`/`plan_with`/`ChangedNodes::new`/`find_dirty_root_boxes` — обобщены по `BuildHasher` для входных `HashSet<NodeId, S>`, чтобы вызывающие со стандартным хешером не менялись.
+- `scroll_rollup::RollupCache` — свёртка `OverflowRollup`, которую поддерево, оставленное планом нетронутым (`ScopedCollection::skipped`: и внутри грязного корня, и снаружи), добавляет
+  к extent родителя, по `NodeId` верхнего бокса. `scroll_containers_cached(cache)` берёт её из кэша вместо обхода и возвращает кэш следующего флаша — только для верхушек
+  *этого* флаша, так что устаревшая запись не переживёт ни одного флаша. Кэш лежит в `IncrFlushBasis` рядом с деревом, из которого поддеревья взяты, поэтому читается только
+  против него; полный путь публикует пустой. Основание: нетронутое и не сдвинутое поддерево — то же, что было, а его вклад зависит только от его собственных боксов
+  (`rect`, transform, `position`, `overflow`).
+- Выключатели: `LUMEN_NO_SCROLL_ROLLUP_CACHE=1`, `V8JsRuntime::set_scroll_rollup_off`; счётчики `scroll_rollup_counts()` (отдано из кэша / посчитано).
+
+**Замер** (тот же стенд, мс на 601 флаш; машина шумит ×1,5–3,5 между прогонами, отношения надёжнее цифр): `maybe_flush` 1 465 → 964; `flush.scroll_collect` 288 → 31;
+`incr.prev_node_ids` 205 → 112; `flush.collect_plan` 292 → 213.
+
+**Тесты.** `lumen-layout`, `scoped_collect::tests::a_skipped_subtrees_scroll_extent_is_served_from_the_cache_and_matches_a_full_walk` (три флаша подряд: результат равен обходу всех
+боксов, второй флаш целиком из кэша, изменённое поддерево из кэша не берётся); `lumen-js`, `v8_bug935_s77_scroll_rollup_cache` — две среды, с кэшем и без, одни и те же правки
+(расширение/сужение поддерева, удаление, добавление бокса, торчащего влево, ресайз контейнера) и равенство всех `scrollWidth`/`scrollHeight`; первым делом проверяется, что кэш
+вообще отдавал записи. Мутационная проверка: если запись, не прочитанная на этом флаше, остаётся в кэше, тест красный. `lumen-core`: тесты хешера.
+
+**Что осталось.** По убыванию, мс/флаш: `try_incremental` 0,8 (`prev_node_ids` 0,19, `precompute_counters` 0,21, `cascade_walk` 0,19, `build_box` 0,15, `post_layout_passes` 0,14),
+`collect_plan` 0,35 (обход детей `body` с четырьмя поисками на каждого), `scroll_restore` 0,17, `touched_clone` 0,09. Остальные хеш-карты на `NodeId` (`counters.styles`, `layout_rects`,
+`ReuseIndex`) на SipHash — следующий кандидат, но их типы публичны и расходятся по `shell`. Статус `OPEN (DEBTOR)` не меняется.
