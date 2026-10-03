@@ -1843,6 +1843,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     ] {
         m.insert(name.into(), v.map_or_else(|| "normal".into(), |s| seconds_list_to_css(&[s])));
     }
+    m.insert("transition-behavior".into(), {
+        if style.transition_behaviors.is_empty() {
+            "normal".to_string()
+        } else {
+            style.transition_behaviors.iter().map(|b| b.to_css()).collect::<Vec<_>>().join(", ")
+        }
+    });
     m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
     m.insert("transition-property".into(), if style.transition_properties.is_empty() {
         "all".into()

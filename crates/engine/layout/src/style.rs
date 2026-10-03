@@ -229,7 +229,7 @@ pub use values::box_model::{
 };
 pub use values::timing::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
-    CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction,
+    CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction, TransitionBehavior,
     parse_css_wide_keyword,
 };
 // SPLIT-ST17. Хвост типов значений — содержимое/списки/перенос/интерактивность
@@ -241,7 +241,7 @@ pub use values::timing::{
 // (`pub mod style` в `lib.rs`; `style::apply::*` и другие крейты зовут их по
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
-pub use values::rule_interp::{interpolate_gap_rule_value, is_interpolable_gap_rule_property};
+pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,

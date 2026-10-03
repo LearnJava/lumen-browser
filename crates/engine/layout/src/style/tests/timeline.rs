@@ -535,6 +535,36 @@ use super::*;
     }
 
     #[test]
+    fn transition_behavior_longhand_and_shorthand_component() {
+        let viewport = Size { width: 1024.0, height: 768.0 };
+        let inherited = ComputedStyle::root();
+        let mut s = ComputedStyle::root();
+        let decl = |s: &mut ComputedStyle, value: &str| {
+            let d = Declaration {
+                property: "transition-behavior".to_string(),
+                value: value.to_string(),
+                important: false,
+            };
+            apply_declaration(s, &d, 16.0, viewport, FontWeight::default(), &inherited, &inherited, false, false);
+        };
+        decl(&mut s, "normal, allow-discrete");
+        assert_eq!(
+            s.transition_behaviors,
+            vec![TransitionBehavior::Normal, TransitionBehavior::AllowDiscrete]
+        );
+        // Невалидный элемент отбрасывает всю декларацию.
+        decl(&mut s, "allow-discrete, bogus");
+        assert_eq!(s.transition_behaviors.len(), 2);
+        // Шортхенд: пятый компонент слоя; без него слой сбрасывается в `normal`.
+        let s = ts("color 1s allow-discrete, opacity 2s");
+        assert_eq!(
+            s.transition_behaviors,
+            vec![TransitionBehavior::AllowDiscrete, TransitionBehavior::Normal]
+        );
+        assert_eq!(s.transition_properties, vec!["color".to_string(), "opacity".to_string()]);
+    }
+
+    #[test]
     fn transition_shorthand_steps_with_args() {
         let s = ts("opacity 1s steps(4, end)");
         assert_eq!(
