@@ -739,10 +739,18 @@ fn build_page_cascade(
         (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies)
     };
 
-    let sheet = {
+    let mut sheet = {
         let _s = lumen_core::trace::span("parse-css", "parse");
         lumen_css_parser::parse(&css)
     };
+    // CSS Color L5 §5.3: ICC bytes for `color(--name …)`.
+    crate::subresources::load_sheet_color_profiles(
+        &mut sheet,
+        &effective_base(doc, base),
+        sink,
+        cookie_jar.clone(),
+        crate::resource_base::document_referrer_policy(doc),
+    );
 
     // CSSOM-1 срез 2: параллельный per-элементный реестр — не участвует в
     // каскаде выше, читает те же `<link>`-байты из уже прогретого

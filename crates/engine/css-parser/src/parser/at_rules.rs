@@ -53,18 +53,24 @@ pub struct FunctionParameter {
 
 /// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
 /// Color L5 §4. Declares a named custom colour profile referenced from
-/// `color(--name c1 c2 c3)`. Phase 0: descriptors are parsed and stored;
-/// actual ICC-based colour transform is deferred (layout treats the profile's
-/// channels as already-sRGB once a matching name is found).
+/// `color(--name c1 c2 c3)`. The descriptors are parsed here; the profile bytes
+/// are fetched by the embedder (the parser does no I/O) and attached with
+/// [`crate::Stylesheet::load_color_profiles`], after which layout compiles an
+/// ICC transform from them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColorProfileRule {
     /// Dashed-ident name, e.g. `--swop5c`. Used to match `color(--name ...)` values.
     pub name: String,
-    /// `src` descriptor — URL of the ICC profile resource (loading deferred).
+    /// `src` descriptor — URL of the ICC profile resource.
     pub src: Option<String>,
     /// `rendering-intent` descriptor — one of `relative-colorimetric` (default),
-    /// `absolute-colorimetric`, `perceptual`, `saturation`.
+    /// `absolute-colorimetric`, `perceptual`, `saturation`. Parsed and stored;
+    /// the transform always uses the profile's colorimetric path.
     pub rendering_intent: Option<String>,
+    /// Raw bytes of the fetched ICC profile. `None` until the embedder loads
+    /// it (or when the fetch failed) — CSS Color L5 §5.3: a colour referencing
+    /// a profile that "has not loaded" is an invalid colour.
+    pub data: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
@@ -1228,6 +1234,7 @@ impl<'a> Parser<'a> {
             name,
             src,
             rendering_intent,
+            data: None,
         })
     }
 

@@ -223,9 +223,9 @@ pub struct Stylesheet {
     /// resolution happen in layout (`resolve_font_palette_for_family`).
     pub font_palette_values: Vec<FontPaletteValuesRule>,
     /// CSS Color L5 §4 — `@color-profile --name { src: ...; rendering-intent: ...; }`.
-    /// Phase 0: parse+store. Matching against `color(--name ...)` and used-value
-    /// resolution happen in layout (`resolve_color_profile`); real ICC transform
-    /// is deferred — channels are treated as already-sRGB.
+    /// Parsed here; the profile bytes are attached by the embedder through
+    /// [`Stylesheet::load_color_profiles`] and `color(--name ...)` is converted
+    /// through the compiled ICC transform in layout (`parse_css_color_fn`).
     pub color_profiles: Vec<ColorProfileRule>,
     /// CSS Functions and Mixins L1 — `@function --name(<params>) { decls }`.
     /// Author-defined custom function, invoked as `--name(<args>)` from any
@@ -450,6 +450,68 @@ impl Stylesheet {
     /// [`Stylesheet::merge_from`] already does it.
     pub fn mark_mutated(&mut self) {
         self.revision = StylesheetRevision::fresh();
+    }
+
+    /// CSS Color L5 §5.3 — attaches ICC profile bytes to the `@color-profile`
+    /// rules. `fetch` receives a rule's `src` and returns the profile bytes, or
+    /// `None` when they could not be fetched (the rule then stays unloaded and
+    /// colours referencing it are invalid).
+    ///
+    /// "If multiple `@color-profile` rules are defined with the same name, the
+    /// last one in document order wins, and all preceding ones are ignored" —
+    /// so `fetch` is called only for the last rule of each name, and an earlier
+    /// duplicate has its `data` cleared. Mints a new revision when anything was
+    /// attached or cleared.
+    pub fn load_color_profiles(
+        &mut self,
+        mut fetch: impl FnMut(&str) -> Option<std::sync::Arc<Vec<u8>>>,
+    ) {
+        let mut changed = false;
+        for i in 0..self.color_profiles.len() {
+            let shadowed = self.color_profiles[i + 1..]
+                .iter()
+                .any(|later| later.name == self.color_profiles[i].name);
+            let data = if shadowed {
+                None
+            } else {
+                self.color_profiles[i].src.as_deref().and_then(&mut fetch)
+            };
+            if self.color_profiles[i].data != data {
+                self.color_profiles[i].data = data;
+                changed = true;
+            }
+        }
+        if changed {
+            self.mark_mutated();
+        }
+    }
+
+    /// Copies already-fetched ICC profile bytes from `prev` into the unloaded
+    /// `@color-profile` rules of this sheet that have the same name and `src`.
+    ///
+    /// For a sheet rebuilt from the same CSS text after the page has loaded
+    /// (a late `<style>`, a CSSOM edit): a relayout must not touch the network,
+    /// so the bytes fetched for the first sheet are carried over instead.
+    pub fn carry_color_profile_data(&mut self, prev: &Stylesheet) {
+        let mut changed = false;
+        for rule in &mut self.color_profiles {
+            if rule.data.is_some() {
+                continue;
+            }
+            // Last rule of the name wins — same order `load_color_profiles` uses.
+            let found = prev
+                .color_profiles
+                .iter()
+                .rev()
+                .find(|p| p.name == rule.name && p.src == rule.src && p.data.is_some());
+            if let Some(found) = found {
+                rule.data = found.data.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            self.mark_mutated();
+        }
     }
 
     /// Appends every rule of `other` to this sheet and mints a new revision.

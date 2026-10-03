@@ -146,6 +146,9 @@ impl Lumen {
             css.push_str(&inline);
             css.push_str(&base.linked);
             let mut sheet = lumen_css_parser::parse(&css);
+            // CSS Color L5 §5.3: no network on relayout — keep the ICC bytes
+            // the first sheet already fetched.
+            sheet.carry_color_profile_data(stylesheet);
             if let Some(adopted) = feed.as_ref().and_then(|f| f.document_adopted_stylesheet()) {
                 sheet.merge_from(adopted);
             }

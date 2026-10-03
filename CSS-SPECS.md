@@ -625,7 +625,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@keyframes` | ✅ | parsed + `AnimationScheduler::tick` (WQ#3) |
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
-| `@color-profile` | 🟡 | CSS Color L5 §4; parsed+stored (`ColorProfileRule`, css-parser); `color(--name c1 c2 c3)` recognized in `parse_css_color_fn` (style.rs); real ICC transform + declared-name validation deferred (p4-color-profile 2026-07-15, test 142, KNOWN_DEBTOR BUG-282) |
+| `@color-profile` | ✅ | CSS Color L5 §4/§5.3; `ColorProfileRule` (css-parser) + `src` loaded by the shell (`load_sheet_color_profiles`, page + iframe sheets; relayout carries bytes over) → `lumen_core::icc` transform compiled per profile; `color(--name c1 c2 c3 [/ a])` converts through it (RGB matrix-shaper 3 ch, CMYK `A2B0` 4 ch). Undeclared / not-loaded / unparsable profile or wrong channel count → invalid colour. Last same-name rule wins. Not done: `components` descriptor + relative `color(from … --name …)`, `device-cmyk`, `rendering-intent` (parsed, ignored) (BUG-282 fixed 2026-10-03, TEST-142 0%) |
 | `@font-palette-values` | ✅ | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; `base-palette` + `override-colors` применяются к CPAL-палитре при покраске COLR v0 глифов (P4 2026-07-29) |
 | `@counter-style` | ✅ | CSS Counter Styles L3; `parse_counter_style_rule` (parser.rs:2336) |
 | `@scope` | ✅ | `parse_scope_rule` (parser.rs) applied in cascade loop (style.rs); donut scoping via `node_in_scope` (root + `to (<limit>)` in one ancestor walk, nearest boundary wins) |

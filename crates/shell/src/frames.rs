@@ -2519,7 +2519,7 @@ pub(crate) fn spawn_frame(
     // того же текста на каждом relayout был бы чистой тратой. Сам layout
     // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
     // нём ищется host-бокс вложенного фрейма.
-    let frame_sheet = lumen_css_parser::parse(&subresources.css);
+    let mut frame_sheet = lumen_css_parser::parse(&subresources.css);
     // GAP-CSPENF срез 25: the CHILD's own policy, read once here so both
     // `load_frame_fonts` (`font-src`) and `fetch_frame_background_images`
     // (`img-src`) below can gate against it without each re-parsing —
@@ -2535,6 +2535,14 @@ pub(crate) fn spawn_frame(
     // images — `load_frame_fonts`/`fetch_frame_background_images` below.
     let child_referrer_policy =
         crate::resource_base::document_referrer_policy(&child_doc_arc.lock().unwrap());
+    // CSS Color L5 §5.3: ICC bytes for the child's `color(--name …)`.
+    crate::subresources::load_sheet_color_profiles(
+        &mut frame_sheet,
+        &child_base,
+        sink,
+        cookie_jar.clone(),
+        child_referrer_policy,
+    );
     // FRAME-5: синхронно (см. doc-comment `load_frame_fonts`) — тем же
     // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
     // ребёнка выше в этой функции.

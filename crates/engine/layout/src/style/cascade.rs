@@ -274,6 +274,10 @@ pub(crate) fn compute_style_shareable(
     // of one line per node. Costs a cached bool check per phase when disabled.
     let _prof = lumen_core::profile::scope_detail("compute_style");
     note_compute_style();
+    // CSS Color L5 §5.3 — `color(--name …)` is parsed deep inside
+    // `apply_declaration`, which never sees the sheet: bind its
+    // `@color-profile` rules to this thread first.
+    crate::style::parse::color::sync_color_profiles(sheet);
     let mut shareable = sheet.scope_rules.is_empty();
     let prof_init = lumen_core::profile::scope_detail("cs_init");
     let mut style = ComputedStyle::inheriting(inherited);
