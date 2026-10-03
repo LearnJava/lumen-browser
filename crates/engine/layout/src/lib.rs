@@ -47,6 +47,7 @@ pub mod selector_query;
 pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
+mod scroll_rollup;
 pub mod scroll_initial_target;
 pub mod scroll_timeline;
 pub mod snapshot;
@@ -1327,9 +1328,7 @@ pub fn collect_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> {
 /// this function at every call site that feeds `update_scroll_states`;
 /// wheel/hit-test call sites must keep using [`collect_scroll_containers`].
 pub fn collect_scroll_containers_for_js_state(root: &LayoutBox) -> Vec<ScrollContainer> {
-    let mut out = Vec::new();
-    collect_scroll_containers_inner(root, &mut out, true);
-    out
+    scroll_rollup::collect_for_js_state(&[root])
 }
 
 /// BUG-1211 (post-collectors): [`collect_scroll_containers_for_js_state`],
@@ -1337,18 +1336,7 @@ pub fn collect_scroll_containers_for_js_state(root: &LayoutBox) -> Vec<ScrollCon
 /// dependency), so a plain per-root re-walk is correct without threading any
 /// context down, unlike [`collect_computed_styles_scoped`].
 pub fn collect_scroll_containers_for_js_state_scoped(roots: &[&LayoutBox]) -> Vec<ScrollContainer> {
-    let mut out = Vec::new();
-    for root in roots {
-        collect_scroll_containers_inner(root, &mut out, true);
-    }
-    out
-}
-
-/// What [`collect_scroll_containers_for_js_state`] publishes for `b` itself, without its subtree.
-pub(crate) fn scroll_container_of(b: &LayoutBox) -> Option<ScrollContainer> {
-    let mut out = Vec::new();
-    scroll_container_into(b, &mut out, true);
-    out.pop()
+    scroll_rollup::collect_for_js_state(roots)
 }
 
 fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
