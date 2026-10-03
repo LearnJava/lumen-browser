@@ -1013,7 +1013,7 @@ def _selftest() -> int:
             "css": {"a.html": leaf()},
             "encoding": {"e.html": leaf()},
         },
-        "crashtest": {"svg": {"c.html": leaf()}},
+        "aamtest": {"svg": {"c.html": leaf()}},
     }}
     shard_states = [
         {"name": "dom", "outcome": "ran"},
@@ -1029,7 +1029,7 @@ def _selftest() -> int:
     by_shard = {e["shard"]: (e["cause"], e["ids"]) for e in got["lost_by_shard"]}
     checks = [
         ("no-executor type counted apart", got["no_executor"] == 1
-         and got["no_executor_by_type"] == {"crashtest": 1}),
+         and got["no_executor_by_type"] == {"aamtest": 1}),
         ("no-executor id not blamed on its shard", "svg" not in by_shard),
         ("killed shard named with its cause", by_shard.get("css") == ("shard-killed", 1)),
         ("silent hole counted", got["lost_in_ran_shards"] == 1),

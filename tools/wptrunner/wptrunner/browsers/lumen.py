@@ -32,7 +32,8 @@ import mozprocess
 from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_free_port, get_timeout_multiplier, require_arg  # noqa: F401
 from ..environment import wait_for_service
 from ..executors import executor_kwargs as base_executor_kwargs
-from ..executors.executorlumen import LumenRefTestExecutor, LumenTestharnessExecutor  # noqa: F401
+from ..executors.executorlumen import (  # noqa: F401
+    LumenCrashtestExecutor, LumenRefTestExecutor, LumenTestharnessExecutor)
 
 #: Prefix of the stderr line `crates/bidi-server/src/server.rs::spawn` prints
 #: once per process (ADR-024 §Access model, DEVX-15).
@@ -66,6 +67,7 @@ __wptrunner__ = {
     "executor": {
         "testharness": "LumenTestharnessExecutor",
         "reftest": "LumenRefTestExecutor",
+        "crashtest": "LumenCrashtestExecutor",
     },
 }
 

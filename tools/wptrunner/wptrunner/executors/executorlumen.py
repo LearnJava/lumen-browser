@@ -69,7 +69,8 @@ from webdriver.bidi.error import BidiException, UnknownErrorException
 from webdriver.bidi.modules.input import Actions
 from webdriver.bidi.modules.script import ContextTarget
 
-from .base import ExecutorException, RefTestExecutor, RefTestImplementation, TestharnessExecutor
+from .base import (CrashtestExecutor, ExecutorException, RefTestExecutor,
+                   RefTestImplementation, TestharnessExecutor)
 from .protocol import Protocol
 
 #: Global `tests/wpt/resources/testharnessreport.js` stashes the JSON-encoded
@@ -215,6 +216,50 @@ class LumenBidiProtocol(Protocol):
         return reader is None or not reader.done()
 
 
+def _lost_browser(protocol, url, error):
+    """`ExecutorException` for an executor call that failed because the browser
+    is gone or wedged, or `None` when the failure is the test's own (BUG-1022).
+
+    A test that kills the browser (a stack overflow on `lumen-pipeline` aborts
+    the whole process) used to come back as a plain ERROR. ERROR does not make
+    `testrunner.py` restart the browser, so the *next* test in the same worker
+    inherited the dead WebSocket and got an ERROR of its own — which neighbour
+    that was depended on sharding, and every `--check` flipped a different
+    innocent file OK→ERROR. CRASH is the status that triggers
+    `restart_before_next`, and is also the honest one.
+
+    Second shape of the same leak: the socket is still up but Lumen's
+    automation loop stopped answering (`crates/driver/src/automation.rs` —
+    `span-limits.html` wedges it before the process finally dies during the
+    *next* test's navigate). A wedged browser is exactly what EXTERNAL-TIMEOUT
+    means, and it too triggers the restart; ERROR would hand the wedge to a
+    neighbour.
+    """
+    if not protocol.is_alive():
+        return ExecutorException(
+            "CRASH", f"browser connection lost while running {url}: {error}")
+    if AUTOMATION_TIMEOUT_MARKER in str(error):
+        return ExecutorException(
+            "EXTERNAL-TIMEOUT",
+            f"browser stopped answering automation while running {url}: {error}")
+    return None
+
+
+async def _reset_and_mark(session, context):
+    """Clear the outgoing document's result/testdriver slots and mark it
+    (`RESET_EXPRESSION`). Best-effort: a context with no JS runtime yet
+    (the initial `about:blank`, before the first test) reports "JS context
+    not available" and has nothing to carry over anyway."""
+    try:
+        await session.script.evaluate(
+            expression=RESET_EXPRESSION,
+            target=ContextTarget(context),
+            await_promise=False)
+    except UnknownErrorException as e:
+        if "JS context not available" not in e.message:
+            raise
+
+
 class LumenTestharnessExecutor(TestharnessExecutor):
     """testharness.js executor for Lumen, driven over WebDriver BiDi."""
 
@@ -240,27 +285,9 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         try:
             raw_result = self.protocol.run(self._run_testharness(url, timeout))
         except Exception as e:
-            # BUG-1022: a test that kills the browser (a stack overflow on
-            # `lumen-pipeline` aborts the whole process) used to come back as
-            # a plain ERROR. ERROR does not make `testrunner.py` restart the
-            # browser, so the *next* test in the same worker inherited the
-            # dead WebSocket and got an ERROR of its own — which neighbour
-            # that was depended on sharding, and every `--check` flipped a
-            # different innocent file OK→ERROR. CRASH is the status that
-            # triggers `restart_before_next`, and is also the honest one.
-            if not self.protocol.is_alive():
-                raise ExecutorException(
-                    "CRASH", f"browser connection lost while running {url}: {e}") from e
-            # Second shape of the same leak: the socket is still up but
-            # Lumen's automation loop stopped answering (`crates/driver/src/
-            # automation.rs` — `span-limits.html` wedges it before the process
-            # finally dies during the *next* test's navigate). A wedged
-            # browser is exactly what EXTERNAL-TIMEOUT means, and it too
-            # triggers the restart; ERROR would hand the wedge to a neighbour.
-            if AUTOMATION_TIMEOUT_MARKER in str(e):
-                raise ExecutorException(
-                    "EXTERNAL-TIMEOUT",
-                    f"browser stopped answering automation while running {url}: {e}") from e
+            lost = _lost_browser(self.protocol, url, e)  # BUG-1022
+            if lost is not None:
+                raise lost from e
             raise
         return self.convert_result(test, raw_result)
 
@@ -336,18 +363,7 @@ class LumenTestharnessExecutor(TestharnessExecutor):
             await asyncio.sleep(POLL_INTERVAL_S)
 
     async def _reset_and_mark(self, session, context):
-        """Clear the outgoing document's result/testdriver slots and mark it
-        (`RESET_EXPRESSION`). Best-effort: a context with no JS runtime yet
-        (the initial `about:blank`, before the first test) reports "JS context
-        not available" and has nothing to carry over anyway."""
-        try:
-            await session.script.evaluate(
-                expression=RESET_EXPRESSION,
-                target=ContextTarget(context),
-                await_promise=False)
-        except UnknownErrorException as e:
-            if "JS context not available" not in e.message:
-                raise
+        await _reset_and_mark(session, context)
 
     async def _handle_action(self, session, context, payload):
         """Execute one `test_driver_internal.*` action and post its
@@ -767,3 +783,114 @@ class LumenRefTestExecutor(RefTestExecutor):
         except IpcError as e:
             return False, ("FAIL", str(e))
         return True, [base64.b64encode(png).decode("ascii")]
+
+
+#: Polled by `LumenCrashtestExecutor`: `"s"` while the pre-navigation document
+#: still answers (`STALE_GLOBAL`, BUG-380), `"w"` while `<html>` carries the
+#: `test-wait` class, `"d"` once it is gone.
+CRASHTEST_POLL_EXPRESSION = f"""(() => {{
+  if (window.{STALE_GLOBAL} === true) return "s";
+  const root = document.documentElement;
+  return root && root.classList.contains("test-wait") ? "w" : "d";
+}})()"""
+
+#: Consecutive `"d"` polls required before a crashtest is called finished. A
+#: page may add `test-wait` from its own `load` handler, which runs *after*
+#: `navigate(wait="complete")` already returned; one poll can land before it.
+CRASHTEST_DONE_POLLS = 2
+
+
+class LumenCrashtestExecutor(CrashtestExecutor):
+    """crashtest executor for Lumen over BiDi (WPT-RUN-8-S1).
+
+    The criterion is the upstream one (`executorwebdriver.
+    WebDriverCrashtestExecutor`): the page loads, the `test-wait` class on
+    `<html>` (if it ever had one) is removed, and the browser is still alive —
+    then `PASS`. The page's own `<script>` errors are irrelevant. A dead
+    process is `CRASH` and a wedged one `EXTERNAL-TIMEOUT` (`_lost_browser`),
+    both of which make `testrunner.py` restart the browser; `test-wait` never
+    removed is `TIMEOUT`.
+
+    Transport is BiDi, like testharness: the IPC path (`LumenIpcProtocol`)
+    does not pump timers, so a `test-wait` removed from `setTimeout` would
+    never be seen there.
+    """
+
+    protocol_cls = LumenBidiProtocol
+
+    def __init__(self, logger, browser, server_config, timeout_multiplier=1,
+                 screenshot_cache=None, debug_info=None, capabilities=None, **kwargs):
+        CrashtestExecutor.__init__(self, logger, browser, server_config,
+                                   screenshot_cache=screenshot_cache,
+                                   timeout_multiplier=timeout_multiplier,
+                                   debug_info=debug_info)
+        self.protocol = self.protocol_cls(self, browser, capabilities)
+
+    def do_test(self, test):
+        url = self.test_url(test)
+        timeout = (test.timeout * self.timeout_multiplier
+                   if self.debug_info is None else None)
+        try:
+            self.protocol.run(self._run_crashtest(url, timeout))
+        except ExecutorException as e:
+            return test.make_result(e.status, e.message), []
+        except Exception as e:
+            lost = _lost_browser(self.protocol, url, e)
+            if lost is not None:
+                raise lost from e
+            raise
+        return self.convert_result(test, {"status": "PASS", "message": None})
+
+    async def _run_crashtest(self, url, timeout):
+        session = self.protocol.session
+        context = self.protocol.context_id
+
+        await _reset_and_mark(session, context)
+        try:
+            await session.browsing_context.navigate(context=context, url=url, wait="complete")
+        except BidiException as e:
+            raise ExecutorException(
+                "ERROR", f"browsingContext.navigate({url}) failed: {e}") from e
+
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout + self.extra_timeout
+        settle_deadline = loop.time() + NAV_SETTLE_S
+        done_polls = 0
+        no_context_since = None
+        while True:
+            try:
+                value = await session.script.evaluate(
+                    expression=CRASHTEST_POLL_EXPRESSION,
+                    target=ContextTarget(context),
+                    await_promise=False)
+            except UnknownErrorException as e:
+                # Same document-swap lag as in `_run_testharness` — but a
+                # document with no `<script>` never gets a JS runtime at all,
+                # and most crashtests are exactly that (pure markup+CSS).
+                # Only script can clear `test-wait`, so a context that is
+                # still missing after `NAV_SETTLE_S` means "nothing to wait
+                # for"; the liveness check below is then the whole verdict.
+                if "JS context not available" not in e.message:
+                    raise
+                done_polls = 0
+                no_context_since = no_context_since or loop.time()
+                if loop.time() - no_context_since > NAV_SETTLE_S:
+                    if not self.protocol.is_alive():
+                        raise ExecutorException(
+                            "CRASH", f"browser connection lost while running {url}")
+                    return
+            else:
+                no_context_since = None
+                state = value.get("value") if value.get("type") == "string" else None
+                if state == "s" and loop.time() > settle_deadline:
+                    raise ExecutorException(
+                        "ERROR",
+                        f"browsingContext.navigate({url}) reported success but the "
+                        f"document was never replaced; the page did not load")
+                done_polls = done_polls + 1 if state == "d" else 0
+                if done_polls >= CRASHTEST_DONE_POLLS:
+                    return
+            if deadline is not None and loop.time() > deadline:
+                raise ExecutorException(
+                    "TIMEOUT", f"Timed out waiting for test-wait to clear: {url}")
+            await asyncio.sleep(POLL_INTERVAL_S)

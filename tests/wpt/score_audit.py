@@ -248,7 +248,7 @@ def runnable_ids_per_shard(shards: list, manifest: dict = None) -> dict:
     """`shard name -> how many ids of a type this harness can execute it holds`.
 
     A shard that produced no verdicts is not automatically a hole: a directory
-    whose only automatable tests are `crashtest`/`print-reftest`/`aamtest` has
+    whose only automatable tests are `print-reftest`/`aamtest`/`wdspec` has
     nothing wptrunner will run for lumen, so it answers "No tests ran" and
     leaves an empty report *by construction* (WPT-RUN-5 slice 25 — corpus-wide
     6 shards / 50 ids). Telling that apart from a shard that should have run
@@ -560,7 +560,7 @@ def _selftest() -> int:
 
     manifest = {"items": {
         "testharness": {"dom": {"ok.html": leaf()}, "referrer-policy": {"r.html": leaf()}},
-        "crashtest": {"print": {"c.html": leaf()}},
+        "aamtest": {"print": {"c.html": leaf()}},
         "manual": {"appmanifest": {"m.html": leaf()}},
     }}
     shards = [
@@ -577,7 +577,7 @@ def _selftest() -> int:
         "totals": {"ids": 3, "ran": 1, "score": 1.0, "pass_rate": 0.33},
         "empty_shards": ["print", "referrer-policy", "appmanifest"],
         "per_category": {
-            "print": {"not_run": 1, "by_type": {"crashtest": 1}},
+            "print": {"not_run": 1, "by_type": {"aamtest": 1}},
             "referrer-policy": {"not_run": 1, "by_type": {"testharness": 1}},
             "dom": {"not_run": 0, "by_type": {"testharness": 1}},
         }}}
