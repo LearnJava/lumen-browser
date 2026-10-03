@@ -48,6 +48,8 @@ pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
+pub mod paint_eq;
+pub use paint_eq::subtree_paint_eq;
 pub mod scroll_initial_target;
 pub mod scroll_timeline;
 pub mod snapshot;

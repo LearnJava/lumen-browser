@@ -340,3 +340,7 @@ mod walk_trampoline;
 #[cfg(test)]
 #[path = "display_list/tests/fill_buckets_trampoline.rs"]
 mod fill_buckets_trampoline;
+
+#[cfg(test)]
+#[path = "display_list/tests/subtree_paint_eq.rs"]
+mod subtree_paint_eq;

@@ -75,8 +75,8 @@
 {
  "generated": "2026-10-03",
  "counts": {
-  "open": 132,
-  "fixed": 1055,
+  "open": 131,
+  "fixed": 1056,
   "inprogress": 0,
   "wontfix": 2
  },
@@ -2354,7 +2354,7 @@
        "title": "PERF-16: кэш display list по поддереву (цикл хрома)",
        "status": "done",
        "size": "L",
-       "note": "Кэш display list по поддереву для инкрементального цикла хрома: не эмитить заново неизменившиеся поддеревья. После BUG-341 (S44) emit display list — ~45% цикла CC-12 (~0.4 мс на 409 боксов, линейно ~0.9 мкс/бокс, горячей точки нет), микроправки `enter_fill`/`FillFrame` дают 0.05-0.1 мс при пиксельном риске. У `CC12_KEY` запас по p95 всего 7-15% (S46). Опора — существующий `crates/engine/paint/src/display_list_cache.rs`; критерий — p95 KEY с запасом ≥ 30% на спокойной машине без изменений пикселей (полный графтест)",
+       "note": "Кэш display list по поддереву для инкрементального цикла хрома: не эмитить заново неизменившиеся поддеревья. После BUG-341 (S44) emit display list — ~45% цикла CC-12 (~0.4 мс на 409 боксов, линейно ~0.9 мкс/бокс, горячей точки нет), микроправки `enter_fill`/`FillFrame` дают 0.05-0.1 мс при пиксельном риске. У `CC12_KEY` запас по p95 всего 7-15% (S46). Опора — существующий `crates/engine/paint/src/display_list_cache.rs`; критерий — p95 KEY с запасом ≥ 30% на спокойной машине без изменений пикселей (полный графтест). **Срез 1 (2026-10-03, P1) влит:** ключ — не хеш (у `ComputedStyle` нет `Hash`), а равенство со снимком, `lumen_layout::subtree_paint_eq` (`paint_eq.rs`), доказан дифференциально на корпусе `graphic_tests` (`display_list/tests/subtree_paint_eq.rs`); emit = 0,52 из 1,40 мс цикла CC-12. Дальше: срез 2 — кэш в `fill_buckets` для non-SC поддеревьев без SC-потомков (в ключе `dpr`, вьюпорт fixed-фонов, `anim == None`; снимок держит `Arc` стилей, provenance-спаны хранятся относительными), срез 3 — гейт CC-12 + голдены",
        "bugs": [
         "BUG-341"
        ]
@@ -7646,13 +7646,6 @@
    "status": "open",
    "title": "`line-height-step` (CSS Rhythmic Sizing L1 §2): Lumen спек-корректно округляет line-box вверх до кратного шагу (48/60/40px фоны), **Edge не поддерживает свойств…",
    "component": "layout",
-   "date": null,
-   "debtor": true
-  },
-  "BUG-282": {
-   "status": "open",
-   "title": "TEST-142: Lumen рендерит спек-корректные swatch-цвета для `color(--name c1 c2 c3)` (каналы трактуются как sRGB, реальная ICC-трансформация отложена); Edge не по…",
-   "component": "layout / css-parser (`@color-profile`, `color()`)",
    "date": null,
    "debtor": true
   },
@@ -15872,6 +15865,13 @@
    "title": "MCP-сервер не по спецификации MCP: стандартные клиенты (Claude Desktop/Code, Cursor) не подключаются — `initialize` без `serverInfo` и с захардкоженной версией,…",
    "component": "mcp (`crates/mcp/src/server.rs::on_initialize`/`on_tools_call`, `crates/mcp/src/protocol.rs:33`)",
    "date": "2026-10-02",
+   "debtor": false
+  },
+  "BUG-282": {
+   "status": "fixed",
+   "title": "TEST-142: закрыт реальной ICC-трансформацией `color(--name …)` — шелл грузит `src` профиля, layout компилирует `lumen_core::icc`-трансформацию; профиль, который…",
+   "component": "layout / css-parser (`@color-profile`, `color()`)",
+   "date": "2026-10-03",
    "debtor": false
   }
  },
