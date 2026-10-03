@@ -28,7 +28,7 @@ use lumen_core::geom::{Rect, Size};
 
 use crate::box_tree::{BoxKind, BoxRole, LayoutBox};
 use crate::style_map::StyleMap;
-use crate::style::{BoxSizing, ComputedStyle, Display, FloatSide, LengthOrAuto, Position};
+use crate::style::{BoxSizing, ComputedStyle, Display, FloatSide, LengthOrAuto, Overflow, Position};
 
 /// Key prefix under which [`apply_used_geometry`] keeps the *computed* value
 /// of every property it overwrites with a used one: `"computed:width"` →
@@ -70,6 +70,11 @@ pub(crate) struct GeomCtx {
     /// flow — the only context whose `auto` horizontal margins are recovered
     /// from geometry.
     pub parent_block_flow: bool,
+    /// Padding box of the nearest ancestor that is a scroll container
+    /// (`overflow` other than `visible`/`clip` on either axis), or the
+    /// viewport — the scrollport `position: sticky` percentage insets resolve
+    /// against (css-position §sticky-pos, csswg-drafts #3115).
+    pub scrollport: Rect,
 }
 
 impl GeomCtx {
@@ -78,7 +83,7 @@ impl GeomCtx {
     /// at the canvas origin.
     pub(crate) fn root(viewport: Size) -> Self {
         let icb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-        GeomCtx { flow_cb: icb, abs_cb: icb, parent_block_flow: true }
+        GeomCtx { flow_cb: icb, abs_cb: icb, parent_block_flow: true, scrollport: icb }
     }
 }
 
@@ -164,7 +169,7 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
     let s = &b.style;
     let r = b.rect;
     if b.origin.role != BoxRole::Element {
-        return GeomCtx { flow_cb: r, abs_cb: ctx.abs_cb, parent_block_flow: ctx.parent_block_flow };
+        return GeomCtx { flow_cb: r, abs_cb: ctx.abs_cb, parent_block_flow: ctx.parent_block_flow, scrollport: ctx.scrollport };
     }
     let (bt, br, bb, bl) = (s.border_top_width, s.border_right_width, s.border_bottom_width, s.border_left_width);
     let [pt, pr, pb, pl] = used_padding(s, containing_block(s, ctx, vp).width, vp);
@@ -176,10 +181,12 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
         (padding_box.height - pt - pb).max(0.0),
     );
     let positioned = s.position != Position::Static;
+    let scrolls = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden);
     GeomCtx {
         flow_cb: content_box,
         abs_cb: if positioned { padding_box } else { ctx.abs_cb },
         parent_block_flow: lays_out_block_flow(s.display),
+        scrollport: if scrolls(s.overflow_x) || scrolls(s.overflow_y) { padding_box } else { ctx.scrollport },
     }
 }
 
@@ -256,7 +263,22 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
                 }
             }
         }
-        Position::Static | Position::Sticky => {}
+        Position::Sticky => {
+            // The used value of a sticky inset is the specified one; percentages
+            // are taken of the nearest scrollport, not the containing block.
+            let sp = ctx.scrollport;
+            for (name, val, basis) in [
+                ("top", &s.top, sp.height),
+                ("right", &s.right, sp.width),
+                ("bottom", &s.bottom, sp.height),
+                ("left", &s.left, sp.width),
+            ] {
+                if let Some(v) = resolve_opt(val, em, basis, vp) {
+                    set_used(m, name, px(v));
+                }
+            }
+        }
+        Position::Static => {}
     }
 
     let in_block_flow = ctx.parent_block_flow
