@@ -192,13 +192,19 @@ fn apply_anchor_positions_rec(
     // CSS: anchor-size(), position-anchor
     if matches!(lb.style.position, Position::Absolute | Position::Fixed) {
         let default_anchor = lb.style.position_anchor.as_deref();
+        let em = lb.style.font_size;
+        let cb = if matches!(lb.style.position, Position::Fixed) {
+            Rect::new(0.0, 0.0, viewport.width, viewport.height)
+        } else {
+            pcb
+        };
         if let Some(w) = lb.style.anchor_size_w.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(registry, f, default_anchor)
+            crate::anchor::resolve_anchor_size_or_fallback(registry, f, default_anchor, em, cb.width, viewport)
         }) {
             lb.rect.width = w;
         }
         if let Some(h) = lb.style.anchor_size_h.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(registry, f, default_anchor)
+            crate::anchor::resolve_anchor_size_or_fallback(registry, f, default_anchor, em, cb.height, viewport)
         }) {
             lb.rect.height = h;
         }

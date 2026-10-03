@@ -395,13 +395,17 @@ pub(crate) fn lay_out_abs_children(
         let mut w_fixed = cs.width.is_some();
         let mut h_fixed = cs.height.is_some();
         if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+            crate::anchor::resolve_anchor_size_or_fallback(
+                &anchors, f, cs.position_anchor.as_deref(), c_em, cb.width, viewport,
+            )
         }) {
             child.rect.width = w;
             w_fixed = true;
         }
         if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+            crate::anchor::resolve_anchor_size_or_fallback(
+                &anchors, f, cs.position_anchor.as_deref(), c_em, cb.height, viewport,
+            )
         }) {
             child.rect.height = h;
             h_fixed = true;

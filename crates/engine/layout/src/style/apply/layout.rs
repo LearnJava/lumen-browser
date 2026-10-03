@@ -291,7 +291,7 @@ pub(in crate::style) fn apply_decl_layout(
         }
         "width" => {
             // CSS Anchor Positioning L1 §4 — intercept `anchor-size()` before normal sizing.
-            if let Some(func) = parse_anchor_size_func(val) {
+            if let Some(func) = parse_anchor_size_func(val, is_quirks) {
                 style.anchor_size_w = Some(func);
             } else {
                 // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
@@ -306,7 +306,7 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "height" => {
-            if let Some(func) = parse_anchor_size_func(val) {
+            if let Some(func) = parse_anchor_size_func(val, is_quirks) {
                 style.anchor_size_h = Some(func);
             } else {
                 style.height = parse_sizing_length(val, is_quirks);
