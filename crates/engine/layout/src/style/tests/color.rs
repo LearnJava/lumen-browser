@@ -1111,7 +1111,7 @@ use crate::style::values::named_colors::NAMED_COLORS;
     }
 
     #[test]
-    fn print_color_adjust_not_inherited() {
+    fn print_color_adjust_inherited() {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
         let root = ComputedStyle::root();
@@ -1120,7 +1120,7 @@ use crate::style::values::named_colors::NAMED_COLORS;
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.print_color_adjust, PrintColorAdjust::Exact);
-        assert_eq!(span_style.print_color_adjust, PrintColorAdjust::Economy);
+        assert_eq!(span_style.print_color_adjust, PrintColorAdjust::Exact);
     }
 
     // ── color-contrast() (CSS Color L5 §11) ───────────────────────────────────

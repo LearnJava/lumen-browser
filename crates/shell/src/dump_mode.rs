@@ -388,7 +388,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
 ) -> Result<usize, Box<dyn Error>> {
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{
-        build_print_display_list, split_at_page_breaks, strip_background_graphics, Renderer,
+        apply_print_color_adjust, build_print_display_list, split_at_page_breaks, Renderer,
     };
     let PrintOptions { margin_tb, margin_lr, scale, print_backgrounds, landscape } = opts;
 
@@ -440,10 +440,11 @@ pub(crate) fn do_print_to_pdf_with_opts(
     let mut pages = paginate(&parsed.layout, &ctx);
     let page_count_total = pages.len() as u32;
     attach_page_boxes(&mut pages, page_count_total, &ctx);
+    // CC-8: drop CSS background graphics when the dialog toggle is off —
+    // except for boxes that opt in with `print-color-adjust: exact`.
+    apply_print_color_adjust(&mut pages, print_backgrounds);
     let cmds = build_print_display_list(&pages);
-    let mut split_pages = split_at_page_breaks(cmds);
-    // CC-8: drop CSS background graphics when the dialog toggle is off.
-    strip_background_graphics(&mut split_pages, print_backgrounds);
+    let split_pages = split_at_page_breaks(cmds);
 
     let images = Renderer::render_print_pages(
         INTER_FONT.to_vec(),

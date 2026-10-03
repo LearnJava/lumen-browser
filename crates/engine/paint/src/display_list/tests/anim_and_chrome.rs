@@ -3,7 +3,7 @@
 //! column-rules/position:sticky и position:fixed/list marker rendering/
 //! background-blend-mode/BoxModelOverlay/MaskMode + PushMaskLayer/
 //! PushScrollLayer/DrawScrollbar/PageBreak и print display list/
-//! strip_background_graphics/DrawCrossFade. Перенесено байт-в-байт из
+//! apply_print_color_adjust/DrawCrossFade. Перенесено байт-в-байт из
 //! `display_list.rs` без дедента (приём ST-1/DL-1).
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-3).
 
@@ -1654,89 +1654,83 @@ use lumen_dom::NodeId;
         assert!(cmds.is_empty());
     }
 
-    // ── strip_background_graphics (CC-8) ────────────────────────────────────
+    // ── apply_print_color_adjust (CC-8 + CSS Color Adjustment L1 §4.1) ───────
 
-    /// `print_backgrounds = true` is a no-op: every command survives.
-    #[test]
-    fn strip_bg_keeps_all_when_enabled() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let mut pages = vec![vec![
-            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
-            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
-        ]];
-        strip_background_graphics(&mut pages, true);
-        assert_eq!(pages[0].len(), 2);
+    /// Paginates `html` and returns the print display list after
+    /// `apply_print_color_adjust(.., print_backgrounds)`.
+    fn print_dl_after_color_adjust(html: &str, print_backgrounds: bool) -> DisplayList {
+        use lumen_layout::{paginate, PaginationContext};
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 800.0,
+            page_height: 600.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+        apply_print_color_adjust(&mut pages, print_backgrounds);
+        build_print_display_list(&pages)
     }
 
-    /// `print_backgrounds = false` removes solid background fills + gradients +
-    /// background images, but keeps text, borders and `<img>` foreground.
-    #[test]
-    fn strip_bg_removes_background_family_when_disabled() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let mut pages = vec![vec![
-            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
-            DisplayCommand::FillRoundedRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 }, radii: CornerRadii::default() },
-            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
-            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, radius_x: 2.5, radius_y: 2.5, stops: vec![], repeating: false },
-            DisplayCommand::DrawConicGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, from_angle_deg: 0.0, stops: vec![], repeating: false },
-            DisplayCommand::DrawBackgroundImage {
-                rect: r, origin_rect: r, src: "bg.png".to_owned(),
-                size: BackgroundSize::Auto, position: ObjectPosition::default(),
-                repeat: BackgroundRepeat::default(), image_rendering: ImageRendering::Auto,
-            },
-            DisplayCommand::DrawText {
-                rect: r, text: "hi".to_owned(), font_size: 12.0,
-                color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
-                font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
-                font_stretch: FontStretch::NORMAL,
-                font_variation_axes: vec![], font_features: vec![], tab_size: 0.0,
-                font_palette: None,
-                highlight_name: None, text_orientation: None,
-            },
-            DisplayCommand::DrawImage {
-                rect: r, src: "img.png".to_owned(), alt: String::new(),
-                object_fit: ObjectFit::Fill, object_position: ObjectPosition::default(),
-                image_rendering: ImageRendering::Auto,
-            },
-        ]];
-        strip_background_graphics(&mut pages, false);
-        assert_eq!(pages[0].len(), 2, "only DrawText + DrawImage survive");
-        assert!(matches!(pages[0][0], DisplayCommand::DrawText { .. }));
-        assert!(matches!(pages[0][1], DisplayCommand::DrawImage { .. }));
+    /// Counts solid fills of exactly `rgb` in the list.
+    fn count_fills(cmds: &[DisplayCommand], rgb: (u8, u8, u8)) -> usize {
+        cmds.iter()
+            .filter(|c| match c {
+                DisplayCommand::FillRect { color, .. }
+                | DisplayCommand::FillRoundedRect { color, .. } => {
+                    (color.r, color.g, color.b) == rgb
+                }
+                _ => false,
+            })
+            .count()
     }
 
-    /// Filtering is applied per page across a multi-page job and keeps
-    /// `Push*`/`Pop*` nesting balanced (only leaf fills are dropped).
+    const PCA_HTML: &str = "<div style='height:40px;background:rgb(1,2,3)'>a</div>        <div style='height:40px;background:rgb(4,5,6);print-color-adjust:exact'>b</div>        <div style='height:40px;background:rgb(7,8,9);color-adjust:exact'><p style='background:rgb(10,11,12)'>c</p></div>        <div style='height:40px;background:linear-gradient(rgb(13,14,15),rgb(16,17,18))'>d</div>";
+
+    /// `print_backgrounds = true` is a no-op: every background survives.
     #[test]
-    fn strip_bg_per_page_and_balanced_nesting() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let mut pages = vec![
-            vec![
-                DisplayCommand::PushClipRect { rect: r },
-                DisplayCommand::FillRect { rect: r, color: Color { r: 9, g: 9, b: 9, a: 255 } },
-                DisplayCommand::PopClip,
-            ],
-            vec![
-                DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 1, b: 1, a: 255 } },
-            ],
-        ];
-        strip_background_graphics(&mut pages, false);
-        // Page 0: clip push/pop remain, the fill between them is gone.
-        assert_eq!(pages[0].len(), 2);
-        assert!(matches!(pages[0][0], DisplayCommand::PushClipRect { .. }));
-        assert!(matches!(pages[0][1], DisplayCommand::PopClip));
-        // Page 1: lone background fill removed → empty.
-        assert!(pages[1].is_empty());
+    fn print_color_adjust_noop_when_backgrounds_enabled() {
+        let cmds = print_dl_after_color_adjust(PCA_HTML, true);
+        assert_eq!(count_fills(&cmds, (1, 2, 3)), 1);
+        assert_eq!(count_fills(&cmds, (4, 5, 6)), 1);
+    }
+
+    /// With the toggle off, `economy` boxes lose `background-color` and
+    /// gradients; text survives.
+    #[test]
+    fn print_color_adjust_economy_strips_backgrounds() {
+        let cmds = print_dl_after_color_adjust(PCA_HTML, false);
+        assert_eq!(count_fills(&cmds, (1, 2, 3)), 0, "economy fill removed");
+        assert!(
+            !cmds.iter().any(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. })),
+            "economy gradient removed"
+        );
+        assert!(
+            cmds.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. })),
+            "foreground text kept"
+        );
+    }
+
+    /// `print-color-adjust: exact` (and the legacy `color-adjust` alias) keeps
+    /// the box's background even with the toggle off, and — the property being
+    /// inherited — the descendant's too.
+    #[test]
+    fn print_color_adjust_exact_keeps_backgrounds_and_inherits() {
+        let cmds = print_dl_after_color_adjust(PCA_HTML, false);
+        assert_eq!(count_fills(&cmds, (4, 5, 6)), 1, "exact box keeps its fill");
+        assert_eq!(count_fills(&cmds, (7, 8, 9)), 1, "legacy alias keeps its fill");
+        assert_eq!(count_fills(&cmds, (10, 11, 12)), 1, "child inherits exact");
     }
 
     /// Empty input slice is handled without panicking.
     #[test]
-    fn strip_bg_empty_pages_noop() {
-        let mut pages: Vec<Vec<DisplayCommand>> = vec![];
-        strip_background_graphics(&mut pages, false);
+    fn print_color_adjust_empty_pages_noop() {
+        let mut pages: Vec<Page> = vec![];
+        apply_print_color_adjust(&mut pages, false);
         assert!(pages.is_empty());
     }
 

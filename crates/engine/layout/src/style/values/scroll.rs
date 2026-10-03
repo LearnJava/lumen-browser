@@ -30,7 +30,7 @@ pub enum OffsetRotate {
     Angle(f32),
 }
 
-/// CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`.
+/// CSS Color Adjustment L1 §4.1 — `print-color-adjust`. Inherited. Initial: `Economy`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PrintColorAdjust {
     #[default]
