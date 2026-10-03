@@ -64,7 +64,7 @@ window.getComputedStyle = function(element, pseudoElt) {
             if (/-color$/.test(name) && /currentcolor/i.test(base)) {
                 base = base.replace(/currentcolor/gi, _lumen_computed_property(nid, 'color') || 'rgb(0, 0, 0)');
             }
-            return _wa_gap_tr_value(nid, name, base);
+            return _wa_gap_an_value(nid, name, base, _wa_gap_tr_value(nid, name, base));
         }
         return base;
     }
@@ -5405,6 +5405,134 @@ function _wa_gap_tr_current(rec, now, camel) {
     // the eased progress is off by up to ~1e-6; snap it before the width is floored to a pixel.
     var eased = Math.round(_wa_ease(raw, r.easing) * 1e5) / 1e5;
     return _wa_gap_interp(camel, r.from, r.to, eased);
+}
+
+// CSS Animations L1 for the gap-decoration properties. The Rust `AnimationScheduler`
+// only knows opacity/transform/color/background-color/height, so an `@keyframes`
+// animation of `*-rule-width|color|inset-*` is evaluated here, at the same place as
+// the transitions above: `getComputedStyle()` reads. The element's computed
+// `animation-*` lists say which animations run; the keyframes come from the document's
+// sheets (`_lumen_keyframes_json`); the first read that sees an animation starts its
+// clock (one `performance.now()` per task, so every read of a turn agrees); the value
+// is interpolated between the keyframes around the directed progress with the same
+// Rust arithmetic as Web Animations (`_wa_interp_prop`). A keyframe missing at 0%/100%
+// is the neutral keyframe — the underlying (settled) computed value. Later animations
+// of the list win. Limits: only `getComputedStyle()` sees it (painted rules are not
+// driven frame by frame; no `animationstart/iteration/end` events), no
+// `animation-composition`, no `getAnimations()` entry for the animation, shorthand
+// declarations of a keyframe (`column-rule: ...`) are not read.
+var _wa_gap_an = {};
+
+// The winning `@keyframes <name>` of the document as JSON, or null (a shim-level seam
+// over the native so the unit tests can substitute it).
+function _wa_gap_keyframes_json(name) { return _lumen_keyframes_json(name); }
+
+// The keyframes of `name` that declare the longhand `kebab`: [{offset, value, easing}]
+// sorted by offset, one per offset (a later declaration wins), or null.
+function _wa_gap_an_frames(kebab, name) {
+    var json = _wa_gap_keyframes_json(name);
+    if (json == null) return null;
+    var frames = JSON.parse(json);
+    var accept = {};
+    accept[kebab] = 1;
+    accept[kebab.replace(/^(column|row)-/, '')] = 1;   // `rule-width` sets both axes
+    var out = [];
+    for (var i = 0; i < frames.length; i++) {
+        var val = null, easing = null, decls = frames[i].decls;
+        for (var j = 0; j < decls.length; j++) {
+            if (accept[decls[j][0]]) val = decls[j][1];
+            else if (decls[j][0] === 'animation-timing-function') easing = decls[j][1];
+        }
+        if (val !== null) out.push({ offset: frames[i].offset, value: val, easing: easing });
+    }
+    out.sort(function(a, b) { return a.offset - b.offset; });
+    var uniq = [];
+    for (var k = 0; k < out.length; k++) {
+        if (uniq.length && uniq[uniq.length - 1].offset === out[k].offset) uniq[uniq.length - 1] = out[k];
+        else uniq.push(out[k]);
+    }
+    return uniq.length ? uniq : null;
+}
+
+// Progress of the animation as a number in [0, 1] before the keyframe easing
+// (CSS Animations L1 §4.3 `animation-delay`, §3.6 iteration/direction, §4.8 fill), or
+// null when the animation does not apply at `ms` (before the delay without a backwards
+// fill, after the end without a forwards fill).
+function _wa_gap_an_progress(t, ms) {
+    var fill = t.fill, back = fill === 'backwards' || fill === 'both';
+    var fwd = fill === 'forwards' || fill === 'both';
+    var directed = function(raw, idx) {
+        var odd = idx % 2 === 1;
+        if (t.dir === 'reverse') return 1 - raw;
+        if (t.dir === 'alternate') return odd ? 1 - raw : raw;
+        if (t.dir === 'alternate-reverse') return odd ? raw : 1 - raw;
+        return raw;
+    };
+    var elapsed = (ms - t.start) / 1000 - t.delay;
+    if (elapsed < 0) return back ? directed(0, 0) : null;
+    var ended = function() {
+        if (!fwd) return null;
+        var n = t.iters, frac = n % 1;
+        return directed(frac === 0 ? 1 : frac, frac === 0 ? n - 1 : Math.floor(n));
+    };
+    if (!(t.dur > 0)) return ended();
+    if (elapsed >= t.dur * t.iters) return ended();
+    var idx = Math.floor(elapsed / t.dur);
+    return directed((elapsed - idx * t.dur) / t.dur, idx);
+}
+
+// The animated value of `kebab` for `nid` given its settled value `base`, or `value`
+// (what the transitions made of it) when no animation of the element touches it.
+function _wa_gap_an_value(nid, kebab, base, value) {
+    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
+    var recs = _wa_gap_an[nid];
+    if (names.length === 1 && (names[0] === 'none' || names[0] === '')) {
+        if (recs) delete _wa_gap_an[nid];
+        return value;
+    }
+    var lists = {};
+    ['duration', 'delay', 'timing-function', 'iteration-count', 'direction', 'fill-mode', 'play-state']
+        .forEach(function(p) { lists[p] = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-' + p)); });
+    var pick = function(p, i) { var l = lists[p]; return l[i % l.length]; };
+    var ms = _wa_gap_tr_clock();
+    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    var live = {}, result = value, eff = null;
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (name === 'none' || name === '') continue;
+        var key = i + ':' + name;
+        var rec = (recs && recs[key]) || { start: ms, pausedAt: null };
+        live[key] = rec;
+        var paused = pick('play-state', i) === 'paused';
+        if (paused && rec.pausedAt === null) rec.pausedAt = ms;
+        else if (!paused && rec.pausedAt !== null) { rec.start += ms - rec.pausedAt; rec.pausedAt = null; }
+        var frames = _wa_gap_an_frames(kebab, name);
+        if (!frames) continue;
+        var itok = pick('iteration-count', i);
+        var t = {
+            start: rec.start,
+            dur: _wa_gap_tr_seconds(pick('duration', i)),
+            delay: _wa_gap_tr_seconds(pick('delay', i)),
+            iters: itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1),
+            dir: pick('direction', i), fill: pick('fill-mode', i)
+        };
+        var p = _wa_gap_an_progress(t, rec.pausedAt !== null ? rec.pausedAt : ms);
+        if (p === null) continue;
+        if (!eff) eff = { target: _lumen_make_element(nid) };
+        if (frames[0].offset > 0) frames.unshift({ offset: 0, value: base, easing: null });
+        if (frames[frames.length - 1].offset < 1) frames.push({ offset: 1, value: base, easing: null });
+        var a = 0;
+        for (var f = 0; f < frames.length - 1; f++) { if (frames[f].offset <= p) a = f; }
+        var from = frames[a], to = frames[a + 1];
+        var local = (p - from.offset) / (to.offset - from.offset);
+        // `animation-timing-function` shapes every keyframe interval (a keyframe's own
+        // declaration wins); snapped like the transitions' eased progress.
+        local = Math.round(_wa_ease(local, from.easing || pick('timing-function', i)) * 1e5) / 1e5;
+        result = _wa_interp_prop(camel, _wa_gap_resolve(eff, camel, from.value),
+                                 _wa_gap_resolve(eff, camel, to.value), local);
+    }
+    if (Object.keys(live).length) _wa_gap_an[nid] = live; else delete _wa_gap_an[nid];
+    return result;
 }
 
 // Interpolate a single CSS property value between two string values.
