@@ -50,14 +50,10 @@ pub const COMPUTED_VALUE_KEY_PREFIX: &str = "computed:";
 /// it never shows up as a property.
 pub const BOXLESS_KEY: &str = "computed:-lumen-boxless";
 
-/// Inserts the used value `v` for `name`, keeping the displaced computed value
-/// under [`COMPUTED_VALUE_KEY_PREFIX`] when the two differ.
+/// Inserts the used value `v` for `name`; the computed value it displaces stays reachable under
+/// [`COMPUTED_VALUE_KEY_PREFIX`] when the two differ (decided on read, see [`StyleMap::set_used`]).
 fn set_used(m: &mut StyleMap, name: &'static str, v: String) {
-    if let Some(computed) = m.insert(name.to_owned(), v)
-        && m.get(name) != Some(&computed)
-    {
-        m.insert(format!("{COMPUTED_VALUE_KEY_PREFIX}{name}"), computed);
-    }
+    m.set_used(name, v);
 }
 
 /// Containing blocks a box's children resolve against.
