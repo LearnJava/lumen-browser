@@ -697,24 +697,24 @@ fn apply_css_wide_keyword_with(
             let color = prop.ends_with("color") || !prop.ends_with("width") && !prop.ends_with("style");
             if cols {
                 if width {
-                    style.column_rule_width = src.column_rule_width;
+                    style.column_rule_width = src.column_rule_width.clone();
                 }
                 if st {
-                    style.column_rule_style = src.column_rule_style;
+                    style.column_rule_style = src.column_rule_style.clone();
                 }
                 if color {
-                    style.column_rule_color = src.column_rule_color;
+                    style.column_rule_color = src.column_rule_color.clone();
                 }
             }
             if rows {
                 if width {
-                    style.row_rule_width = src.row_rule_width;
+                    style.row_rule_width = src.row_rule_width.clone();
                 }
                 if st {
-                    style.row_rule_style = src.row_rule_style;
+                    style.row_rule_style = src.row_rule_style.clone();
                 }
                 if color {
-                    style.row_rule_color = src.row_rule_color;
+                    style.row_rule_color = src.row_rule_color.clone();
                 }
             }
         }

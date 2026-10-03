@@ -35,7 +35,7 @@ use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
-    RuleBreak, RuleInsets, RuleOverlap, RuleVisibilityItems,
+    RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
@@ -495,21 +495,22 @@ pub struct ComputedStyle {
     /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. Typed.
     /// `None` = `auto`. Phase 0: parsing only.
     pub column_width: Option<Length>,
-    /// CSS Multi-column L1 §4.1 — `column-rule-width` (px). Default 3 (`medium`).
-    pub column_rule_width: f32,
+    /// CSS Multi-column L1 §4.1 / CSS Gap Decorations L1 §4.5 — `column-rule-width`: список
+    /// px-значений по щелям (`repeat()` сохранён). Default `[3]` (`medium`).
+    pub column_rule_width: RuleList<f32>,
     /// CSS Multi-column L1 §4.2 — `column-rule-style`. Default `None`
     /// (без линии — линия рисуется только если style != None и width > 0).
-    pub column_rule_style: BorderStyle,
+    pub column_rule_style: RuleList<BorderStyle>,
     /// CSS Multi-column L1 §4.3 — `column-rule-color`. Initial = `CurrentColor`.
-    pub column_rule_color: CssColor,
+    pub column_rule_color: RuleList<CssColor>,
     /// CSS Gap Decorations L1 §3 — `row-rule-width` (px). Default 3 (`medium`). Non-inherited.
     /// Горизонтальные линии между строками flex-wrap/grid-контейнера; ось колонок
     /// использует `column_rule_*` выше (одни и те же поля для multicol и gap decorations).
-    pub row_rule_width: f32,
+    pub row_rule_width: RuleList<f32>,
     /// CSS Gap Decorations L1 §3 — `row-rule-style`. Default `None`. Non-inherited.
-    pub row_rule_style: BorderStyle,
+    pub row_rule_style: RuleList<BorderStyle>,
     /// CSS Gap Decorations L1 §3 — `row-rule-color`. Default `CurrentColor`. Non-inherited.
-    pub row_rule_color: CssColor,
+    pub row_rule_color: RuleList<CssColor>,
     /// CSS Gap Decorations L1 §3.2 — `column-rule-break`. Initial `Normal`. Non-inherited.
     pub column_rule_break: RuleBreak,
     /// CSS Gap Decorations L1 §3.2 — `row-rule-break`. Initial `Normal`. Non-inherited.
@@ -1293,12 +1294,12 @@ impl ComputedStyle {
             column_gap: Length::Px(0.0),
             column_count: None,
             column_width: None,
-            column_rule_width: 3.0,
-            column_rule_style: BorderStyle::None,
-            column_rule_color: CssColor::CurrentColor,
-            row_rule_width: 3.0,
-            row_rule_style: BorderStyle::None,
-            row_rule_color: CssColor::CurrentColor,
+            column_rule_width: RuleList::single(3.0),
+            column_rule_style: RuleList::single(BorderStyle::None),
+            column_rule_color: RuleList::single(CssColor::CurrentColor),
+            row_rule_width: RuleList::single(3.0),
+            row_rule_style: RuleList::single(BorderStyle::None),
+            row_rule_color: RuleList::single(CssColor::CurrentColor),
             column_rule_break: RuleBreak::Normal,
             row_rule_break: RuleBreak::Normal,
             column_rule_visibility_items: RuleVisibilityItems::Normal,
@@ -1671,12 +1672,12 @@ impl ComputedStyle {
             // CSS Multi-column — не наследуются.
             column_count: None,
             column_width: None,
-            column_rule_width: 3.0,
-            column_rule_style: BorderStyle::None,
-            column_rule_color: CssColor::CurrentColor,
-            row_rule_width: 3.0,
-            row_rule_style: BorderStyle::None,
-            row_rule_color: CssColor::CurrentColor,
+            column_rule_width: RuleList::single(3.0),
+            column_rule_style: RuleList::single(BorderStyle::None),
+            column_rule_color: RuleList::single(CssColor::CurrentColor),
+            row_rule_width: RuleList::single(3.0),
+            row_rule_style: RuleList::single(BorderStyle::None),
+            row_rule_color: RuleList::single(CssColor::CurrentColor),
             column_rule_break: RuleBreak::Normal,
             row_rule_break: RuleBreak::Normal,
             column_rule_visibility_items: RuleVisibilityItems::Normal,
