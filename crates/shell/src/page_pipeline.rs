@@ -828,7 +828,7 @@ pub(crate) struct JsLayoutSnapshot {
     /// (BUG-464/BUG-477) — same tree `rects` was collected from.
     pub(crate) tree: Arc<LayoutBox>,
     /// `node index -> property -> serialized computed value`.
-    pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    pub(crate) styles: std::collections::HashMap<u32, lumen_layout::StyleMap>,
     /// CSSOM-6 (BUG-490): `(node index, pseudo name) -> property -> serialized
     /// computed value` — backs `getComputedStyle(el, pseudoElt)`.
     pub(crate) pseudo_styles:

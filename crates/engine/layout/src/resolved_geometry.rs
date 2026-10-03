@@ -23,11 +23,11 @@
 //! * `position: sticky` insets — the used offset depends on the scroll
 //!   position at read time.
 
-use std::collections::HashMap;
 
 use lumen_core::geom::{Rect, Size};
 
 use crate::box_tree::{BoxKind, BoxRole, LayoutBox};
+use crate::style_map::StyleMap;
 use crate::style::{BoxSizing, ComputedStyle, Display, FloatSide, LengthOrAuto, Position};
 
 /// Key prefix under which [`apply_used_geometry`] keeps the *computed* value
@@ -52,7 +52,7 @@ pub const BOXLESS_KEY: &str = "computed:-lumen-boxless";
 
 /// Inserts the used value `v` for `name`, keeping the displaced computed value
 /// under [`COMPUTED_VALUE_KEY_PREFIX`] when the two differ.
-fn set_used(m: &mut HashMap<String, String>, name: &str, v: String) {
+fn set_used(m: &mut StyleMap, name: &'static str, v: String) {
     if let Some(computed) = m.insert(name.to_owned(), v)
         && m.get(name) != Some(&computed)
     {
@@ -190,7 +190,7 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
 /// Overwrites the geometry entries of `m` (built by `computed_style_to_map`
 /// from `b.style`) with their CSSOM resolved values. No-op for boxes that are
 /// not an element's principal CSS box.
-pub(crate) fn apply_used_geometry(m: &mut HashMap<String, String>, b: &LayoutBox, ctx: &GeomCtx, vp: Size) {
+pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx, vp: Size) {
     if !reports_used_geometry(b) {
         return;
     }

@@ -2304,7 +2304,7 @@ pub(crate) struct PrecollectedJsData {
     /// empty map on a tick where the flag simply hadn't been set yet would
     /// wipe out a valid snapshot a same-tick CSSOM-4 flush (`style_flush.rs`)
     /// had already populated via a different, non-gated write path.
-    pub(crate) styles: Option<std::collections::HashMap<u32, std::collections::HashMap<String, String>>>,
+    pub(crate) styles: Option<std::collections::HashMap<u32, lumen_layout::StyleMap>>,
     pub(crate) pseudo_styles:
         Option<std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>>,
     pub(crate) customs:

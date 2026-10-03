@@ -403,7 +403,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after every `relayout_page`. The JS side uses this for
     /// `window.getComputedStyle()` and CSS property reads.
     #[allow(dead_code)]
-    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
+    fn update_computed_styles(&self, styles: HashMap<u32, lumen_layout::StyleMap>);
     /// Merge per-frame animated `opacity`/`transform` overrides into the
     /// computed-style snapshot in place (GAP-CSSANIM срез 3), so
     /// `getComputedStyle()` reflects the live interpolated value during an
@@ -1226,8 +1226,8 @@ impl PersistentJs for V8PersistentJs {
             "_lumen_deliver_layout_shift({value}, [{sources_js}], {had_input_js})"
         ));
     }
-    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
-        self.rt.update_computed_styles(styles);
+    fn update_computed_styles(&self, styles: HashMap<u32, lumen_layout::StyleMap>) {
+        self.rt.update_style_maps(styles);
     }
     fn patch_animated_computed_styles(&self, patches: &HashMap<u32, HashMap<String, String>>) {
         self.rt.patch_animated_computed_styles(patches);

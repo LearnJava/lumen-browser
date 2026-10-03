@@ -21,7 +21,7 @@ use lumen_dom::NodeId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-type StyleMaps = HashMap<u32, HashMap<String, String>>;
+type StyleMaps = HashMap<u32, crate::StyleMap>;
 
 /// BUG-935 срез 59 — which nodes of an incremental flush really changed, as far
 /// as a computed-style entry can tell.
@@ -758,7 +758,7 @@ mod tests {
 
         // What the collector then publishes: the rebuilt entry changes, the kept ones are untouched.
         let before_b = styles[&(b.index() as u32)].clone();
-        styles.get_mut(&(a.index() as u32)).unwrap().insert("sentinel".into(), "kept".into());
+        styles.get_mut(&(a.index() as u32)).unwrap().insert("sentinel", "kept".into());
         plan.collect_computed_styles(&doc, VIEWPORT, &mut styles);
         assert_eq!(styles[&(a.index() as u32)].get("sentinel").map(String::as_str), Some("kept"));
         assert_ne!(styles[&(b.index() as u32)], before_b, "b's entry was rebuilt with its new background");

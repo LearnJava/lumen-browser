@@ -44,6 +44,8 @@ pub mod rule_index;
 mod resolved_geometry;
 pub mod selection;
 pub mod selector_query;
+pub mod style_map;
+pub use style_map::StyleMap;
 pub mod scoped_collect;
 pub mod scroll_initial_target;
 pub mod scroll_timeline;
@@ -1656,7 +1658,7 @@ pub fn collect_computed_styles(
     doc: &lumen_dom::Document,
     counters: Option<&CounterMap>,
     viewport: lumen_core::geom::Size,
-) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
+) -> std::collections::HashMap<u32, StyleMap> {
     let mut out = std::collections::HashMap::new();
     collect_computed_styles_rec(doc, root, resolved_geometry::GeomCtx::root(viewport), viewport, &mut out);
     if let Some(counters) = counters {
@@ -1667,12 +1669,12 @@ pub fn collect_computed_styles(
             }
             let id = lumen_dom::NodeId::from_index(i);
             if let Some(style) = counters.style_arc(id) {
-                let mut m = computed_style_to_map(&style);
+                let mut m = StyleMap::of_style(&style);
                 // BUG-1191: no box (empty inline, `display: none` /
                 // `content-visibility: hidden` descendant) — publish the
                 // cascaded style, marked so «rendered» checks can skip it.
                 if style.display != Display::Contents {
-                    m.insert(resolved_geometry::BOXLESS_KEY.to_owned(), "1".to_owned());
+                    m.insert(resolved_geometry::BOXLESS_KEY, "1".to_owned());
                 }
                 out.insert(idx, m);
             }
@@ -1709,7 +1711,7 @@ fn collect_computed_styles_rec(
     root: &LayoutBox,
     root_ctx: resolved_geometry::GeomCtx,
     viewport: lumen_core::geom::Size,
-    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
 ) {
     let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> = vec![(root, root_ctx)];
     while let Some((b, ctx)) = stack.pop() {
@@ -1727,7 +1729,7 @@ fn collect_computed_styles_box(
     b: &LayoutBox,
     ctx: &resolved_geometry::GeomCtx,
     viewport: lumen_core::geom::Size,
-    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
 ) {
     collect_computed_styles_parts(doc, b, ctx, viewport, true, true, out);
 }
@@ -1743,11 +1745,11 @@ fn collect_computed_styles_parts(
     viewport: lumen_core::geom::Size,
     own: bool,
     segments: bool,
-    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
 ) {
     if own {
         out.entry(b.node.index() as u32).or_insert_with(|| {
-            let mut m = computed_style_to_map(&b.style);
+            let mut m = StyleMap::of_style(&b.style);
             resolved_geometry::apply_used_geometry(&mut m, b, ctx, viewport);
             m
         });
@@ -1763,13 +1765,13 @@ fn collect_computed_styles_parts(
                 continue;
             }
             out.entry(seg.source_node.index() as u32)
-                .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
+                .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style).into());
             // BUG-488: publish the full property map for every plain inline
             // element this segment is nested inside — see `collect_computed_styles`'s
             // doc comment for the approximation this relies on.
             for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
                 out.entry(anc.index() as u32)
-                    .or_insert_with(|| computed_style_to_map(&seg.style));
+                    .or_insert_with(|| computed_style_to_map(&seg.style).into());
             }
         }
     }
