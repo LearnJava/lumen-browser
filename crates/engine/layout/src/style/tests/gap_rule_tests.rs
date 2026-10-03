@@ -235,3 +235,109 @@ fn rule_keyword_properties_are_supported_and_computed() {
     assert_eq!(m.get("column-rule-visibility-items").map(String::as_str), Some("normal"));
     assert_eq!(m.get("rule-overlap").map(String::as_str), Some("row-over-column"));
 }
+
+// ── CSS Gap Decorations L1 §3.3: *-rule-inset* ──────────────────────────────
+
+fn inset_css(i: &RuleInset) -> String {
+    i.to_css()
+}
+
+fn slots(r: &RuleInsets) -> [String; 4] {
+    [inset_css(&r.cap_start), inset_css(&r.cap_end), inset_css(&r.junction_start), inset_css(&r.junction_end)]
+}
+
+#[test]
+fn rule_inset_initial_is_zero() {
+    let s = parse_gap_rule("color: red;");
+    assert_eq!(slots(&s.column_rule_inset), ["0px", "0px", "0px", "0px"]);
+    assert_eq!(slots(&s.row_rule_inset), ["0px", "0px", "0px", "0px"]);
+}
+
+#[test]
+fn rule_inset_longhands() {
+    let s = parse_gap_rule(
+        "column-rule-inset-cap-start: 1px; column-rule-inset-cap-end: 2px;          column-rule-inset-junction-start: 3px; column-rule-inset-junction-end: overlap-join;          row-rule-inset-cap-end: 25%;",
+    );
+    assert_eq!(slots(&s.column_rule_inset), ["1px", "2px", "3px", "overlap-join"]);
+    assert_eq!(slots(&s.row_rule_inset), ["0px", "25%", "0px", "0px"]);
+}
+
+#[test]
+fn rule_inset_start_end_cap_junction_shorthands() {
+    let s = parse_gap_rule("column-rule-inset-start: 4px;");
+    assert_eq!(slots(&s.column_rule_inset), ["4px", "0px", "4px", "0px"]);
+    let s = parse_gap_rule("row-rule-inset-end: 5px;");
+    assert_eq!(slots(&s.row_rule_inset), ["0px", "5px", "0px", "5px"]);
+    let s = parse_gap_rule("column-rule-inset-cap: 6px;");
+    assert_eq!(slots(&s.column_rule_inset), ["6px", "6px", "0px", "0px"]);
+    let s = parse_gap_rule("column-rule-inset-junction: 7px 8px;");
+    assert_eq!(slots(&s.column_rule_inset), ["0px", "0px", "7px", "8px"]);
+    // `rule-inset-*` задаёт обе оси.
+    let s = parse_gap_rule("rule-inset-cap: 1px 2px;");
+    assert_eq!(slots(&s.column_rule_inset), ["1px", "2px", "0px", "0px"]);
+    assert_eq!(slots(&s.row_rule_inset), ["1px", "2px", "0px", "0px"]);
+}
+
+#[test]
+fn rule_inset_full_shorthand_fills_omitted_values() {
+    let s = parse_gap_rule("column-rule-inset: 1px;");
+    assert_eq!(slots(&s.column_rule_inset), ["1px", "1px", "1px", "1px"]);
+    let s = parse_gap_rule("column-rule-inset: 1px 2px;");
+    assert_eq!(slots(&s.column_rule_inset), ["1px", "2px", "1px", "2px"]);
+    let s = parse_gap_rule("column-rule-inset: 1px 2px / 3px 4px;");
+    assert_eq!(slots(&s.column_rule_inset), ["1px", "2px", "3px", "4px"]);
+    let s = parse_gap_rule("row-rule-inset: 1px / 3px;");
+    assert_eq!(slots(&s.row_rule_inset), ["1px", "1px", "3px", "3px"]);
+    let s = parse_gap_rule("rule-inset: -50% / overlap-join;");
+    for r in [&s.column_rule_inset, &s.row_rule_inset] {
+        assert_eq!(slots(r), ["-50%", "-50%", "overlap-join", "overlap-join"]);
+    }
+}
+
+#[test]
+fn rule_inset_invalid_values_are_dropped() {
+    for bad in ["auto", "none", "1px 2px 3px", "", "red", "1px /", "/ 1px", "1px / 2px / 3px"] {
+        let s = parse_gap_rule(&format!("column-rule-inset: 7px; column-rule-inset: {bad};"));
+        assert_eq!(slots(&s.column_rule_inset), ["7px"; 4], "column-rule-inset: {bad:?}");
+    }
+    // Longhand — ровно одно значение.
+    let s = parse_gap_rule("row-rule-inset-cap-start: 7px; row-rule-inset-cap-start: 1px 2px;");
+    assert_eq!(inset_css(&s.row_rule_inset.cap_start), "7px");
+    // Шортхенд cap/junction — не больше двух.
+    let s = parse_gap_rule("row-rule-inset-cap: 7px; row-rule-inset-cap: 1px 2px 3px;");
+    assert_eq!(slots(&s.row_rule_inset), ["7px", "7px", "0px", "0px"]);
+}
+
+#[test]
+fn rule_inset_not_inherited_and_css_wide() {
+    let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+    let sheet = lumen_css_parser::parse(
+        "div { rule-inset: 9px; } span { column-rule-inset-cap: inherit; row-rule-inset-start: 4px; row-rule-inset-start: initial; }",
+    );
+    let root = ComputedStyle::root();
+    let body = doc.body().expect("body");
+    let div = doc.get(body).children.first().copied().expect("div");
+    let span = doc.get(div).children.first().copied().expect("span");
+    let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+    let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+    assert_eq!(slots(&div_style.row_rule_inset), ["9px"; 4]);
+    // `inherit` берёт только cap-start/cap-end родителя.
+    assert_eq!(slots(&span_style.column_rule_inset), ["9px", "9px", "0px", "0px"]);
+    assert_eq!(slots(&span_style.row_rule_inset), ["0px"; 4], "not inherited; `initial` resets");
+}
+
+#[test]
+fn rule_inset_properties_are_supported_and_computed() {
+    let m = crate::computed_style_to_map(&parse_gap_rule("column-rule-inset: 2px / overlap-join;"));
+    assert_eq!(m.get("column-rule-inset-cap-start").map(String::as_str), Some("2px"));
+    assert_eq!(m.get("column-rule-inset-junction-end").map(String::as_str), Some("overlap-join"));
+    assert_eq!(m.get("row-rule-inset-cap-end").map(String::as_str), Some("0px"));
+    for p in [
+        "rule-inset", "column-rule-inset", "row-rule-inset", "rule-inset-start", "rule-inset-end",
+        "rule-inset-cap", "rule-inset-junction", "column-rule-inset-cap", "row-rule-inset-junction",
+        "column-rule-inset-start", "row-rule-inset-end", "column-rule-inset-cap-start",
+        "row-rule-inset-junction-end",
+    ] {
+        assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing");
+    }
+}

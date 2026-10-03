@@ -1021,6 +1021,35 @@ use lumen_dom::NodeId;
         assert_eq!(axis_order("column-over-row"), vec![false, true], "columns painted last");
     }
 
+    #[test]
+    fn rule_inset_shortens_gap_segments_at_container_edges() {
+        // GRID_2X2 content box: 220×120 at x=0; column gap spans the full height,
+        // the row gap the full width.
+        let html = GRID_2X2.replace("{}", "rule:2px solid red;column-rule-inset:10px 20px;row-rule-inset:30px 5px");
+        let dl = build(&html, "");
+        let cols = column_rule_cmds(&dl);
+        let rows = horizontal_rule_cmds(&dl);
+        assert_eq!((cols.len(), rows.len()), (1, 1));
+        let (DisplayCommand::DrawBorder { rect: c, .. }, DisplayCommand::DrawBorder { rect: r, .. }) = (cols[0], rows[0])
+        else {
+            panic!("expected DrawBorder");
+        };
+        assert!((c.height - 90.0).abs() < 0.6, "120 - 10 - 20, got {}", c.height);
+        assert!((r.width - 185.0).abs() < 0.6, "220 - 30 - 5, got {}", r.width);
+        // Percentages and `overlap-join` resolve to 0 at a container edge.
+        let html = GRID_2X2.replace("{}", "rule:2px solid red;rule-inset:50%");
+        let dl = build(&html, "");
+        let DisplayCommand::DrawBorder { rect, .. } = column_rule_cmds(&dl)[0] else { panic!("expected DrawBorder") };
+        assert!((rect.height - 120.0).abs() < 0.6, "got {}", rect.height);
+    }
+
+    #[test]
+    fn rule_inset_collapsing_a_segment_removes_it() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red;rule-inset:110px");
+        let dl = build(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len() + horizontal_rule_cmds(&dl).len(), 0);
+    }
+
     /// The ordered (stacking-context) path — the one the live window and
     /// `--screenshot` use — must draw gap rules too, not only `walk`.
     #[test]

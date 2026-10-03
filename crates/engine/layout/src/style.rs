@@ -244,7 +244,7 @@ pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
     FieldSizing, Hyphens, LineBreak, ListStylePosition,
     ListStyleType, OverflowAnchor, OverflowClipMarginBox, OverflowWrap, PointerEvents, Quotes, Resize,
-    RuleBreak, RuleOverlap, RuleVisibilityItems,
+    RuleBreak, RuleInset, RuleInsets, RuleOverlap, RuleVisibilityItems,
     ScrollMarkerGroup, ScrollMarkerGroupMode, ScrollMarkerGroupPlacement, ScrollTargetGroup,
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };

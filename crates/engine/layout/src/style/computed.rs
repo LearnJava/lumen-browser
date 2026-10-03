@@ -35,7 +35,7 @@ use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
-    RuleBreak, RuleOverlap, RuleVisibilityItems,
+    RuleBreak, RuleInsets, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
@@ -520,6 +520,12 @@ pub struct ComputedStyle {
     pub row_rule_visibility_items: RuleVisibilityItems,
     /// CSS Gap Decorations L1 §3.5 — `rule-overlap`. Initial `RowOverColumn`. Non-inherited.
     pub rule_overlap: RuleOverlap,
+    /// CSS Gap Decorations L1 §3.3 — `column-rule-inset-{cap,junction}-{start,end}`. Initial `0`.
+    /// Non-inherited.
+    pub column_rule_inset: RuleInsets,
+    /// CSS Gap Decorations L1 §3.3 — `row-rule-inset-{cap,junction}-{start,end}`. Initial `0`.
+    /// Non-inherited.
+    pub row_rule_inset: RuleInsets,
     /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
     /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
     pub border_collapse: BorderCollapse,
@@ -1298,6 +1304,8 @@ impl ComputedStyle {
             column_rule_visibility_items: RuleVisibilityItems::Normal,
             row_rule_visibility_items: RuleVisibilityItems::Normal,
             rule_overlap: RuleOverlap::RowOverColumn,
+            column_rule_inset: RuleInsets::default(),
+            row_rule_inset: RuleInsets::default(),
             border_collapse: BorderCollapse::Separate,
             empty_cells: EmptyCells::Show,
             caption_side: CaptionSide::Top,
@@ -1674,6 +1682,8 @@ impl ComputedStyle {
             column_rule_visibility_items: RuleVisibilityItems::Normal,
             row_rule_visibility_items: RuleVisibilityItems::Normal,
             rule_overlap: RuleOverlap::RowOverColumn,
+            column_rule_inset: RuleInsets::default(),
+            row_rule_inset: RuleInsets::default(),
             column_span_all: false,
             column_fill_balance: true,
             break_before: BreakValue::Auto,

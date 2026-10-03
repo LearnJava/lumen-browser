@@ -72,6 +72,7 @@ use crate::style::parse::box_sides::{
 };
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::values::length::split_top_level_ws;
+use crate::style::values::misc::RuleInsetProp;
 use crate::style::shorthand::{
     apply_flex_flow_shorthand,
     apply_flex_shorthand,
@@ -677,6 +678,21 @@ pub(in crate::style) fn apply_decl_layout(
         "rule-overlap" => {
             if let Some(v) = RuleOverlap::parse(val) {
                 style.rule_overlap = v;
+            }
+        }
+        // CSS Gap Decorations L1 §3.3: `*-rule-inset*` (восемь longhand-ов + шортхенды).
+        p if RuleInsetProp::of(p).is_some() => {
+            if let Some(rp) = RuleInsetProp::of(p)
+                && let Some(values) = rp.parse(val, is_quirks)
+            {
+                for (slot, v) in values {
+                    if rp.cols {
+                        *style.column_rule_inset.slot_mut(slot) = v.clone();
+                    }
+                    if rp.rows {
+                        *style.row_rule_inset.slot_mut(slot) = v;
+                    }
+                }
             }
         }
         "column-span" => {
