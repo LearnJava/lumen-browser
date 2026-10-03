@@ -42,6 +42,9 @@ use crate::style::{
     ObjectPosition,
     Position,
     Resize,
+    RuleBreak,
+    RuleOverlap,
+    RuleVisibilityItems,
     ScrollMarkerGroup,
     ScrollTargetGroup,
     ShapeOutside,
@@ -648,6 +651,33 @@ pub(in crate::style) fn apply_decl_layout(
         | "row-rule" | "row-rule-width" | "row-rule-style" | "row-rule-color" | "rule"
         | "rule-width" | "rule-style" | "rule-color" => {
             apply_gap_rule_declaration(style, prop, val, em_basis, viewport, is_quirks);
+        }
+        // CSS Gap Decorations L1 §3.2 / §3.4 / §3.5: `*-rule-break`, `*-rule-visibility-items`
+        // (one keyword; `rule-*` shorthand sets both axes) and `rule-overlap`.
+        "column-rule-break" | "row-rule-break" | "rule-break" => {
+            if let Some(v) = RuleBreak::parse(val) {
+                if prop != "row-rule-break" {
+                    style.column_rule_break = v;
+                }
+                if prop != "column-rule-break" {
+                    style.row_rule_break = v;
+                }
+            }
+        }
+        "column-rule-visibility-items" | "row-rule-visibility-items" | "rule-visibility-items" => {
+            if let Some(v) = RuleVisibilityItems::parse(val) {
+                if prop != "row-rule-visibility-items" {
+                    style.column_rule_visibility_items = v;
+                }
+                if prop != "column-rule-visibility-items" {
+                    style.row_rule_visibility_items = v;
+                }
+            }
+        }
+        "rule-overlap" => {
+            if let Some(v) = RuleOverlap::parse(val) {
+                style.rule_overlap = v;
+            }
         }
         "column-span" => {
             match val.trim().to_ascii_lowercase().as_str() {

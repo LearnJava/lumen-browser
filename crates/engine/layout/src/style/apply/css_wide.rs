@@ -683,6 +683,61 @@ fn apply_css_wide_keyword_with(
             style.block_step_align = src.block_step_align;
             style.block_step_round = src.block_step_round;
         }
+        // CSS Multi-column L1 §4 / CSS Gap Decorations L1 §3 — none of the
+        // `*-rule*` properties are inherited.
+        "column-rule-width" | "column-rule-style" | "column-rule-color" | "column-rule"
+        | "row-rule-width" | "row-rule-style" | "row-rule-color" | "row-rule" | "rule-width"
+        | "rule-style" | "rule-color" | "rule" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            let cols = !prop.starts_with("row-");
+            let rows = !prop.starts_with("column-");
+            let width = prop.ends_with("width") || !prop.ends_with("style") && !prop.ends_with("color");
+            let st = prop.ends_with("style") || !prop.ends_with("width") && !prop.ends_with("color");
+            let color = prop.ends_with("color") || !prop.ends_with("width") && !prop.ends_with("style");
+            if cols {
+                if width {
+                    style.column_rule_width = src.column_rule_width;
+                }
+                if st {
+                    style.column_rule_style = src.column_rule_style;
+                }
+                if color {
+                    style.column_rule_color = src.column_rule_color;
+                }
+            }
+            if rows {
+                if width {
+                    style.row_rule_width = src.row_rule_width;
+                }
+                if st {
+                    style.row_rule_style = src.row_rule_style;
+                }
+                if color {
+                    style.row_rule_color = src.row_rule_color;
+                }
+            }
+        }
+        "column-rule-break" | "row-rule-break" | "rule-break" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            if prop != "row-rule-break" {
+                style.column_rule_break = src.column_rule_break;
+            }
+            if prop != "column-rule-break" {
+                style.row_rule_break = src.row_rule_break;
+            }
+        }
+        "column-rule-visibility-items" | "row-rule-visibility-items" | "rule-visibility-items" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            if prop != "row-rule-visibility-items" {
+                style.column_rule_visibility_items = src.column_rule_visibility_items;
+            }
+            if prop != "column-rule-visibility-items" {
+                style.row_rule_visibility_items = src.row_rule_visibility_items;
+            }
+        }
+        "rule-overlap" => {
+            style.rule_overlap = if inh_only_inherit { inherited.rule_overlap } else { init.rule_overlap };
+        }
         "opacity" => {
             style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };
         }

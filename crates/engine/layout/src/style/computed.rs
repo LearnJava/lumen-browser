@@ -35,6 +35,7 @@ use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
+    RuleBreak, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
@@ -509,6 +510,16 @@ pub struct ComputedStyle {
     pub row_rule_style: BorderStyle,
     /// CSS Gap Decorations L1 §3 — `row-rule-color`. Default `CurrentColor`. Non-inherited.
     pub row_rule_color: CssColor,
+    /// CSS Gap Decorations L1 §3.2 — `column-rule-break`. Initial `Normal`. Non-inherited.
+    pub column_rule_break: RuleBreak,
+    /// CSS Gap Decorations L1 §3.2 — `row-rule-break`. Initial `Normal`. Non-inherited.
+    pub row_rule_break: RuleBreak,
+    /// CSS Gap Decorations L1 §3.4 — `column-rule-visibility-items`. Initial `Normal`. Non-inherited.
+    pub column_rule_visibility_items: RuleVisibilityItems,
+    /// CSS Gap Decorations L1 §3.4 — `row-rule-visibility-items`. Initial `Normal`. Non-inherited.
+    pub row_rule_visibility_items: RuleVisibilityItems,
+    /// CSS Gap Decorations L1 §3.5 — `rule-overlap`. Initial `RowOverColumn`. Non-inherited.
+    pub rule_overlap: RuleOverlap,
     /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
     /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
     pub border_collapse: BorderCollapse,
@@ -1282,6 +1293,11 @@ impl ComputedStyle {
             row_rule_width: 3.0,
             row_rule_style: BorderStyle::None,
             row_rule_color: CssColor::CurrentColor,
+            column_rule_break: RuleBreak::Normal,
+            row_rule_break: RuleBreak::Normal,
+            column_rule_visibility_items: RuleVisibilityItems::Normal,
+            row_rule_visibility_items: RuleVisibilityItems::Normal,
+            rule_overlap: RuleOverlap::RowOverColumn,
             border_collapse: BorderCollapse::Separate,
             empty_cells: EmptyCells::Show,
             caption_side: CaptionSide::Top,
@@ -1653,6 +1669,11 @@ impl ComputedStyle {
             row_rule_width: 3.0,
             row_rule_style: BorderStyle::None,
             row_rule_color: CssColor::CurrentColor,
+            column_rule_break: RuleBreak::Normal,
+            row_rule_break: RuleBreak::Normal,
+            column_rule_visibility_items: RuleVisibilityItems::Normal,
+            row_rule_visibility_items: RuleVisibilityItems::Normal,
+            rule_overlap: RuleOverlap::RowOverColumn,
             column_span_all: false,
             column_fill_balance: true,
             break_before: BreakValue::Auto,

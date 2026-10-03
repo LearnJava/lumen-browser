@@ -122,3 +122,116 @@
             assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing from SUPPORTED_PROPERTIES");
         }
     }
+
+// ── CSS Gap Decorations L1: *-rule-break / *-rule-visibility-items / rule-overlap ──
+
+#[test]
+fn rule_keyword_longhands_initial_values() {
+    let s = parse_gap_rule("color: red;");
+    assert_eq!(s.column_rule_break, RuleBreak::Normal);
+    assert_eq!(s.row_rule_break, RuleBreak::Normal);
+    assert_eq!(s.column_rule_visibility_items, RuleVisibilityItems::Normal);
+    assert_eq!(s.row_rule_visibility_items, RuleVisibilityItems::Normal);
+    assert_eq!(s.rule_overlap, RuleOverlap::RowOverColumn);
+}
+
+#[test]
+fn rule_break_longhands_and_shorthand() {
+    let s = parse_gap_rule("column-rule-break: intersection; row-rule-break: none;");
+    assert_eq!(s.column_rule_break, RuleBreak::Intersection);
+    assert_eq!(s.row_rule_break, RuleBreak::None);
+    let s = parse_gap_rule("rule-break: intersection;");
+    assert_eq!(s.column_rule_break, RuleBreak::Intersection);
+    assert_eq!(s.row_rule_break, RuleBreak::Intersection);
+    // Later longhand overrides one axis of the shorthand.
+    let s = parse_gap_rule("rule-break: none; row-rule-break: normal;");
+    assert_eq!(s.column_rule_break, RuleBreak::None);
+    assert_eq!(s.row_rule_break, RuleBreak::Normal);
+}
+
+#[test]
+fn rule_visibility_items_longhands_and_shorthand() {
+    let s = parse_gap_rule("column-rule-visibility-items: around; row-rule-visibility-items: between;");
+    assert_eq!(s.column_rule_visibility_items, RuleVisibilityItems::Around);
+    assert_eq!(s.row_rule_visibility_items, RuleVisibilityItems::Between);
+    let s = parse_gap_rule("rule-visibility-items: all;");
+    assert_eq!(s.column_rule_visibility_items, RuleVisibilityItems::All);
+    assert_eq!(s.row_rule_visibility_items, RuleVisibilityItems::All);
+}
+
+#[test]
+fn rule_keyword_invalid_values_are_dropped() {
+    // Mirrors css-gaps `*-invalid.html`: a bad value leaves the previous one in place.
+    for bad in ["auto", "true", "10px", "default"] {
+        let s = parse_gap_rule(&format!("rule-break: none; rule-break: {bad};"));
+        assert_eq!(s.column_rule_break, RuleBreak::None, "rule-break: {bad}");
+    }
+    for bad in ["true", "10px", "default", "none", "auto"] {
+        let s = parse_gap_rule(&format!(
+            "rule-visibility-items: all; rule-visibility-items: {bad};"
+        ));
+        assert_eq!(s.row_rule_visibility_items, RuleVisibilityItems::All, "visibility: {bad}");
+    }
+    for bad in ["auto", "none", "10px", "10%", "true"] {
+        let s = parse_gap_rule(&format!("rule-overlap: column-over-row; rule-overlap: {bad};"));
+        assert_eq!(s.rule_overlap, RuleOverlap::ColumnOverRow, "rule-overlap: {bad}");
+    }
+}
+
+#[test]
+fn rule_overlap_parses() {
+    let s = parse_gap_rule("rule-overlap: column-over-row;");
+    assert_eq!(s.rule_overlap, RuleOverlap::ColumnOverRow);
+}
+
+#[test]
+fn rule_keyword_properties_not_inherited() {
+    let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+    let sheet = lumen_css_parser::parse(
+        "div { rule-break: none; rule-visibility-items: all; rule-overlap: column-over-row; }",
+    );
+    let root = ComputedStyle::root();
+    let body = doc.body().expect("body");
+    let div = doc.get(body).children.first().copied().expect("div");
+    let span = doc.get(div).children.first().copied().expect("span");
+    let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+    let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+    assert_eq!(div_style.column_rule_break, RuleBreak::None);
+    assert_eq!(span_style.column_rule_break, RuleBreak::Normal);
+    assert_eq!(span_style.row_rule_visibility_items, RuleVisibilityItems::Normal);
+    assert_eq!(span_style.rule_overlap, RuleOverlap::RowOverColumn);
+}
+
+#[test]
+fn rule_keyword_css_wide_keywords() {
+    // `inherit` pulls the parent's value; `initial` resets to the spec initial.
+    let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+    let sheet = lumen_css_parser::parse(
+        "div { rule-break: none; rule-overlap: column-over-row; column-rule-width: 7px; }          span { rule-break: inherit; rule-overlap: inherit; column-rule-width: inherit;                 row-rule-width: 9px; row-rule-width: initial; }",
+    );
+    let root = ComputedStyle::root();
+    let body = doc.body().expect("body");
+    let div = doc.get(body).children.first().copied().expect("div");
+    let span = doc.get(div).children.first().copied().expect("span");
+    let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+    let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+    assert_eq!(span_style.column_rule_break, RuleBreak::None);
+    assert_eq!(span_style.row_rule_break, RuleBreak::None);
+    assert_eq!(span_style.rule_overlap, RuleOverlap::ColumnOverRow);
+    assert_eq!(span_style.column_rule_width, 7.0);
+    assert_eq!(span_style.row_rule_width, 3.0);
+}
+
+#[test]
+fn rule_keyword_properties_are_supported_and_computed() {
+    for p in [
+        "column-rule-break", "row-rule-break", "rule-break", "column-rule-visibility-items",
+        "row-rule-visibility-items", "rule-visibility-items", "rule-overlap",
+    ] {
+        assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing");
+    }
+    let m = crate::computed_style_to_map(&ComputedStyle::root());
+    assert_eq!(m.get("row-rule-break").map(String::as_str), Some("normal"));
+    assert_eq!(m.get("column-rule-visibility-items").map(String::as_str), Some("normal"));
+    assert_eq!(m.get("rule-overlap").map(String::as_str), Some("row-over-column"));
+}

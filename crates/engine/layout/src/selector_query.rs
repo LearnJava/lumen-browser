@@ -1237,6 +1237,18 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("block-step-align".into(), style.block_step_align.to_css().into());
     m.insert("block-step-round".into(), style.block_step_round.to_css().into());
     m.insert("block-step".into(), block_step_shorthand_computed(style));
+    // CSS Gap Decorations L1 §3.2 / §3.4 / §3.5 — keyword longhands, computed = specified.
+    m.insert("column-rule-break".into(), style.column_rule_break.to_css().into());
+    m.insert("row-rule-break".into(), style.row_rule_break.to_css().into());
+    m.insert(
+        "column-rule-visibility-items".into(),
+        style.column_rule_visibility_items.to_css().into(),
+    );
+    m.insert(
+        "row-rule-visibility-items".into(),
+        style.row_rule_visibility_items.to_css().into(),
+    );
+    m.insert("rule-overlap".into(), style.rule_overlap.to_css().into());
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
