@@ -495,7 +495,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `grid-template` / `grid` (super-shorthand) | ✅ | CSS Grid L1 §7.4/§8.2: `rows / columns`, форма со строками-areas + размеры рядов, `grid: auto-flow [dense] … / …` в обе стороны, сброс `grid-auto-*`, имена линий пропускаются, невалидное значение игнорируется (`style/shorthand.rs::apply_grid_template_shorthand`/`apply_grid_shorthand`) 2026-10-03 |
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
-| `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
+| `grid-column*` / `grid-row*` / `grid-area` | ✅ | CSS Grid L1 §8.3/§8.4: `<grid-line>` = `auto` / `±N` / `span N` / `<ident>` / `N <ident>` / `span [N] <ident>`; отрицательные номера считаются с конца явной сетки (треки шаблона или `grid-template-areas`), линии меняются местами при `start > end`, имена линий (`[a b]`, в т.ч. из `repeat()` и `grid-template`/`grid`) хранятся в `grid_template_*_line_names`, неявные линии `<area>-start/-end`; шортхенды: пропущенная сторона = копия `<ident>` или `auto`, невалидная часть — декларация игнорируется; элемент с заданной строкой и авто-столбцом остаётся в своей строке. p4-grid-line-placement |
 | `subgrid` | ✅ | CSS Grid L2; track inheritance via `SubgridContext`/`SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` in `box_tree.rs` (WQ#30) 2026-06-03 |
 | `masonry` | ✅ | CSS Grid L3; Edge parity: no stable browser ships masonry, so the `masonry` track-list sentinel is dropped and the axis lays out as a regular grid (`box_tree/grid.rs:177`, BUG-105/BUG-143, TEST-63/75); `masonry-auto-flow` parsed + stored, intentionally no layout effect. `masonry.rs` waterfall kept unwired until a stable engine ships it |
 

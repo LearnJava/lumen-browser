@@ -798,6 +798,12 @@ pub struct ComputedStyle {
     /// Default `[]` (none). Outer vec = rows (top-to-bottom), inner vec = columns
     /// (left-to-right). Each string is a cell name; `"."` means unnamed cell.
     pub grid_template_areas: Vec<Vec<String>>,
+    /// CSS Grid Layout L1 §7.2.2 — имена линий `grid-template-columns`
+    /// (`[a b] 100px [c]`). Индекс `i` — линия номер `i + 1`; пусто, если имён
+    /// нет. Non-inherited. Default `[]`.
+    pub grid_template_col_line_names: Vec<Vec<String>>,
+    /// То же для `grid-template-rows`.
+    pub grid_template_row_line_names: Vec<Vec<String>>,
     /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
     pub grid_auto_flow: GridAutoFlow,
     /// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls placement order in
@@ -1370,6 +1376,8 @@ impl ComputedStyle {
             grid_template_col_auto_repeat: None,
             grid_template_row_auto_repeat: None,
             grid_template_areas: Vec::new(),
+            grid_template_col_line_names: Vec::new(),
+            grid_template_row_line_names: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_auto_columns: GridTrackSize::Auto,
@@ -1756,6 +1764,8 @@ impl ComputedStyle {
             grid_template_col_auto_repeat: None,
             grid_template_row_auto_repeat: None,
             grid_template_areas: Vec::new(),
+            grid_template_col_line_names: Vec::new(),
+            grid_template_row_line_names: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_auto_columns: GridTrackSize::Auto,
