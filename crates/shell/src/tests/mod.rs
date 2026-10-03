@@ -195,6 +195,8 @@ struct Cc12IncrementalState {
     /// PERF-16 срез 2: кэш emit по поддереву, как `Lumen::chrome_emit_cache` в проде
     /// (`LUMEN_NO_EMIT_CACHE=1` выключает — для A/B).
     emit_cache: lumen_paint::SubtreeEmitCache,
+    /// PERF-16 срез 4: индексы рестайла хрома, как `Lumen::chrome_restyle_indexes` в проде.
+    restyle_indexes: lumen_layout::style::RestyleIndexCache,
 }
 
 /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
@@ -235,23 +237,36 @@ fn cc12_bench_cycle(
     let (layout, counters) = match state.prev_pristine_layout.take() {
         Some(prev) => {
             let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
-            let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
-            let mut dirty_roots = std::collections::HashSet::new();
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, prev_hover, new_interactive.0, &state_index,
-            ));
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, prev_focus, new_interactive.1, &state_index,
-            ));
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, prev_active, new_interactive.2, &state_index,
-            ));
-            let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
-                doc,
-                chrome_node_changes(&touched),
-                &node_index,
-            ));
+            // PERF-16 срез 4: kept from cycle to cycle, as `Lumen::chrome_restyle_indexes` in prod.
+            // `LUMEN_NO_RESTYLE_INDEX_CACHE=1` scans the sheet on every cycle — the A/B arm.
+            let roots = |state_index: &lumen_layout::style::StateRestyleIndex<'_>,
+                         node_index: &lumen_layout::style::NodeRestyleIndex<'_>| {
+                let mut dirty_roots = std::collections::HashSet::new();
+                for (prev, new) in [
+                    (prev_hover, new_interactive.0),
+                    (prev_focus, new_interactive.1),
+                    (prev_active, new_interactive.2),
+                ] {
+                    dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                        doc, prev, new, state_index,
+                    ));
+                }
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                    doc,
+                    chrome_node_changes(&touched),
+                    node_index,
+                ));
+                dirty_roots
+            };
+            let dirty_roots = if std::env::var_os("LUMEN_NO_RESTYLE_INDEX_CACHE").is_some() {
+                roots(
+                    &lumen_layout::style::restyle_state_index(doc, sheet),
+                    &lumen_layout::style::restyle_node_index(doc, sheet),
+                )
+            } else {
+                let (state_index, node_index) = state.restyle_indexes.indexes(doc, sheet);
+                roots(state_index, node_index)
+            };
             let delta = lumen_layout::counters::RestyleDelta {
                 prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                 dirty_roots,

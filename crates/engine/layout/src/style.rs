@@ -55,6 +55,7 @@ mod property_syntax;
 mod pseudo;
 mod quirks;
 mod restyle;
+mod restyle_cache;
 mod rule_roots;
 mod share_cache;
 mod share_safety;
@@ -311,8 +312,9 @@ pub use env::{
 };
 pub(crate) use env::{animated_height_for, animated_heights_active};
 pub use rule_roots::restyle_roots_for_rule_changes;
+pub use restyle_cache::RestyleIndexCache;
 pub use restyle::{
-    restyle_node_index, restyle_node_index_shared, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
+    restyle_node_index, restyle_node_index_shared, restyle_state_index_owned, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
     restyle_roots_for_node_changes, restyle_state_index, NodeChange, NodeRestyleIndex, RestyleRoots, StateRestyleIndex,
 };
 // `CONTAINER_CQ`/`FONT_CH_EX` читает `style::values::length` по старому пути

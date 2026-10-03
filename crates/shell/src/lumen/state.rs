@@ -221,6 +221,10 @@ pub(crate) struct Lumen {
     /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
     /// compare against the wrong reference.
     pub(crate) chrome_prev_cascade_styles: lumen_layout::CascadeStyles,
+    /// PERF-16 срез 4: the state and node restyle indexes of the chrome's stylesheet, kept from
+    /// pass to pass — the sheet is parsed once, so scanning it twice per interaction was pure
+    /// repetition. See [`lumen_layout::style::RestyleIndexCache`].
+    pub(crate) chrome_restyle_indexes: lumen_layout::style::RestyleIndexCache,
     /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
     /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
     /// a hover/focus/active transition can compute its conservative dirty
