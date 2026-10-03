@@ -37,6 +37,9 @@ pub struct GapSegment {
     /// `true` → row gap (horizontal rule drawn between two rows).
     /// `false` → column gap (vertical rule drawn between two columns).
     pub horizontal: bool,
+    /// Номер щели в своей оси (по возрастанию координаты, с 0): значения списков
+    /// `*-rule-*` раздаются по нему (§4.6). У щели, разрезанной на куски, он общий.
+    pub gap: usize,
 }
 
 /// CSS Gap Decorations L1 §3.3 — сдвигает концы отрезка щели вдоль её оси.
@@ -138,6 +141,306 @@ pub fn emit_gap_rules(
     out
 }
 
+/// Допуск сравнения границ дорожек с рёбрами элементов (px, float-округление layout).
+const TRACK_TOL: f32 = 0.5;
+
+/// Диапазон дорожек `[first, last]` (включительно), который занимает отрезок `[lo, hi]`
+/// по оси. `tops` — координаты начала щелей по возрастанию, `gap` — их ширина: дорожка `t`
+/// лежит между `tops[t-1] + gap` и `tops[t]` (первая и последняя открыты наружу).
+pub fn track_span(lo: f32, hi: f32, tops: &[f32], gap: f32) -> (usize, usize) {
+    let n = tops.len() + 1;
+    let first = (0..n).find(|&t| t == n - 1 || lo <= tops[t] + TRACK_TOL).unwrap_or(0);
+    let last = (0..n).rev().find(|&t| t == 0 || hi >= tops[t - 1] + gap - TRACK_TOL).unwrap_or(0);
+    (first, last.max(first))
+}
+
+/// Элемент сетки как диапазоны дорожек: `t` — поперёк щели (колонки для колоночной щели),
+/// `a` — вдоль щели (строки для колоночной щели); границы включительно.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridItemSpan {
+    pub t0: usize,
+    pub t1: usize,
+    pub a0: usize,
+    pub a1: usize,
+}
+
+/// Конец куска линии вдоль щели.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PieceEnd {
+    /// Край контейнера.
+    Edge,
+    /// Стык с перпендикулярной щелью `k` (между дорожками `k` и `k + 1` вдоль оси щели).
+    Junction(usize),
+}
+
+/// Кусок линии одной щели (CSS Gap Decorations L1 §3.1.2) в координатах вдоль её оси.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GapPiece {
+    /// Номер щели поперёк оси (между дорожками `gap` и `gap + 1`).
+    pub gap: usize,
+    pub lo: f32,
+    pub hi: f32,
+    pub lo_end: PieceEnd,
+    pub hi_end: PieceEnd,
+}
+
+/// CSS Gap Decorations L1 §3.1–§3.4 для grid-контейнера: режет щели на куски по
+/// `*-rule-break` и скрывает куски у пустых областей по `*-rule-visibility-items`.
+///
+/// `n_t`/`n_a` — число дорожек поперёк/вдоль оси щели; `items` — элементы в этих
+/// индексах; `a_tops` — начала перпендикулярных щелей вдоль оси (`n_a - 1` штук),
+/// `a_gap` — их ширина; `[a_lo, a_hi]` — протяжённость контейнера вдоль оси.
+///
+/// * `none` — одна линия от края до края (позади элементов тоже);
+/// * `normal` (grid) — разрыв на «Т»-стыках (перпендикулярная щель только с одной
+///   стороны), сквозь «крест» линия идёт;
+/// * `intersection` — разрыв на любом стыке;
+/// * любой режим, кроме `none`, обрывает линию там, где щель пересекает элемент.
+///
+/// Куски возвращаются по возрастанию номера щели, внутри щели — вдоль оси.
+#[allow(clippy::too_many_arguments)]
+pub fn grid_gap_pieces(
+    n_t: usize,
+    n_a: usize,
+    items: &[GridItemSpan],
+    a_tops: &[f32],
+    a_gap: f32,
+    a_lo: f32,
+    a_hi: f32,
+    brk: lumen_layout::RuleBreak,
+    vis: lumen_layout::RuleVisibilityItems,
+) -> Vec<GapPiece> {
+    use lumen_layout::{RuleBreak, RuleVisibilityItems};
+    if n_t < 2 || n_a == 0 {
+        return Vec::new();
+    }
+    // occ[a][t] — клетка занята; across[g][a] — элемент пересекает щель g в дорожке a;
+    // along[k][t] — элемент пересекает перпендикулярную щель k в дорожке t.
+    let mut occ = vec![vec![false; n_t]; n_a];
+    let mut across = vec![vec![false; n_a]; n_t - 1];
+    let mut along = vec![vec![false; n_t]; n_a.saturating_sub(1)];
+    for it in items {
+        let (t1, a1) = (it.t1.min(n_t - 1), it.a1.min(n_a - 1));
+        for a in it.a0..=a1 {
+            for cell in occ[a].iter_mut().take(t1 + 1).skip(it.t0) {
+                *cell = true;
+            }
+            for row in across.iter_mut().take(t1).skip(it.t0) {
+                row[a] = true;
+            }
+        }
+        for row in along.iter_mut().take(a1).skip(it.a0) {
+            for cell in row.iter_mut().take(t1 + 1).skip(it.t0) {
+                *cell = true;
+            }
+        }
+    }
+    let end_of = |a: usize| if a + 1 >= n_a { (a_hi, PieceEnd::Edge) } else { (a_tops[a], PieceEnd::Junction(a)) };
+    let start_of = |a: usize| if a == 0 { (a_lo, PieceEnd::Edge) } else { (a_tops[a - 1] + a_gap, PieceEnd::Junction(a - 1)) };
+
+    let mut out = Vec::new();
+    for g in 0..n_t - 1 {
+        let visible = |a: usize| {
+            let (l, r) = (occ[a][g], occ[a][g + 1]);
+            let shown = match vis {
+                RuleVisibilityItems::Around => l || r,
+                RuleVisibilityItems::Between => l && r,
+                RuleVisibilityItems::All | RuleVisibilityItems::Normal => true,
+            };
+            shown && (brk == RuleBreak::None || !across[g][a])
+        };
+        // Разрыв на стыке `k`: сколько сторон щели `g` имеют перпендикулярную щель.
+        let breaks_at = |k: usize| {
+            let sides = usize::from(!along[k][g]) + usize::from(!along[k][g + 1]);
+            match brk {
+                RuleBreak::None => false,
+                RuleBreak::Intersection => sides > 0,
+                RuleBreak::Normal => sides == 1,
+            }
+        };
+        let mut start: Option<usize> = None;
+        for a in 0..n_a {
+            if visible(a) && start.is_none() {
+                start = Some(a);
+            }
+            let Some(s) = start else { continue };
+            let goes_on = a + 1 < n_a && visible(a + 1) && !breaks_at(a);
+            if visible(a) && !goes_on {
+                let ((lo, lo_end), (hi, hi_end)) = (start_of(s), end_of(a));
+                out.push(GapPiece { gap: g, lo, hi, lo_end, hi_end });
+                start = None;
+            }
+        }
+    }
+    out
+}
+
+/// Сегменты щелей grid-контейнера плюс число щелей каждой оси (куски одной щели
+/// делят номер; щель, у которой все куски скрыты, всё равно занимает значение списка).
+pub struct GridGapGeometry {
+    pub segments: Vec<GapSegment>,
+    pub col_total: usize,
+    pub row_total: usize,
+}
+
+/// Параметры [`grid_gap_segments`].
+pub struct GridGapParams<'a> {
+    /// Content box контейнера: `(x, y, width, height)`.
+    pub content: (f32, f32, f32, f32),
+    pub col_gap: f32,
+    pub row_gap: f32,
+    pub column_visible: bool,
+    pub row_visible: bool,
+    pub style: &'a lumen_layout::ComputedStyle,
+}
+
+/// Начала щелей оси: правые рёбра элементов, за которыми на расстоянии `gap` начинается
+/// другой элемент (так же, как это делают flex-щели). По возрастанию, без дублей.
+fn gap_starts(edges: &[(f32, f32)], gap: f32) -> Vec<f32> {
+    const EPS: f32 = 1.5;
+    if gap <= 0.0 {
+        return Vec::new();
+    }
+    let mut ends: Vec<f32> = edges.iter().map(|&(_, hi)| hi).collect();
+    ends.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ends.dedup_by(|a, b| (*a - *b).abs() < EPS);
+    ends.into_iter().filter(|e| edges.iter().any(|&(lo, _)| (lo - (e + gap)).abs() < EPS)).collect()
+}
+
+/// CSS Gap Decorations L1 §3 для grid-контейнера: щели, разрезанные по `*-rule-break`,
+/// скрытые по `*-rule-visibility-items` и сдвинутые `*-rule-inset-*` (cap — у края
+/// контейнера, junction — у стыка с перпендикулярной щелью).
+///
+/// Дорожки восстанавливаются из прямоугольников детей: щель — это пара «правое ребро
+/// элемента → левое ребро другого через `gap`». Щель, рядом с которой нет ни одной пары
+/// таких элементов (целиком пустая дорожка, нестретчнутые элементы), не находится — тот
+/// же предел, что у flex-ветки.
+pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> GridGapGeometry {
+    let s = p.style;
+    let (cx, cy, cw, ch) = p.content;
+    let em = s.font_size;
+    let vp = lumen_core::geom::Size::new(cw, ch);
+    let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
+    let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
+    let col_tops = gap_starts(&xs, p.col_gap);
+    let row_tops = gap_starts(&ys, p.row_gap);
+    let (n_cols, n_rows) = (col_tops.len() + 1, row_tops.len() + 1);
+    let spans: Vec<(usize, usize, usize, usize)> = xs
+        .iter()
+        .zip(&ys)
+        .map(|(&(x0, x1), &(y0, y1))| {
+            let (c0, c1) = track_span(x0, x1, &col_tops, p.col_gap);
+            let (r0, r1) = track_span(y0, y1, &row_tops, p.row_gap);
+            (c0, c1, r0, r1)
+        })
+        .collect();
+    let rtl = s.direction == lumen_layout::Direction::Rtl;
+    let mut out = GridGapGeometry { segments: Vec::new(), col_total: col_tops.len(), row_total: row_tops.len() };
+
+    // Ширина линии пересекающей щели `k` — для `overlap-join`.
+    let cross_width = |widths: &lumen_layout::RuleList<f32>,
+                       styles: &lumen_layout::RuleList<BorderStyle>,
+                       k: usize,
+                       total: usize| {
+        if styles.value_for_gap(k, total).is_visible() {
+            *widths.value_for_gap(k, total)
+        } else {
+            0.0
+        }
+    };
+
+    for horizontal in [false, true] {
+        let (visible, insets, brk, vis, tops_t, tops_a, gap_t, gap_a, n_t, n_a, a_lo, a_len, reversed) = if horizontal {
+            (
+                p.row_visible,
+                &s.row_rule_inset,
+                s.row_rule_break,
+                s.row_rule_visibility_items,
+                &row_tops,
+                &col_tops,
+                p.row_gap,
+                p.col_gap,
+                n_rows,
+                n_cols,
+                cx,
+                cw,
+                rtl,
+            )
+        } else {
+            (
+                p.column_visible,
+                &s.column_rule_inset,
+                s.column_rule_break,
+                s.column_rule_visibility_items,
+                &col_tops,
+                &row_tops,
+                p.col_gap,
+                p.row_gap,
+                n_cols,
+                n_rows,
+                cy,
+                ch,
+                false,
+            )
+        };
+        if !visible || gap_t <= 0.0 || tops_t.is_empty() {
+            continue;
+        }
+        let items: Vec<GridItemSpan> = spans
+            .iter()
+            .map(|&(c0, c1, r0, r1)| {
+                if horizontal {
+                    GridItemSpan { t0: r0, t1: r1, a0: c0, a1: c1 }
+                } else {
+                    GridItemSpan { t0: c0, t1: c1, a0: r0, a1: r1 }
+                }
+            })
+            .collect();
+        let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_lo + a_len, brk, vis);
+        let (cross_w, cross_s, cross_total) = if horizontal {
+            (&s.column_rule_width, &s.column_rule_style, col_tops.len())
+        } else {
+            (&s.row_rule_width, &s.row_rule_style, row_tops.len())
+        };
+        // Смещение одного конца куска в px (положительное — внутрь куска).
+        let end_inset = |end: PieceEnd, is_start: bool| -> f32 {
+            let junction = matches!(end, PieceEnd::Junction(_));
+            let slot = match (junction, is_start) {
+                (false, true) => &insets.cap_start,
+                (false, false) => &insets.cap_end,
+                (true, true) => &insets.junction_start,
+                (true, false) => &insets.junction_end,
+            };
+            match (slot, end) {
+                (lumen_layout::RuleInset::Length(l), PieceEnd::Junction(_)) => l.resolve_or_zero(em, gap_a, vp),
+                (lumen_layout::RuleInset::Length(l), PieceEnd::Edge) => l.resolve_or_zero(em, 0.0, vp),
+                (lumen_layout::RuleInset::OverlapJoin, PieceEnd::Junction(k)) => {
+                    -(gap_a * 0.5 + cross_width(cross_w, cross_s, k, cross_total) * 0.5)
+                }
+                (lumen_layout::RuleInset::OverlapJoin, PieceEnd::Edge) => 0.0,
+            }
+        };
+        for piece in pieces {
+            // `reversed` — ось идёт справа налево: «начало» куска у его правого конца.
+            let lo_inset = end_inset(piece.lo_end, !reversed);
+            let hi_inset = end_inset(piece.hi_end, reversed);
+            let len = piece.hi - piece.lo - lo_inset - hi_inset;
+            if len <= 0.0 {
+                continue;
+            }
+            let along = piece.lo + lo_inset;
+            let across = tops_t[piece.gap];
+            let rect = if horizontal {
+                Rect::new(along, across, len, gap_t)
+            } else {
+                Rect::new(across, along, gap_t, len)
+            };
+            out.segments.push(GapSegment { rect, horizontal, gap: piece.gap });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,11 +455,11 @@ mod tests {
     }
 
     fn col_gap(x: f32, y: f32, w: f32, h: f32) -> GapSegment {
-        GapSegment { rect: Rect::new(x, y, w, h), horizontal: false }
+        GapSegment { rect: Rect::new(x, y, w, h), horizontal: false, gap: 0 }
     }
 
     fn row_gap(x: f32, y: f32, w: f32, h: f32) -> GapSegment {
-        GapSegment { rect: Rect::new(x, y, w, h), horizontal: true }
+        GapSegment { rect: Rect::new(x, y, w, h), horizontal: true, gap: 0 }
     }
 
     #[test]
@@ -239,5 +542,83 @@ mod tests {
         // A collapsed span disappears.
         assert_eq!(inset_span(10.0, 100.0, 50.0, 50.0, false), None);
         assert_eq!(inset_span(10.0, 100.0, 60.0, 60.0, false), None);
+    }
+
+    // ── grid_gap_pieces: CSS Gap Decorations L1 §3.1–§3.4 ──────────────────
+
+    use lumen_layout::{RuleBreak, RuleVisibilityItems};
+
+    /// Колоночные щели 3×3-сетки: дорожки 100px, щели 20px, начала строковых щелей 100/220.
+    fn pieces(items: &[GridItemSpan], brk: RuleBreak, vis: RuleVisibilityItems) -> Vec<(usize, f32, f32)> {
+        grid_gap_pieces(3, 3, items, &[100.0, 220.0], 20.0, 0.0, 340.0, brk, vis)
+            .into_iter()
+            .map(|p| (p.gap, p.lo, p.hi))
+            .collect()
+    }
+
+    fn cell(t: usize, a: usize) -> GridItemSpan {
+        GridItemSpan { t0: t, t1: t, a0: a, a1: a }
+    }
+
+    fn full_grid() -> Vec<GridItemSpan> {
+        (0..3).flat_map(|a| (0..3).map(move |t| cell(t, a))).collect()
+    }
+
+    #[test]
+    fn full_grid_normal_runs_through_crosses() {
+        // Все стыки — «кресты»: `normal` не режет, `intersection` режет на каждом.
+        let n = pieces(&full_grid(), RuleBreak::Normal, RuleVisibilityItems::Normal);
+        assert_eq!(n, vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]);
+        let i = pieces(&full_grid(), RuleBreak::Intersection, RuleVisibilityItems::Normal);
+        assert_eq!(
+            i,
+            vec![(0, 0.0, 100.0), (0, 120.0, 220.0), (0, 240.0, 340.0), (1, 0.0, 100.0), (1, 120.0, 220.0), (1, 240.0, 340.0)]
+        );
+    }
+
+    #[test]
+    fn spanning_item_interrupts_the_gap_it_covers() {
+        // Элемент на колонки 0–1 в строке 1 перекрывает щель 0 в этой строке.
+        let mut items: Vec<_> = full_grid().into_iter().filter(|c| !(c.a0 == 1 && c.t0 < 2 && c.t0 != 2)).collect();
+        items.push(GridItemSpan { t0: 0, t1: 1, a0: 1, a1: 1 });
+        let normal = pieces(&items, RuleBreak::Normal, RuleVisibilityItems::Normal);
+        assert_eq!(normal, vec![(0, 0.0, 100.0), (0, 240.0, 340.0), (1, 0.0, 340.0)]);
+        // `none` рисует сквозь элемент.
+        let none = pieces(&items, RuleBreak::None, RuleVisibilityItems::Normal);
+        assert_eq!(none, vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]);
+    }
+
+    #[test]
+    fn normal_breaks_at_t_junctions_only() {
+        // Колонка 0 держит один элемент на строки 0–1: он пересекает строковую щель 0,
+        // и для колоночной щели 0 стык с ней — «Т» (щель есть только справа).
+        let mut items: Vec<_> = full_grid().into_iter().filter(|c| !(c.t0 == 0 && c.a0 < 2)).collect();
+        items.push(GridItemSpan { t0: 0, t1: 0, a0: 0, a1: 1 });
+        let normal = pieces(&items, RuleBreak::Normal, RuleVisibilityItems::Normal);
+        // Щель 0: разрыв на «Т» (стык 0), сквозь «крест» (стык 1) линия идёт.
+        assert_eq!(normal, vec![(0, 0.0, 100.0), (0, 120.0, 340.0), (1, 0.0, 340.0)]);
+        // `intersection` режет и на кресте.
+        let inter = pieces(&items, RuleBreak::Intersection, RuleVisibilityItems::Normal);
+        assert_eq!(
+            inter,
+            vec![(0, 0.0, 100.0), (0, 120.0, 220.0), (0, 240.0, 340.0), (1, 0.0, 100.0), (1, 120.0, 220.0), (1, 240.0, 340.0)]
+        );
+        // `none` не режет вовсе.
+        assert_eq!(
+            pieces(&items, RuleBreak::None, RuleVisibilityItems::Normal),
+            vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]
+        );
+    }
+
+    #[test]
+    fn visibility_items_hide_pieces_next_to_empty_cells() {
+        // Пустая клетка (колонка 2, строка 1): щель 1 в строке 1 касается только колонки 1.
+        let items: Vec<_> = full_grid().into_iter().filter(|c| !(c.t0 == 2 && c.a0 == 1)).collect();
+        let all = pieces(&items, RuleBreak::None, RuleVisibilityItems::All);
+        assert_eq!(all, vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]);
+        let around = pieces(&items, RuleBreak::None, RuleVisibilityItems::Around);
+        assert_eq!(around, vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]);
+        let between = pieces(&items, RuleBreak::None, RuleVisibilityItems::Between);
+        assert_eq!(between, vec![(0, 0.0, 340.0), (1, 0.0, 100.0), (1, 240.0, 340.0)]);
     }
 }

@@ -42,7 +42,9 @@ use lumen_layout::{
     font_palette::{palette_selection, FontPaletteSelection},
 };
 
-use crate::gap_decorations::{emit_gap_rules, inset_span, GapDecorationContext, GapSegment};
+use crate::gap_decorations::{
+    emit_gap_rules, grid_gap_segments, inset_span, GapDecorationContext, GapSegment, GridGapGeometry, GridGapParams,
+};
 
 mod paint_types;
 pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClipShape};
