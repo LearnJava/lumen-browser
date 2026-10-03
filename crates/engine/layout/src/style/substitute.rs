@@ -40,7 +40,7 @@ pub(crate) fn expand_vars_and_env(
         value.to_string()
     };
     if contains_env_call(&after_var) {
-        expand_env_vars(&after_var, &empty_env_registry(), 0)
+        expand_env_vars(&after_var, ua_env_registry(), 0)
     } else {
         Some(after_var)
     }
@@ -635,10 +635,12 @@ fn split_call_args(s: &str) -> Vec<&str> {
 /// из UA-supplied registry. Имена не имеют `--` префикса (env-имена —
 /// `safe-area-inset-top`, `viewport-segment-width` и т.д.).
 ///
-/// Phase 0: registry — пустой `HashMap`, все env-вызовы попадают в
-/// fallback. Это даёт корректное `padding: env(safe-area-inset-top, 0px)`
-/// → `padding: 0px`. Indices (`env(name 0 1, fallback)`) парсятся, но
-/// игнорируются (используется только name до пробела).
+/// Имя из [`ua_env_registry`] подставляется (fallback при этом игнорируется,
+/// как в Chrome: `env(safe-area-inset-top, 20px)` на десктопе = `0px`);
+/// неизвестное имя уходит в fallback. Indices (`env(name 0 1, fallback)`)
+/// допустимы только у индексируемых переменных (`viewport-segment-*`,
+/// которых в реестре нет — один сегмент); у неиндексируемой переменной
+/// из реестра индекс — несовпадение размерности, и вызов идёт в fallback.
 fn expand_env_vars(
     value: &str,
     env_registry: &HashMap<String, String>,
@@ -655,11 +657,18 @@ fn expand_env_vars(
     let (args, after_close) = parse_balanced_to_close(after_open)?;
     let (name_part, fallback) = split_var_args(args);
     // Indices в name-part: `safe-area-inset-top` или `viewport-segment-width 0 0`.
-    let env_name = name_part.split_whitespace().next().unwrap_or("");
+    let mut name_tokens = name_part.split_whitespace();
+    let env_name = name_tokens.next().unwrap_or("");
     if env_name.is_empty() {
         return None;
     }
-    let resolved = if let Some(v) = env_registry.get(env_name) {
+    let has_indices = name_tokens.next().is_some();
+    let registered = if has_indices {
+        None
+    } else {
+        env_registry.get(env_name)
+    };
+    let resolved = if let Some(v) = registered {
         expand_env_vars(v.trim(), env_registry, depth + 1)?
     } else {
         let fb = fallback?;
@@ -904,11 +913,33 @@ fn strip_css_comments(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// UA env-registry. Phase 0: пустой; вызовы `env(name, fallback)`
-/// возвращают fallback. В Phase 2+ значения будут заполняться shell-ом
-/// из реального viewport state (safe-area, виртуальная клавиатура).
-fn empty_env_registry() -> HashMap<String, String> {
-    HashMap::new()
+/// UA env-registry (CSS Environment Variables L1 §2, VirtualKeyboard API).
+///
+/// Десктопное окно без вырезов и без экранной клавиатуры: четыре
+/// `safe-area-inset-*` и все `keyboard-inset-*` равны `0px` (переменная
+/// определена, поэтому fallback вызова не используется). Не определены
+/// (→ fallback): `titlebar-area-*` — только в режиме `window-controls-overlay`,
+/// которого у Lumen нет; `viewport-segment-*` — один сегмент, складных
+/// экранов нет.
+fn ua_env_registry() -> &'static HashMap<String, String> {
+    static REGISTRY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        [
+            "safe-area-inset-top",
+            "safe-area-inset-right",
+            "safe-area-inset-bottom",
+            "safe-area-inset-left",
+            "keyboard-inset-top",
+            "keyboard-inset-right",
+            "keyboard-inset-bottom",
+            "keyboard-inset-left",
+            "keyboard-inset-width",
+            "keyboard-inset-height",
+        ]
+        .into_iter()
+        .map(|name| (name.to_string(), "0px".to_string()))
+        .collect()
+    })
 }
 
 /// CSS dimension units recognised in `attr(<name> <unit>)` substitution.
