@@ -476,7 +476,7 @@ impl Lumen {
             } else {
                 lumen_layout::counters::ContentDirty::Untracked
             };
-            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty, shallow_roots: Default::default() };
+            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty, shallow_roots: Default::default(), point_roots: Default::default() };
             lumen_layout::counters::set_incremental_restyle(true);
             // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
             // box-build reuse rides on the same content precondition computed

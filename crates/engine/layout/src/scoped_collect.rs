@@ -897,7 +897,7 @@ mod tests {
             prev_styles: prev_counters.into_styles(),
             dirty_roots: HashSet::from([p]),
             content_dirty: ContentDirty::Nodes(&content),
-            shallow_roots: Default::default(),
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let (after, counters) =
@@ -946,7 +946,7 @@ mod tests {
             prev_styles: prev_counters.into_styles(),
             dirty_roots: HashSet::from([root]),
             content_dirty: ContentDirty::Nodes(&content),
-            shallow_roots: Default::default(),
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let (after, counters) =
@@ -1040,6 +1040,7 @@ mod tests {
             dirty_roots: Default::default(),
             content_dirty: ContentDirty::Nodes(&content),
             shallow_roots: HashSet::from([p]),
+            point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let (after, counters) =

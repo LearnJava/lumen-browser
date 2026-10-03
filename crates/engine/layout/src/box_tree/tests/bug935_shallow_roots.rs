@@ -80,6 +80,7 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<(u32, usize)> {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: roots.deep,
             shallow_roots: roots.shallow,
+            point_roots: roots.point,
             content_dirty: ContentDirty::Nodes(&journal),
         };
         set_incremental_restyle(true);

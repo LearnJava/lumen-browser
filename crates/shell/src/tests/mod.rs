@@ -255,7 +255,7 @@ fn cc12_bench_cycle(
                 // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so
                 // the bench measures the production reuse decision.
                 content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
-                shallow_roots: Default::default(),
+                shallow_roots: Default::default(), point_roots: Default::default(),
             };
             lumen_layout::counters::set_incremental_restyle(true);
             lumen_layout::box_tree::set_incremental_box_build(!state.box_reuse_off);

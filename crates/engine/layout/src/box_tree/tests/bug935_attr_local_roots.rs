@@ -70,6 +70,8 @@ struct Step {
     elements: usize,
     deep: usize,
     shallow: usize,
+    /// Descendants of a shallow root the cascade is asked to recompute on their own.
+    point: usize,
 }
 
 /// Runs `steps` against `html`/`css`.
@@ -120,11 +122,12 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
 
         let node_index = restyle_node_index(&doc, &sheet);
         let roots = restyle_roots_for_node_changes(&doc, changes, &node_index);
-        let (deep, shallow) = (roots.deep.len(), roots.shallow.len());
+        let (deep, shallow, point) = (roots.deep.len(), roots.shallow.len(), roots.point.len());
         let delta = RestyleDelta {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: roots.deep,
             shallow_roots: roots.shallow,
+            point_roots: roots.point,
             content_dirty: ContentDirty::Nodes(&journal),
         };
         set_incremental_restyle(true);
@@ -146,7 +149,7 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
         collect(&full, &mut b);
         assert_eq!(a, b, "step {step}: the narrowed incremental tree diverged from a full rebuild");
 
-        out.push(Step { recomputed: stats.recomputed, elements: full_counters.styles().len(), deep, shallow });
+        out.push(Step { recomputed: stats.recomputed, elements: full_counters.styles().len(), deep, shallow, point });
         prev = incr;
         prev_counters = incr_counters;
     }
@@ -167,6 +170,18 @@ fn assert_narrow(s: &Step, what: &str) {
         "{what}: recascaded {} of {} elements — the root did not narrow",
         s.recomputed,
         s.elements
+    );
+}
+
+/// BUG-935 срез 73: a selector reads the token from an ancestor position, so the root is a shallow
+/// one and the descendants that selector can style are listed as point roots.
+fn assert_reaches(s: &Step, what: &str) {
+    assert!(
+        s.deep == 0 && s.shallow >= 1 && s.point >= 1,
+        "{what}: expected a shallow root with point roots, got deep={} shallow={} point={}",
+        s.deep,
+        s.shallow,
+        s.point
     );
 }
 
@@ -198,15 +213,14 @@ fn an_unreferenced_class_token_narrows_and_a_referenced_one_does_not() {
         ],
     );
     assert_narrow(&r[0], "`loaded` is in no selector");
-    assert_deep(&r[1], "`open` is read by `.open p`");
-    assert!(r[1].recomputed as usize * 2 > r[1].elements, "the deep root must recascade its subtree");
-    assert_deep(&r[2], "removing `open` is the same reach");
+    assert_reaches(&r[1], "`open` is read by `.open p`");
+    assert_reaches(&r[2], "removing `open` is the same reach");
 }
 
-/// Every way an ancestor token can reach a descendant must keep the whole-subtree path, and the
-/// result must equal a full cascade either way.
+/// Every way an ancestor token can reach a descendant must name the elements it can style, and the
+/// result must equal a full cascade either way (`drive` checks that).
 #[test]
-fn every_ancestor_reach_of_a_class_token_stays_deep() {
+fn every_ancestor_reach_of_a_class_token_names_its_subjects() {
     let reaches = [
         ".x p { color: red }",
         ".x > div p { color: red }",
@@ -235,8 +249,8 @@ fn every_ancestor_reach_of_a_class_token_stays_deep() {
             ],
         );
         if !css.contains(":has") {
-            assert_deep(&r[0], css);
-            assert_deep(&r[1], css);
+            assert_reaches(&r[0], css);
+            assert_reaches(&r[1], css);
         }
     }
 }
@@ -259,7 +273,7 @@ fn a_token_read_only_by_a_subject_compound_does_not_reach_down() {
 
 /// `id`: `#w p` reads the id from an ancestor position.
 #[test]
-fn an_id_read_by_a_descendant_combinator_stays_deep() {
+fn an_id_read_by_a_descendant_combinator_names_its_subjects() {
     let r = drive(
         &wrapped(20),
         "p { color: blue } #special p { margin: 4px } #w2 { zzz-unknown: 1 }",
@@ -279,8 +293,8 @@ fn an_id_read_by_a_descendant_combinator_stays_deep() {
         ],
     );
     assert_narrow(&r[0], "`w2` is read only by a subject compound");
-    assert_deep(&r[1], "`#special p`");
-    assert_deep(&r[2], "leaving `#special`");
+    assert_reaches(&r[1], "`#special p`");
+    assert_reaches(&r[2], "leaving `#special`");
 }
 
 /// `style`, `data-*`: narrowed unless an attribute selector keys on the name from an ancestor.
@@ -309,7 +323,7 @@ fn style_and_data_attributes_narrow_unless_an_ancestor_selector_reads_them() {
         ],
     );
     assert_narrow(&r[0], "`[data-view]` is a subject compound");
-    assert_deep(&r[1], "`[data-open] p`");
+    assert_reaches(&r[1], "`[data-open] p`");
     // A width changes the wrapper's own style, so the walk goes below it all the same.
     assert!(r[2].shallow >= 1 && r[2].deep == 0, "`style` is read by no ancestor selector");
     assert!(r[3].shallow >= 1, "a colour is inherited: the style moved, the subtree follows");
@@ -351,9 +365,9 @@ fn a_sibling_combinator_is_silent_about_unrelated_tokens() {
     assert_deep(&r[1], "`lazy` is on the left of a sibling combinator");
 }
 
-/// Several attributes on one node: one reader among them takes the node deep.
+/// Several attributes on one node: the one a selector reads names its subjects, the other stays local.
 #[test]
-fn one_unnarrowable_write_among_several_makes_the_node_deep() {
+fn several_writes_on_one_node_each_take_their_own_path() {
     let r = drive(
         &wrapped(10),
         "p { color: blue } .open p { margin: 3px }",
@@ -363,10 +377,39 @@ fn one_unnarrowable_write_among_several_makes_the_node_deep() {
             set(d, w, "class", "wrap lazy open");
         })],
     );
-    // The attribute write that could be narrowed is listed as a shallow root too; the deep
-    // root wins in the walk, which is what the subtree's recascade shows.
-    assert!(r[0].deep >= 1, "`open` among other writes: expected a deep root");
-    assert!(r[0].recomputed as usize * 2 > r[0].elements, "the deep root must recascade its subtree");
+    assert_reaches(&r[0], "`open` among other writes");
+}
+
+/// The point roots are exactly the elements a selector can style: with a rule on `.open p` that
+/// leaves every style as it was, the paragraphs are recomputed and their `<b>`/`<i>` children,
+/// the sibling subtree and the rest of the document are not (a paragraph whose style *did* move
+/// takes its inheriting subtree, as for any shallow node).
+#[test]
+fn only_the_subjects_of_the_reading_selector_are_recomputed() {
+    let r = drive(
+        &wrapped(20),
+        "p { color: blue } .open p { zzz-unknown: 1 }",
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy open");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy");
+            }),
+        ],
+    );
+    for (i, step) in r.iter().enumerate() {
+        assert_reaches(step, "`.open p`");
+        // 20 `p` + the wrapper and its direct child, nothing of `<b>`/`<i>`/`#tail`.
+        assert_eq!(step.point, 20, "step {i}: the subjects are the 20 paragraphs");
+        assert!(
+            (step.recomputed as usize) <= 20 + 3,
+            "step {i}: recomputed {} elements, expected the paragraphs and the root's neighbourhood",
+            step.recomputed
+        );
+    }
 }
 
 /// A node that is its own ancestor-less subject and has children whose style it influences
@@ -387,4 +430,46 @@ fn an_inherited_value_changed_by_a_narrowed_write_reaches_the_subtree() {
             }),
         ],
     );
+}
+
+/// A link with 20 paragraphs under it: the subtree a deep root on `<a>` would take whole.
+fn linked(paras: usize) -> String {
+    let ps: String = (0..paras).map(|i| format!("<p>para {i} <b>bold</b></p>")).collect();
+    format!(
+        "<div id=\"w\"><a id=\"l\" href=\"/one\" title=\"t\"><div id=\"inner\">{ps}</div></a><img id=\"pic\" src=\"a.png\"></div>\
+         <div id=\"tail\"><p>tail</p></div>"
+    )
+}
+
+/// BUG-935 срез 73: `href`/`src`/`title` writes narrow on the elements that own them — unless
+/// the sheet reads a link state or the attribute from an ancestor position.
+#[test]
+fn resource_attributes_narrow_unless_an_ancestor_selector_reads_them() {
+    let step = |id: &'static str, name: &'static str, value: &'static str| -> Mutation {
+        Box::new(move |d| {
+            let n = by_id(d, id);
+            set(d, n, name, value);
+        })
+    };
+    let r = drive(
+        &linked(20),
+        "p { color: blue } a { color: red } img { width: 10px }",
+        vec![step("l", "href", "/two"), step("pic", "src", "b.png"), step("l", "title", "u"), step("w", "href", "/x")],
+    );
+    assert_narrow(&r[0], "`href` on `<a>`");
+    assert_narrow(&r[1], "`src` on `<img>`");
+    assert_narrow(&r[2], "`title`");
+    assert_deep(&r[3], "`href` on a `<div>` is not a link attribute: stays deep");
+
+    // `a:link` in an ancestor position hands the `href` match to the paragraphs below.
+    let r = drive(&linked(20), "a:link p { color: green } p { color: blue }", vec![step("l", "href", "/two")]);
+    assert_deep(&r[0], "`a:link p`");
+    // As the subject compound it styles `<a>` itself and stays inside the root.
+    let r = drive(&linked(20), "a:any-link { color: green } p { color: blue }", vec![step("l", "href", "/two")]);
+    assert_narrow(&r[0], "`a:any-link` as a subject");
+    // An attribute selector on `href` / `src` in an ancestor position.
+    let r = drive(&linked(20), "[href] p { color: green } p { color: blue }", vec![step("l", "href", "/two")]);
+    assert_deep(&r[0], "`[href] p`");
+    let r = drive(&linked(20), "[src] + p { color: green } p { color: blue }", vec![step("pic", "src", "b.png")]);
+    assert_deep(&r[0], "`[src] + p`");
 }

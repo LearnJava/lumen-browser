@@ -9,7 +9,7 @@
 //! видимость `stylesheet_needs_state_fanout`, у которой вызыватели только в
 //! тестах.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use lumen_css_parser::{
     Combinator, ComplexSelector, CompoundSelector, PseudoClass, PseudoElementKind, SimpleSelector, Stylesheet,
@@ -609,6 +609,28 @@ fn collect_structure_sensitive_compounds<'a>(complex: &'a ComplexSelector, out: 
     }
 }
 
+/// Whether `node` is an element whose local name is one of `tags` (ASCII case-insensitive).
+fn tag_is(doc: &Document, node: NodeId, tags: &[&str]) -> bool {
+    matches!(&doc.get(node).data, NodeData::Element { name, .. } if tags.iter().any(|t| name.local.eq_ignore_ascii_case(t)))
+}
+
+/// BUG-935 срез 73 — attributes of an element whose only effect is the element's own
+/// box or a resource load: no pseudo-class passes them to a descendant, so an attribute
+/// selector in an ancestor position (checked by the caller through `AncestorDeps::attrs`)
+/// is the only way a write reaches below the element. Deliberately a short list by tag:
+/// `<base href>`, `<table cellpadding>`, `<svg><use href>` and the like change what
+/// *other* nodes resolve to and stay on the deep path.
+fn resource_attr_is_inert(doc: &Document, node: NodeId, attr: &str) -> bool {
+    match attr {
+        "src" | "srcset" | "sizes" | "alt" | "loading" | "decoding" | "crossorigin" | "referrerpolicy" => {
+            tag_is(doc, node, &["img", "source", "iframe", "video", "audio", "track", "embed"])
+        }
+        "rel" | "target" | "download" | "hreflang" | "ping" => tag_is(doc, node, &["a", "area"]),
+        "title" => true,
+        _ => false,
+    }
+}
+
 /// True when `part` is keyed on the attribute named `attr` — i.e. writing that
 /// attribute is what could flip this simple selector's result.
 fn simple_selector_keys_on_attr(part: &SimpleSelector, attr: &str) -> bool {
@@ -650,6 +672,97 @@ fn compound_could_match_after_attr_change(
     })
 }
 
+/// BUG-935 срез 73 — for every class token, `id` and attribute name that some selector reads
+/// from an ancestor position ([`AncestorDeps`]), the subject compounds of those selectors.
+/// One scan of the sheet answers every write of a flush; keys are ASCII-lowercased.
+#[derive(Default)]
+struct ReaderTable<'a> {
+    classes: HashMap<String, Vec<&'a CompoundSelector>>,
+    ids: HashMap<String, Vec<&'a CompoundSelector>>,
+    attrs: HashMap<String, Vec<&'a CompoundSelector>>,
+}
+
+impl<'a> ReaderTable<'a> {
+    fn scan(sheet: &'a Stylesheet) -> Self {
+        let mut table = Self::default();
+        let mut deps = AncestorDeps::default();
+        for rules in stylesheet_rule_groups(sheet) {
+            for rule in rules {
+                for selector in &rule.selectors {
+                    // A lone compound reads an ancestor only through a nested selector, and
+                    // only a pseudo-class (or `::slotted()`) carries one: most of a real sheet ends here.
+                    if selector.tail.is_empty()
+                        && !selector.head.parts.iter().any(|p| matches!(p, SimpleSelector::PseudoClass(_) | SimpleSelector::PseudoElement(_)))
+                    {
+                        continue;
+                    }
+                    deps.classes.clear();
+                    deps.ids.clear();
+                    deps.attrs.clear();
+                    deps.collect_selector(selector);
+                    let subject = selector.tail.last().map_or(&selector.head, |(_, c)| c);
+                    for (map, keys) in [
+                        (&mut table.classes, &deps.classes),
+                        (&mut table.ids, &deps.ids),
+                        (&mut table.attrs, &deps.attrs),
+                    ] {
+                        for key in keys {
+                            map.entry(key.clone()).or_default().push(subject);
+                        }
+                    }
+                }
+            }
+        }
+        table
+    }
+}
+
+/// BUG-935 срез 73 — subject compounds, bucketed by the one simple selector that must
+/// hold for an element to match (`#id`, else a class, else the tag), so that asking
+/// "could this element match any of them" costs a few lookups, not one test per compound.
+#[derive(Default)]
+struct SubjectIndex<'a> {
+    by_id: HashMap<&'a str, Vec<&'a CompoundSelector>>,
+    by_class: HashMap<&'a str, Vec<&'a CompoundSelector>>,
+    by_tag: HashMap<&'a str, Vec<&'a CompoundSelector>>,
+    /// No id, class or type in the compound (`[data-x]`, `:not(.a)`, `*`): tried on every element.
+    rest: Vec<&'a CompoundSelector>,
+}
+
+impl<'a> SubjectIndex<'a> {
+    fn insert(&mut self, compound: &'a CompoundSelector) {
+        let id = compound.parts.iter().find_map(|p| if let SimpleSelector::Id(i) = p { Some(i.as_str()) } else { None });
+        let class =
+            compound.parts.iter().find_map(|p| if let SimpleSelector::Class(c) = p { Some(c.as_str()) } else { None });
+        let tag =
+            compound.parts.iter().find_map(|p| if let SimpleSelector::Type(t) = p { Some(t.as_str()) } else { None });
+        match (id, class, tag) {
+            (Some(id), ..) => self.by_id.entry(id).or_default().push(compound),
+            (None, Some(class), _) => self.by_class.entry(class).or_default().push(compound),
+            (None, None, Some(tag)) => self.by_tag.entry(tag).or_default().push(compound),
+            (None, None, None) => self.rest.push(compound),
+        }
+    }
+
+    /// Whether some indexed compound could match the element, pseudo-classes and
+    /// pseudo-elements counted as matching (the answer only ever widens).
+    fn could_match(&self, doc: &Document, node: NodeId, tag: &str, attrs: &[lumen_dom::Attribute]) -> bool {
+        let fits = |c: &&CompoundSelector| {
+            c.parts.iter().all(|part| match part {
+                SimpleSelector::PseudoElement(_) | SimpleSelector::PseudoClass(_) => true,
+                other => matches_simple(other, doc, node, tag, attrs),
+            })
+        };
+        let value = |wanted: &str| attrs.iter().find(|a| a.name.local == wanted).map(|a| a.value.as_str());
+        value("id").and_then(|id| self.by_id.get(id)).is_some_and(|v| v.iter().any(fits))
+            || value("class").is_some_and(|classes| {
+                classes.split_whitespace().any(|c| self.by_class.get(c).is_some_and(|v| v.iter().any(fits)))
+            })
+            || self.by_tag.get(tag).is_some_and(|v| v.iter().any(fits))
+            || self.rest.iter().any(fits)
+    }
+}
+
 /// BUG-935 срез 68 — what the sheet's selectors read from an element's *ancestors*, by
 /// class token, `id` and attribute name.
 ///
@@ -666,6 +779,9 @@ struct AncestorDeps {
     ids: HashSet<String>,
     /// Lowercased attribute names keyed by an attribute selector.
     attrs: HashSet<String>,
+    /// An ancestor-position compound carries a pseudo-class that reads a link's `href`
+    /// (`a:link > span`): a write to `href` then reaches descendants.
+    link_state: bool,
     /// The sheet holds something this scan does not model (`@scope`: its root/limit are
     /// stored as text and matched apart from the rules' selectors).
     unmodelled: bool,
@@ -723,6 +839,19 @@ impl AncestorDeps {
             // and no `#id` part names it.
             PseudoClass::Target | PseudoClass::TargetWithin => {
                 self.attrs.insert("id".to_string());
+            }
+            // Match on the element's own `href` (and, for `:current`/`:past`/`:future`, on
+            // the document's links): only a compound that is *not* the subject can pass
+            // that to a descendant.
+            PseudoClass::Link
+            | PseudoClass::Visited
+            | PseudoClass::AnyLink
+            | PseudoClass::Current
+            | PseudoClass::Past
+            | PseudoClass::Future
+                if !subject =>
+            {
+                self.link_state = true;
             }
             _ => {}
         }
@@ -804,6 +933,11 @@ impl AncestorDeps {
 /// The DOM-mutation counterpart of [`StateRestyleIndex`], and built from the
 /// same single scan over every rule list in the sheet.
 pub struct NodeRestyleIndex<'a> {
+    /// The sheet the index was built from — [`Self::affected_descendants`] scans its
+    /// selectors once ([`ReaderTable`]), for the first write it is asked about.
+    sheet: &'a Stylesheet,
+    /// BUG-935 срез 73 — [`ReaderTable`] of `sheet`, built on the first write that asks.
+    readers: std::cell::OnceCell<ReaderTable<'a>>,
     /// Every compound in `sheet` from which a sibling combinator is reachable
     /// ([`collect_sibling_source_compounds`]).
     sibling_sources: Vec<&'a CompoundSelector>,
@@ -849,7 +983,7 @@ pub struct NodeRestyleIndex<'a> {
     attr_narrowing: bool,
 }
 
-impl NodeRestyleIndex<'_> {
+impl<'a> NodeRestyleIndex<'a> {
     /// Whether per-node narrowing is disabled for this document/sheet pair.
     pub fn is_conservative(&self) -> bool {
         self.conservative
@@ -965,8 +1099,90 @@ impl NodeRestyleIndex<'_> {
             "class" => old.is_some_and(|old| !deps.class_write_hits(old, current("class"))),
             "id" => old.is_some_and(|old| !deps.id_write_hits(old, current("id"))),
             "style" => true,
-            n => n.starts_with("data-") || n.starts_with("aria-"),
+            "href" => !deps.link_state && tag_is(doc, node, &["a", "area"]),
+            n => n.starts_with("data-") || n.starts_with("aria-") || resource_attr_is_inert(doc, node, n),
         }
+    }
+
+    /// BUG-935 срез 73 — the descendants of `node` whose style a write of `attr` on `node`
+    /// can change, for a write that [`Self::attr_change_stays_local`] refused because
+    /// some selector does read it from an ancestor position (`html.js .menu`).
+    ///
+    /// Such a selector styles only elements its *subject* compound matches. So the
+    /// descendants a write can reach are those that match the subject compound of one of
+    /// the selectors that read the written token — with every pseudo-class and
+    /// pseudo-element in it taken as matching, which only widens the set. Everything else
+    /// under `node` keeps the set of rules it matched, hence its style, as long as the
+    /// style it inherits does not move (the cascade's own comparison of `node`'s style
+    /// follows that). `None` — the write is not one this analysis models (`class` and
+    /// `id` need the old value; `data-*`/`aria-*` go by name; `@scope` in the sheet), or
+    /// the selectors that read it are too many to be worth indexing: the caller takes the
+    /// deep path.
+    pub fn affected_descendants(
+        &self,
+        doc: &Document,
+        node: NodeId,
+        attr: &str,
+        old: Option<&str>,
+    ) -> Option<Vec<NodeId>> {
+        /// More selectors than this reading one token and the subtree walk below is no
+        /// longer cheaper than recascading it.
+        const MAX_READERS: usize = 4096;
+        if !self.attr_narrowing || self.conservative || self.ancestor_deps.unmodelled {
+            return None;
+        }
+        let NodeData::Element { attrs, .. } = &doc.get(node).data else {
+            return None;
+        };
+        let name = attr.to_ascii_lowercase();
+        let current = |wanted: &str| {
+            attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case(wanted)).map_or("", |a| a.value.as_str())
+        };
+        let table = self.readers.get_or_init(|| ReaderTable::scan(self.sheet));
+        let mut subjects = SubjectIndex::default();
+        let mut readers = 0usize;
+        let mut add = |list: Option<&Vec<&'a CompoundSelector>>| {
+            for &c in list.into_iter().flatten() {
+                subjects.insert(c);
+                readers += 1;
+            }
+        };
+        match name.as_str() {
+            "class" => {
+                let (old, new) = (old?, current("class"));
+                let split = |v: &str| v.split_ascii_whitespace().map(str::to_ascii_lowercase).collect::<HashSet<_>>();
+                let (before, after) = (split(old), split(new));
+                for token in before.symmetric_difference(&after) {
+                    add(table.classes.get(token));
+                }
+                add(table.attrs.get("class"));
+            }
+            "id" => {
+                let (old, new) = (old?, current("id"));
+                if old != new {
+                    add(table.ids.get(&old.to_ascii_lowercase()));
+                    add(table.ids.get(&new.to_ascii_lowercase()));
+                }
+                add(table.attrs.get("id"));
+            }
+            n if n.starts_with("data-") || n.starts_with("aria-") => add(table.attrs.get(n)),
+            _ => return None,
+        }
+        if readers > MAX_READERS {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut stack: Vec<NodeId> = doc.get(node).children.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            let n = doc.get(id);
+            if let NodeData::Element { name, attrs } = &n.data {
+                if subjects.could_match(doc, id, &name.local, attrs) {
+                    out.push(id);
+                }
+                stack.extend(n.children.iter().rev().copied());
+            }
+        }
+        Some(out)
     }
 
     /// BUG-935 срез 68 — turns the attribute narrowing ([`Self::attr_change_stays_local`])
@@ -1030,6 +1246,8 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
         }
     }
     NodeRestyleIndex {
+        sheet,
+        readers: std::cell::OnceCell::new(),
         sibling_sources,
         conservative,
         has_dependent,
@@ -1133,6 +1351,10 @@ pub struct RestyleRoots {
     /// recascaded, and a child's subtree only when its style changed, it moved from
     /// another parent, or it is in [`Self::deep`] (`RestyleDelta::shallow_roots`).
     pub shallow: HashSet<NodeId>,
+    /// BUG-935 срез 73 — descendants of a [`Self::shallow`] root that a selector reads the
+    /// root's written token for: each is recascaded on its own (`RestyleDelta::point_roots`),
+    /// the rest of the shallow root's subtree is left alone.
+    pub point: HashSet<NodeId>,
 }
 
 /// BUG-935 срез 60 — like [`restyle_root_set_for_node_change`], but a
@@ -1161,7 +1383,7 @@ fn root_set_impl<'a>(
     allow_shallow: bool,
 ) -> RestyleRoots {
     if index.has_dependent && index.has_in_shadow_doc {
-        return RestyleRoots { deep: changes.into_iter().map(|_| doc.root()).collect(), shallow: HashSet::new() };
+        return RestyleRoots { deep: changes.into_iter().map(|_| doc.root()).collect(), ..RestyleRoots::default() };
     }
     let mut roots = RestyleRoots::default();
     let shallow_ok = allow_shallow && !index.conservative;
@@ -1212,8 +1434,19 @@ fn root_set_impl<'a>(
                 let local = shallow_ok
                     && !needs_fanout
                     && written.is_some_and(|(name, old)| index.attr_change_stays_local(doc, n, name, old));
+                // BUG-935 срез 73: a write some selector *does* read from an ancestor position
+                // names the descendants that selector can style; those, and not the whole
+                // subtree, are what the cascade has to look at.
+                let affected = if local || !shallow_ok || needs_fanout {
+                    None
+                } else {
+                    written.and_then(|(name, old)| index.affected_descendants(doc, n, name, old))
+                };
                 if local {
                     roots.shallow.insert(n);
+                } else if let Some(points) = affected {
+                    roots.shallow.insert(n);
+                    roots.point.extend(points);
                 } else {
                     roots.deep.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
                 }
