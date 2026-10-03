@@ -5429,8 +5429,8 @@ function _wa_gap_tr_current(rec, now, camel) {
 // is the neutral keyframe — the underlying (settled) computed value. Later animations
 // of the list win. Limits: only `getComputedStyle()` sees it (painted rules are not
 // driven frame by frame; no `animationstart/iteration/end` events), no
-// `animation-composition`, no `getAnimations()` entry for the animation, shorthand
-// declarations of a keyframe (`column-rule: ...`) are not read.
+// `animation-composition`, shorthand declarations of a keyframe (`column-rule: ...`) are
+// not read. `getAnimations()` lists it through `_wa_gap_an_sync` below.
 var _wa_gap_an = {};
 
 // The winning `@keyframes <name>` of the document as JSON, or null (a shim-level seam
@@ -5543,6 +5543,94 @@ function _wa_gap_an_value(nid, kebab, base, value) {
     }
     if (Object.keys(live).length) _wa_gap_an[nid] = live; else delete _wa_gap_an[nid];
     return result;
+}
+
+// `element.getAnimations()` for a CSS `@keyframes` animation of a gap-decoration property.
+// The Rust `AnimationScheduler` registers a `getAnimations()` shadow entry only after its
+// first frame and with an effect that knows no timing, while the value `getComputedStyle()`
+// reports comes from the clock in `_wa_gap_an` above. This brings the two together: for
+// every animation of the element whose `@keyframes` declare a gap-decoration longhand it
+// finds (or creates, under the same registry key the scheduler's `animationstart` uses) the
+// `Animation`, gives its effect the computed `animation-*` timing, and lets `currentTime`
+// read and write that clock — a seek (`anim.currentTime = ms`) re-bases the record, so the
+// next `getComputedStyle()` read sees the value at that time. A paused animation is held at
+// the moment the record was created. Animations that are not current (finished without a
+// forwards/both fill) are not listed.
+var _wa_gap_an_kf_re = /^(?:(?:column|row)-)?rule-(?:width|color|inset)/;
+
+function _wa_gap_an_has_gap_frames(name) {
+    var json = _wa_gap_keyframes_json(name);
+    if (json == null) return false;
+    var frames = JSON.parse(json);
+    for (var i = 0; i < frames.length; i++) {
+        for (var j = 0; j < frames[i].decls.length; j++) {
+            if (_wa_gap_an_kf_re.test(frames[i].decls[j][0])) return true;
+        }
+    }
+    return false;
+}
+
+function _wa_gap_an_sync(target) {
+    var nid = target && target.__nid__;
+    if (nid == null) return;
+    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
+    var lists = null;
+    var ms = _wa_gap_tr_clock();
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (name === 'none' || name === '' || !_wa_gap_an_has_gap_frames(name)) continue;
+        if (!lists) {
+            lists = {};
+            ['duration', 'delay', 'iteration-count', 'direction', 'fill-mode', 'play-state']
+                .forEach(function(p) { lists[p] = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-' + p)); });
+        }
+        var pick = function(p) { var l = lists[p]; return l[i % l.length]; };
+        var recs = _wa_gap_an[nid] || (_wa_gap_an[nid] = {});
+        var key = i + ':' + name;
+        var paused = pick('play-state') === 'paused';
+        var rec = recs[key];
+        if (!rec) { rec = recs[key] = { start: ms, pausedAt: paused ? ms : null }; }
+        var dur = _wa_gap_tr_seconds(pick('duration')), delay = _wa_gap_tr_seconds(pick('delay'));
+        var itok = pick('iteration-count');
+        var iters = itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1);
+        var fill = pick('fill-mode');
+        var now = rec.pausedAt !== null ? rec.pausedAt : ms;
+        var elapsed = (now - rec.start) / 1000 - delay;
+        var finished = !(iters === Infinity) && elapsed >= dur * iters;
+        var fwd = fill === 'forwards' || fill === 'both';
+        if (finished && !fwd) {
+            _lumen_css_anim_unregister('a:', nid, name, 'idle');
+            continue;
+        }
+        // The scheduler's `animationend` drops the registry key but leaves a finished
+        // entry in the list; reuse that one rather than registering a second.
+        var anim = (rec.anim && _wa_animations.indexOf(rec.anim) >= 0) ? rec.anim
+                 : _lumen_css_anim_register('a:', nid, name);
+        rec.anim = anim;
+        anim.effect._timing = {
+            duration: dur * 1000, delay: delay * 1000, endDelay: 0, fill: fill === 'none' ? 'auto' : fill,
+            iterationStart: 0, iterations: iters, easing: 'linear', direction: pick('direction')
+        };
+        anim._state = finished ? 'finished' : (paused ? 'paused' : 'running');
+        if (!anim._wa_gap_an_bound) {
+            anim._wa_gap_an_bound = true;
+            (function(anim, nid, key, rec0) {
+                Object.defineProperty(anim, 'currentTime', {
+                    get: function() {
+                        var r = (_wa_gap_an[nid] || {})[key] || rec0;
+                        return (r.pausedAt !== null ? r.pausedAt : _wa_gap_tr_clock()) - r.start;
+                    },
+                    set: function(v) {
+                        var r = (_wa_gap_an[nid] || {})[key] || rec0;
+                        var at = _wa_gap_tr_clock();
+                        if (r.pausedAt !== null) r.pausedAt = at;
+                        r.start = at - (+v || 0);
+                    },
+                    configurable: true
+                });
+            })(anim, nid, key, rec);
+        }
+    }
 }
 
 // Interpolate a single CSS property value between two string values.
@@ -6283,6 +6371,7 @@ function _wa_element_animate(target, keyframes, options) {
 
 // element.getAnimations() — all non-idle animations targeting this element.
 function _wa_get_animations_for(target) {
+    _wa_gap_an_sync(target);
     return _wa_animations.filter(function(a) {
         return a._state !== 'idle' && a.effect && a.effect.target === target;
     });

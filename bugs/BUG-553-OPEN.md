@@ -147,3 +147,10 @@ CSS `@keyframes`-анимации `*-rule-width`/`-color`/`-inset-*` как ан
 Покадровое рисование переходов и `@keyframes` для `*-rule-width`/`*-rule-color`: `TransitionScheduler::sync_gap_rules` и `shell::AnimationScheduler` (`interpolate_gap_rules`) кладут `GapRuleOverride` (`style/values/rule_anim.rs`) в `AnimatedStyle::gap_rules` → `CompositorOverride::gap_rules`; `gap_decoration_commands(b, gap_rules)` рисует щели flex/grid из перекрытых значений без relayout (ordered и `walk_with_anim`). События `transitionrun/start/end/cancel` этих свойств идут от планировщика. Тайминги берутся по последнему токену `transition-property`, покрывающему свойство (`all`, `rule`, `column-rule`, `rule-width`, лонгхенд); не интерполируемая пара — только с `allow-discrete`; прерванный переход продолжается с текущего значения; отсутствующий 0%/100% keyframe — вычисленное значение элемента.
 
 **Остаток:** `*-rule-inset-*` и multicol не рисуются покадрово; `animationstart/iteration/end` и `getAnimations()` для `@keyframes` этих свойств; нумерация щелей по схлопнутым/фрагментированным желобам и строкам flex-wrap.
+
+
+## Срез 12 (P4, 2026-10-03, p4-gap-rule-getanimations)
+
+`el.getAnimations()` отдаёт `@keyframes`-анимацию `*-rule-*`: `_wa_gap_an_sync` (`web_api_shim_tail_b.js`, зовётся из `_wa_get_animations_for`) заводит `Animation` под тем же ключом реестра `a:`, что и `animationstart` планировщика, кладёт в эффект вычисленный тайминг `animation-*` (`getComputedTiming().duration`), а `currentTime` читает и сдвигает ту же запись часов, по которой `getComputedStyle()` считает значение — перемотка видна следующему чтению. Завершённая анимация без `forwards`/`both` из списка уходит. `css-gaps/animation`: 2380 → 2384 из 2396; четыре `rule-{color,width}-interpolation-conversion-00{1,2}.html` зелёные (`.ini` удалены). Юнит-тесты — `v8_gap_rule_interp.rs`.
+
+**Остаток (12 подтестов):** `-0%` в `calc()` (8), `repeat(auto, …)` при `t=1.5` с незакрытой скобкой (4; решение по `RuleList::parse` ждёт ответа). Вне `css-gaps`: `getAnimations()` не возвращает `CSSAnimation` для остальных свойств (BUG-536).
