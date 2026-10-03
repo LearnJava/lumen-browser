@@ -1553,7 +1553,11 @@ impl<'a> Parser<'a> {
                     let at_start = self.pos;
                     self.consume(); // '@'
                     let ident = self.parse_ident().unwrap_or_default();
-                    if ident.eq_ignore_ascii_case("apply") {
+                    if ident.eq_ignore_ascii_case("nest") {
+                        let (r, a) = self.parse_legacy_nest_rule(parent_sels);
+                        nested.extend(r);
+                        at_rules.extend(a);
+                    } else if ident.eq_ignore_ascii_case("apply") {
                         let raw_start = self.pos;
                         if self.parse_apply_rule().is_some() {
                             let raw = self.input[raw_start..self.pos].to_string();
@@ -1576,6 +1580,78 @@ impl<'a> Parser<'a> {
             }
         }
         (decls, nested, at_rules)
+    }
+
+    /// Legacy `@nest <selector-list> { declarations }` (css-nesting-1 ED до
+    /// 2023-02; в текущей спеке удалён, но старые таблицы стилей его содержат).
+    /// Курсор — сразу после `@nest`. Каждый complex-селектор prelude обязан
+    /// содержать хотя бы один `&` (иначе правило невалидно и блок пропускается
+    /// целиком); `&` заменяется на родительский селектор в любой позиции
+    /// (`@nest .dark & { }`, `@nest :not(&) { }`), а не только в начале, как в
+    /// `& sel` — этим `@nest` и отличается от современной формы. Семантика
+    /// подстановки — `:is(<родитель>)` (Nesting L1 §3.1); одиночный compound без
+    /// хвоста подставляется текстом как есть, чтобы не раздувать специфичность
+    /// и не терять pseudo-element-ы.
+    fn parse_legacy_nest_rule(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+    ) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
+        self.skip_ws_and_comments();
+        let prelude_start = self.pos;
+        // Prelude до `{` верхнего уровня; строки и скобки не завершают prelude.
+        let mut depth: i32 = 0;
+        let mut quote: Option<char> = None;
+        while let Some(c) = self.peek() {
+            match quote {
+                Some(q) => {
+                    if c == '\\' {
+                        self.consume();
+                    } else if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '"' | '\'' => quote = Some(c),
+                    '(' | '[' => depth += 1,
+                    ')' | ']' => depth -= 1,
+                    '{' | ';' | '}' if depth <= 0 => break,
+                    _ => {}
+                },
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') || parent_sels.is_empty() {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        }
+        let prelude = self.input[prelude_start..self.pos].to_string();
+        let parent_css = if let [only] = parent_sels {
+            if only.tail.is_empty() {
+                only.to_css_str()
+            } else {
+                format!(":is({})", only.to_css_str())
+            }
+        } else {
+            let list: Vec<String> = parent_sels.iter().map(ComplexSelector::to_css_str).collect();
+            format!(":is({})", list.join(", "))
+        };
+        let Some(substituted) = substitute_nesting_selector(&prelude, &parent_css) else {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        };
+        let mut sub = Parser::new(&substituted);
+        let expanded_sels = sub.parse_selector_list();
+        sub.skip_ws_and_comments();
+        if expanded_sels.is_empty() || sub.peek().is_some() {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        }
+        self.consume(); // '{'
+        let (declarations, sub_nested, sub_at) =
+            self.parse_declaration_block_with_nesting(&expanded_sels);
+        let mut result = vec![Rule { selectors: expanded_sels, declarations }];
+        result.extend(sub_nested);
+        (result, sub_at)
     }
 
     /// Parse `& [combinator] selector-list { declarations }` and expand into flat rules.
@@ -1998,6 +2074,73 @@ fn is_ident_start(c: char) -> bool {
 
 fn is_ident_continue(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit()
+}
+
+/// Заменяет каждый `&` prelude-а legacy `@nest` на `parent_css`. `None`, если
+/// в каком-либо complex-селекторе (части списка по запятой верхнего уровня)
+/// нет `&` — для `@nest` это делает правило невалидным. `&` внутри строк и
+/// `[attr]`-скобок — не nesting-селектор и не трогается.
+fn substitute_nesting_selector(prelude: &str, parent_css: &str) -> Option<String> {
+    let mut out = String::with_capacity(prelude.len() + parent_css.len());
+    let mut has_amp = false;
+    let mut depth_paren = 0i32;
+    let mut in_attr = false;
+    let mut quote: Option<char> = None;
+    let mut chars = prelude.chars();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            out.push(c);
+            if c == '\\' {
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                quote = Some(c);
+                out.push(c);
+            }
+            '\\' => {
+                out.push(c);
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            }
+            '[' => {
+                in_attr = true;
+                out.push(c);
+            }
+            ']' => {
+                in_attr = false;
+                out.push(c);
+            }
+            '(' => {
+                depth_paren += 1;
+                out.push(c);
+            }
+            ')' => {
+                depth_paren -= 1;
+                out.push(c);
+            }
+            '&' if !in_attr => {
+                has_amp = true;
+                out.push_str(parent_css);
+            }
+            ',' if !in_attr && depth_paren == 0 => {
+                if !has_amp {
+                    return None;
+                }
+                has_amp = false;
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    has_amp.then_some(out)
 }
 
 /// Hard cap on selectors a single [`expand_nesting`] call can produce.

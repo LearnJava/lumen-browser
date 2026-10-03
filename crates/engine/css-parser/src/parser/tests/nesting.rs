@@ -1316,3 +1316,56 @@ use super::*;
             .collect();
         assert_eq!(names, ["--b", "--c"]);
     }
+
+    // --- legacy `@nest` ---
+
+    #[test]
+    fn legacy_nest_amp_in_tail_position() {
+        // `.card { @nest .dark & { color: white; } }` → `.dark .card`
+        let s = parse(".card { color: black; @nest .dark & { color: white; } }");
+        assert_eq!(s.rules.len(), 2);
+        let sel = &s.rules[1].selectors[0];
+        assert_eq!(sel.head.parts, vec![SimpleSelector::Class("dark".into())]);
+        assert_eq!(sel.tail.len(), 1);
+        assert_eq!(sel.tail[0].0, Combinator::Descendant);
+        assert_eq!(sel.tail[0].1.parts, vec![SimpleSelector::Class("card".into())]);
+        assert_eq!(s.rules[1].declarations[0].value, "white");
+    }
+
+    #[test]
+    fn legacy_nest_compound_join_and_list() {
+        // `h1, h2 { @nest &.on, .x & { } }` → `:is(h1, h2).on`, `.x :is(h1, h2)`
+        let s = parse("h1, h2 { @nest &.on, .x & { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[1].selectors.len(), 2);
+    }
+
+    #[test]
+    fn legacy_nest_simple_parent_is_textual() {
+        let s = parse("div { @nest &.on { color: red; } }");
+        let sel = &s.rules[1].selectors[0];
+        assert_eq!(
+            sel.head.parts,
+            vec![SimpleSelector::Type("div".into()), SimpleSelector::Class("on".into())]
+        );
+        assert!(sel.tail.is_empty());
+    }
+
+    #[test]
+    fn legacy_nest_without_amp_is_invalid() {
+        // Нет `&` в одном из complex-селекторов → вся rule отбрасывается,
+        // соседние декларации и правила не страдают.
+        let s = parse("p { color: red; @nest .a { color: blue; } @nest &.b, .c { color: blue; } margin: 0; }");
+        assert_eq!(s.rules.len(), 1);
+        assert_eq!(s.rules[0].declarations.len(), 2);
+    }
+
+    #[test]
+    fn legacy_nest_nested_inside_nest_and_with_attr_amp() {
+        let s = parse(r#"a { @nest [data-x="&"] & { @nest & b { color: red; } } }"#);
+        assert_eq!(s.rules.len(), 3);
+        // Родитель второго уровня — сложный селектор, подставляется как `:is(...)`.
+        let sel = &s.rules[2].selectors[0];
+        assert!(matches!(sel.head.parts[0], SimpleSelector::PseudoClass(PseudoClass::Is(_))));
+        assert_eq!(sel.tail.len(), 1);
+    }
