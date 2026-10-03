@@ -6,6 +6,9 @@
 //! сохраняется (computed value = as specified), а раскрытие в плоский ряд делается
 //! при раздаче значений щелям ([`RuleList::value_for_gap`]).
 
+use crate::style::calc::{looks_like_function_call, parse_math_function_value};
+use crate::style::{CalcNode, Length};
+
 /// Элемент списка: одиночное значение или повторитель.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleItem<T> {
@@ -184,11 +187,7 @@ fn parse_repeat<T>(
     let n = if count.eq_ignore_ascii_case("auto") {
         None
     } else {
-        // `<integer [1,∞]>`: только цифры, без знака и дробей.
-        if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        Some(count.parse::<u32>().ok().filter(|&n| n >= 1)?)
+        Some(parse_repeat_count(count)?)
     };
     if rest.is_empty() {
         return None;
@@ -202,6 +201,24 @@ fn parse_repeat<T>(
         })
         .collect::<Option<Vec<T>>>()?;
     Some(Some((n, vs)))
+}
+
+/// `<integer [1,∞]>`: цифры без знака и дробей либо `calc()` из одних чисел
+/// (`calc(5 + 3)` → 8, CSS Values L4 §10.2: целочисленный результат).
+fn parse_repeat_count(count: &str) -> Option<u32> {
+    if !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()) {
+        return count.parse::<u32>().ok().filter(|&n| n >= 1);
+    }
+    if !looks_like_function_call(count) {
+        return None;
+    }
+    match parse_math_function_value(count)? {
+        Length::Calc(node) => match *node {
+            CalcNode::Number(n) if n >= 1.0 && n.fract() == 0.0 && n <= u32::MAX as f32 => Some(n as u32),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Дописывает `)` для функций, не закрытых до конца значения; `None` — лишняя `)`.

@@ -345,11 +345,34 @@ pub enum BorderStyle {
     Dashed,
     Dotted,
     Double,
+    /// `hidden` — как `none`, но выигрывает конфликт (CSS Backgrounds L3 §4.3).
+    /// Из `border-style` недостижим (его разбор знает пять ключевых слов); приходит
+    /// только из `*-rule-style` (CSS Gap Decorations L1 §4.2).
+    Hidden,
+    /// `groove` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    Groove,
+    /// `ridge` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    Ridge,
+    /// `inset` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    Inset,
+    /// `outset` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    Outset,
 }
 
 impl BorderStyle {
     pub fn is_visible(self) -> bool {
-        !matches!(self, BorderStyle::None)
+        !matches!(self, BorderStyle::None | BorderStyle::Hidden)
+    }
+
+    /// Вид, которым стиль реально рисуется: объёмные `groove`/`ridge`/`inset`/`outset`
+    /// отдельной растеризации не имеют и идут как сплошная линия.
+    pub fn painted_as(self) -> BorderStyle {
+        match self {
+            BorderStyle::Groove | BorderStyle::Ridge | BorderStyle::Inset | BorderStyle::Outset => {
+                BorderStyle::Solid
+            }
+            other => other,
+        }
     }
 }
 

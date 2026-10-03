@@ -201,6 +201,20 @@ pub(in crate::style) fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
     }
 }
 
+/// CSS Gap Decorations L1 §4.2 — `<line-style>` целиком (десять ключевых слов):
+/// в отличие от `border-style` у `*-rule-style` разбирается и `hidden`, и объёмные
+/// `groove`/`ridge`/`inset`/`outset`.
+pub(in crate::style) fn parse_rule_style_opt(s: &str) -> Option<BorderStyle> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "hidden" => Some(BorderStyle::Hidden),
+        "groove" => Some(BorderStyle::Groove),
+        "ridge" => Some(BorderStyle::Ridge),
+        "inset" => Some(BorderStyle::Inset),
+        "outset" => Some(BorderStyle::Outset),
+        other => parse_border_style_opt(other),
+    }
+}
+
 /// CSS Backgrounds L3 §4.2 / Basic UI L4 §5.2 — `<line-width>` =
 /// `<length> | thin | medium | thick`. UA convention: thin=1, medium=3,
 /// thick=5 (Chromium/Firefox/WebKit совпадают).
@@ -222,8 +236,13 @@ pub(in crate::style) fn parse_outline_style_opt(s: &str) -> Option<OutlineStyle>
         return Some(OutlineStyle::Auto);
     }
     match parse_border_style_opt(s)? {
-        BorderStyle::None => Some(OutlineStyle::None),
-        BorderStyle::Solid | BorderStyle::Double => Some(OutlineStyle::Solid),
+        BorderStyle::None | BorderStyle::Hidden => Some(OutlineStyle::None),
+        BorderStyle::Solid
+        | BorderStyle::Double
+        | BorderStyle::Groove
+        | BorderStyle::Ridge
+        | BorderStyle::Inset
+        | BorderStyle::Outset => Some(OutlineStyle::Solid),
         BorderStyle::Dashed => Some(OutlineStyle::Dashed),
         BorderStyle::Dotted => Some(OutlineStyle::Dotted),
     }
