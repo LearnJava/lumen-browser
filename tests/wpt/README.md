@@ -230,6 +230,22 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   default would rescan 72k files on each of the ~400 shards). `--pilot` runs
   ten categories chosen to exercise the orchestrator's hazards (https-only, ws,
   reftest-dominated, an unexecutable test type) rather than the engine.
+  `--prefixes a/b,c/d` / `--exclude-prefixes …` (WPT-RUN-14) narrow a run to a
+  part of a category — `css/css-flexbox` out of the 34 607-id `css` — and the
+  denominator shrinks with them. The category is implied by the first path
+  component. The filter is written to `state.json` (`prefixes`,
+  `exclude_prefixes`); `--resume`/`--aggregate-only` with a different one
+  refuse to run, and `score_audit.py`/`type_audit.py` read it back. Use a
+  separate `--out-dir` per filter (`.tmp/wpt-run14/<slug>`, never
+  `.tmp/wpt-corpus`). Shards are an exact cover of the selected ids
+  (`_narrow`/`_cover`): a directory entirely inside the selection is one prefix
+  shard, a mixed one is cut into subdirectories, and the files lying directly in
+  it become one explicit-id `(bare)` shard. `--selftest` checks this on a
+  hand-made manifest.
+- `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
+  `run_corpus.py` out-dir, renders test and `rel=match` reference with
+  `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
+  geometry, `size-differs`). Separates "layout wrong" from "1-px seam" ([BUG-1249](../../bugs/BUG-1249-OPEN.md)).
   Scoring — including "an id that never ran scores 0" — is written down in
   `docs/wpt/pass-rate.md`. Two flags exist because a corpus run must never
   quietly misreport its own coverage:
