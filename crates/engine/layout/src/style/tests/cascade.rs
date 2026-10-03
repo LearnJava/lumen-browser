@@ -1676,3 +1676,60 @@ use super::*;
         assert!(result.is_some());
         assert!((result.unwrap().font_size - 20.0).abs() < 0.01);
     }
+
+    // ── CSS View Transitions L1 §6: ::view-transition-* author styles ─────
+
+    fn view_transition_style(
+        css: &str,
+        part: ViewTransitionPart,
+        name: &str,
+    ) -> Option<ComputedStyle> {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let html = doc.create_element(lumen_dom::QualName::html("html"));
+        doc.append_child(root, html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = lumen_core::geom::Size { width: 800.0, height: 600.0 };
+        compute_view_transition_pseudo_style(&doc, &sheet, part, name, vp, false)
+    }
+
+    #[test]
+    fn view_transition_old_root_carries_author_animation() {
+        let s = view_transition_style(
+            "::view-transition-old(root) { animation-duration: 1.5s; animation-timing-function: ease-in; }",
+            ViewTransitionPart::Old,
+            "root",
+        )
+        .expect("rule targets ::view-transition-old(root)");
+        assert_eq!(s.animation_durations, vec![1.5]);
+        assert_eq!(s.animation_timing_functions.len(), 1);
+    }
+
+    #[test]
+    fn view_transition_name_argument_selects_the_group() {
+        let css = "::view-transition-group(hero) { animation-duration: 2s; }";
+        assert!(view_transition_style(css, ViewTransitionPart::Group, "root").is_none());
+        let s = view_transition_style(css, ViewTransitionPart::Group, "hero").unwrap();
+        assert_eq!(s.animation_durations, vec![2.0]);
+        // Same name, other part: not targeted.
+        assert!(view_transition_style(css, ViewTransitionPart::Old, "hero").is_none());
+    }
+
+    #[test]
+    fn view_transition_wildcard_matches_every_name_and_originates_from_root_element() {
+        let css = ":root::view-transition-new(*) { animation-duration: 0s; }";
+        for n in ["root", "hero", "x"] {
+            let s = view_transition_style(css, ViewTransitionPart::New, n).unwrap();
+            assert_eq!(s.animation_durations, vec![0.0], "{n}");
+        }
+        // Originating compound must match the document element.
+        let css = "body::view-transition-new(*) { animation-duration: 0s; }";
+        assert!(view_transition_style(css, ViewTransitionPart::New, "root").is_none());
+    }
+
+    #[test]
+    fn view_transition_arguments_are_case_sensitive_names() {
+        let css = "::view-transition-old(Hero) { animation-duration: 3s; }";
+        assert!(view_transition_style(css, ViewTransitionPart::Old, "hero").is_none());
+        assert!(view_transition_style(css, ViewTransitionPart::Old, "Hero").is_some());
+    }

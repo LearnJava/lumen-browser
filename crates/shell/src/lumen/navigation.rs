@@ -827,6 +827,23 @@ impl Lumen {
     /// No opt-in / no pending snapshot → the snapshot is simply dropped and
     /// the navigation already rendered without animation (срез 5's fallback
     /// is this function doing nothing).
+    /// Cross-fade duration/easing for a view transition starting now: the page's
+    /// `::view-transition-{old,group}(root)` `animation-*` declarations
+    /// ([`crate::view_transition::author_params`]), else the shell defaults.
+    /// Read from the live (post-navigation / post-callback) document, which is
+    /// the one whose pseudo-tree the spec animates.
+    pub(crate) fn view_transition_author_params(&self) -> (f64, lumen_layout::TimingFunction) {
+        let authored = self.layout_source.as_ref().zip(self.relayout_viewport()).and_then(|(ls, vp)| {
+            let doc = ls.document.lock().ok()?;
+            Some(crate::view_transition::author_params(&doc, &ls.stylesheet, vp, self.dark_mode))
+        });
+        let (duration, easing) = authored.unwrap_or((None, None));
+        (
+            duration.unwrap_or(crate::view_transition::DEFAULT_DURATION_MS),
+            easing.unwrap_or(lumen_layout::TimingFunction::Linear),
+        )
+    }
+
     pub(crate) fn maybe_reveal_mpa_view_transition(&mut self) {
         let Some(old_dl) = self.pending_mpa_view_transition_snapshot.take() else { return };
         let Some(ls) = self.layout_source.as_ref() else { return };
@@ -834,7 +851,8 @@ impl Lumen {
             return;
         }
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
-        self.view_transition = Some(ViewTransitionState { old_dl, start_ms: now_ms, duration_ms: 300.0 });
+        let (duration_ms, easing) = self.view_transition_author_params();
+        self.view_transition = Some(ViewTransitionState { old_dl, start_ms: now_ms, duration_ms, easing });
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }

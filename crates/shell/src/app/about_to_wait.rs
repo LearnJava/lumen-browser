@@ -1763,7 +1763,8 @@ impl Lumen {
                         self.view_transition = Some(ViewTransitionState {
                             old_dl: self.display_list.clone(),
                             start_ms: 0.0,
-                            duration_ms: 300.0,
+                            duration_ms: crate::view_transition::DEFAULT_DURATION_MS,
+                            easing: lumen_layout::TimingFunction::Linear,
                         });
                     }
                     ViewTransitionEvent::End => {
@@ -1775,6 +1776,14 @@ impl Lumen {
                             vt.start_ms = now_ms;
                         }
                         self.relayout();
+                        // Author `animation-duration`/`-timing-function` on
+                        // `::view-transition-old(root)` — read after the
+                        // callback's DOM mutation, like the spec's new state.
+                        let (duration_ms, easing) = self.view_transition_author_params();
+                        if let Some(vt) = &mut self.view_transition {
+                            vt.duration_ms = duration_ms;
+                            vt.easing = easing;
+                        }
                         if let Some(w) = self.window.as_ref() {
                             w.request_redraw();
                         }
