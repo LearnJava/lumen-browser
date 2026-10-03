@@ -310,10 +310,10 @@ use super::*;
 
     #[test]
     fn object_position_invalid_value_keeps_default() {
-        // 3 token-а — пока не поддерживаем; декларация ignored.
+        // 5 token-ов не образуют валидный `<position>`; декларация ignored.
         let s = cascade_at(
             "<img>",
-            "img { object-position: left 10px top; }",
+            "img { object-position: left 10px top 5px 7px; }",
             &[0],
         );
         // initial-value сохранён.
@@ -345,6 +345,27 @@ use super::*;
         let pc = PositionComponent::Px(15.0);
         assert!((pc.resolve(0.0) - 15.0).abs() < f32::EPSILON);
         assert!((pc.resolve(1000.0) - 15.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn position_component_resolve_percent_plus_px() {
+        // `right 10px` → 100% - 10px от свободного места.
+        let pc = PositionComponent::PercentPlusPx { percent: 1.0, px: -10.0 };
+        assert!((pc.resolve(100.0) - 90.0).abs() < f32::EPSILON);
+        assert!((pc.resolve(-40.0) - (-50.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn quad_position_resolves_against_free_space() {
+        // `right 10px bottom 20px`, область 200×100, тайл 20×20 → (170, 60).
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: right 10px bottom 20px; }",
+            &[0],
+        );
+        let pos = s.background_layers[0].position;
+        assert!((pos.x.resolve(200.0 - 20.0) - 170.0).abs() < 1e-3);
+        assert!((pos.y.resolve(100.0 - 20.0) - 60.0).abs() < 1e-3);
     }
 
     // -------- vertical-align (CSS 2.1 §10.8.1) --------

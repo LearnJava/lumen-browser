@@ -11,7 +11,7 @@ use lumen_core::geom::Size;
 use serde::{Deserialize, Serialize};
 
 use crate::style::parse::counters::is_css_ident;
-use crate::style::values::length::{parse_length, parse_length_q, Length};
+use crate::style::values::length::{parse_length, parse_length_q, split_top_level_ws, Length};
 
 /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
 ///
@@ -514,11 +514,12 @@ impl GridLine {
     }
 }
 
-/// Одна компонента `object-position`. Length-варианты резолвятся в px
-/// относительно края коробки (positive = от left/top); percentage —
-/// относительно **свободного места** `box_size - content_size` (может быть
-/// отрицательным, тогда излишек уходит за противоположный край). См.
-/// CSS Images L3 §5.5 «object-position».
+/// Одна компонента `<position>` (`object-position`, `background-position`,
+/// `transform-origin`, `perspective-origin`, `mask-position`, `offset-anchor`).
+/// Length-варианты резолвятся в px относительно края коробки (positive = от
+/// left/top); percentage — относительно **свободного места**
+/// `box_size - content_size` (может быть отрицательным, тогда излишек уходит
+/// за противоположный край). См. CSS Images L3 §5.5 «object-position».
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionComponent {
     /// Length в px (после resolve em/rem/vw/...).
@@ -526,6 +527,13 @@ pub enum PositionComponent {
     /// Percentage в долях 1.0 (`50%` → 0.5). Резолвится на paint-стадии
     /// против свободного места: `offset = free_space * percent`.
     Percent(f32),
+    /// Смещение от дальнего края (CSS Values L4 §9.4 tri-/quad-форма,
+    /// `right 10px` / `bottom 3px`): процент свободного места **плюс** px.
+    /// `right 10px` → `PercentPlusPx { percent: 1.0, px: -10.0 }`
+    /// (`calc(100% - 10px)`). Чисто процентные смещения (`right 20%` → `80%`)
+    /// сворачиваются в `Percent` при построении
+    /// ([`PositionComponent::from_edge`]).
+    PercentPlusPx { percent: f32, px: f32 },
 }
 
 impl PositionComponent {
@@ -537,6 +545,26 @@ impl PositionComponent {
         match self {
             Self::Px(px) => px,
             Self::Percent(p) => free_space * p,
+            Self::PercentPlusPx { percent, px } => free_space * percent + px,
+        }
+    }
+
+    /// Компонента «смещение `offset` от края»: `far = false` — от
+    /// левого/верхнего (`left 10px` ≡ `10px`), `far = true` — от
+    /// правого/нижнего (`right 10px` ≡ `calc(100% - 10px)`). `offset = None`
+    /// — голый keyword-край (`left` = `0%`, `right` = `100%`).
+    fn from_edge(far: bool, offset: Option<PositionComponent>) -> Self {
+        match (far, offset) {
+            (false, None) => Self::Percent(0.0),
+            (true, None) => Self::Percent(1.0),
+            (false, Some(o)) => o,
+            (true, Some(Self::Px(v))) => Self::PercentPlusPx { percent: 1.0, px: -v },
+            (true, Some(Self::Percent(p))) => Self::Percent(1.0 - p),
+            // Смещение уже смешанное — парсер такого не порождает
+            // (`parse_length_percentage_component` отдаёт только Px/Percent).
+            (true, Some(Self::PercentPlusPx { percent, px })) => {
+                Self::PercentPlusPx { percent: 1.0 - percent, px: -px }
+            }
         }
     }
 }
@@ -579,16 +607,20 @@ impl ObjectPosition {
     ///   - один token (`50%`, `10px`, keyword) — второй = `center`,
     ///   - два token-а — первый x, второй y.
     ///
-    /// Tri- и quad-форма (`<keyword> <length> <keyword> <length>` для
-    /// сторон-якорей) — отложены: на современных страницах редкость.
+    /// Tri- и quad-форма (`right 10px bottom 3px`, `left 5% top`) — смещение
+    /// от указанного края, см. [`parse_edge_offset_position`].
     pub fn parse(s: &str, em_basis: f32, viewport: Size) -> Option<Self> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return None;
         }
-        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-        if tokens.is_empty() || tokens.len() > 2 {
+        let tokens = split_top_level_ws(trimmed);
+        if tokens.is_empty() || tokens.len() > 4 {
             return None;
+        }
+        // Tri-/quad-форма: `[ left | right | center ] <lp>? && [ top | bottom | center ] <lp>?`.
+        if tokens.len() >= 3 {
+            return parse_edge_offset_position(&tokens, em_basis, viewport);
         }
         // Single-token: применяется к horizontal оси; вертикальная = center.
         // Если token — vertical keyword (`top`/`bottom`), то horizontal = center.
@@ -632,6 +664,117 @@ fn is_vertical_keyword(t: &str) -> bool {
 
 fn is_horizontal_keyword(t: &str) -> bool {
     t.eq_ignore_ascii_case("left") || t.eq_ignore_ascii_case("right")
+}
+
+fn is_edge_keyword(t: &str) -> bool {
+    is_horizontal_keyword(t) || is_vertical_keyword(t)
+}
+
+/// Tri-/quad-форма `<position>` (CSS Values L4 §9.4): две группы
+/// `<keyword> <length-percentage>?`, где keyword — `left|right|top|bottom`
+/// (`center` — без смещения). Группы могут идти в любом порядке, но обязаны
+/// занимать разные оси; `center` занимает ту ось, что осталась.
+fn parse_edge_offset_position(tokens: &[&str], em_basis: f32, viewport: Size) -> Option<ObjectPosition> {
+    let mut groups: Vec<(&str, Option<PositionComponent>)> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let kw = tokens[i];
+        let is_center = kw.eq_ignore_ascii_case("center");
+        if !(is_center || is_edge_keyword(kw)) {
+            return None;
+        }
+        i += 1;
+        let mut offset = None;
+        if i < tokens.len() && !(tokens[i].eq_ignore_ascii_case("center") || is_edge_keyword(tokens[i])) {
+            // `center` смещения не принимает.
+            if is_center {
+                return None;
+            }
+            offset = Some(parse_length_percentage_component(tokens[i], em_basis, viewport)?);
+            i += 1;
+        }
+        groups.push((kw, offset));
+    }
+    if groups.len() != 2 {
+        return None;
+    }
+    let mut x: Option<PositionComponent> = None;
+    let mut y: Option<PositionComponent> = None;
+    let mut centers = 0;
+    for (kw, off) in &groups {
+        if kw.eq_ignore_ascii_case("center") {
+            centers += 1;
+            continue;
+        }
+        let far = kw.eq_ignore_ascii_case("right") || kw.eq_ignore_ascii_case("bottom");
+        let slot = if is_horizontal_keyword(kw) { &mut x } else { &mut y };
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(PositionComponent::from_edge(far, *off));
+    }
+    // `center` занимает ось, оставшуюся свободной.
+    for _ in 0..centers {
+        let slot = if x.is_none() { &mut x } else { &mut y };
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(PositionComponent::Percent(0.5));
+    }
+    Some(ObjectPosition { x: x?, y: y? })
+}
+
+/// Одна ось `background-position-x`/`-y` (CSS Backgrounds L4 §2.6):
+/// `center | [ [ left | right | x-start | x-end ]? <length-percentage>? ]!`
+/// (для y — `top | bottom | y-start | y-end`). `x-start`/`x-end` трактуются
+/// как физические `left`/`right` (`y-start`/`y-end` — `top`/`bottom`): спека
+/// (§2.6, «still being worked out») пока не определяет их соотнесение с
+/// `writing-mode`/`direction`.
+pub(in crate::style) fn parse_position_axis(
+    s: &str,
+    em_basis: f32,
+    viewport: Size,
+    vertical: bool,
+) -> Option<PositionComponent> {
+    let tokens = split_top_level_ws(s.trim());
+    let (near, far, start, end) = if vertical {
+        ("top", "bottom", "y-start", "y-end")
+    } else {
+        ("left", "right", "x-start", "x-end")
+    };
+    // `Some(false)` — ближний край, `Some(true)` — дальний, `None` — не keyword края.
+    let edge = |t: &str| -> Option<bool> {
+        if t.eq_ignore_ascii_case(near) || t.eq_ignore_ascii_case(start) {
+            Some(false)
+        } else if t.eq_ignore_ascii_case(far) || t.eq_ignore_ascii_case(end) {
+            Some(true)
+        } else {
+            None
+        }
+    };
+    match tokens.as_slice() {
+        [t] => match edge(t) {
+            Some(is_far) => Some(PositionComponent::from_edge(is_far, None)),
+            None => parse_position_component(t, em_basis, viewport, vertical),
+        },
+        [kw, off] => {
+            let is_far = edge(kw)?;
+            let off = parse_length_percentage_component(off, em_basis, viewport)?;
+            Some(PositionComponent::from_edge(is_far, Some(off)))
+        }
+        _ => None,
+    }
+}
+
+/// `<length-percentage>` → `Px`/`Percent` (без keyword-ов).
+fn parse_length_percentage_component(t: &str, em_basis: f32, viewport: Size) -> Option<PositionComponent> {
+    if let Some(pct) = t.strip_suffix('%')
+        && let Ok(n) = pct.trim().parse::<f32>()
+    {
+        return Some(PositionComponent::Percent(n / 100.0));
+    }
+    let len = parse_length(t)?;
+    Some(PositionComponent::Px(len.resolve(em_basis, None, viewport)?))
 }
 
 pub(in crate::style) fn parse_position_component(

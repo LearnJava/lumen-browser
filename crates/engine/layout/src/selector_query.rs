@@ -602,6 +602,14 @@ fn position_component_to_css(c: PositionComponent) -> String {
                 format!("{}%", pct)
             }
         }
+        // Смещение от дальнего края — `calc(<pct>% ± <px>px)` (Typed OM /
+        // CSS Values L4 §10.1 сериализация mixed length-percentage).
+        PositionComponent::PercentPlusPx { percent, px } => {
+            let pct = percent * 100.0;
+            let pct_s = if pct.fract() == 0.0 { format!("{}", pct as i64) } else { format!("{pct}") };
+            let (sign, mag) = if px < 0.0 { ('-', -px) } else { ('+', px) };
+            format!("calc({pct_s}% {sign} {})", px_str(mag))
+        }
     }
 }
 
@@ -3024,6 +3032,28 @@ mod tests {
             "div { background-image: url(a.png), url(b.png); background-position-x: 10%, 90%; }",
         );
         assert_eq!(m.get("background-position-x").map(String::as_str), Some("10%, 90%"));
+    }
+
+    #[test]
+    fn computed_map_background_position_x_edge_offset_serialization() {
+        // WPT `background-position-x-computed.html`: `left -20%` → `-20%`,
+        // `right -10px` → `calc(100% + 10px)`, `right 10px` → `calc(100% - 10px)`,
+        // `x-start`/`x-end` → `0%`/`100%`.
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-image: url(a.png), url(b.png), url(c.png);                    background-position-x: calc(10px - 0.5em), left -20%, right 10px; }",
+        );
+        assert_eq!(
+            m.get("background-position-x").map(String::as_str),
+            Some("2px, -20%, calc(100% - 10px)")
+        );
+        let m = div_computed_map("<div>x</div>", "div { background-position-x: right -10px; }");
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("calc(100% + 10px)"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-image: url(a.png), url(b.png); background-position-x: x-start, x-end; }",
+        );
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("0%, 100%"));
     }
 
     #[test]
