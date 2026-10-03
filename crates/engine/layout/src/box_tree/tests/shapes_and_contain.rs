@@ -1075,3 +1075,89 @@ fn content_visibility_auto_skipped_keeps_explicit_height() {
     let _ = crate::content_visibility::take_cv_skipped();
 }
 
+
+// ── CSS Shapes L1 §3 — per-line wrapping of inline content around a shape ──
+
+/// Left edge (x relative to the container) and right extent of every line of
+/// the first `InlineRun` in the tree, as `(top_y, x0, x1)`.
+fn shaped_lines(css: &str) -> Vec<(f32, f32, f32)> {
+    let words = "aa ".repeat(60);
+    let html = format!(r#"<div><div class="f"></div><p>{words}</p></div>"#);
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Ifc8);
+    fn find(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+        if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find)
+    }
+    let run = find(&root).expect("InlineRun");
+    let super::super::BoxKind::InlineRun { lines, .. } = &run.kind else { unreachable!() };
+    let lh = run.used_line_height;
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let x0 = l.first().map_or(f32::NAN, |f| f.x);
+            let x1 = l.last().map_or(f32::NAN, |f| f.x + f.width);
+            (run.rect.y + i as f32 * lh, run.rect.x + x0, run.rect.x + x1)
+        })
+        .collect()
+}
+
+#[test]
+fn inline_text_follows_circle_contour_per_line() {
+    // 200×200 circle float (r = 100) in a 400px column: the band beside it
+    // widens with every line instead of staying at the rectangle's 200px.
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 200px; height: 200px; shape-outside: circle(100px); }",
+    );
+    let starts: Vec<f32> = lines.iter().filter(|l| l.0 < 200.0).map(|l| l.1).collect();
+    assert!(starts.len() >= 4, "text must run beside the float, got {starts:?}");
+    // A circle is widest at its equator and narrow at the poles: lines near
+    // the top/bottom start left of the equator-adjacent ones.
+    let mid = starts.len() / 2;
+    let widest = starts.iter().cloned().fold(f32::MIN, f32::max);
+    assert!(widest <= 8.0 + 200.0 + 0.5, "never past the margin box: {starts:?}");
+    assert!(starts[0] < starts[mid] - 1.0, "first line hugs the top of the circle: {starts:?}");
+    assert!(
+        starts[starts.len() - 1] < widest - 1.0,
+        "lines below the equator must recede again: {starts:?}"
+    );
+    // Single-width approximation would put every line at x = 208.
+    assert!(starts.iter().any(|&x| x < 207.0), "no line follows the contour: {starts:?}");
+}
+
+#[test]
+fn inline_text_beside_plain_float_keeps_rectangular_band() {
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 200px; height: 80px; }",
+    );
+    for l in lines.iter().filter(|l| l.0 < 80.0) {
+        assert!((l.1 - 208.0).abs() < 0.5, "plain float: line starts at the margin edge, got {l:?}");
+    }
+}
+
+#[test]
+fn inline_text_below_shape_widens_to_full_width() {
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 100px; height: 40px; shape-outside: circle(20px); }",
+    );
+    let last = lines.last().expect("lines");
+    assert!((last.1 - 8.0).abs() < 0.5, "line below the float starts at the left edge: {last:?}");
+}
+
+#[test]
+fn inline_text_follows_right_float_contour() {
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: right; width: 200px; height: 200px; shape-outside: circle(100px); }",
+    );
+    let ends: Vec<f32> = lines.iter().filter(|l| l.0 < 200.0).map(|l| l.2).collect();
+    assert!(ends.len() >= 4, "{ends:?}");
+    assert!(ends.iter().all(|&e| e <= 408.0 + 0.5), "stays inside the column: {ends:?}");
+    assert!(
+        ends.iter().cloned().fold(f32::MIN, f32::max) > ends.iter().cloned().fold(f32::MAX, f32::min) + 1.0,
+        "right edge must vary with the contour: {ends:?}"
+    );
+}

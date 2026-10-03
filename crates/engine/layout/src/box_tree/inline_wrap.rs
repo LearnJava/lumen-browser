@@ -1075,10 +1075,25 @@ pub(crate) fn align_lines(
     text_align_last: TextAlignLast,
     direction: Direction,
 ) {
-    let is_rtl = direction == Direction::Rtl;
     let total = lines.len();
     for (idx, line) in lines.iter_mut().enumerate() {
-        let is_last = idx + 1 == total;
+        align_one_line(line, idx + 1 == total, content_width, text_align, text_align_last, direction);
+    }
+}
+
+/// One iteration of [`align_lines`]: reorder + align a single line box.
+/// `is_last` selects `text-align-last`; `content_width` is the width of *this*
+/// line box (a line shortened by a float aligns inside its own band).
+pub(crate) fn align_one_line(
+    line: &mut [InlineFrag],
+    is_last: bool,
+    content_width: f32,
+    text_align: TextAlign,
+    text_align_last: TextAlignLast,
+    direction: Direction,
+) {
+    let is_rtl = direction == Direction::Rtl;
+    {
         // CSS Text L3 §7.2: last line uses text-align-last.
         // Auto → same as text-align (justify not yet in TextAlign, so no special case).
         // TextAlignLast::Justify → Start (word-spacing justification not yet implemented).
@@ -1103,7 +1118,7 @@ pub(crate) fn align_lines(
         };
         // Measured before reordering, while `wrap_inline_run`'s ascending-x
         // order still holds, so the last frag is the rightmost one.
-        let Some(last_frag) = line.last() else { continue };
+        let Some(last_frag) = line.last() else { return };
         let line_width = last_frag.x + last_frag.width;
         // UAX #9 L2 — logical → visual placement. Subsumes the RTL line mirror
         // `align_lines` used to do itself, but level-aware, so an LTR island

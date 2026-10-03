@@ -374,7 +374,16 @@ fn step_child(
     let mut outer_for_child: Option<&FloatContext> = None;
     {
         let child = &frame.b.children[i];
-        if (flow_left > content_x || flow_right < container_right)
+        // CSS Shapes L1 §3: a paragraph beside a float with a `shape-outside`
+        // spans the full containing block and wraps per line box against the
+        // contour (`inline_shape_wrap`) instead of the float's margin rectangle.
+        if matches!(child.kind, BoxKind::InlineRun { .. })
+            && frame.init.fc.shapes_bottom() > child_y
+        {
+            eff_left = content_x + marker_shift;
+            eff_w = (content_width - marker_shift).max(0.0);
+            outer_for_child = Some(&frame.init.fc);
+        } else if (flow_left > content_x || flow_right < container_right)
             && child.style.width.is_none()
             && matches!(child.kind, BoxKind::Block)
             && !establishes_bfc(child)
@@ -708,7 +717,9 @@ fn wire_shape_outside(
         center_x: child.rect.x + child.rect.width / 2.0,
         center_y: bx.top_y + child.rect.height / 2.0,
     };
-    register_shape_outside(fc, sv, &g, margin);
+    if register_shape_outside(fc, sv, &g, margin) {
+        fc.mark_last_shaped(is_left);
+    }
 }
 
 /// Runs once `frame.b`'s children are all processed — the CSS 2.1 §8.3.1

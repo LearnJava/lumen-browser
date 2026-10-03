@@ -54,8 +54,8 @@ mod inline_wrap;
 pub use inline_wrap::{measure_text_w, measure_text_w_families, measure_text_w_varied};
 pub(crate) use inline_wrap::strip_soft_hyphens;
 use inline_wrap::{
-    align_lines, apply_inline_vertical_align, apply_line_clamp, apply_text_overflow_ellipsis, balance_wrap,
-    one_line_fallback, pretty_wrap, step_line_height, wrap_inline_run,
+    align_lines, align_one_line, apply_inline_vertical_align, apply_line_clamp,
+    apply_text_overflow_ellipsis, balance_wrap, one_line_fallback, pretty_wrap, step_line_height, wrap_inline_run,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's own non-test code.
 #[cfg(test)]
@@ -195,6 +195,7 @@ use intrinsic::{
 };
 
 mod shapes_floats;
+mod inline_shape_wrap;
 use shapes_floats::{
     register_shape_outside, shift_tree, shift_y_box, FloatContext, FloatShapeGeom,
 };
