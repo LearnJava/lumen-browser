@@ -608,6 +608,12 @@ fn apply_animated_heights(b: &mut LayoutBox) {
 /// `frag.style.font_size`) pick up the scaled size from a single source. Inline
 /// text segments carry their own cloned style, so they are adjusted too.
 pub(crate) fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    // BUG-935 срез 76: a subtree moved out of `prev` (`REUSED_SUBTREE` on its root) went
+    // through this pass last cycle — descending again would not only re-walk every box
+    // of it but apply `font-size-adjust` a second time to an already adjusted size.
+    if b.dirty.contains(crate::incremental::DirtyBits::REUSED_SUBTREE) {
+        return;
+    }
     // BUG-341 S12: the `None` test lives here rather than only inside
     // `apply_font_size_adjust_to_style`, because reaching for `Arc::make_mut`
     // on a style shared with the cascade cache would deep-copy it — on every
@@ -689,6 +695,11 @@ pub(crate) fn used_line_height_px(style: &ComputedStyle, m: &dyn TextMeasurer) -
 /// `normal` is the default `line-height` — writing into it would force
 /// `Arc::make_mut` to deep-copy nearly every box in the document).
 pub(crate) fn resolve_used_line_height(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    // BUG-935 срез 76: see `apply_font_size_adjust` — a reused subtree already carries the
+    // line height resolved from the very style it still has.
+    if b.dirty.contains(crate::incremental::DirtyBits::REUSED_SUBTREE) {
+        return;
+    }
     b.used_line_height = used_line_height_px(&b.style, m);
     for child in &mut b.children {
         resolve_used_line_height(child, m);

@@ -281,6 +281,9 @@ pub struct GridGapGeometry {
     pub segments: Vec<GapSegment>,
     pub col_total: usize,
     pub row_total: usize,
+    /// Колоночные щели нумеруются справа налево (grid при `direction: rtl`); у flex номера
+    /// уже розданы в порядке размещения.
+    pub column_reversed: bool,
 }
 
 /// Параметры [`grid_gap_segments`].
@@ -335,7 +338,12 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
         })
         .collect();
     let rtl = s.direction == lumen_layout::Direction::Rtl;
-    let mut out = GridGapGeometry { segments: Vec::new(), col_total: col_tops.len(), row_total: row_tops.len() };
+    let mut out = GridGapGeometry {
+        segments: Vec::new(),
+        col_total: col_tops.len(),
+        row_total: row_tops.len(),
+        column_reversed: rtl,
+    };
 
     // Ширина линии пересекающей щели `k` — для `overlap-join`.
     let cross_width = |widths: &lumen_layout::RuleList<f32>,

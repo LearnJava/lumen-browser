@@ -184,6 +184,20 @@ pub(crate) fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     build_display_list_ordered(layout, &tree, &order).0
 }
 
+
+/// [`paint_ordered`] с кэшем emit по поддереву, который держит вызывающий между кадрами
+/// (PERF-16 срез 2). Результат тот же; `LUMEN_NO_EMIT_CACHE=1` возвращает сборку без кэша.
+pub(crate) fn paint_ordered_cached(
+    layout: &lumen_layout::LayoutBox,
+    cache: &mut lumen_paint::SubtreeEmitCache,
+) -> DisplayList {
+    if !lumen_paint::emit_cache_enabled() {
+        return paint_ordered(layout);
+    }
+    let tree = StackingTree::build(layout);
+    let order = PaintOrder::from_tree(&tree);
+    lumen_paint::build_display_list_ordered_dpr_cached(layout, &tree, &order, 1.0, cache).0
+}
 /// [`paint_ordered`] для документа, разложенного под `viewport`: его
 /// `background-attachment: fixed` слои позиционируются от этого вьюпорта
 /// (CSS Backgrounds L3 §3.6). Корневой бокс — `max(вьюпорт, документ)`, так

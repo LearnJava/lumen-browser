@@ -47,14 +47,14 @@ fn style_text(doc: &Document) -> String {
     out
 }
 
-fn layout_page(html: &str, extra_css: &str) -> LayoutBox {
+pub(super) fn layout_page(html: &str, extra_css: &str) -> LayoutBox {
     let doc = lumen_html_parser::parse(html);
     let css = format!("{}\n{extra_css}", style_text(&doc));
     let sheet = lumen_css_parser::parse(&css);
     lumen_layout::layout_measured(&doc, &sheet, Size::new(1024.0, 720.0), &Fixed8)
 }
 
-fn corpus() -> Vec<(String, String)> {
+pub(super) fn corpus() -> Vec<(String, String)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../graphic_tests");
     let mut pages = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("graphic_tests/ рядом с крейтом") {
@@ -169,7 +169,7 @@ fn compare_trees(label: &str, a: &LayoutBox, b: &LayoutBox, tally: &mut Tally) {
 /// каждую группу полей `ComputedStyle`, которые читает emit: цвет, фон (цвет/градиент/клип),
 /// рамки и радиусы, тени, outline, декорации и тени текста, шрифт, видимость, переполнение,
 /// списки, таблицы, replaced-элементы, генерируемое содержимое, режимы письма.
-const PERTURBATIONS: &[&str] = &[
+pub(super) const PERTURBATIONS: &[&str] = &[
     "color: #e11 !important",
     "background-color: #0a8 !important",
     "background-image: linear-gradient(#f00, #00f) !important",
@@ -225,7 +225,7 @@ const PERTURBATIONS: &[&str] = &[
 
 /// Селекторы возмущений: от «всё» до единичных тегов, чтобы часть поддеревьев оставалась нетронутой
 /// (иначе нечего сравнивать на равенство).
-const SELECTORS: &[&str] = &[
+pub(super) const SELECTORS: &[&str] = &[
     "*",
     "div",
     "p, li, dd, dt",

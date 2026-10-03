@@ -165,7 +165,7 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList,
     RuleOverlap, RuleVisibilityItems,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,

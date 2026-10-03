@@ -36,6 +36,7 @@ pub mod glsl;
 pub mod compositor;
 pub mod display_list;
 pub mod fallback;
+pub mod flex_gap_decorations;
 pub mod gap_decorations;
 pub mod fingerprint;
 pub mod hit_test;
@@ -107,6 +108,17 @@ pub fn scroll_blit_enabled() -> bool {
             _ => true, // default on (M3.2.1c-7)
         }
     })
+}
+
+/// `true`, если кэш emit display list по поддереву ([`SubtreeEmitCache`], PERF-16) включён.
+///
+/// Kill-switch: `LUMEN_NO_EMIT_CACHE=1` — каждая сборка эмитит все боксы заново, как до среза 2.
+/// Значение читается из окружения один раз за процесс.
+#[must_use]
+pub fn emit_cache_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("LUMEN_NO_EMIT_CACHE").is_none())
 }
 
 /// Аккумулятор времён кадров для сессионной сводки (`LUMEN_FRAME_LOG`).
@@ -337,6 +349,7 @@ pub use compositor::{
 };
 pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
+    build_display_list_ordered_dpr_cached, EmitCacheStats, SubtreeEmitCache,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_ordered_with_anim_split,
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,

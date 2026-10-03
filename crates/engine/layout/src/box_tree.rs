@@ -196,8 +196,11 @@ use intrinsic::{
 
 mod shapes_floats;
 mod inline_shape_wrap;
+// `shift_tree` is also `incremental::translate_subtree`: one relocation, one implementation
+// (rect + `svg_paint_matrix` + `<mask>` content move together).
+pub(crate) use shapes_floats::shift_tree;
 use shapes_floats::{
-    register_shape_outside, shift_tree, shift_y_box, FloatContext, FloatShapeGeom,
+    register_shape_outside, shift_y_box, FloatContext, FloatShapeGeom,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's
 // own non-test code.

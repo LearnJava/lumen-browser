@@ -57,7 +57,7 @@ impl Drop for FixedBgViewportGuard {
 
 /// Positioning area of a `background-attachment: fixed` layer — the viewport,
 /// when a build installed one and it is non-degenerate.
-fn fixed_bg_viewport() -> Option<Rect> {
+pub(super) fn fixed_bg_viewport() -> Option<Rect> {
     FIXED_BG_VIEWPORT
         .with(std::cell::Cell::get)
         .filter(|r| r.width > 0.0 && r.height > 0.0)

@@ -100,15 +100,18 @@ impl std::ops::BitOrAssign for DirtyBits {
 /// Used to reposition a clean subtree when a dirty sibling above it changed
 /// height, keeping the block-flow y-cursor consistent across siblings.
 /// Zero deltas are a no-op (early exit at the root level).
+///
+/// Moves what *other* layout output is stored in document space together with
+/// the rect — `svg_paint_matrix` and the `<mask>` content of SVG shapes (the
+/// walk is [`crate::box_tree::shift_tree`]). A rect-only translate left the
+/// matrix at its old origin, so each incremental pass that relocated a clean
+/// icon grew the gap between `rect` and the CTM that `<path>` icons paint with
+/// (chrome: +41 px per keystroke).
 pub fn translate_subtree(b: &mut LayoutBox, dx: f32, dy: f32) {
     if dx.abs() < f32::EPSILON && dy.abs() < f32::EPSILON {
         return;
     }
-    b.rect.x += dx;
-    b.rect.y += dy;
-    for child in &mut b.children {
-        translate_subtree(child, dx, dy);
-    }
+    crate::box_tree::shift_tree(b, dx, dy);
 }
 
 /// Mark `node_id` as needing full re-layout.
@@ -1043,6 +1046,44 @@ mod tests {
         assert!((root.rect.y - 10.0).abs() < f32::EPSILON);
         assert!((root.children[0].rect.x - 15.0).abs() < f32::EPSILON);
         assert!((root.children[0].rect.y - 30.0).abs() < f32::EPSILON);
+    }
+
+    /// `svg_paint_matrix` (document-space CTM) and `<mask>` content live outside `rect` but in
+    /// the same space: a translate that moves only `rect` leaves a `<path>` icon painted at
+    /// its old origin (`emit_svg_shape` takes the matrix's translation as is).
+    #[test]
+    fn translate_subtree_moves_svg_paint_matrix_and_mask_content_with_the_rect() {
+        use crate::box_tree::{SvgMaskContent, SvgShapeKind, SvgTransform};
+
+        let mut mask_shape = leaf(4, Rect::new(1.0, 2.0, 3.0, 4.0));
+        mask_shape.kind = BoxKind::SvgShape {
+            shape: SvgShapeKind::Path { d: "M0 0".to_owned() },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, 1.0, 2.0] },
+            svg_mask: None,
+        };
+        let mut shape = leaf(3, Rect::new(10.0, 20.0, 5.0, 5.0));
+        shape.kind = BoxKind::SvgShape {
+            shape: SvgShapeKind::Path { d: "M0 0 L1 1".to_owned() },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform { matrix: [0.5, 0.0, 0.0, 0.5, 10.0, 20.0] },
+            svg_mask: Some(Box::new(SvgMaskContent { content: vec![mask_shape], mode: crate::style::MaskMode::default() })),
+        };
+        let mut root = block_with_children(1, Rect::new(0.0, 0.0, 100.0, 100.0), vec![shape]);
+
+        translate_subtree(&mut root, 5.0, 40.0);
+
+        let BoxKind::SvgShape { svg_paint_matrix, svg_mask, .. } = &root.children[0].kind else {
+            panic!("shape box expected");
+        };
+        assert_eq!(root.children[0].rect.y, 60.0);
+        assert_eq!(svg_paint_matrix.matrix, [0.5, 0.0, 0.0, 0.5, 15.0, 60.0], "CTM follows the rect");
+        let mask_box = &svg_mask.as_ref().expect("mask kept").content[0];
+        assert_eq!((mask_box.rect.x, mask_box.rect.y), (6.0, 42.0), "mask content follows the shape");
+        let BoxKind::SvgShape { svg_paint_matrix: mask_matrix, .. } = &mask_box.kind else {
+            panic!("mask shape expected");
+        };
+        assert_eq!(mask_matrix.matrix, [1.0, 0.0, 0.0, 1.0, 6.0, 42.0]);
     }
 
     #[test]
