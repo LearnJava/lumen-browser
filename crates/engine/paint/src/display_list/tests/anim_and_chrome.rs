@@ -1072,6 +1072,102 @@ use lumen_dom::NodeId;
         assert_eq!(column_rule_cmds(&dl).len() + horizontal_rule_cmds(&dl).len(), 0);
     }
 
+    /// 3×3 grid, дорожки 50px, щели 20px (190×190). `{style}` — свойства контейнера,
+    /// `{items}` — дети.
+    const GRID_3X3: &str = r#"<div style="display:grid;grid-template-columns:50px 50px 50px;        grid-template-rows:50px 50px 50px;gap:20px;width:190px;height:190px;{style}">{items}</div>"#;
+
+    fn grid3(style: &str, items: &str) -> String {
+        GRID_3X3.replace("{style}", style).replace("{items}", items)
+    }
+
+    /// Вертикальные куски колоночных правил: `(x, y, height)`, по x и y.
+    fn column_pieces(dl: &DisplayList) -> Vec<(i32, i32, i32)> {
+        let mut v: Vec<_> = column_rule_cmds(dl)
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, .. } => {
+                    Some((rect.x.round() as i32, rect.y.round() as i32, rect.height.round() as i32))
+                }
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    const CELL: &str = "<div></div>";
+
+    /// §3.2: элемент, пересекающий щель, прерывает её; `normal` в grid рвёт на «Т», `none` — нет.
+    #[test]
+    fn grid_rule_break_cuts_gap_at_spanning_item() {
+        // Элемент на колонки 1–2 в строке 2 закрывает колоночную щель 0 в этой строке.
+        let items = "<div style=\"grid-area:1/1\"></div><div style=\"grid-area:1/2\"></div><div style=\"grid-area:1/3\"></div>                     <div style=\"grid-area:2/1/3/3\"></div><div style=\"grid-area:2/3\"></div>                     <div style=\"grid-area:3/1\"></div><div style=\"grid-area:3/2\"></div><div style=\"grid-area:3/3\"></div>";
+        let dl = build(&grid3("column-rule:2px solid red", items), "");
+        let cols = column_pieces(&dl);
+        // Щель 0 (x=50..70) закрыта спаннером в строке 1 (y=70..120): остаются куски строк 0 и 2.
+        // Щель 1 (x=120..140) идёт сквозь всю высоту.
+        assert!(cols.iter().filter(|c| c.0 < 100).count() == 2, "{cols:?}");
+        assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 0 && c.2 == 50), "{cols:?}");
+        assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 140 && c.2 == 50), "{cols:?}");
+        assert!(cols.iter().any(|c| c.0 > 100 && c.2 == 190), "{cols:?}");
+        // `none` — линия идёт позади элемента.
+        let dl = build(&grid3("column-rule:2px solid red;column-rule-break:none", items), "");
+        assert_eq!(column_pieces(&dl).len(), 2, "none: две сплошные линии");
+    }
+
+    /// §3.4: `between` скрывает кусок щели рядом с пустой клеткой, `all` — нет.
+    #[test]
+    fn grid_rule_visibility_items_hides_next_to_empty_cells() {
+        // Пустая клетка: строка 2, колонка 3.
+        let items = "<div style=\"grid-area:1/1\"></div><div style=\"grid-area:1/2\"></div><div style=\"grid-area:1/3\"></div>                     <div style=\"grid-area:2/1\"></div><div style=\"grid-area:2/2\"></div>                     <div style=\"grid-area:3/1\"></div><div style=\"grid-area:3/2\"></div><div style=\"grid-area:3/3\"></div>";
+        let all = build(&grid3("column-rule:2px solid red;column-rule-break:none", items), "");
+        assert_eq!(column_pieces(&all).len(), 2);
+        let between = build(
+            &grid3("column-rule:2px solid red;column-rule-break:none;column-rule-visibility-items:between", items),
+            "",
+        );
+        // Щель 1 (колонки 2|3) в строке 2 касается пустой клетки → линия рвётся там.
+        let cols = column_pieces(&between);
+        assert_eq!(cols.iter().filter(|c| c.0 > 100).count(), 2, "{cols:?}");
+        assert_eq!(cols.iter().filter(|c| c.0 < 100).count(), 1, "{cols:?}");
+        let around = build(
+            &grid3("column-rule:2px solid red;column-rule-break:none;column-rule-visibility-items:around", items),
+            "",
+        );
+        assert_eq!(column_pieces(&around).len(), 2, "around: клетка слева занята");
+    }
+
+    /// §3.3: `junction`-отступ сдвигает концы кусков у стыка, `cap` — у края контейнера.
+    #[test]
+    fn grid_rule_inset_junction_applies_at_cuts() {
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3("column-rule:2px solid red;column-rule-break:intersection;column-rule-inset:0 / 5px", &items),
+            "",
+        );
+        let cols = column_pieces(&dl);
+        // Щель 0: 0..50 (cap-начало 0, junction-конец 5 → 45), 70..120 (5 с обеих сторон → 40), 140..190 (→ 45).
+        let mut g0: Vec<_> = cols.iter().filter(|c| c.0 < 100).map(|c| (c.1, c.2)).collect();
+        g0.sort();
+        assert_eq!(g0, vec![(0, 45), (75, 40), (145, 45)], "{cols:?}");
+    }
+
+    /// `overlap-join` заходит в стык на полширины щели плюс полширины линии.
+    #[test]
+    fn grid_rule_inset_overlap_join_extends_into_junction() {
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3(
+                "rule:4px solid red;column-rule-break:intersection;column-rule-inset:0 / overlap-join",
+                &items,
+            ),
+            "",
+        );
+        let cols = column_pieces(&dl);
+        // Внутренний кусок щели 0 (строка 1): 70..120 → продлён на 10 + 2 = 12px с каждой стороны.
+        assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 58 && c.2 == 74), "{cols:?}");
+    }
+
     /// The ordered (stacking-context) path — the one the live window and
     /// `--screenshot` use — must draw gap rules too, not only `walk`.
     #[test]

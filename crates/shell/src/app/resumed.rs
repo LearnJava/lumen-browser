@@ -25,7 +25,10 @@ impl Lumen {
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))
             .with_position(LogicalPosition::new(0, 0))
-            .with_maximized(self.maximized);
+            .with_maximized(self.maximized)
+            // PERF-10: `--no-paint` — окно существует (winit/HWND нужны движку),
+            // но не показывается: ни фокуса, ни увода foreground.
+            .with_visible(!no_paint_backend::no_paint_enabled());
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -108,11 +111,24 @@ impl Lumen {
             }
         }
 
-        let mut renderer = match backend_factory::create_backend(
-            window.clone(),
-            INTER_FONT.to_vec(),
-            self.target_color_space(),
-        ) {
+        // PERF-10: без растеризации GPU-бэкенд не создаётся вовсе — layout берёт
+        // размер вьюпорта и DPR у `NoPaintBackend`.
+        let backend_result: Result<Box<dyn lumen_paint::RenderBackend>, Box<dyn std::error::Error>> =
+            if no_paint_backend::no_paint_enabled() {
+                let size = window.inner_size();
+                Ok(Box::new(no_paint_backend::NoPaintBackend::new(
+                    size.width,
+                    size.height,
+                    window.scale_factor(),
+                )))
+            } else {
+                backend_factory::create_backend(
+                    window.clone(),
+                    INTER_FONT.to_vec(),
+                    self.target_color_space(),
+                )
+            };
+        let mut renderer = match backend_result {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");

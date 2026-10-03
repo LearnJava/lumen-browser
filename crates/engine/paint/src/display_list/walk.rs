@@ -604,7 +604,8 @@ pub(crate) fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
 ///
 /// Returns an empty `Vec` when the container is not flex/grid, when both gap
 /// values are zero, or when neither axis has a visible rule.
-fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
+fn collect_gap_segments(b: &LayoutBox) -> GridGapGeometry {
+    let none = || GridGapGeometry { segments: Vec::new(), col_total: 0, row_total: 0 };
     let s = &b.style;
     // Only flex/grid containers produce gap rules.
     let is_flex_or_grid = matches!(
@@ -612,7 +613,7 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
         Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
     );
     if !is_flex_or_grid {
-        return Vec::new();
+        return none();
     }
     // Списки значений (CSS Gap Decorations L1 §4.5): ось видима, если хоть одна щель
     // может получить видимое значение; точный выбор — по номеру щели в `gap_decoration_commands`.
@@ -621,7 +622,7 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     let row_rule_visible =
         s.row_rule_style.iter().any(|st| st.is_visible()) && s.row_rule_width.iter().any(|w| *w > 0.0);
     if !column_rule_visible && !row_rule_visible {
-        return Vec::new();
+        return none();
     }
 
     // Content area of the container (border-box minus border+padding).
@@ -656,7 +657,23 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
         .collect();
 
     if children.len() < 2 {
-        return Vec::new();
+        return none();
+    }
+
+    // Grid: дорожки и стыки известны, так что щели режутся по `*-rule-break` и скрываются
+    // по `*-rule-visibility-items` (CSS Gap Decorations L1 §3.2, §3.4).
+    if matches!(s.display, Display::Grid | Display::InlineGrid) {
+        return grid_gap_segments(
+            &children,
+            &GridGapParams {
+                content: (cx, cy, cw, ch),
+                col_gap: col_gap_px,
+                row_gap: row_gap_px,
+                column_visible: column_rule_visible,
+                row_visible: row_rule_visible,
+                style: s,
+            },
+        );
     }
 
     let mut segments: Vec<GapSegment> = Vec::new();
@@ -693,6 +710,7 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
                 segments.push(GapSegment {
                     rect: Rect::new(*right, y, col_gap_px, h),
                     horizontal: false,
+                    gap: 0,
                 });
             }
         }
@@ -714,12 +732,20 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
                 segments.push(GapSegment {
                     rect: Rect::new(x, *bottom, w, row_gap_px),
                     horizontal: true,
+                    gap: 0,
                 });
             }
         }
     }
 
-    segments
+    // Flex: щели нумеруются по порядку координаты в своей оси.
+    let (mut col_total, mut row_total) = (0, 0);
+    for seg in &mut segments {
+        let n = if seg.horizontal { &mut row_total } else { &mut col_total };
+        seg.gap = *n;
+        *n += 1;
+    }
+    GridGapGeometry { segments, col_total, row_total }
 }
 
 /// CSS Gap Decorations L1 — `DrawBorder` rules for the gaps of a flex/grid
@@ -729,10 +755,12 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
 /// Shared by `walk`'s epilogue and the ordered/stacking-context path
 /// (`box_layer_ops`); the caller owns the visibility check.
 pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
-    let gap_segs = collect_gap_segments(b);
-    if gap_segs.is_empty() {
+    let geom = collect_gap_segments(b);
+    if geom.segments.is_empty() {
         return Vec::new();
     }
+    let (col_total, row_total) = (geom.col_total, geom.row_total);
+    let gap_segs = geom.segments;
     let s = &b.style;
     let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
         gap_segs.into_iter().partition(|g| !g.horizontal);
@@ -742,12 +770,12 @@ pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
                      widths: &lumen_layout::RuleList<f32>,
                      styles: &lumen_layout::RuleList<BorderStyle>,
                      colors: &lumen_layout::RuleList<lumen_layout::CssColor>,
+                     total: usize,
                      reversed: bool| {
-        let total = segs.len();
         let mut out = Vec::new();
-        for (i, seg) in segs.iter().enumerate() {
+        for seg in segs {
             // `reversed` — ось идёт справа налево (колонки при `direction: rtl`): первая щель правая.
-            let idx = if reversed { total - 1 - i } else { i };
+            let idx = if reversed { total - 1 - seg.gap } else { seg.gap };
             let ctx = GapDecorationContext {
                 rule_width: *widths.value_for_gap(idx, total),
                 rule_style: *styles.value_for_gap(idx, total),
@@ -758,8 +786,8 @@ pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
         out
     };
     let rtl = s.direction == lumen_layout::Direction::Rtl;
-    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, rtl);
-    let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, false);
+    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, col_total, rtl);
+    let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, row_total, false);
     // CSS Gap Decorations L1 §3.5 `rule-overlap`: the axis painted last lies on top.
     let (mut out, top) = match s.rule_overlap {
         lumen_layout::RuleOverlap::RowOverColumn => (col_cmds, row_cmds),

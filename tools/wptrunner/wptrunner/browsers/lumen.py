@@ -102,6 +102,11 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
         "ipc_mode": test_type == "reftest",
         "ca_cert_path": kwargs.get("ca_cert_path"),
         "forced_colors": os.environ.get("LUMEN_FORCED_COLORS") == "1",
+        # PERF-10: `LUMEN_NO_PAINT=1` -> `--no-paint` (DOM+JS+layout, no GPU
+        # backend, hidden window). Same parent-env -> CLI-arg trick as above.
+        # Pixel-bearing runs (reftest, `--ipc-server`) ignore it: they need a
+        # real raster, see `make_command`.
+        "no_paint": os.environ.get("LUMEN_NO_PAINT") == "1",
     }
 
 
@@ -228,7 +233,7 @@ class LumenBrowser(WebDriverBrowser):
     speaks BiDi itself, there is no separate driver process."""
 
     def __init__(self, logger, binary, ipc_mode=False, ca_cert_path=None,
-                 forced_colors=False, **kwargs):
+                 forced_colors=False, no_paint=False, **kwargs):
         env = dict(kwargs.pop("env", None) or {})
         if ca_cert_path:
             # BUG-785: the browser has no CLI flag for this, only an env var
@@ -247,6 +252,7 @@ class LumenBrowser(WebDriverBrowser):
         super().__init__(logger, binary=binary, webdriver_binary=binary, env=env or None, **kwargs)
         self.ipc_mode = ipc_mode
         self.forced_colors = forced_colors
+        self.no_paint = no_paint
 
     def make_command(self):
         if self.ipc_mode:
@@ -257,7 +263,8 @@ class LumenBrowser(WebDriverBrowser):
             # flag here would be silently ignored. Not forwarded on purpose.
             return [self.binary, "--ipc-server"]
         forced_colors_args = ["--forced-colors"] if self.forced_colors else []
-        return [self.binary, "--bidi-port", str(self.port), *forced_colors_args]
+        no_paint_args = ["--no-paint"] if self.no_paint else []
+        return [self.binary, "--bidi-port", str(self.port), *forced_colors_args, *no_paint_args]
 
     def create_output_handler(self, cmd):
         if self.ipc_mode:
