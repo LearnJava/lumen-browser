@@ -1097,6 +1097,7 @@ impl FlushHandles {
         };
         let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &node_index);
         dirty_roots.extend(roots.deep);
+        let point_roots = roots.point;
         let sheet_delta_count = sheet_delta_roots.len();
         self.sheet_delta_used.fetch_add(sheet_delta_count as u64, Ordering::Relaxed);
         dirty_roots.extend(sheet_delta_roots);
@@ -1167,6 +1168,7 @@ impl FlushHandles {
             prev_styles: basis.cascade,
             dirty_roots,
             shallow_roots,
+            point_roots,
             content_dirty,
         };
         let null_hp = lumen_core::ext::NullHyphenationProvider;

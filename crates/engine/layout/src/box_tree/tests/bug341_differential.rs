@@ -393,7 +393,7 @@ fn box_build_hover_transition_matches_full_and_reuses_subset() {
         prev_styles: baseline_counters.styles().clone(),
         dirty_roots,
         content_dirty: crate::counters::ContentDirty::Nothing,
-        shallow_roots: Default::default(),
+        shallow_roots: Default::default(), point_roots: Default::default(),
     };
     set_incremental_restyle(true);
     let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
@@ -500,7 +500,7 @@ fn box_build_node_change_disables_reuse_conservatively() {
         prev_styles: baseline_counters.styles().clone(),
         dirty_roots,
         content_dirty: crate::counters::ContentDirty::Untracked,
-        shallow_roots: Default::default(),
+        shallow_roots: Default::default(), point_roots: Default::default(),
     };
     set_incremental_restyle(true);
     let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
@@ -769,7 +769,7 @@ fn box_build_text_mutation_reuses_everything_but_the_mutated_chain() {
         prev_styles: baseline_counters.styles().clone(),
         dirty_roots: std::collections::HashSet::new(),
         content_dirty: ContentDirty::Nodes(&content),
-        shallow_roots: Default::default(),
+        shallow_roots: Default::default(), point_roots: Default::default(),
     };
     set_incremental_restyle(true);
     let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
@@ -1883,7 +1883,7 @@ fn box_build_driven_by_the_document_journal_matches_full_rebuild() {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: ContentDirty::Nodes(&journal),
-            shallow_roots: Default::default(),
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         super::super::set_incremental_box_build(true);

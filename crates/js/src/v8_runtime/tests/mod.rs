@@ -1603,7 +1603,7 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
             &node_index,
         )
     };
-    let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked, shallow_roots: Default::default() };
+    let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
 
     // BUG-341 S19: the incremental pass consumes `prev` (it moves the
     // reusable subtrees into the tree it returns), and the geometry

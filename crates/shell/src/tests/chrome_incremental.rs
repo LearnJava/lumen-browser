@@ -1099,7 +1099,7 @@ fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
         prev_styles: none_map.styles().clone(),
         dirty_roots,
         content_dirty: lumen_layout::counters::ContentDirty::Nothing,
-        shallow_roots: Default::default(),
+        shallow_roots: Default::default(), point_roots: Default::default(),
     };
     set_incremental_restyle(true);
     let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
@@ -1201,7 +1201,7 @@ fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
         prev_styles: before.styles().clone(),
         dirty_roots,
         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
-        shallow_roots: Default::default(),
+        shallow_roots: Default::default(), point_roots: Default::default(),
     };
     set_incremental_restyle(true);
     let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);

@@ -737,6 +737,14 @@ pub struct RestyleDelta<'a> {
     /// Only sound together with a complete content record — see [`restyle_spine`], which
     /// is where an unlisted container would otherwise be skipped.
     pub shallow_roots: HashSet<NodeId>,
+    /// BUG-935 срез 73 — single elements re-cascaded on their own: the node alone, and
+    /// below it only what a shallow root's child gets — its subtree when its style
+    /// came out different, when it moved from another parent, or when it is listed
+    /// elsewhere in the delta. The caller lists here the descendants of a shallow
+    /// root that a changed `class`/`id`/attribute can reach through a selector
+    /// ([`crate::style::NodeRestyleIndex::affected_descendants`]) — the rest of that
+    /// subtree is proven untouched and is not entered.
+    pub point_roots: HashSet<NodeId>,
     /// BUG-341 S16: which nodes had their *content* — the things `build_box`
     /// reads that the cascade cannot see (text-node data, child lists,
     /// attributes) — mutated since `prev_styles` was taken. See
@@ -777,6 +785,7 @@ impl RestyleDelta<'_> {
     fn is_noop(&self) -> bool {
         self.dirty_roots.is_empty()
             && self.shallow_roots.is_empty()
+            && self.point_roots.is_empty()
             && self.content_dirty.nothing_changed()
             && !self.prev_styles.is_empty()
             && !self.prev_styles.generated_content()
@@ -917,7 +926,7 @@ pub fn incremental_precompute_counters(
         // how many entries this one will hold — closer than `node_count`, which
         // counts text and comment nodes too. S24: and it *is* this pass's cache.
         let elements = delta.prev_styles.len();
-        let RestyleDelta { prev_styles, dirty_roots, shallow_roots, content_dirty } = delta;
+        let RestyleDelta { prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty } = delta;
         // BUG-341 S27: read off the carried cache before it is moved into the
         // map — it is the previous walking pass's report, and the licence to
         // skip depends on it.
@@ -925,13 +934,13 @@ pub fn incremental_precompute_counters(
         let spine = restyle_spine(
             doc,
             flat,
-            dirty_roots.iter().chain(shallow_roots.iter()).copied(),
+            dirty_roots.iter().chain(shallow_roots.iter()).chain(point_roots.iter()).copied(),
             &content_dirty,
             ctx.quotes_possible,
             prev_generated_content,
         );
         let map = CounterMap::continuing(prev_styles, elements);
-        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, content_dirty, spine })
+        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine })
     };
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
@@ -959,6 +968,8 @@ struct IncrRestyle<'a> {
     dirty_roots: HashSet<NodeId>,
     /// See [`RestyleDelta::shallow_roots`].
     shallow_roots: HashSet<NodeId>,
+    /// See [`RestyleDelta::point_roots`].
+    point_roots: HashSet<NodeId>,
     /// See [`RestyleDelta::content_dirty`].
     content_dirty: ContentDirty<'a>,
     /// BUG-341 S27 — every ancestor of a dirty root or a content-mutated node,
@@ -1421,7 +1432,8 @@ fn walk(
     let host_override = is_shallow_root && !std::ptr::eq(flat.children_of(doc, id), doc.get(id).children.as_slice());
     is_shallow_root &= !host_override;
     let deep = force || host_override || incr.is_some_and(|d| d.dirty_roots.contains(&id));
-    let shallow = !deep && (shallow_child || is_shallow_root);
+    let is_point_root = incr.is_some_and(|d| d.point_roots.contains(&id));
+    let shallow = !deep && (shallow_child || is_shallow_root || is_point_root);
     let reused = match incr {
         None => None,
         Some(_) if deep || shallow => None,
@@ -2491,7 +2503,7 @@ mod tests {
                 prev_styles: full.into_styles(),
                 dirty_roots: HashSet::new(),
                 content_dirty: ContentDirty::Nothing,
-                shallow_roots: Default::default(),
+                shallow_roots: Default::default(), point_roots: Default::default(),
             };
             set_incremental_restyle(true);
             let _ = take_cascade_stats();
@@ -2577,7 +2589,7 @@ mod tests {
             prev_styles: full.into_styles(),
             dirty_roots,
             content_dirty: ContentDirty::Nothing,
-            shallow_roots: Default::default(),
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let _ = take_cascade_stats();
@@ -2612,7 +2624,7 @@ mod tests {
             prev_styles: prev,
             dirty_roots,
             content_dirty: ContentDirty::Nodes(content),
-            shallow_roots: Default::default(),
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let _ = take_cascade_stats();
