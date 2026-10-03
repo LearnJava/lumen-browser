@@ -761,6 +761,201 @@ use super::*;
         assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
     }
 
+    // ── font-variant-{numeric,ligatures,position} (CSS Fonts L4 §6.5–§6.8) ──
+
+    fn features_of(html: &str, css: &str, path: &[usize]) -> Vec<([u8; 4], u32)> {
+        text_font_features(&cascade_at(html, css, path))
+    }
+
+    #[test]
+    fn font_variant_numeric_emits_tnum_and_zero() {
+        let f = features_of(
+            "<div>1</div>",
+            "div { font-variant-numeric: tabular-nums slashed-zero; }",
+            &[0],
+        );
+        assert_eq!(f, vec![(*b"tnum", 1), (*b"zero", 1)]);
+    }
+
+    #[test]
+    fn font_variant_numeric_all_components() {
+        let f = features_of(
+            "<div>1</div>",
+            "div { font-variant-numeric: oldstyle-nums proportional-nums diagonal-fractions ordinal; }",
+            &[0],
+        );
+        assert_eq!(f, vec![(*b"onum", 1), (*b"pnum", 1), (*b"frac", 1), (*b"ordn", 1)]);
+        let f = features_of(
+            "<div>1</div>",
+            "div { font-variant-numeric: lining-nums stacked-fractions; }",
+            &[0],
+        );
+        assert_eq!(f, vec![(*b"lnum", 1), (*b"afrc", 1)]);
+    }
+
+    #[test]
+    fn font_variant_numeric_invalid_is_ignored() {
+        // Две категории spacing в одном значении — невалидно, остаётся initial.
+        let f = features_of(
+            "<div>1</div>",
+            "div { font-variant-numeric: tabular-nums proportional-nums; }",
+            &[0],
+        );
+        assert!(f.is_empty());
+        let f = features_of("<div>1</div>", "div { font-variant-numeric: bogus; }", &[0]);
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn font_variant_ligatures_none_disables_all() {
+        let f = features_of("<div>fi</div>", "div { font-variant-ligatures: none; }", &[0]);
+        assert_eq!(
+            f,
+            vec![(*b"liga", 0), (*b"clig", 0), (*b"dlig", 0), (*b"hlig", 0), (*b"calt", 0)]
+        );
+    }
+
+    #[test]
+    fn font_variant_ligatures_mixed_keywords() {
+        let f = features_of(
+            "<div>fi</div>",
+            "div { font-variant-ligatures: no-common-ligatures discretionary-ligatures; }",
+            &[0],
+        );
+        assert_eq!(f, vec![(*b"liga", 0), (*b"clig", 0), (*b"dlig", 1)]);
+        let f = features_of("<div>fi</div>", "div { font-variant-ligatures: no-contextual; }", &[0]);
+        assert_eq!(f, vec![(*b"calt", 0)]);
+        // normal → ничего не форсируется.
+        let f = features_of("<div>fi</div>", "div { font-variant-ligatures: normal; }", &[0]);
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn font_variant_ligatures_invalid_values_ignored() {
+        let f = features_of(
+            "<div>fi</div>",
+            "div { font-variant-ligatures: common-ligatures no-common-ligatures; }",
+            &[0],
+        );
+        assert!(f.is_empty());
+        // `none` нельзя комбинировать с другими keyword-ами.
+        let f = features_of("<div>fi</div>", "div { font-variant-ligatures: none contextual; }", &[0]);
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn font_variant_position_emits_subs_sups() {
+        let f = features_of("<div>x</div>", "div { font-variant-position: sub; }", &[0]);
+        assert_eq!(f, vec![(*b"subs", 1)]);
+        let f = features_of("<div>x</div>", "div { font-variant-position: super; }", &[0]);
+        assert_eq!(f, vec![(*b"sups", 1)]);
+    }
+
+    #[test]
+    fn font_feature_settings_overrides_variant_longhands() {
+        let f = features_of(
+            "<div>1</div>",
+            "div { font-variant-numeric: tabular-nums; font-feature-settings: \"tnum\" 0; }",
+            &[0],
+        );
+        // font-feature-settings идёт последним — rustybuzz применяет слева направо.
+        assert_eq!(f, vec![(*b"tnum", 1), (*b"tnum", 0)]);
+    }
+
+    #[test]
+    fn font_variant_longhands_are_inherited() {
+        let f = features_of(
+            "<div><span>1</span></div>",
+            "div { font-variant-numeric: tabular-nums; font-variant-ligatures: none; \
+             font-variant-position: super; }",
+            &[0, 0],
+        );
+        assert!(f.contains(&(*b"tnum", 1)));
+        assert!(f.contains(&(*b"liga", 0)));
+        assert!(f.contains(&(*b"sups", 1)));
+    }
+
+    #[test]
+    fn font_variant_shorthand_sets_and_resets_new_components() {
+        let s = cascade_at(
+            "<div>x</div>",
+            "div { font-variant: small-caps tabular-nums no-contextual super; }",
+            &[0],
+        );
+        assert_eq!(s.font_variant_caps, FontVariantCaps::SmallCaps);
+        assert_eq!(s.font_variant_numeric.spacing, crate::style::values::typography::NumericSpacing::Tabular);
+        assert_eq!(s.font_variant_ligatures.contextual, Some(false));
+        assert_eq!(s.font_variant_position, FontVariantPosition::Super);
+        // Следующий shorthand сбрасывает всё, что сам не задал.
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-numeric: tabular-nums; font-variant-position: sub; } \
+             span { font-variant: common-ligatures; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_numeric, FontVariantNumeric::default());
+        assert_eq!(s.font_variant_position, FontVariantPosition::Normal);
+        assert_eq!(s.font_variant_ligatures.common, Some(true));
+        // `font-variant: none` = ligatures none.
+        let s = cascade_at("<div>x</div>", "div { font-variant: none; }", &[0]);
+        assert_eq!(s.font_variant_ligatures, FontVariantLigatures::NONE);
+    }
+
+    #[test]
+    fn font_shorthand_resets_new_font_variant_longhands() {
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-numeric: tabular-nums; font-variant-ligatures: none; \
+             font-variant-position: super; } span { font: 12px serif; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_numeric, FontVariantNumeric::default());
+        assert_eq!(s.font_variant_ligatures, FontVariantLigatures::default());
+        assert_eq!(s.font_variant_position, FontVariantPosition::Normal);
+    }
+
+    #[test]
+    fn font_variant_longhands_css_wide_keywords() {
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-numeric: ordinal; } span { font-variant-numeric: slashed-zero; \
+             font-variant-numeric: inherit; }",
+            &[0, 0],
+        );
+        assert!(s.font_variant_numeric.ordinal && !s.font_variant_numeric.slashed_zero);
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-position: sub; font-variant-ligatures: none; } \
+             span { font-variant-position: initial; font-variant-ligatures: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_position, FontVariantPosition::Normal);
+        assert_eq!(s.font_variant_ligatures, FontVariantLigatures::default());
+        // `font-variant: inherit` затрагивает и новые компоненты.
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-numeric: ordinal; } \
+             span { font-variant-numeric: slashed-zero; font-variant: inherit; }",
+            &[0, 0],
+        );
+        assert!(s.font_variant_numeric.ordinal);
+    }
+
+    #[test]
+    fn font_variant_longhands_split_inline_runs() {
+        let mut a = ComputedStyle::root();
+        let mut b = ComputedStyle::root();
+        assert!(a.text_rendering_eq(&b));
+        b.font_variant_numeric.slashed_zero = true;
+        assert!(!a.text_rendering_eq(&b));
+        b = ComputedStyle::root();
+        a.font_variant_ligatures = FontVariantLigatures::NONE;
+        assert!(!a.text_rendering_eq(&b));
+        a = ComputedStyle::root();
+        b.font_variant_position = FontVariantPosition::Sub;
+        assert!(!a.text_rendering_eq(&b));
+    }
+
     // --- font-size-adjust ---
 
     #[test]

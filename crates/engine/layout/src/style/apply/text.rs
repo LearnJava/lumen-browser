@@ -25,6 +25,9 @@ use crate::style::{
     FontStyle,
     FontVariantCaps,
     FontVariantEmoji,
+    FontVariantLigatures,
+    FontVariantNumeric,
+    FontVariantPosition,
     FontWeight,
     Hyphens,
     Length,
@@ -214,6 +217,9 @@ pub(in crate::style) fn apply_decl_text(
                 // `font` сбрасывает ВСЕ longhand-ы `font-variant`, включая те,
                 // что сам выразить не может (§6.10) — emoji-компоненту тоже.
                 style.font_variant_emoji = FontVariantEmoji::Normal;
+                style.font_variant_ligatures = FontVariantLigatures::default();
+                style.font_variant_numeric = FontVariantNumeric::default();
+                style.font_variant_position = FontVariantPosition::Normal;
                 style.font_weight = parts
                     .weight
                     .as_deref()
@@ -269,14 +275,50 @@ pub(in crate::style) fn apply_decl_text(
                 style.font_variant_emoji = v;
             }
         }
+        "font-variant-ligatures" => {
+            // CSS Fonts L4 §6.5 — `normal | none | [ <common-lig> || ... ]`.
+            if let Some(v) = FontVariantLigatures::parse(val) {
+                style.font_variant_ligatures = v;
+            }
+        }
+        "font-variant-numeric" => {
+            // CSS Fonts L4 §6.7 — `normal | [ <figure> || <spacing> || ... ]`.
+            if let Some(v) = FontVariantNumeric::parse(val) {
+                style.font_variant_numeric = v;
+            }
+        }
+        "font-variant-position" => {
+            // CSS Fonts L4 §6.8 — `normal | sub | super`.
+            if let Some(v) = FontVariantPosition::from_keyword(val.trim()) {
+                style.font_variant_position = v;
+            }
+        }
         "font-variant" => {
             // CSS Fonts L4 §6.10 — shorthand над font-variant-{caps,ligatures,
-            // numeric,east-asian,position,alternates,emoji}. Реализованы только
-            // caps- и emoji-компоненты, но сбросить их обязан любой валидный
-            // shorthand (CSS Cascade L4 §3.1): `font-variant: common-ligatures`
-            // должен вернуть caps в initial, а не оставить унаследованное
-            // small-caps. `none` (отключение лигатур) и любые нереализованные
-            // keyword-ы этих компонент не содержат — значит они в initial.
+            // numeric,east-asian,position,alternates,emoji}. Реализованы все,
+            // кроме `-east-asian`/`-alternates`, но сбросить их обязан любой
+            // валидный shorthand (CSS Cascade L4 §3.1): `font-variant:
+            // common-ligatures` должен вернуть caps в initial, а не оставить
+            // унаследованное small-caps. Нереализованные keyword-ы компонент
+            // не содержат — значит они в initial. `none` принадлежит
+            // ligatures-компоненте (§6.10: «none» = `font-variant-ligatures:
+            // none`, остальные longhand-ы — initial).
+            let mut ligatures = FontVariantLigatures::default();
+            let mut numeric = FontVariantNumeric::default();
+            let mut position = FontVariantPosition::Normal;
+            for kw in val.split_whitespace() {
+                let kw = kw.to_ascii_lowercase();
+                if kw == "none" {
+                    ligatures = FontVariantLigatures::NONE;
+                } else if kw == "sub" || kw == "super" {
+                    position = FontVariantPosition::from_keyword(&kw).unwrap_or_default();
+                } else if !ligatures.set_keyword(&kw) {
+                    numeric.set_keyword(&kw);
+                }
+            }
+            style.font_variant_ligatures = ligatures;
+            style.font_variant_numeric = numeric;
+            style.font_variant_position = position;
             style.font_variant_caps = val
                 .split_whitespace()
                 .find_map(FontVariantCaps::from_keyword)

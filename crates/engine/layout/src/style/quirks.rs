@@ -54,6 +54,9 @@ pub(in crate::style) fn apply_quirks_table_reset(doc: &Document, node: NodeId, s
     style.font_family = default_font_family();
     style.font_style = FontStyle::Normal;
     style.font_variant_caps = FontVariantCaps::Normal;
+    style.font_variant_ligatures = Default::default();
+    style.font_variant_numeric = Default::default();
+    style.font_variant_position = Default::default();
     style.font_weight = FontWeight::NORMAL;
     style.font_stretch = FontStretch::NORMAL;
     style.color = Color::BLACK;

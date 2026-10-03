@@ -25,7 +25,8 @@ use crate::style::{
     CssColor, CssContinue,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
-    FontVariantCaps, FontVariantEmoji, ImageRendering, Isolation, IterationCount, Length,
+    FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
+    FontVariantPosition, ImageRendering, Isolation, IterationCount, Length,
     LengthOrAuto,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowAnchor, overflow_clip_margin_serialize,
     OutlineColor, OverscrollBehavior,
@@ -1346,19 +1347,40 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         FontStyle::Oblique => "oblique",
     }.into());
     // CSS Fonts L4 §6.10: shorthand сериализуется значениями реализованных
-    // компонент (caps + emoji) — остальные longhand-ы всегда в initial.
-    // Обе в initial → `normal`; иначе — только не-initial части, в порядке
-    // грамматики.
+    // компонент (ligatures, caps, numeric, position, emoji) — `-east-asian`/
+    // `-alternates` всегда в initial. Все в initial → `normal`; иначе — только
+    // не-initial части в порядке longhand-ов. `none` (ligatures) в списке
+    // невыразим → пустая строка (§6.10 serialization).
     m.insert("font-variant".into(), {
-        let mut parts: Vec<&str> = Vec::with_capacity(2);
+        let lig = style.font_variant_ligatures;
+        let num = style.font_variant_numeric;
+        let mut parts: Vec<String> = Vec::with_capacity(5);
+        if lig != FontVariantLigatures::default() {
+            parts.push(lig.serialize());
+        }
         if style.font_variant_caps != FontVariantCaps::Normal {
-            parts.push(style.font_variant_caps.as_str());
+            parts.push(style.font_variant_caps.as_str().into());
+        }
+        if num != FontVariantNumeric::default() {
+            parts.push(num.serialize());
+        }
+        if style.font_variant_position != FontVariantPosition::Normal {
+            parts.push(style.font_variant_position.as_str().into());
         }
         if style.font_variant_emoji != FontVariantEmoji::Normal {
-            parts.push(style.font_variant_emoji.as_str());
+            parts.push(style.font_variant_emoji.as_str().into());
         }
-        if parts.is_empty() { "normal".to_string() } else { parts.join(" ") }
+        if parts.is_empty() {
+            "normal".to_string()
+        } else if lig == FontVariantLigatures::NONE && parts.len() > 1 {
+            String::new()
+        } else {
+            parts.join(" ")
+        }
     });
+    m.insert("font-variant-ligatures".into(), style.font_variant_ligatures.serialize());
+    m.insert("font-variant-numeric".into(), style.font_variant_numeric.serialize());
+    m.insert("font-variant-position".into(), style.font_variant_position.as_str().into());
     m.insert("font-variant-caps".into(), style.font_variant_caps.as_str().into());
     m.insert("font-variant-emoji".into(), style.font_variant_emoji.as_str().into());
     m.insert("font-stretch".into(), {
@@ -2980,6 +3002,33 @@ mod tests {
         assert_eq!(m.get("font-variant-emoji").map(String::as_str), Some("normal"));
         let m = div_computed_map("<div>x</div>", "div { font-variant-emoji: unicode; }");
         assert_eq!(m.get("font-variant-emoji").map(String::as_str), Some("unicode"));
+    }
+
+    #[test]
+    fn computed_map_font_variant_new_longhands() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("font-variant-ligatures").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("font-variant-numeric").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("font-variant-position").map(String::as_str), Some("normal"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { font-variant-ligatures: none; font-variant-numeric: slashed-zero tabular-nums; \
+             font-variant-position: sub; }",
+        );
+        assert_eq!(m.get("font-variant-ligatures").map(String::as_str), Some("none"));
+        assert_eq!(
+            m.get("font-variant-numeric").map(String::as_str),
+            Some("tabular-nums slashed-zero")
+        );
+        assert_eq!(m.get("font-variant-position").map(String::as_str), Some("sub"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { font-variant: no-contextual small-caps tabular-nums; }",
+        );
+        assert_eq!(
+            m.get("font-variant").map(String::as_str),
+            Some("no-contextual small-caps tabular-nums")
+        );
     }
 
     #[test]
