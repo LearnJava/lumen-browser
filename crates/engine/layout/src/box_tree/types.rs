@@ -232,7 +232,7 @@ pub enum PseudoKind {
 /// `width` — ширина текста фрагмента в пикселях.
 /// `padding_left` / `padding_right` — разрешённые px padding-а inline-элемента
 /// для этого фрагмента (ненулевые только для первого/последнего слова сегмента).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InlineFrag {
     pub x: f32,
     pub width: f32,

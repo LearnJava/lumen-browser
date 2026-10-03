@@ -78,7 +78,9 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
         };
         let thumb = Rect::new(
             track.x + inset,
-            thumb_y.clamp(i.clip_y, i.clip_y + i.clip_h - thumb_h),
+            // Верхняя граница не ниже нижней: при `thumb_h == clip_h` округление f32 ставит её на ulp ниже,
+            // а `f32::clamp` на `min > max` паникует.
+            thumb_y.clamp(i.clip_y, (i.clip_y + i.clip_h - thumb_h).max(i.clip_y)),
             g - inset * 2.0,
             thumb_h,
         );
@@ -102,7 +104,7 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
             i.clip_x
         };
         let thumb = Rect::new(
-            thumb_x.clamp(i.clip_x, i.clip_x + i.clip_w - thumb_w),
+            thumb_x.clamp(i.clip_x, (i.clip_x + i.clip_w - thumb_w).max(i.clip_x)),
             track.y + inset,
             thumb_w,
             g - inset * 2.0,
@@ -338,4 +340,38 @@ pub fn patch_scroll_layer(dl: &mut DisplayList, b: &LayoutBox) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Контент выше клипа на ничтожную долю → `thumb_h == clip_h`, и верхняя граница `clamp`,
+    /// `clip_y + clip_h - thumb_h`, из-за округления f32 оказывалась на ulp НИЖЕ нижней —
+    /// `f32::clamp` паниковал («min > max») и валил сборку display list. Находка теста
+    /// PERF-16 `subtree_paint_eq` (`overflow: scroll` на странице из `graphic_tests`).
+    #[test]
+    fn a_thumb_as_long_as_the_clip_does_not_invert_the_clamp_range() {
+        for y_tenths in 0..20_000 {
+            let clip_y = y_tenths as f32 * 0.1;
+            for clip_h in [17.3_f32, 100.1, 333.7, 599.9] {
+                let (v, h) = scrollbar_rects(&ScrollbarInput {
+                    clip_x: clip_y,
+                    clip_y,
+                    clip_w: clip_h,
+                    clip_h,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    content_w: clip_h * 1.000_000_1 + 0.000_1,
+                    content_h: clip_h * 1.000_000_1 + 0.000_1,
+                    need_v: true,
+                    need_h: true,
+                    gutter_px: 12.0,
+                });
+                for (_, thumb) in [v, h].into_iter().flatten() {
+                    assert!(thumb.x.is_finite() && thumb.y.is_finite());
+                }
+            }
+        }
+    }
 }
