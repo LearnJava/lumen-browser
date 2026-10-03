@@ -245,7 +245,7 @@ pub struct V8JsRuntime {
     /// does — the debt belongs to the document, not to the shell.
     pub(super) page_scroll_end_pending: Arc<Mutex<bool>>,
     /// Computed CSS styles per node, updated after each relayout by the shell.
-    pub(super) computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    pub(super) computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     /// CSSOM-6 (BUG-490): computed CSS styles per `(node, pseudo-element name)`
     /// (`"before"`/`"after"`/`"first-line"`/`"first-letter"`), updated alongside
     /// [`Self::computed_styles`] — backs `getComputedStyle(el, pseudoElt)`'s
@@ -1202,6 +1202,12 @@ impl V8JsRuntime {
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     /// Mirrors [`crate::QuickJsRuntime::update_computed_styles`].
     pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
+        self.update_style_maps(styles.into_iter().map(|(node, props)| (node, props.into())).collect());
+    }
+
+    /// [`Self::update_computed_styles`] for the entries the layout collectors publish
+    /// ([`lumen_layout::StyleMap`]: a shared base plus the box's own overrides).
+    pub fn update_style_maps(&self, styles: HashMap<u32, lumen_layout::StyleMap>) {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
     }
 

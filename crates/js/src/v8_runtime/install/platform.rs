@@ -911,7 +911,7 @@ pub(crate) fn install_computed_styles(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
-    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
@@ -1033,7 +1033,7 @@ pub(crate) fn install_crypto_and_typed_om(
     dom_dirty: Arc<AtomicBool>,
     flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
-    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
     custom_props_needed: Arc<AtomicBool>,
@@ -1374,7 +1374,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 let prefix = lumen_layout::COMPUTED_VALUE_KEY_PREFIX;
                 pairs.extend(m.iter().filter(|(k, _)| !k.starts_with(prefix)).map(|(k, v)| {
                     let v = if computed { m.get(&format!("{prefix}{k}")).unwrap_or(v) } else { v };
-                    (k.clone(), v.clone())
+                    (k.to_owned(), v.clone())
                 }));
             }
             if let Ok(map) = cp.lock()

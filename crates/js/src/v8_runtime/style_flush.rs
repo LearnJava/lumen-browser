@@ -78,7 +78,7 @@ pub(crate) struct FlushHandles {
     /// so a same-tick `getClientRects()` after a DOM/style mutation never
     /// disagrees with `getBoundingClientRect()` over the same flush.
     pub(crate) client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
-    pub(crate) computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    pub(crate) computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     /// CSSOM-6 (BUG-490): sibling of `computed_styles` for pseudo-elements,
     /// keyed by `(node, pseudo name)` — see `V8JsRuntime::pseudo_computed_styles`.
     pub(crate) pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,

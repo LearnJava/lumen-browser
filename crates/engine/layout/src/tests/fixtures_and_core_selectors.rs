@@ -423,7 +423,7 @@ use super::*;
 
     /// CSSOM-9 (BUG-472): collects the snapshot for `html` and returns the
     /// entry of the element matching `sel`.
-    fn resolved_style_of(html: &str, css: &str, sel: &str) -> std::collections::HashMap<String, String> {
+    fn resolved_style_of(html: &str, css: &str, sel: &str) -> crate::StyleMap {
         let (doc, root) = lay_full_measured_with_doc(html, css);
         let nid = find_first_dom_node_by_selector(&doc, sel)
             .unwrap_or_else(|| panic!("{sel} must be findable in the DOM"))
@@ -433,7 +433,7 @@ use super::*;
             .unwrap_or_else(|| panic!("{sel} must have a computed-style entry"))
     }
 
-    fn prop<'a>(style: &'a std::collections::HashMap<String, String>, name: &str) -> &'a str {
+    fn prop<'a>(style: &'a crate::StyleMap, name: &str) -> &'a str {
         style.get(name).map_or("<absent>", String::as_str)
     }
 
