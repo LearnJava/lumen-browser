@@ -220,7 +220,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `background-color` | ✅ | |
 | `color-scheme` | ✅ | UA switching wired: form controls + system-color resolution (style.rs:6394,6973,7020,12391) |
 | `forced-color-adjust` | ✅ | Forced Colors Mode (Color Adjust L1 §3): system-palette forcing post-pass in compute_style (element-aware LinkText/ButtonText/GrayText/Field pairs, shadows→none, non-url() background-image→none, bg transparency preserved, `scrollbar-color`→`auto`, `font-variant-emoji` `normal`/`unicode`→`text`); `(forced-colors: active)` media wired; shell a11y toggle relayouts (P4 2026-07-04, §3.1-добор P3 2026-08-10 BUG-388) |
-| `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
+| `print-color-adjust` / `color-adjust` | ✅ | `economy`/`exact`, inherited (CSS Color Adjustment L1 §4.1; было ошибочно non-inherited); `color-adjust` — legacy alias. Печать: при выключенном «Фон и графика» (`apply_print_color_adjust`, `display_list/print.rs`) боксы `economy` теряют `background-color`/`background-image`/градиенты, `exact` (в т.ч. унаследованный) — сохраняет; текст/границы/`<img>` не трогаются (P4 2026-10-03). Не покрыто: авто-осветление текста при `economy` и propagation значения корня на viewport/canvas |
 | `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
 | `color()` predefined spaces | ✅ | srgb/display-p3/rec2020 + srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50 (P4 2026-06-13); non-displayable gamut-mapped to sRGB; 11 tests; test 96 |

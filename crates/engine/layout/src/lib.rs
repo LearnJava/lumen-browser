@@ -166,7 +166,7 @@ pub use style::{
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
     FontStyle,
     FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,

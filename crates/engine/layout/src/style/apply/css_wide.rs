@@ -465,7 +465,7 @@ fn apply_css_wide_keyword_with(
             };
         }
         "print-color-adjust" | "color-adjust" => {
-            style.print_color_adjust = if inh_only_inherit {
+            style.print_color_adjust = if inh {
                 inherited.print_color_adjust
             } else {
                 init.print_color_adjust

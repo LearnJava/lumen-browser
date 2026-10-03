@@ -33,7 +33,7 @@ use lumen_layout::{
     SvgGradientDef, SvgGradientUnits, SvgPaint,
     GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
+    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, PrintColorAdjust, Resize,
     ScrollbarWidth, SelectionHighlight,
     StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
@@ -88,7 +88,7 @@ pub use builder::{
 use builder::SplitTracker;
 
 mod print;
-pub use print::{build_print_display_list, split_at_page_breaks, strip_background_graphics};
+pub use print::{apply_print_color_adjust, build_print_display_list, split_at_page_breaks};
 // Used by `display_list/{box_layer,walk}.rs` and `display_list/tests/anim_and_chrome.rs`
 // (via `super::*` / explicit `use super::clip_path_to_rect`).
 use print::clip_path_to_rect;

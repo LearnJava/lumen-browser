@@ -1775,8 +1775,8 @@ impl ComputedStyle {
             container_name: Vec::new(),
             // CSS Filter Effects L2 — backdrop-filter не наследуется.
             backdrop_filter: Vec::new(),
-            // CSS Color Adjustment L1 §5 — print-color-adjust не наследуется.
-            print_color_adjust: PrintColorAdjust::Economy,
+            // CSS Color Adjustment L1 §4.1 — print-color-adjust inherited.
+            print_color_adjust: inherited.print_color_adjust,
             // CSS Fonts L5 §4 — font-size-adjust inherited.
             font_size_adjust: inherited.font_size_adjust,
             // CSS Writing Modes L3 — оба inherited.
