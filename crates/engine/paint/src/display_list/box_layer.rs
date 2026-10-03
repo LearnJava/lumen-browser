@@ -300,6 +300,10 @@ enum FillFrame<'a> {
     /// Run the closing commands for a box whose whole subtree has already
     /// been walked.
     Leave(LeaveFill<'a>),
+    /// PERF-16: the whole subtree of `child` has been walked — hand what it
+    /// wrote to the [`SubtreeEmitCache`]. Sits *under* the child's `Enter` so it
+    /// pops after the subtree and before the next sibling's `Continue`.
+    Capture { child: &'a LayoutBox, sc: StackingContextId, mark: CaptureMark },
 }
 
 /// State threaded through repeated [`FillFrame::Continue`] visits for one
@@ -385,6 +389,29 @@ pub(crate) fn fill_buckets(
     split: &mut SplitTracker,
     raw_spans: &mut Vec<RawSpan>,
 ) {
+    fill_buckets_cached(
+        b, current_sc, next_sc_id, buckets, is_sc_root, anim, dpr, inherited_clips, split, raw_spans, None,
+    );
+}
+
+/// [`fill_buckets`] with the PERF-16 subtree emit cache. With `cache == Some`,
+/// `anim` must be `None` and `split` disabled: the cache holds no compositor
+/// override and no split spans (see `emit_cache.rs`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_buckets_cached(
+    b: &LayoutBox,
+    current_sc: StackingContextId,
+    next_sc_id: &mut u32,
+    buckets: &mut [ScBucket],
+    is_sc_root: bool,
+    anim: Option<&CompositorAnimFrame>,
+    dpr: f32,
+    inherited_clips: &[DisplayCommand],
+    split: &mut SplitTracker,
+    raw_spans: &mut Vec<RawSpan>,
+    mut cache: Option<&mut SubtreeEmitCache>,
+) {
+    debug_assert!(cache.is_none() || (anim.is_none() && !split.enabled));
     let mut stack: Vec<FillFrame<'_>> = vec![FillFrame::Enter {
         b,
         current_sc,
@@ -399,8 +426,15 @@ pub(crate) fn fill_buckets(
                     raw_spans, &mut stack,
                 );
             }
-            FillFrame::Continue(cf) => continue_fill(cf, next_sc_id, &mut stack),
+            FillFrame::Continue(cf) => {
+                continue_fill(cf, next_sc_id, buckets, raw_spans, cache.as_deref_mut(), &mut stack);
+            }
             FillFrame::Leave(lf) => leave_fill(lf, buckets, split, raw_spans),
+            FillFrame::Capture { child, sc, mark } => {
+                if let Some(cache) = cache.as_deref_mut() {
+                    cache.store(child, sc.0, &mark, *next_sc_id, &buckets[sc.0 as usize].contents, raw_spans);
+                }
+            }
         }
     }
 }
@@ -549,7 +583,14 @@ fn enter_fill<'a>(
 /// `Enter` means the child's entire subtree (including every id it and its
 /// descendants allocate) is fully popped before the next sibling's id is
 /// allocated — the same order the old recursion gave for free.
-fn continue_fill<'a>(cf: ContinueFrame<'a>, next_sc_id: &mut u32, stack: &mut Vec<FillFrame<'a>>) {
+fn continue_fill<'a>(
+    cf: ContinueFrame<'a>,
+    next_sc_id: &mut u32,
+    buckets: &mut [ScBucket],
+    raw_spans: &mut Vec<RawSpan>,
+    cache: Option<&mut SubtreeEmitCache>,
+    stack: &mut Vec<FillFrame<'a>>,
+) {
     let ContinueFrame { b, current_sc, is_sc_root, next_idx, child_clips, leave_payload } = cf;
     if next_idx >= b.children.len() {
         stack.push(FillFrame::Leave(LeaveFill { b, current_sc, payload: leave_payload }));
@@ -581,6 +622,26 @@ fn continue_fill<'a>(cf: ContinueFrame<'a>, next_sc_id: &mut u32, stack: &mut Ve
         let inherited = if is_sc_root { Vec::new() } else { child_clips.clone() };
         (current_sc, false, inherited)
     };
+    // PERF-16: a non-SC child is a candidate for the subtree emit cache — it
+    // writes only into this SC's `contents`, so a replay is a plain append.
+    let mut capture = None;
+    let mut replayed = false;
+    if !child_creates_sc
+        && let Some(cache) = cache
+    {
+        let bucket = &mut buckets[current_sc.0 as usize];
+        match cache.lookup(child, current_sc.0, &mut bucket.contents, raw_spans) {
+            Lookup::Replayed => replayed = true,
+            Lookup::Capture => {
+                capture = Some(CaptureMark {
+                    contents_start: bucket.contents.len(),
+                    spans_start: raw_spans.len(),
+                    next_sc_id: *next_sc_id,
+                });
+            }
+            Lookup::Skip => {}
+        }
+    }
     stack.push(FillFrame::Continue(ContinueFrame {
         b,
         current_sc,
@@ -589,6 +650,12 @@ fn continue_fill<'a>(cf: ContinueFrame<'a>, next_sc_id: &mut u32, stack: &mut Ve
         child_clips,
         leave_payload,
     }));
+    if replayed {
+        return;
+    }
+    if let Some(mark) = capture {
+        stack.push(FillFrame::Capture { child, sc: current_sc, mark });
+    }
     stack.push(FillFrame::Enter {
         b: child,
         current_sc: child_sc,

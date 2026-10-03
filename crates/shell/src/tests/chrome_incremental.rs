@@ -2120,3 +2120,41 @@ fn bug625_chrome_mono_text_measured_with_bundled_jetbrains_mono() {
     let inter_w: f32 = "Ctrl".chars().map(|c| lumen_layout::TextMeasurer::char_width(&inter_m, c, 10.0)).sum();
     assert!((inter_w - expected).abs() > 0.5, "Inter {inter_w} vs mono {expected}");
 }
+
+/// BUG-1249: after N incremental chrome cycles (a typed omnibox — the content that moves clean
+/// icons around), every `svg_paint_matrix` must equal the one
+/// a fresh full layout of the same document gives. `rect` alone is not enough: `<path>` icons
+/// paint through the matrix's translation, so a drifted matrix is an icon painted off place.
+#[test]
+fn incremental_typing_cycles_keep_svg_paint_matrix_equal_to_a_full_layout() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1280.0, 800.0);
+    let mut state = Cc12IncrementalState::default();
+    let mut typed = String::new();
+    for _ in 0..8 {
+        typed.push('a');
+        let model = cc12_bench_model(&typed);
+        cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+    }
+    let incr = state.prev_pristine_layout.take().expect("persisted tree");
+    // Fresh full layout of the document in the same final state.
+    lumen_layout::set_interactive_state(None, None, None);
+    let (fresh, _) = lumen_layout::layout_measured_hyp_with_counters(&doc, &sheet, viewport, &measurer, &hyp, false);
+    fn mats(b: &lumen_layout::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, [f32; 6])>) {
+        if let lumen_layout::BoxKind::SvgShape { svg_paint_matrix, .. } = &b.kind {
+            out.push((b.node, svg_paint_matrix.matrix));
+        }
+        for c in &b.children {
+            mats(c, out);
+        }
+    }
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    mats(&incr, &mut a);
+    mats(&fresh, &mut b);
+    assert_eq!(a.len(), b.len());
+    let bad: Vec<_> = a.iter().zip(&b).filter(|(x, y)| x != y).take(5).collect();
+    assert!(bad.is_empty(), "svg_paint_matrix drifted: {} of {}; first: {:?}", a.iter().zip(&b).filter(|(x, y)| x != y).count(), a.len(), bad);
+}

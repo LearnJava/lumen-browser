@@ -266,6 +266,7 @@ pub(crate) fn run_window_mode(
         chrome_prev_forced_colors: false,
         chrome_dl_content_hash: None,
         chrome_layout_generation: 0,
+        chrome_emit_cache: lumen_paint::SubtreeEmitCache::new(),
         chrome_overlay_frame_cache: None,
         chrome_anim_frame: None,
         runtime: runtime::EventLoop::new(),

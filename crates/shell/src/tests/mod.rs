@@ -192,6 +192,9 @@ struct Cc12IncrementalState {
     /// `prev` and honours it in O(1), which is the right production
     /// behaviour but leaves nothing for a per-box reject census to measure.
     box_reuse_off: bool,
+    /// PERF-16 срез 2: кэш emit по поддереву, как `Lumen::chrome_emit_cache` в проде
+    /// (`LUMEN_NO_EMIT_CACHE=1` выключает — для A/B).
+    emit_cache: lumen_paint::SubtreeEmitCache,
 }
 
 /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
@@ -284,7 +287,11 @@ fn cc12_bench_cycle(
     let t_pt = t3.elapsed().as_secs_f64() * 1000.0;
     let order = lumen_layout::PaintOrder::from_tree(&tree);
     let t_po = t3.elapsed().as_secs_f64() * 1000.0;
-    let _dl = lumen_paint::build_display_list_ordered(&layout, &tree, &order).0;
+    let _dl = if lumen_paint::emit_cache_enabled() {
+        lumen_paint::build_display_list_ordered_dpr_cached(&layout, &tree, &order, 1.0, &mut state.emit_cache).0
+    } else {
+        lumen_paint::build_display_list_ordered(&layout, &tree, &order).0
+    };
     let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
     eprintln!("[s43-paint] tree={t_pt:.3} order={:.3} emit={:.3}", t_po - t_pt, t_paint - t_po);
     // BUG-341 S22: a **move**, not a `clone()`. Production stopped copying
