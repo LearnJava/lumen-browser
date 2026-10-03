@@ -559,6 +559,29 @@ use super::*;
         assert_eq!(prop(&s, "top"), "10%", "static box keeps the computed inset");
     }
 
+    /// CSSOM-9-S1 (BUG-472): percentage insets of `position: sticky` resolve against
+    /// the nearest scrollport (padding box of the closest scroll container, else the
+    /// viewport), not the containing block; `auto` stays `auto`.
+    #[test]
+    fn resolved_sticky_percent_insets_use_the_scrollport() {
+        let s = resolved_style_of(
+            "<html><body><div style=\"height:500px;overflow:hidden\"><div style=\"height:400px\">             <div id=a style=\"position:sticky;left:0;top:50%;height:100px\"></div></div></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "top"), "250px", "50% of the 500px overflow:hidden ancestor, not the 400px parent");
+        assert_eq!(prop(&s, "left"), "0px");
+        assert_eq!(prop(&s, "bottom"), "auto");
+
+        let s = resolved_style_of(
+            "<html><body><div style=\"height:400px\">             <div id=a style=\"position:sticky;top:50%;left:25%;height:100px\"></div></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "top"), "300px", "no scroll container: 50% of the 600px viewport");
+        assert_eq!(prop(&s, "left"), "200px", "25% of the 800px viewport width");
+    }
+
     /// CSSOM-9 (BUG-472): a non-replaced inline element has no box of its own
     /// and `width` does not apply to it — the computed `auto` stays.
     #[test]
