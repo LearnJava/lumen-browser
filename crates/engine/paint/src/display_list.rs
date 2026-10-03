@@ -299,7 +299,7 @@ use table::{collect_table_cells, emit_table_box, emit_table_cell_border};
 mod walk;
 use walk::{
     depth_sorted_child_order, emit_box_self, emit_push_perspective, establishes_3d_rendering_context,
-    is_backface_hidden, walk,
+    gap_decoration_commands, is_backface_hidden, walk,
 };
 // Used only by `display_list/tests/shadows_and_transforms.rs` (via `use super::*`).
 #[cfg(test)]

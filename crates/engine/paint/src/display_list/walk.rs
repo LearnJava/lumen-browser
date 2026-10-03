@@ -592,14 +592,18 @@ pub(crate) fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
     order
 }
 
-/// Collects `GapSegment`s for `gap-rule-*` rendering in flex/grid containers.
+/// Collects `GapSegment`s for `column-rule-*` / `row-rule-*` rendering (CSS Gap
+/// Decorations L1) in flex/grid containers.
 ///
 /// Scans child box right-edges and top-edges against the container's `column_gap`
 /// and `row_gap` values; emits one `GapSegment` per actual gap found. Works for
-/// both single-line and multi-line flex, and for grid containers.
+/// both single-line and multi-line flex, and for grid containers. Vertical
+/// segments (`horizontal == false`) are produced only when the column rule is
+/// visible (`column_rule_style` ≠ `None`, `column_rule_width` > 0); horizontal
+/// ones only when the row rule is.
 ///
-/// Returns an empty `Vec` when the container is not flex/grid, or when both gap
-/// values are zero, or when `gap_rule_style` is `None` / `gap_rule_width` ≤ 0.
+/// Returns an empty `Vec` when the container is not flex/grid, when both gap
+/// values are zero, or when neither axis has a visible rule.
 fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     let s = &b.style;
     // Only flex/grid containers produce gap rules.
@@ -610,7 +614,9 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     if !is_flex_or_grid {
         return Vec::new();
     }
-    if !s.gap_rule_style.is_visible() || s.gap_rule_width <= 0.0 {
+    let column_rule_visible = s.column_rule_style.is_visible() && s.column_rule_width > 0.0;
+    let row_rule_visible = s.row_rule_style.is_visible() && s.row_rule_width > 0.0;
+    if !column_rule_visible && !row_rule_visible {
         return Vec::new();
     }
 
@@ -652,7 +658,7 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     let mut segments: Vec<GapSegment> = Vec::new();
     const EPS: f32 = 1.5; // tolerance for float layout rounding
 
-    if col_gap_px > 0.0 {
+    if column_rule_visible && col_gap_px > 0.0 {
         // Collect unique right-edges of children.
         let mut rights: Vec<f32> =
             children.iter().map(|c| c.rect.x + c.rect.width).collect();
@@ -672,7 +678,7 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
         }
     }
 
-    if row_gap_px > 0.0 {
+    if row_rule_visible && row_gap_px > 0.0 {
         // Collect unique bottom-edges of children.
         let mut bottoms: Vec<f32> =
             children.iter().map(|c| c.rect.y + c.rect.height).collect();
@@ -692,6 +698,35 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     }
 
     segments
+}
+
+/// CSS Gap Decorations L1 — `DrawBorder` rules for the gaps of a flex/grid
+/// container. Two independent decoration styles: vertical segments take the
+/// column rule, horizontal ones the row rule. Empty for any other box.
+///
+/// Shared by `walk`'s epilogue and the ordered/stacking-context path
+/// (`box_layer_ops`); the caller owns the visibility check.
+pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
+    let gap_segs = collect_gap_segments(b);
+    if gap_segs.is_empty() {
+        return Vec::new();
+    }
+    let s = &b.style;
+    let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
+        gap_segs.into_iter().partition(|g| !g.horizontal);
+    let col_ctx = GapDecorationContext {
+        rule_width: s.column_rule_width,
+        rule_style: s.column_rule_style,
+        rule_color: s.column_rule_color.resolve(s.color),
+    };
+    let row_ctx = GapDecorationContext {
+        rule_width: s.row_rule_width,
+        rule_style: s.row_rule_style,
+        rule_color: s.row_rule_color.resolve(s.color),
+    };
+    let mut out = emit_gap_rules(&b.children, &cols, &col_ctx);
+    out.extend(emit_gap_rules(&b.children, &rows, &row_ctx));
+    out
 }
 
 /// LAYOUT-2 срез 9's explicit-stack driver replaces `walk`'s own four
@@ -842,16 +877,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     }
     // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
     if e.self_visible {
-        let gap_segs = collect_gap_segments(b);
-        if !gap_segs.is_empty() {
-            let s = &b.style;
-            let ctx = GapDecorationContext {
-                rule_width: s.gap_rule_width,
-                rule_style: s.gap_rule_style,
-                rule_color: s.gap_rule_color.resolve(s.color),
-            };
-            out.extend(emit_gap_rules(&b.children, &gap_segs, &ctx));
-        }
+        out.extend(gap_decoration_commands(b));
     }
     if e.has_overflow_clip {
         if e.use_scroll_layer {

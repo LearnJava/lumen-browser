@@ -1,4 +1,4 @@
-//! Тесты `style.rs`: правило `gap` в каскаде.
+//! Тесты `style.rs`: `column-rule*` / `row-rule*` / `rule*` (CSS Gap Decorations L1) в каскаде.
 //!
 //! Перенесено батчем SPLIT-ST2 без правок тел.
 
@@ -16,52 +16,109 @@
         compute_style(&doc, child, &sheet, &root, VP, false)
     }
 
-    #[test]
-    fn gap_rule_width_parses() {
-        let s = parse_gap_rule("gap-rule-width: 4px;");
-        assert!((s.gap_rule_width - 4.0).abs() < 0.01, "gap_rule_width={}", s.gap_rule_width);
-    }
-
-    #[test]
-    fn gap_rule_style_solid_parses() {
-        let s = parse_gap_rule("gap-rule-style: solid;");
-        assert_eq!(s.gap_rule_style, BorderStyle::Solid);
-    }
-
-    #[test]
-    fn gap_rule_color_parses() {
-        let s = parse_gap_rule("gap-rule-color: #ff0000;");
-        if let CssColor::Rgba(c) = s.gap_rule_color {
-            assert_eq!((c.r, c.g, c.b), (255, 0, 0));
-        } else {
-            panic!("expected Rgba, got {:?}", s.gap_rule_color);
+    fn rgb(c: CssColor) -> (u8, u8, u8) {
+        match c {
+            CssColor::Rgba(c) => (c.r, c.g, c.b),
+            other => panic!("expected Rgba, got {other:?}"),
         }
     }
 
     #[test]
-    fn gap_rule_shorthand_parses_all_components() {
-        let s = parse_gap_rule("gap-rule: 3px dashed blue;");
-        assert!((s.gap_rule_width - 3.0).abs() < 0.01, "width={}", s.gap_rule_width);
-        assert_eq!(s.gap_rule_style, BorderStyle::Dashed);
-        if let CssColor::Rgba(c) = s.gap_rule_color {
-            assert_eq!((c.r, c.g, c.b), (0, 0, 255));
-        } else {
-            panic!("expected Rgba color for gap-rule shorthand");
+    fn row_rule_longhands_parse() {
+        let s = parse_gap_rule("row-rule-width: 4px; row-rule-style: solid; row-rule-color: #ff0000;");
+        assert!((s.row_rule_width - 4.0).abs() < 0.01, "row_rule_width={}", s.row_rule_width);
+        assert_eq!(s.row_rule_style, BorderStyle::Solid);
+        assert_eq!(rgb(s.row_rule_color), (255, 0, 0));
+        // column axis untouched
+        assert_eq!(s.column_rule_style, BorderStyle::None);
+    }
+
+    #[test]
+    fn row_rule_shorthand_parses_all_components() {
+        let s = parse_gap_rule("row-rule: 3px dashed blue;");
+        assert!((s.row_rule_width - 3.0).abs() < 0.01, "width={}", s.row_rule_width);
+        assert_eq!(s.row_rule_style, BorderStyle::Dashed);
+        assert_eq!(rgb(s.row_rule_color), (0, 0, 255));
+        assert_eq!(s.column_rule_style, BorderStyle::None, "row-rule must not touch the column axis");
+    }
+
+    #[test]
+    fn column_rule_shorthand_does_not_touch_row_axis() {
+        let s = parse_gap_rule("column-rule: 2px solid red;");
+        assert!((s.column_rule_width - 2.0).abs() < 0.01);
+        assert_eq!(s.column_rule_style, BorderStyle::Solid);
+        assert_eq!(s.row_rule_style, BorderStyle::None);
+        assert_eq!(s.row_rule_width, 3.0, "row_rule_width stays at its initial `medium`");
+    }
+
+    #[test]
+    fn rule_shorthand_sets_both_axes() {
+        let s = parse_gap_rule("rule: 5px dotted #00ff00;");
+        for (w, st, c) in [
+            (s.column_rule_width, s.column_rule_style, s.column_rule_color),
+            (s.row_rule_width, s.row_rule_style, s.row_rule_color),
+        ] {
+            assert!((w - 5.0).abs() < 0.01);
+            assert_eq!(st, BorderStyle::Dotted);
+            assert_eq!(rgb(c), (0, 255, 0));
         }
     }
 
     #[test]
-    fn gap_rule_not_inherited() {
-        // gap-rule-* are non-inherited; child div should get default 0/None/CurrentColor.
+    fn rule_longhands_set_both_axes() {
+        let s = parse_gap_rule("rule-width: 2px; rule-style: solid; rule-color: red;");
+        assert!((s.column_rule_width - 2.0).abs() < 0.01);
+        assert!((s.row_rule_width - 2.0).abs() < 0.01);
+        assert_eq!(s.column_rule_style, BorderStyle::Solid);
+        assert_eq!(s.row_rule_style, BorderStyle::Solid);
+        assert_eq!(rgb(s.column_rule_color), (255, 0, 0));
+        assert_eq!(rgb(s.row_rule_color), (255, 0, 0));
+    }
+
+    #[test]
+    fn rule_shorthand_resets_omitted_components() {
+        // `rule: solid` after a wider longhand resets width to `medium`, color to currentColor.
+        let s = parse_gap_rule("row-rule-width: 9px; row-rule-color: red; row-rule: solid;");
+        assert_eq!(s.row_rule_width, 3.0);
+        assert_eq!(s.row_rule_style, BorderStyle::Solid);
+        assert_eq!(s.row_rule_color, CssColor::CurrentColor);
+    }
+
+    #[test]
+    fn rule_shorthand_invalid_is_ignored() {
+        // Дубль компонента и мусорный токен делают декларацию невалидной.
+        let s = parse_gap_rule("row-rule: 2px solid dashed;");
+        assert_eq!(s.row_rule_style, BorderStyle::None);
+        let s = parse_gap_rule("row-rule: 2px solid red bogus;");
+        assert_eq!(s.row_rule_style, BorderStyle::None);
+    }
+
+    #[test]
+    fn rule_line_width_keywords() {
+        let s = parse_gap_rule("row-rule-width: thick; column-rule-width: thin;");
+        assert_eq!(s.row_rule_width, 5.0);
+        assert_eq!(s.column_rule_width, 1.0);
+    }
+
+    #[test]
+    fn rule_not_inherited() {
+        // *-rule-* are non-inherited; child gets initial medium/None/CurrentColor.
         let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
-        let sheet = lumen_css_parser::parse("div { gap-rule-width: 5px; gap-rule-style: solid; }");
+        let sheet = lumen_css_parser::parse("div { row-rule: 5px solid red; column-rule: 5px solid red; }");
         let root = ComputedStyle::root();
         let body = doc.body().expect("body");
         let div = doc.get(body).children.first().copied().expect("div");
         let span = doc.get(div).children.first().copied().expect("span");
         let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
         let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
-        assert!((div_style.gap_rule_width - 5.0).abs() < 0.01);
-        assert_eq!(span_style.gap_rule_width, 0.0, "gap_rule_width must not be inherited");
-        assert_eq!(span_style.gap_rule_style, BorderStyle::None, "gap_rule_style must not be inherited");
+        assert!((div_style.row_rule_width - 5.0).abs() < 0.01);
+        assert_eq!(span_style.row_rule_style, BorderStyle::None, "row_rule_style must not be inherited");
+        assert_eq!(span_style.column_rule_style, BorderStyle::None, "column_rule_style must not be inherited");
+    }
+
+    #[test]
+    fn rule_properties_are_supported() {
+        for p in ["row-rule", "row-rule-width", "row-rule-style", "row-rule-color", "rule", "rule-width", "rule-style", "rule-color"] {
+            assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing from SUPPORTED_PROPERTIES");
+        }
     }

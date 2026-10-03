@@ -1,8 +1,9 @@
 //! CSS Gap Decorations L1 — visual rules rendered inside flex/grid/multicol gaps.
 //!
 //! Phase 0: geometry and emit logic.
-//! Phase 1 (P4): wire `gap-rule-width`, `gap-rule-style`, `gap-rule-color` from
-//! `ComputedStyle` into `GapDecorationContext` and call `emit_gap_rules()`.
+//! Phase 1 (P4): wire `column-rule-*` (vertical segments) and `row-rule-*`
+//! (horizontal segments) from `ComputedStyle` into one `GapDecorationContext`
+//! per axis and call `emit_gap_rules()` for each.
 
 use lumen_core::geom::Rect;
 use lumen_layout::{BorderStyle, Color, LayoutBox};
@@ -11,10 +12,10 @@ use crate::display_list::{CornerRadii, DisplayCommand};
 
 /// Parameters for gap rule rendering.
 ///
-/// P4 constructs this from `ComputedStyle` fields `gap-rule-width/style/color`
-/// and passes it to [`emit_gap_rules`].
+/// P4 constructs one per axis from `ComputedStyle`: `column_rule_*` for column
+/// gaps, `row_rule_*` for row gaps, and passes it to [`emit_gap_rules`].
 ///
-/// // CSS: gap-rule-width, gap-rule-style, gap-rule-color
+/// // CSS: column-rule-width/style/color, row-rule-width/style/color
 pub struct GapDecorationContext {
     /// Thickness of the rule line in CSS px.
     pub rule_width: f32,

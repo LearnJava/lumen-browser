@@ -91,3 +91,12 @@ containers, (3) implementing the `<gap-rule-list>`/`<gap-auto-rule-list>`
 value grammar (`repeat()`, per-segment override lists, intersection-behavior
 keywords) in the parser, and (4) re-verifying `CAPABILITIES.md`/
 `CSS-SPECS.md:113`, which currently claims this module is done.
+
+## Срез 1 (P4, 2026-10-03, p4-gap-rule-axes)
+
+Закрыты пункты (1), (2) и имена свойств из (4): нестандартный `gap-rule*` удалён;
+`column-rule*` (общие `column_rule_*` с multicol) рисуют вертикальные сегменты flex/grid,
+новые `row_rule_*` + `row-rule*` — горизонтальные, `rule*` задаёт обе оси. Шортхенд парсит
+`<line-width> || <line-style> || <color>` (`thin/medium/thick`, дубль/мусор → декларация
+отброшена), initial ширины — `medium` (3px). Остаток — пункт (3): `<gap-rule-list>`/
+`repeat()`, `*-rule-inset`/`-break`/`-overlap`/`-visibility-items`, интерполяция.

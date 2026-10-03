@@ -949,6 +949,74 @@ use lumen_dom::NodeId;
         }
     }
 
+    // ── CSS Gap Decorations L1: column-rule / row-rule in flex/grid ────────
+
+    fn horizontal_rule_cmds(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        // Row rules are emitted as DrawBorder with widths=[0, 0, rule_h, 0].
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { widths: [0.0, 0.0, h, 0.0], .. } if *h > 0.0))
+            .collect()
+    }
+
+    const GRID_2X2: &str = r#"<div style="display:grid;grid-template-columns:100px 100px;
+        grid-template-rows:50px 50px;gap:20px;width:220px;height:120px;{}">
+        <div></div><div></div><div></div><div></div></div>"#;
+
+    #[test]
+    fn grid_row_rule_emits_one_horizontal_segment() {
+        let html = GRID_2X2.replace("{}", "row-rule:2px solid red");
+        let dl = build(&html, "");
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 1, "grid 2x2 → one row gap");
+        assert_eq!(column_rule_cmds(&dl).len(), 0, "row-rule alone must not draw vertical rules");
+    }
+
+    #[test]
+    fn grid_column_rule_emits_one_vertical_segment() {
+        let html = GRID_2X2.replace("{}", "column-rule:2px solid red");
+        let dl = build(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1, "grid 2x2 → one column gap");
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 0, "column-rule alone must not draw horizontal rules");
+    }
+
+    #[test]
+    fn grid_rule_shorthand_emits_both_axes() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red");
+        let dl = build(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1);
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 1);
+    }
+
+    #[test]
+    fn grid_axes_use_independent_styles() {
+        let html = GRID_2X2.replace("{}", "column-rule:4px solid red;row-rule:2px dashed blue");
+        let dl = build(&html, "");
+        let cols = column_rule_cmds(&dl);
+        let rows = horizontal_rule_cmds(&dl);
+        assert_eq!((cols.len(), rows.len()), (1, 1));
+        if let DisplayCommand::DrawBorder { widths: [_, w, _, _], styles, .. } = cols[0] {
+            assert!((*w - 4.0).abs() < 0.01);
+            assert_eq!(styles[1], BorderStyle::Solid);
+        }
+        if let DisplayCommand::DrawBorder { widths: [_, _, h, _], styles, .. } = rows[0] {
+            assert!((*h - 2.0).abs() < 0.01);
+            assert_eq!(styles[2], BorderStyle::Dashed);
+        }
+    }
+
+    /// The ordered (stacking-context) path — the one the live window and
+    /// `--screenshot` use — must draw gap rules too, not only `walk`.
+    #[test]
+    fn grid_rules_drawn_by_ordered_path() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red").replace("<div></div>", "<div style=\"background:blue\"></div>");
+        let dl = super::ordered_build_scroll::build_ordered(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1, "ordered path: one column rule");
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 1, "ordered path: one row rule");
+        // Rules sit inside the overflow clip, after the children's fills.
+        let last_fill = dl.iter().rposition(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+        let first_rule = dl.iter().position(|c| matches!(c, DisplayCommand::DrawBorder { .. })).unwrap();
+        assert!(first_rule > last_fill, "gap rules must paint over the children");
+    }
+
     // ── CSS Lists L3 §2.1 — list marker geometric rendering ─────────────────
 
     /// disc marker emits FillRoundedRect (filled circle), not DrawText.
