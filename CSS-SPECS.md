@@ -371,7 +371,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `border-collapse` | ✅ | ComputedStyle.border_collapse wired; collapse zeroes spacing; 5 unit-тестов + graphic test 80 (P4 2026-06-10) |
 | `border-spacing` | ✅ | border_spacing_h/v in ComputedStyle; zero when collapse mode |
 | `empty-cells` | ✅ | ComputedStyle.empty_cells (inherited); `hide` suppresses border+bg of empty cells in separate mode; wired in emit_table_cell; 6 unit + 5 paint tests + graphic test 115 (P4 2026-06-14) |
-| `caption-side` / `table-layout` | 🟡 | parsed |
+| `caption-side` | ✅ | ComputedStyle.caption_side (inherited); `top`/`bottom` captions laid out inside the table box above/below the row grid (`box_tree/table.rs` `build_table_init` + `finish_table`); caption sits inside the table border, not outside it as in a two-box wrapper model; 5 unit-тестов `tests/table_caption_layout.rs` (P4 2026-10-03) |
+| `table-layout` | 🟡 | ComputedStyle.table_layout (not inherited); `fixed` with non-auto `width` takes column widths from the first row (`fixed_layout_col_widths`), otherwise auto; `<col>`/`<colgroup>` widths and `min-content` clamping of fixed columns not modelled; 4 unit-тестов (P4 2026-10-03) |
 
 ### [T1] Positioning (sticky & z-index)
 

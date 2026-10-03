@@ -18,6 +18,7 @@ use crate::style::{
     BorderCollapse,
     BorderStyle,
     BoxSizing,
+    CaptionSide,
     ClearSide,
     ComputedStyle,
     ContainFlags,
@@ -30,6 +31,7 @@ use crate::style::{
     FlexDirection,
     FlexWrap,
     FloatSide,
+    TableLayout,
     GridAutoFlow,
     GridLine,
     GridTrackSize,
@@ -545,6 +547,18 @@ pub(in crate::style) fn apply_decl_layout(
             // CSS Tables L2 §17.6 — `border-collapse: separate | collapse`.
             if let Some(v) = BorderCollapse::parse(val.trim()) {
                 style.border_collapse = v;
+            }
+        }
+        "caption-side" => {
+            // CSS Tables L2 §17.4.1 — `caption-side: top | bottom`.
+            if let Some(v) = CaptionSide::parse(val.trim()) {
+                style.caption_side = v;
+            }
+        }
+        "table-layout" => {
+            // CSS Tables L2 §17.5.2 — `table-layout: auto | fixed`.
+            if let Some(v) = TableLayout::parse(val.trim()) {
+                style.table_layout = v;
             }
         }
         "empty-cells" => {

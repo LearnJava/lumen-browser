@@ -466,6 +466,7 @@ mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
 mod table_trampoline;
+mod table_caption_layout;
 mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;

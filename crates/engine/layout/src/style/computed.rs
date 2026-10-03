@@ -34,7 +34,7 @@ use lumen_core::ColorSpace;
 use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
-    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
@@ -516,6 +516,10 @@ pub struct ComputedStyle {
     /// When `Hide`, a table cell with no in-flow content draws neither borders nor
     /// background. No effect under `border-collapse: collapse`.
     pub empty_cells: EmptyCells,
+    /// CSS Tables L2 §17.4.1 — `caption-side`. Inherited. Default `Top`.
+    pub caption_side: CaptionSide,
+    /// CSS Tables L2 §17.5.2 — `table-layout`. Not inherited. Default `Auto`.
+    pub table_layout: TableLayout,
     /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
     /// Horizontal gap (px) between adjacent table cells in separate-border mode.
     /// Only applies when `border-collapse: separate` (CSS 2.1 default).
@@ -1280,6 +1284,8 @@ impl ComputedStyle {
             gap_rule_color: CssColor::CurrentColor,
             border_collapse: BorderCollapse::Separate,
             empty_cells: EmptyCells::Show,
+            caption_side: CaptionSide::Top,
+            table_layout: TableLayout::Auto,
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
@@ -1695,6 +1701,8 @@ impl ComputedStyle {
             // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
             border_collapse: inherited.border_collapse,
             empty_cells: inherited.empty_cells,
+            caption_side: inherited.caption_side,
+            table_layout: TableLayout::Auto,
             border_spacing_h: inherited.border_spacing_h,
             border_spacing_v: inherited.border_spacing_v,
             // CSS Text typography — все inherited.
