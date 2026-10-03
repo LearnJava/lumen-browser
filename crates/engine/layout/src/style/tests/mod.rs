@@ -68,6 +68,7 @@
     mod gap_rule_tests;
     mod masonry_auto_flow_tests;
     mod node_fanout_tests;
+    mod restyle_cache_tests;
     mod rule_index_regression;
     mod shadow_dom_selectors;
     mod share_cache;
