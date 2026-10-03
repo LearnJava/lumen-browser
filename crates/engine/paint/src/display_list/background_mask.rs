@@ -238,6 +238,33 @@ fn emit_background_layer(
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
     }
+    // CSS Images L4 §4 — `cross-fade()` с хотя бы одной не-URL стороной
+    // (градиент, вложенный `cross-fade()`): `DrawCrossFade` умеет смешивать
+    // только две растровые текстуры, поэтому сторона `a` рисуется как обычный
+    // слой, а сторона `b` — поверх, внутри opacity-группы с альфой `t`. Для
+    // непрозрачных картинок это тот же результат, что даёт `DrawCrossFade`
+    // (`a` целиком, `b` с прогрессом `t`). Blend-режим слоя оборачивает пару
+    // целиком; сами стороны рисуются с `Normal`.
+    if let BackgroundImage::CrossFade { a, b: side_b, t } = &layer.image
+        && !matches!((a.as_ref(), side_b.as_ref()), (BackgroundImage::Url(_), BackgroundImage::Url(_)))
+    {
+        let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
+        if use_blend {
+            out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode), bounds: clip });
+        }
+        let mut side = layer.clone();
+        side.blend_mode = LayoutBlendMode::Normal;
+        side.image = (**a).clone();
+        emit_background_layer(out, b, &side, dpr, true, radii);
+        side.image = (**side_b).clone();
+        out.push(DisplayCommand::PushOpacity { alpha: t.clamp(0.0, 1.0), bounds: Some(clip) });
+        emit_background_layer(out, b, &side, dpr, true, radii);
+        out.push(DisplayCommand::PopOpacity);
+        if use_blend {
+            out.push(DisplayCommand::PopBlendMode);
+        }
+        return;
+    }
     // CSS Backgrounds L3 §3.5: positioning area (background-origin) is independent of
     // the painting/clip area (background-clip). size/position calculations use origin_rect.
     //
@@ -386,7 +413,7 @@ fn emit_background_layer(
         }
         BackgroundImage::CrossFade { a, b, t } => {
             // CSS Images L4 §4 — emit DrawCrossFade for two-URL cross-fade.
-            // Gradient sides are not composited via DrawCrossFade (Phase 0 scope).
+            // Не-URL стороны (градиенты, вложенный cross-fade) обработаны выше, в начале функции.
             if let (BackgroundImage::Url(url_a), BackgroundImage::Url(url_b)) =
                 (a.as_ref(), b.as_ref())
             {
