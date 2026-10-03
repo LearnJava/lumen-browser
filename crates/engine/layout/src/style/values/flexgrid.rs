@@ -166,6 +166,12 @@ pub struct GridRepeat {
     pub count: RepeatCount,
     /// The track sizing functions inside the parentheses, e.g. `minmax(100px, 1fr)`.
     pub tracks: Vec<GridTrackSize>,
+    /// Tracks written before the auto `repeat()` in the same track list
+    /// (`100px repeat(auto-fit, 50px) 1fr` → `[100px]`). CSS Grid L2 §7.2.3.2: only one
+    /// auto repeat may appear, fixed tracks around it keep their place.
+    pub before: Vec<GridTrackSize>,
+    /// Tracks written after the auto `repeat()` (`[1fr]` in the example above).
+    pub after: Vec<GridTrackSize>,
 }
 
 /// Count type for grid-template-columns/rows `repeat()`.
@@ -348,30 +354,51 @@ impl GridTrackSize {
     }
 }
 
-/// Extracts auto-fill/auto-fit repeat metadata from a track-list string.
-/// Returns `Some(GridRepeat)` when the string is exactly `repeat(auto-fill|auto-fit, ...)`.
-/// Used in Phase 2 of CSS Grid auto-repeat expansion (CSS Grid L1 §7.2.3.4).
+/// Extracts auto-fill/auto-fit repeat metadata from a track-list string: the single auto
+/// `repeat(auto-fill|auto-fit, ...)` plus the fixed tracks written before and after it
+/// (CSS Grid L1 §7.2.3.4, CSS Grid L2 §7.2.3.2). `None` when the list has no auto repeat,
+/// or has more than one (invalid).
 pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
-    let trimmed = s.trim();
-    // Must start with "repeat(" (case-insensitive) and end with ")"
-    let lc = trimmed.to_ascii_lowercase();
-    let inner = lc.strip_prefix("repeat(")?.strip_suffix(')')?;
-    let (count_s, rest) = split_paren_aware_comma(inner)?;
-    let count = match count_s.trim() {
-        "auto-fill" => RepeatCount::AutoFill,
-        "auto-fit" => RepeatCount::AutoFit,
-        _ => return None,
-    };
-    // Re-parse from original string to preserve case in track sizes
-    let orig_inner = trimmed
-        .get("repeat(".len()..trimmed.len() - 1)?;
-    let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
-    let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
-    if tracks.is_empty() {
-        return None;
+    let mut found: Option<(RepeatCount, Vec<GridTrackSize>)> = None;
+    let (mut before, mut after): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    for tok in split_track_list_tokens(s.trim()) {
+        let lc = tok.to_ascii_lowercase();
+        if let Some(inner) = lc.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')'))
+            && let Some((count_s, _)) = split_paren_aware_comma(inner)
+        {
+            let count = match count_s.trim() {
+                "auto-fill" => Some(RepeatCount::AutoFill),
+                "auto-fit" => Some(RepeatCount::AutoFit),
+                _ => None,
+            };
+            if let Some(count) = count {
+                if found.is_some() {
+                    return None;
+                }
+                // Re-parse from the original token to preserve case in track sizes.
+                let orig_inner = tok.get("repeat(".len()..tok.len() - 1)?;
+                let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
+                let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
+                if tracks.is_empty() {
+                    return None;
+                }
+                found = Some((count, tracks));
+                continue;
+            }
+        }
+        if found.is_some() {
+            after.push(tok);
+        } else {
+            before.push(tok);
+        }
     }
-    let _ = rest; // suppress unused warning from lc version
-    Some(GridRepeat { count, tracks })
+    let (count, tracks) = found?;
+    Some(GridRepeat {
+        count,
+        tracks,
+        before: GridTrackSize::parse_track_list(&before.join(" "), false),
+        after: GridTrackSize::parse_track_list(&after.join(" "), false),
+    })
 }
 
 /// Split a comma inside a track-list token that may contain nested parens.

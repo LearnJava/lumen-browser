@@ -26,6 +26,9 @@ pub(super) struct GridInit {
     /// resolution/align-content), both of which outlive `build_grid_init`'s
     /// own borrow of `s.grid_template_rows`.
     pub(super) eff_row_template: Vec<GridTrackSize>,
+    /// Row tracks of a `repeat(auto-fit, …)` that hold no item (CSS Grid L1 §7.2.3.2): sized
+    /// `0` and without gutters. Same length as `eff_row_template`.
+    pub(super) row_collapsed: Vec<bool>,
     pub(super) inherited_rows: Option<SubgridContext>,
     /// Row track sizes — the base sizes `build_grid_init` seeded, grown by
     /// each item's probed height in `post_probe_item`, then resolved to final
@@ -378,7 +381,7 @@ fn post_probe_item(frame: &mut Frame, i: usize) {
 fn finish_probe_pass(init: &mut GridInit) {
     let n_rows = init.n_rows;
     let row_gap = init.row_gap;
-    let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
+    let total_row_gap = row_gap * super::grid::gutter_count(&init.row_collapsed, n_rows as usize) as f32;
     if init.inherited_rows.is_none() {
         // CSS Grid L1 §11.7 — the free space available to flexible (`fr`) tracks is
         // the container's content size minus the base sizes of the OTHER tracks
@@ -440,14 +443,11 @@ fn finish_probe_pass(init: &mut GridInit) {
         let (ac_start, ac_extra) = grid_content_distribution(
             init.s.align_content,
             init.definite_content_height.map(|h| h - used_row_total).unwrap_or(0.0),
-            n_rows as usize,
+            super::grid::gutter_count(&init.row_collapsed, n_rows as usize) + 1,
         );
-        let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
-        let mut y_off = ac_start;
-        for r in 0..n_rows {
-            row_offsets.push(y_off);
-            y_off += init.row_heights[r as usize] + if r < n_rows - 1 { row_gap + ac_extra } else { 0.0 };
-        }
+        let row_offsets =
+            super::grid::track_offsets(&init.row_heights, &init.row_collapsed, row_gap, ac_extra, ac_start);
+        let y_off = row_offsets.last().copied().unwrap_or(ac_start) + init.row_heights.last().copied().unwrap_or(0.0);
         (row_offsets, y_off)
     };
     init.row_offsets = row_offsets;

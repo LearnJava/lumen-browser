@@ -215,3 +215,41 @@ fn animated_gap_rule_override_changes_width_and_colour() {
     let walked = build_display_list_with_anim(&tree, Some(&frame));
     check(&walked, "walk_with_anim");
 }
+
+// Нумерация и геометрия щелей grid при коллапсе `repeat(auto-fit, …)` (BUG-553, срез 17;
+// WPT `css/css-gaps/grid/grid-gap-decorations-collapsed-*`). Пустые auto-fit-дорожки
+// схлопываются в 0, а щели по обе стороны сливаются в одну — она берёт ровно одно значение
+// списка (CSS Gap Decorations L1 §4.6).
+
+/// collapsed-middle-spanner: схлопнутая средняя дорожка не оставляет щели; единственный
+/// видимый зазор между верхним и нижним рядом блокирует элемент, растянутый на два ряда.
+#[test]
+fn grid_auto_fit_collapsed_middle_rows_keep_one_gap() {
+    let html = r#"<div style="display:grid;grid-template-columns:100px 100px 100px;
+        grid-template-rows:100px repeat(auto-fit,100px) 100px 100px;gap:10px;width:320px;height:540px;
+        align-content:start;row-rule:6px solid red;rule-inset:0px">
+        <div style="grid-column:1;grid-row:-3/-1;width:100px;height:100px"></div>
+        <div style="grid-column:2;grid-row:1/2;width:100px;height:100px"></div>
+        <div style="grid-column:2;grid-row:-3/-2;width:100px;height:100px"></div>
+        <div style="grid-column:2;grid-row:-2/-1;width:100px;height:100px"></div>
+        <div style="grid-column:3;grid-row:1/2;width:100px;height:100px"></div>
+        <div style="grid-column:3;grid-row:-3/-2;width:100px;height:100px"></div>
+        <div style="grid-column:3;grid-row:-2/-1;width:100px;height:100px"></div></div>"#;
+    let dl = build(html, "");
+    // Ряды после коллапса: 0..100, 110..210, 220..320 — две щели (y = 102 и 212) на всю
+    // ширину; схлопнутые дорожки не оставляют третьей.
+    assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 6.0), (0.0, 212.0, 320.0, 6.0)]);
+}
+
+/// collapsed-trailing-auto-fit: пустые дорожки в хвосте не создают щелей.
+#[test]
+fn grid_auto_fit_collapsed_trailing_rows_have_no_gap() {
+    let html = r#"<div style="display:grid;grid-template-columns:100px 100px 100px;
+        grid-template-rows:100px 100px repeat(auto-fit,100px);gap:10px;width:320px;height:430px;
+        align-content:start;row-rule:6px solid red;row-rule-visibility-items:around;rule-inset:0px">
+        <div style="grid-column:1/4;grid-row:1/2;height:100px"></div>
+        <div style="grid-column:1/4;grid-row:2/3;height:100px"></div></div>"#;
+    let dl = build(html, "");
+    // Один зазор между двумя рядами: y = 100 + (10 − 6) / 2 = 102, на всю ширину 320.
+    assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 6.0)]);
+}
