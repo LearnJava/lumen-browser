@@ -2121,7 +2121,7 @@ fn bug625_chrome_mono_text_measured_with_bundled_jetbrains_mono() {
     assert!((inter_w - expected).abs() > 0.5, "Inter {inter_w} vs mono {expected}");
 }
 
-/// BUG-1249: after N incremental chrome cycles (a typed omnibox — the content that moves clean
+/// BUG-1261: after N incremental chrome cycles (a typed omnibox — the content that moves clean
 /// icons around), every `svg_paint_matrix` must equal the one
 /// a fresh full layout of the same document gives. `rect` alone is not enough: `<path>` icons
 /// paint through the matrix's translation, so a drifted matrix is an icon painted off place.
