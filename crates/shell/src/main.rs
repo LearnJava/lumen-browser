@@ -162,6 +162,7 @@ mod tab_lifecycle;
 mod tabs;
 mod theme_tokens;
 mod toolbar;
+mod touch_state;
 mod tracks;
 mod update;
 mod update_ui;
