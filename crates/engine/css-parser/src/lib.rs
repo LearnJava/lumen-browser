@@ -428,6 +428,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "transform-origin",
     "transform-style",
     "transition",
+    "transition-behavior",
     "transition-delay",
     "transition-duration",
     "transition-fill-mode",

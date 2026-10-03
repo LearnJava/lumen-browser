@@ -542,6 +542,42 @@ impl AnimationFillMode {
     }
 }
 
+/// CSS Transitions L2 §3.1 — `transition-behavior: normal | allow-discrete`.
+/// `allow-discrete` разрешает переход свойств с дискретной анимацией (flip на 50%).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransitionBehavior {
+    /// Дискретные свойства не переходят. Initial.
+    #[default]
+    Normal,
+    /// Дискретные свойства переходят скачком на середине прогресса.
+    AllowDiscrete,
+}
+
+impl TransitionBehavior {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "allow-discrete" => Some(Self::AllowDiscrete),
+            _ => None,
+        }
+    }
+
+    /// Список через запятую; любой невалидный элемент отбрасывает весь список (`None`).
+    pub fn parse_list(s: &str) -> Option<Vec<TransitionBehavior>> {
+        split_top_level_commas(s)
+            .into_iter()
+            .map(TransitionBehavior::parse)
+            .collect()
+    }
+
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::AllowDiscrete => "allow-discrete",
+        }
+    }
+}
+
 /// CSS Animations L1 §3.8 — `animation-play-state`. Default = `Running`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AnimationPlayState {

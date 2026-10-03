@@ -5292,8 +5292,14 @@ function _wa_gap_resolve(eff, prop, v) {
 function _wa_gap_interp(prop, from, to, t) {
     var kebab = prop.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
     var r = _lumen_css_interpolate_gap_rule(kebab, String(from), String(to), t);
-    if (r == null) return t < 0.5 ? from : to;
+    if (r == null) return _wa_gap_flip(kebab, t < 0.5 ? from : to);
     return r;
+}
+
+// The discretely flipped end, serialised as a computed value (`red` -> `rgb(255, 0, 0)`).
+function _wa_gap_flip(kebab, v) {
+    var c = _lumen_css_canonical_gap_rule(kebab, String(v));
+    return c == null ? v : c;
 }
 
 // CSS Transitions L1 for the gap-decoration properties. The Rust
@@ -5370,7 +5376,8 @@ function _wa_gap_tr_timing(nid, kebab) {
     var dur = _wa_gap_tr_seconds(pick('transition-duration'));
     var delay = _wa_gap_tr_seconds(pick('transition-delay'));
     if (!(dur > 0)) return null;   // a zero duration never starts a transition
-    return { dur: dur, delay: delay, easing: pick('transition-timing-function') || 'ease' };
+    return { dur: dur, delay: delay, easing: pick('transition-timing-function') || 'ease',
+             discrete: pick('transition-behavior') === 'allow-discrete' };
 }
 
 function _wa_gap_tr_value(nid, kebab, base) {
@@ -5382,9 +5389,12 @@ function _wa_gap_tr_value(nid, kebab, base) {
         var from = rec.run ? _wa_gap_tr_current(rec, now, camel) : rec.seen;
         var timing = null;
         // Pairs that do not interpolate (overlap-join, mismatched lists) are
-        // discrete and do not transition without `transition-behavior: allow-discrete`.
-        if (from !== base && _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) != null) {
+        // discrete and transition (flipping at 50%) only with
+        // `transition-behavior: allow-discrete`.
+        if (from !== base) {
+            var flip = _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) == null;
             timing = _wa_gap_tr_timing(nid, kebab);
+            if (timing && flip && !timing.discrete) timing = null;
         }
         rec.seen = base;
         rec.run = timing ? { from: from, to: base, start: now, dur: timing.dur * 1000,

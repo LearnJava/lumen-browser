@@ -12,7 +12,7 @@
 
 use crate::style::{
     AnimationDirection,
-    AnimationFillMode,
+    AnimationFillMode, TransitionBehavior,
     AnimationPlayState,
     BackfaceVisibility,
     ComputedStyle,
@@ -560,6 +560,12 @@ pub(in crate::style) fn apply_decl_motion(
         }
         "transition-timing-function" => {
             style.transition_timing_functions = TimingFunction::parse_list(val);
+        }
+        "transition-behavior" => {
+            // CSS Transitions L2 §3.1: невалидный список отбрасывает декларацию.
+            if let Some(v) = TransitionBehavior::parse_list(val) {
+                style.transition_behaviors = v;
+            }
         }
         "transition-fill-mode" => {
             style.transition_fill_modes = AnimationFillMode::parse_list(val);

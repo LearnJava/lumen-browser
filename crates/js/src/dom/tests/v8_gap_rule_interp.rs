@@ -151,6 +151,58 @@ fn transition_does_not_start_for_non_interpolable_pair() {
     assert_eq!(eval_str(&rt, &script), "4px");
 }
 
+#[test]
+fn transition_of_non_interpolable_pair_flips_at_half_with_allow_discrete() {
+    let rt = rt();
+    let script = format!(
+        "{TR_PRELUDE}
+        __vals['transition-property'] = 'row-rule-color';
+        __vals['transition-behavior'] = 'allow-discrete';
+        __vals['row-rule-color'] = 'red, repeat(auto, red)'; __read('row-rule-color');
+        __vals['row-rule-color'] = 'blue, blue, repeat(auto, blue)';
+        var a = __read('row-rule-color');
+        __now = 4000; var b = __read('row-rule-color');
+        __now = 6000; var c = __read('row-rule-color');
+        [a, b, c].join('|')"
+    );
+    // До 50% — `from`, после — `to`; обе стороны в computed-форме (`rgb()`), форма
+    // списка с `repeat(auto, …)` сохранена.
+    assert_eq!(
+        eval_str(&rt, &script),
+        concat!(
+            "rgb(255, 0, 0), repeat(auto, rgb(255, 0, 0))|",
+            "rgb(255, 0, 0), repeat(auto, rgb(255, 0, 0))|",
+            "rgb(0, 0, 255), rgb(0, 0, 255), repeat(auto, rgb(0, 0, 255))"
+        )
+    );
+}
+
+#[test]
+fn transition_of_non_interpolable_pair_stays_idle_with_normal_behavior() {
+    let rt = rt();
+    let script = format!(
+        "{TR_PRELUDE}
+        __vals['transition-property'] = 'row-rule-color';
+        __vals['transition-behavior'] = 'normal';
+        __vals['row-rule-color'] = 'red, repeat(auto, red)'; __read('row-rule-color');
+        __vals['row-rule-color'] = 'blue, blue, repeat(auto, blue)'; __read('row-rule-color')"
+    );
+    assert_eq!(eval_str(&rt, &script), "blue, blue, repeat(auto, blue)");
+}
+
+#[test]
+fn flipped_value_is_serialized_as_computed() {
+    let rt = rt();
+    assert_eq!(
+        eval_str(&rt, "_wa_interp_prop('columnRuleColor', 'red, repeat(auto, red)', 'blue, blue, repeat(auto, blue)', 0.3)"),
+        "rgb(255, 0, 0), repeat(auto, rgb(255, 0, 0))"
+    );
+    assert_eq!(
+        eval_str(&rt, "_lumen_css_canonical_gap_rule('column-rule-width', 'thin, repeat(2, 20px)')"),
+        "1px, repeat(2, 20px)"
+    );
+}
+
 /// CSS Animations L1 для `*-rule-*`: `_wa_gap_an_value` читает `animation-*` из вычисленного
 /// стиля и `@keyframes` из `_wa_gap_keyframes_json`; обе функции и часы подменены.
 const AN_PRELUDE: &str = "

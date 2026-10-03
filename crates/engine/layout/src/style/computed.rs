@@ -32,7 +32,7 @@ use lumen_core::ColorSpace;
 // путь `crate::style::<Имя>` работает и для тех имён, которые донор сам
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
-    AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
+    AlignValue, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
@@ -710,6 +710,9 @@ pub struct ComputedStyle {
     /// Parallels animation-fill-mode; используется для сохранения значений
     /// в delay-периоде (backwards) и после завершения (forwards).
     pub transition_fill_modes: Vec<AnimationFillMode>,
+    /// CSS Transitions L2 §3.1 — `transition-behavior: <transition-behavior-value>#`.
+    /// Пустой список = `normal`; читается через `getComputedStyle` и JS-шимом переходов.
+    pub transition_behaviors: Vec<TransitionBehavior>,
     /// CSS Animations L1 §3.1 — `animation-name: none | <keyframes-name>#`.
     /// `none` хранится как пустой `Vec` (нет анимаций); иначе список имён.
     /// Имя соответствует `@keyframes name { ... }` в [`Stylesheet`].
@@ -1373,6 +1376,7 @@ impl ComputedStyle {
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
             transition_fill_modes: Vec::new(),
+            transition_behaviors: Vec::new(),
             animation_names: Vec::new(),
             animation_durations: Vec::new(),
             animation_timing_functions: Vec::new(),
@@ -1760,6 +1764,7 @@ impl ComputedStyle {
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
             transition_fill_modes: Vec::new(),
+            transition_behaviors: Vec::new(),
             animation_names: Vec::new(),
             animation_durations: Vec::new(),
             animation_timing_functions: Vec::new(),

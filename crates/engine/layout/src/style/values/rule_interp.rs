@@ -75,6 +75,26 @@ pub fn interpolate_gap_rule_value(prop: &str, from: &str, to: &str, t: f64) -> O
     }
 }
 
+/// Computed-форма одного значения свойства (для дискретного перелома, где арифметики
+/// нет, а значение всё равно должно быть сериализовано как computed): цвета — в `rgb()`,
+/// ширины — в `px` с привязкой как у `border-width`, вставки — как заданы; форма списка
+/// с `repeat()` сохраняется. `None` — значение не разобралось.
+pub fn canonical_gap_rule_value(prop: &str, value: &str) -> Option<String> {
+    match kind_of(prop)? {
+        Kind::Width => {
+            let item =
+                |s: &str| parse_line_width(s, 16.0, Size::ZERO, false).filter(|px| *px >= 0.0);
+            let list = RuleList::parse(value.trim(), &item)?;
+            Some(list.to_css(|px| fmt_width(&snap_width(f64::from(*px)))))
+        }
+        Kind::Color => {
+            let list = RuleList::parse(value.trim(), &|s: &str| parse_color(s))?;
+            Some(list.to_css(|c| crate::selector_query::color_to_css(*c)))
+        }
+        Kind::Inset => RuleInset::parse(value, false).map(|i| i.to_css()),
+    }
+}
+
 // ─── списки ─────────────────────────────────────────────────────────────────
 
 /// Список, разобранный на «до `auto`», тело `auto` и «после `auto`».
@@ -194,7 +214,13 @@ fn lerp_width(a: f32, b: f32, t: f64) -> f32 {
     // [0, 1] результат зажимается, как у `border-width`. Computed value — «list of
     // absolute lengths, snapped as a border width» (§4.3): ненулевая ширина меньше 1px
     // становится 1px, прочие округляются вниз до целого.
-    let v = lerp(f64::from(a), f64::from(b), t).max(0.0);
+    snap_width(lerp(f64::from(a), f64::from(b), t))
+}
+
+/// Привязка ширины как у `border-width`: 0 остаётся 0, ненулевая меньше 1px — 1px,
+/// прочие округляются вниз; отрицательная зажимается в 0.
+fn snap_width(v: f64) -> f32 {
+    let v = v.max(0.0);
     if v == 0.0 {
         0.0
     } else {
@@ -403,6 +429,22 @@ mod tests {
         );
         assert_eq!(i("-100%", "1px", 1.0).as_deref(), Some("calc(0% + 1px)"));
         assert_eq!(i("overlap-join", "1px", 0.3), None);
+    }
+
+    #[test]
+    fn canonical_keeps_list_form_and_serializes_computed() {
+        let c = |p: &str, v: &str| canonical_gap_rule_value(p, v);
+        assert_eq!(
+            c("column-rule-color", "red, repeat(auto, red)").as_deref(),
+            Some("rgb(255, 0, 0), repeat(auto, rgb(255, 0, 0))")
+        );
+        assert_eq!(
+            c("column-rule-width", "thin, repeat(2, 20px)").as_deref(),
+            Some("1px, repeat(2, 20px)")
+        );
+        assert_eq!(c("row-rule-inset-cap-start", "overlap-join").as_deref(), Some("overlap-join"));
+        assert_eq!(c("column-rule-color", "nonsense"), None);
+        assert_eq!(c("column-rule-style", "solid"), None);
     }
 
     #[test]

@@ -168,7 +168,7 @@ pub use style::{
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
     AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList,
     RuleOverlap, RuleVisibilityItems,
-    AnimationFillMode, AnimationPlayState,
+    AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,

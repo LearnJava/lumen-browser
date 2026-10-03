@@ -562,6 +562,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Gap Decorations L1 §4.7 — computed-form serialization of one specified
+    // value (`red` → `rgb(255, 0, 0)`, `thin` → `1px`, `repeat()` form kept), used
+    // where an animation/transition flips discretely and no arithmetic runs.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_gap_rule",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_gap_rule_value(&prop, &value)
+        }
+    );
+
     // Canonical `<length-percentage>` serialization for inline-`style`
     // margin-*/padding-* longhands (CSS Box §8, CSSOM-2/BUG-484) — same role
     // as `_lumen_css_canonical_color` above but for lengths: rejects a
