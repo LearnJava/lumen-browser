@@ -460,6 +460,7 @@ mod bug935_attr_local_roots;
 mod bug935_shallow_roots;
 mod bug935_cascade_bench;
 mod bug935_svg_root_children;
+mod perf16_shadow_sheets;
 mod bfc_margin_collapse;
 mod layout_box_drop;
 mod block_flow_trampoline;

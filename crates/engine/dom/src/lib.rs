@@ -1194,6 +1194,13 @@ impl Document {
             .map(|(&host, _)| host)
     }
 
+    /// Every `(host, shadow root)` pair, in unspecified order — the cost is the host count, not
+    /// the arena size (PERF-16 срез 5: `build_shadow_sheets` used to ask `is_shadow_host` of every
+    /// node on every layout pass).
+    pub fn shadow_hosts(&self) -> impl Iterator<Item = (NodeId, NodeId)> + '_ {
+        self.shadow_roots.iter().map(|(&host, &sr)| (host, sr))
+    }
+
     /// Whether `id` is a shadow host (has an attached shadow root).
     pub fn is_shadow_host(&self, id: NodeId) -> bool {
         self.shadow_roots.contains_key(&id)
