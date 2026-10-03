@@ -297,7 +297,7 @@ impl Lumen {
             }
         }
         self.chrome_prev_styles = new_styles;
-        let dl = paint_ordered(&layout);
+        let dl = paint_ordered_cached(&layout, &mut self.chrome_emit_cache);
         // BUG-405 срез 48 (диагностика, п.85): не гейтит поведение — только
         // печать под `LUMEN_FRAME_LOG=2`. `hash_display_list` берёт `dl` как
         // overlay-лейн (content — пустой срез), тот же тотальный хэш, что уже

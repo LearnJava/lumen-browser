@@ -79,9 +79,15 @@ pub use fingerprint::{
 mod serialize;
 pub use serialize::serialize_display_list;
 
+mod emit_cache;
+pub use emit_cache::{EmitCacheStats, SubtreeEmitCache};
+// Used only by `display_list/box_layer.rs` (via `super::*`).
+use emit_cache::{CaptureMark, Lookup};
+
 mod builder;
 pub use builder::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
+    build_display_list_ordered_dpr_cached,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_ordered_with_anim_split, build_display_list_with_anim,
     build_display_list_with_selection,
@@ -239,7 +245,7 @@ mod text_run;
 use text_run::emit_inline_run;
 
 mod box_layer;
-use box_layer::fill_buckets;
+use box_layer::{fill_buckets, fill_buckets_cached};
 
 mod inline_frag;
 use inline_frag::{
@@ -254,7 +260,7 @@ use inline_frag::background_origin_rect;
 use inline_frag::content_box_rect;
 
 mod background_mask;
-use background_mask::{emit_background_image, emit_push_mask, rendered_mask_layers, FixedBgViewportGuard};
+use background_mask::{emit_background_image, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
 pub use background_mask::with_fixed_background_viewport;
 // Used only by `display_list/tests/background_and_layers.rs` (via `super::*`).
 #[cfg(test)]
@@ -346,3 +352,7 @@ mod fill_buckets_trampoline;
 #[cfg(test)]
 #[path = "display_list/tests/subtree_paint_eq.rs"]
 mod subtree_paint_eq;
+
+#[cfg(test)]
+#[path = "display_list/tests/subtree_emit_cache.rs"]
+mod subtree_emit_cache;

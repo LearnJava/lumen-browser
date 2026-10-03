@@ -252,6 +252,10 @@ pub(crate) struct Lumen {
     /// [`ChromeOverlayFrameCache`]'s doc comment for why "unconditional" (not
     /// "only when bytes changed") is the correct, safe choice here.
     pub(crate) chrome_layout_generation: u64,
+    /// PERF-16 срез 2: кэш emit display list по поддереву для хрома — между проходами
+    /// [`Self::relayout_chrome_host`] неизменившиеся куски воспроизводятся копированием
+    /// (`LUMEN_NO_EMIT_CACHE=1` выключает).
+    pub(crate) chrome_emit_cache: lumen_paint::SubtreeEmitCache,
     /// BUG-405 срез 50: the last `RedrawRequested`'s assembled chrome overlay
     /// segment, reused verbatim on a later frame when nothing that shapes it
     /// has changed — see [`ChromeOverlayFrameCache`]'s own doc comment.
