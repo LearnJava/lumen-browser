@@ -61,7 +61,7 @@ pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
 
-pub use scoped_collect::{ChainBreaks, ChangedNodes, Reasons, ScopedCollection, StyleCollectStats};
+pub use scoped_collect::{ChainBreaks, ChangedNodes, PlanOptions, Reasons, ScopedCollection, StyleCollectStats};
 
 pub use scroll_initial_target::{apply_scroll_initial_targets, InitialScroll};
 
@@ -1343,7 +1343,21 @@ pub fn collect_scroll_containers_for_js_state_scoped(roots: &[&LayoutBox]) -> Ve
     out
 }
 
+/// What [`collect_scroll_containers_for_js_state`] publishes for `b` itself, without its subtree.
+pub(crate) fn scroll_container_of(b: &LayoutBox) -> Option<ScrollContainer> {
+    let mut out = Vec::new();
+    scroll_container_into(b, &mut out, true);
+    out.pop()
+}
+
 fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
+    scroll_container_into(b, out, include_non_wheel);
+    for child in &b.children {
+        collect_scroll_containers_inner(child, out, include_non_wheel);
+    }
+}
+
+fn scroll_container_into(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     use style::Overflow;
     let s = &b.style;
     let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto)
@@ -1391,9 +1405,6 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
                 overscroll_behavior_y: s.overscroll_behavior_y,
             });
         }
-    }
-    for child in &b.children {
-        collect_scroll_containers_inner(child, out, include_non_wheel);
     }
 }
 

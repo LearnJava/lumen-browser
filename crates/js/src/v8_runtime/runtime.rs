@@ -320,6 +320,10 @@ pub struct V8JsRuntime {
     pub(super) sheet_delta_used: Arc<AtomicU64>,
     /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_off`].
     pub(super) sheet_delta_off: Arc<AtomicBool>,
+    /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_prune_off`].
+    pub(super) scope_prune_off: Arc<AtomicBool>,
+    /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_pruned`].
+    pub(super) scope_pruned: Arc<AtomicU64>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -613,6 +617,8 @@ impl V8JsRuntime {
             shallow_roots_off: Arc::new(AtomicBool::new(false)),
             sheet_delta_used: Arc::new(AtomicU64::new(0)),
             sheet_delta_off: Arc::new(AtomicBool::new(false)),
+            scope_prune_off: Arc::new(AtomicBool::new(false)),
+            scope_pruned: Arc::new(AtomicU64::new(0)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -1007,6 +1013,20 @@ impl V8JsRuntime {
     #[doc(hidden)]
     pub fn set_sheet_delta_off(&self, off: bool) {
         self.sheet_delta_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 70: switch the pruning of unchanged subtrees inside a dirty root off for this
+    /// runtime (what `LUMEN_NO_SCOPE_PRUNE=1` does process-wide) — the baseline of a differential
+    /// test.
+    #[doc(hidden)]
+    pub fn set_scope_prune_off(&self, off: bool) {
+        self.scope_prune_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 70: boxes the same-tick flush left alone inside a dirty root (summed over flushes).
+    #[doc(hidden)]
+    pub fn scope_pruned_count(&self) -> u64 {
+        self.scope_pruned.load(Ordering::Relaxed)
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].

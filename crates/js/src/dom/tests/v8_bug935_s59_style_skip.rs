@@ -13,7 +13,7 @@
 use super::v8_bug935_s55_content_journal::{page, runtime, JOURNAL_SWITCH};
 use super::*;
 
-const SHEET: &str = "body { margin: 0; }
+pub(super) const SHEET: &str = "body { margin: 0; }
      .c { padding: 2px; width: 200px; margin: 3px; } .c p { margin: 0; } input { width: 80px; }
      .pc { width: 50%; padding: 0 10%; } .wide { width: 300px; } .pp { padding: 5%; }
      .c:first-child { margin-left: 7px; } .e:empty { height: 9px; }
@@ -36,6 +36,18 @@ fn run(steps: &str, mode: Mode) -> (String, u64) {
 }
 
 pub(super) fn run_on(sheet: &str, steps: &str, mode: Mode) -> (String, u64) {
+    run_with(sheet, steps, mode, false)
+}
+
+/// [`run_on`] with the pruning of unchanged subtrees inside a dirty root (BUG-935 срез 70)
+/// switched off when `prune_off`.
+pub(super) fn run_with(sheet: &str, steps: &str, mode: Mode, prune_off: bool) -> (String, u64) {
+    let (out, kept, _) = run_counted(sheet, steps, mode, prune_off);
+    (out, kept)
+}
+
+/// [`run_with`], plus the boxes the flushes left alone inside a dirty root.
+pub(super) fn run_counted(sheet: &str, steps: &str, mode: Mode, prune_off: bool) -> (String, u64, u64) {
     let reads = if mode == Mode::Full {
         ""
     } else {
@@ -43,6 +55,8 @@ pub(super) fn run_on(sheet: &str, steps: &str, mode: Mode) -> (String, u64) {
     };
     let rt = runtime(page());
     rt.set_style_skip_off(mode == Mode::NoSkip);
+    // The "skip off" baseline is the behaviour before every later slice too: no pruning either.
+    rt.set_scope_prune_off(prune_off || mode == Mode::NoSkip);
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(sheet)));
     let script = format!(
         "(function() {{
@@ -62,6 +76,11 @@ pub(super) fn run_on(sheet: &str, steps: &str, mode: Mode) -> (String, u64) {
                 var entries = JSON.parse(_lumen_get_computed_style_entries(e.__nid__, false));
                 var r = e.getBoundingClientRect();
                 out.push(name + ' rect: ' + [r.x, r.y, r.width, r.height].join(','));
+                // Per-fragment rects and the scroll metrics are separate caches (срез 70).
+                var frags = e.getClientRects();
+                var fr = [];
+                for (var f = 0; f < frags.length; f++) fr.push([frags[f].x, frags[f].y, frags[f].width, frags[f].height].join(','));
+                out.push(name + ' client: ' + fr.join(' | ') + ' scroll: ' + [e.scrollWidth, e.scrollHeight].join(','));
                 if (!entries.length) out.push(name + ' <no entry>');
                 for (var i = 0; i < entries.length; i++) out.push(name + ' ' + entries[i][0] + ': ' + entries[i][1]);
             }}
@@ -90,7 +109,7 @@ pub(super) fn run_on(sheet: &str, steps: &str, mode: Mode) -> (String, u64) {
         lumen_core::JsValue::String(s) => s,
         other => panic!("expected a string, got {other:?}"),
     };
-    (out, rt.style_entries_kept_count())
+    (out, rt.style_entries_kept_count(), rt.scope_pruned_count())
 }
 
 pub(super) fn diff(a: &str, b: &str) -> Vec<String> {
@@ -106,7 +125,7 @@ pub(super) fn diff(a: &str, b: &str) -> Vec<String> {
 /// `(name, steps, must_keep)`: `must_keep` — the scenario is one where entries
 /// provably survive, so a collector that quietly stopped skipping fails too (the
 /// answer would still be right, just slow — the S8 lesson).
-const SCENARIOS: &[(&str, &str, bool)] = &[
+pub(super) const SCENARIOS: &[(&str, &str, bool)] = &[
     // The shape of the lenta.ru `fonts2` loop: a child appended to `body` and removed
     // again, a style written on it, a layout property read in between.
     (
@@ -114,6 +133,15 @@ const SCENARIOS: &[(&str, &str, bool)] = &[
         "[function() { var s = document.createElement('span'); s.style.fontFamily = 'serif'; document.body.appendChild(s); s.offsetWidth; },
           function() { document.body.removeChild(document.body.lastChild); },
           function() { var s = document.createElement('span'); document.body.appendChild(s); s.style.fontFamily = 'monospace'; s.offsetWidth; }]",
+        true,
+    ),
+    // A child appended to `root` and removed: every card is re-cascaded as a child of the root and
+    // everything under a card is carried over (BUG-935 срез 70).
+    (
+        "append_on_root",
+        "[function() { var n = document.createElement('div'); n.className = 'box'; root.appendChild(n); },
+          function() { root.removeChild(root.lastChild); },
+          function() { var n = document.createElement('p'); n.textContent = 'x'; root.insertBefore(n, els[4]); }]",
         true,
     ),
     // A child-list change under `root`: the card after it is shifted, not changed.
