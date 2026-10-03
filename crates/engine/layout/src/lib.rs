@@ -2385,43 +2385,34 @@ pub fn find_dirty_root_boxes<'a>(
     out
 }
 
-/// BUG-1211: every `NodeId` (as the `u32` index the JS-visible caches key
-/// on) owning a box anywhere in `root`'s subtree — the eviction-side twin of
-/// [`find_dirty_root_boxes`]: taken against the *previous* flush's tree
-/// before an incremental restyle discards it, so a same-tick collector can
-/// remove exactly the entries a touched subtree owned (including ones for
-/// nodes since removed from the DOM, which own no box in the *fresh* tree
-/// and so would otherwise never be evicted) before re-inserting from the
-/// fresh subtree.
-pub fn collect_subtree_node_indices(root: &LayoutBox) -> std::collections::HashSet<u32> {
-    let mut out = std::collections::HashSet::new();
-    let mut stack: Vec<&LayoutBox> = vec![root];
-    while let Some(b) = stack.pop() {
-        out.insert(b.node.index() as u32);
-        stack.extend(b.children.iter());
-    }
-    out
-}
-
-/// [`collect_subtree_node_indices`], keyed by [`lumen_dom::NodeId::raw`]
-/// (index + generation) instead of [`lumen_dom::NodeId::index`] alone.
+/// BUG-1211: every `NodeId` owning a box anywhere in the subtrees [`find_dirty_root_boxes`] finds
+/// for `roots`, as the sets the JS-visible caches evict by — the eviction-side twin of that search:
+/// taken against the *previous* flush's tree before an incremental restyle discards it, so a
+/// same-tick collector can remove exactly the entries a touched subtree owned (including ones for
+/// nodes since removed from the DOM, which own no box in the *fresh* tree and so would otherwise
+/// never be evicted) before re-inserting from the fresh subtree.
 ///
-/// `FlushHandles::scroll_states` (unlike `layout_rects`/`client_rects`/
-/// `computed_styles`) is keyed by `.raw()`, not `.index()` — a pre-existing
-/// asymmetry in the JS-visible cache maps this function's caller must match
-/// exactly, not "fix": using an `.index()`-keyed eviction set against a
-/// `.raw()`-keyed map would silently fail to evict a stale entry whenever a
-/// node's generation byte is nonzero (its arena slot was reused at least
-/// once — GAP-P3GCJSDOM), leaving a removed-then-regenerated node's old
-/// scroll offset in the cache forever.
-pub fn collect_subtree_node_raw_ids(root: &LayoutBox) -> std::collections::HashSet<u32> {
-    let mut out = std::collections::HashSet::new();
-    let mut stack: Vec<&LayoutBox> = vec![root];
+/// Returns `(indices, raw_ids)`: [`lumen_dom::NodeId::index`] for `layout_rects`/`client_rects`/
+/// `computed_styles`, [`lumen_dom::NodeId::raw`] (index + generation) for `scroll_states`. The
+/// asymmetry is pre-existing in those maps and the caller must match it exactly, not "fix" it: an
+/// `.index()`-keyed set against a `.raw()`-keyed map silently fails to evict a stale entry whenever
+/// a node's generation byte is nonzero (its arena slot was reused — GAP-P3GCJSDOM).
+///
+/// BUG-935 срез 74: one search and one walk of each subtree for both sets (they were built by four
+/// walks over the same boxes: 0,36 мс of a 5 мс flush on `lenta.ru`, where the dirty root is `body`).
+pub fn collect_dirty_subtree_ids(
+    root: &LayoutBox,
+    roots: &std::collections::HashSet<lumen_dom::NodeId>,
+) -> (std::collections::HashSet<u32>, std::collections::HashSet<u32>) {
+    let mut indices = std::collections::HashSet::new();
+    let mut raws = std::collections::HashSet::new();
+    let mut stack: Vec<&LayoutBox> = find_dirty_root_boxes(root, roots);
     while let Some(b) = stack.pop() {
-        out.insert(b.node.raw());
+        indices.insert(b.node.index() as u32);
+        raws.insert(b.node.raw());
         stack.extend(b.children.iter());
     }
-    out
+    (indices, raws)
 }
 
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {

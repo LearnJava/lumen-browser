@@ -391,6 +391,8 @@ impl V8JsRuntime {
                 sheet_delta_off: Arc::clone(&self.sheet_delta_off),
                 scope_prune_off: Arc::clone(&self.scope_prune_off),
                 scope_pruned: Arc::clone(&self.scope_pruned),
+                node_index_cache: Arc::new(Mutex::new(None)),
+                node_index_builds: Arc::clone(&self.node_index_builds),
                 verify_shadow: Arc::new(Mutex::new(Default::default())),
                 patched_sheet_cache: Arc::new(Mutex::new(None)),
             };

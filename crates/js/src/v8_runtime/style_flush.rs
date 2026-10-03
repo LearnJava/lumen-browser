@@ -208,6 +208,21 @@ pub(crate) struct FlushHandles {
     pub(crate) scope_pruned: Arc<std::sync::atomic::AtomicU64>,
     /// BUG-935 срез 70: the previous flush's full collect, for `LUMEN_VERIFY_SCOPE_PRUNE`.
     pub(crate) verify_shadow: Arc<Mutex<VerifyShadow>>,
+    /// BUG-935 срез 74: the restyle index of the last flush, kept for as long as the stylesheet
+    /// revision (and whether the document has a shadow root) stays the same. Building it is a scan
+    /// of every selector in the sheet — 0,7 мс per flush on `lenta.ru`, a loop of one-span flushes
+    /// paid it each time. Taken out for the duration of a flush and put back on the way out.
+    pub(crate) node_index_cache: Arc<Mutex<Option<CachedNodeIndex>>>,
+    /// BUG-935 срез 74: scans of the stylesheet made to build that index; read through
+    /// `V8JsRuntime::node_index_build_count`.
+    pub(crate) node_index_builds: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// See [`FlushHandles::node_index_cache`].
+pub(crate) struct CachedNodeIndex {
+    revision: lumen_css_parser::StylesheetRevision,
+    shadow: bool,
+    index: lumen_layout::style::NodeRestyleIndex<'static>,
 }
 
 /// See [`FlushHandles::verify_shadow`].
@@ -315,6 +330,13 @@ fn style_skip_disabled() -> bool {
 fn sheet_delta_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SHEET_DELTA").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 74: `LUMEN_NO_NODE_INDEX_CACHE=1` scans the stylesheet to build the restyle
+/// index on every flush, as before — A/B switch for a live measurement.
+fn node_index_cache_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_NODE_INDEX_CACHE").is_some_and(|v| v != "0"))
 }
 
 /// BUG-935 срез 70: `LUMEN_NO_SCOPE_PRUNE=1` collects a dirty root's whole subtree again, even
@@ -938,6 +960,30 @@ impl FlushHandles {
         };
     }
 
+    /// BUG-935 срез 74: [`Self::node_index_cache`], locked for the flush, holding the restyle index
+    /// of `sheet`: the one the last flush built for the same revision of the sheet in a document
+    /// that agrees on shadow roots (the only part of the document the index reads), otherwise one
+    /// scanned afresh. `LUMEN_NO_NODE_INDEX_CACHE=1` scans every time.
+    fn lock_node_index(
+        &self,
+        doc: &lumen_dom::Document,
+        sheet: &Arc<lumen_css_parser::Stylesheet>,
+    ) -> std::sync::MutexGuard<'_, Option<CachedNodeIndex>> {
+        let shadow = doc.has_author_shadow_roots();
+        let mut slot = self.node_index_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let fresh = !node_index_cache_disabled()
+            && slot.as_ref().is_some_and(|c| c.revision == sheet.revision() && c.shadow == shadow);
+        if !fresh {
+            self.node_index_builds.fetch_add(1, Ordering::Relaxed);
+            *slot = Some(CachedNodeIndex {
+                revision: sheet.revision(),
+                shadow,
+                index: lumen_layout::style::restyle_node_index_shared(doc, sheet),
+            });
+        }
+        slot
+    }
+
     /// BUG-1211: attempt the incremental cascade+layout path instead of a
     /// full [`lumen_layout::layout_measured_with_counters`] recompute.
     ///
@@ -1043,7 +1089,11 @@ impl FlushHandles {
         drop(new_touched_scope);
         let tp0 = std::time::Instant::now();
         let index_scope = lumen_core::profile::scope("incr.node_index");
-        let mut node_index = lumen_layout::style::restyle_node_index(doc, sheet);
+        let mut node_index_slot = self.lock_node_index(doc, sheet);
+        let Some(CachedNodeIndex { index: node_index, .. }) = node_index_slot.as_mut() else {
+            declined("no restyle index");
+            return None;
+        };
         let shallow_off = shallow_roots_disabled() || self.shallow_roots_off.load(Ordering::Relaxed);
         node_index.set_attr_narrowing(!shallow_off && !attr_local_roots_disabled());
         drop(index_scope);
@@ -1095,7 +1145,7 @@ impl FlushHandles {
         } else {
             Vec::new()
         };
-        let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &node_index);
+        let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &*node_index);
         dirty_roots.extend(roots.deep);
         let point_roots = roots.point;
         let sheet_delta_count = sheet_delta_roots.len();
@@ -1145,16 +1195,7 @@ impl FlushHandles {
         let scope_roots: std::collections::HashSet<lumen_dom::NodeId> =
             dirty_roots.iter().chain(shallow_roots.iter()).copied().collect();
         let prev_ids_scope = lumen_core::profile::scope("incr.prev_node_ids");
-        let prev_node_ids: std::collections::HashSet<u32> =
-            lumen_layout::find_dirty_root_boxes(&basis.layout, &scope_roots)
-                .into_iter()
-                .flat_map(lumen_layout::collect_subtree_node_indices)
-                .collect();
-        let prev_node_raw_ids: std::collections::HashSet<u32> =
-            lumen_layout::find_dirty_root_boxes(&basis.layout, &scope_roots)
-                .into_iter()
-                .flat_map(lumen_layout::collect_subtree_node_raw_ids)
-                .collect();
+        let (prev_node_ids, prev_node_raw_ids) = lumen_layout::collect_dirty_subtree_ids(&basis.layout, &scope_roots);
         drop(prev_ids_scope);
         let (deep_count, shallow_count) = (dirty_roots.len(), shallow_roots.len());
         let has_dependency = node_index.has_has_dependency();
