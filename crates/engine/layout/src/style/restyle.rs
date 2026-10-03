@@ -10,6 +10,7 @@
 //! тестах.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use lumen_css_parser::{
     Combinator, ComplexSelector, CompoundSelector, PseudoClass, PseudoElementKind, SimpleSelector, Stylesheet,
@@ -432,7 +433,7 @@ fn complex_selector_has_nth_of(c: &ComplexSelector) -> bool {
 /// BUG-935 срез 58 — a compound that carries a `:has()`, and whether a flip of
 /// its result reaches outside the matched element's own subtree.
 struct HasSubject<'a> {
-    compound: &'a CompoundSelector,
+    compound: CompoundRef<'a>,
     /// A sibling combinator follows the compound in its selector (`E:has(x) + F`),
     /// or the `:has()` sits inside a nested selector list whose own combinators
     /// are not analysed: a flip then restyles the parent's subtree, not only `E`'s.
@@ -499,7 +500,7 @@ fn complex_has_sibling_reach(complex: &ComplexSelector) -> bool {
 }
 
 /// Registers every compound of `complex` that carries a `:has()` — see [`HasSubject`].
-fn collect_has_subjects<'a>(complex: &'a ComplexSelector, out: &mut Vec<HasSubject<'a>>) {
+fn collect_has_subjects<'s>(complex: &'s ComplexSelector, out: &mut Vec<(&'s CompoundSelector, bool)>) {
     let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
     compounds.push(&complex.head);
     let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
@@ -516,7 +517,7 @@ fn collect_has_subjects<'a>(complex: &'a ComplexSelector, out: &mut Vec<HasSubje
         });
         if has_any {
             let fanout = nested_any || combinators[i..].iter().copied().any(is_sibling_combinator);
-            out.push(HasSubject { compound, fanout });
+            out.push((*compound, fanout));
         }
     }
 }
@@ -677,13 +678,13 @@ fn compound_could_match_after_attr_change(
 /// One scan of the sheet answers every write of a flush; keys are ASCII-lowercased.
 #[derive(Default)]
 struct ReaderTable<'a> {
-    classes: HashMap<String, Vec<&'a CompoundSelector>>,
-    ids: HashMap<String, Vec<&'a CompoundSelector>>,
-    attrs: HashMap<String, Vec<&'a CompoundSelector>>,
+    classes: HashMap<String, Vec<Arc<CompoundRef<'a>>>>,
+    ids: HashMap<String, Vec<Arc<CompoundRef<'a>>>>,
+    attrs: HashMap<String, Vec<Arc<CompoundRef<'a>>>>,
 }
 
 impl<'a> ReaderTable<'a> {
-    fn scan(sheet: &'a Stylesheet) -> Self {
+    fn scan<'s>(sheet: &'s Stylesheet, wrap: impl Fn(&'s CompoundSelector) -> CompoundRef<'a>) -> Self {
         let mut table = Self::default();
         let mut deps = AncestorDeps::default();
         for rules in stylesheet_rule_groups(sheet) {
@@ -700,14 +701,14 @@ impl<'a> ReaderTable<'a> {
                     deps.ids.clear();
                     deps.attrs.clear();
                     deps.collect_selector(selector);
-                    let subject = selector.tail.last().map_or(&selector.head, |(_, c)| c);
+                    let subject = Arc::new(wrap(selector.tail.last().map_or(&selector.head, |(_, c)| c)));
                     for (map, keys) in [
                         (&mut table.classes, &deps.classes),
                         (&mut table.ids, &deps.ids),
                         (&mut table.attrs, &deps.attrs),
                     ] {
                         for key in keys {
-                            map.entry(key.clone()).or_default().push(subject);
+                            map.entry(key.clone()).or_default().push(Arc::clone(&subject));
                         }
                     }
                 }
@@ -935,12 +936,12 @@ impl AncestorDeps {
 pub struct NodeRestyleIndex<'a> {
     /// The sheet the index was built from — [`Self::affected_descendants`] scans its
     /// selectors once ([`ReaderTable`]), for the first write it is asked about.
-    sheet: &'a Stylesheet,
+    sheet: SheetRef<'a>,
     /// BUG-935 срез 73 — [`ReaderTable`] of `sheet`, built on the first write that asks.
     readers: std::cell::OnceCell<ReaderTable<'a>>,
     /// Every compound in `sheet` from which a sibling combinator is reachable
     /// ([`collect_sibling_source_compounds`]).
-    sibling_sources: Vec<&'a CompoundSelector>,
+    sibling_sources: Vec<CompoundRef<'a>>,
     /// The per-node narrowing below is unsound for this document/sheet pair, so
     /// every changed node widens to its parent (pre-S17 behaviour). Set by
     /// `:nth-child(… of S)` (sibling reach with no combinator to see it) or by
@@ -971,7 +972,7 @@ pub struct NodeRestyleIndex<'a> {
     has_in_shadow_doc: bool,
     /// BUG-935 срез 60 — the non-subject compounds a child-list change can flip
     /// ([`collect_structure_sensitive_compounds`]).
-    structure_sensitive: Vec<&'a CompoundSelector>,
+    structure_sensitive: Vec<CompoundRef<'a>>,
     /// BUG-935 срез 68 — what the selectors read from ancestors ([`AncestorDeps`]).
     ancestor_deps: AncestorDeps,
     /// BUG-935 срез 68 — what the selectors with a sibling combinator read from an element
@@ -981,6 +982,18 @@ pub struct NodeRestyleIndex<'a> {
     /// [`Self::set_attr_narrowing`]: the A/B switch of a live measurement and the baseline
     /// of the differential tests.
     attr_narrowing: bool,
+}
+
+/// Indexes the subject compounds of `list` and counts them into `readers`.
+fn add_readers<'t>(
+    subjects: &mut SubjectIndex<'t>,
+    readers: &mut usize,
+    list: Option<&'t Vec<Arc<CompoundRef<'_>>>>,
+) {
+    for c in list.into_iter().flatten() {
+        subjects.insert(c);
+        *readers += 1;
+    }
 }
 
 impl<'a> NodeRestyleIndex<'a> {
@@ -1008,7 +1021,7 @@ impl<'a> NodeRestyleIndex<'a> {
     fn has_reach_roots(&self, doc: &Document, node: NodeId, out: &mut HashSet<NodeId>) {
         let mut consider = |a: NodeId| {
             for subject in &self.has_subjects {
-                if compound_could_match_after_attr_change(subject.compound, doc, a, "") {
+                if compound_could_match_after_attr_change(&subject.compound, doc, a, "") {
                     out.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
                 }
             }
@@ -1138,34 +1151,33 @@ impl<'a> NodeRestyleIndex<'a> {
         let current = |wanted: &str| {
             attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case(wanted)).map_or("", |a| a.value.as_str())
         };
-        let table = self.readers.get_or_init(|| ReaderTable::scan(self.sheet));
+        let table = self.readers.get_or_init(|| match &self.sheet {
+            SheetRef::Borrowed(sheet) => ReaderTable::scan(sheet, CompoundRef::Borrowed),
+            SheetRef::Shared(sheet) => ReaderTable::scan(sheet, CompoundRef::owned),
+        });
         let mut subjects = SubjectIndex::default();
         let mut readers = 0usize;
-        let mut add = |list: Option<&Vec<&'a CompoundSelector>>| {
-            for &c in list.into_iter().flatten() {
-                subjects.insert(c);
-                readers += 1;
-            }
-        };
         match name.as_str() {
             "class" => {
                 let (old, new) = (old?, current("class"));
                 let split = |v: &str| v.split_ascii_whitespace().map(str::to_ascii_lowercase).collect::<HashSet<_>>();
                 let (before, after) = (split(old), split(new));
                 for token in before.symmetric_difference(&after) {
-                    add(table.classes.get(token));
+                    add_readers(&mut subjects, &mut readers, table.classes.get(token));
                 }
-                add(table.attrs.get("class"));
+                add_readers(&mut subjects, &mut readers, table.attrs.get("class"));
             }
             "id" => {
                 let (old, new) = (old?, current("id"));
                 if old != new {
-                    add(table.ids.get(&old.to_ascii_lowercase()));
-                    add(table.ids.get(&new.to_ascii_lowercase()));
+                    add_readers(&mut subjects, &mut readers, table.ids.get(&old.to_ascii_lowercase()));
+                    add_readers(&mut subjects, &mut readers, table.ids.get(&new.to_ascii_lowercase()));
                 }
-                add(table.attrs.get("id"));
+                add_readers(&mut subjects, &mut readers, table.attrs.get("id"));
             }
-            n if n.starts_with("data-") || n.starts_with("aria-") => add(table.attrs.get(n)),
+            n if n.starts_with("data-") || n.starts_with("aria-") => {
+                add_readers(&mut subjects, &mut readers, table.attrs.get(n));
+            }
             _ => return None,
         }
         if readers > MAX_READERS {
@@ -1220,13 +1232,59 @@ impl<'a> NodeRestyleIndex<'a> {
 /// [`restyle_state_index`]), then one structural match per changed node per
 /// sibling-reachable compound.
 pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRestyleIndex<'a> {
+    build_node_index(doc, sheet, SheetRef::Borrowed(sheet), CompoundRef::Borrowed)
+}
+
+/// BUG-935 срез 74 — [`restyle_node_index`] over a shared sheet: the index holds the `Arc`
+/// instead of a borrow, so a caller can keep it for as long as the sheet's revision stays
+/// the same (`doc` matters only through whether it has an author shadow root).
+pub fn restyle_node_index_shared(doc: &Document, sheet: &Arc<Stylesheet>) -> NodeRestyleIndex<'static> {
+    build_node_index(doc, sheet, SheetRef::Shared(Arc::clone(sheet)), CompoundRef::owned)
+}
+
+/// Where [`NodeRestyleIndex`] reads its sheet from when it needs to scan it again.
+enum SheetRef<'a> {
+    Borrowed(&'a Stylesheet),
+    Shared(Arc<Stylesheet>),
+}
+
+/// A compound of the sheet an index was built for: borrowed from it, or — for an index that has
+/// to outlive any borrow of the sheet — a copy.
+enum CompoundRef<'a> {
+    Borrowed(&'a CompoundSelector),
+    Owned(Box<CompoundSelector>),
+}
+
+impl CompoundRef<'_> {
+    fn owned(compound: &CompoundSelector) -> CompoundRef<'static> {
+        CompoundRef::Owned(Box::new(compound.clone()))
+    }
+}
+
+impl std::ops::Deref for CompoundRef<'_> {
+    type Target = CompoundSelector;
+
+    fn deref(&self) -> &CompoundSelector {
+        match self {
+            CompoundRef::Borrowed(c) => c,
+            CompoundRef::Owned(c) => c,
+        }
+    }
+}
+
+fn build_node_index<'a, 's>(
+    doc: &Document,
+    sheet: &'s Stylesheet,
+    sheet_ref: SheetRef<'a>,
+    wrap: impl Fn(&'s CompoundSelector) -> CompoundRef<'a>,
+) -> NodeRestyleIndex<'a> {
     let has_in_shadow_doc = document_has_shadow_roots(doc);
     let mut conservative = has_in_shadow_doc;
     let mut has_dependent = false;
     let mut has_sibling_reach = false;
-    let mut sibling_sources = Vec::new();
-    let mut has_subjects = Vec::new();
-    let mut structure_sensitive = Vec::new();
+    let mut sibling_sources: Vec<&CompoundSelector> = Vec::new();
+    let mut has_subjects: Vec<(&CompoundSelector, bool)> = Vec::new();
+    let mut structure_sensitive: Vec<&CompoundSelector> = Vec::new();
     let mut ancestor_deps = AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), ..AncestorDeps::default() };
     let mut sibling_deps = AncestorDeps::default();
     for rules in stylesheet_rule_groups(sheet) {
@@ -1246,15 +1304,18 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
         }
     }
     NodeRestyleIndex {
-        sheet,
+        sheet: sheet_ref,
         readers: std::cell::OnceCell::new(),
-        sibling_sources,
+        sibling_sources: sibling_sources.into_iter().map(&wrap).collect(),
         conservative,
         has_dependent,
-        has_subjects,
+        has_subjects: has_subjects
+            .into_iter()
+            .map(|(compound, fanout)| HasSubject { compound: wrap(compound), fanout })
+            .collect(),
         has_sibling_reach,
         has_in_shadow_doc,
-        structure_sensitive,
+        structure_sensitive: structure_sensitive.into_iter().map(&wrap).collect(),
         ancestor_deps,
         sibling_deps,
         attr_narrowing: true,

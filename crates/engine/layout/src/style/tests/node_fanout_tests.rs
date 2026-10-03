@@ -238,3 +238,47 @@
         let menu = doc.find_by_id("menu").expect("#menu");
         assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
     }
+
+    /// BUG-935 срез 74: an index built over a shared sheet (the one the same-tick flush keeps from
+    /// one flush to the next) answers every question like the one that borrows it — sibling reach,
+    /// `:has()`, structure, the ancestor readers of a `class` write — and keeps answering after the
+    /// borrowed sheet's own scope has ended.
+    #[test]
+    fn a_shared_index_answers_like_a_borrowed_one() {
+        let sheets = [
+            ".item { color: black; }",
+            "[data-x=\"1\"] + .item { color: green; }",
+            "ul:has(.item) { color: green; } .item:first-child + .item { color: red; }",
+            "#menu.open .item { color: blue; } .a ~ .b { color: red; } @media (min-width: 1px) { .item:checked + li { color: red; } }",
+        ];
+        for text in sheets {
+            let doc = fixture();
+            let shared = std::sync::Arc::new(parse_css(text));
+            let kept = restyle_node_index_shared(&doc, &shared);
+            drop(shared);
+            let sheet = parse_css(text);
+            let borrowed = restyle_node_index(&doc, &sheet);
+            let (a, menu) = (doc.find_by_id("a").expect("#a"), doc.find_by_id("menu").expect("#menu"));
+            for attr in ["data-x", "checked", "class", "id"] {
+                let change = [(a, NodeChange::AttrFrom { name: attr, old: "x" })];
+                assert_eq!(
+                    restyle_root_set_for_node_change(&doc, change, &kept),
+                    restyle_root_set_for_node_change(&doc, change, &borrowed),
+                    "{text} / {attr}",
+                );
+            }
+            let change = [(menu, NodeChange::ChildList)];
+            assert_eq!(
+                restyle_roots_for_node_changes(&doc, change, &kept).shallow,
+                restyle_roots_for_node_changes(&doc, change, &borrowed).shallow,
+                "{text} / child list",
+            );
+            assert_eq!(kept.sibling_source_count(), borrowed.sibling_source_count(), "{text}");
+            assert_eq!(kept.has_has_dependency(), borrowed.has_has_dependency(), "{text}");
+            assert_eq!(
+                kept.affected_descendants(&doc, menu, "class", Some("")),
+                borrowed.affected_descendants(&doc, menu, "class", Some("")),
+                "{text} / readers",
+            );
+        }
+    }

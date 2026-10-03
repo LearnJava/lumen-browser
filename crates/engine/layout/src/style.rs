@@ -309,9 +309,8 @@ pub use env::{
 pub(crate) use env::{animated_height_for, animated_heights_active};
 pub use rule_roots::restyle_roots_for_rule_changes;
 pub use restyle::{
-    restyle_node_index, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
-    restyle_roots_for_node_changes, restyle_state_index, NodeChange, NodeRestyleIndex, RestyleRoots,
-    StateRestyleIndex,
+    restyle_node_index, restyle_node_index_shared, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
+    restyle_roots_for_node_changes, restyle_state_index, NodeChange, NodeRestyleIndex, RestyleRoots, StateRestyleIndex,
 };
 // `CONTAINER_CQ`/`FONT_CH_EX` читает `style::values::length` по старому пути
 // `crate::style::…` (SPLIT-ST9): это реэкспорт, а не импорт, — своих вызывателей

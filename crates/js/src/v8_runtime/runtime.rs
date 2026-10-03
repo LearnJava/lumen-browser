@@ -324,6 +324,8 @@ pub struct V8JsRuntime {
     pub(super) scope_prune_off: Arc<AtomicBool>,
     /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_pruned`].
     pub(super) scope_pruned: Arc<AtomicU64>,
+    /// BUG-935 срез 74: mirrors [`super::style_flush::FlushHandles::node_index_builds`].
+    pub(super) node_index_builds: Arc<AtomicU64>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -619,6 +621,7 @@ impl V8JsRuntime {
             sheet_delta_off: Arc::new(AtomicBool::new(false)),
             scope_prune_off: Arc::new(AtomicBool::new(false)),
             scope_pruned: Arc::new(AtomicU64::new(0)),
+            node_index_builds: Arc::new(AtomicU64::new(0)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
@@ -1027,6 +1030,12 @@ impl V8JsRuntime {
     #[doc(hidden)]
     pub fn scope_pruned_count(&self) -> u64 {
         self.scope_pruned.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 74: how many times the same-tick flush scanned the stylesheet to build its restyle index.
+    #[doc(hidden)]
+    pub fn node_index_build_count(&self) -> u64 {
+        self.node_index_builds.load(Ordering::Relaxed)
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].
