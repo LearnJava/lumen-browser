@@ -611,6 +611,34 @@ use super::*;
         assert_eq!(s.color_profiles[0].name, "--p");
     }
 
+    #[test]
+    fn color_profile_data_is_attached_by_load_and_carried_over() {
+        use std::sync::Arc;
+        let css = r#"@color-profile --p { src: url("p.icc"); } @color-profile --q { }"#;
+        let mut s = parse(css);
+        assert!(s.color_profiles.iter().all(|c| c.data.is_none()));
+        let before = s.revision();
+        let mut asked = Vec::new();
+        s.load_color_profiles(|src| {
+            asked.push(src.to_owned());
+            Some(Arc::new(vec![1, 2, 3]))
+        });
+        // `--q` has no `src` → never fetched, stays unloaded.
+        assert_eq!(asked, ["p.icc"]);
+        assert_eq!(s.color_profiles[0].data.as_deref(), Some(&vec![1, 2, 3]));
+        assert!(s.color_profiles[1].data.is_none());
+        assert_ne!(before, s.revision(), "attaching bytes changes the sheet");
+
+        // A rebuilt sheet from the same CSS inherits the bytes without a fetch.
+        let mut rebuilt = parse(css);
+        rebuilt.carry_color_profile_data(&s);
+        assert_eq!(rebuilt.color_profiles[0].data.as_deref(), Some(&vec![1, 2, 3]));
+        // …but a rule whose `src` changed does not.
+        let mut changed = parse(r#"@color-profile --p { src: url("other.icc"); }"#);
+        changed.carry_color_profile_data(&s);
+        assert!(changed.color_profiles[0].data.is_none());
+    }
+
     // ── @function tests ─────────────────────────────────────────────────────
 
     #[test]

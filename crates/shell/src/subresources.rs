@@ -695,6 +695,55 @@ pub(crate) fn fetch_font_bytes(
     )
 }
 
+/// CSS Color L5 §5.3 — fetches the ICC profile bytes of one `@color-profile`
+/// `src`. Tagged `RequestDestination::Other` (the spec's `color-profile`
+/// destination has no dedicated variant; like fonts it is neither an image nor
+/// a script, and `Other` keeps Mixed Content's blockable classification).
+pub(crate) fn fetch_color_profile_bytes(
+    raw_src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    fetch_subresource_bytes(
+        raw_src,
+        base,
+        sink,
+        cookie_jar,
+        lumen_network::RequestDestination::Other,
+        "color-profile",
+        referrer_policy,
+    )
+}
+
+/// CSS Color L5 §5.3 — loads the ICC bytes of every `@color-profile` rule of
+/// `sheet` (the last rule of each name only; see
+/// [`lumen_css_parser::Stylesheet::load_color_profiles`]). Synchronous, like a
+/// frame's `@font-face`: a colour that depends on a profile has no meaningful
+/// first paint without it (an unloaded profile makes the colour invalid), and
+/// sheets without `@color-profile` pay nothing — the loop body never runs.
+pub(crate) fn load_sheet_color_profiles(
+    sheet: &mut lumen_css_parser::Stylesheet,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) {
+    if sheet.color_profiles.is_empty() {
+        return;
+    }
+    sheet.load_color_profiles(|src| {
+        match fetch_color_profile_bytes(src, base, sink, cookie_jar.clone(), referrer_policy) {
+            Ok(bytes) => Some(Arc::new(bytes)),
+            Err(e) => {
+                eprintln!("@color-profile: не удалось загрузить {src}: {e}");
+                None
+            }
+        }
+    });
+}
+
 /// GAP-MEDIADECODE срез 7: fetch an FFmpeg-container `<video src>` body.
 /// `RequestDestination::Media` (not `Image`, unlike the GIF path — GIF-backed
 /// `<video>` reuses the image pipeline, an FFmpeg container is not an image).

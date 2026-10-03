@@ -374,6 +374,8 @@ fn compute_pseudo_element_style_inner(
     dark_mode: bool,
 ) -> Option<ComputedStyle> {
     let _prof = lumen_core::profile::scope_detail("pseudo_style");
+    // CSS Color L5 §5.3 — see `compute_style_shareable`.
+    crate::style::parse::color::sync_color_profiles(sheet);
 
     // BUG-341 S23: if the sheet never uses this pseudo-element as a selector
     // subject, `matches_complex_for_pseudo` below cannot match anything and the
