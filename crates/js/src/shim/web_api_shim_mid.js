@@ -1857,6 +1857,18 @@ function _lumen_parse_style(s) {
         var prop = decl.slice(0, idx).trim();
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
+        if (_lumen_gap_rule_key_re.test(prop)) {
+            // `!important` is not part of the value (the priority is not tracked here).
+            var gapVal = _lumen_close_open_parens(val.replace(/\s*!\s*important\s*$/i, ''));
+            if (_lumen_pending_substitution_value(gapVal) === undefined) {
+                var gapPairs = _lumen_gap_rule_expand(prop, gapVal);
+                if (gapPairs === false) return;
+                if (gapPairs !== null) {
+                    gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+                    return;
+                }
+            }
+        }
         if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(prop)) {
             var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[prop], val);
             if (expanded !== null) {
@@ -3164,6 +3176,10 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
         var v2v = _lumen_2v_shorthand_value(obj, key);
         if (v2v !== undefined) return v2v;
     }
+    if (_lumen_gap_rule_key_re.test(key)) {
+        var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
+        if (gapSh !== null && gapSh !== undefined) return gapSh;
+    }
     return '';
 };
 // CSS Syntax §5.4.7: the end of the value closes every function still open, so
@@ -3186,6 +3202,26 @@ function _lumen_close_open_parens(v) {
     for (var d = 0; d < depth; d++) v += ')';
     return v;
 }
+// CSS Gap Decorations L1 §3–§4 (BUG-553): `rule*`/`{column,row}-rule*` are stored in the
+// inline-style object as canonical LONGHANDS only (`_lumen_css_expand_gap_rule`, Rust
+// `style/values/rule_cssom.rs`); a shorthand is composed back on read
+// (`_lumen_css_gap_rule_shorthand`). Returns `null` when `key` is not one of these
+// properties, `false` when the value is invalid (declaration dropped), else the list of
+// `[longhand, value]` pairs.
+function _lumen_gap_rule_expand(key, strVal) {
+    if (!_lumen_gap_rule_key_re.test(key)) return null;
+    var r = JSON.parse(_lumen_css_expand_gap_rule(key, strVal));
+    if (r.k === 'not') return null;
+    if (r.k === 'invalid') return false;
+    return r.l;
+}
+// Drops `key` — and, for a gap shorthand, every longhand it covers — from `obj`.
+function _lumen_gap_rule_delete(obj, key) {
+    if (_lumen_gap_rule_key_re.test(key)) {
+        JSON.parse(_lumen_css_gap_rule_longhands(key)).forEach(function(n) { delete obj[n]; });
+    }
+    delete obj[key];
+}
 CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
@@ -3194,9 +3230,18 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     var obj = _lumen_style_get_parsed(nid);
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property.
-        delete obj[key];
+        _lumen_gap_rule_delete(obj, key);
         _lumen_style_set_parsed(nid, obj);
         return;
+    }
+    if (_lumen_pending_substitution_value(strVal) === undefined) {
+        var gapPairs = _lumen_gap_rule_expand(key, strVal);
+        if (gapPairs === false) return; // invalid gap-decoration value: declaration dropped
+        if (gapPairs !== null) {
+            gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+            _lumen_style_set_parsed(nid, obj);
+            return;
+        }
     }
     // BUG-514: `var()`/`env()` values bypass every per-property grammar below
     // (shorthand expansion included) — see `_lumen_pending_substitution_value`.
@@ -3297,8 +3342,9 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
     var nid = this;
     var obj = _lumen_style_get_parsed(nid);
     var key = _lumen_camel_to_kebab(String(prop));
-    var old = obj[key] || '';
-    delete obj[key]; _lumen_style_set_parsed(nid, obj); return old;
+    var old = Object.prototype.hasOwnProperty.call(obj, key) ? obj[key]
+        : (_lumen_gap_rule_key_re.test(key) ? (this.getPropertyValue(key) || '') : '');
+    _lumen_gap_rule_delete(obj, key); _lumen_style_set_parsed(nid, obj); return old;
 };
 Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
     // CSSOM §6.7.2: cssText always reflects the current declarations'
