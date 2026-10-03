@@ -572,6 +572,41 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Gap Decorations L1 §3–§4 in the inline-`style` CSSOM: one `rule*` /
+    // `{column,row}-rule*` declaration → canonical longhands. Returns JSON
+    // `{"k":"not"|"invalid"|"ok","l":[[longhand,value],…]}` (`not` = not a gap
+    // property, the shim takes its usual path; `invalid` = declaration dropped).
+    reg!(scope, ctx, store,
+        "_lumen_css_expand_gap_rule",
+        |prop: String, value: String| -> String {
+            use lumen_layout::style::{GapDecl, expand_gap_rule_declaration};
+            match expand_gap_rule_declaration(&prop, &value) {
+                GapDecl::NotGap => r#"{"k":"not"}"#.to_string(),
+                GapDecl::Invalid => r#"{"k":"invalid"}"#.to_string(),
+                GapDecl::Longhands(l) => serde_json::json!({ "k": "ok", "l": l }).to_string(),
+            }
+        }
+    );
+
+    // Longhand names a gap property sets (JSON array; `[]` = not a gap property).
+    reg!(scope, ctx, store,
+        "_lumen_css_gap_rule_longhands",
+        |prop: String| -> String {
+            serde_json::to_string(&lumen_layout::style::gap_rule_longhand_names(&prop))
+                .unwrap_or_else(|_| "[]".to_string())
+        }
+    );
+
+    // Shorthand value of a gap property from the stored longhands (`obj` is a JSON
+    // object of longhand → value); `None` when it cannot be composed.
+    reg!(scope, ctx, store,
+        "_lumen_css_gap_rule_shorthand",
+        |prop: String, obj: String| -> Option<String> {
+            let map: std::collections::HashMap<String, String> = serde_json::from_str(&obj).ok()?;
+            lumen_layout::style::gap_rule_shorthand_value(&prop, &|n| map.get(n).cloned())
+        }
+    );
+
     // Canonical `<length-percentage>` serialization for inline-`style`
     // margin-*/padding-* longhands (CSS Box §8, CSSOM-2/BUG-484) — same role
     // as `_lumen_css_canonical_color` above but for lengths: rejects a
