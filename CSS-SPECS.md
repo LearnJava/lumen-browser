@@ -298,6 +298,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `justify-content` | ✅ | |
 | `justify-items` / `justify-self` | ✅ | grid cells ✅; block-level `justify-self` (start/center/end, box_tree.rs auto-margin path) ✅ 2026-07-05; container `justify-items` default for block children ✅ 2026-07-18 |
 | `gap` / `row-gap` / `column-gap` | ✅ | |
+| `flex-wrap: balance` / `flex-line-count` | ⬜ | CSS Flexbox L2 `#algo-balance`: `FlexWrap` knows only nowrap/wrap/wrap-reverse (`style/values/flexgrid.rs`); 40 id `css/css-flexbox/balance/*` (WPT-RUN-14 срез 1, [BUG-1259](bugs/BUG-1259-OPEN.md)) |
 
 ### [T0] Transforms
 

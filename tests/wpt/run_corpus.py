@@ -180,8 +180,45 @@ def load_manifest() -> dict:
         return json.load(fh)
 
 
-def plan_shards(manifest: dict, categories: list) -> list:
+def parse_prefixes(text) -> list:
+    """`"css/css-flexbox, /css/css-grid/"` -> `["css/css-flexbox", "css/css-grid"]`.
+
+    Path prefixes relative to the WPT root, no leading or trailing slash. An
+    empty or `None` input is the empty list, i.e. "no filter".
+    """
+    if not text:
+        return []
+    return [p.strip().strip("/") for p in text.split(",") if p.strip().strip("/")]
+
+
+def _under(test_id: str, prefix: str) -> bool:
+    """Whether `test_id` is the path `prefix` or lies below it (a `?variant` of
+    the file counts too). `prefix` is a `parse_prefixes` entry."""
+    path = test_id.lstrip("/")
+    return path == prefix or path.startswith((prefix + "/", prefix + "?"))
+
+
+def id_selected(test_id: str, prefixes: list, exclude_prefixes: list) -> bool:
+    """The `--prefixes` / `--exclude-prefixes` filter: no `prefixes` means
+    everything; an exclusion always wins over an inclusion."""
+    if exclude_prefixes and any(_under(test_id, p) for p in exclude_prefixes):
+        return False
+    return not prefixes or any(_under(test_id, p) for p in prefixes)
+
+
+def plan_shards(manifest: dict, categories: list, prefixes: list = None,
+                exclude_prefixes: list = None) -> list:
     """Split the selected categories into runnable shards.
+
+    `prefixes` / `exclude_prefixes` (WPT-RUN-14) narrow the plan to a part of a
+    category — `css/css-flexbox` out of the 34 607-id `css`. The category is
+    still split exactly as without the filter, so shard names stay the ones a
+    full run would produce; a shard the filter only partly covers is then
+    re-cut along directories (`_narrow`) into pieces that are wholly inside the
+    selection, because wptrunner can only be pointed at a path prefix or an
+    explicit id list. Filtering the ids *before* the split would be wrong: a
+    selection of 1 400 ids would plan one shard named `css` with prefix `/css/`
+    and quietly run all 34 607.
 
     A shard is `{"name", "prefix", "ids", "auto_ids"}` where `prefix` is what
     gets passed to wptrunner as a positional test filter. Categories under
@@ -218,12 +255,18 @@ def plan_shards(manifest: dict, categories: list) -> list:
 
     shards = []
     dropped = 0
+    filtered = bool(prefixes or exclude_prefixes)
     for category in categories:
         ids = by_category.get(category)
         if not ids:
             print(f"warning: category not in manifest, skipped: {category}", file=sys.stderr)
             continue
-        for shard in _split([category], ids, automatable, long_tests):
+        planned = _split([category], ids, automatable, long_tests)
+        if filtered:
+            selected = {i for i in ids if id_selected(i, prefixes or [], exclude_prefixes or [])}
+            planned = [piece for shard in planned
+                       for piece in _narrow(shard, ids, selected, automatable, long_tests)]
+        for shard in planned:
             if shard["auto_ids"]:
                 shards.append(shard)
             else:
@@ -231,6 +274,62 @@ def plan_shards(manifest: dict, categories: list) -> list:
     if dropped:
         print(f"{dropped} shards hold only manual/visual tests — not planned "
               f"(wptrunner runs neither; they are not in the denominator)", file=sys.stderr)
+    return shards
+
+
+def _narrow(shard: dict, category_ids: list, selected: set, automatable: set,
+            long_tests: set) -> list:
+    """Cut one planned shard down to the part of it `selected` covers.
+
+    A shard wholly inside the selection comes back unchanged (same name, so a
+    filtered run's shards are a subset of the full run's). A shard wholly
+    outside comes back as nothing. A partly covered one is re-cut by directory:
+    a directory every id of which is selected becomes one prefix shard, a mixed
+    directory is descended into, and the files lying directly in a mixed
+    directory become one explicit-id `(bare)` shard (they cannot be addressed by
+    prefix without re-selecting their subdirectories).
+    """
+    if shard.get("test_ids"):
+        members = shard["test_ids"]
+    else:
+        members = [i for i in category_ids if i.startswith(shard["prefix"])]
+    chosen = [i for i in members if i in selected]
+    if not chosen:
+        return []
+    if len(chosen) == len(members):
+        return [shard]
+    if shard.get("test_ids"):
+        piece = _shard(shard["name"], None, chosen, automatable, long_tests)
+        piece["test_ids"] = sorted(chosen)
+        return [piece]
+    return _cover(shard["prefix"].strip("/").split("/"), members, selected,
+                  automatable, long_tests)
+
+
+def _cover(parts: list, ids: list, selected: set, automatable: set, long_tests: set) -> list:
+    """Exact cover of `selected ∩ ids` by prefix shards and one bare shard per
+    mixed directory — see `_narrow`."""
+    chosen = [i for i in ids if i in selected]
+    if not chosen:
+        return []
+    name = "/".join(parts)
+    if len(chosen) == len(ids):
+        return [_shard(name, f"/{name}/", ids, automatable, long_tests)]
+    depth = len(parts)
+    groups = {}
+    for test_id in ids:
+        segs = test_id.strip("/").split("/")
+        groups.setdefault(segs[depth] if len(segs) > depth + 1 else "", []).append(test_id)
+    shards = []
+    for key, group in sorted(groups.items()):
+        if key:
+            shards.extend(_cover(parts + [key], group, selected, automatable, long_tests))
+        else:
+            direct = sorted(i for i in group if i in selected)
+            if direct:
+                piece = _shard(f"{name} (bare)", None, direct, automatable, long_tests)
+                piece["test_ids"] = direct
+                shards.append(piece)
     return shards
 
 
@@ -397,7 +496,8 @@ def shard_timeout(shard: dict, base: int, per_id, processes: int = 1) -> int:
     return int(base + declared * BUDGET_SLACK / max(processes, 1))
 
 
-def https_ids(manifest: dict, scope: set = None) -> list:
+def https_ids(manifest: dict, scope: set = None, prefixes: list = None,
+              exclude_prefixes: list = None) -> list:
     """Every `.https.` test id.
 
     BUG-785 (fixed 2026-08-20) made these unreachable at the TLS layer,
@@ -414,7 +514,8 @@ def https_ids(manifest: dict, scope: set = None) -> list:
     return sorted({i for t, c, i in corpus_stats.iter_ids(manifest)
                    if ".https." in i
                    and t not in corpus_stats.NON_AUTOMATABLE_TYPES
-                   and (scope is None or c in scope)})
+                   and (scope is None or c in scope)
+                   and id_selected(i, prefixes or [], exclude_prefixes or [])})
 
 
 NO_TESTS_MARKERS = ("Unable to find any tests at the path(s)", "No tests ran")
@@ -844,7 +945,8 @@ def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
 
 
 def score_reports(manifest: dict, out_dir: str, scope: set = None,
-                  shard_states: list = None) -> dict:
+                  shard_states: list = None, prefixes: list = None,
+                  exclude_prefixes: list = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
     Ids with no result score 0 — that is the whole point of scoring against the
@@ -861,6 +963,8 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
         if test_type in corpus_stats.NON_AUTOMATABLE_TYPES:
             continue
         if scope is not None and category not in scope:
+            continue
+        if not id_selected(test_id, prefixes or [], exclude_prefixes or []):
             continue
         expected[test_id] = {"type": test_type, "category": category}
 
@@ -1040,11 +1144,82 @@ def _selftest() -> int:
         ("id with a verdict is not counted", got["by_type"].get("testharness") == 3),
     ]
     checks.extend(_selftest_resume())
+    checks.extend(_selftest_prefixes())
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     failed = [label for label, ok in checks if not ok]
     print(f"selftest: {'PASS' if not failed else 'FAIL (' + ', '.join(failed) + ')'}")
     return 1 if failed else 0
+
+
+def _selftest_prefixes() -> list:
+    """Prove `--prefixes` / `--exclude-prefixes` on a hand-made manifest (WPT-RUN-14).
+
+    The property that matters is an exact cover: the planned shards must run
+    every selected id exactly once and nothing else. Both halves have a failure
+    that looks like success — a shard that is too wide silently runs (and scores
+    against) the rest of the category, and one that is too narrow loses ids that
+    then score 0 as if the engine failed them — so the plan is expanded back to
+    ids and compared as sets.
+    """
+    def leaf():
+        return ["hash", [None, {}]]
+
+    files = ["a/x/1.html", "a/x/2.html", "a/y/3.html", "a/y/z/4.html", "a/y/z/5.html",
+             "a/6.html", "a/xx/7.html", "b/8.html"]
+    tree = {}
+    for f in files:
+        node = tree
+        parts = f.split("/")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = leaf()
+    manifest = {"items": {"testharness": tree}}
+
+    def covered(shards):
+        ids = []
+        for s in shards:
+            if s.get("test_ids"):
+                ids.extend(s["test_ids"])
+            else:
+                ids.extend(f"/{f}" for f in files if f"/{f}".startswith(s["prefix"]))
+        return sorted(ids)
+
+    def plan(cats, inc, exc):
+        global SHARD_THRESHOLD
+        saved, SHARD_THRESHOLD = SHARD_THRESHOLD, 2   # force the category to split
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                return plan_shards(manifest, cats, parse_prefixes(inc), parse_prefixes(exc))
+        finally:
+            SHARD_THRESHOLD = saved
+
+    def ids_of(*names):
+        return sorted(f"/{f}" for f in files if f in names)
+
+    whole = plan(["a"], None, None)
+    one = plan(["a"], "a/y", None)
+    mixed = plan(["a"], "a/y/z", "a/y/z/5.html")
+    out = plan(["a"], "a", "a/y,a/6.html")
+    return [
+        ("prefixes: no filter plans what it always did",
+         covered(whole) == ids_of(*[f for f in files if f.startswith("a/")])),
+        ("prefixes: a directory is covered exactly, `a/x` does not leak into `a/xx`",
+         covered(plan(["a"], "a/x", None)) == ids_of("a/x/1.html", "a/x/2.html")),
+        ("prefixes: a directory with a subdirectory is covered exactly",
+         covered(one) == ids_of("a/y/3.html", "a/y/z/4.html", "a/y/z/5.html")),
+        ("prefixes: an exclusion inside a selection carves one id out",
+         covered(mixed) == ids_of("a/y/z/4.html")),
+        ("prefixes: exclusions win over the whole category",
+         covered(out) == ids_of("a/x/1.html", "a/x/2.html", "a/xx/7.html")),
+        ("prefixes: the filter never selects another category",
+         covered(plan(["a"], "b", None)) == []),
+        ("prefixes: a single file is addressable",
+         covered(plan(["a"], "a/y/3.html", None)) == ids_of("a/y/3.html")),
+        ("prefixes: a variant id belongs to its file",
+         id_selected("/a/y/3.html?x=1", ["a/y/3.html"], [])
+         and not id_selected("/a/y/3.htmlx", ["a/y/3.html"], [])),
+    ]
 
 
 def _selftest_resume() -> list:
@@ -1111,6 +1286,15 @@ def main() -> int:
                         help="flat per-id time budget, seconds; default is to derive the "
                              "budget from the declared per-test timeouts in the manifest "
                              "(see shard_timeout)")
+    parser.add_argument("--prefixes", default=None,
+                        help="comma-separated WPT path prefixes (e.g. css/css-flexbox) — run and score "
+                             "only the ids under them, within the selected categories; the "
+                             "category is implied when no --categories/--all is given "
+                             "(WPT-RUN-14). Use a dedicated --out-dir: the filter is recorded in "
+                             "state.json and --resume refuses a different one")
+    parser.add_argument("--exclude-prefixes", default=None,
+                        help="comma-separated WPT path prefixes to leave out of the selection "
+                             "(applies on top of --prefixes; an exclusion always wins)")
     parser.add_argument("--resume", action="store_true", help="skip shards that already produced a report")
     parser.add_argument("--retry-timeouts", action="store_true",
                         help="on --resume, run budget-killed shards again instead of keeping "
@@ -1148,6 +1332,22 @@ def main() -> int:
             update_manifest()
 
     manifest = load_manifest()
+    prefixes = parse_prefixes(args.prefixes)
+    exclude_prefixes = parse_prefixes(args.exclude_prefixes)
+    if os.path.isfile(state_path):
+        with open(state_path, encoding="utf-8") as fh:
+            recorded = json.load(fh)
+        recorded_filter = (recorded.get("prefixes") or [], recorded.get("exclude_prefixes") or [])
+        if args.aggregate_only and not (prefixes or exclude_prefixes):
+            # Scoring an existing run: the filter belongs to the run, as the
+            # binary and the commit do.
+            prefixes, exclude_prefixes = recorded_filter
+        elif (args.resume or args.aggregate_only) and recorded_filter != (prefixes, exclude_prefixes):
+            print(f"{state_path} was written with --prefixes={recorded_filter[0]} "
+                  f"--exclude-prefixes={recorded_filter[1]}; this command asks for "
+                  f"{prefixes} / {exclude_prefixes}. Shards of the same name would cover "
+                  f"different ids — use a separate --out-dir", file=sys.stderr)
+            return 1
 
     # Provenance of an aggregate-only score belongs to the run that produced
     # the shards, not to the checkout that happens to be scoring them: the
@@ -1182,6 +1382,10 @@ def main() -> int:
     else:
         if args.all:
             categories = sorted({c for _t, c, _i in corpus_stats.iter_ids(manifest)})
+        elif prefixes and not (args.pilot or args.categories):
+            # `--prefixes css/css-flexbox` alone: the category is the first path
+            # component, nobody should have to say `--categories css` as well.
+            categories = sorted({p.split("/")[0] for p in prefixes})
         elif args.pilot:
             categories = list(PILOT_CATEGORIES)
         elif args.categories:
@@ -1190,14 +1394,14 @@ def main() -> int:
             print("pick a selection: --all, --pilot or --categories", file=sys.stderr)
             return 1
 
-        shards = plan_shards(manifest, categories)
+        shards = plan_shards(manifest, categories, prefixes, exclude_prefixes)
         print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids "
               f"({sum(s['auto_ids'] for s in shards)} automatable — the scored denominator), "
               f"--processes={args.processes}", flush=True)
 
         exclude_file = None
         if args.skip_https:
-            skipped = https_ids(manifest, set(categories))
+            skipped = https_ids(manifest, set(categories), prefixes, exclude_prefixes)
             exclude_file = os.path.join(args.out_dir, "exclude-https.txt")
             with open(exclude_file, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(skipped) + "\n")
@@ -1257,6 +1461,7 @@ def main() -> int:
             # that started it, and must be resumable from wherever it stopped.
             with open(state_path, "w", encoding="utf-8") as fh:
                 json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
+                           "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
                            "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
 
     # A run only gets to be scored against what it actually covered. The scope
@@ -1271,12 +1476,17 @@ def main() -> int:
     # itself as partial.
     all_categories = {c for t, c, _i in corpus_stats.iter_ids(manifest)
                       if t not in corpus_stats.NON_AUTOMATABLE_TYPES}
-    if scope and scope >= all_categories:
+    if scope and scope >= all_categories and not (prefixes or exclude_prefixes):
         scope = None
-    scored = score_reports(manifest, args.out_dir, scope, shard_states)
+    scored = score_reports(manifest, args.out_dir, scope, shard_states, prefixes,
+                           exclude_prefixes)
     if scope:
         print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
               f"(partial run — denominator covers only what was selected)")
+    if prefixes or exclude_prefixes:
+        print(f"filter: --prefixes {','.join(prefixes) or '(none)'}"
+              + (f" --exclude-prefixes {','.join(exclude_prefixes)}" if exclude_prefixes else "")
+              + " — the denominator is the ids under it, not the whole category")
     print_summary(scored, shard_states)
 
     # No silent caps: an intentionally unrun slice must be named in the same
@@ -1300,6 +1510,8 @@ def main() -> int:
             "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "processes": args.processes,
             "scope": sorted(scope) if scope else "full-corpus",
+            "prefixes": prefixes,
+            "exclude_prefixes": exclude_prefixes,
             "shards": shard_states,
             "scored": scored,
         }
