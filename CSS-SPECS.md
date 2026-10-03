@@ -388,7 +388,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `float` | ✅ | left/right/none; FloatContext axis-aligned placement + shrink-to-fit |
 | `clear` | ✅ | left/right/both; FloatContext.clear_y() |
-| `shape-outside` | 🟡 | parsed; `FloatContext` carries circle/ellipse/inset/polygon/path geometry, `shape-margin` grows it (§6.3, clamped to the margin box; `register_shape_outside`, p4-shape-margin 2026-10-03); per-line wrapping of inline content around it ⬜ (an `InlineRun` is wrapped at one width, so lines do not yet follow the contour) |
+| `shape-outside` | 🟡 | parsed; `FloatContext` carries circle/ellipse/inset/polygon/path geometry, `shape-margin` grows it (§6.3, clamped to the margin box; `register_shape_outside`, p4-shape-margin 2026-10-03); inline text follows the contour line by line (`inline_shape_wrap.rs`, p4-shape-outside-wrap 2026-10-03): each line box takes the band over its own vertical extent, wraps/aligns inside it, and a line that fits no word beside the float drops below it; not yet for `::first-line`, `text-wrap: balance\|pretty`, `line-clamp`, ellipsis, `white-space: pre*`, or a run sharing its row with an atomic inline (those keep the rectangular band); `shape-outside: <image>`/`<box>` ⬜ |
 
 ### [T1] Lists
 

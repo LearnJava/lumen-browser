@@ -1161,7 +1161,38 @@ pub(super) fn dispatch_box(
                 } else {
                     segments
                 };
-            *lines = if let Some(fls) = first_line_style.as_deref() {
+            // CSS Shapes L1 §3 — beside a float with a `shape-outside` every line
+            // box gets its own band (see `inline_shape_wrap`); already aligned.
+            let shaped = if inline_shape_wrap::eligible(
+                &s,
+                first_line_style.is_some(),
+                row_continuation_width.is_some(),
+                outer_floats,
+                b.rect.y,
+            ) && let Some(fc) = outer_floats
+            {
+                Some(inline_shape_wrap::wrap_around_shapes(
+                    &inline_shape_wrap::ShapedRun {
+                        fc,
+                        segments,
+                        style: &s,
+                        left: b.rect.x,
+                        top: b.rect.y,
+                        width: content_width,
+                        line_h: step_line_height(b.used_line_height, s.line_height_step),
+                        text_indent: text_indent_px,
+                        viewport,
+                    },
+                    m,
+                    hp,
+                ))
+            } else {
+                None
+            };
+            let was_shaped = shaped.is_some();
+            *lines = if let Some(shaped_lines) = shaped {
+                shaped_lines
+            } else if let Some(fls) = first_line_style.as_deref() {
                 // CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
                 // Pass A: wrap ALL segments under the ::first-line style to find the
                 // true extent of the first formatted line (a larger ::first-line font
@@ -1275,7 +1306,9 @@ pub(super) fn dispatch_box(
                 all.extend(rest);
                 *lines = all;
             }
-            if let Some(cont_width) = split_at_row_width
+            if was_shaped {
+                // Aligned line by line inside each band.
+            } else if let Some(cont_width) = split_at_row_width
                 && lines.len() > 1
             {
                 let (first, rest) = lines.split_at_mut(1);

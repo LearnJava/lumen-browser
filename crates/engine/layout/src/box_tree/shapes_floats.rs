@@ -310,6 +310,13 @@ pub(crate) struct FloatContext {
     pub(crate) shape_ellipses: Vec<ShapeEllipse>,
     /// CSS Shapes L1 — `shape-outside: inset(...)` overrides.
     pub(crate) shape_insets: Vec<ShapeInset>,
+    /// Indices into [`Self::left`] of floats whose `shape-outside` was recorded
+    /// above. Their rectangular margin-box entry stays (it still bounds float
+    /// enclosure, `clear` and single-band consumers) but a per-line query
+    /// ([`Self::line_band`]) follows the shape instead of the rectangle.
+    shaped_left: Vec<usize>,
+    /// Same as [`Self::shaped_left`], for [`Self::right`].
+    shaped_right: Vec<usize>,
     /// CSS 2.1 §9.5 — floats belonging to an *enclosing* block formatting
     /// context, inherited by a non-BFC child so its line boxes are shortened by
     /// the parent's floats (the child does not own them: they are excluded from
@@ -327,6 +334,8 @@ impl FloatContext {
             shape_polygons: Vec::new(),
             shape_ellipses: Vec::new(),
             shape_insets: Vec::new(),
+            shaped_left: Vec::new(),
+            shaped_right: Vec::new(),
             inherited: None,
         }
     }
@@ -345,10 +354,17 @@ impl FloatContext {
     /// Left boundary of available inline space at `y` (= rightmost right-edge
     /// of all left floats whose `bottom_y > y`).  Falls back to `default_x`.
     pub(crate) fn left_edge_at(&self, y: f32, default_x: f32) -> f32 {
+        self.left_edge_impl(y, default_x, false)
+    }
+
+    /// [`Self::left_edge_at`]; with `exact` a float that has a `shape-outside`
+    /// contributes its contour only, not its rectangular margin box.
+    fn left_edge_impl(&self, y: f32, default_x: f32, exact: bool) -> f32 {
         let rect_edge = self.left
             .iter()
-            .filter(|(bot, _)| *bot > y)
-            .map(|(_, r)| *r)
+            .enumerate()
+            .filter(|(i, (bot, _))| *bot > y && !(exact && self.shaped_left.contains(i)))
+            .map(|(_, (_, r))| *r)
             .fold(default_x, f32::max);
         // CSS Shapes L1: circle boundary.
         let after_circles = self.shape_circles
@@ -389,7 +405,7 @@ impl FloatContext {
             .fold(after_ellipses, f32::max);
         // CSS 2.1 §9.5: enclosing-context floats also push the left edge right.
         match &self.inherited {
-            Some(p) => p.left_edge_at(y, own),
+            Some(p) => p.left_edge_impl(y, own, exact),
             None => own,
         }
     }
@@ -397,10 +413,16 @@ impl FloatContext {
     /// Right boundary of available inline space at `y` (= leftmost left-edge
     /// of all right floats whose `bottom_y > y`).  Falls back to `default_x`.
     pub(crate) fn right_edge_at(&self, y: f32, default_x: f32) -> f32 {
+        self.right_edge_impl(y, default_x, false)
+    }
+
+    /// [`Self::right_edge_at`]; `exact` as in [`Self::left_edge_impl`].
+    fn right_edge_impl(&self, y: f32, default_x: f32, exact: bool) -> f32 {
         let rect_edge = self.right
             .iter()
-            .filter(|(bot, _)| *bot > y)
-            .map(|(_, l)| *l)
+            .enumerate()
+            .filter(|(i, (bot, _))| *bot > y && !(exact && self.shaped_right.contains(i)))
+            .map(|(_, (_, l))| *l)
             .fold(default_x, f32::min);
         // CSS Shapes L1: circle boundary.
         let after_circles = self.shape_circles
@@ -441,7 +463,7 @@ impl FloatContext {
             .fold(after_ellipses, f32::min);
         // CSS 2.1 §9.5: enclosing-context floats also pull the right edge left.
         match &self.inherited {
-            Some(p) => p.right_edge_at(y, own),
+            Some(p) => p.right_edge_impl(y, own, exact),
             None => own,
         }
     }
@@ -456,6 +478,57 @@ impl FloatContext {
     /// edge at `left_edge`.
     pub(crate) fn add_right(&mut self, bottom_y: f32, left_edge: f32) {
         self.right.push((bottom_y, left_edge));
+    }
+
+    /// Marks the float just added with [`Self::add_left`] / [`Self::add_right`]
+    /// as shaped (its `shape-outside` was recorded): see [`Self::line_band`].
+    pub(crate) fn mark_last_shaped(&mut self, is_left: bool) {
+        if is_left {
+            if let Some(i) = self.left.len().checked_sub(1) {
+                self.shaped_left.push(i);
+            }
+        } else if let Some(i) = self.right.len().checked_sub(1) {
+            self.shaped_right.push(i);
+        }
+    }
+
+    /// Lowest `bottom_y` of any recorded `shape-outside` visible here (owned or
+    /// inherited), `f32::NEG_INFINITY` when there is none. A line box that
+    /// starts at or below it cannot be affected by a contour, so such a run
+    /// keeps the plain single-band layout.
+    pub(crate) fn shapes_bottom(&self) -> f32 {
+        let own = self.shape_circles.iter().map(|c| c.1)
+            .chain(self.shape_polygons.iter().map(|p| p.bottom_y))
+            .chain(self.shape_ellipses.iter().map(|e| e.bottom_y))
+            .chain(self.shape_insets.iter().map(|i| i.bottom_y))
+            .fold(f32::NEG_INFINITY, f32::max);
+        self.inherited.as_ref().map_or(own, |p| own.max(p.shapes_bottom()))
+    }
+
+    /// CSS Shapes L1 §3 / CSS 2.1 §9.4.2 — the inline band `(left, right)` a
+    /// line box spanning `[y_top, y_bot)` may occupy: the tightest edges over
+    /// the whole box (sampled every px plus the last row), with a shaped float
+    /// narrowing it by its contour rather than its margin rectangle.
+    pub(crate) fn line_band(
+        &self,
+        y_top: f32,
+        y_bot: f32,
+        left_default: f32,
+        right_default: f32,
+    ) -> (f32, f32) {
+        let mut left = left_default;
+        let mut right = right_default;
+        let last = (y_bot - 0.01).max(y_top);
+        let mut y = y_top;
+        loop {
+            left = left.max(self.left_edge_impl(y, left_default, true));
+            right = right.min(self.right_edge_impl(y, right_default, true));
+            if y >= last {
+                break;
+            }
+            y = (y + 1.0).min(last);
+        }
+        (left, right)
     }
 
     /// CSS 2.1 §9.5.2 — advance `y` past all floats on the given side.
@@ -612,12 +685,13 @@ pub(crate) struct FloatShapeGeom {
 /// (the float keeps its rectangular wrapping). With `margin > 0` the wrap edge
 /// is additionally clamped to the float's margin box (§6.3: the float area never
 /// extends past it); with `margin == 0` the pre-existing geometry is kept as is.
+/// Returns whether a shape was recorded.
 pub(crate) fn register_shape_outside(
     fc: &mut FloatContext,
     sv: &str,
     g: &FloatShapeGeom,
     margin: f32,
-) {
+) -> bool {
     let m = margin.max(0.0);
     let bound_x = match (m > 0.0, g.is_left) {
         (false, true) => f32::INFINITY,
@@ -663,5 +737,8 @@ pub(crate) fn register_shape_outside(
             radius: if irad > 0.0 || m > 0.0 { irad + m } else { 0.0 },
             corner_top, corner_bottom, bound_x,
         });
+    } else {
+        return false;
     }
+    true
 }

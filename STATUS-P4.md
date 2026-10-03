@@ -1,4 +1,3 @@
-CSS-SPECS.md:391
 CSS-SPECS.md:223
 crates/engine/paint/src/display_list/background_mask.rs:435
 CSS-SPECS.md:524
