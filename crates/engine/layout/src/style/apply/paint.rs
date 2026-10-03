@@ -52,7 +52,7 @@ use crate::style::{
     parse_box_shadow_one,
     parse_cursor_kw,
     parse_length_q,
-    parse_position_component,
+    parse_position_axis,
     split_top_level_commas,
 };
 use crate::style::parse::box_sides::{
@@ -465,13 +465,11 @@ pub(in crate::style) fn apply_decl_paint(
         }
         "background-position-x" => {
             // CSS Backgrounds L4 §3.5 — standalone horizontal longhand,
-            // `[ center | left | right | <length-percentage> ]#`. Edge-relative
-            // offset form (`right -10px`) and `x-start`/`x-end` logical
-            // keywords are not yet supported — same deferral as the
-            // tri-/quad-form of `<position>` noted on `ObjectPosition::parse`.
+            // `[ center | [ [ left | right | x-start | x-end ]? <length-percentage>? ]! ]#`
+            // — включая смещение от края (`right -10px`), см. `parse_position_axis`.
             let xs: Vec<PositionComponent> = split_top_level_commas(val.trim())
                 .iter()
-                .filter_map(|s| parse_position_component(s.trim(), em_basis, viewport, false))
+                .filter_map(|s| parse_position_axis(s.trim(), em_basis, viewport, false))
                 .collect();
             if xs.is_empty() { return true; }
             if style.background_layers.is_empty() {
@@ -487,7 +485,7 @@ pub(in crate::style) fn apply_decl_paint(
             // `background-position-x` above.
             let ys: Vec<PositionComponent> = split_top_level_commas(val.trim())
                 .iter()
-                .filter_map(|s| parse_position_component(s.trim(), em_basis, viewport, true))
+                .filter_map(|s| parse_position_axis(s.trim(), em_basis, viewport, true))
                 .collect();
             if ys.is_empty() { return true; }
             if style.background_layers.is_empty() {

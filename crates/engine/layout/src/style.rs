@@ -271,7 +271,7 @@ pub use values::flexgrid::{
 pub(crate) use values::flexgrid::parse_auto_repeat;
 // `parse_position_component` тоже была приватной в доноре, но её зовёт
 // сосед `style::apply::motion` — реэкспорт сужен до `crate::style`.
-pub(in crate::style) use values::flexgrid::parse_position_component;
+pub(in crate::style) use values::flexgrid::{parse_position_axis, parse_position_component};
 pub use values::transform::{
     BackfaceVisibility, ClipPath, FilterFn, GradientStop, MaskComposite, MaskLayer, MaskMode,
     ShapeValue, TransformFn, TransformStyle,

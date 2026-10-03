@@ -186,6 +186,141 @@ use super::*;
         assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.75));
     }
 
+    // -------- <position> edge-offset форма (CSS Values L4 §9.4, BUG-495) --------
+
+    fn far(percent: f32, px: f32) -> PositionComponent {
+        PositionComponent::PercentPlusPx { percent, px }
+    }
+
+    #[test]
+    fn background_position_x_edge_offset_forms() {
+        let x = |css: &str| {
+            cascade_at("<div></div>", &format!("div {{ background-position-x: {css}; }}"), &[0])
+                .background_layers
+                .first()
+                .map(|l| l.position.x)
+        };
+        // `left <lp>` — от левого края, ≡ голое смещение.
+        assert_eq!(x("left -20%"), Some(PositionComponent::Percent(-0.20)));
+        assert_eq!(x("left 7px"), Some(PositionComponent::Px(7.0)));
+        // `right <px>` — от правого края: 100% минус смещение.
+        assert_eq!(x("right -10px"), Some(far(1.0, 10.0)));
+        assert_eq!(x("right 10px"), Some(far(1.0, -10.0)));
+        // `right <pct>` сворачивается в чистый процент.
+        assert_eq!(x("right 20%"), Some(PositionComponent::Percent(0.80)));
+        // Логические keyword-ы (≡ физические, см. parse_position_axis).
+        assert_eq!(x("x-start"), Some(PositionComponent::Percent(0.0)));
+        assert_eq!(x("x-end"), Some(PositionComponent::Percent(1.0)));
+        assert_eq!(x("x-end 4px"), Some(far(1.0, -4.0)));
+        // Недопустимые формы игнорируются.
+        assert_eq!(x("center 10px"), None);
+        assert_eq!(x("top 10px"), None);
+        assert_eq!(x("left right"), None);
+    }
+
+    #[test]
+    fn background_position_y_edge_offset_forms() {
+        let y = |css: &str| {
+            cascade_at("<div></div>", &format!("div {{ background-position-y: {css}; }}"), &[0])
+                .background_layers
+                .first()
+                .map(|l| l.position.y)
+        };
+        assert_eq!(y("bottom 3px"), Some(far(1.0, -3.0)));
+        assert_eq!(y("top 3px"), Some(PositionComponent::Px(3.0)));
+        assert_eq!(y("y-end"), Some(PositionComponent::Percent(1.0)));
+        assert_eq!(y("left 3px"), None);
+    }
+
+    #[test]
+    fn background_position_x_edge_offset_in_layer_list() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png), url(b.png), url(c.png);                   background-position-x: calc(10px - 0.5em), left -20%, right 10px; }",
+            &[0],
+        );
+        // em_basis = 16px: 10 - 8 = 2px.
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Px(2.0));
+        assert_eq!(s.background_layers[1].position.x, PositionComponent::Percent(-0.20));
+        assert_eq!(s.background_layers[2].position.x, far(1.0, -10.0));
+    }
+
+    #[test]
+    fn background_position_quad_form_shorthand() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: right 10px bottom 3px; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].position.x, far(1.0, -10.0));
+        assert_eq!(s.background_layers[0].position.y, far(1.0, -3.0));
+    }
+
+    #[test]
+    fn background_position_tri_form_and_axis_order() {
+        // `top 5px left` ≡ `left top 5px`: оси определяются keyword-ами.
+        let s = cascade_at("<div></div>", "div { background-position: top 5px left; }", &[0]);
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.0));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Px(5.0));
+        // `center` занимает оставшуюся ось.
+        let s = cascade_at("<div></div>", "div { background-position: center bottom 4px; }", &[0]);
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_layers[0].position.y, far(1.0, -4.0));
+    }
+
+    #[test]
+    fn background_shorthand_accepts_quad_position_and_size() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url(a.png) no-repeat right 10px bottom 3px / 20px 20px; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].position.x, far(1.0, -10.0));
+        assert_eq!(s.background_layers[0].position.y, far(1.0, -3.0));
+    }
+
+    #[test]
+    fn object_position_quad_form() {
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: right 10px bottom 20%; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, far(1.0, -10.0));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.80));
+    }
+
+    #[test]
+    fn mask_position_and_shorthand_accept_quad_form() {
+        let s = cascade_at("<div></div>", "div { mask-position: right 10px bottom 3px; }", &[0]);
+        let l = &s.mask_layers[0];
+        assert_eq!(l.position.x, far(1.0, -10.0));
+        assert_eq!(l.position.y, far(1.0, -3.0));
+        let s = cascade_at(
+            "<div></div>",
+            "div { mask: url(m.png) no-repeat right 10px bottom 3px / 20px 20px; }",
+            &[0],
+        );
+        let l = &s.mask_layers[0];
+        assert_eq!(l.position.x, far(1.0, -10.0));
+        assert_eq!(l.position.y, far(1.0, -3.0));
+    }
+
+    #[test]
+    fn position_invalid_edge_forms_rejected() {
+        // Две группы на одной оси, offset после `center`, лишний токен.
+        for bad in [
+            "left 10px right 5px",
+            "center 10px top",
+            "left 1px top 2px bottom 3px",
+            "10px left 5px",
+            "top 10px 20px",
+        ] {
+            let s = cascade_at("<img>", &format!("img {{ object-position: {bad}; }}"), &[0]);
+            assert_eq!(s.object_position, ObjectPosition::default(), "{bad}");
+        }
+    }
+
     // -------- image-rendering (CSS Images L3 §6.1) --------
 
     #[test]

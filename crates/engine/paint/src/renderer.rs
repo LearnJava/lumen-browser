@@ -39,7 +39,7 @@ use lumen_font::{
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, font_palette::FontPaletteSelection, style::TextOrientation};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, font_palette::FontPaletteSelection, style::TextOrientation};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry, InsertOutcome};
@@ -2473,14 +2473,8 @@ impl Renderer {
                     };
 
                     // Compute first tile origin from background-position relative to positioning area.
-                    let off_x = match position.x {
-                        PositionComponent::Px(px) => px,
-                        PositionComponent::Percent(p) => (oarea.width - tile_w) * p,
-                    };
-                    let off_y = match position.y {
-                        PositionComponent::Px(py) => py,
-                        PositionComponent::Percent(p) => (oarea.height - tile_h) * p,
-                    };
+                    let off_x = position.x.resolve(oarea.width - tile_w);
+                    let off_y = position.y.resolve(oarea.height - tile_h);
                     let tile_x0 = oarea.x + off_x;
                     let tile_y0 = oarea.y + off_y;
 
@@ -2860,14 +2854,8 @@ impl Renderer {
                                         }
                                     }
                                 };
-                                let off_x = match info.position.x {
-                                    PositionComponent::Px(px) => px,
-                                    PositionComponent::Percent(p) => (area.width - tile_w) * p,
-                                };
-                                let off_y = match info.position.y {
-                                    PositionComponent::Px(py) => py,
-                                    PositionComponent::Percent(p) => (area.height - tile_h) * p,
-                                };
+                                let off_x = info.position.x.resolve(area.width - tile_w);
+                                let off_y = info.position.y.resolve(area.height - tile_h);
                                 let tile_x0 = area.x + off_x;
                                 let tile_y0 = area.y + off_y;
                                 let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match info.repeat {

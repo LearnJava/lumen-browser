@@ -525,7 +525,7 @@ fn length_literal_is_negative(l: &Length) -> bool {
 /// of tokenizer, same "small enough to duplicate rather than couple
 /// unrelated modules" call the JS shim's `_lumen_split_top_level_ws_quoted`
 /// already made for the same concern (`bugs/BUG-505-OPEN.md` срез 2).
-fn split_top_level_ws(s: &str) -> Vec<&str> {
+pub(in crate::style) fn split_top_level_ws(s: &str) -> Vec<&str> {
     let bytes = s.as_bytes();
     let mut tokens = Vec::new();
     let mut start = 0;

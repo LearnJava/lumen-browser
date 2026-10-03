@@ -455,8 +455,13 @@ pub(in crate::style) fn parse_single_bg_layer(
         // position: one or two position-tokens, optionally followed by / size
         if t != "/" && is_bg_position_token(t) {
             let mut pos_parts = vec![t];
-            // Второй позиционный токен?
-            if idx + 1 < n && tokens[idx + 1] != "/" && is_bg_position_token(tokens[idx + 1]) {
+            // Ещё до трёх позиционных токенов (двух — для `x y`, четырёх —
+            // для edge-offset формы `right 10px bottom 5px`).
+            while pos_parts.len() < 4
+                && idx + 1 < n
+                && tokens[idx + 1] != "/"
+                && is_bg_position_token(tokens[idx + 1])
+            {
                 pos_parts.push(tokens[idx + 1]);
                 idx += 1;
             }
@@ -652,7 +657,11 @@ pub(in crate::style) fn parse_single_mask_layer(
         // <position> [ / <bg-size> ]?
         if t != "/" && is_bg_position_token(t) {
             let mut pos_parts = vec![t];
-            if idx + 1 < n && tokens[idx + 1] != "/" && is_bg_position_token(tokens[idx + 1]) {
+            while pos_parts.len() < 4
+                && idx + 1 < n
+                && tokens[idx + 1] != "/"
+                && is_bg_position_token(tokens[idx + 1])
+            {
                 pos_parts.push(tokens[idx + 1]);
                 idx += 1;
             }
