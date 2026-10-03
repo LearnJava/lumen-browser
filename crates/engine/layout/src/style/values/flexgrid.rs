@@ -388,6 +388,72 @@ fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Имена линий `<track-list>` оси (CSS Grid L1 §7.2.2): `[a b] 100px [c]`.
+///
+/// Индекс `i` результата — имена линии номер `i + 1`; длина всегда
+/// `треков + 1`. Фиксированный `repeat(N, ...)` разворачивается (имена на
+/// стыке итераций объединяются); `auto-fill`/`auto-fit` учитываются как одна
+/// итерация — то же правило, что в [`GridTrackSize::parse_track_list`], чтобы
+/// индексы совпадали с развёрнутым списком треков. `subgrid`/`masonry` и
+/// `none` дают пустой список.
+pub(crate) fn parse_track_line_names(s: &str, is_quirks: bool) -> Vec<Vec<String>> {
+    let trimmed = s.trim();
+    if trimmed.eq_ignore_ascii_case("subgrid")
+        || trimmed.eq_ignore_ascii_case("masonry")
+        || trimmed.eq_ignore_ascii_case("none")
+    {
+        return Vec::new();
+    }
+    let (_, names) = collect_line_names(trimmed, is_quirks);
+    // Без единого имени хранить нечего — экономим аллокации на типичных сетках.
+    if names.iter().all(Vec::is_empty) {
+        return Vec::new();
+    }
+    names
+}
+
+fn collect_line_names(s: &str, is_quirks: bool) -> (usize, Vec<Vec<String>>) {
+    let mut n_tracks = 0usize;
+    let mut names: Vec<Vec<String>> = vec![Vec::new()];
+    for token in split_track_list_tokens(s) {
+        let t = token.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            for name in t[1..t.len() - 1].split_whitespace() {
+                names[n_tracks].push(name.to_string());
+            }
+            continue;
+        }
+        let lc = t.to_ascii_lowercase();
+        if lc.starts_with("repeat(") && lc.ends_with(')') {
+            let inner = &t[7..t.len() - 1];
+            let Some((count_s, rest)) = split_paren_aware_comma(inner) else { continue };
+            let count_lc = count_s.trim().to_ascii_lowercase();
+            let times = if count_lc == "auto-fill" || count_lc == "auto-fit" {
+                1
+            } else if let Ok(n) = count_lc.parse::<usize>() {
+                n
+            } else {
+                continue;
+            };
+            let (inner_tracks, inner_names) = collect_line_names(rest.trim(), is_quirks);
+            for _ in 0..times {
+                for (k, group) in inner_names.iter().enumerate() {
+                    if k > 0 {
+                        n_tracks += 1;
+                        names.push(Vec::new());
+                    }
+                    names[n_tracks].extend(group.iter().cloned());
+                }
+                debug_assert_eq!(inner_names.len(), inner_tracks + 1);
+            }
+        } else if GridTrackSize::parse_single(t, is_quirks).is_some() {
+            n_tracks += 1;
+            names.push(Vec::new());
+        }
+    }
+    (n_tracks, names)
+}
+
 /// Tokenize a track-list string into individual track tokens,
 /// respecting parentheses (so `minmax(...)` stays as one token).
 fn split_track_list_tokens(s: &str) -> Vec<&str> {
@@ -397,8 +463,8 @@ fn split_track_list_tokens(s: &str) -> Vec<&str> {
     let bytes = s.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         match b {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
             b' ' | b'\t' | b'\n' if depth == 0 => {
                 let tok = s[start..i].trim();
                 if !tok.is_empty() {
@@ -479,38 +545,79 @@ pub enum GridLine {
     Line(i32),
     /// `span <integer>` — span N tracks.
     Span(u32),
-    /// Named grid area reference (CSS Grid L1 §8.3). Resolved at layout time
-    /// by looking up the name in the containing grid's `grid-template-areas`.
+    /// `<custom-ident>` — named grid area (`<name>-start` / `<name>-end`
+    /// implicit lines) or, failing that, the first line with that name
+    /// (CSS Grid L1 §8.3). Resolved at layout time against the container.
     Named(String),
+    /// `<integer> <custom-ident>` — N-th line with that name (negative N
+    /// counts from the end of the grid).
+    NamedLine(String, i32),
+    /// `span <custom-ident>` / `span <integer> <custom-ident>` — span until
+    /// the N-th line with that name, counted from the opposite edge.
+    SpanNamed(String, u32),
 }
 
 impl GridLine {
+    /// Parse a `<grid-line>` value (CSS Grid L1 §8.3):
+    /// `auto | <custom-ident> | [<integer [-∞,-1]|[1,∞]> && <custom-ident>?] |
+    /// [span && [<integer [1,∞]> || <custom-ident>]]`.
     pub fn parse(s: &str) -> Option<Self> {
-        let trimmed = s.trim();
-        if trimmed.eq_ignore_ascii_case("auto") {
-            return Some(Self::Auto);
-        }
-        // `span N` or `span`
-        if let Some(rest) = trimmed.to_ascii_lowercase().strip_prefix("span") {
-            let rest = rest.trim();
-            if rest.is_empty() {
-                return Some(Self::Span(1));
+        let toks: Vec<&str> = s.split_whitespace().collect();
+        let is_ident = |t: &str| {
+            is_css_ident(t)
+                && !t.eq_ignore_ascii_case("span")
+                && !t.eq_ignore_ascii_case("auto")
+        };
+        let as_int = |t: &str| t.parse::<i32>().ok();
+        match toks.as_slice() {
+            [] => None,
+            [t] => {
+                if t.eq_ignore_ascii_case("auto") {
+                    Some(Self::Auto)
+                } else if t.eq_ignore_ascii_case("span") {
+                    // Голое `span` без счётчика/имени невалидно по грамматике,
+                    // но исторически принималось как `span 1`.
+                    Some(Self::Span(1))
+                } else if let Some(n) = as_int(t) {
+                    (n != 0).then_some(Self::Line(n))
+                } else if is_ident(t) {
+                    Some(Self::Named((*t).to_string()))
+                } else {
+                    None
+                }
             }
-            if let Ok(n) = rest.parse::<u32>() {
-                return Some(Self::Span(n.max(1)));
+            [first, rest @ ..] if first.eq_ignore_ascii_case("span") => {
+                // `span` && [<integer> || <custom-ident>]
+                let (mut count, mut name) = (None, None);
+                for t in rest {
+                    if let Some(n) = as_int(t) {
+                        if n < 1 || count.is_some() {
+                            return None;
+                        }
+                        count = Some(n as u32);
+                    } else if is_ident(t) && name.is_none() {
+                        name = Some((*t).to_string());
+                    } else {
+                        return None;
+                    }
+                }
+                match (count, name) {
+                    (None, None) => None,
+                    (c, None) => Some(Self::Span(c.unwrap_or(1))),
+                    (c, Some(n)) => Some(Self::SpanNamed(n, c.unwrap_or(1))),
+                }
             }
+            [a, b] => {
+                // <integer> && <custom-ident> в любом порядке.
+                let (n, name) = match (as_int(a), as_int(b)) {
+                    (Some(n), None) if is_ident(b) => (n, *b),
+                    (None, Some(n)) if is_ident(a) => (n, *a),
+                    _ => return None,
+                };
+                (n != 0).then(|| Self::NamedLine(name.to_string(), n))
+            }
+            _ => None,
         }
-        // integer line number
-        if let Ok(n) = trimmed.parse::<i32>() && n != 0 {
-            return Some(Self::Line(n));
-        }
-        // CSS custom-ident: named grid area or named line.
-        // Only accept valid CSS idents (letters, digits, hyphens, underscores;
-        // cannot start with a digit or two hyphens without a letter).
-        if is_css_ident(trimmed) {
-            return Some(Self::Named(trimmed.to_string()));
-        }
-        None
     }
 }
 

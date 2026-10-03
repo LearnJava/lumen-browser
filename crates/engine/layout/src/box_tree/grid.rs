@@ -198,6 +198,29 @@ pub(crate) fn build_grid_init(
         eff_col_template.len().max(1)
     };
 
+    // Явная сетка для разрешения линий: треки шаблона или строки/столбцы
+    // `grid-template-areas` (что больше — CSS Grid L1 §7.1).
+    let areas_cols = s.grid_template_areas.first().map_or(0, Vec::len);
+    let areas_rows = s.grid_template_areas.len();
+    let subgrid_cols = eff_col_template.first() == Some(&GridTrackSize::Subgrid);
+    let subgrid_rows = eff_row_template.first() == Some(&GridTrackSize::Subgrid);
+    let col_axis = GridAxis {
+        n_tracks: if subgrid_cols { n_explicit_cols as u32 } else { eff_col_template.len().max(areas_cols) as u32 },
+        names: if subgrid_cols { &[] } else { &s.grid_template_col_line_names },
+        areas: &s.grid_template_areas,
+        is_col: true,
+    };
+    let row_axis = GridAxis {
+        n_tracks: if subgrid_rows {
+            inherited_rows.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1) as u32
+        } else {
+            eff_row_template.len().max(areas_rows) as u32
+        },
+        names: if subgrid_rows { &[] } else { &s.grid_template_row_line_names },
+        areas: &s.grid_template_areas,
+        is_col: false,
+    };
+
     // --- Step 1: Resolve placements for every item ---
     // placement: (col_start, col_end, row_start, row_end) all 1-based inclusive/exclusive.
     let mut placements: Vec<(u32, u32, u32, u32)> = vec![(0, 0, 0, 0); item_idxs.len()];
@@ -208,42 +231,12 @@ pub(crate) fn build_grid_init(
     for (k, &i) in item_idxs.iter().enumerate() {
         let is = &children[i].style;
 
-        // Resolve named area references first (grid-area: <name> shorthand or
-        // individual grid-{row,column}-{start,end}: <name> values).
-        let (named_cs, named_ce, named_rs, named_re) = {
-            let has_named = matches!(&is.grid_column_start, GridLine::Named(_))
-                || matches!(&is.grid_column_end, GridLine::Named(_))
-                || matches!(&is.grid_row_start, GridLine::Named(_))
-                || matches!(&is.grid_row_end, GridLine::Named(_));
-            if has_named && !s.grid_template_areas.is_empty() {
-                resolve_named_lines(
-                    &is.grid_column_start,
-                    &is.grid_column_end,
-                    &is.grid_row_start,
-                    &is.grid_row_end,
-                    &s.grid_template_areas,
-                )
-            } else {
-                (0, 0, 0, 0)
-            }
-        };
-
-        // For each axis: use resolved named value if non-zero, else fall back to
-        // the normal numeric/span resolver.
-        let cs = if named_cs != 0 { named_cs } else { resolve_grid_line(&is.grid_column_start, n_explicit_cols as u32) };
-        let ce = if named_ce != 0 { named_ce } else { resolve_grid_line_end(&is.grid_column_end, cs, n_explicit_cols as u32) };
-        let rs = if named_rs != 0 { named_rs } else { resolve_grid_line(&is.grid_row_start, 0) };
-        let re = if named_re != 0 { named_re } else { resolve_grid_line_end(&is.grid_row_end, rs, 0) };
-
-        // `grid-column: span N` → start=Span(N), end=Auto → cs=0, ce=0.
-        // resolve_grid_line returns 0 for Span-on-start, losing the count.
-        // Recover the span so Pass 2 can use it for placement sizing.
-        let ce = if ce == 0 {
-            match &is.grid_column_start { GridLine::Span(n) => *n, _ => 0 }
-        } else { ce };
-        let re = if re == 0 {
-            match &is.grid_row_start { GridLine::Span(n) => *n, _ => 0 }
-        } else { re };
+        // CSS Grid L1 §8.3: каждая ось разрешается независимо — номера линий
+        // (в т.ч. отрицательные), `span`, имена линий и неявные линии областей.
+        // Результат оси — `(start, end)`; `start == 0` — позиция авто, тогда
+        // `end` несёт span (0 — span 1).
+        let (cs, ce) = resolve_grid_axis(&is.grid_column_start, &is.grid_column_end, &col_axis);
+        let (rs, re) = resolve_grid_axis(&is.grid_row_start, &is.grid_row_end, &row_axis);
 
         if cs != 0 && rs != 0 {
             // Fully explicit: both axes known.
@@ -298,9 +291,19 @@ pub(crate) fn build_grid_init(
         if row_flow {
             let fixed_cs = if cs != 0 { cs } else { 0 };
             let fixed_ce = if cs != 0 { ce } else { 0 };
+            // CSS Grid L1 §8.5 шаг 2: элемент с определённой строкой и авто-столбцом
+            // остаётся в своей строке и ищет первый свободный столбец (а не уезжает
+            // за курсором).
+            let fixed_rs = rs;
 
             // Dense packing starts each scan from (1,1); sparse continues from cursor.
-            let (mut scan_r, mut scan_c) = if dense { (1u32, 1u32) } else { (cursor_row, cursor_col) };
+            let (mut scan_r, mut scan_c) = if fixed_rs != 0 {
+                (fixed_rs, 1u32)
+            } else if dense {
+                (1u32, 1u32)
+            } else {
+                (cursor_row, cursor_col)
+            };
 
             // BUG-801: the column bound below must never be able to reject
             // EVERY scan position, or the loop has no exit. Two ways that
@@ -322,7 +325,7 @@ pub(crate) fn build_grid_init(
                 let try_ce_val = if fixed_cs != 0 { fixed_ce } else { try_c + col_span };
 
                 // Bounds: item must fit within the (possibly grid-grown) column count.
-                let fits = fixed_cs != 0 || (try_ce_val - 1) <= col_bound;
+                let fits = fixed_cs != 0 || fixed_rs != 0 || (try_ce_val - 1) <= col_bound;
                 let cell_free = fits && (try_c..try_ce_val)
                     .all(|c| (scan_r..scan_r + row_span).all(|r| !occupied.contains(&(c, r))));
 
@@ -334,6 +337,10 @@ pub(crate) fn build_grid_init(
                         }
                     }
                     // Track highest placed row for grid-size calculation.
+                    if fixed_rs != 0 {
+                        // Элемент закреплён за строкой — курсор авто-размещения не двигается.
+                        break;
+                    }
                     cursor_row = cursor_row.max(scan_r);
                     if !dense {
                         cursor_col = try_ce_val;
@@ -346,7 +353,9 @@ pub(crate) fn build_grid_init(
                 }
 
                 // Advance scan position.
-                if fixed_cs != 0 {
+                if fixed_rs != 0 {
+                    scan_c += 1;
+                } else if fixed_cs != 0 {
                     scan_r += 1;
                     scan_c = 1;
                 } else {
@@ -630,49 +639,6 @@ pub(super) fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track
     template.get(idx as usize).unwrap_or(auto_track)
 }
 
-/// Resolve a `GridLine` to a 1-based track number, or 0 if auto.
-fn resolve_grid_line(line: &GridLine, n_tracks: u32) -> u32 {
-    match line {
-        GridLine::Auto | GridLine::Named(_) => 0,
-        GridLine::Line(n) => {
-            if *n > 0 {
-                *n as u32
-            } else if n_tracks > 0 {
-                // Negative line numbers count from the end.
-                (n_tracks as i32 + 1 + n).max(1) as u32
-            } else {
-                1
-            }
-        }
-        GridLine::Span(_) => 0, // span on start — auto
-    }
-}
-
-/// Resolve a grid-line end given start position and span.
-fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
-    match line {
-        GridLine::Auto | GridLine::Named(_) => {
-            if start > 0 { start + 1 } else { 0 }
-        }
-        GridLine::Line(n) => {
-            if *n > 0 {
-                (*n as u32).max(start + 1)
-            } else if n_tracks > 0 {
-                let abs = (n_tracks as i32 + 1 + n).max(1) as u32;
-                abs.max(start + 1)
-            } else {
-                start + 1
-            }
-        }
-        GridLine::Span(n) => {
-            // When start is known: end = start + span.
-            // When start is auto (0): store span N directly so pass-2 placement
-            // can use `re - rs = N - 0 = N` to recover the span count.
-            if start > 0 { start + n } else { *n }
-        }
-    }
-}
-
 /// CSS Grid L1 §7.3 — locate a named area in `grid-template-areas`.
 ///
 /// Returns `(row_start, row_end, col_start, col_end)` as 1-based exclusive
@@ -700,46 +666,167 @@ fn find_named_area(areas: &[Vec<String>], name: &str) -> Option<(u32, u32, u32, 
     Some((row_start?, row_end?, col_start?, col_end?))
 }
 
-/// Resolve named grid-line references for a single item against the
-/// container's `grid-template-areas`. Returns `(col_start, col_end, row_start, row_end)`.
-///
-/// When all four placement properties are `Named(same_name)` (set by
-/// `grid-area: <name>` shorthand), the area bounds are looked up once and
-/// applied to all four axes. Mixed named/unnamed configurations fall back
-/// to `Auto` (0) for any unresolved axis.
-fn resolve_named_lines(
-    col_start: &GridLine,
-    col_end: &GridLine,
-    row_start: &GridLine,
-    row_end: &GridLine,
-    areas: &[Vec<String>],
-) -> (u32, u32, u32, u32) {
-    // When grid-area: <name> sets all four to Named(name), resolve as one area.
-    if let (
-        GridLine::Named(n_cs),
-        GridLine::Named(n_ce),
-        GridLine::Named(n_rs),
-        GridLine::Named(n_re),
-    ) = (col_start, col_end, row_start, row_end)
-        && n_cs == n_ce
-        && n_ce == n_rs
-        && n_rs == n_re
-        && let Some((rs, re, cs, ce)) = find_named_area(areas, n_cs)
-    {
-        return (cs, ce, rs, re);
+/// Явная сетка одной оси для разрешения `<grid-line>` (CSS Grid L1 §8.3).
+struct GridAxis<'a> {
+    /// Число треков явной сетки (линий — на одну больше).
+    n_tracks: u32,
+    /// Имена линий: индекс `i` — линия номер `i + 1`.
+    names: &'a [Vec<String>],
+    /// `grid-template-areas` — источник неявных линий `<area>-start/-end`.
+    areas: &'a [Vec<String>],
+    /// `true` — ось столбцов.
+    is_col: bool,
+}
+
+impl GridAxis<'_> {
+    /// Номер последней линии явной сетки.
+    fn last_line(&self) -> u32 {
+        self.n_tracks + 1
     }
-    // Partial Named references: each axis resolved independently.
-    let cs = if let GridLine::Named(n) = col_start {
-        find_named_area(areas, n).map_or(0, |(_, _, cs, _)| cs)
-    } else { 0 };
-    let ce = if let GridLine::Named(n) = col_end {
-        find_named_area(areas, n).map_or(0, |(_, _, _, ce)| ce)
-    } else { 0 };
-    let rs = if let GridLine::Named(n) = row_start {
-        find_named_area(areas, n).map_or(0, |(rs, _, _, _)| rs)
-    } else { 0 };
-    let re = if let GridLine::Named(n) = row_end {
-        find_named_area(areas, n).map_or(0, |(_, re, _, _)| re)
-    } else { 0 };
-    (cs, ce, rs, re)
+
+    /// Все линии с именем `name` (по возрастанию, без дублей): именованные
+    /// линии `grid-template-*` и неявные `<area>-start` / `<area>-end`.
+    fn lines_named(&self, name: &str) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for (i, group) in self.names.iter().enumerate() {
+            if group.iter().any(|n| n == name) {
+                out.push(i as u32 + 1);
+            }
+        }
+        let implicit = name
+            .strip_suffix("-start")
+            .map(|a| (a, true))
+            .or_else(|| name.strip_suffix("-end").map(|a| (a, false)));
+        if let Some((area, is_start)) = implicit
+            && let Some((rs, re, cs, ce)) = find_named_area(self.areas, area)
+        {
+            let (start, end) = if self.is_col { (cs, ce) } else { (rs, re) };
+            out.push(if is_start { start } else { end });
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// `<integer> <custom-ident>` — N-я линия с именем (отрицательная — с конца).
+    /// Не хватает линий — неявные линии за явной сеткой считаются имеющими это
+    /// имя (§8.3), в нужную сторону от явной сетки.
+    fn nth_named(&self, name: &str, n: i32) -> u32 {
+        let lines = self.lines_named(name);
+        let k = lines.len() as i32;
+        if n > 0 {
+            if n <= k {
+                lines[n as usize - 1]
+            } else {
+                self.last_line() + (n - k) as u32
+            }
+        } else if -n <= k {
+            lines[(k + n) as usize]
+        } else {
+            1
+        }
+    }
+
+    /// `<custom-ident>` на стороне start/end: сначала `<ident>-start|-end`
+    /// (область), затем линия с именем `<ident>`, иначе `1 <ident>`.
+    fn named_edge(&self, name: &str, is_start: bool) -> u32 {
+        let suffixed = format!("{name}{}", if is_start { "-start" } else { "-end" });
+        if let Some(&l) = self.lines_named(&suffixed).first() {
+            return l;
+        }
+        self.nth_named(name, 1)
+    }
+
+    /// Номер линии для `Line(n)`: положительный как есть, отрицательный — с
+    /// конца явной сетки (`-1` — последняя линия). Не меньше 1.
+    fn numbered(&self, n: i32) -> u32 {
+        if n > 0 {
+            n as u32
+        } else {
+            (self.last_line() as i32 + 1 + n).max(1) as u32
+        }
+    }
+
+    /// N-я линия `name` строго после `from` (поиск вперёд, для `span N name`).
+    fn span_forward(&self, name: &str, from: u32, n: u32) -> u32 {
+        let after: Vec<u32> = self.lines_named(name).into_iter().filter(|&l| l > from).collect();
+        let k = after.len() as u32;
+        if n <= k {
+            after[n as usize - 1]
+        } else {
+            from.max(self.last_line()) + (n - k)
+        }
+    }
+
+    /// N-я линия `name` строго до `from` (поиск назад); нет — 1.
+    fn span_backward(&self, name: &str, from: u32, n: u32) -> u32 {
+        let before: Vec<u32> = self.lines_named(name).into_iter().filter(|&l| l < from).collect();
+        let k = before.len() as u32;
+        if n <= k { before[(k - n) as usize] } else { 1 }
+    }
+}
+
+/// Одна сторона `<grid-line>` после разрешения имён.
+enum Edge {
+    /// Позиция авто.
+    Auto,
+    /// Определённая линия.
+    Line(u32),
+    /// `span N` с необязательным именем линии-границы.
+    Span(u32, Option<String>),
+}
+
+fn resolve_edge(line: &GridLine, axis: &GridAxis, is_start: bool) -> Edge {
+    match line {
+        GridLine::Auto => Edge::Auto,
+        GridLine::Line(n) => Edge::Line(axis.numbered(*n)),
+        GridLine::Span(n) => Edge::Span(*n, None),
+        GridLine::Named(name) => Edge::Line(axis.named_edge(name, is_start)),
+        GridLine::NamedLine(name, n) => Edge::Line(axis.nth_named(name, *n)),
+        GridLine::SpanNamed(name, n) => Edge::Span(*n, Some(name.clone())),
+    }
+}
+
+/// CSS Grid L1 §8.3.1 — разрешает пару `start`/`end` одной оси.
+///
+/// Возвращает `(start, end)` — номера линий, 1-based. `start == 0` означает
+/// авто-позицию: тогда `end` — число занимаемых треков (0 — один).
+fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
+    let s = resolve_edge(start, axis, true);
+    let mut e = resolve_edge(end, axis, false);
+    // Два `span` — end отбрасывается (§8.3.1).
+    if matches!(s, Edge::Span(..)) && matches!(e, Edge::Span(..)) {
+        e = Edge::Auto;
+    }
+    match (s, e) {
+        (Edge::Line(a), Edge::Line(b)) => match a.cmp(&b) {
+            std::cmp::Ordering::Less => (a, b),
+            std::cmp::Ordering::Greater => (b, a), // меняются местами
+            std::cmp::Ordering::Equal => (a, a + 1),
+        },
+        (Edge::Line(a), Edge::Span(n, name)) => {
+            let b = match name {
+                Some(name) => axis.span_forward(&name, a, n),
+                None => a + n,
+            };
+            (a, b)
+        }
+        (Edge::Line(a), Edge::Auto) => (a, a + 1),
+        (Edge::Span(n, name), Edge::Line(b)) => {
+            let a = match name {
+                Some(name) => axis.span_backward(&name, b, n),
+                None => b.saturating_sub(n).max(1),
+            };
+            (a, b.max(a + 1))
+        }
+        // Без противоположной линии именованный span считается по числу.
+        (Edge::Span(n, _), Edge::Auto) => (0, n),
+        (Edge::Auto, Edge::Line(b)) => {
+            let a = b.saturating_sub(1).max(1);
+            (a, b.max(a + 1))
+        }
+        (Edge::Auto, Edge::Span(n, _)) => (0, n),
+        (Edge::Auto, Edge::Auto) => (0, 0),
+        (Edge::Span(..), Edge::Span(..)) => unreachable!("end span dropped above"),
+    }
 }

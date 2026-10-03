@@ -2073,3 +2073,221 @@ fn grid_shorthand_areas_layout_placement() {
     assert!((items[1].rect.x - 100.0).abs() < 1.0, "b.x={}", items[1].rect.x);
     assert!((items[0].rect.height - 50.0).abs() < 1.0, "a.h={}", items[0].rect.height);
 }
+
+// ── <grid-line>: отрицательные номера, именованные линии, span <name> ─────
+
+/// Раскладка одного элемента `#a` в сетке 300px; возвращает его rect.
+fn place_in_3x3(template: &str, item_css: &str) -> (f32, f32, f32, f32) {
+    let root = lay(
+        "<body><div id='g'><span id='a'></span></div></body>",
+        &format!(
+            "#g {{ display: grid; width: 300px; {template} }} #a {{ {item_css} }}"
+        ),
+    );
+    let items = grid_items(first_element_child(&root));
+    let r = &items[0].rect;
+    (r.x, r.y, r.width, r.height)
+}
+
+const COLS_3: &str = "grid-template-columns: 100px 100px 100px; \
+                      grid-template-rows: 40px 40px 40px;";
+
+/// `GridLine::parse`: все формы §8.3.
+#[test]
+fn grid_line_parse_all_forms() {
+    use crate::GridLine as L;
+    assert_eq!(L::parse("-1"), Some(L::Line(-1)));
+    assert_eq!(L::parse("0"), None);
+    assert_eq!(L::parse("span 2"), Some(L::Span(2)));
+    assert_eq!(L::parse("span 0"), None);
+    assert_eq!(L::parse("span foo"), Some(L::SpanNamed("foo".into(), 1)));
+    assert_eq!(L::parse("span 2 foo"), Some(L::SpanNamed("foo".into(), 2)));
+    assert_eq!(L::parse("foo span 2"), None);
+    assert_eq!(L::parse("span foo 3"), Some(L::SpanNamed("foo".into(), 3)));
+    assert_eq!(L::parse("2 foo"), Some(L::NamedLine("foo".into(), 2)));
+    assert_eq!(L::parse("foo 2"), Some(L::NamedLine("foo".into(), 2)));
+    assert_eq!(L::parse("-1 foo"), Some(L::NamedLine("foo".into(), -1)));
+    assert_eq!(L::parse("0 foo"), None);
+    assert_eq!(L::parse("auto foo"), None);
+    assert_eq!(L::parse("1 2"), None);
+}
+
+/// `grid-column: 1 / -1` — от первой до последней линии явной сетки.
+#[test]
+fn grid_negative_line_spans_whole_explicit_grid() {
+    let (x, _, w, _) = place_in_3x3(COLS_3, "grid-column: 1 / -1;");
+    assert!((x - 0.0).abs() < 1.0 && (w - 300.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// `grid-row: -2 / -1` — последняя строка.
+#[test]
+fn grid_negative_row_lines_pick_last_row() {
+    let (_, y, _, h) = place_in_3x3(COLS_3, "grid-row: -2 / -1;");
+    assert!((y - 80.0).abs() < 1.0 && (h - 40.0).abs() < 1.0, "y={y} h={h}");
+}
+
+/// `grid-column-start: -2` на сетке из 3 столбцов — линия 3, end авто → один трек.
+#[test]
+fn grid_negative_start_only() {
+    let (x, _, w, _) = place_in_3x3(COLS_3, "grid-column-start: -2;");
+    assert!((x - 200.0).abs() < 1.0 && (w - 100.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// `3 / 1` — линии меняются местами (§8.3.1).
+#[test]
+fn grid_reversed_lines_swap() {
+    let (x, _, w, _) = place_in_3x3(COLS_3, "grid-column: 3 / 1;");
+    assert!((x - 0.0).abs() < 1.0 && (w - 200.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// Именованные линии: `[a] 100px [b] 100px [c] 100px [d]`, `grid-column: b / d`.
+#[test]
+fn grid_named_lines_start_end() {
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: [a] 100px [b] 100px [c] 100px [d]; grid-template-rows: 40px;",
+        "grid-column: b / d;",
+    );
+    assert!((x - 100.0).abs() < 1.0 && (w - 200.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// `grid-column: x` копирует имя на end; обе стороны — первая линия `x` → span 1.
+#[test]
+fn grid_single_named_line_shorthand_copies_to_end() {
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: 100px [x] 100px [x] 100px;",
+        "grid-column: x;",
+    );
+    assert!((x - 100.0).abs() < 1.0 && (w - 100.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// `<integer> <name>` — N-я линия с именем.
+#[test]
+fn grid_nth_named_line() {
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: [x] 100px [x] 100px [x] 100px [x];",
+        "grid-column: 2 x / 4 x;",
+    );
+    assert!((x - 100.0).abs() < 1.0 && (w - 200.0).abs() < 1.0, "x={x} w={w}");
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: [x] 100px [x] 100px [x] 100px [x];",
+        "grid-column: -2 x / -1 x;",
+    );
+    assert!((x - 200.0).abs() < 1.0 && (w - 100.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// `span <name>` ищет следующую линию с именем от противоположной стороны.
+#[test]
+fn grid_span_to_named_line() {
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: [s] 100px [m] 100px [m] 100px [e];",
+        "grid-column: s / span m;",
+    );
+    assert!((x - 0.0).abs() < 1.0 && (w - 100.0).abs() < 1.0, "x={x} w={w}");
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: [s] 100px [m] 100px [m] 100px [e];",
+        "grid-column: s / span 2 m;",
+    );
+    assert!((x - 0.0).abs() < 1.0 && (w - 200.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// `span <name> / <line>` — назад от end.
+#[test]
+fn grid_span_named_backward_from_end() {
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: [m] 100px [m] 100px [m] 100px [e];",
+        "grid-column: span m / e;",
+    );
+    assert!((x - 200.0).abs() < 1.0 && (w - 100.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// Неявные линии области: `grid-column: main-start / main-end`.
+#[test]
+fn grid_implicit_area_lines() {
+    let (x, y, w, h) = place_in_3x3(
+        "grid-template-columns: 100px 100px 100px; grid-template-rows: 40px 40px; \
+         grid-template-areas: \". main main\" \". main main\";",
+        "grid-column: main-start / main-end; grid-row: main-start / main-end;",
+    );
+    assert!((x - 100.0).abs() < 1.0 && (w - 200.0).abs() < 1.0, "x={x} w={w}");
+    assert!((y - 0.0).abs() < 1.0 && (h - 80.0).abs() < 1.0, "y={y} h={h}");
+}
+
+/// Явная сетка без треков в шаблоне берётся из `grid-template-areas`.
+#[test]
+fn grid_negative_line_uses_areas_extent() {
+    let root = lay(
+        "<body><div id='g'><span id='a'></span></div></body>",
+        "#g { display: grid; width: 200px; grid-auto-columns: 100px; \
+         grid-template-areas: \"a b\"; } #a { grid-column: 1 / -1; }",
+    );
+    let r = &grid_items(first_element_child(&root))[0].rect;
+    assert!((r.width - 200.0).abs() < 1.0, "w={}", r.width);
+}
+
+/// Область (`b-start`/`b-end`) приоритетнее линии `b` без суффикса.
+#[test]
+fn grid_area_name_beats_plain_line_name() {
+    let (x, _, w, _) = place_in_3x3(
+        "grid-template-columns: 100px 100px 100px; grid-template-rows: 40px; \
+         grid-template-areas: \". b b\";",
+        "grid-column: b;",
+    );
+    assert!((x - 100.0).abs() < 1.0 && (w - 200.0).abs() < 1.0, "x={x} w={w}");
+}
+
+/// Шортхенд: невалидная часть — вся декларация игнорируется.
+#[test]
+fn grid_column_shorthand_invalid_part_ignored() {
+    let s = grid_div_style("div { grid-column: 2 / 4; grid-column: 3 / 3abc; }");
+    assert_eq!(s.grid_column_start, GridLine::Line(2));
+    assert_eq!(s.grid_column_end, GridLine::Line(4));
+}
+
+/// `grid-column: 3` сбрасывает end в `auto` (а не оставляет прежний).
+#[test]
+fn grid_column_shorthand_single_resets_end() {
+    let s = grid_div_style("div { grid-column: 2 / 4; grid-column: 3; }");
+    assert_eq!(s.grid_column_start, GridLine::Line(3));
+    assert_eq!(s.grid_column_end, GridLine::Auto);
+    let s = grid_div_style("div { grid-column: foo; }");
+    assert_eq!(s.grid_column_end, GridLine::Named("foo".into()));
+}
+
+/// `grid-area`: пропущенные значения копируются из противоположной стороны,
+/// если это `<custom-ident>`, иначе `auto` (§8.4).
+#[test]
+fn grid_area_omitted_values() {
+    let s = grid_div_style("div { grid-area: a / b; }");
+    assert_eq!(s.grid_row_start, GridLine::Named("a".into()));
+    assert_eq!(s.grid_column_start, GridLine::Named("b".into()));
+    assert_eq!(s.grid_row_end, GridLine::Named("a".into()));
+    assert_eq!(s.grid_column_end, GridLine::Named("b".into()));
+    let s = grid_div_style("div { grid-area: 2 / 3; }");
+    assert_eq!(s.grid_row_end, GridLine::Auto);
+    assert_eq!(s.grid_column_end, GridLine::Auto);
+    let s = grid_div_style("div { grid-area: 2 / 3 / 4; }");
+    assert_eq!(s.grid_column_end, GridLine::Auto);
+    assert_eq!(s.grid_row_end, GridLine::Line(4));
+}
+
+/// Имена линий сохраняются (развёрнутый `repeat`, объединение на стыках).
+#[test]
+fn grid_template_line_names_stored() {
+    let s = grid_div_style(
+        "div { display: grid; grid-template-columns: [a b] 10px [c] repeat(2, [r] 5px [s]) [z]; }",
+    );
+    let names = &s.grid_template_col_line_names;
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert_eq!(names[0], vec!["a", "b"]);
+    assert_eq!(names[1], vec!["c", "r"]);
+    assert_eq!(names[2], vec!["s", "r"]);
+    assert_eq!(names[3], vec!["s", "z"]);
+}
+
+/// `grid-template` тоже сохраняет имена линий.
+#[test]
+fn grid_template_shorthand_stores_line_names() {
+    let s = grid_div_style("div { display: grid; grid-template: [r1] 10px [r2] / [c1] 20px [c2]; }");
+    assert_eq!(s.grid_template_row_line_names, vec![vec!["r1"], vec!["r2"]]);
+    assert_eq!(s.grid_template_col_line_names, vec![vec!["c1"], vec!["c2"]]);
+}

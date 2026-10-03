@@ -268,7 +268,7 @@ pub use values::flexgrid::{
 };
 // `parse_auto_repeat` была `pub(crate)` в доноре (зовёт только `style::apply::layout`
 // внутри крейта, не публичная поверхность наружу) — реэкспорт сужен так же.
-pub(crate) use values::flexgrid::parse_auto_repeat;
+pub(crate) use values::flexgrid::{parse_auto_repeat, parse_track_line_names};
 // `parse_position_component` тоже была приватной в доноре, но её зовёт
 // сосед `style::apply::motion` — реэкспорт сужен до `crate::style`.
 pub(in crate::style) use values::flexgrid::{parse_position_axis, parse_position_component};
