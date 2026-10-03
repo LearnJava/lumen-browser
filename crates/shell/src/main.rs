@@ -50,6 +50,7 @@ mod js_escape;
 mod layout_metrics;
 mod layout_walk;
 mod nav_history;
+mod no_paint_backend;
 mod page_source;
 mod page_state;
 mod parallel_fetch;

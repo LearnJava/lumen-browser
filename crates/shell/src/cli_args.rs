@@ -29,6 +29,7 @@ pub(crate) fn print_usage() {
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
     eprintln!("  [--maximized]                                   — развернуть окно на весь экран (живой перф-аудит)");
+    eprintln!("  [--no-paint]                                    — без растеризации и видимого окна: DOM+JS+layout (или LUMEN_NO_PAINT=1, PERF-10)");
     eprintln!("  [--forced-colors]                               — включить Forced Colors Mode (или LUMEN_FORCED_COLORS=1, BUG-755)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
@@ -261,6 +262,44 @@ pub(crate) fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
         }
     }
     (found, rest)
+}
+
+/// Извлечь `--no-paint` из аргументов (PERF-10).
+///
+/// Режим «DOM+JS+layout без paint и без видимого окна»: окно создаётся
+/// невидимым, вместо wgpu-бэкенда ставится `NoPaintBackend`. Для WPT-категорий,
+/// не проверяющих пиксели. Также включается `LUMEN_NO_PAINT=1`.
+pub(crate) fn extract_no_paint(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_NO_PAINT").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--no-paint" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+#[cfg(test)]
+mod no_paint_tests {
+    use super::extract_no_paint;
+
+    #[test]
+    fn flag_present_is_extracted_and_removed() {
+        let args: Vec<String> = vec!["--no-paint".into(), "http://x.com".into()];
+        let (found, rest) = extract_no_paint(&args);
+        assert!(found);
+        assert_eq!(rest, vec!["http://x.com".to_string()]);
+    }
+
+    #[test]
+    fn flag_absent_keeps_args() {
+        let args: Vec<String> = vec!["http://x.com".into()];
+        let (_, rest) = extract_no_paint(&args);
+        assert_eq!(rest, args);
+    }
 }
 
 /// Извлечь `--forced-colors` из аргументов (BUG-755).
@@ -747,6 +786,8 @@ pub(crate) fn run_cli() -> ExitCode {
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
     let (maximized, rest_args) = extract_maximized(&rest_args);
     let (forced_colors, rest_args) = extract_forced_colors(&rest_args);
+    let (no_paint, rest_args) = extract_no_paint(&rest_args);
+    crate::no_paint_backend::set_no_paint(no_paint);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
     // PERF-6: session health journal. Turned on by `--activity-log`/`--click-log`
