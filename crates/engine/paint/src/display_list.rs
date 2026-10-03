@@ -43,8 +43,9 @@ use lumen_layout::{
 };
 
 use crate::gap_decorations::{
-    emit_gap_rules, grid_gap_segments, inset_span, GapDecorationContext, GapSegment, GridGapGeometry, GridGapParams,
+    emit_gap_rules, grid_gap_segments, GapDecorationContext, GapSegment, GridGapGeometry, GridGapParams,
 };
+use crate::flex_gap_decorations::flex_gap_segments;
 
 mod paint_types;
 pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClipShape};
@@ -324,6 +325,10 @@ mod svg_table_and_hash;
 #[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]
 mod anim_and_chrome;
+
+#[cfg(test)]
+#[path = "display_list/tests/flex_gap_rules.rs"]
+mod flex_gap_rules;
 
 #[cfg(test)]
 #[path = "display_list/tests/shadows_and_transforms.rs"]

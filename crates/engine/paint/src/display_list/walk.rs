@@ -605,7 +605,7 @@ pub(crate) fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
 /// Returns an empty `Vec` when the container is not flex/grid, when both gap
 /// values are zero, or when neither axis has a visible rule.
 fn collect_gap_segments(b: &LayoutBox) -> GridGapGeometry {
-    let none = || GridGapGeometry { segments: Vec::new(), col_total: 0, row_total: 0 };
+    let none = || GridGapGeometry { segments: Vec::new(), col_total: 0, row_total: 0, column_reversed: false };
     let s = &b.style;
     // Only flex/grid containers produce gap rules.
     let is_flex_or_grid = matches!(
@@ -676,76 +676,19 @@ fn collect_gap_segments(b: &LayoutBox) -> GridGapGeometry {
         );
     }
 
-    let mut segments: Vec<GapSegment> = Vec::new();
-    const EPS: f32 = 1.5; // tolerance for float layout rounding
-
-    // CSS Gap Decorations L1 §3.3: segments run the full container length, so their
-    // only endpoints are container edges — cap endpoints, where the crossing gap width
-    // is 0 (a percentage resolves to 0, `overlap-join` is treated as 0). Junction insets
-    // need per-segment breaks (`*-rule-break`) and are not consulted yet.
-    let cap_px = |inset: &lumen_layout::RuleInset| match inset {
-        lumen_layout::RuleInset::Length(l) => l.resolve_or_zero(em, 0.0, vp),
-        lumen_layout::RuleInset::OverlapJoin => 0.0,
-    };
-    let (col_start, col_end) =
-        (cap_px(&s.column_rule_inset.cap_start), cap_px(&s.column_rule_inset.cap_end));
-    let (row_start, row_end) =
-        (cap_px(&s.row_rule_inset.cap_start), cap_px(&s.row_rule_inset.cap_end));
-    let rtl = s.direction == lumen_layout::Direction::Rtl;
-
-    if column_rule_visible && col_gap_px > 0.0 {
-        // Collect unique right-edges of children.
-        let mut rights: Vec<f32> =
-            children.iter().map(|c| c.rect.x + c.rect.width).collect();
-        rights.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
-        rights.dedup_by(|a, x| (*a - *x).abs() < EPS);
-
-        // For each right-edge, check if a child starts right_edge + col_gap away.
-        let lefts: Vec<f32> = children.iter().map(|c| c.rect.x).collect();
-        for right in &rights {
-            let expected = right + col_gap_px;
-            if lefts.iter().any(|l| (*l - expected).abs() < EPS)
-                && let Some((y, h)) = inset_span(cy, ch, col_start, col_end, false)
-            {
-                segments.push(GapSegment {
-                    rect: Rect::new(*right, y, col_gap_px, h),
-                    horizontal: false,
-                    gap: 0,
-                });
-            }
-        }
-    }
-
-    if row_rule_visible && row_gap_px > 0.0 {
-        // Collect unique bottom-edges of children.
-        let mut bottoms: Vec<f32> =
-            children.iter().map(|c| c.rect.y + c.rect.height).collect();
-        bottoms.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
-        bottoms.dedup_by(|a, x| (*a - *x).abs() < EPS);
-
-        let tops: Vec<f32> = children.iter().map(|c| c.rect.y).collect();
-        for bottom in &bottoms {
-            let expected = bottom + row_gap_px;
-            if tops.iter().any(|t| (*t - expected).abs() < EPS)
-                && let Some((x, w)) = inset_span(cx, cw, row_start, row_end, rtl)
-            {
-                segments.push(GapSegment {
-                    rect: Rect::new(x, *bottom, w, row_gap_px),
-                    horizontal: true,
-                    gap: 0,
-                });
-            }
-        }
-    }
-
-    // Flex: щели нумеруются по порядку координаты в своей оси.
-    let (mut col_total, mut row_total) = (0, 0);
-    for seg in &mut segments {
-        let n = if seg.horizontal { &mut row_total } else { &mut col_total };
-        seg.gap = *n;
-        *n += 1;
-    }
-    GridGapGeometry { segments, col_total, row_total }
+    // Flex: щели главной оси — между элементами одной flex-строки, поперечной — между
+    // строками; режутся по `*-rule-break: intersection` и сдвигаются `*-rule-inset-*`.
+    flex_gap_segments(
+        &children,
+        &GridGapParams {
+            content: (cx, cy, cw, ch),
+            col_gap: col_gap_px,
+            row_gap: row_gap_px,
+            column_visible: column_rule_visible,
+            row_visible: row_rule_visible,
+            style: s,
+        },
+    )
 }
 
 /// CSS Gap Decorations L1 — `DrawBorder` rules for the gaps of a flex/grid
@@ -759,7 +702,7 @@ pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
     if geom.segments.is_empty() {
         return Vec::new();
     }
-    let (col_total, row_total) = (geom.col_total, geom.row_total);
+    let (col_total, row_total, column_reversed) = (geom.col_total, geom.row_total, geom.column_reversed);
     let gap_segs = geom.segments;
     let s = &b.style;
     let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
@@ -785,8 +728,7 @@ pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
         }
         out
     };
-    let rtl = s.direction == lumen_layout::Direction::Rtl;
-    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, col_total, rtl);
+    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, col_total, column_reversed);
     let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, row_total, false);
     // CSS Gap Decorations L1 §3.5 `rule-overlap`: the axis painted last lies on top.
     let (mut out, top) = match s.rule_overlap {
