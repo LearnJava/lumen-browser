@@ -188,8 +188,8 @@ pub(crate) fn caps_synthesis(
             continue;
         }
         // Стиль капители: уменьшенный кегль + компенсация базовой линии.
-        let small = {
-            let mut st = seg.style.clone();
+        let small = Arc::new({
+            let mut st = (*seg.style).clone();
             let big = seg.style.font_size;
             st.font_size = big * SMALL_CAPS_SCALE;
             if seg.style.vertical_align == VerticalAlign::Baseline {
@@ -205,7 +205,7 @@ pub(crate) fn caps_synthesis(
                 st.vertical_align = VerticalAlign::Length(delta * (0.5 - ascent_ratio));
             }
             st
-        };
+        });
         // Разрез на однородные по роли прогоны символов.
         let start = out.len();
         let mut prev_role: Option<CapsRole> = None;

@@ -377,7 +377,7 @@ mod tests {
             width,
             y_offset: 0.0,
             text: text.to_string(),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             padding_left: 0.0,
             padding_right: 0.0,
             is_element_box: false,
@@ -710,7 +710,7 @@ mod tests {
         let mut f = make_frag(text, x, node, 0);
         let mut st = ComputedStyle::root();
         st.user_select = us;
-        f.style = st;
+        f.style = std::sync::Arc::new(st);
         f
     }
 

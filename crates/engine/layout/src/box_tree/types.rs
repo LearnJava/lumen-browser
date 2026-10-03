@@ -153,7 +153,7 @@ pub enum BoxRole {
 #[derive(Debug, Clone)]
 pub struct InlineSegment {
     pub text: String,
-    pub style: ComputedStyle,
+    pub style: std::sync::Arc<ComputedStyle>,
     /// Resolved px space before this segment's first word:
     /// margin_left + border_left_width + padding_left of the inline element.
     pub pre_space: f32,
@@ -232,14 +232,14 @@ pub enum PseudoKind {
 /// `width` — ширина текста фрагмента в пикселях.
 /// `padding_left` / `padding_right` — разрешённые px padding-а inline-элемента
 /// для этого фрагмента (ненулевые только для первого/последнего слова сегмента).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct InlineFrag {
     pub x: f32,
     pub width: f32,
     /// Vertical offset within the line box (CSS vertical-align). Positive = down.
     pub y_offset: f32,
     pub text: String,
-    pub style: ComputedStyle,
+    pub style: std::sync::Arc<ComputedStyle>,
     /// Resolved padding_left of this frag's inline box start (0 if not a box start).
     pub padding_left: f32,
     /// Resolved padding_right of this frag's inline box end (0 if not a box end).
@@ -277,6 +277,46 @@ pub struct InlineFrag {
     /// common single-source fragment. Read through
     /// [`crate::text_geometry::frag_source_spans`].
     pub merged_sources: Vec<MergedSource>,
+}
+
+/// Равенство по значению, но стиль сначала по указателю: фрагменты строки делят `Arc` с сегментом и
+/// с прошлым деревом, а полное сравнение 302 полей `ComputedStyle` — почти вся цена `subtree_paint_eq`
+/// (PERF-16, срез 3). Поля разобраны поимённо без `..`: новое поле не скомпилируется, пока его не добавят сюда.
+impl PartialEq for InlineFrag {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            x,
+            width,
+            y_offset,
+            text,
+            style,
+            padding_left,
+            padding_right,
+            is_element_box,
+            img_src,
+            img_is_lazy,
+            is_first_line,
+            source_node,
+            source_char_offset,
+            bidi_level,
+            merged_sources,
+        } = self;
+        x == &other.x
+            && width == &other.width
+            && y_offset == &other.y_offset
+            && text == &other.text
+            && (std::sync::Arc::ptr_eq(style, &other.style) || style == &other.style)
+            && padding_left == &other.padding_left
+            && padding_right == &other.padding_right
+            && is_element_box == &other.is_element_box
+            && img_src == &other.img_src
+            && img_is_lazy == &other.img_is_lazy
+            && is_first_line == &other.is_first_line
+            && source_node == &other.source_node
+            && source_char_offset == &other.source_char_offset
+            && bidi_level == &other.bidi_level
+            && merged_sources == &other.merged_sources
+    }
 }
 
 /// Where a later DOM text node's words start inside a merged [`InlineFrag`]
