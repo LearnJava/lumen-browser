@@ -197,6 +197,9 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.font_weight = parent.font_weight;
     style.font_variant_caps = parent.font_variant_caps;
     style.font_variant_emoji = parent.font_variant_emoji;
+    style.font_variant_ligatures = parent.font_variant_ligatures;
+    style.font_variant_numeric = parent.font_variant_numeric;
+    style.font_variant_position = parent.font_variant_position;
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
@@ -304,6 +307,9 @@ pub fn merge_pseudo_inherited(
         font_weight,
         font_variant_caps,
         font_variant_emoji,
+        font_variant_ligatures,
+        font_variant_numeric,
+        font_variant_position,
         font_stretch,
         font_optical_sizing,
         font_size_adjust,

@@ -140,7 +140,23 @@ fn apply_css_wide_keyword_with(
             if prop == "font-variant" {
                 style.font_variant_emoji =
                     if inh { inherited.font_variant_emoji } else { init.font_variant_emoji };
+                let src = if inh { inherited } else { init };
+                style.font_variant_ligatures = src.font_variant_ligatures;
+                style.font_variant_numeric = src.font_variant_numeric;
+                style.font_variant_position = src.font_variant_position;
             }
+        }
+        "font-variant-ligatures" => {
+            style.font_variant_ligatures =
+                if inh { inherited.font_variant_ligatures } else { init.font_variant_ligatures };
+        }
+        "font-variant-numeric" => {
+            style.font_variant_numeric =
+                if inh { inherited.font_variant_numeric } else { init.font_variant_numeric };
+        }
+        "font-variant-position" => {
+            style.font_variant_position =
+                if inh { inherited.font_variant_position } else { init.font_variant_position };
         }
         "font-variant-emoji" => {
             style.font_variant_emoji =

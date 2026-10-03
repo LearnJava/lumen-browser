@@ -39,7 +39,8 @@ use crate::style::{
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
     FlexWrap, FloatSide, FontFeatureSetting, FontOpticalSizing, FontPalette, FontSizeAdjust,
-    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
+    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
+    FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
     ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     InterpolateSizeMode, Isolation, IterationCount, Length, LengthOrAuto, LineBreak,
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
@@ -155,6 +156,13 @@ pub struct ComputedStyle {
     /// CSS Fonts L4 §6.6 — font-variant-emoji. Inherited. На выбор глифа пока
     /// не влияет — см. [`FontVariantEmoji`].
     pub font_variant_emoji: FontVariantEmoji,
+    /// CSS Fonts L4 §6.5 — font-variant-ligatures. Inherited. Попадает в
+    /// OpenType-фичи через [`text_font_features`].
+    pub font_variant_ligatures: FontVariantLigatures,
+    /// CSS Fonts L4 §6.7 — font-variant-numeric. Inherited.
+    pub font_variant_numeric: FontVariantNumeric,
+    /// CSS Fonts L4 §6.8 — font-variant-position. Inherited.
+    pub font_variant_position: FontVariantPosition,
     /// CSS Fonts L4 §2.5 — font-stretch (десятые доли процента; normal = 1000).
     /// Inherited.
     pub font_stretch: FontStretch,
@@ -1104,6 +1112,9 @@ impl ComputedStyle {
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
             && self.font_variant_caps == other.font_variant_caps
+            && self.font_variant_ligatures == other.font_variant_ligatures
+            && self.font_variant_numeric == other.font_variant_numeric
+            && self.font_variant_position == other.font_variant_position
             && self.font_stretch == other.font_stretch
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
@@ -1142,6 +1153,9 @@ impl ComputedStyle {
             font_weight: FontWeight::NORMAL,
             font_variant_caps: FontVariantCaps::Normal,
             font_variant_emoji: FontVariantEmoji::Normal,
+            font_variant_ligatures: FontVariantLigatures::default(),
+            font_variant_numeric: FontVariantNumeric::default(),
+            font_variant_position: FontVariantPosition::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: default_font_family(),
             font_variation_settings: Vec::new(),
@@ -1489,6 +1503,9 @@ impl ComputedStyle {
             font_weight: inherited.font_weight,
             font_variant_caps: inherited.font_variant_caps,
             font_variant_emoji: inherited.font_variant_emoji,
+            font_variant_ligatures: inherited.font_variant_ligatures,
+            font_variant_numeric: inherited.font_variant_numeric,
+            font_variant_position: inherited.font_variant_position,
             font_stretch: inherited.font_stretch,
             font_family: inherited.font_family.clone(),
             font_variation_settings: inherited.font_variation_settings.clone(),

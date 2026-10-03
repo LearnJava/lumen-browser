@@ -205,8 +205,8 @@ pub use values::length::{
 // вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::typography::{
     ColorScheme, CssContinue, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing,
-    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
-    ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
+    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
+    FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform,
     TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxOrient, WhiteSpace,
