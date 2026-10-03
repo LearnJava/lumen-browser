@@ -6,8 +6,10 @@
 //!
 //! Phase 0 exposes:
 //! - `PerformanceSoftNavigationEntry` class (entryType = `'soft-navigation'`).
-//! - `_lumen_deliver_soft_nav(url, startTime, durationMs)` — shell hook to record
-//!   a soft navigation and notify `PerformanceObserver` subscribers.
+//! - `_lumen_deliver_soft_nav(url, startTime, durationMs)` — hook to record a soft
+//!   navigation and notify `PerformanceObserver` subscribers. Its caller is the
+//!   `_sn_*` block at the end of `shim/web_api_shim_tail.js` (GAP-SOFTNAV-S1):
+//!   trusted click/keydown + `pushState` + node insertion, delivered on the next rAF.
 //!
 //! The entry is inserted into `performance._perf_entries` (same slot used by other
 //! performance entries) so that `performance.getEntriesByType('soft-navigation')`

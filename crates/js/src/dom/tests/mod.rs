@@ -417,6 +417,7 @@ mod v8_bug671_selection_interface;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1137_history_interface;
+mod v8_soft_navigation_s1;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1138_html_document;

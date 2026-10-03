@@ -1193,7 +1193,9 @@ var _lumen_history_members = {
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
         _lumen_history_push(new_state_json, target === null ? '' : target);
         if (target !== null) {
+            var _sn_moved = target !== _lumen_loc_parts.href;
             _lumen_location_update(target);
+            if (_sn_moved) _sn_note_url(target);
         }
         // A same-document entry is added regardless of whether `url` was
         // given (HTML LS §7.4.6 step 8) — the shell must learn about it
@@ -1209,7 +1211,9 @@ var _lumen_history_members = {
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
         _lumen_history_replace(new_state_json, target === null ? '' : target);
         if (target !== null) {
+            var _sn_moved = target !== _lumen_loc_parts.href;
             _lumen_location_update(target);
+            if (_sn_moved) _sn_note_url(target);
         }
         _lumen_history_replace_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
