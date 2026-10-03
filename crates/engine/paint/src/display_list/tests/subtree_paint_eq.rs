@@ -391,7 +391,7 @@ fn key_notices_every_field_emit_reads_and_ignores_dirty() {
         ("frag.y_offset", Box::new(|b| frag_mut(b, |f| f.y_offset += 0.25))),
         ("frag.text", Box::new(|b| frag_mut(b, |f| f.text.push('!')))),
         ("frag.style.color", Box::new(|b| {
-            frag_mut(b, |f| f.style.color = Color { r: 9, g: 8, b: 7, a: 255 });
+            frag_mut(b, |f| std::sync::Arc::make_mut(&mut f.style).color = Color { r: 9, g: 8, b: 7, a: 255 });
         })),
         ("frag.padding_left", Box::new(|b| frag_mut(b, |f| f.padding_left += 1.0))),
         ("frag.bidi_level", Box::new(|b| frag_mut(b, |f| f.bidi_level += 1))),

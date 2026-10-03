@@ -247,7 +247,7 @@ fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSeg
     style.font_variant_caps = caps;
     super::InlineSegment {
         text: text.to_string(),
-        style,
+        style: std::sync::Arc::new(style),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -353,7 +353,7 @@ fn caps_synthesis_baseline_compensation_lowers_capitals() {
 fn caps_synthesis_respects_author_vertical_align() {
     use crate::style::{FontVariantCaps, VerticalAlign};
     let mut seg = caps_seg("ab", FontVariantCaps::SmallCaps);
-    seg.style.vertical_align = VerticalAlign::Super;
+    std::sync::Arc::make_mut(&mut seg.style).vertical_align = VerticalAlign::Super;
     let (segs, _) = super::caps_synthesis(&[seg], None).expect("must be synthesized");
     // Автор задал выравнивание явно — компенсацию не навязываем.
     assert_eq!(segs[0].style.vertical_align, VerticalAlign::Super);

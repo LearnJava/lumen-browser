@@ -702,7 +702,7 @@ fn make_frag(x: f32, width: f32) -> super::super::InlineFrag {
         width,
         y_offset: 0.0,
         text: String::new(),
-        style: ComputedStyle::root(),
+        style: std::sync::Arc::new(ComputedStyle::root()),
         padding_left: 0.0,
         padding_right: 0.0,
         is_element_box: false,

@@ -1208,7 +1208,7 @@ pub(super) fn dispatch_box(
                             // segment inherited — an inner `<b>`/`<em>` keeps its
                             // own metrics, so pass A measures the real glyphs.
                             fl_seg.style =
-                                crate::style::merge_pseudo_inherited(&seg.style, &s, fls);
+                                Arc::new(crate::style::merge_pseudo_inherited(&seg.style, &s, fls));
                         }
                         fl_seg
                     })
@@ -1342,7 +1342,7 @@ pub(super) fn dispatch_box(
                 // so it only supplies properties the fragment inherited; an inner
                 // `<b>`/`<em>`/`style="color:…"` keeps its own declarations.
                 if let Some(fls) = first_line_style {
-                    frag.style = crate::style::merge_pseudo_inherited(&frag.style, &s, fls);
+                    frag.style = Arc::new(crate::style::merge_pseudo_inherited(&frag.style, &s, fls));
                 }
             }
         }

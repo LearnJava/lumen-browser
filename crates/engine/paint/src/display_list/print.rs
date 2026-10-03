@@ -136,10 +136,10 @@ fn economize_box(b: &mut LayoutBox) {
     }
     if let BoxKind::InlineRun { segments, lines, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
-            economize_style(&mut seg.style);
+            economize_style(std::sync::Arc::make_mut(&mut seg.style));
         }
         for frag in lines.iter_mut().flatten() {
-            economize_style(&mut frag.style);
+            economize_style(std::sync::Arc::make_mut(&mut frag.style));
         }
     }
     for child in b.children.iter_mut() {

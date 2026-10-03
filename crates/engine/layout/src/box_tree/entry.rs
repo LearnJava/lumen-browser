@@ -631,7 +631,9 @@ pub(crate) fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
     }
     if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
-            apply_font_size_adjust_to_style(&mut seg.style, m);
+            if !matches!(seg.style.font_size_adjust, crate::style::FontSizeAdjust::None) {
+                apply_font_size_adjust_to_style(Arc::make_mut(&mut seg.style), m);
+            }
         }
     }
     for child in &mut b.children {

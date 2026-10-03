@@ -36,7 +36,7 @@ pub(crate) fn apply_first_letter_style(
                 let own_style = segments[i].style.clone();
                 segments[i].text = first_text;
                 segments[i].style =
-                    crate::style::merge_pseudo_inherited(&own_style, inherited, &fl_style);
+                    Arc::new(crate::style::merge_pseudo_inherited(&own_style, inherited, &fl_style));
                 let rest = InlineSegment {
                     text: rest_text,
                     style: own_style,
@@ -57,9 +57,9 @@ pub(crate) fn apply_first_letter_style(
                 segments.insert(i + 1, rest);
             } else {
                 // Single-char or empty segment: just layer the pseudo style on.
-                segments[i].style = crate::style::merge_pseudo_inherited(
+                segments[i].style = Arc::new(crate::style::merge_pseudo_inherited(
                     &segments[i].style, inherited, &fl_style,
-                );
+                ));
             }
             return;
         }
@@ -262,7 +262,7 @@ pub(crate) fn extract_initial_letter(
         inner_style.text_indent = Length::Px(0.0);
         inner_style.initial_letter_size = 1.0;
         inner_style.initial_letter_sink = 0;
-        seg.style = inner_style.clone();
+        seg.style = Arc::new(inner_style.clone());
 
         let inner = LayoutBox {
             node,
@@ -374,7 +374,7 @@ fn apply_first_line_pseudo_styles_inner(
             for frag in first_line.iter_mut() {
                 if frag.is_first_line {
                     frag.style =
-                        crate::style::merge_pseudo_inherited(&frag.style, &base, &fl_style);
+                        Arc::new(crate::style::merge_pseudo_inherited(&frag.style, &base, &fl_style));
                 }
             }
         }

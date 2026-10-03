@@ -686,7 +686,7 @@ fn position_relative_all_auto_no_offset() {
 fn first_seg_style(p: &LayoutBox) -> ComputedStyle {
     let run = first_inline_run(p);
     if let BoxKind::InlineRun { segments, .. } = &run.kind {
-        segments[0].style.clone()
+        (*segments[0].style).clone()
     } else {
         panic!("expected InlineRun with segments");
     }

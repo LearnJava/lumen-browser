@@ -768,7 +768,7 @@ fn wrap_inline_run_soft_hyphen_breaks_word_on_manual() {
     //   avail = 60-20-10 = 30; "hy-"=30 ≤ 30 → break at pos 2.
     let seg = InlineSegment {
         text: "hi hy\u{00AD}phen".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -821,7 +821,7 @@ fn wrap_inline_run_hyphens_none_no_break_on_shy() {
     // Same segment, Hyphens::None → soft hyphen ignored, full word wraps to new line unbroken.
     let seg = InlineSegment {
         text: "hi hy\u{00AD}phen".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -876,7 +876,7 @@ fn shy_invisible_when_word_fits_on_line() {
     // "hy\u{AD}phen" → strip → "hyphen" = 6 chars × 10px = 60px; max_width=200 → fits.
     let seg = InlineSegment {
         text: "hy\u{00AD}phen".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -941,7 +941,7 @@ fn shy_rightmost_fitting_break_selected() {
     //   rightmost: "super"=50, 50+10(hyphen)=60 ≤ 60 → break → "super-" / "man".
     let seg = InlineSegment {
         text: "xx su\u{00AD}per\u{00AD}man".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1002,7 +1002,7 @@ fn shy_auto_mode_respects_shy_positions() {
     // Same geometry as shy_rightmost_fitting_break_selected but with Hyphens::Auto.
     let seg = InlineSegment {
         text: "xx su\u{00AD}per\u{00AD}man".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1066,7 +1066,7 @@ fn shy_manual_no_hyphen_when_no_shy_in_word() {
     //   → normal wrap: "longword" moves to next line intact, no hyphen.
     let seg = InlineSegment {
         text: "aa longword".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1217,7 +1217,7 @@ fn overflow_wrap_break_word_splits_long_word() {
     // overflow-wrap: break-word should split it across lines.
     let seg = InlineSegment {
         text: "Superlongword".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1290,7 +1290,7 @@ fn wrap_cjk(
 
     let seg = InlineSegment {
         text: text.to_string(),
-        style: ComputedStyle::root(),
+        style: std::sync::Arc::new(ComputedStyle::root()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1427,7 +1427,7 @@ fn word_break_break_all_breaks_at_current_position() {
     //   Emit "Wor" at end of line1, line2 = "ld".
     let seg = InlineSegment {
         text: "Hi World".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,

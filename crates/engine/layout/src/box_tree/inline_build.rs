@@ -302,7 +302,7 @@ pub(crate) fn build_anon_text_item(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,
-    parent: &ComputedStyle,
+    parent: &Arc<ComputedStyle>,
     viewport: Size,
     flat: &FlatTree,
     counters: &CounterMap,
@@ -379,7 +379,7 @@ fn apply_first_letter_pseudo(
     }
     if first_char_end >= segs[pos].text.len() {
         // Single-character segment: layer the pseudo style on in place.
-        segs[pos].style = crate::style::merge_pseudo_inherited(&segs[pos].style, parent, &fl_style);
+        segs[pos].style = Arc::new(crate::style::merge_pseudo_inherited(&segs[pos].style, parent, &fl_style));
         return;
     }
     // Multi-character: split into [first_char | rest], each with its own style.
@@ -388,7 +388,7 @@ fn apply_first_letter_pseudo(
     let source_node = segs[pos].source_node;
     let post_space = segs[pos].post_space;
     segs[pos].text.truncate(first_char_end);
-    segs[pos].style = crate::style::merge_pseudo_inherited(&original_style, parent, &fl_style);
+    segs[pos].style = Arc::new(crate::style::merge_pseudo_inherited(&original_style, parent, &fl_style));
     segs[pos].post_space = 0.0;
     segs.insert(pos + 1, InlineSegment {
         text: rest_text,
@@ -442,7 +442,7 @@ pub(crate) fn split_inline_pieces(
     let mut rest = segs;
     // Escape-ы приходят в порядке обхода, их `at` не убывает; идём с конца,
     // чтобы отрезать хвост `split_off`-ом без сдвигов уже отданных индексов.
-    let mut tails: Vec<(Vec<InlineSegment>, NodeId, ComputedStyle)> = Vec::new();
+    let mut tails: Vec<(Vec<InlineSegment>, NodeId, Arc<ComputedStyle>)> = Vec::new();
     for esc in escapes.into_iter().rev() {
         let at = esc.at.min(rest.len());
         tails.push((rest.split_off(at), esc.node, esc.inherited));
@@ -733,7 +733,7 @@ pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items:
 pub(crate) fn control_value_segments(
     node: NodeId,
     value_text: &str,
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
 ) -> Vec<InlineSegment> {
     let mut out = Vec::new();
     let mut push = |text: String, forced_break: bool, byte_offset: u32| {
@@ -795,7 +795,7 @@ pub(crate) struct InlineEscape {
     /// Блочный контейнер строит бокс далеко от места находки, и его
     /// собственный стиль здесь не подходит: цвет/шрифт `<span>`-а между ними
     /// был бы потерян.
-    inherited: ComputedStyle,
+    inherited: Arc<ComputedStyle>,
 }
 
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
@@ -812,7 +812,7 @@ pub(crate) fn collect_inline_segments(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,
-    inherited: &ComputedStyle,
+    inherited: &Arc<ComputedStyle>,
     viewport: Size,
     out: &mut Vec<InlineSegment>,
     escapes: &mut Vec<InlineEscape>,
@@ -978,7 +978,7 @@ pub(crate) fn collect_inline_segments(
             }
         }
         NodeData::Element { .. } => {
-            let s = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
+            let s = Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode));
             if s.display == Display::None {
                 return;
             }
@@ -1259,7 +1259,7 @@ fn make_content_text_segment(
 ) -> InlineSegment {
     InlineSegment {
         text,
-        style: style.clone(),
+        style: Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1287,7 +1287,7 @@ fn make_content_image_segment(
 ) -> InlineSegment {
     InlineSegment {
         text: String::new(),
-        style: style.clone(),
+        style: Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: true,
