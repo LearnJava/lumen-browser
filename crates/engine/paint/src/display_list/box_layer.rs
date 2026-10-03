@@ -188,7 +188,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     // drew them at all, so the live window and `--screenshot` lost every rule.
     if is_paint_visible(b) && !is_hidden_empty_cell(b) {
         let at = usize::from(matches!(overflow_post.first(), Some(DisplayCommand::PopTransform)));
-        for (i, cmd) in gap_decoration_commands(b).into_iter().enumerate() {
+        for (i, cmd) in gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())).into_iter().enumerate() {
             overflow_post.insert(at + i, cmd);
         }
     }

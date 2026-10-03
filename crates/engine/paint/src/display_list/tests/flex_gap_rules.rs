@@ -162,3 +162,56 @@ fn flex_rtl_mirrors_row_rule_insets() {
     assert_eq!(rows.len(), 3, "{rows:?}");
     assert!(close(rows[0], (0.0, 107.0, 90.0, 6.0)), "{rows:?}");
 }
+
+/// BUG-553 срез 11: анимированные `*-rule-width` / `*-rule-color` (перекрытие от
+/// планировщика) перекрашивают и утолщают линии щелей без повторной раскладки — и в
+/// упорядоченном (живом) пути, и в `walk_with_anim`.
+#[test]
+fn animated_gap_rule_override_changes_width_and_colour() {
+    let html = r#"<div style="display:flex;gap:20px;width:300px;column-rule:2px solid red;
+        row-rule:2px solid red"><div style="width:100px;height:50px"></div>
+        <div style="width:100px;height:50px"></div></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("");
+    let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    fn find_flex(b: &lumen_layout::LayoutBox) -> Option<lumen_dom::NodeId> {
+        if b.style.display == lumen_layout::Display::Flex {
+            return Some(b.node);
+        }
+        b.children.iter().find_map(find_flex)
+    }
+    let node = find_flex(&tree).expect("flex container");
+
+    let mut gap_rules = lumen_layout::GapRuleOverride::default();
+    assert!(gap_rules.set("column-rule-width", "6px"));
+    assert!(gap_rules.set("column-rule-color", "rgb(0, 0, 255)"));
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        node,
+        CompositorOverride { gap_rules: Some(gap_rules), ..Default::default() },
+    );
+    let frame = CompositorAnimFrame { overrides, has_active: true };
+
+    let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+    let check = |dl: &DisplayList, what: &str| {
+        let cols = rules(dl, true);
+        assert_eq!(cols.len(), 1, "{what}: {cols:?}");
+        assert!((cols[0].2 - 6.0).abs() < 0.1, "{what}: width {cols:?}");
+        assert!(
+            dl.iter().any(|c| matches!(c,
+                DisplayCommand::DrawBorder { colors, widths: [0.0, w, 0.0, 0.0], .. }
+                if *w > 0.0 && colors[1] == blue)),
+            "{what}: colour"
+        );
+    };
+
+    let stacking_tree = lumen_layout::StackingTree::build(&tree);
+    let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+    let base = build_display_list_ordered(&tree, &stacking_tree, &order).0;
+    let base_cols = rules(&base, true);
+    assert!((base_cols[0].2 - 2.0).abs() < 0.1, "base {base_cols:?}");
+    let ordered = build_display_list_ordered_with_anim(&tree, &stacking_tree, &order, Some(&frame));
+    check(&ordered, "ordered");
+    let walked = build_display_list_with_anim(&tree, Some(&frame));
+    check(&walked, "walk_with_anim");
+}

@@ -202,7 +202,7 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
 }
 
 /// Число без хвостовых нулей: 4 знака после запятой хватает для `px`.
-fn fmt_num(v: f64) -> String {
+pub(super) fn fmt_num(v: f64) -> String {
     let r = (v * 10_000.0).round() / 10_000.0;
     let r = if r == 0.0 { 0.0 } else { r };
     let s = format!("{r:.4}");
@@ -228,7 +228,7 @@ fn snap_width(v: f64) -> f32 {
     }
 }
 
-fn fmt_width(px: &f32) -> String {
+pub(super) fn fmt_width(px: &f32) -> String {
     format!("{}px", fmt_num(f64::from(*px)))
 }
 

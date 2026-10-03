@@ -93,7 +93,7 @@ pub use ruby::{
     resolve_level_sides,
 };
 pub use animation::{
-    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
+    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator, interpolate_gap_rules,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
     CompositorAnimFrame, CompositorOverride,
     AnimationScheduler, TransitionScheduler, TransitionEventInfo, TransitionEventKind,
@@ -166,7 +166,7 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
     AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
