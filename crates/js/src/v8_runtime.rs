@@ -389,6 +389,9 @@ impl V8JsRuntime {
                 shallow_roots_off: Arc::clone(&self.shallow_roots_off),
                 sheet_delta_used: Arc::clone(&self.sheet_delta_used),
                 sheet_delta_off: Arc::clone(&self.sheet_delta_off),
+                scope_prune_off: Arc::clone(&self.scope_prune_off),
+                scope_pruned: Arc::clone(&self.scope_pruned),
+                verify_shadow: Arc::new(Mutex::new(Default::default())),
                 patched_sheet_cache: Arc::new(Mutex::new(None)),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);

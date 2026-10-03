@@ -201,6 +201,23 @@ pub(crate) struct FlushHandles {
     pub(crate) sheet_delta_used: Arc<std::sync::atomic::AtomicU64>,
     /// BUG-935 срез 64: this runtime's own `LUMEN_NO_SHEET_DELTA`, for a differential test.
     pub(crate) sheet_delta_off: Arc<std::sync::atomic::AtomicBool>,
+    /// BUG-935 срез 70: this runtime's own `LUMEN_NO_SCOPE_PRUNE`, for a differential test.
+    pub(crate) scope_prune_off: Arc<std::sync::atomic::AtomicBool>,
+    /// BUG-935 срез 70: boxes the incremental flushes left alone inside a dirty root; read
+    /// through `V8JsRuntime::scope_pruned_count`.
+    pub(crate) scope_pruned: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 70: the previous flush's full collect, for `LUMEN_VERIFY_SCOPE_PRUNE`.
+    pub(crate) verify_shadow: Arc<Mutex<VerifyShadow>>,
+}
+
+/// See [`FlushHandles::verify_shadow`].
+#[derive(Default)]
+pub(crate) struct VerifyShadow {
+    valid: bool,
+    rects: std::collections::HashMap<u32, [f32; 4]>,
+    client: std::collections::HashMap<u32, Vec<[f32; 4]>>,
+    styles: std::collections::HashMap<u32, lumen_layout::StyleMap>,
+    scroll: std::collections::HashMap<u32, [f32; 4]>,
 }
 
 /// See [`FlushHandles::patched_sheet_cache`].
@@ -298,6 +315,22 @@ fn style_skip_disabled() -> bool {
 fn sheet_delta_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SHEET_DELTA").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 70: `LUMEN_NO_SCOPE_PRUNE=1` collects a dirty root's whole subtree again, even
+/// the parts nothing in the change record touched — A/B switch for a live measurement and the
+/// way back if a page shows a stale rect or computed style after a script mutation.
+fn scope_prune_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SCOPE_PRUNE").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 70: `LUMEN_VERIFY_SCOPE_PRUNE=1` re-collects every cache in full after each
+/// incremental flush and reports (stderr, `[verify]`) any entry of a subtree the flush left alone
+/// that differs — the self-check for a live run over real pages. Costs a full collect per flush.
+fn verify_scope_prune() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LUMEN_VERIFY_SCOPE_PRUNE").is_some_and(|v| v != "0"))
 }
 
 /// BUG-935 срез 60: `LUMEN_NO_SHALLOW_ROOTS=1` reports a child-list change as an
@@ -525,6 +558,10 @@ impl FlushHandles {
         drop(scroll_scope);
         let collect_scope = lumen_core::profile::scope("flush.collectors");
         let collect_t0 = std::time::Instant::now();
+        // BUG-935 срез 70: the plan outlives the collectors — the scroll-state cache is
+        // refreshed from it below.
+        let mut scoped_plan: Option<lumen_layout::ScopedCollection<'_>> = None;
+        let mut plan_census = (0usize, 0usize);
         if let Some((dirty_roots, prev_node_ids, _, content_nodes)) = &incr_scope {
             let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
             let plan_scope = lumen_core::profile::scope("flush.collect_plan");
@@ -533,24 +570,40 @@ impl FlushHandles {
             // worth building when that collector runs on the scoped path, and only
             // with a complete content record (it names the nodes whose subtree
             // changed without a style change of their own).
-            let changed = if self.computed_styles_needed.load(Ordering::Relaxed)
+            //
+            // BUG-935 срез 70: the same record lets every collector leave the unchanged
+            // subtrees of a dirty root alone, so it is also built for a page that never
+            // reads a computed style.
+            let styles_on = self.computed_styles_needed.load(Ordering::Relaxed)
                 && self.computed_styles_collected.load(Ordering::Relaxed)
                 && !style_skip_disabled()
-                && !self.style_skip_off.load(Ordering::Relaxed)
-            {
+                && !self.style_skip_off.load(Ordering::Relaxed);
+            let prune_on = !scope_prune_disabled() && !self.scope_prune_off.load(Ordering::Relaxed);
+            let changed = if styles_on || prune_on {
                 content_nodes
                     .as_ref()
                     .and_then(|content| lumen_layout::ChangedNodes::new(&doc_guard, &counters, content))
             } else {
                 None
             };
-            let plan = lumen_layout::ScopedCollection::plan(
-                &layout_root, dirty_roots, counters.clean_subtrees(), &lr, viewport, changed.as_ref(),
+            let plan = lumen_layout::ScopedCollection::plan_with(
+                &layout_root,
+                dirty_roots,
+                counters.clean_subtrees(),
+                &lr,
+                viewport,
+                changed.as_ref(),
+                lumen_layout::PlanOptions { styles: styles_on, prune: prune_on },
             );
             drop(plan_scope);
+            let (pruned_boxes, planned_items) = plan.census();
+            self.scope_pruned.fetch_add(pruned_boxes as u64, Ordering::Relaxed);
+            plan_census = (pruned_boxes, planned_items);
             let rects_scope = lumen_core::profile::scope("flush.collect_layout_rects");
             for nid in prev_node_ids {
-                lr.remove(nid);
+                if !plan.keeps_published(*nid) {
+                    lr.remove(nid);
+                }
             }
             plan.collect_layout_rects(&doc_guard, &mut lr);
             drop(lr);
@@ -559,7 +612,9 @@ impl FlushHandles {
                 let _client_scope = lumen_core::profile::scope("flush.collect_client_rects");
                 let mut cr = self.client_rects.lock().unwrap_or_else(|e| e.into_inner());
                 for nid in prev_node_ids {
-                    cr.remove(nid);
+                    if !plan.keeps_published(*nid) {
+                        cr.remove(nid);
+                    }
                 }
                 plan.collect_client_rects(&doc_guard, &mut cr);
             }
@@ -606,6 +661,7 @@ impl FlushHandles {
                 }
                 self.computed_styles_collected.store(true, Ordering::Relaxed);
             }
+            scoped_plan = Some(plan);
         } else {
             *self.layout_rects.lock().unwrap_or_else(|e| e.into_inner()) =
                 lumen_layout::collect_layout_rects(&layout_root, &doc_guard);
@@ -670,12 +726,27 @@ impl FlushHandles {
         // the full-document cost on every single incremental flush.
         let scroll_collect_scope = lumen_core::profile::scope("flush.scroll_collect");
         if let Some((dirty_roots, _, prev_node_raw_ids, _)) = &incr_scope {
-            let scoped_roots = lumen_layout::find_dirty_root_boxes(&layout_root, dirty_roots);
             let mut ss = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
-            for nid in prev_node_raw_ids {
-                ss.remove(nid);
-            }
-            for c in lumen_layout::collect_scroll_containers_for_js_state_scoped(&scoped_roots) {
+            // BUG-935 срез 70: the boxes the plan collected — a dirty root's subtree minus what it
+            // left alone, plus the boxes above it — instead of every dirty root whole.
+            let containers = match &scoped_plan {
+                Some(plan) => {
+                    for nid in prev_node_raw_ids {
+                        if !plan.keeps_scroll_state(*nid) {
+                            ss.remove(nid);
+                        }
+                    }
+                    plan.scroll_containers()
+                }
+                None => {
+                    for nid in prev_node_raw_ids {
+                        ss.remove(nid);
+                    }
+                    let scoped_roots = lumen_layout::find_dirty_root_boxes(&layout_root, dirty_roots);
+                    lumen_layout::collect_scroll_containers_for_js_state_scoped(&scoped_roots)
+                }
+            };
+            for c in containers {
                 ss.insert(c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]);
             }
         } else {
@@ -686,6 +757,10 @@ impl FlushHandles {
                     .collect();
         }
         drop(scroll_collect_scope);
+        if verify_scope_prune() {
+            self.verify_pruned(scoped_plan.as_ref(), &layout_root, &doc_guard, &counters, viewport, &sheet, &measurer);
+        }
+        drop(scoped_plan);
         // BUG-1211: publish this flush's tree/cascade as the next same-tick
         // flush's incremental basis. This can be published even when the
         // full path just ran (not only the incremental one) — the full
@@ -726,14 +801,141 @@ impl FlushHandles {
         // `[js-stall]` sample can be matched to its forced-reflow count.
         if lumen_paint::frame_log_enabled() {
             eprintln!(
-                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={}",
+                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={} planned={} pruned_boxes={}",
                 flush_t0.elapsed().as_secs_f64() * 1000.0,
                 collect_ms,
                 if incr_scope.is_some() { "incremental" } else { "full" },
                 incr_scope.as_ref().map_or(0, |(roots, _, _, _)| roots.len()),
                 touched.nodes.len(),
+                plan_census.1,
+                plan_census.0,
             );
         }
+    }
+
+    /// BUG-935 срез 70, `LUMEN_VERIFY_SCOPE_PRUNE=1`: for every box of a subtree the flush left
+    /// alone, checks that a full collect of the fresh tree gives what the *previous* flush's full
+    /// collect gave, or else what the caches already hold — the claim the pruning rests on is "nothing
+    /// in this subtree changed", and what the caches hold is not the thing to compare with alone: the shell publishes geometry measured with
+    /// the page's own fonts, the flush measures with the bundled one, so the two differ for text
+    /// whatever was pruned. Runs after every flush (the shadow must follow full-path ones too).
+    #[allow(clippy::too_many_arguments)]
+    fn verify_pruned(
+        &self,
+        plan: Option<&lumen_layout::ScopedCollection<'_>>,
+        layout_root: &lumen_layout::LayoutBox,
+        doc: &lumen_dom::Document,
+        counters: &lumen_layout::CounterMap,
+        viewport: lumen_core::geom::Size,
+        sheet: &Arc<lumen_css_parser::Stylesheet>,
+        measurer: &lumen_paint::FontMeasurer<'_>,
+    ) {
+        let full_rects = lumen_layout::collect_layout_rects(layout_root, doc);
+        // The truth: a layout from scratch of the same document.
+        let (truth_root, _) = lumen_layout::layout_measured_with_counters(doc, sheet, viewport, measurer);
+        let truth_rects = lumen_layout::collect_layout_rects(&truth_root, doc);
+        let full_client = lumen_layout::collect_client_rects(layout_root, doc);
+        let full_styles = lumen_layout::collect_computed_styles(layout_root, doc, Some(counters), viewport);
+        let mut full_scroll = std::collections::HashMap::new();
+        for c in lumen_layout::collect_scroll_containers_for_js_state(layout_root) {
+            full_scroll.insert(c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]);
+        }
+        let mut shadow = self.verify_shadow.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(plan) = plan.filter(|_| shadow.valid) {
+            let (ids, raw_ids) = plan.pruned_node_ids();
+            let held_rects = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
+            let held_client = self.client_rects.lock().unwrap_or_else(|e| e.into_inner());
+            let held_styles = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
+            let held_scroll = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
+            let mut bad = 0usize;
+            let mut report = |what: &str, id: u32, before: String, now: String| {
+                bad += 1;
+                if bad <= 6 {
+                    // The path from the root to the node, with the pruned subtree's top marked.
+                    let mut who = String::from("?");
+                    let mut stack = vec![(layout_root, 0usize)];
+                    let mut path: Vec<&lumen_layout::LayoutBox> = Vec::new();
+                    while let Some((b, depth)) = stack.pop() {
+                        path.truncate(depth);
+                        path.push(b);
+                        if b.node.index() as u32 == id || b.node.raw() == id {
+                            who = path
+                                .iter()
+                                .rev()
+                                .take(10)
+                                .map(|a| {
+                                    let tag = doc.get(a.node).element_name().map_or("#node".to_string(), |q| q.local.to_string());
+                                    let class = match &doc.get(a.node).data {
+                                        lumen_dom::NodeData::Element { attrs, .. } => attrs
+                                            .iter()
+                                            .find(|x| x.name.local == "class")
+                                            .map_or(String::new(), |x| x.value.chars().take(30).collect()),
+                                        _ => String::new(),
+                                    };
+                                    format!(
+                                        "
+    {}<{tag} .{class}> pos={:?} disp={:?} now={:?} prev_flush={:?} held={:?}",
+                                        if ids.contains(&(a.node.index() as u32)) { "P " } else { "  " },
+                                        a.style.position, a.style.display,
+                                        full_rects.get(&(a.node.index() as u32)),
+                                        shadow.rects.get(&(a.node.index() as u32)),
+                                        held_rects.get(&(a.node.index() as u32)),
+                                    )
+                                })
+                                .collect::<String>();
+                            break;
+                        }
+                        stack.extend(b.children.iter().rev().map(|c| (c, depth + 1)));
+                    }
+                    eprintln!("[verify] scope-prune STALE {what} node={id} {who}
+  previous flush: {before}
+  this flush:     {now}");
+                }
+            };
+            // Stale: the flush's own layout changed since the previous flush AND the cache does not hold the new
+            // value. (A cache that differs from both is the shell's geometry, measured with the page's fonts.)
+            for &id in ids {
+                if shadow.rects.get(&id) != full_rects.get(&id) && held_rects.get(&id) != full_rects.get(&id) {
+                    report("rect", id, format!("{:?}", shadow.rects.get(&id)), format!("{:?} (held {:?})", full_rects.get(&id), held_rects.get(&id)));
+                }
+                if shadow.client.get(&id) != full_client.get(&id) && held_client.get(&id) != full_client.get(&id) {
+                    report("client-rects", id, format!("{:?}", shadow.client.get(&id)), format!("{:?}", full_client.get(&id)));
+                }
+                if self.computed_styles_collected.load(Ordering::Relaxed)
+                    && shadow.styles.get(&id) != full_styles.get(&id)
+                    && held_styles.get(&id) != full_styles.get(&id)
+                {
+                    let diff: Vec<String> = match (held_styles.get(&id), full_styles.get(&id)) {
+                        (Some(h), Some(f)) => f
+                            .iter()
+                            .filter(|(k, v)| h.get(k) != Some(*v))
+                            .take(4)
+                            .map(|(k, v)| format!("{k}: {:?} -> {v:?}", h.get(k)))
+                            .collect(),
+                        (h, f) => vec![format!("entry held {} now {}", h.is_some(), f.is_some())],
+                    };
+                    report("computed-style", id, "entry".into(), diff.join("; "));
+                }
+            }
+            for &raw in raw_ids {
+                if shadow.scroll.get(&raw) != full_scroll.get(&raw) && held_scroll.get(&raw) != full_scroll.get(&raw) {
+                    report("scroll", raw, format!("{:?}", shadow.scroll.get(&raw)), format!("{:?} (held {:?})", full_scroll.get(&raw), held_scroll.get(&raw)));
+                }
+            }
+            let held_wrong = ids.iter().filter(|id| held_rects.get(id) != truth_rects.get(id)).count();
+            let now_wrong = ids.iter().filter(|id| full_rects.get(id) != truth_rects.get(id)).count();
+            eprintln!(
+                "[verify] scope-prune checked {} boxes: {bad} stale; against a layout from scratch: cache differs {held_wrong}, incremental tree differs {now_wrong}",
+                ids.len()
+            );
+        }
+        *shadow = VerifyShadow {
+            valid: true,
+            rects: full_rects,
+            client: full_client,
+            styles: full_styles,
+            scroll: full_scroll,
+        };
     }
 
     /// BUG-1211: attempt the incremental cascade+layout path instead of a
