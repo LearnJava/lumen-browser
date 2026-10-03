@@ -100,3 +100,7 @@ keywords) in the parser, and (4) re-verifying `CAPABILITIES.md`/
 `<line-width> || <line-style> || <color>` (`thin/medium/thick`, дубль/мусор → декларация
 отброшена), initial ширины — `medium` (3px). Остаток — пункт (3): `<gap-rule-list>`/
 `repeat()`, `*-rule-inset`/`-break`/`-overlap`/`-visibility-items`, интерполяция.
+
+## Срез 2 (P4, 2026-10-03, p4-gap-rule-visibility)
+
+Разобраны, каскадируются (non-inherited, CSS-wide, `getComputedStyle`) `column-rule-break`/`row-rule-break`/`rule-break`, `*-rule-visibility-items`/`rule-visibility-items` и `rule-overlap`; `rule-overlap` уже задаёт порядок рисования осей. `*-rule-break` и `*-rule-visibility-items` хранятся, но paint их не читает — нужна геометрия сегментов по таблицам треков grid (`col_offsets`/`row_offsets` в `grid_trampoline.rs`), сейчас `collect_gap_segments` восстанавливает щели по краям детей. Остаток: `<gap-rule-list>`/`repeat()`, `*-rule-inset*`, paint для break/visibility, интерполяция.

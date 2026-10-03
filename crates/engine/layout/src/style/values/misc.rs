@@ -714,3 +714,106 @@ impl BlockStepRound {
     }
 }
 
+/// CSS Gap Decorations L1 §3.2 — `column-rule-break` / `row-rule-break`.
+/// NOT inherited. Initial: `normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuleBreak {
+    /// `none` — one continuous decoration from one end of the gap to the other.
+    None,
+    /// `normal` — container-dependent: grid breaks at "T" intersections only,
+    /// flex behaves as `none`, multicol as `intersection` (columns) / `none` (rows).
+    #[default]
+    Normal,
+    /// `intersection` — decorations start and end at every "T" and "cross".
+    Intersection,
+}
+
+impl RuleBreak {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "normal" => Some(Self::Normal),
+            "intersection" => Some(Self::Intersection),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Normal => "normal",
+            Self::Intersection => "intersection",
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §3.4 — `column-rule-visibility-items` /
+/// `row-rule-visibility-items`. NOT inherited. Initial: `normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuleVisibilityItems {
+    /// `all` — paint in every gap segment, whether or not items are adjacent.
+    All,
+    /// `around` — paint when at least one of the two adjacent areas holds an item.
+    Around,
+    /// `between` — paint only when both adjacent areas hold items.
+    Between,
+    /// `normal` — container-dependent: grid `all`; multicol `between` (columns)
+    /// / `all` (rows).
+    #[default]
+    Normal,
+}
+
+impl RuleVisibilityItems {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "all" => Some(Self::All),
+            "around" => Some(Self::Around),
+            "between" => Some(Self::Between),
+            "normal" => Some(Self::Normal),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Around => "around",
+            Self::Between => "between",
+            Self::Normal => "normal",
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §3.5 — `rule-overlap`: paint order of overlapping
+/// row and column decorations. NOT inherited. Initial: `row-over-column`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuleOverlap {
+    /// `row-over-column` — row decorations are painted above column ones.
+    #[default]
+    RowOverColumn,
+    /// `column-over-row` — column decorations are painted above row ones.
+    ColumnOverRow,
+}
+
+impl RuleOverlap {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "row-over-column" => Some(Self::RowOverColumn),
+            "column-over-row" => Some(Self::ColumnOverRow),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::RowOverColumn => "row-over-column",
+            Self::ColumnOverRow => "column-over-row",
+        }
+    }
+}

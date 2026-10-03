@@ -724,8 +724,14 @@ pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
         rule_style: s.row_rule_style,
         rule_color: s.row_rule_color.resolve(s.color),
     };
-    let mut out = emit_gap_rules(&b.children, &cols, &col_ctx);
-    out.extend(emit_gap_rules(&b.children, &rows, &row_ctx));
+    // CSS Gap Decorations L1 §3.5 `rule-overlap`: the axis painted last lies on top.
+    let col_cmds = emit_gap_rules(&b.children, &cols, &col_ctx);
+    let row_cmds = emit_gap_rules(&b.children, &rows, &row_ctx);
+    let (mut out, top) = match s.rule_overlap {
+        lumen_layout::RuleOverlap::RowOverColumn => (col_cmds, row_cmds),
+        lumen_layout::RuleOverlap::ColumnOverRow => (row_cmds, col_cmds),
+    };
+    out.extend(top);
     out
 }
 

@@ -1003,6 +1003,24 @@ use lumen_dom::NodeId;
         }
     }
 
+    #[test]
+    fn rule_overlap_decides_which_axis_paints_on_top() {
+        fn axis_order(overlap: &str) -> Vec<bool> {
+            let html = GRID_2X2.replace("{}", &format!("rule:2px solid red;rule-overlap:{overlap}"));
+            let dl = build(&html, "");
+            // `true` = a vertical (column) rule, `false` = a horizontal (row) rule.
+            dl.iter()
+                .filter_map(|c| match c {
+                    DisplayCommand::DrawBorder { widths: [0.0, w, 0.0, 0.0], .. } if *w > 0.0 => Some(true),
+                    DisplayCommand::DrawBorder { widths: [0.0, 0.0, h, 0.0], .. } if *h > 0.0 => Some(false),
+                    _ => None,
+                })
+                .collect()
+        }
+        assert_eq!(axis_order("row-over-column"), vec![true, false], "rows painted last");
+        assert_eq!(axis_order("column-over-row"), vec![false, true], "columns painted last");
+    }
+
     /// The ordered (stacking-context) path — the one the live window and
     /// `--screenshot` use — must draw gap rules too, not only `walk`.
     #[test]
