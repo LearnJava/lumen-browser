@@ -71,7 +71,8 @@ use crate::style::shorthand::{
     apply_flex_shorthand,
     apply_grid_area_shorthand,
     apply_grid_line_shorthand,
-    find_slash,
+    apply_grid_shorthand,
+    apply_grid_template_shorthand,
     parse_contain_intrinsic_one,
     parse_contain_intrinsic_size,
 };
@@ -236,43 +237,12 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "grid-template" => {
-            // CSS Grid L1 §7.4: shorthand for grid-template-rows / -columns / -areas.
-            // Phase 0: treat as "rows / columns" split if `/` present; else columns only.
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("none") {
-                style.grid_template_columns = Vec::new();
-                style.grid_template_rows = Vec::new();
-                style.grid_template_col_auto_repeat = None;
-                style.grid_template_row_auto_repeat = None;
-            } else if let Some(pos) = find_slash(trimmed) {
-                let rows_s = trimmed[..pos].trim();
-                let cols_s = trimmed[pos + 1..].trim();
-                style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
-                style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
-                style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
-                style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
-            } else {
-                style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
-                style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
-            }
+            // CSS Grid L1 §7.4: невалидное значение — декларация игнорируется.
+            apply_grid_template_shorthand(val, style, is_quirks);
         }
         "grid" => {
-            // CSS Grid L1 §8.2: shorthand. Phase 0: delegate to grid-template.
-            let trimmed = val.trim();
-            if !trimmed.eq_ignore_ascii_case("none") {
-                // Parse same as grid-template for rows / columns split.
-                if let Some(pos) = find_slash(trimmed) {
-                    let rows_s = trimmed[..pos].trim();
-                    let cols_s = trimmed[pos + 1..].trim();
-                    style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
-                    style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
-                    style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
-                    style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
-                } else {
-                    style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
-                    style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
-                }
-            }
+            // CSS Grid L1 §8.2: сбрасывает явную и неявную сетку целиком.
+            apply_grid_shorthand(val, style, is_quirks);
         }
         // CSS Grid Layout L1 — item placement properties.
         "grid-column-start" => {

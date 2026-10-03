@@ -492,7 +492,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `grid-template-columns` / `grid-template-rows` | ✅ | px/fr/auto/repeat()/minmax() |
 | `grid-template-areas` | ✅ | parsed + named area placement in lay_out_grid; GridLine::Named resolved |
-| `grid-template` / `grid` (super-shorthand) | 🟡 | |
+| `grid-template` / `grid` (super-shorthand) | ✅ | CSS Grid L1 §7.4/§8.2: `rows / columns`, форма со строками-areas + размеры рядов, `grid: auto-flow [dense] … / …` в обе стороны, сброс `grid-auto-*`, имена линий пропускаются, невалидное значение игнорируется (`style/shorthand.rs::apply_grid_template_shorthand`/`apply_grid_shorthand`) 2026-10-03 |
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
 | `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
