@@ -437,6 +437,35 @@ use super::*;
         style.get(name).map_or("<absent>", String::as_str)
     }
 
+    /// BUG-935 срез 72: the collector publishes an entry for every element, but serialises
+    /// the style only for the element a page reads — boxes, inline elements around text and
+    /// box-less elements alike.
+    #[test]
+    fn collector_leaves_unread_entries_unserialised() {
+        let doc = lumen_html_parser::parse(
+            "<html><body><div id=a style=\"padding:5%\"><p>x <b id=b><i>y</i></b></p></div><span id=c style=\"display:none\"></span></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("body{margin:0}");
+        let (root, counters) =
+            layout_measured_with_counters(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let styles = collect_computed_styles(&root, &doc, Some(&counters), Size::new(800.0, 600.0));
+        let idx = |sel: &str| find_first_dom_node_by_selector(&doc, sel).expect(sel).index() as u32;
+        // box (`div`, `p`), inline element around text (`b`, `i`) and box-less (`span`).
+        let elements = ["#a", "p", "#b", "i", "#c"].map(idx);
+        for e in elements {
+            assert!(!styles[&e].is_serialised(), "element {e}: nothing was read yet");
+        }
+        let a = idx("#a");
+        assert_eq!(styles[&a].get("padding-top").map(String::as_str), Some("40px"));
+        assert_eq!(styles[&a].get("computed:padding-top").map(String::as_str), Some("5%"));
+        assert!(styles[&a].is_serialised());
+        assert_eq!(
+            elements.iter().filter(|e| styles[e].is_serialised()).count(),
+            1,
+            "only the element that was read"
+        );
+    }
+
     /// CSSOM-9 (BUG-472): CSSOM §6.7.2 — for a rendered element `width`/
     /// `height`/`padding-*` resolve to the *used* px value, not the computed
     /// `auto` / percentage the snapshot used to publish (`jQuery.css('height')`,

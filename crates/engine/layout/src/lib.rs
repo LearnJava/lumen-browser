@@ -1685,7 +1685,7 @@ pub fn collect_computed_styles(
                 // `content-visibility: hidden` descendant) — publish the
                 // cascaded style, marked so «rendered» checks can skip it.
                 if style.display != Display::Contents {
-                    m.insert(resolved_geometry::BOXLESS_KEY, "1".to_owned());
+                    m.set(resolved_geometry::BOXLESS_KEY, "1".to_owned());
                 }
                 out.insert(idx, m);
             }
@@ -1782,7 +1782,7 @@ fn collect_computed_styles_parts(
             // doc comment for the approximation this relies on.
             for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
                 out.entry(anc.index() as u32)
-                    .or_insert_with(|| computed_style_to_map(&seg.style).into());
+                    .or_insert_with(|| StyleMap::of_style_copy(&seg.style));
             }
         }
     }
