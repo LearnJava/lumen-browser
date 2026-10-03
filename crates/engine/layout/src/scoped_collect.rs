@@ -230,6 +230,9 @@ struct Item<'a> {
     /// Whether the computed-style map needs this item. `false` for a clean
     /// subtree that was merely translated vertically: see [`translation_keeps_styles`].
     styles: bool,
+    /// BUG-935 срез 78: the item lies inside a dirty root, i.e. in the area whose published entries
+    /// the flush evicts ([`ScopedCollection::evictable`]).
+    in_root: bool,
 }
 
 /// The boxes of an incrementally laid-out tree whose collector entries may differ
@@ -244,8 +247,13 @@ pub struct ScopedCollection<'a> {
     /// BUG-935 срез 70: the node ids (`NodeId::index` / `NodeId::raw`) of the boxes in the
     /// subtrees inside a dirty root that the plan proved unchanged and leaves alone — the ids a
     /// caller evicts for the whole dirty root must not include these.
+    ///
+    /// BUG-935 срез 78: built only with [`PlanOptions::ids`] — they cost a walk of everything the plan
+    /// left alone, which the flush no longer needs ([`Self::evictable`]).
     pruned_ids: IdSet<u32>,
     pruned_raw_ids: IdSet<u32>,
+    /// BUG-935 срез 78: how many subtrees inside a dirty root the plan left alone.
+    pruned_tops: usize,
     /// The boxes of subtrees inside a dirty root that moved but whose computed-style entries did
     /// not ([`translation_keeps_styles`]): their rects are collected, their styles stay.
     style_kept_ids: IdSet<u32>,
@@ -259,6 +267,10 @@ pub struct PlanOptions {
     /// Walk a dirty root like any other box and leave its unchanged subtrees alone (срез 70)
     /// instead of collecting it whole. Needs the change record.
     pub prune: bool,
+    /// BUG-935 срез 78: list the ids of the boxes in the subtrees left alone
+    /// ([`ScopedCollection::keeps_published`] and friends). A flush that evicts through
+    /// [`ScopedCollection::evictable`] does not need them.
+    pub ids: bool,
 }
 
 impl<'a> ScopedCollection<'a> {
@@ -290,7 +302,7 @@ impl<'a> ScopedCollection<'a> {
         viewport: lumen_core::geom::Size,
         changed: Option<&ChangedNodes>,
     ) -> Self {
-        let opts = PlanOptions { styles: true, prune: false };
+        let opts = PlanOptions { styles: true, prune: false, ids: true };
         Self::plan_with(root, dirty_roots, clean_subtrees, layout_rects, viewport, changed, opts)
     }
 
@@ -335,7 +347,7 @@ impl<'a> ScopedCollection<'a> {
             let is_root = dirty_roots.contains(&b.node);
             let in_root = in_root || is_root;
             if is_root && prune_changed.is_none() {
-                items.push(Item { b, ctx, whole: true, styles: true });
+                items.push(Item { b, ctx, whole: true, styles: true, in_root });
                 if let Some(changed) = style_changed {
                     plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                 }
@@ -371,13 +383,13 @@ impl<'a> ScopedCollection<'a> {
                         pruned.push(b);
                     }
                 } else if unmoved {
-                    items.push(Item { b, ctx, whole: true, styles: true });
+                    items.push(Item { b, ctx, whole: true, styles: true, in_root });
                     if let Some(changed) = style_changed {
                         plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                     }
                 } else {
                     let styles = !translation_keeps_styles(b, r, published, parent_stable);
-                    items.push(Item { b, ctx, whole: true, styles });
+                    items.push(Item { b, ctx, whole: true, styles, in_root });
                     if !styles && in_root {
                         translated.push(b);
                     }
@@ -387,7 +399,7 @@ impl<'a> ScopedCollection<'a> {
                 }
                 continue;
             }
-            items.push(Item { b, ctx, whole: false, styles: true });
+            items.push(Item { b, ctx, whole: false, styles: true, in_root });
             let first = seen.insert(b.node);
             let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
             let stable = published.is_some_and(|p| p[0] == r.x && p[2] == r.width);
@@ -418,7 +430,7 @@ impl<'a> ScopedCollection<'a> {
         }
         let mut pruned_ids = IdSet::default();
         let mut pruned_raw_ids = IdSet::default();
-        for &top in &pruned {
+        for &top in pruned.iter().filter(|_| opts.ids) {
             let mut walk = vec![top];
             while let Some(b) = walk.pop() {
                 pruned_ids.insert(b.node.index() as u32);
@@ -434,7 +446,7 @@ impl<'a> ScopedCollection<'a> {
                 walk.extend(b.children.iter());
             }
         }
-        Self { items, skipped, skips, pruned_ids, pruned_raw_ids, style_kept_ids }
+        Self { items, skipped, skips, pruned_ids, pruned_raw_ids, pruned_tops: pruned.len(), style_kept_ids }
     }
 
     /// Whether the plan leaves `node`'s published computed-style entry alone, so the
@@ -443,9 +455,27 @@ impl<'a> ScopedCollection<'a> {
         self.skips.own.contains(&node) || self.pruned_ids.contains(&node) || self.style_kept_ids.contains(&node)
     }
 
-    /// How many boxes lie in the subtrees the plan left alone, and how many planned items there are.
+    /// How many subtrees inside a dirty root the plan left alone, and how many planned items there are.
     pub fn census(&self) -> (usize, usize) {
-        (self.pruned_ids.len(), self.items.len())
+        (self.pruned_tops, self.items.len())
+    }
+
+    /// BUG-935 срез 78: adds to `index`/`raw` the ids of the boxes the plan collects inside a dirty
+    /// root — the subtrees it walked, as opposed to the ones it left alone. Together with the ids the
+    /// box build released from the previous tree ([`crate::incremental::ReleasedIds`]) these are the
+    /// ones whose published entries a flush evicts before collecting: every other box of the dirty
+    /// area is a subtree that was carried over and kept, with its entries.
+    pub fn evictable(&self, index: &mut IdSet<u32>, raw: &mut IdSet<u32>) {
+        for item in self.items.iter().filter(|i| i.in_root) {
+            let mut stack = vec![item.b];
+            while let Some(b) = stack.pop() {
+                index.insert(b.node.index() as u32);
+                raw.insert(b.node.raw());
+                if item.whole {
+                    stack.extend(b.children.iter());
+                }
+            }
+        }
     }
 
     /// The ids ([`Self::keeps_published`]) and raw ids ([`Self::keeps_scroll_state`]) of the
@@ -964,7 +994,7 @@ mod tests {
             let scope: HashSet<NodeId> = dirty.iter().chain(&shallow).copied().collect();
             let plan = ScopedCollection::plan_with(
                 &after, &scope, counters.clean_subtrees(), &published, VIEWPORT, Some(&changed),
-                PlanOptions { styles: false, prune: true },
+                PlanOptions { styles: false, prune: true, ids: true },
             );
             let (cached, next, (served, walked)) = plan.scroll_containers_cached(std::mem::take(&mut cache));
             let walk_all = plan.scroll_containers();
@@ -1153,7 +1183,8 @@ mod tests {
 
     /// BUG-935 срез 70: the `lenta.ru` font-probe loop in miniature — a child appended to a
     /// shallow root whose existing children are carried over untouched.
-    fn append_to_shallow_root() -> (Vec<(&'static str, bool, bool)>, usize, usize) {
+    #[allow(clippy::type_complexity)]
+    fn append_to_shallow_root() -> (Vec<(&'static str, bool, bool, bool)>, usize, usize) {
         use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
         use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
         use lumen_core::ext::NullHyphenationProvider;
@@ -1177,20 +1208,40 @@ mod tests {
             point_roots: Default::default(),
         };
         set_incremental_restyle(true);
-        let (after, counters) =
+        crate::box_tree::set_incremental_box_build(true);
+        let (after, mut counters) =
             layout_mutation_incremental_restyle(&doc, &sheet, VIEWPORT, &Fixed, &hp, false, prev, delta);
+        crate::box_tree::set_incremental_box_build(false);
         set_incremental_restyle(false);
         let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
-        let opts = PlanOptions { styles: true, prune: true };
+        let opts = PlanOptions { styles: true, prune: true, ids: true };
         let plan = ScopedCollection::plan_with(
             &after, &HashSet::from([p]), counters.clean_subtrees(), &published, VIEWPORT, Some(&changed), opts,
         );
+        // The flush evicts by the ids the build released plus the boxes the plan collects.
+        let released = counters.take_released().expect("the pass records what it released");
+        let (mut evict, mut evict_raw) = (released.index, released.raw);
+        plan.evictable(&mut evict, &mut evict_raw);
+        // Listing the ids of what was left alone is optional and changes nothing else.
+        let unlisted = ScopedCollection::plan_with(
+            &after,
+            &HashSet::from([p]),
+            counters.clean_subtrees(),
+            &published,
+            VIEWPORT,
+            Some(&changed),
+            PlanOptions { ids: false, ..opts },
+        );
+        assert_eq!(unlisted.census(), plan.census());
+        assert!(!unlisted.keeps_published(doc.find_by_id("a1").unwrap().index() as u32));
         let ids = ["p", "a", "a1", "b", "b1"];
         let rows = ids
             .iter()
             .map(|id| {
-                let n = doc.find_by_id(id).unwrap().index() as u32;
-                (*id, plan.keeps_published(n), plan.keeps_computed_style(n))
+                let n = doc.find_by_id(id).unwrap();
+                assert_eq!(evict.contains(&(n.index() as u32)), evict_raw.contains(&n.raw()));
+                let n = n.index() as u32;
+                (*id, plan.keeps_published(n), plan.keeps_computed_style(n), evict.contains(&n))
             })
             .collect();
         let whole_items = plan.items.iter().filter(|it| it.whole).count();
@@ -1207,6 +1258,9 @@ mod tests {
         assert!(!get("p").1 && !get("a").1 && !get("b").1, "the spine is collected for its rects: {rows:?}");
         // The spine's computed-style entries stay too: nothing in them changed.
         assert!(get("p").2 && get("a").2 && get("b").2 && get("a1").2 && get("b1").2, "styles kept: {rows:?}");
+        // The spine is evicted before it is collected again; what was carried over is not.
+        assert!(get("p").3 && get("a").3 && get("b").3, "the spine is evicted: {rows:?}");
+        assert!(!get("a1").3 && !get("b1").3, "carried-over grandchildren keep their entries: {rows:?}");
         // The new span is in the change record, so it is a spine item too; nothing needs a whole walk.
         assert_eq!(whole, 0, "no subtree is collected whole ({items} items)");
     }

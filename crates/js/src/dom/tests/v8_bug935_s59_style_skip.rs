@@ -48,6 +48,19 @@ pub(super) fn run_with(sheet: &str, steps: &str, mode: Mode, prune_off: bool) ->
 
 /// [`run_with`], plus the boxes the flushes left alone inside a dirty root.
 pub(super) fn run_counted(sheet: &str, steps: &str, mode: Mode, prune_off: bool) -> (String, u64, u64) {
+    let (out, kept, pruned, _) = run_published(sheet, steps, mode, prune_off, false);
+    (out, kept, pruned)
+}
+
+/// [`run_counted`], plus the sizes of the four JS-visible caches (BUG-935 срез 78) at the end, and
+/// the eviction by the box build's release list switched off when `released_off`.
+pub(super) fn run_published(
+    sheet: &str,
+    steps: &str,
+    mode: Mode,
+    prune_off: bool,
+    released_off: bool,
+) -> (String, u64, u64, [usize; 4]) {
     let reads = if mode == Mode::Full {
         ""
     } else {
@@ -57,6 +70,7 @@ pub(super) fn run_counted(sheet: &str, steps: &str, mode: Mode, prune_off: bool)
     rt.set_style_skip_off(mode == Mode::NoSkip);
     // The "skip off" baseline is the behaviour before every later slice too: no pruning either.
     rt.set_scope_prune_off(prune_off || mode == Mode::NoSkip);
+    rt.set_released_evict_off(released_off);
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(sheet)));
     let script = format!(
         "(function() {{
@@ -109,7 +123,7 @@ pub(super) fn run_counted(sheet: &str, steps: &str, mode: Mode, prune_off: bool)
         lumen_core::JsValue::String(s) => s,
         other => panic!("expected a string, got {other:?}"),
     };
-    (out, rt.style_entries_kept_count(), rt.scope_pruned_count())
+    (out, rt.style_entries_kept_count(), rt.scope_pruned_count(), rt.published_cache_sizes())
 }
 
 pub(super) fn diff(a: &str, b: &str) -> Vec<String> {

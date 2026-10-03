@@ -110,7 +110,7 @@ pub use box_tree::{
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
 };
-pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
+pub use incremental::{ReleasedIds, DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{

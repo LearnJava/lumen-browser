@@ -457,7 +457,11 @@ pub fn layout_mutation_incremental_restyle(
         let _prof = lumen_core::profile::scope("build_shadow_sheets");
         crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     }
-    let counters = {
+    // BUG-935 срез 78: the flush's scope — what the JS-visible caches treat as changed — is taken
+    // before the delta is consumed; the ids the build releases from it are read off `prev` below.
+    let released_scope: lumen_core::id_hash::IdSet<lumen_dom::NodeId> =
+        delta.dirty_roots.iter().chain(delta.shallow_roots.iter()).copied().collect();
+    let mut counters = {
         let _prof = lumen_core::profile::scope("precompute_counters");
         crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
     };
@@ -480,10 +484,14 @@ pub fn layout_mutation_incremental_restyle(
         // BUG-341 S19: this is where `prev` is consumed — the reusable subtrees
         // are moved into the tree being built, not copied out of it.
         if incremental_box_build_enabled() {
-            incremental_build_box(
+            let (built, unplaced) = super::build::incremental_build_box_unplaced(
                 doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, &mut prev,
-            )
+            );
+            let _prof = lumen_core::profile::scope("released_ids");
+            counters.set_released(crate::incremental::released_ids(&prev, &unplaced, &released_scope));
+            built
         } else {
+            counters.set_released(crate::incremental::released_ids(&prev, &[], &released_scope));
             build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
         }
     };

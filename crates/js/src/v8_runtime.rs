@@ -391,6 +391,7 @@ impl V8JsRuntime {
                 sheet_delta_off: Arc::clone(&self.sheet_delta_off),
                 scope_prune_off: Arc::clone(&self.scope_prune_off),
                 scope_pruned: Arc::clone(&self.scope_pruned),
+                released_evict_off: Arc::clone(&self.released_evict_off),
                 scroll_rollup_off: Arc::clone(&self.scroll_rollup_off),
                 scroll_rollup_served: Arc::clone(&self.scroll_rollup_served),
                 scroll_rollup_walked: Arc::clone(&self.scroll_rollup_walked),

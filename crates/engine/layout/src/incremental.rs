@@ -258,6 +258,78 @@ fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
     }
 }
 
+/// BUG-935 срез 78 — the node ids a restyle took out of the *previous* tree's dirty area.
+///
+/// The JS-visible caches (`layout_rects`, `client_rects`, `computed_styles`, `scroll_states`) are
+/// evicted for every node the flush's dirty roots owned before the flush, so that a node the
+/// mutation removed does not linger with stale geometry. That set used to be the whole subtree of
+/// every root in the old tree — `body` on a real page, i.e. the document — and the plan then
+/// subtracted the whole document again for the subtrees it left alone.
+///
+/// A subtree the box builder carried over is, by construction, still in the new tree under the same
+/// ids, so only the other old boxes can have gone: the ones the build left in the husked `prev`
+/// ([`extract_clean_subtrees`]) and the carried-over subtrees it did not end up placing. Those are
+/// proportional to what changed, not to the document.
+///
+/// `index` is keyed by [`NodeId::index`] (`layout_rects`, `client_rects`, `computed_styles`), `raw`
+/// by [`NodeId::raw`] (`scroll_states`) — the asymmetry the caches already have.
+#[derive(Default, Debug, Clone)]
+pub struct ReleasedIds {
+    pub index: lumen_core::id_hash::IdSet<u32>,
+    pub raw: lumen_core::id_hash::IdSet<u32>,
+}
+
+impl ReleasedIds {
+    fn add_subtree(&mut self, top: &LayoutBox) {
+        let mut stack = vec![top];
+        while let Some(b) = stack.pop() {
+            self.index.insert(b.node.index() as u32);
+            self.raw.insert(b.node.raw());
+            stack.extend(b.children.iter());
+        }
+    }
+}
+
+/// BUG-935 срез 78 — [`ReleasedIds`] of a tree `prev` the box build has taken subtrees out of.
+///
+/// The area is what [`crate::find_dirty_root_boxes`] gives for `scope`: the subtree of the first box
+/// of each scope root in pre-order. `unplaced` are the subtrees the build moved out of `prev` and
+/// then did not use (their parent no longer builds them, say); one counts when the husk at its old
+/// position lies in the area. With the build off `prev` has no husks and this is the old subtree
+/// walk.
+pub(crate) fn released_ids(
+    prev: &LayoutBox,
+    unplaced: &[LayoutBox],
+    scope: &lumen_core::id_hash::IdSet<NodeId>,
+) -> ReleasedIds {
+    let mut out = ReleasedIds::default();
+    if scope.is_empty() {
+        return out;
+    }
+    let mut husks_in_area = lumen_core::id_hash::IdSet::<NodeId>::default();
+    let mut stack: Vec<(&LayoutBox, bool)> = vec![(prev, false)];
+    while let Some((b, in_area)) = stack.pop() {
+        let in_area = in_area || scope.contains(&b.node);
+        if b.dirty.contains(DirtyBits::MOVED_OUT) {
+            if in_area {
+                husks_in_area.insert(b.node);
+            }
+            continue;
+        }
+        if in_area {
+            out.index.insert(b.node.index() as u32);
+            out.raw.insert(b.node.raw());
+        }
+        stack.extend(b.children.iter().map(|c| (c, in_area)));
+    }
+    for top in unplaced {
+        if husks_in_area.contains(&top.node) {
+            out.add_subtree(top);
+        }
+    }
+    out
+}
+
 // ─── Graft accounting (BUG-341 S13) ─────────────────────────────────────────
 
 /// Per-pass tally of what [`graft_geometry`] reused and why it refused the rest.
@@ -3528,5 +3600,59 @@ mod tests {
              class change on #a should not force-recompute the unrelated \
              #unrelated subtree",
         );
+    }
+
+    /// BUG-935 срез 78: the ids a restyle releases from the previous tree's dirty area are the boxes
+    /// the build left in `prev` plus the subtrees it took out and did not place — and nothing it
+    /// carried over, nor anything outside the area.
+    #[test]
+    fn bug935_s78_released_ids_are_what_left_the_dirty_area() {
+        use crate::box_tree::layout_measured_hyp_with_counters;
+        use lumen_core::ext::NullHyphenationProvider;
+        use lumen_core::id_hash::IdSet;
+
+        let doc = lumen_html_parser::parse(
+            "<body><div id=\"p\"><div id=\"c\"><span id=\"s\">x</span></div><div id=\"d\"></div></div><div id=\"o\"></div></body>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let id = |name: &str| doc.find_by_id(name).unwrap();
+        let idx = |name: &str| id(name).index() as u32;
+        let hollowed = || {
+            let (mut prev, _) =
+                layout_measured_hyp_with_counters(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+            let clean: IdSet<NodeId> = [id("c"), id("o")].into_iter().collect();
+            let (index, _) = extract_clean_subtrees(&mut prev, &clean);
+            let taken: Vec<LayoutBox> = index.into_values().filter_map(|slot| slot.into_inner().unwrap()).collect();
+            (prev, taken)
+        };
+        let scope = |names: &[&str]| -> IdSet<NodeId> { names.iter().map(|n| id(n)).collect() };
+
+        // `c` and `o` were carried over (and placed): only what is left in `prev` inside `p` goes.
+        let (prev, _) = hollowed();
+        let released = released_ids(&prev, &[], &scope(&["p"]));
+        assert!(released.index.contains(&idx("p")) && released.index.contains(&idx("d")));
+        for carried in ["c", "o"] {
+            assert!(!released.index.contains(&idx(carried)), "{carried} was carried over");
+        }
+        assert!(released.raw.contains(&id("d").raw()));
+
+        // `c` taken out and not placed: its whole subtree goes, but not `o`, which is outside the area.
+        let (prev, taken) = hollowed();
+        assert_eq!(taken.len(), 2);
+        let released = released_ids(&prev, &taken, &scope(&["p"]));
+        for gone in ["p", "d", "c"] {
+            assert!(released.index.contains(&idx(gone)), "{gone} left the tree");
+            assert!(released.raw.contains(&id(gone).raw()));
+        }
+        assert!(!released.index.contains(&idx("o")), "o is outside the dirty area");
+
+        // A dirty area that does not hold `c`'s husk does not release it either.
+        let released = released_ids(&prev, &taken, &scope(&["d"]));
+        assert_eq!(released.index.len(), 1, "{released:?}");
+        assert!(released.index.contains(&idx("d")));
+
+        // No scope, nothing released.
+        assert!(released_ids(&prev, &taken, &IdSet::default()).index.is_empty());
     }
 }
