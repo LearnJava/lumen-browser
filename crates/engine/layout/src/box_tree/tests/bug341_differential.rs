@@ -222,6 +222,122 @@ fn font_size_adjust_scales_relative_number_line_height() {
     );
 }
 
+/// BUG-935 срез 76: the two post-build walks stop at a subtree moved out of `prev`.
+/// One box of the pair carries the reuse claim and a sentinel line height that
+/// neither pass may touch (a size adjusted a second time would drift each cycle);
+/// the other, unclaimed, gets both passes as before.
+#[test]
+fn post_build_walks_leave_a_reused_subtree_alone() {
+    use crate::incremental::DirtyBits;
+    use crate::style::{ComputedStyle, FontSizeAdjust};
+    let m = AspectMeasurer(0.8);
+    let make = |claimed: bool| {
+        let mut s = ComputedStyle::root();
+        s.font_size = 100.0;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        super::super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            used_line_height: -1.0,
+            style: std::sync::Arc::new(s),
+            kind: super::super::BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: if claimed { DirtyBits::REUSED_SUBTREE } else { Default::default() },
+            origin: super::super::BoxOrigin::default(),
+        }
+    };
+    let mut root = make(false);
+    let mut inner = make(false);
+    inner.children = vec![make(false)];
+    root.children = vec![make(true), inner];
+    // A claimed box with unclaimed children: the claim stops the walk, so the
+    // children below it are not visited either.
+    root.children[0].children = vec![make(false)];
+
+    super::super::apply_font_size_adjust(&mut root, &m);
+    crate::box_tree::entry::resolve_used_line_height(&mut root, &m);
+
+    let claimed = &root.children[0];
+    assert_eq!(claimed.style.font_size, 100.0, "claimed root was adjusted again");
+    assert_eq!(claimed.used_line_height, -1.0, "claimed root had its line height rewritten");
+    assert_eq!(claimed.children[0].style.font_size, 100.0, "walk went below a claim");
+    assert_eq!(claimed.children[0].used_line_height, -1.0);
+    for b in [&root, &root.children[1], &root.children[1].children[0]] {
+        assert!((b.style.font_size - 62.5).abs() < 0.01, "unclaimed box not adjusted: {}", b.style.font_size);
+        assert!(b.used_line_height > 0.0, "unclaimed box kept the sentinel");
+    }
+}
+
+/// BUG-935 срез 76, differential: an incremental pass that reuses a `font-size-adjust`
+/// subtree must publish the sizes and line heights one full layout does. Before the
+/// slice the second walk re-applied the adjustment to the reused boxes' already
+/// adjusted style, so the size drifted from the full layout's on every cycle.
+#[test]
+fn incremental_restyle_does_not_readjust_a_reused_font_size_adjust_subtree() {
+    use crate::box_tree::{
+        layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        take_box_build_stats,
+    };
+    use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+    use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
+    use lumen_core::ext::NullHyphenationProvider;
+    use lumen_dom::NodeData;
+
+    let html = r#"<div id="keep"><p id="t">tall text <b>bold</b></p></div><div id="hit" data-x="1">x</div>"#;
+    let css = "#keep p { font-size: 20px; font-size-adjust: 0.5; line-height: normal; }
+               [data-x=\"2\"] { height: 40px; }";
+    let mut doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let vp = Size::new(800.0, 600.0);
+    let m = AspectMeasurer(0.8);
+    let hp = NullHyphenationProvider;
+
+    let (mut prev, mut counters) = layout_measured_hyp_with_counters(&doc, &sheet, vp, &m, &hp, false);
+    let hit = doc.find_by_id("hit").expect("#hit");
+    for round in 0..3 {
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(hit).data {
+            for a in attrs.iter_mut().filter(|a| a.name.local == "data-x") {
+                a.value = (2 - round % 2).to_string();
+            }
+        }
+        let index = restyle_node_index(&doc, &sheet);
+        let roots = restyle_root_set_for_node_change(&doc, [(hit, NodeChange::Attr("data-x"))], &index);
+        let content: std::collections::HashSet<_> = [hit].into_iter().collect();
+        let delta = RestyleDelta {
+            prev_styles: counters.styles().clone(),
+            dirty_roots: roots,
+            content_dirty: ContentDirty::Nodes(&content),
+            shallow_roots: Default::default(),
+            point_roots: Default::default(),
+        };
+        let _ = take_box_build_stats();
+        set_incremental_restyle(true);
+        crate::box_tree::set_incremental_box_build(true);
+        let (incr, next_counters) =
+            layout_mutation_incremental_restyle(&doc, &sheet, vp, &m, &hp, false, prev, delta);
+        crate::box_tree::set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        assert!(take_box_build_stats().reused > 0, "round {round}: nothing was reused — the test would pass trivially");
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &m, &hp, false);
+        fn flat(b: &super::super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, f32, f32)>) {
+            out.push((b.node, b.style.font_size, b.used_line_height));
+            b.children.iter().for_each(|c| flat(c, out));
+        }
+        let (mut a, mut f) = (Vec::new(), Vec::new());
+        flat(&incr, &mut a);
+        flat(&full, &mut f);
+        assert_eq!(a, f, "round {round}: incremental sizes/line heights differ from a full layout");
+        prev = incr;
+        counters = next_counters;
+    }
+}
+
 // --- is_open_details ---
 
 #[test]
