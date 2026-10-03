@@ -551,6 +551,17 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Gap Decorations L1 §4.7 — interpolation of `*-rule-width`/`-color`/
+    // `-inset-*` between two specified values (Web Animations shim,
+    // `_wa_gap_compute`). `None` = the pair does not interpolate (the caller
+    // flips discretely at 50%).
+    reg!(scope, ctx, store,
+        "_lumen_css_interpolate_gap_rule",
+        |prop: String, from: String, to: String, t: f64| -> Option<String> {
+            lumen_layout::style::interpolate_gap_rule_value(&prop, &from, &to, t)
+        }
+    );
+
     // Canonical `<length-percentage>` serialization for inline-`style`
     // margin-*/padding-* longhands (CSS Box §8, CSSOM-2/BUG-484) — same role
     // as `_lumen_css_canonical_color` above but for lengths: rejects a

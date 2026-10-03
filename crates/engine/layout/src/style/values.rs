@@ -9,6 +9,7 @@ pub mod flexgrid;
 pub mod length;
 pub mod misc;
 pub mod named_colors;
+pub mod rule_interp;
 pub mod rule_list;
 pub mod scroll;
 pub mod text_size_adjust;
