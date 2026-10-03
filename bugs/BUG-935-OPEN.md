@@ -4620,3 +4620,31 @@ BUG-960 запись публикуется и для `visible`-бокса, че
 **Что осталось.** Предпосылка «`confirm_clean_subtree` — главная статья `cascade_walk`» не перемерена на живой странице — нужен lenta.ru. На стенде по убыванию
 (мс/флаш после правки): `try_incremental` ≈ 0,84 (`prev_node_ids` 0,22 — всё ещё обход, `layout_mutation` 0,6: `precompute_counters` 0,2, `post_build_tree_walks`
 0,2, `build_box` 0,15), `flush.collectors` 0,33 (`collect_plan` 0,25), `scroll_collect` 0,30, `scroll_restore` 0,1. Статус `OPEN (DEBTOR)` не меняется.
+
+## Срез 76 (P1, 2026-10-03) — проходы после сборки боксов не заходят в поддеревья, взятые из прошлого дерева
+
+**Вопрос из среза 75.** Остаток устойчивого флаша на стенде 2 200 элементов (`v8_bug935_s76_stand`, `#[ignore]`: `LUMEN_PROFILE_TREE=1 cargo test -p lumen-js
+--profile dev-release --features v8-backend --lib bug935_s76_stand -- --ignored --nocapture --test-threads=1`, суммы `[profile]` по 601 флашу): `maybe_flush` 1 598 мс,
+из них `try_incremental` 758, `incr.layout_mutation` 553 (`post_build_tree_walks` **193**, `precompute_counters` 140, `cascade_walk` 124, `build_box` 103),
+`flush.collectors` 324 (`collect_plan` 284), `scroll_collect` 280, `incr.prev_node_ids` 194.
+
+**Причина.** `post_build_tree_walks` — два обхода всего дерева (`apply_font_size_adjust`, `resolve_used_line_height`) после `build_box`. Инкрементальная сборка
+`incremental_build_box` вынимает чистые поддеревья из прошлого дерева целиком и ставит на корень `DirtyBits::REUSED_SUBTREE`; оба обхода это не учитывали и
+заходили в каждый бокс переиспользованного поддерева — на стенде это почти весь документ (0,32 мс на флаш, 12 % флаша). Хуже, чем лишний обход:
+поддерево из прошлого прохода **уже** прошло оба прохода, и `apply_font_size_adjust` применял `font-size-adjust` второй раз к уже скорректированному размеру.
+Проверено дифференциально до правки: `p { font-size: 20px; font-size-adjust: 0.5 }` при аспекте 0,8 — полный layout 12,5 px, инкрементальный 7,81 px на первом же флаше
+(на каждом следующем — дальше вниз). Это было неверное отображение, а не только цена.
+
+**Что сделано.** `crates/engine/layout/src/box_tree/entry.rs`: оба обхода возвращаются на боксе с `REUSED_SUBTREE`. Остальные вызывающие (полные пути) флага не видят — у них
+нет индекса переиспользования, поведение прежнее.
+
+**Замер** (тот же стенд). `post_build_tree_walks`: 193 мс → 7,5 мс (во втором прогоне машина шумела ×3,5 — все остальные области выросли в те же разы, так что отношение
+лучше цифры). Остальные области не менялись.
+
+**Тесты.** `lumen-layout`, `box_tree::tests::bug341_differential`: `post_build_walks_leave_a_reused_subtree_alone` (бокс с флагом и дети под ним не трогаются, бокс без флага —
+по-прежнему) и `incremental_restyle_does_not_readjust_a_reused_font_size_adjust_subtree` (три флаша подряд: размеры и `used_line_height` каждого бокса равны полному layout;
+первым делом проверяется `reused > 0`, иначе тест проходил бы вхолостую). Оба красные без правки.
+
+**Что осталось.** По убыванию на стенде, мс/флаш: `try_incremental` 1,26 (`layout_mutation` 0,92: `precompute_counters` 0,23, `cascade_walk` 0,2, `build_box` 0,17,
+`post_layout_passes` 0,13), `flush.collectors` 0,54 (`collect_plan` 0,47), `scroll_collect` 0,47, `incr.prev_node_ids` 0,32 — корень сбора это `body` целиком (`appendChild` в `body`),
+поэтому сбор идентификаторов идёт по всему дереву; сузить можно только вместе со сменой того, что считается «областью» флаша. Статус `OPEN (DEBTOR)` не меняется.
