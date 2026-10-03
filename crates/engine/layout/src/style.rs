@@ -240,6 +240,7 @@ pub use values::timing::{
 // (`pub mod style` в `lib.rs`; `style::apply::*` и другие крейты зовут их по
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
+pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
     FieldSizing, Hyphens, LineBreak, ListStylePosition,

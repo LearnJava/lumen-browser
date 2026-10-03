@@ -710,16 +710,16 @@ fn column_rule_individual() {
         "p { column-rule-width: 2px; column-rule-style: solid; }",
     );
     let s = first_p_style(&root);
-    assert!((s.column_rule_width - 2.0).abs() < 1e-6);
-    assert_eq!(s.column_rule_style, BorderStyle::Solid);
+    assert!((*s.column_rule_width.first() - 2.0).abs() < 1e-6);
+    assert_eq!(*s.column_rule_style.first(), BorderStyle::Solid);
 }
 
 #[test]
 fn column_rule_shorthand() {
     let root = lay("<p>x</p>", "p { column-rule: 3px dashed; }");
     let s = first_p_style(&root);
-    assert!((s.column_rule_width - 3.0).abs() < 1e-6);
-    assert_eq!(s.column_rule_style, BorderStyle::Dashed);
+    assert!((*s.column_rule_width.first() - 3.0).abs() < 1e-6);
+    assert_eq!(*s.column_rule_style.first(), BorderStyle::Dashed);
 }
 
 #[test]
