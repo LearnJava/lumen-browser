@@ -55,7 +55,7 @@ import run_corpus  # noqa: E402
 #: Types no executor exists for (WPT-RUN-8). They are in the denominator and
 #: score zero by construction, so they are reported apart from the types whose
 #: zero is an engine result.
-NO_EXECUTOR = ("crashtest", "wdspec", "print-reftest", "aamtest")
+NO_EXECUTOR = ("wdspec", "print-reftest", "aamtest")
 
 #: Id markers for "wptserve hands this test out over TLS". `.https.` is the
 #: obvious one; `.h2.` is the trap — HTTP/2 is served on the h2 port, which is
@@ -249,7 +249,8 @@ def _selftest() -> int:
         if got != want:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
-    # manual is out of the denominator; crashtest is in it and scores 0.
+    # manual is out of the denominator; crashtest is in it and scores 0 (no
+    # verdict in `results`, whatever executor exists).
     check("denominator", split["totals"]["ids"], 6)
     check("ran", split["totals"]["ran"], 5)
     check("score", round(split["totals"]["score"], 3), round(1.0 + 0.0 + 0.5 + 1.0 + 1.0, 3))

@@ -12,8 +12,8 @@ is what `wptrunner` itself selects tests from, and what wpt.fyi/Servo/Ladybird
 report against, so it is the only defensible denominator.
 
 Scope decision (user, 2026-08-18): the denominator is the **whole vendored
-manifest, no exemptions** — types with no executor at all (`crashtest`,
-`wdspec`, `print-reftest`, `aamtest`; `WPT-RUN-8`) and categories
+manifest, no exemptions** — types with no executor at all (`wdspec`,
+`print-reftest`, `aamtest`; `WPT-RUN-8`) and categories
 `docs/wpt-status.md` marks out of scope (media, hardware APIs, ad-tech) all
 stay in. Anything not run counts as not passed. The one type
 excluded is `support`, which holds fixtures (images, helper scripts), not
@@ -51,7 +51,7 @@ LUMEN_BROWSER_PY = os.path.join(REPO_ROOT, "tools", "wptrunner", "wptrunner",
 
 #: Fallback for `supported_types()` when `lumen.py` cannot be parsed — the set
 #: as of 2026-08-20 (`testharness` since WPT-RUN-2, `reftest` since TEST-4).
-SUPPORTED_TYPES_FALLBACK = frozenset({"testharness", "reftest"})
+SUPPORTED_TYPES_FALLBACK = frozenset({"testharness", "reftest", "crashtest"})
 
 
 def supported_types(path: str = LUMEN_BROWSER_PY) -> frozenset:

@@ -603,6 +603,11 @@ directory's top level (the `dom/nodes` default's original, deliberately
 non-recursive behavior — its own subdirectories are crashtests/other
 never-vetted sub-suites, not part of the 168-file count).
 
+`crashtest` items run too (`LumenCrashtestExecutor`, WPT-RUN-8-S1): PASS = page loaded,
+`test-wait` on `<html>` cleared (or never set), browser alive; CRASH = process died;
+TIMEOUT = `test-wait` never cleared. A crashtest with no `<script>` has no JS runtime,
+so the executor stops waiting `NAV_SETTLE_S` after navigate and checks liveness only.
+
 (Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
 explicitly when running the script from a `git worktree`, whose own `target/`
 is empty. Use `run_smoke.py` with an explicit test-id list instead only to run
