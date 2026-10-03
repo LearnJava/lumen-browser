@@ -43,6 +43,7 @@ use crate::style::{
     Position,
     Resize,
     RuleBreak,
+    RuleList,
     RuleOverlap,
     RuleVisibilityItems,
     ScrollMarkerGroup,
@@ -1160,6 +1161,7 @@ enum RuleAxis {
 
 /// Одна `<line-width> || <line-style> || <color>`-тройка шортхенда `*-rule`.
 /// `None` у компонента — он не задан и сбрасывается в initial.
+#[derive(Clone)]
 struct RuleTriplet {
     width: Option<f32>,
     style: Option<BorderStyle>,
@@ -1229,29 +1231,35 @@ fn apply_gap_rule_declaration(
         _ => return,
     };
     let v = val.trim();
-    let triplet = match part {
-        "" => match parse_rule_triplet(v, em_basis, viewport, is_quirks) {
-            Some(t) => RuleTriplet {
-                // Пропущенные компоненты шортхенда — initial: medium / none / currentColor.
-                width: Some(t.width.unwrap_or(3.0)),
-                style: Some(t.style.unwrap_or(BorderStyle::None)),
-                color: Some(t.color.unwrap_or(crate::style::CssColor::CurrentColor)),
-            },
+    let width_item = |t: &str| parse_line_width(t, em_basis, viewport, is_quirks).filter(|px| *px >= 0.0);
+    let style_item = parse_border_style_opt;
+    let color_item = |t: &str| parse_css_color_legacy(t.trim(), is_quirks);
+    // CSS Gap Decorations L1 §4.4: шортхенд — список `<gap-rule>` (с `repeat()`); каждый
+    // элемент раскладывается в три списка одинаковой формы, пропущенное — initial.
+    let mut width_list = None;
+    let mut style_list = None;
+    let mut color_list = None;
+    match part {
+        "" => {
+            let item = |t: &str| parse_rule_triplet(t, em_basis, viewport, is_quirks);
+            let Some(list) = RuleList::parse(v, &item) else { return };
+            width_list = Some(list.map(|t| t.width.unwrap_or(3.0)));
+            style_list = Some(list.map(|t| t.style.unwrap_or(BorderStyle::None)));
+            color_list = Some(list.map(|t| t.color.unwrap_or(crate::style::CssColor::CurrentColor)));
+        }
+        "width" => match RuleList::parse(v, &width_item) {
+            Some(l) => width_list = Some(l),
             None => return,
         },
-        "width" => match parse_line_width(v, em_basis, viewport, is_quirks) {
-            Some(px) if px >= 0.0 => RuleTriplet { width: Some(px), style: None, color: None },
-            _ => return,
-        },
-        "style" => match parse_border_style_opt(v) {
-            Some(s) => RuleTriplet { width: None, style: Some(s), color: None },
+        "style" => match RuleList::parse(v, &style_item) {
+            Some(l) => style_list = Some(l),
             None => return,
         },
-        _ => match parse_css_color_legacy(v, is_quirks) {
-            Some(c) => RuleTriplet { width: None, style: None, color: Some(c) },
+        _ => match RuleList::parse(v, &color_item) {
+            Some(l) => color_list = Some(l),
             None => return,
         },
-    };
+    }
     for axis in axes {
         let (w, st, c) = match axis {
             RuleAxis::Column => (
@@ -1265,14 +1273,14 @@ fn apply_gap_rule_declaration(
                 &mut style.row_rule_color,
             ),
         };
-        if let Some(px) = triplet.width {
-            *w = px;
+        if let Some(l) = &width_list {
+            *w = l.clone();
         }
-        if let Some(s) = triplet.style {
-            *st = s;
+        if let Some(l) = &style_list {
+            *st = l.clone();
         }
-        if let Some(col) = triplet.color {
-            *c = col;
+        if let Some(l) = &color_list {
+            *c = l.clone();
         }
     }
 }

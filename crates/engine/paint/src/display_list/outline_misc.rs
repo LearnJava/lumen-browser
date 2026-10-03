@@ -91,7 +91,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     if s.column_count.is_none() && s.column_width.is_none() {
         return;
     }
-    if !s.column_rule_style.is_visible() || s.column_rule_width <= 0.0 {
+    if !s.column_rule_style.iter().any(|st| st.is_visible()) || !s.column_rule_width.iter().any(|w| *w > 0.0) {
         return;
     }
 
@@ -150,10 +150,18 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 
     let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
-    let rule_w = s.column_rule_width;
-    let rule_color = s.column_rule_color.resolve(s.color);
+    let total = (n_cols - 1) as usize;
 
     for i in 0..(n_cols - 1) {
+        // CSS Gap Decorations L1 §4.6: значения списков — по номеру щели
+        // (геометрия multicol-колонок здесь слева направо при любом `direction`).
+        let gap_idx = i as usize;
+        let rule_w = *s.column_rule_width.value_for_gap(gap_idx, total);
+        let rule_style = *s.column_rule_style.value_for_gap(gap_idx, total);
+        let rule_color = s.column_rule_color.value_for_gap(gap_idx, total).resolve(s.color);
+        if !rule_style.is_visible() || rule_w <= 0.0 {
+            continue;
+        }
         // Left edge of gap after column i.
         let gap_left = content_x + (i + 1) as f32 * col_w + i as f32 * col_gap;
         // Rule centered in the gap.
@@ -167,7 +175,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             colors: [Color::TRANSPARENT, rule_color, Color::TRANSPARENT, Color::TRANSPARENT],
             styles: [
                 BorderStyle::None,
-                s.column_rule_style,
+                rule_style,
                 BorderStyle::None,
                 BorderStyle::None,
             ],

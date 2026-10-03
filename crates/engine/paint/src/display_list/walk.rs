@@ -614,8 +614,12 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     if !is_flex_or_grid {
         return Vec::new();
     }
-    let column_rule_visible = s.column_rule_style.is_visible() && s.column_rule_width > 0.0;
-    let row_rule_visible = s.row_rule_style.is_visible() && s.row_rule_width > 0.0;
+    // Списки значений (CSS Gap Decorations L1 §4.5): ось видима, если хоть одна щель
+    // может получить видимое значение; точный выбор — по номеру щели в `gap_decoration_commands`.
+    let column_rule_visible = s.column_rule_style.iter().any(|st| st.is_visible())
+        && s.column_rule_width.iter().any(|w| *w > 0.0);
+    let row_rule_visible =
+        s.row_rule_style.iter().any(|st| st.is_visible()) && s.row_rule_width.iter().any(|w| *w > 0.0);
     if !column_rule_visible && !row_rule_visible {
         return Vec::new();
     }
@@ -732,19 +736,31 @@ pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
     let s = &b.style;
     let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
         gap_segs.into_iter().partition(|g| !g.horizontal);
-    let col_ctx = GapDecorationContext {
-        rule_width: s.column_rule_width,
-        rule_style: s.column_rule_style,
-        rule_color: s.column_rule_color.resolve(s.color),
+    // CSS Gap Decorations L1 §4.6: значения списков раздаются щелям оси по порядку
+    // (сегменты собраны по возрастанию координаты — это порядок щелей).
+    let axis_cmds = |segs: &[GapSegment],
+                     widths: &lumen_layout::RuleList<f32>,
+                     styles: &lumen_layout::RuleList<BorderStyle>,
+                     colors: &lumen_layout::RuleList<lumen_layout::CssColor>,
+                     reversed: bool| {
+        let total = segs.len();
+        let mut out = Vec::new();
+        for (i, seg) in segs.iter().enumerate() {
+            // `reversed` — ось идёт справа налево (колонки при `direction: rtl`): первая щель правая.
+            let idx = if reversed { total - 1 - i } else { i };
+            let ctx = GapDecorationContext {
+                rule_width: *widths.value_for_gap(idx, total),
+                rule_style: *styles.value_for_gap(idx, total),
+                rule_color: colors.value_for_gap(idx, total).resolve(s.color),
+            };
+            out.extend(emit_gap_rules(&b.children, std::slice::from_ref(seg), &ctx));
+        }
+        out
     };
-    let row_ctx = GapDecorationContext {
-        rule_width: s.row_rule_width,
-        rule_style: s.row_rule_style,
-        rule_color: s.row_rule_color.resolve(s.color),
-    };
+    let rtl = s.direction == lumen_layout::Direction::Rtl;
+    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, rtl);
+    let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, false);
     // CSS Gap Decorations L1 §3.5 `rule-overlap`: the axis painted last lies on top.
-    let col_cmds = emit_gap_rules(&b.children, &cols, &col_ctx);
-    let row_cmds = emit_gap_rules(&b.children, &rows, &row_ctx);
     let (mut out, top) = match s.rule_overlap {
         lumen_layout::RuleOverlap::RowOverColumn => (col_cmds, row_cmds),
         lumen_layout::RuleOverlap::ColumnOverRow => (row_cmds, col_cmds),

@@ -1043,6 +1043,28 @@ use lumen_dom::NodeId;
         assert!((rect.height - 120.0).abs() < 0.6, "got {}", rect.height);
     }
 
+    /// CSS Gap Decorations L1 §4.6: a list of values is dealt to the gaps in order.
+    #[test]
+    fn rule_value_lists_are_assigned_per_gap() {
+        let html = r#"<div style="display:grid;grid-template-columns:50px 50px 50px;gap:10px;
+            width:200px;height:20px;column-rule:{}"><div></div><div></div><div></div></div>"#;
+        let widths = |rule: &str| -> Vec<f32> {
+            let dl = build(&html.replace("{}", rule), "");
+            column_rule_cmds(&dl)
+                .iter()
+                .map(|c| match c {
+                    DisplayCommand::DrawBorder { widths: [_, w, _, _], .. } => *w,
+                    _ => unreachable!(),
+                })
+                .collect()
+        };
+        assert_eq!(widths("2px solid red, 4px solid red"), [2.0, 4.0]);
+        assert_eq!(widths("2px solid red, repeat(auto, 4px solid red, 6px solid red)"), [2.0, 4.0]);
+        // A `none` entry skips its gap but still consumes a value.
+        assert_eq!(widths("2px none, 6px solid red"), [6.0]);
+        assert_eq!(widths("repeat(2, 3px solid blue)"), [3.0, 3.0]);
+    }
+
     #[test]
     fn rule_inset_collapsing_a_segment_removes_it() {
         let html = GRID_2X2.replace("{}", "rule:2px solid red;rule-inset:110px");
