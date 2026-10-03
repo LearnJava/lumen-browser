@@ -447,6 +447,9 @@ pub struct CounterMap {
     /// see that function's doc comment for why content dirtiness (not style
     /// equality alone) is the correctness precondition.
     clean_subtrees: IdSet<NodeId>,
+    /// BUG-935 срез 78 — the ids the incremental box build took out of the previous tree's dirty
+    /// area ([`crate::incremental::ReleasedIds`]); `None` for a pass that did not record them.
+    released: Option<crate::incremental::ReleasedIds>,
     /// THREAD-4 срез 2 — intra-pass structural memo, reset every pass (`style::share_cache`).
     share_cache: ShareCache,
 }
@@ -598,6 +601,17 @@ impl CounterMap {
     /// (`RestyleDelta::content_dirty`) that gates population.
     pub fn clean_subtrees(&self) -> &IdSet<NodeId> {
         &self.clean_subtrees
+    }
+
+    /// BUG-935 срез 78 — records the ids [`crate::incremental::ReleasedIds`] names for this pass.
+    pub(crate) fn set_released(&mut self, released: crate::incremental::ReleasedIds) {
+        self.released = Some(released);
+    }
+
+    /// BUG-935 срез 78 — takes the ids the pass released from the previous tree's dirty area, if it
+    /// recorded them.
+    pub fn take_released(&mut self) -> Option<crate::incremental::ReleasedIds> {
+        self.released.take()
     }
 }
 

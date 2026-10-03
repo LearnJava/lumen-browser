@@ -324,6 +324,8 @@ pub struct V8JsRuntime {
     pub(super) scope_prune_off: Arc<AtomicBool>,
     /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_pruned`].
     pub(super) scope_pruned: Arc<AtomicU64>,
+    /// BUG-935 срез 78: mirrors [`super::style_flush::FlushHandles::released_evict_off`].
+    pub(super) released_evict_off: Arc<AtomicBool>,
     /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_off`].
     pub(super) scroll_rollup_off: Arc<AtomicBool>,
     /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_served`].
@@ -627,6 +629,7 @@ impl V8JsRuntime {
             sheet_delta_off: Arc::new(AtomicBool::new(false)),
             scope_prune_off: Arc::new(AtomicBool::new(false)),
             scope_pruned: Arc::new(AtomicU64::new(0)),
+            released_evict_off: Arc::new(AtomicBool::new(false)),
             scroll_rollup_off: Arc::new(AtomicBool::new(false)),
             scroll_rollup_served: Arc::new(AtomicU64::new(0)),
             scroll_rollup_walked: Arc::new(AtomicU64::new(0)),
@@ -1033,6 +1036,21 @@ impl V8JsRuntime {
     #[doc(hidden)]
     pub fn set_scope_prune_off(&self, off: bool) {
         self.scope_prune_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 78: entries in `layout_rects`, `client_rects`, `computed_styles`, `scroll_states`.
+    #[doc(hidden)]
+    pub fn published_cache_sizes(&self) -> [usize; 4] {
+        fn len<K, V>(m: &Mutex<HashMap<K, V>>) -> usize {
+            m.lock().unwrap_or_else(|e| e.into_inner()).len()
+        }
+        [len(&self.layout_rects), len(&self.client_rects), len(&self.computed_styles), len(&self.scroll_states)]
+    }
+
+    /// BUG-935 срез 78: evicts by the previous tree's dirty-area listing, as before the slice (differential tests).
+    #[doc(hidden)]
+    pub fn set_released_evict_off(&self, off: bool) {
+        self.released_evict_off.store(off, Ordering::Relaxed);
     }
 
     /// BUG-935 срез 77: disables the scroll-extent rollup cache for this runtime (differential tests).

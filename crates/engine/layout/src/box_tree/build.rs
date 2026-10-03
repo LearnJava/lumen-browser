@@ -456,8 +456,27 @@ pub fn incremental_build_box(
     dark_mode: bool,
     prev: &mut LayoutBox,
 ) -> LayoutBox {
+    incremental_build_box_unplaced(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev).0
+}
+
+/// [`incremental_build_box`], also handing back the subtrees it took out of `prev` and did not
+/// place in the new tree (BUG-935 срез 78: their ids are ones the caches must forget).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn incremental_build_box_unplaced(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev: &mut LayoutBox,
+) -> (LayoutBox, Vec<LayoutBox>) {
     if !incremental_box_build_enabled() {
-        return build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+        let built = build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+        return (built, Vec::new());
     }
     let t = std::time::Instant::now();
     let (prev_index, visited) = crate::incremental::extract_clean_subtrees(prev, counters.clean_subtrees());
@@ -469,7 +488,10 @@ pub fn incremental_build_box(
     if box_build_diagnostics_on() {
         note_prev_index(t.elapsed().as_nanos() as u64, visited);
     }
-    build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
+    let built =
+        build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index));
+    let unplaced = prev_index.into_values().filter_map(|slot| slot.into_inner().ok().flatten()).collect();
+    (built, unplaced)
 }
 
 /// BUG-341 S20 — timing shim around [`build_box_inner`].

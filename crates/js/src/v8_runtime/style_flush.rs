@@ -208,6 +208,8 @@ pub(crate) struct FlushHandles {
     /// BUG-935 срез 70: boxes the incremental flushes left alone inside a dirty root; read
     /// through `V8JsRuntime::scope_pruned_count`.
     pub(crate) scope_pruned: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 78: this runtime's own `LUMEN_NO_RELEASED_EVICT`, for a differential test.
+    pub(crate) released_evict_off: Arc<std::sync::atomic::AtomicBool>,
     /// BUG-935 срез 77: this runtime's own `LUMEN_NO_SCROLL_ROLLUP_CACHE`, for a differential test.
     pub(crate) scroll_rollup_off: Arc<std::sync::atomic::AtomicBool>,
     /// BUG-935 срез 77: subtrees whose scroll-extent rollup the flush took from the cache / had to
@@ -364,6 +366,14 @@ fn scope_prune_disabled() -> bool {
 fn scroll_rollup_cache_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SCROLL_ROLLUP_CACHE").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 78: `LUMEN_NO_RELEASED_EVICT=1` evicts the cache entries of a dirty root by listing
+/// its whole subtree in the previous tree and subtracting the subtrees the plan left alone, as
+/// before, instead of taking the ids the box build released plus the boxes the plan collects.
+fn released_evict_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_RELEASED_EVICT").is_some_and(|v| v != "0"))
 }
 
 /// BUG-935 срез 70: `LUMEN_VERIFY_SCOPE_PRUNE=1` re-collects every cache in full after each
@@ -550,7 +560,7 @@ impl FlushHandles {
         // means the full path ran and every collector below must rebuild its
         // whole-document map from scratch, same as before this slice.
         drop(incr_scope_guard);
-        let (mut layout_root, counters, incr_scope, mut cached_rollups) = match incr {
+        let (mut layout_root, mut counters, incr_scope, mut cached_rollups) = match incr {
             Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes, scroll_rollups)) => {
                 (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)), scroll_rollups)
             }
@@ -603,7 +613,11 @@ impl FlushHandles {
         // refreshed from it below.
         let mut scoped_plan: Option<lumen_layout::ScopedCollection<'_>> = None;
         let mut plan_census = (0usize, 0usize);
+        // BUG-935 срез 78: the ids to evict by when the box build's release list stands in for the
+        // previous tree's dirty-area listing (`released_evict_on`); `(index-keyed, raw-keyed)`.
+        let mut evict_sets: Option<(lumen_core::id_hash::IdSet<u32>, lumen_core::id_hash::IdSet<u32>)> = None;
         if let Some((dirty_roots, prev_node_ids, _, content_nodes)) = &incr_scope {
+            let released_on = self.released_evict_on();
             let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
             let plan_scope = lumen_core::profile::scope("flush.collect_plan");
             // BUG-935 срез 59: which elements the cascade really changed, so the
@@ -634,9 +648,22 @@ impl FlushHandles {
                 &lr,
                 viewport,
                 changed.as_ref(),
-                lumen_layout::PlanOptions { styles: styles_on, prune: prune_on },
+                lumen_layout::PlanOptions {
+                    styles: styles_on,
+                    prune: prune_on,
+                    ids: !released_on || verify_scope_prune(),
+                },
             );
             drop(plan_scope);
+            let evict_scope = lumen_core::profile::scope("flush.evict_ids");
+            if released_on {
+                let released = counters.take_released().unwrap_or_default();
+                let (mut index, mut raw) = (released.index, released.raw);
+                plan.evictable(&mut index, &mut raw);
+                evict_sets = Some((index, raw));
+            }
+            let prev_node_ids = evict_sets.as_ref().map_or(prev_node_ids, |(index, _)| index);
+            drop(evict_scope);
             let (pruned_boxes, planned_items) = plan.census();
             self.scope_pruned.fetch_add(pruned_boxes as u64, Ordering::Relaxed);
             plan_census = (pruned_boxes, planned_items);
@@ -768,6 +795,7 @@ impl FlushHandles {
         let scroll_collect_scope = lumen_core::profile::scope("flush.scroll_collect");
         let mut next_rollups = lumen_layout::RollupCache::default();
         if let Some((dirty_roots, _, prev_node_raw_ids, _)) = &incr_scope {
+            let prev_node_raw_ids = evict_sets.as_ref().map_or(prev_node_raw_ids, |(_, raw)| raw);
             let mut ss = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
             // BUG-935 срез 70: the boxes the plan collected — a dirty root's subtree minus what it
             // left alone, plus the boxes above it — instead of every dirty root whole.
@@ -855,7 +883,7 @@ impl FlushHandles {
         // `[js-stall]` sample can be matched to its forced-reflow count.
         if lumen_paint::frame_log_enabled() {
             eprintln!(
-                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={} planned={} pruned_boxes={}",
+                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={} planned={} pruned_subtrees={}",
                 flush_t0.elapsed().as_secs_f64() * 1000.0,
                 collect_ms,
                 if incr_scope.is_some() { "incremental" } else { "full" },
@@ -1014,6 +1042,11 @@ impl FlushHandles {
             });
         }
         slot
+    }
+
+    /// BUG-935 срез 78: whether a flush evicts by the ids the box build released ([`released_evict_disabled`]).
+    fn released_evict_on(&self) -> bool {
+        !released_evict_disabled() && !self.released_evict_off.load(Ordering::Relaxed)
     }
 
     /// BUG-1211: attempt the incremental cascade+layout path instead of a
@@ -1227,7 +1260,11 @@ impl FlushHandles {
         let scope_roots: lumen_core::id_hash::IdSet<lumen_dom::NodeId> =
             dirty_roots.iter().chain(shallow_roots.iter()).copied().collect();
         let prev_ids_scope = lumen_core::profile::scope("incr.prev_node_ids");
-        let (prev_node_ids, prev_node_raw_ids) = lumen_layout::collect_dirty_subtree_ids(&basis.layout, &scope_roots);
+        let (prev_node_ids, prev_node_raw_ids) = if self.released_evict_on() {
+            Default::default()
+        } else {
+            lumen_layout::collect_dirty_subtree_ids(&basis.layout, &scope_roots)
+        };
         drop(prev_ids_scope);
         let (deep_count, shallow_count) = (dirty_roots.len(), shallow_roots.len());
         let has_dependency = node_index.has_has_dependency();
