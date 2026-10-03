@@ -27,7 +27,10 @@
 
 use crate::style::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, Color, ComputedStyle, FilterFn,
-    GradientStop, InterpolateSizeMode, IterationCount, Length, TimingFunction, TransformFn,
+    GapRuleOverride, GradientStop, InterpolateSizeMode, IterationCount, Length,
+    PAINTED_GAP_RULE_PROPERTIES, TimingFunction, TransformFn, TransitionBehavior,
+    gap_rule_computed_css, gap_rule_endpoint_css, interpolate_gap_rule_value,
+    transition_token_covers,
 };
 use lumen_css_parser::{Declaration, KeyframesRule, Stylesheet};
 use lumen_dom::NodeId;
@@ -46,6 +49,9 @@ pub struct AnimatedStyle {
     /// Animated height override — `Some` during a height transition.
     /// Requires relayout to apply (not a compositor-offloadable property).
     pub height: Option<Length>,
+    /// CSS Gap Decorations L1 §4.7 — animated `*-rule-width` / `*-rule-color`.
+    /// Applied while painting the gaps of a flex/grid container, no relayout.
+    pub gap_rules: Option<GapRuleOverride>,
 }
 
 /// Output of `AnimationScheduler::tick` — per-node animated values for one frame.
@@ -72,6 +78,7 @@ impl AnimationFrame {
             if let Some(v) = style.color { entry.color = Some(v); }
             if let Some(v) = style.background_color { entry.background_color = Some(v); }
             if let Some(v) = style.height { entry.height = Some(v); }
+            if let Some(v) = style.gap_rules { merge_gap_rules(&mut entry.gap_rules, &v); }
         }
     }
 
@@ -90,6 +97,7 @@ impl AnimationFrame {
             if style.transform.is_some() { entry.transform = style.transform; }
             if style.color.is_some() { entry.color = style.color; }
             if style.background_color.is_some() { entry.background_color = style.background_color; }
+            if let Some(v) = &style.gap_rules { merge_gap_rules(&mut entry.gap_rules, v); }
             if style.height.is_some() { entry.height = style.height; }
         }
     }
@@ -111,12 +119,14 @@ impl AnimationFrame {
                 || style.transform.is_some()
                 || style.color.is_some()
                 || style.background_color.is_some()
+                || style.gap_rules.is_some()
             {
                 frame.overrides.insert(node, CompositorOverride {
                     opacity: style.opacity,
                     transform: style.transform.clone(),
                     color: style.color,
                     background_color: style.background_color,
+                    gap_rules: style.gap_rules.clone(),
                     ..Default::default()
                 });
             }
@@ -168,6 +178,12 @@ impl AnimationFrame {
     }
 }
 
+/// Merges `src` into `dst` (`src` wins per property) — the shared tail of the two
+/// `AnimationFrame` merge flavours.
+pub fn merge_gap_rules(dst: &mut Option<GapRuleOverride>, src: &GapRuleOverride) {
+    dst.get_or_insert_with(GapRuleOverride::default).merge_from(src);
+}
+
 /// Compositor-offloadable overrides for one element.
 ///
 /// Applied as display-list patches without relayout: opacity/transform via
@@ -181,6 +197,9 @@ pub struct CompositorOverride {
     pub color: Option<Color>,
     /// Animated `background-color` — replaces the box's background fill colour.
     pub background_color: Option<Color>,
+    /// Animated gap-decoration `*-rule-width` / `*-rule-color` — replaces the
+    /// computed values while the container's gaps are painted.
+    pub gap_rules: Option<GapRuleOverride>,
     /// FRAME-7: char-index text cursor to paint as a caret bar inside a
     /// focused typeable `<input>`. Not animation-related — this map is reused
     /// as the per-`NodeId` carrier because it is already threaded through
@@ -226,6 +245,10 @@ pub struct KeyframeStyle {
     pub color: Option<Color>,
     pub background_color: Option<Color>,
     pub height: Option<Length>,
+    /// CSS Gap Decorations L1: `(longhand, value)` pairs of the keyframe for
+    /// `{column,row}-rule-{width,color}` (`rule-width`/`rule-color` are expanded to both
+    /// axes), in declaration order.
+    pub gap_rules: Vec<(&'static str, String)>,
 }
 
 /// Parse the `declarations` of one `@keyframes` frame into a [`KeyframeStyle`].
@@ -261,10 +284,87 @@ pub fn parse_keyframe_style(declarations: &[Declaration]) -> KeyframeStyle {
             "height" => {
                 ks.height = crate::style::parse_length(decl.value.as_str());
             }
-            _ => {}
+            prop => {
+                for longhand in gap_rule_longhands(prop) {
+                    ks.gap_rules.push((longhand, decl.value.trim().to_string()));
+                }
+            }
         }
     }
     ks
+}
+
+/// The painted gap-decoration longhands a keyframe property sets: the longhand itself,
+/// or both axes for `rule-width` / `rule-color`.
+pub fn gap_rule_longhands(prop: &str) -> Vec<&'static str> {
+    PAINTED_GAP_RULE_PROPERTIES
+        .iter()
+        .copied()
+        .filter(|l| {
+            *l == prop
+                || l.split_once("-rule-")
+                    .is_some_and(|(_, part)| prop.strip_prefix("rule-") == Some(part))
+        })
+        .collect()
+}
+
+/// CSS Gap Decorations L1 §4.7 inside `@keyframes`: the `*-rule-width` / `*-rule-color`
+/// values at overall progress `t ∈ [0, 1]`.
+///
+/// `frames` are the keyframes of the rule as `(offset, parsed style)`. Per property, only
+/// the keyframes that declare it count; a missing 0% / 100% keyframe is the neutral one —
+/// the element's own computed value (`base`), CSS Animations L1 §3. The value is
+/// interpolated between the two keyframes around `t` with the same list arithmetic as
+/// Web Animations; a pair that does not interpolate flips at 50% of the interval.
+/// `None` — no keyframe sets a gap property.
+pub fn interpolate_gap_rules(
+    frames: &[(f32, &KeyframeStyle)],
+    base: &ComputedStyle,
+    t: f32,
+) -> Option<GapRuleOverride> {
+    let mut out = GapRuleOverride::default();
+    let mut any = false;
+    for prop in PAINTED_GAP_RULE_PROPERTIES {
+        let mut pts: Vec<(f32, String)> = Vec::new();
+        for (offset, ks) in frames {
+            // The last declaration of a keyframe wins.
+            let Some((_, raw)) = ks.gap_rules.iter().rev().find(|(p, _)| *p == prop) else {
+                continue;
+            };
+            if let Some(css) = gap_rule_endpoint_css(prop, raw, base.color) {
+                pts.push((*offset, css));
+            }
+        }
+        if pts.is_empty() {
+            continue;
+        }
+        let Some(under) = gap_rule_computed_css(base, prop) else {
+            continue;
+        };
+        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        if pts[0].0 > 0.0 {
+            pts.insert(0, (0.0, under.clone()));
+        }
+        if pts[pts.len() - 1].0 < 1.0 {
+            pts.push((1.0, under));
+        }
+        let i = pts
+            .iter()
+            .rposition(|(o, _)| *o <= t)
+            .unwrap_or(0)
+            .min(pts.len() - 1);
+        let css = match pts.get(i + 1) {
+            Some((o1, to)) if pts[i].0 < *o1 => {
+                let local = f64::from(((t - pts[i].0) / (o1 - pts[i].0)).clamp(0.0, 1.0));
+                interpolate_gap_rule_value(prop, &pts[i].1, to, local).unwrap_or_else(|| {
+                    if local < 0.5 { pts[i].1.clone() } else { to.clone() }
+                })
+            }
+            _ => pts[i].1.clone(),
+        };
+        any |= out.set(prop, &css);
+    }
+    any.then_some(out)
 }
 
 /// Анимируемое значение. Phase 0: восемь вариантов — Number / Length / Color /
@@ -298,6 +398,10 @@ pub enum AnimValue {
     /// Дискретное (не-интерполируемое) значение — хранится как ключ:
     /// для interpolation просто step-half.
     Discrete(String),
+    /// CSS Gap Decorations L1 §4.7 — computed value of `prop` (one of
+    /// `PAINTED_GAP_RULE_PROPERTIES`) as CSS text, interpolated list-wise by
+    /// `interpolate_gap_rule_value`; a pair that does not interpolate flips at 50%.
+    GapRule { prop: &'static str, css: String },
 }
 
 /// Trait для интерполяции пары computed values.
@@ -381,6 +485,14 @@ impl AnimationInterpolator for LinearInterpolator {
             (AnimValue::GradientStops(a), AnimValue::GradientStops(b)) => Some(
                 interpolate_gradient_stops(a, b, t)
                     .map(AnimValue::GradientStops)
+                    .unwrap_or_else(|| if t < 0.5 { from.clone() } else { to.clone() }),
+            ),
+            (
+                AnimValue::GapRule { prop, css: a },
+                AnimValue::GapRule { prop: other, css: b },
+            ) if prop == other => Some(
+                interpolate_gap_rule_value(prop, a, b, f64::from(t))
+                    .map(|css| AnimValue::GapRule { prop, css })
                     .unwrap_or_else(|| if t < 0.5 { from.clone() } else { to.clone() }),
             ),
             _ => {
@@ -1097,6 +1209,7 @@ fn keyframe_interpolate(kf: &KeyframesRule, t: f32) -> Option<KeyframeStyle> {
             &interp,
         ),
         height: interp_optional_length(from_ks.height, to_ks.height, local_t, &interp),
+        gap_rules: Vec::new(),
     })
 }
 
@@ -1445,7 +1558,113 @@ impl TransitionScheduler {
                 elapsed_time: 0.0,
             });
         }
+        self.sync_gap_rules(node, old, new, now, &mut events);
         events
+    }
+
+    /// CSS Gap Decorations L1 §4.7 — transitions of `{column,row}-rule-{width,color}`.
+    ///
+    /// Unlike the Phase-0 table in [`Self::sync`], the timing lists are indexed by the
+    /// *last* `transition-property` entry that covers the property (`all`, `rule`,
+    /// `column-rule`, `rule-width`, the longhand itself), as CSS Transitions L1 §2 asks.
+    /// A pair that does not interpolate (mismatched `repeat(auto, …)` shapes) starts a
+    /// transition only with `transition-behavior: allow-discrete` and flips at 50%.
+    fn sync_gap_rules(
+        &mut self,
+        node: NodeId,
+        old: &ComputedStyle,
+        new: &ComputedStyle,
+        now: f32,
+        events: &mut Vec<TransitionEventInfo>,
+    ) {
+        for prop in PAINTED_GAP_RULE_PROPERTIES {
+            let Some(idx) = new
+                .transition_properties
+                .iter()
+                .rposition(|tok| transition_token_covers(tok, prop))
+            else {
+                continue;
+            };
+            let key = (node, prop.to_string());
+            let dur = cyclic_get(&new.transition_durations, idx).copied().unwrap_or(0.0);
+            if dur <= 0.0 {
+                if let Some(removed) = self.active.remove(&key)
+                    && !removed.completed
+                {
+                    events.push(cancel_event(node, prop, &removed, now));
+                }
+                continue;
+            }
+            let (Some(old_css), Some(new_css)) =
+                (gap_rule_computed_css(old, prop), gap_rule_computed_css(new, prop))
+            else {
+                continue;
+            };
+            let to_val = AnimValue::GapRule { prop, css: new_css };
+            // A running transition continues from its current value (CSS Transitions L1 §3).
+            let running = self.active.get(&key);
+            let from_val = match running {
+                Some(state) => state.value_at(now),
+                None => AnimValue::GapRule { prop, css: old_css },
+            };
+            if from_val == to_val {
+                continue;
+            }
+            let allow_discrete = matches!(
+                cyclic_get(&new.transition_behaviors, idx),
+                Some(TransitionBehavior::AllowDiscrete)
+            );
+            let interpolable = match (&from_val, &to_val) {
+                (AnimValue::GapRule { css: a, .. }, AnimValue::GapRule { css: b, .. }) => {
+                    interpolate_gap_rule_value(prop, a, b, 0.5).is_some()
+                }
+                _ => false,
+            };
+            let cancel = running
+                .filter(|state| !state.completed)
+                .map(|state| cancel_event(node, prop, state, now));
+            if !interpolable && !allow_discrete {
+                // The value changed and nothing may animate it: drop any running transition.
+                if self.active.remove(&key).is_some()
+                    && let Some(cancel) = cancel
+                {
+                    events.push(cancel);
+                }
+                continue;
+            }
+            let delay = cyclic_get(&new.transition_delays, idx).copied().unwrap_or(0.0);
+            let timing_fn = cyclic_get(&new.transition_timing_functions, idx)
+                .cloned()
+                .unwrap_or_else(TimingFunction::default);
+            let fill_mode = cyclic_get(&new.transition_fill_modes, idx)
+                .copied()
+                .unwrap_or(AnimationFillMode::None);
+            if let Some(cancel) = cancel {
+                events.push(cancel);
+            }
+            self.active.insert(
+                key,
+                TransitionState {
+                    from: from_val,
+                    to: to_val,
+                    start_time: now,
+                    duration: dur,
+                    delay,
+                    timing_fn,
+                    fill_mode,
+                    interrupted_value: None,
+                    auto_resolved_px: None,
+                    started_fired: false,
+                    completed: false,
+                },
+            );
+            events.push(TransitionEventInfo {
+                node,
+                property: prop.to_string(),
+                kind: TransitionEventKind::Run,
+                elapsed_time: 0.0,
+            });
+        }
     }
 
     /// Remove all transition state for `node` (called when node leaves DOM).
@@ -1512,7 +1731,14 @@ impl TransitionScheduler {
                     entry.height = Some(l.clone());
                 }
             }
-            _ => {}
+            _ => {
+                if let AnimValue::GapRule { prop: p, css } = val {
+                    entry
+                        .gap_rules
+                        .get_or_insert_with(GapRuleOverride::default)
+                        .set(p, css);
+                }
+            }
         }
     }
 
@@ -1591,6 +1817,24 @@ impl TransitionScheduler {
         });
 
         (frame, events)
+    }
+}
+
+impl TransitionState {
+    /// The value the transition shows at `now` (before its delay — `from`, after the
+    /// active period — `to`), used as the start of a transition that interrupts it.
+    fn value_at(&self, now: f32) -> AnimValue {
+        let elapsed = now - self.start_time - self.delay;
+        if elapsed <= 0.0 {
+            return self.from.clone();
+        }
+        if elapsed >= self.duration {
+            return self.to.clone();
+        }
+        let eased = self.timing_fn.progress((elapsed / self.duration).clamp(0.0, 1.0));
+        LinearInterpolator
+            .interpolate(&self.from, &self.to, eased)
+            .unwrap_or_else(|| self.to.clone())
     }
 }
 
@@ -3300,5 +3544,159 @@ mod tests {
             events.iter().all(|e| e.kind != TransitionEventKind::Cancel),
             "a completed fill-mode transition must not fire transitioncancel"
         );
+    }
+
+    // ─── CSS Gap Decorations L1 §4.7: painted transitions / animations ───────
+
+    fn gap_transition_style(width: &str, props: &str, dur: f32) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        let mut o = GapRuleOverride::default();
+        assert!(o.set("column-rule-width", width));
+        o.apply_to(&mut s);
+        s.transition_properties = vec![props.to_string()];
+        s.transition_durations = vec![dur];
+        s.transition_timing_functions = vec![crate::style::TimingFunction::Linear];
+        s
+    }
+
+    #[test]
+    fn gap_rule_width_transition_interpolates_into_overrides() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(50usize);
+        let old = gap_transition_style("10px", "column-rule-width", 1.0);
+        let new = gap_transition_style("20px", "column-rule-width", 1.0);
+        let events = sched.sync(node, &old, &new, 0.0);
+        assert!(events.iter().any(|e| e.property == "column-rule-width"
+            && e.kind == TransitionEventKind::Run));
+        let (frame, _) = sched.tick(0.5);
+        assert!(frame.has_active);
+        let rules = frame.overrides[&node].gap_rules.as_ref().expect("gap override");
+        assert_eq!(*rules.column_width.as_ref().expect("width").first(), 15.0);
+        assert!(rules.row_width.is_none());
+        // The override reaches the compositor frame (no relayout needed).
+        assert!(frame.to_compositor_frame().get(node).is_some_and(|o| o.gap_rules.is_some()));
+        // After the end the transition is dropped and the computed value takes over.
+        let (done, events) = sched.tick(1.5);
+        assert!(done.overrides.is_empty());
+        assert!(events.iter().any(|e| e.kind == TransitionEventKind::End));
+    }
+
+    #[test]
+    fn gap_rule_transition_is_covered_by_shorthand_and_all() {
+        for tok in ["rule", "column-rule", "rule-width", "all"] {
+            let mut sched = TransitionScheduler::new();
+            let node = lumen_dom::NodeId::from_index(51usize);
+            let old = gap_transition_style("10px", tok, 1.0);
+            let new = gap_transition_style("20px", tok, 1.0);
+            sched.sync(node, &old, &new, 0.0);
+            assert!(
+                sched.active.contains_key(&(node, "column-rule-width".to_string())),
+                "{tok}"
+            );
+        }
+        // `row-rule` does not cover the column axis.
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(52usize);
+        sched.sync(
+            node,
+            &gap_transition_style("10px", "row-rule", 1.0),
+            &gap_transition_style("20px", "row-rule", 1.0),
+            0.0,
+        );
+        assert!(sched.active.is_empty());
+    }
+
+    #[test]
+    fn gap_rule_transition_interrupted_continues_from_current_value() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(53usize);
+        let a = gap_transition_style("10px", "column-rule-width", 1.0);
+        let b = gap_transition_style("20px", "column-rule-width", 1.0);
+        let c = gap_transition_style("40px", "column-rule-width", 1.0);
+        sched.sync(node, &a, &b, 0.0);
+        // Half way (15px) the target changes again.
+        let events = sched.sync(node, &b, &c, 0.5);
+        assert!(events.iter().any(|e| e.kind == TransitionEventKind::Cancel));
+        let (frame, _) = sched.tick(0.5);
+        let rules = frame.overrides[&node].gap_rules.as_ref().expect("gap override");
+        assert_eq!(*rules.column_width.as_ref().expect("width").first(), 15.0);
+    }
+
+    #[test]
+    fn gap_rule_discrete_pair_needs_allow_discrete() {
+        let node = lumen_dom::NodeId::from_index(54usize);
+        let shape_a = "repeat(auto, 4px)";
+        let shape_b = "6px, repeat(auto, 8px)";
+        let mut old = gap_transition_style(shape_a, "column-rule-width", 1.0);
+        let mut new = gap_transition_style(shape_b, "column-rule-width", 1.0);
+        let mut sched = TransitionScheduler::new();
+        sched.sync(node, &old, &new, 0.0);
+        assert!(sched.active.is_empty(), "mismatched shapes are discrete: no transition");
+        old.transition_behaviors = vec![TransitionBehavior::AllowDiscrete];
+        new.transition_behaviors = vec![TransitionBehavior::AllowDiscrete];
+        sched.sync(node, &old, &new, 0.0);
+        assert_eq!(sched.active.len(), 1);
+        let (early, _) = sched.tick(0.25);
+        assert_eq!(
+            early.overrides[&node].gap_rules.as_ref().and_then(|r| r.column_width.clone()),
+            old.column_rule_width.clone().into(),
+        );
+        let (late, _) = sched.tick(0.75);
+        assert_eq!(
+            *late.overrides[&node].gap_rules.as_ref().and_then(|r| r.column_width.as_ref()).expect("w").first(),
+            6.0
+        );
+    }
+
+    #[test]
+    fn gap_rule_zero_duration_starts_nothing() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(55usize);
+        sched.sync(
+            node,
+            &gap_transition_style("10px", "column-rule-width", 0.0),
+            &gap_transition_style("20px", "column-rule-width", 0.0),
+            0.0,
+        );
+        assert!(sched.active.is_empty());
+    }
+
+    fn decl_kf(offset: f32, decls: &[(&str, &str)]) -> (f32, KeyframeStyle) {
+        let ds: Vec<Declaration> = decls.iter().map(|(p, v)| decl(p, v)).collect();
+        (offset, parse_keyframe_style(&ds))
+    }
+
+    #[test]
+    fn keyframes_interpolate_gap_width_and_color_with_neutral_endpoints() {
+        let kfs = [
+            decl_kf(0.5, &[("column-rule-width", "20px")]),
+            decl_kf(1.0, &[("rule-color", "rgb(0, 0, 255)"), ("column-rule-width", "40px")]),
+        ];
+        let refs: Vec<(f32, &KeyframeStyle)> = kfs.iter().map(|(o, k)| (*o, k)).collect();
+        let mut base = ComputedStyle::root();
+        base.color = Color { r: 255, g: 0, b: 0, a: 255 };
+        let mut o = GapRuleOverride::default();
+        o.set("column-rule-width", "10px");
+        o.apply_to(&mut base);
+
+        // 0.25: halfway between the neutral 0% (10px, currentcolor = red) and the 50% keyframe.
+        let at = interpolate_gap_rules(&refs, &base, 0.25).expect("override");
+        assert_eq!(*at.column_width.as_ref().expect("w").first(), 15.0);
+        // The colour is declared only at 100%: neutral 0% (red) -> blue, 25% in = 0.25 of 1.0 span.
+        let col = at.column_color.as_ref().expect("c").first().to_owned();
+        assert_eq!(col, Color { r: 191, g: 0, b: 64, a: 255 });
+        // `rule-color` sets both axes.
+        assert!(at.row_color.is_some());
+        assert!(at.row_width.is_none());
+        // 0.75: between the 50% and 100% keyframes.
+        let at = interpolate_gap_rules(&refs, &base, 0.75).expect("override");
+        assert_eq!(*at.column_width.as_ref().expect("w").first(), 30.0);
+    }
+
+    #[test]
+    fn keyframes_without_gap_properties_yield_none() {
+        let kfs = [decl_kf(0.0, &[("opacity", "0")]), decl_kf(1.0, &[("opacity", "1")])];
+        let refs: Vec<(f32, &KeyframeStyle)> = kfs.iter().map(|(o, k)| (*o, k)).collect();
+        assert!(interpolate_gap_rules(&refs, &ComputedStyle::root(), 0.5).is_none());
     }
 }

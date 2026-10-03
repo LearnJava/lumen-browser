@@ -242,6 +242,10 @@ pub use values::timing::{
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
+pub use values::rule_anim::{
+    GapRuleOverride, PAINTED_GAP_RULE_PROPERTIES, gap_rule_computed_css, gap_rule_endpoint_css,
+    transition_token_covers,
+};
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,

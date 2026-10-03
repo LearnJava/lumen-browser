@@ -19,9 +19,10 @@ use lumen_dom::NodeId;
 use lumen_layout::{
     animation::{
         AnimatedStyle, AnimationFrame, AnimationInterpolator, AnimValue, KeyframeStyle,
-        LinearInterpolator, parse_keyframe_style,
+        LinearInterpolator, interpolate_gap_rules, merge_gap_rules, parse_keyframe_style,
     },
     style::{
+        ComputedStyle,
         AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
         IterationCount, TimingFunction,
     },
@@ -434,7 +435,7 @@ impl AnimationScheduler {
             };
 
             // Интерполировать keyframe-значения.
-            let animated = interpolate_at(kf_rule, t);
+            let animated = interpolate_at(kf_rule, t, style);
 
             // Слить в overrides для этого узла.
             let entry = frame.overrides.entry(lb.node).or_default();
@@ -452,6 +453,9 @@ impl AnimationScheduler {
             }
             if let Some(v) = animated.height {
                 entry.height = Some(v);
+            }
+            if let Some(v) = &animated.gap_rules {
+                merge_gap_rules(&mut entry.gap_rules, v);
             }
         }
     }
@@ -519,7 +523,7 @@ fn apply_direction(progress: f32, iteration: u64, direction: AnimationDirection)
 // ─── Интерполяция keyframe-ов ──────────────────────────────────────────────
 
 /// Интерполировать свойства keyframe-правила в точке `t ∈ [0,1]`.
-fn interpolate_at(rule: &KeyframesRule, t: f32) -> AnimatedStyle {
+fn interpolate_at(rule: &KeyframesRule, t: f32, base: &ComputedStyle) -> AnimatedStyle {
     let frames = &rule.frames;
     if frames.is_empty() {
         return AnimatedStyle::default();
@@ -554,7 +558,17 @@ fn interpolate_at(rule: &KeyframesRule, t: f32) -> AnimatedStyle {
     let from_ks = parse_keyframe_style(&from_kf.declarations);
     let to_ks = parse_keyframe_style(&to_kf.declarations);
 
-    interpolate_keyframe_styles(&from_ks, &to_ks, local_t)
+    let mut animated = interpolate_keyframe_styles(&from_ks, &to_ks, local_t);
+    // CSS Gap Decorations L1 §4.7: `*-rule-width` / `*-rule-color` look at every keyframe
+    // that declares them (a missing 0%/100% is the element's computed value), not only
+    // at the two surrounding the progress.
+    let parsed: Vec<(f32, KeyframeStyle)> = sorted
+        .iter()
+        .map(|f| (f.offset, parse_keyframe_style(&f.declarations)))
+        .collect();
+    let refs: Vec<(f32, &KeyframeStyle)> = parsed.iter().map(|(o, ks)| (*o, ks)).collect();
+    animated.gap_rules = interpolate_gap_rules(&refs, base, t);
+    animated
 }
 
 /// Попарно интерполировать все поля KeyframeStyle.
@@ -1071,5 +1085,33 @@ mod tests {
             }
             other => panic!("expected Length::Px, got {other:?}"),
         }
+    }
+
+    // BUG-553 срез 11: `@keyframes` of `column-rule-width` / `rule-color` reach
+    // `AnimationFrame.overrides` (and the painted gaps) frame by frame; a missing
+    // 0% keyframe is the element's own computed value.
+    #[test]
+    fn tick_interpolates_gap_rule_width_and_color() {
+        let mut sched = AnimationScheduler::new();
+        let mut root = make_animated_box(1, "pulse", 1.0, IterationCount::Finite(1.0));
+        {
+            let style = std::sync::Arc::make_mut(&mut root.style);
+            style.animation_timing_functions = vec![TimingFunction::Linear];
+            style.column_rule_width = lumen_layout::RuleList::single(10.0);
+        }
+        let sheet = lumen_css_parser::parse(
+            "@keyframes pulse { to { column-rule-width: 30px; rule-color: rgb(0, 0, 255); } }",
+        );
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp); // Start.
+        let (frame, _) = sched.tick(500.0, &root, &sheet, 0.0, 0.0, vp);
+        let rules = frame
+            .overrides
+            .get(&node(1))
+            .and_then(|s| s.gap_rules.as_ref())
+            .expect("gap-rule override at midpoint");
+        assert_eq!(*rules.column_width.as_ref().expect("width").first(), 20.0);
+        assert!(rules.column_color.is_some() && rules.row_color.is_some());
+        assert!(rules.row_width.is_none());
     }
 }
