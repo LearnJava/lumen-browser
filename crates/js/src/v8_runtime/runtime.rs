@@ -74,6 +74,80 @@ pub struct DomTouched {
     /// could react to *this* attribute (a `style` write rarely widens at all)
     /// instead of treating every touch as `Unattributed`. Never cleared.
     pub(crate) attr_gen: HashMap<NodeId, HashMap<Box<str>, u64>>,
+    /// BUG-935 срез 68: the values `class`/`id` had *before* each recent write, per node —
+    /// what lets the flush name the tokens that changed since its basis
+    /// ([`Self::value_before`]). Never cleared, like [`Self::attr_gen`]; bounded per
+    /// attribute by [`ValueLog`].
+    pub(crate) value_log: HashMap<(NodeId, LoggedAttr), ValueLog>,
+    /// BUG-935 срез 68: the epoch of the last drain ([`V8JsRuntime::take_dom_touched`]),
+    /// which empties [`Self::value_log`] along with the other per-node maps. A basis older
+    /// than this has writes the log no longer holds, so [`Self::value_before`] declines.
+    pub(crate) log_floor: u64,
+}
+
+/// BUG-935 срез 68: the attributes whose old value [`DomTouched::value_log`] keeps — the
+/// two a selector reads by token (`.a`, `#a`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum LoggedAttr {
+    Class,
+    Id,
+}
+
+impl LoggedAttr {
+    pub(crate) fn of(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("class") {
+            Some(Self::Class)
+        } else if name.eq_ignore_ascii_case("id") {
+            Some(Self::Id)
+        } else {
+            None
+        }
+    }
+}
+
+/// BUG-935 срез 68: the last few writes to one attribute of one node, each with the value
+/// it replaced.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ValueLog {
+    /// `(epoch of the write, value before it)`, oldest first. `""` stands for "absent":
+    /// for a class list or an id the two mean the same thing to a selector.
+    writes: Vec<(u64, Box<str>)>,
+    /// The newest epoch whose entry was dropped for room. A question about a basis older
+    /// than this has lost the entry that would have answered it.
+    lost_through: u64,
+}
+
+impl ValueLog {
+    /// Entries kept per attribute: a node toggled in a loop keeps the last few writes, and
+    /// a flush whose basis predates them falls back to the deep path.
+    const CAP: usize = 4;
+
+    pub(crate) fn push(&mut self, epoch: u64, before: &str) {
+        if self.writes.len() == Self::CAP {
+            self.lost_through = self.writes.remove(0).0;
+        }
+        self.writes.push((epoch, before.into()));
+    }
+
+    /// The value at `basis_epoch`: what the first write after it replaced. `None` when no
+    /// write after the basis is on record, or when the entry for it was dropped.
+    pub(crate) fn value_at(&self, basis_epoch: u64) -> Option<&str> {
+        if basis_epoch < self.lost_through {
+            return None;
+        }
+        self.writes.iter().find(|(e, _)| *e > basis_epoch).map(|(_, v)| &**v)
+    }
+}
+
+impl DomTouched {
+    /// BUG-935 срез 68: the value `name` (`class`/`id`) of `node` had when the epoch was
+    /// `basis_epoch`, if the log can say.
+    pub(crate) fn value_before(&self, node: NodeId, name: &str, basis_epoch: u64) -> Option<&str> {
+        if basis_epoch < self.log_floor {
+            return None;
+        }
+        self.value_log.get(&(node, LoggedAttr::of(name)?))?.value_at(basis_epoch)
+    }
 }
 
 /// Per-node snapshot of resolved CSS custom properties: node id → the map of
@@ -852,7 +926,7 @@ impl V8JsRuntime {
         let mut guard = self.dom_touched.lock().unwrap_or_else(|e| e.into_inner());
         // `epoch` survives the drain — see the field's doc comment.
         let epoch = guard.epoch;
-        std::mem::replace(&mut *guard, DomTouched { epoch, ..DomTouched::default() })
+        std::mem::replace(&mut *guard, DomTouched { epoch, log_floor: epoch, ..DomTouched::default() })
     }
 
     /// Returns `true` if `requestAnimationFrame` was called since the last call,
@@ -1825,5 +1899,51 @@ impl V8JsRuntime {
 
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod value_log_tests {
+    use super::*;
+
+    fn touched_with(node: NodeId, writes: &[(u64, &str)]) -> DomTouched {
+        let mut t = DomTouched::default();
+        for &(epoch, before) in writes {
+            t.value_log.entry((node, LoggedAttr::Class)).or_default().push(epoch, before);
+        }
+        t
+    }
+
+    #[test]
+    fn the_value_at_a_basis_is_what_the_first_later_write_replaced() {
+        let n = NodeId::from_raw(3);
+        let t = touched_with(n, &[(5, "a"), (9, "a b"), (12, "b")]);
+        assert_eq!(t.value_before(n, "class", 4), Some("a"), "basis before every write");
+        assert_eq!(t.value_before(n, "class", 5), Some("a b"), "the write at the basis is already in it");
+        assert_eq!(t.value_before(n, "class", 10), Some("b"));
+        assert_eq!(t.value_before(n, "class", 12), None, "no write after the basis");
+        assert_eq!(t.value_before(n, "CLASS", 4), Some("a"), "attribute names compare case-insensitively");
+        assert_eq!(t.value_before(n, "style", 4), None, "only class and id are logged");
+    }
+
+    #[test]
+    fn a_basis_older_than_the_dropped_entries_gets_no_answer() {
+        let n = NodeId::from_raw(1);
+        let writes: Vec<(u64, &str)> = (1..=6).map(|e| (e * 10, "x")).collect();
+        let t = touched_with(n, &writes);
+        // Entries for epochs 10 and 20 were dropped for room.
+        assert_eq!(t.value_before(n, "class", 5), None);
+        assert_eq!(t.value_before(n, "class", 19), None);
+        assert_eq!(t.value_before(n, "class", 20), Some("x"));
+        assert_eq!(t.value_before(n, "class", 59), Some("x"));
+    }
+
+    #[test]
+    fn a_drain_makes_older_bases_unknown() {
+        let n = NodeId::from_raw(2);
+        let mut t = touched_with(n, &[(7, "a")]);
+        t.log_floor = 6;
+        assert_eq!(t.value_before(n, "class", 5), None, "the basis predates the drain");
+        assert_eq!(t.value_before(n, "class", 6), Some("a"));
     }
 }

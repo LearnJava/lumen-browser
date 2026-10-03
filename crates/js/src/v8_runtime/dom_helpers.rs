@@ -189,12 +189,17 @@ pub(super) fn record_dom_touch_child_list(tracker: &Mutex<DomTouched>, nid: Node
 /// the attribute `attr` on `nid`. Remembers the name, so the same-tick flush
 /// can narrow the restyle root with `NodeChange::Attr` instead of widening to
 /// the parent.
-pub(super) fn record_dom_touch_attr(tracker: &Mutex<DomTouched>, nid: NodeId, attr: &str) {
+pub(super) fn record_dom_touch_attr(tracker: &Mutex<DomTouched>, nid: NodeId, attr: &str, before: Option<&str>) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     t.nodes.insert(nid);
     t.epoch = t.epoch.wrapping_add(1);
     let touch_gen = t.epoch;
     t.touch_gen.insert(nid, touch_gen);
+    // BUG-935 срез 68: a `class`/`id` write keeps the value it replaced, so the flush can
+    // tell which tokens moved since its basis.
+    if let Some(kind) = super::runtime::LoggedAttr::of(attr) {
+        t.value_log.entry((nid, kind)).or_default().push(touch_gen, before.unwrap_or(""));
+    }
     let names = t.attr_gen.entry(nid).or_default();
     match names.get_mut(attr) {
         Some(g) => *g = touch_gen,

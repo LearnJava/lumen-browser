@@ -725,7 +725,7 @@ pub(crate) fn install_node_properties(
                 // whether the value changed).
                 let changed = old.as_deref() != Some(value.as_str());
                 if changed {
-                    record_dom_touch_attr(&touched, nid, &name);
+                    record_dom_touch_attr(&touched, nid, &name, old.as_deref());
                 }
                 // BUG-1118: HTML LS §4.8.4.3 "update the image data" — a
                 // script assigning `<img>.src`/`setAttribute('src', …)` must
@@ -752,10 +752,10 @@ pub(crate) fn install_node_properties(
             if !doc.contains_id(nid) {
                 return;
             }
-            let had = doc.get(nid).get_attr(&name).is_some();
+            let before = doc.get(nid).get_attr(&name).map(|s| s.to_string());
             remove_attribute(&mut doc, nid, &name);
-            if had {
-                record_dom_touch_attr(&touched, nid, &name);
+            if before.is_some() {
+                record_dom_touch_attr(&touched, nid, &name, before.as_deref());
             }
             dirty.store(true, Ordering::Relaxed);
             stale.store(true, Ordering::Relaxed);

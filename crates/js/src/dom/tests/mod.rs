@@ -275,6 +275,7 @@ mod v8_bug1238_scoped_collectors;
 mod v8_bug935_s58_has_flush;
 mod v8_bug935_s59_style_skip;
 mod v8_bug935_s60_shallow_roots;
+mod v8_bug935_s68_attr_local_roots;
 mod v8_bug935_s64_sheet_delta;
 mod v8_bug1245_inline_restyle;
 mod v8_bug935_s61_positioned_skip;

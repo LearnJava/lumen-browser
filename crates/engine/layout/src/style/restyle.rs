@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use lumen_css_parser::{
-    Combinator, ComplexSelector, CompoundSelector, PseudoClass, SimpleSelector, Stylesheet,
+    Combinator, ComplexSelector, CompoundSelector, PseudoClass, PseudoElementKind, SimpleSelector, Stylesheet,
 };
 use lumen_dom::{Document, NodeData, NodeId};
 
@@ -650,6 +650,154 @@ fn compound_could_match_after_attr_change(
     })
 }
 
+/// BUG-935 срез 68 — what the sheet's selectors read from an element's *ancestors*, by
+/// class token, `id` and attribute name.
+///
+/// A write to `R`'s attribute reaches `R`'s descendants only through a selector that has
+/// `R` in a non-subject position (`.open .item`, `[data-x] > a`, `:not(.a) b`) — the
+/// subject compound is matched against the descendant itself. So when the tokens a write
+/// changed appear in none of those compounds, no descendant's match can have flipped, and
+/// the root needs `R` and its direct children rather than its whole subtree
+/// ([`NodeRestyleIndex::attr_change_stays_local`]).
+#[derive(Default)]
+struct AncestorDeps {
+    /// Class tokens (ASCII-lowercased: quirks mode compares them case-insensitively).
+    classes: HashSet<String>,
+    ids: HashSet<String>,
+    /// Lowercased attribute names keyed by an attribute selector.
+    attrs: HashSet<String>,
+    /// The sheet holds something this scan does not model (`@scope`: its root/limit are
+    /// stored as text and matched apart from the rules' selectors).
+    unmodelled: bool,
+}
+
+impl AncestorDeps {
+    /// `compound` is matched against an element; `subject` — that element is the one a
+    /// rule styles, not an ancestor of it. Everything inside a non-subject compound
+    /// counts; in a subject one only the nested selectors that walk up the tree do.
+    fn collect_compound(&mut self, compound: &CompoundSelector, subject: bool) {
+        for part in &compound.parts {
+            match part {
+                SimpleSelector::Class(c) if !subject => {
+                    self.classes.insert(c.to_ascii_lowercase());
+                }
+                SimpleSelector::Id(i) if !subject => {
+                    self.ids.insert(i.to_ascii_lowercase());
+                }
+                SimpleSelector::Attribute(a) if !subject => {
+                    self.attrs.insert(a.name.to_ascii_lowercase());
+                }
+                SimpleSelector::PseudoClass(pc) => self.collect_pseudo_class(pc, subject),
+                SimpleSelector::PseudoElement(PseudoElementKind::Slotted(Some(list))) => {
+                    for c in list {
+                        self.collect_complex(c, false);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_pseudo_class(&mut self, pc: &PseudoClass, subject: bool) {
+        match pc {
+            PseudoClass::Not(list)
+            | PseudoClass::Is(list)
+            | PseudoClass::Where(list)
+            | PseudoClass::NthChild(_, Some(list))
+            | PseudoClass::NthLastChild(_, Some(list))
+            | PseudoClass::Host(Some(list)) => {
+                for c in list {
+                    // A nested selector without combinators is still matched against the
+                    // same element as the compound that carries it.
+                    self.collect_complex(c, subject && c.tail.is_empty());
+                }
+            }
+            // `:has()` reads the matched element's descendants and later siblings: an
+            // ancestor of it is never inside its argument.
+            PseudoClass::Has(rels) if !subject => {
+                for r in rels {
+                    self.collect_complex(&r.selector, false);
+                }
+            }
+            // `id` against the URL fragment: the *value* of `id` is what flips the match,
+            // and no `#id` part names it.
+            PseudoClass::Target | PseudoClass::TargetWithin => {
+                self.attrs.insert("id".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_complex(&mut self, complex: &ComplexSelector, subject: bool) {
+        self.collect_compound(&complex.head, subject);
+        for (_, compound) in &complex.tail {
+            self.collect_compound(compound, subject);
+        }
+    }
+
+    /// Registers everything in `complex` — and in any selector nested in it — that has a
+    /// sibling combinator: a write to an element's attribute reaches that element's siblings
+    /// through the compounds on the left of such a combinator. Over-approximates by taking the
+    /// whole selector, subject included.
+    fn collect_sibling_reach(&mut self, complex: &ComplexSelector) {
+        if complex.tail.iter().any(|(c, _)| is_sibling_combinator(*c)) {
+            self.collect_complex(complex, false);
+        }
+        for compound in std::iter::once(&complex.head).chain(complex.tail.iter().map(|(_, c)| c)) {
+            for part in &compound.parts {
+                match part {
+                    SimpleSelector::PseudoClass(
+                        PseudoClass::Not(list)
+                        | PseudoClass::Is(list)
+                        | PseudoClass::Where(list)
+                        | PseudoClass::NthChild(_, Some(list))
+                        | PseudoClass::NthLastChild(_, Some(list))
+                        | PseudoClass::Host(Some(list)),
+                    ) => list.iter().for_each(|c| self.collect_sibling_reach(c)),
+                    SimpleSelector::PseudoClass(PseudoClass::Has(rels)) => {
+                        for r in rels {
+                            if r.combinator.is_some_and(is_sibling_combinator) {
+                                self.collect_complex(&r.selector, false);
+                            }
+                            self.collect_sibling_reach(&r.selector);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Whether a write that moved `old` to `new` on a `class` (or `id`) attribute touches
+    /// anything this scan holds: a token on one side only that is listed, or an attribute
+    /// selector keyed on the attribute itself (whose match reads the whole value).
+    fn class_write_hits(&self, old: &str, new: &str) -> bool {
+        if self.attrs.contains("class") {
+            return true;
+        }
+        let in_set = |token: &str| self.classes.contains(&token.to_ascii_lowercase());
+        old.split_ascii_whitespace().filter(|t| !new.split_ascii_whitespace().any(|n| n == *t)).any(in_set)
+            || new.split_ascii_whitespace().filter(|t| !old.split_ascii_whitespace().any(|o| o == *t)).any(in_set)
+    }
+
+    fn id_write_hits(&self, old: &str, new: &str) -> bool {
+        old != new
+            && (self.attrs.contains("id")
+                || self.ids.contains(&old.to_ascii_lowercase())
+                || self.ids.contains(&new.to_ascii_lowercase()))
+    }
+
+    /// Registers `complex`: every compound but the last is an ancestor (or a sibling of
+    /// one) of the element the rule styles.
+    fn collect_selector(&mut self, complex: &ComplexSelector) {
+        let subject = complex.tail.len();
+        for i in 0..=subject {
+            let compound = if i == 0 { &complex.head } else { &complex.tail[i - 1].1 };
+            self.collect_compound(compound, i == subject);
+        }
+    }
+}
+
 /// BUG-341 S17 — what [`restyle_root_set_for_node_change`] needs to know about
 /// the stylesheet in play, computed once per layout pass.
 ///
@@ -690,6 +838,15 @@ pub struct NodeRestyleIndex<'a> {
     /// BUG-935 срез 60 — the non-subject compounds a child-list change can flip
     /// ([`collect_structure_sensitive_compounds`]).
     structure_sensitive: Vec<&'a CompoundSelector>,
+    /// BUG-935 срез 68 — what the selectors read from ancestors ([`AncestorDeps`]).
+    ancestor_deps: AncestorDeps,
+    /// BUG-935 срез 68 — what the selectors with a sibling combinator read from an element
+    /// that has siblings after it ([`AncestorDeps::collect_sibling_reach`]).
+    sibling_deps: AncestorDeps,
+    /// BUG-935 срез 68 — [`Self::attr_change_stays_local`] may answer `true`. Off only through
+    /// [`Self::set_attr_narrowing`]: the A/B switch of a live measurement and the baseline
+    /// of the differential tests.
+    attr_narrowing: bool,
 }
 
 impl NodeRestyleIndex<'_> {
@@ -747,6 +904,77 @@ impl NodeRestyleIndex<'_> {
             .any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
     }
 
+    /// BUG-935 срез 68 — [`Self::attr_change_needs_fanout`] for a write whose old value may be
+    /// known. A `class`/`id` write that moved only tokens no sibling-combinator selector
+    /// mentions cannot flip any such selector's match on `node`, so it reaches no sibling
+    /// (`.side + .card` is silent about a `loaded` class); the structural question is asked
+    /// only when it could.
+    pub fn attr_change_needs_fanout_from(&self, doc: &Document, node: NodeId, attr: &str, old: Option<&str>) -> bool {
+        if self.conservative {
+            return true;
+        }
+        if !self.attr_narrowing {
+            return self.attr_change_needs_fanout(doc, node, attr);
+        }
+        if let (Some(old), NodeData::Element { attrs, .. }) = (old, &doc.get(node).data) {
+            let current = |wanted: &str| {
+                attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case(wanted)).map_or("", |a| a.value.as_str())
+            };
+            let silent = if attr.eq_ignore_ascii_case("class") {
+                !self.sibling_deps.class_write_hits(old, current("class"))
+            } else if attr.eq_ignore_ascii_case("id") {
+                !self.sibling_deps.id_write_hits(old, current("id"))
+            } else {
+                false
+            };
+            if silent {
+                return false;
+            }
+        }
+        self.attr_change_needs_fanout(doc, node, attr)
+    }
+
+    /// BUG-935 срез 68 — can a write to `node`'s `attr` change the style of anything
+    /// *below* `node`, i.e. does some selector read it from an ancestor position?
+    ///
+    /// `old` is the attribute's value before the write when the caller knows it
+    /// (`None` = unknown, never narrowed for `class`/`id`, whose changed tokens it is
+    /// the value that names). Sound only for the attributes whose effect on a
+    /// descendant is *entirely* a selector match — `class`, `id`, `style` (own
+    /// declarations; descendants see them through inheritance, which the cascade's own
+    /// style comparison catches), `data-*` and `aria-*`. `lang`, `dir`, `disabled`,
+    /// `hidden`… reach descendants through pseudo-classes (`:lang()`, `:dir()`,
+    /// `:disabled`) and stay on the deep path. Sibling reach is a separate question
+    /// ([`Self::attr_change_needs_fanout`]) that the caller asks first.
+    pub fn attr_change_stays_local(&self, doc: &Document, node: NodeId, attr: &str, old: Option<&str>) -> bool {
+        let deps = &self.ancestor_deps;
+        if !self.attr_narrowing || self.conservative || deps.unmodelled {
+            return false;
+        }
+        let name = attr.to_ascii_lowercase();
+        if deps.attrs.contains(&name) {
+            return false;
+        }
+        let NodeData::Element { attrs, .. } = &doc.get(node).data else {
+            return false;
+        };
+        let current = |wanted: &str| {
+            attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case(wanted)).map_or("", |a| a.value.as_str())
+        };
+        match name.as_str() {
+            "class" => old.is_some_and(|old| !deps.class_write_hits(old, current("class"))),
+            "id" => old.is_some_and(|old| !deps.id_write_hits(old, current("id"))),
+            "style" => true,
+            n => n.starts_with("data-") || n.starts_with("aria-"),
+        }
+    }
+
+    /// BUG-935 срез 68 — turns the attribute narrowing ([`Self::attr_change_stays_local`])
+    /// on or off for this index; on by default.
+    pub fn set_attr_narrowing(&mut self, on: bool) {
+        self.attr_narrowing = on;
+    }
+
     /// Number of sibling-reachable compounds the narrowing tests each changed
     /// node against. Exposed for the count-based regression gates.
     pub fn sibling_source_count(&self) -> usize {
@@ -783,9 +1011,13 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
     let mut sibling_sources = Vec::new();
     let mut has_subjects = Vec::new();
     let mut structure_sensitive = Vec::new();
+    let mut ancestor_deps = AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), ..AncestorDeps::default() };
+    let mut sibling_deps = AncestorDeps::default();
     for rules in stylesheet_rule_groups(sheet) {
         for rule in rules {
             for selector in &rule.selectors {
+                ancestor_deps.collect_selector(selector);
+                sibling_deps.collect_sibling_reach(selector);
                 if complex_selector_has_any_has(selector) {
                     has_dependent = true;
                     has_sibling_reach |= complex_has_sibling_reach(selector);
@@ -805,6 +1037,9 @@ pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRest
         has_sibling_reach,
         has_in_shadow_doc,
         structure_sensitive,
+        ancestor_deps,
+        sibling_deps,
+        attr_narrowing: true,
     }
 }
 
@@ -815,6 +1050,15 @@ pub enum NodeChange<'a> {
     /// The attribute named `.0` was written to, or removed from, the node. The
     /// name is what lets the root-set ask which selectors could possibly react.
     Attr(&'a str),
+    /// BUG-935 срез 68 — like [`Self::Attr`], and the value the attribute had *before*
+    /// the write (`""` when it was absent), which is what lets the root-set name the
+    /// class/id tokens that changed. Only a source that knows the old value reports it.
+    AttrFrom {
+        /// The attribute written.
+        name: &'a str,
+        /// Its value at the start of the interval the change covers.
+        old: &'a str,
+    },
     /// BUG-935 срез 60 — the node's child list changed (an element was appended,
     /// removed, moved, or its text replaced) and nothing else about it did.
     /// [`restyle_roots_for_node_changes`] can restyle the node and its direct
@@ -954,11 +1198,25 @@ fn root_set_impl<'a>(
                 }
             }
             other => {
-                let needs_fanout = match other {
-                    NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
-                    NodeChange::Unattributed | NodeChange::ChildList => true,
+                let (needs_fanout, written) = match other {
+                    NodeChange::Attr(attr) => (index.attr_change_needs_fanout(doc, n, attr), Some((attr, None))),
+                    NodeChange::AttrFrom { name, old } => {
+                        (index.attr_change_needs_fanout_from(doc, n, name, Some(old)), Some((name, Some(old))))
+                    }
+                    NodeChange::Unattributed | NodeChange::ChildList => (true, None),
                 };
-                roots.deep.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
+                // BUG-935 срез 68: nothing below `n` reads what was written, so `n` and its
+                // direct children are restyled and the walk goes deeper only if `n`'s style
+                // moved — the shallow-root contract, with the attribute (not the child
+                // list) as the reason.
+                let local = shallow_ok
+                    && !needs_fanout
+                    && written.is_some_and(|(name, old)| index.attr_change_stays_local(doc, n, name, old));
+                if local {
+                    roots.shallow.insert(n);
+                } else {
+                    roots.deep.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
+                }
             }
         }
         if index.has_dependent {
