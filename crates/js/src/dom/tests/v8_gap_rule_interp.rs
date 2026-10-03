@@ -150,3 +150,99 @@ fn transition_does_not_start_for_non_interpolable_pair() {
     );
     assert_eq!(eval_str(&rt, &script), "4px");
 }
+
+/// CSS Animations L1 для `*-rule-*`: `_wa_gap_an_value` читает `animation-*` из вычисленного
+/// стиля и `@keyframes` из `_wa_gap_keyframes_json`; обе функции и часы подменены.
+const AN_PRELUDE: &str = "
+var __vals = {}, __now = 0, __kf = {};
+_lumen_computed_property = function(nid, name) { return __vals[name] || ''; };
+_wa_gap_keyframes_json = function(name) { return __kf[name] === undefined ? null : JSON.stringify(__kf[name]); };
+_lumen_make_element = function(nid) { return null; };
+performance.now = function() { return __now; };
+function __an(base) { _wa_gap_tr_clock_ms = null; return _wa_gap_an_value(1, 'row-rule-width', base, base); }
+__vals['animation-name'] = 'a';
+__vals['animation-duration'] = '10s';
+__vals['animation-delay'] = '0s';
+__vals['animation-timing-function'] = 'linear';
+__vals['animation-iteration-count'] = '1';
+__vals['animation-direction'] = 'normal';
+__vals['animation-fill-mode'] = 'none';
+__vals['animation-play-state'] = 'running';
+__kf['a'] = [
+  { offset: 0, decls: [['row-rule-width', '10px']] },
+  { offset: 1, decls: [['row-rule-width', '30px']] },
+];
+";
+
+#[test]
+fn keyframes_animation_interpolates_between_frames_over_time() {
+    let rt = rt();
+    let script = format!(
+        "{AN_PRELUDE}
+        var r = [__an('3px')];
+        __now = 5000; r.push(__an('3px'));
+        __now = 10000; r.push(__an('3px'));
+        r.join(' ')"
+    );
+    // t = 0 → 10px, t = 5 с → 20px, после конца без fill-mode — установившееся значение.
+    assert_eq!(eval_str(&rt, &script), "10px 20px 3px");
+}
+
+#[test]
+fn keyframes_animation_missing_end_is_the_neutral_keyframe() {
+    let rt = rt();
+    let script = format!(
+        "{AN_PRELUDE}
+        __kf['a'] = [{{ offset: 0, decls: [['row-rule-width', '10px']] }}];
+        __an('50px'); __now = 5000; __an('50px')"
+    );
+    assert_eq!(eval_str(&rt, &script), "30px");
+}
+
+#[test]
+fn keyframes_animation_honours_delay_fill_direction_and_pause() {
+    let rt = rt();
+    let delayed = format!(
+        "{AN_PRELUDE}
+        __vals['animation-delay'] = '2s'; __vals['animation-fill-mode'] = 'both';
+        var r = [__an('3px')];
+        __now = 7000; r.push(__an('3px'));
+        __now = 60000; r.push(__an('3px'));
+        r.join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &delayed), "10px 20px 30px");
+    let alternate = format!(
+        "{AN_PRELUDE}
+        __vals['animation-iteration-count'] = '2'; __vals['animation-direction'] = 'alternate';
+        __an('3px'); __now = 12500; __an('3px')"
+    );
+    // Вторая итерация идёт назад: на её четверти — 25 % от конца = 25px.
+    assert_eq!(eval_str(&rt, &alternate), "25px");
+    let paused = format!(
+        "{AN_PRELUDE}
+        __an('3px'); __now = 5000; __an('3px');
+        __vals['animation-play-state'] = 'paused'; __now = 5000; var a = __an('3px');
+        __now = 9000; var b = __an('3px');
+        __vals['animation-play-state'] = 'running'; __now = 9000; __an('3px');
+        __now = 11000; var c = __an('3px');
+        [a, b, c].join(' ')"
+    );
+    // На паузе значение стоит на 20px; после возобновления часы идут с замороженной точки.
+    assert_eq!(eval_str(&rt, &paused), "20px 20px 24px");
+}
+
+#[test]
+fn keyframes_animation_ignores_other_properties_and_none() {
+    let rt = rt();
+    let script = format!(
+        "{AN_PRELUDE}
+        __kf['a'] = [{{ offset: 0, decls: [['opacity', '0']] }}, {{ offset: 1, decls: [['opacity', '1']] }}];
+        var r = [__an('3px')];
+        __kf['a'] = [{{ offset: 0, decls: [['rule-width', '10px']] }}, {{ offset: 1, decls: [['rule-width', '30px']] }}];
+        __now = 5000; r.push(__an('3px'));
+        __vals['animation-name'] = 'none'; r.push(__an('3px'));
+        r.join(' ')"
+    );
+    // `rule-width` задаёт обе оси; `opacity` ключевого кадра значения не меняет.
+    assert_eq!(eval_str(&rt, &script), "3px 20px 3px");
+}
