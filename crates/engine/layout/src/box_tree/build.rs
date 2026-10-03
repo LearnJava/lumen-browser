@@ -910,7 +910,12 @@ fn build_box_inner(
             BoxRole::AnonymousInlineRun,
         ));
     }
-    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
+    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup) {
+        // BUG-935 срез 71: `BoxKind::SvgRoot` is deliberately not in this list — its
+        // children are replaced below by `build_svg_children` (the SVG shape tree, not
+        // HTML boxes), so building them here only to drop them cost a full pass over
+        // every inline `<svg>` (a 340-box icon sprite = 4 ms of every same-tick flush
+        // on lenta.ru).
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
         // HTML5 §4.11.1 — <details>: when `open` attribute absent, only <summary> is rendered.
         // A `<details>` with its UA shadow tree needs no filter: the content
