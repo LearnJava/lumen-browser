@@ -610,6 +610,18 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical top-level `anchor()` / `anchor-size()` serialization for
+    // inline-`style` inset/margin/sizing properties (CSS Anchor Positioning L1
+    // §3.1/§4, BUG-563, GAP-ANCHORCSSOM-S2). `allow_anchor` — `anchor()` is
+    // valid only in the inset properties, `anchor-size()` also in margin and
+    // sizing ones. `None` = invalid, so the shim rejects the assignment.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_anchor",
+        |value: String, allow_anchor: bool| -> Option<String> {
+            lumen_layout::style::canonical_specified_anchor(&value, allow_anchor)
+        }
+    );
+
     // Canonical `overflow-clip-margin` serialization for inline-`style`
     // (CSS Overflow L3 §overflow-clip-margin, BUG-505 срез 4) — same role as
     // `_lumen_css_canonical_length` above, but the grammar is

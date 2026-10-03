@@ -665,3 +665,65 @@
         assert!(!forced_colors_active(), "forced colors must be false");
     }
 
+
+    // GAP-ANCHORCSSOM-S2: канонизатор `element.style` для верхнеуровневых
+    // anchor()/anchor-size().
+
+    #[test]
+    fn canonical_anchor_puts_name_first_and_lowercases_side() {
+        assert_eq!(canonical_specified_anchor("anchor(--a top)", true).as_deref(), Some("anchor(--a top)"));
+        assert_eq!(canonical_specified_anchor("anchor(top --a)", true).as_deref(), Some("anchor(--a top)"));
+        assert_eq!(canonical_specified_anchor("ANCHOR( TOP )", true).as_deref(), Some("anchor(top)"));
+        assert_eq!(canonical_specified_anchor("anchor(--a 50%)", true).as_deref(), Some("anchor(--a 50%)"));
+        assert_eq!(canonical_specified_anchor("anchor(self-end)", true).as_deref(), Some("anchor(self-end)"));
+    }
+
+    #[test]
+    fn canonical_anchor_serializes_fallback_as_length() {
+        assert_eq!(canonical_specified_anchor("anchor(--a left, 0)", true).as_deref(), Some("anchor(--a left, 0px)"));
+        assert_eq!(canonical_specified_anchor("anchor(left --a,1px)", true).as_deref(), Some("anchor(--a left, 1px)"));
+        assert_eq!(
+            canonical_specified_anchor("anchor(top, calc(50% + 1px))", true).as_deref(),
+            Some("anchor(top, calc(50% + 1px))")
+        );
+    }
+
+    #[test]
+    fn canonical_anchor_rejects_invalid_forms() {
+        for bad in [
+            "anchor(--a, top)", "anchor(--a top,)", "anchor(--a top bottom)", "anchor(--a top, 10px 20%)",
+            "anchor(--a top, 10px, 20%)", "anchor(foo top)", "anchor(top foo)", "anchor(--a height)",
+            "anchor(--a 10em)", "anchor(--a top, 1)", "anchor(--a top, bottom)", "anchor(--a top, auto",
+            "anchor()", "anchor(--a)", "10px",
+        ] {
+            assert_eq!(canonical_specified_anchor(bad, true), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn canonical_anchor_size_orders_name_before_dimension() {
+        assert_eq!(canonical_specified_anchor("anchor-size(--a width)", false).as_deref(), Some("anchor-size(--a width)"));
+        assert_eq!(canonical_specified_anchor("anchor-size(width --a)", false).as_deref(), Some("anchor-size(--a width)"));
+        assert_eq!(canonical_specified_anchor("anchor-size(self-inline)", false).as_deref(), Some("anchor-size(self-inline)"));
+        assert_eq!(
+            canonical_specified_anchor("anchor-size(--a block, 0)", false).as_deref(),
+            Some("anchor-size(--a block, 0px)")
+        );
+    }
+
+    #[test]
+    fn canonical_anchor_size_rejects_invalid_forms() {
+        for bad in [
+            "anchor-size(--a, width)", "anchor-size(--a width,)", "anchor-size(--a width height)",
+            "anchor-size(--a width, 10px 20%)", "anchor-size(foo width)", "anchor-size(--a top)",
+            "anchor-size(--a 50%)", "anchor-size(--a width, 1)", "anchor-size(--a width, height)",
+        ] {
+            assert_eq!(canonical_specified_anchor(bad, false), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn canonical_anchor_not_allowed_for_anchor_only_in_size_properties() {
+        assert_eq!(canonical_specified_anchor("anchor(--a top)", false), None);
+        assert!(canonical_specified_anchor("anchor-size(--a width)", false).is_some());
+    }
