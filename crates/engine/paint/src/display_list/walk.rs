@@ -655,7 +655,13 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
         })
         .collect();
 
-    if children.len() < 2 {
+    // Grid с фиксированным шаблоном дорожек имеет щели и без элементов в потоке (пустой
+    // контейнер, дети только `position: absolute`): дорожки берутся из шаблона, а если
+    // шаблон другой, `grid_gap_segments` не найдёт ни одной щели. С одним элементом щели
+    // не рисуются: `*-rule-visibility-items: around` для одиночного элемента ещё не разобран
+    // (collapsed-leading-auto-fit, repaint-on-item-position-change ухудшались).
+    let empty_grid = children.is_empty() && matches!(s.display, Display::Grid | Display::InlineGrid);
+    if children.len() < 2 && !empty_grid {
         return none();
     }
 

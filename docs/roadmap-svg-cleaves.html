@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-03",
+ "generated": "2026-10-04",
  "counts": {
-  "open": 143,
-  "fixed": 1056,
+  "open": 145,
+  "fixed": 1062,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1201,
+ "total_bugs": 1209,
  "phases": [
   {
    "id": "P0",
@@ -360,26 +360,6 @@
      "note": "Явный стек для рекурсивных layout/paint-диспетчеров — остаток [LAYOUT-1](ROADMAP.md) среза 4 (2026-09-07), выделенный отдельной задачей по собственной оговорке той задачи («если объём окажется соразмерен целому LAYOUT-1»). В отличие от закрытого в LAYOUT-1 безопасного механического класса (чистые pre-order обходы без пост-обработки), здесь КАЖДЫЙ из шести диспетчеров — нехвостовая рекурсия: вызывает `lay_out`/`lay_out_with_used_size`/`lay_out_inner` для ребёнка/item'а/ячейки и затем читает его `.rect` для собственной бухгалтерии, которую нельзя посчитать заранее. Объём (по убыванию частоты попадания на реальных страницах): (1) `lay_out_inner`'s block-flow ветка (`box_tree/layout_dispatch.rs:1180-1537`, рекурсивный вызов `:1483`) — float-размещение (`FloatContext`, до двух пробных `lay_out` на float до финального размещения) и collapse-бухгалтерия соседних margin (`child_y`/`prev_block_mb`/`seen_inflow_child`) после каждого ребёнка; используется буквально каждой страницей — наибольший риск тонкой пиксельной регрессии. (2) `box_tree/flex.rs::lay_out_flex` (1104 строки) — двухпроходный (probe max-content, затем реальная раскладка), cross-axis stretch и baseline-alignment после каждого item'а. (3) `box_tree/grid.rs::lay_out_grid` (949 строк) — track sizing и `align-self`/`justify-self` после каждой ячейки. (4) `box_tree/table.rs` (852 строки, `lay_out_table_row`/`lay_out_table`) — выравнивание высоты строк, rowspan-бухгалтерия, border-collapse offset и rollup высоты групп после каждой ячейки — самая плотная пост-обработка из шести. (5) `box_tree/multicol_abspos.rs` (504 строки) — `lay_out_multicol_children` (балансировка колонок: `col_y[col] = child.rect.y + child.rect.height + mb`) и `lay_out_abs_children` (разрешение static-position/anchor после раскладки). (6) `vertical.rs::lay_out_vertical_block` (875 строк) — потребление block-size из `child.rect.width` и `shift_subtree_x` после каждого ребёнка. `box_tree/svg.rs` (1592 строки) НЕ рекурсирует в `lay_out`/`lay_out_inner` — вне объёма (геометрия считается напрямую по `SvgShapeKind`). Отдельно, не layout, но тот же класс: `crates/engine/paint/src/display_list/walk.rs`/`box_layer.rs` (`walk`/`fill_buckets`) — рекурсия по дереву боксов на пути живого рендера/`--screenshot`/`--print-to-pdf`, найдена ещё в срезе 1 LAYOUT-1, не тронута ни разу. Каждый пункт нуждается в СВОЕЙ явной машине состояний (стек кадров с сохранённым прогрессом track-sizing/row-эквализации/column-балансировки на паузе перед рекурсивным вызовом ребёнка, возобновление после), а не общей замене цикла — генераторов/корутин в стабильном Rust нет, велосипед неизбежен на каждый алгоритм. Не блокирует ничего срочного: краш-симптом BUG-987 уже смягчён (PE `/STACK:134217728` + `stack_size(128 MiB)` у `lumen-engine`, потолок — десятки тысяч уровней вложенности вместо ~150–800). Приёмка — унаследована от LAYOUT-1: `--dump-layout`/`--screenshot`/живой `--print-to-pdf` на `<div>`×20000 (и на эквивалентной глубине flex/grid/table/multicol/vertical-структур) без увеличенных стеков; полный `graphic_tests/run.py --continue-on-fail` пиксельно нейтрален на каждом сданном пункте (это самые горячие пути движка — обязателен, не `dump_golden.py`). Рекомендуемый порядок — начать с (1), самого нагруженного и самого рискованного; остальные пять и paint-обход можно вести по отдельности, каждый со своим A/B. Срез 1 (2026-09-07, `p1-layout2-blockflow-trampoline`): пункт (1) — `lay_out_inner`'s block-flow ветка — переведена на явный heap-стек. `dispatch_box` (переименованное ядро бывшей `lay_out_inner`) теперь возвращает `DispatchOutcome`: `Done` для всех веток, что раньше просто `return`-или (behaviorally identical), и `NeedsBlockFlowLoop(Box<BlockFlowInit>)` — единственную нехвостовую ветку. `block_flow_trampoline::run` (новый модуль) водит её и каждого дальнейшего block-flow потомка на `Vec<Frame>` вместо нативного стека: `take_box`/`mem::replace` временно вынимает бокс из родительского слота на время его собственного цикла (тот же приём, что и `LayoutBox::Drop` в LAYOUT-1 срезе 2), `step_child` обрабатывает один дочерний элемент (float/marker/clear/normal-flow) и либо завершает его синхронно (`Advance`), либо возвращает `BlockFlowInit` ребёнка для `run` (`Descend`), `finish_frame`/`post_child_bookkeeping` — скопированные один-в-один post-loop эпилог и per-child margin-бухгалтерия. `finalize_block_height`/`finish_after_match` вынесены в `pub(super)`-хелперы, общие с не-block-flow ветками (первая — заодно с multicol). Float-размещение (`place_float`) и не-block-flow дочерние диспетчеры (flex/grid/table/multicol/svg/vertical) осознанно остались на нативном стеке — вне объёма среза, как и было объявлено. Найден и исправлен по ходу приёмки баг в НОВЫХ regression-тестах (не в трамплине): `deep_chain_with_margins_collapses_through_the_trampoline` передавала `in_block_flow: false` в верхний вызов `lay_out` — по документированной семантике (`layout_dispatch.rs`) это означает «document root / независимый форматный контекст, не схлопывай свой верхний margin с первым ребёнком» (BUG-153), ровно исключение, которое доккомментарий теста явно отрицает («none of these boxes is the true document root»); с `true` тест проходит. Также обнаружена и задокументирована (не исправлена в этом срезе, см. [BUG-1026](bugs/BUG-1026-OPEN.md)) латентная O(N²)-стоимость `collapsed_top_margin`/`collapsed_bottom_margin` (`bfc.rs`) — LAYOUT-1 срез 1 сделал их O(1) по стеку, но не по времени, и трамплин зовёт их по разу на каждый уровень цепочки; синтетический тест на 200 000 уровней не завершился за час CPU, сокращён до заявленного порога приёмки 20 000 (~2 минуты там же). `cargo test -p lumen-layout --lib`: 3902/3902 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` чисто; полный `graphic_tests/run.py --build --continue-on-fail` (LUMEN_PROFILE=dev-release) — дельта против предыдущего прогона (коммит 83764ba74, до трамплина) «Изменений нет», все 12 FAIL/46 DEBTOR — предсуществующий долг. Пиксельная нейтральность подтверждена на самом горячем пути движка. Не закрывает задачу: пункты (2)–(6) (flex/grid/table/multicol/vertical) и paint `walk`/`fill_buckets` остаются на нативной рекурсии; `<div>`×20000 без увеличенных стеков теперь подтверждён живым тестом (было — только заявлено). Срез 2 (2026-09-07, `p1-layout2-flex-trampoline`; ветка заведена под пункт (2) — flex.rs — но по факту закрыла отдельный, найденный по ходу подготовки класс): не флекс-трамплин, а расширение безопасного механического класса LAYOUT-1 (pre-order обход, ничего после цикла по детям не читает результат потомка) на 18 функций-обходчиков вне шести диспетчеров LAYOUT-2, найденных аудитом всего `lumen-layout` на тот же паттерн — `anchor.rs::collect_anchors_rec`, `box_tree/container_anchor.rs::{apply_anchor_positions_rec, apply_container_inner}` (обе с состоянием-стеком предков/`container_stack`, восстанавливаемым через `truncate(depth)` — тот же приём, что и у `collect_snap_rec` ниже), `box_tree/image_requests.rs::collect_bg_image_inner`, `box_tree/shapes_floats.rs::{shift_y_box, shift_tree}`, `image_gating.rs::collect_visible`, `inert.rs::collect_inert_rec`, `property_trees.rs::walk`, `scroll_timeline.rs::{collect_named_scroll_timelines_rec, collect_named_view_timelines_rec}`, `stacking.rs::walk`, `subgrid.rs::collect_recursive`, `text_iter.rs::collect_text_rec` (11 функций, обнаружены и переведены до начала этой сессии в этом же слоте) плюс `lib.rs::{collect_clickable_rec, collect_sticky_rec, collect_snap_rec, collect_pseudo_computed_styles_rec, collect_custom_properties_rec, collect_vt_names_rec, collect_vt_groups_rec}` (7 функций, эта сессия). `motion_path.rs::walk_cubic_rec` проверена и осознанно не тронута — не обход дерева, а бинарное деление кривой Безье с глубиной ~17 (`(t_hi-t_lo)<1e-5`), не зависит от глубины DOM. 7 новых regression-тестов (`tests/deep_traversal_stress.rs`) на глубину 200000 для шести O(1)-функций `lib.rs` и на 20000 с настоящей DOM-цепочкой для `collect_clickable_elements` (`inert::is_inert` ходит к корню документа на каждый узел — O(depth) за вызов, `Document::get` паникует на id вне арены, поэтому синтетические `NodeId` без DOM не годятся). Для 11 файлов, переведённых до этой сессии, отдельных стресс-тестов не добавлено — покрытие ограничено существующим набором крейта (не регрессировал) и рецензией кода в этой сессии; это осознанный компромисс объёма, не забывчивость. Побочно: `lib.rs` вырос 2180→2275 строк (машинерия явного стека) — `scripts/file-size-baseline.tsv` обновлён тем же коммитом (храповик, `docs/lint-policy.md` §5.1); гейт `check_file_sizes.py` уже был красным на `main` до этой сессии по пяти ДРУГИМ файлам ([BUG-1002](bugs/BUG-1002-FIXED.md), не трогали). `cargo test -p lumen-layout --lib`: 3909/3909 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` и `cargo check --workspace` чисты. Не запускали полный `graphic_tests/run.py`: ни один из 18 обходчиков не пишет в display list/paint (метаданные для JS-API — clickable/sticky/snap/pseudo-style/custom-props/view-transition — и служебные пре-паспорты anchor/container/image-gating/subgrid; `shift_y_box`/`shift_tree` двигают `rect`, но по значению идентично старой рекурсии). Не закрывает задачу: пункты (2)–(6) диспетчеров и paint `walk`/`fill_buckets` остаются нетронутыми — следующий срез по-прежнему нужен для настоящего flex-трамплина. Срез 3 (2026-09-07, `p1-layout2-flex-trampoline2`; ветка изначально заведена под пункт (2), теперь доведена до настоящего flex-трамплина): пункт (2) — `flex.rs::lay_out_flex` — переведён на явный heap-стек. Бывшая `lay_out_flex` разделена на две фазы: `flex::build_flex_init` (переименованное ядро прежней функции) считает Steps 1–3/justify precompute нативно как раньше (Step 1 probe для column `flex-basis: auto`/`content` и `flex_auto_base_main_width` для row без явной ширины остаются вне области среза — тот же класс, что float-размещение в `block_flow_trampoline`) и возвращает `Box<FlexInit>` вместо результата раскладки; новый модуль `flex_trampoline.rs` (654 строки) водит Phase A (per-item final placement, §9.5/§9.6) на `Vec<Frame>` вместо нативного стека — `step_item` обрабатывает один item синхронно (`Advance`) либо, если item сам flex-контейнер, возвращает его `FlexInit` для `run` (`Descend`); `finish_line`/`finish_frame` — построчное cross-axis выравнивание (§9.5) и align-content между линиями (§8.3) соответственно. `DispatchOutcome` получил `NeedsFlexLoop`; `block_flow_trampoline::step_child` и `layout_dispatch.rs`'s `lay_out_inner_impl` оба зовут `flex_trampoline::run` на встреченном flex-потомке — цепочка block↔flex теперь не растит нативный стек ни на одном из двух переходов (каждый трамплин зовёт другой синхронно на СВОЁМ явном стеке, а не рекурсией друг в друга). Хвост прежней flex-ветки `layout_dispatch.rs` (высота контейнера, CSS Flexbox §4.1 `flex_abs` абсолютно позиционированные дети) перенесён в `finish_frame` — та же реорганизация, что LAYOUT-2 срез 1 сделал для block-flow. `flex.rs` сжался на 911 строк за счёт удаления самого item-placement цикла (перенесён построчно в `flex_trampoline.rs` с сохранением семантики бит-в-бит, включая BUG-341 S41 column probe/replay точное битовое сравнение и BUG-104/BUG-209 `relayout_column_flex`, оставшиеся на нативной рекурсии как и было объявлено). 2 новых теста (`tests/flex_trampoline.rs`): цепочка из 20000 вложенных `flex-direction: row` контейнеров по одному item на уровень (проверяет и отсутствие переполнения стека, и корректный проброс высоты через все уровни) и её column-аналог. `cargo test -p lumen-layout --lib`: 3911/3911 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` чисто; полный `graphic_tests/run.py --build --continue-on-fail` (LUMEN_PROFILE=dev-release) — 0 изменений статусов тестов против прежнего бейзлайна (98 passed/12 failed/46 debtor идентично) — пиксельная нейтральность подтверждена на самом горячем пути движка. Не закрывает задачу: пункты (3)–(6) диспетчеров (grid/table/multicol/vertical) и paint `walk`/`fill_buckets` остаются нетронутыми — следующий срез по ROADMAP-порядку (по убыванию частоты) — пункт (3), `grid.rs::lay_out_grid`. Срез 5 (2026-09-07, `p1-layout2-grid-trampoline`): пункт (3) — `grid.rs::lay_out_grid` — переведён на явный heap-стек. Бывшая `lay_out_grid` разделена: `grid::build_grid_init` (переименованное ядро) считает Steps 1–3 нативно (placement resolution + column-track sizing — ни один не вызывает `lay_out` на ребёнка, поэтому объём среза их не касается) и возвращает `Option<Box<GridInit>>` (`None` — нет items, тот же ранний `return 0.0`, что и раньше, только эпилог высоты теперь общий с непустым случаем через `grid_trampoline::finish_container_height`); новый модуль `grid_trampoline.rs` (~590 строк) водит ДВА прохода на `Vec<Frame>` вместо нативного стека внутри одного и того же фрейма — Probe (CSS Grid L1 §12.3, измерение auto/fr row track через `.rect` каждого item'а) и Final (§11.2, финальная расстановка + align-items/justify-items), с явным переходом состояния `Pass::Probe → Pass::Final` внутри фрейма после `finish_probe_pass` (fr-резолв + align-content, скопировано построчно из старого кода между двумя циклами). `DispatchOutcome` получил `NeedsGridLoop`; `block_flow_trampoline::step_child`, оба рукава (row/column) `flex_trampoline::step_item` и `layout_dispatch.rs`'s `lay_out_inner_impl` зовут `grid_trampoline::run` на встреченном grid-потомке — тот же паттерн, что срез 3 завёл для flex↔block. BUG-341 S33 probe-reuse (`GridInit::probe_reuse`) сохранён бит-в-бит — Final-фаза берёт закэшированный Probe-результат через `translate_subtree` вместо повторного `dispatch_box`, когда позволяет `CV_AUTO_TOUCHED`; subgrid-ветка (обе фазы, `SubgridContextGuard`) осознанно исключена из reuse, как и в исходнике. Найдены и задокументированы (не устранены в этом срезе — вне объёма, тот же класс, что float-размещение в срезе 1 и Step-1-проба в срезе 3) две ПРЕДСУЩЕСТВУЮЩИЕ ловушки, обе всплыли при попытке написать regression-тест на цепочку 20000 уровней: (1) `LayoutBox`'s `#[derive(Clone)]` (в отличие от `impl Drop`, LAYOUT-1 срез 2 его не тронул) рекурсирует нативно на `probe_reuse`-кэше и переполняет стек тестового потока уже на глубине 1000 (500 — безопасно, эмпирически найдено); (2) отказ от reuse (найден через `content-visibility: auto` на каждом уровне) воспроизводит на grid тот же экспоненциальный `T(n)=2·T(n-1)` даблинг, что BUG-341/BUG-802 уже задокументировали для flex — цепочка subgrid-контейнеров (структурно reuse-неспособна) тестируется на глубине 16, не 20000, по той же причине. 2 новых теста (`tests/grid_trampoline.rs`): `deep_grid_chain_...` (глубина 500, reuse включён — жмёт именно Probe-фазовый `Descend`, Final резолвится через дешёвый `translate_subtree`) и `deep_subgrid_chain_...` (глубина 16, subgrid — жмёт независимый Final-фазовый `Descend`, поскольку subgrid туда попадает всегда). `cargo test -p lumen-layout --lib`: 3921/3921 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` и `cargo check --workspace` чисты; полный `graphic_tests/run.py --build --continue-on-fail` (LUMEN_PROFILE=dev-release) — дельта против прежнего прогона (коммит c6a4419d5) «Изменений нет», те же 12 FAIL/46 DEBTOR байт-в-байт — пиксельная нейтральность подтверждена на самом горячем пути движка. Не закрывает задачу: пункты (4)–(6) диспетчеров (table/multicol/vertical) и paint `walk`/`fill_buckets` остаются нетронутыми — следующий срез по ROADMAP-порядку (по убыванию частоты) — пункт (4), `table.rs`. Срез 6 (2026-09-08, `p1-layout2-table-trampoline`): пункт (4) — `table.rs` (`lay_out_table`/`lay_out_table_row`) — переведён на явный heap-стек. Бывшая `lay_out_table` разделена: `table::build_table_init` (CSS 2.1 §17.5 Steps 1–2 — колоночное размещение каждой строки через новую `build_row_init` плюс регистрация rowspan-occupancy в `rowspan_map`, ни один шаг не читает `.rect` ячейки) считает геометрию нативно, как и прежде, и возвращает `Box<TableInit>` вместо результата раскладки; новый модуль `table_trampoline.rs` (479 строк) водит per-row/per-cell placement pass (Step 3/4) на `Vec<Frame>`. В отличие от плоского списка item'ов у flex/grid, таблица гнездит три цикла (top-level entry → row-within-group → cell-within-row), поэтому позиция кадра — тройка `(t, r, cell)`; `begin_group`/`begin_row` — построчный/групповой пролог позиционирования, `step_cell` — Step 3 (диспетч ячейки на предвычисленной ширине с временным снятием `style.width`), `finish_row`/`finish_entry`/`finish_table` — построчная нормализация высоты по non-rowspan ячейкам, групповой эпилог и Pass 2 (rowspan height post-fix) плюс хвост таблицы (ширина/высота контейнера, перенесённый из `layout_dispatch.rs`, та же реорганизация, что и в прошлых срезах). В отличие от flex/grid, `<table>` не может сама быть `<td>` — вложенная таблица всегда достижима только через ячейку (CSS 2.1 §17.2 оборачивает содержимое ячейки в анонимный block-level бокс), поэтому цепочка table-in-table стоит два нативных кадра на уровень (`table_trampoline::run` → `block_flow_trampoline::run` → снова `table_trampoline::run`), а не ноль, как у flex/grid same-kind цепочек — задокументировано в докстринге теста и объясняет `DEPTH=500` вместо `20000`. 2 новых теста (`tests/table_trampoline.rs`): плоская цепочка `<table><tr><td>{...}</td></tr></table>` глубиной 500 и её `<tbody>`-вариант (`TableRowGroup`, жмёт `begin_group`/`finish_entry`) глубиной 400 — оба проверяют не только отсутствие переполнения стека, но и что итоговая высота корня равна высоте единственного листа (раскладка сохранена бит-в-бит, не только терминация). `cargo test -p lumen-layout --lib`: 3933/3933 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` и `cargo check --workspace` чисты; полный `graphic_tests/run.py --build --continue-on-fail` (LUMEN_PROFILE=dev-release) — дельта против прежнего прогона (коммит 80a165712) «Изменений нет», те же 12 FAIL/46 DEBTOR — пиксельная нейтральность подтверждена на самом горячем пути движка. Не закрывает задачу: пункты (5)–(6) диспетчеров (multicol/vertical) и paint `walk`/`fill_buckets` остаются нетронутыми — следующий срез по ROADMAP-порядку (по убыванию частоты) — пункт (5), `multicol_abspos.rs`. Срез 7 (2026-09-08, `p1-layout2-multicol-trampoline`): пункт (5) — `multicol_abspos.rs::lay_out_multicol_children` — переведён на явный heap-стек. В отличие от grid/table (Steps 1–3 / column-resolution чисто нативны, ни разу не зовут `lay_out`), у multicol измерительный проход (Measure — dispatch каждого элемента сегмента при `(0,0)` для `outer_hs`) обязателен для КАЖДОГО сегмента независимо от sliceable/atomic решения — в отличие от условного (и документированно оставленного нативным) Step 1 probe `flex::build_flex_init`, здесь пропустить измерение нельзя, поэтому весь измерительный + atomic-Place проход, а не только Place, ушёл в трамплин. `multicol_abspos::build_multicol_init` (переименованное ядро, чисто: column-count/width, column-fill, разбиение на сегменты по `column-span:all` и sliceable-решение — последнее не зависит от `.rect`, чистая функция `box_is_column_sliceable` по `style`/`kind`) возвращает `Box<MulticolInit>`; новый модуль `multicol_trampoline.rs` (~470 строк) водит на `Vec<Frame>` три состояния на сегмент — `Measure` (всегда), `Place` (только atomic-сегменты — вложенный multicol никогда не sliceable, т.к. требует непустых `children`), `Span` (`column-span:all` элемент) — вместо нативного стека. Sliceable-сегменты геометрически нарезаются из результатов Measure без повторного dispatch (как и раньше — только leaf-боксы). `DispatchOutcome` получил `NeedsMulticolLoop`; все пять существующих трамплинов (`block_flow_trampoline::step_child`, оба рукава `flex_trampoline::step_item`, пять точек `grid_trampoline` (subgrid/non-subgrid probe, unplaced/subgrid/reuse-fallback final), `table_trampoline::step_cell`) и сам `layout_dispatch.rs::lay_out_inner_impl` зовут `multicol_trampoline::run` на встреченном multicol-потомке — тот же паттерн, что и предыдущие срезы. Per-item dispatch зовёт `dispatch_box` напрямую, а не `lay_out()` — тот же обход BUG-341 in-place/layout-result кэшей, что и у всех остальных трамплинов LAYOUT-2. `lay_out_abs_children` (второй пункт объёма (5) по формулировке задачи) НЕ тронут: его собственный цикл — плоский `for` по уже готовому списку, не рекурсия в себя, и `lay_out()`, который он зовёт на каждый deferred-child, уже разрешает `NeedsMulticolLoop` через существующий путь `lay_out_inner_impl` без изменений — конвертация его на `dispatch_box`+match не меняла бы устойчивость к стеку, только стиль. Отдельно найдена (не устранена, вне объёма) архитектурная проблема: цепочка `position:absolute`-в-`position:absolute` растит нативный стек через взаимную рекурсию `lay_out_abs_children`↔`block_flow_trampoline::finish_frame` (каждый уровень добавляет ~6 нативных кадров) — тот же класс допущения, что и цепочка float'ов среза 1. 2 новых теста (`tests/multicol_trampoline.rs`): цепочка вложенных одноколоночных multicol на `DEPTH=16` (не 20000 — унаследованный от исходного кода двухпроходный Measure+Place дизайн даёт `T(n)=2·T(n-1)` для вложенного multicol, тот же класс, что и BUG-802 для flex; измерено — 16 уровней 0.1с, 24 уровня 29с, экспонента подтверждена, не предположена) и её двухколоночный вариант (жмёт `compute_col_assignment`/`col_y`-бухгалтерию на двух независимых `Descend`-цепочках). `cargo test -p lumen-layout --lib`: 3935/3935 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` и `cargo clippy --workspace --all-targets -- -D warnings` чисты; полный `graphic_tests/run.py --build --continue-on-fail` (LUMEN_PROFILE=dev-release) — дельта против прежнего прогона (коммит d1fc83842) «Изменений нет», те же 12 FAIL/46 DEBTOR — пиксельная нейтральность подтверждена. Не закрывает задачу: пункт (6) диспетчера (`vertical.rs::lay_out_vertical_block`) и paint `walk`/`fill_buckets` остаются нетронутыми — следующий срез по ROADMAP-порядку — пункт (6), `vertical.rs`. Срез 8 (2026-09-08, `p1-layout2-vertical-trampoline`): пункт (6), последний диспетчер — `vertical.rs::lay_out_vertical_block` — переведён на явный heap-стек. Бывшая функция разделена: `vertical::build_vertical_init` (переименованное ядро — resolve `writing-mode`/`is_rtl`, border/padding, `resolve_axis_size` для explicit block-size, content-box геометрия) считает всё нативно, как и раньше (ни один шаг не читает `.rect` ребёнка), и возвращает `VerticalInit` вместо результата раскладки; новый модуль `box_tree/vertical_trampoline.rs` водит per-child block-axis stacking pass (тентативный dispatch на левом крае → чтение `child.rect.width` как потреблённого block-size → `finish_child` перепозиционирует на истинный физический x, `vertical-rl` справа налево / `vertical-lr` слева направо — CSS Writing Modes L3 §3) на `Vec<Frame>` вместо нативного стека. `DispatchOutcome` получил `NeedsVerticalLoop(Box<VerticalInit>)`; все шесть существующих трамплинов (`block_flow_trampoline::step_child`, оба рукава `flex_trampoline::step_item`, `grid_trampoline` (обе фазы, четыре точки), `table_trampoline::step_cell`, `multicol_trampoline::dispatch_child`) и сам `layout_dispatch.rs::lay_out_inner_impl` зовут `vertical_trampoline::run` на встреченном vertical-writing-mode потомке — тот же паттерн, что и предыдущие пять срезов; крейт-приватный шим `bfc::lay_out_for_vertical` (существовал только затем, чтобы `vertical.rs` мог рекурсивно звать приватный `lay_out` соседнего модуля) удалён — больше не нужен. Второй, независимый источник нативной рекурсии найден при написании `DEPTH=20000`-теста (унаследованный от LAYOUT-1/сестринских трамплинов акцептанс-порог) и исправлен в том же срезе: `finish_child` перепозиционирует каждого ребёнка со своей тентативной позиции на истинную через `shift_subtree_x`, которая до этого среза обходила уже готовое поддерево ребёнка нативной рекурсией, один кадр на потомка — тот же класс дефекта, что и сама dispatch-рекурсия, но отдельный код, ничем не защищённый предыдущими срезами. Для `vertical-rl`-цепочки (либо любого не-первого сиблинга под `vertical-lr`) тентативная и истинная x совпадают только когда доступный block-extent контейнера равен размеру ребёнка — то есть сдвиг происходит практически на каждом уровне; переведена на тот же `Vec<&mut LayoutBox>` explicit-stack walk, что уже использует `box_tree::shapes_floats::shift_tree`. Из-за этого исправления общая стоимость сдвига — `O(depth)` на вызов при `O(depth)`-глубоком поддереве, то есть `O(depth²)` итого (тот же класс, что комбинаторные издержки grid/multicol-трамплинов по их собственным причинам, задокументированным в их докстрингах) — поэтому `DEPTH` для этого теста взят равным буквальному акцептанс-числу ROADMAP (`<div>`×20000), а не унаследованному от `block_flow_trampoline` `200_000` (что увело бы этот конкретный тест из ~1с в минуты); превращение сдвига в настоящий `O(depth)`-фикс (например, вычислять истинный x ребёнка до его собственной раскладки вместо пост-сдвига) — отдельное алгоритмическое изменение вне объёма среза, та же позиция, что и по multicol abs-in-abs цепочке и flex BUG-802-даблингу. 2 новых теста (`tests/vertical_trampoline.rs`): `vertical-rl`-цепочка глубиной 20000 (`is_rtl == true` ветка `finish_child`) и `vertical-lr`-вариант с двумя независимыми поддеревьями-сиблингами по 10000 каждое (`is_rtl == false` ветка, плюс `run`'s per-frame `next_child_idx` переход между независимыми `Descend`-цепочками) — оба проверяют не только отсутствие переполнения стека, но и что итоговая ширина корня равна ожидаемой сумме `LEAF_WIDTH` (раскладка сохранена бит-в-бит). Побочно, вне объёма LAYOUT-2 (`ГЕЙТ СЛОМАН`-класс): `cargo clippy --workspace --all-targets -- -D warnings` был красным на чистом `main` от `crates/js/src/v8_runtime/install/platform.rs:980,1062` (`collapsible_if`, привнесено чужим P3-коммитом BUG-1036, `62da93256`) — исправлено тем же механическим `if`+`&&`-let-chain, что предлагает сам clippy, отдельным коммитом до слияния этого среза, т.к. блокировало финальный гейт КАЖДОЙ задачи, не только этой. `cargo test -p lumen-layout --lib`: 3937/3937 (1 ignored), 0 регрессий; `cargo clippy -p lumen-layout --all-targets -- -D warnings` и `cargo clippy --workspace --all-targets -- -D warnings` чисты; `scripts/scoped-test.sh` — два предсуществующих несвязанных провала, оба воспроизведены на чистом `main` без изменений этого среза: (1) `lumen-driver`'s `cases::snapshot_cpu::cpu_snapshots_match_references` — дрейф CPU-эталонов (тот же класс, что BUG-1008, не regression LAYOUT-2 — vertical.rs не участвует ни в одной из семи упавших тестовых страниц: text-rendering/canvas-2d/list-markers/forms/multiple-backgrounds/scrollbar-rendering/final); (2) `lumen-shell`'s `download::tests::{hit_test_open_and_reveal_buttons_on_done, done_entry_buttons_render_in_bar}` — параллельный флейк, оба теста проходят изолированно (`--test-threads=1`, filtered by name), полностью не связаны с layout. Полный `graphic_tests/run.py --build --continue-on-fail` (LUMEN_PROFILE=dev-release, прогнан 2026-09-08 08:06:59 этим же срезом до коммита) — дельта против прежнего прогона (коммит cff8f410f) «Изменений нет», те же 98 passed/12 failed/46 debtor — пиксельная нейтральность подтверждена на самом горячем пути движка. **LAYOUT-2 закрывает все шесть layout-диспетчеров.** Не закрывает задачу целиком: paint `walk`/`fill_buckets` (`crates/engine/paint/src/display_list/walk.rs`/`box_layer.rs`) — единственный оставшийся пункт объёма, найденный ещё в LAYOUT-1 срезе 1, не тронут ни разу за все восемь срезов — отдельный, самостоятельный срез. Срез 9 (2026-09-08, `p1-layout2-paint-walk-trampoline`): `display_list/walk.rs::walk` — центральный обходчик легаси (не-ordered) display-list builder-а, используемый `--dump-display-list`/`--screenshot` (CPU-путь)/`--print-to-pdf` — переведён на явный heap-стек. В отличие от layout-диспетчеров, `walk` только читает `LayoutBox` (никогда не мутирует), поэтому кадр явного стека хранит простую ссылку `&'a LayoutBox`, а не владение через `take_box`/`mem::replace`, которого требуют layout-трамплины для дерева `&mut LayoutBox`. `walk` разделён на `dispatch` (бывшее тело функции, ветвится по `BoxKind`, делает весь `Push*`-сетап до детей) и `run` (новый явный цикл на `Vec<Box<Frame>>`); `dispatch` возвращает `WalkOutcome::Done` для всех веток, что раньше просто заканчивались (лист без детей, ранние `return` на opacity:0/backface-hidden/invisible), и `NeedsLoop(Box<Frame>)` — для четырёх точек собственной рекурсии `walk`, что нашлись общим обходом (по убыванию значимости): (1)/(2) общей ветки Block/FlowRoot/Table/TableRow/TableRowGroup — обычный (document-order) и `preserve-3d`-отсортированный (`depth_sorted_child_order`) циклы по детям, самый частый случай на реальных страницах (обычная вложенность `<div>`); (3) `InlineBlockRow`; (4) `SvgRoot`. Каждая несёт свой `Epilogue` (`Full` — дюжина флагов gap-декораций/overflow-clip/outline/filter/backdrop-filter/clip-path/transform/opacity/blend-mode/mask, скопированных в `BlockEpilogue` бит-в-бит из хвоста старой ветки; `SvgViewportClip` — один `PopClip`; `None` — у `InlineBlockRow` тени/бордера нет). `Table`-под-случай (внутри той же общей ветки) НЕ переведён на `Frame` — `emit_table_box` (`table.rs`) не рекурсирует в `walk` сама по себе, а зовёт публичную `walk` заново на row-group/cell-content, так что остаётся синхронной: явный стек запускается заново с нуля на этой границе (тот же приём, что и переход между layout-трамплинами) и полностью защищает всё вложенное под ней, а сама граница платит те же несколько нативных кадров на уровень, что и `table_trampoline` в LAYOUT-2 срезе 6 для `<table>`-в-`<td>`. По тому же принципу не тронут `svg_text_decoration.rs::emit_svg_shape_masked` (вызывает `walk` повторно на содержимом маски). Побочно найден и задокументирован (не исправлен — вне объёма, сохранён бит-в-бит ради честности A/B-нейтральности) предсуществующий дефект — [BUG-1037](bugs/BUG-1037-OPEN.md): ранний `return` на `!is_paint_visible` в `FormControl`/`Image`/`Video`/`Canvas`/`Audio`/`Iframe` пропускает закрытие `EndFixedLayer`/`EndStickyLayer`, если элемент `position:fixed`/`sticky` и невидим/нулевого размера — маркер остаётся без пары. 3 новых теста (`display_list/tests/walk_trampoline.rs`): цепочка `DEPTH=20000` вложенных `overflow:hidden`-контейнеров (проверяет не только отсутствие переполнения стека, но и точный баланс `PushClipRect`/`PopClip` — по одному на уровень), её `transform-style:preserve-3d`-вариант (жмёт `depth_sorted_child_order`-ветку) и цепочка `InlineBlockRow` (пустой display list — доказательство, что `dispatch` не провалился в чужой `Epilogue`). Деревья строятся напрямую (`LayoutBox`, без HTML-парсера и без прохода `lay_out`), чтобы тест бил только по paint-обходу. `cargo test -p lumen-paint --lib`: 1046/1046 (4 ignored), 0 регрессий (было 1043). `cargo clippy -p lumen-paint --all-targets -- -D warnings` не прогнать целиком на этой Linux-машине по той же причине, что и в срезе 8 — `chunks_exact_to_as_chunks` в `lumen-image`/`lumen-font` (зависимости `lumen-paint`) от рассинхрона clippy-driver 1.98.1 против пина 1.97.0, воспроизведено на чистом `main`; `cargo check --workspace` чист. `graphic_tests/run.py` недоступен на этой машине — пиксельная нейтральность доказана расширенным A/B (dev-release, `git stash`/пересборка/сравнение): `--dump-layout`/`--dump-display-list` на 14 страницах — 6 штатных `dump_golden.py` (table/grid/flex/transform-zindex) плюс `42-position-sticky`, `100-transform-overflow`, `103-filter-transform`, `104-mask-gradient-radius`, `127-svg-text-anchor`, `14-overflow`, `149-nested-overflow-scroll`, `1000000-final` (широкий сборный тест) — набор расширен относительно среза 8 умышленно, чтобы покрыть каждую из четырёх переведённых точек рекурсии и соседние ветки (sticky/fixed/mask/filter/SVG-clip/table) их же собственными страницами; все 28 дампов байт-в-байт идентичны. Не закрывает задачу: `box_layer.rs::fill_buckets` (ordered/anim-aware paint-путь — живой рендер) — тот же класс рекурсии, отдельная структура кадров (`emit_box_self`, без `walk`'s `dispatch`/`run`), остаётся нетронутым — последний оставшийся пункт LAYOUT-2, закроет задачу целиком. Срез 10 (2026-09-08, `p1-layout2-paint-trampoline`): последний пункт объёма — `box_layer.rs::fill_buckets` (ordered/anim-aware paint-путь, живой рендер) — переведён на явный heap-стек, той же безопасной механической категорией, что и срез 2 (18 pre-order обходчиков) и срез 9 (`walk`): пост-обработка после цикла по детям (`ops.overflow_post`/`ops.post`, BUG-200 cell-border repass) читает только состояние, посчитанное ДО спуска, не результат потомка. Одна дополнительная оговорка, которой не было у `walk`: нумерация `StackingContextId` обязана остаться строго pre-order — id соседа выделяется только после того, как ВСЁ поддерево предыдущего ребёнка (включая чужие id) уже пройдено, иначе перенумеровался бы каждый stacking context; поэтому дети раздаются по одному через возобновляемый `FillFrame::Continue{next_idx}`, а не пушаются в стек все разом (наивный «выделить все id детей сразу, потом положить в стек» пронумеровал бы сиблингов раньше их потомков). 1 новый regression-тест (`display_list/tests/fill_buckets_trampoline.rs`, отдельно от `walk_trampoline.rs` среза 9): синтетическая цепочка `<div>`×20000 (`LayoutBox`-литерал, без HTML/layout) вызывает `fill_buckets` напрямую с одним бакетом, проверяя по одному `FillRect` на уровень (доказывает, что пройден каждый уровень, а не просто «не упало») и что `next_sc_id` не продвигается (в фикстуре ничего не триггерит stacking context). `cargo test -p lumen-paint --lib` и `cargo clippy -p lumen-paint --all-targets -- -D warnings`/`cargo clippy --workspace --all-targets -- -D warnings` чисты (точные числа — в теле коммита слияния). `scripts/scoped-test.sh` не дошёл до конца — обратное замыкание зависимостей `lumen-paint` тянет `lumen-network`, чей `udp_round_trip` вешает гейт ([BUG-805](bugs/BUG-805-FIXED.md), предсуществующе, воспроизведено на чистом `main`); адресный `cargo test -p lumen-paint --lib` зелёный. Полный `graphic_tests/run.py --build --continue-on-fail`: встроенная строка «дельта против прежнего прогона» ненадёжна с тех пор, как в `results/` появился `baselines.json` — сортируется раньше timestamp-файлов и сдвигает индекс на «прогон сам с собой» ([BUG-1039](bugs/BUG-1039-FIXED.md), найден этим же срезом); ручное посекундное сравнение против последнего закоммиченного прогона (`20260908-080659.json`, срез 8) дало identical проценты по всем 156 тестам, кроме разового сбоя захвата окна на TEST-06 (96.70%, не воспроизвёлся при изолированном `--only 06` — снова 0.42%) — пиксельная нейтральность подтверждена вручную. **LAYOUT-2 закрыта полностью** — все шесть layout-диспетчеров (срезы 1–8) и paint `walk`/`fill_buckets` (срезы 9–10) переведены на явный стек.",
      "bugs": [
       "BUG-987"
-     ]
-    },
-    {
-     "id": "FLEX-BASELINE",
-     "title": "FLEX-BASELINE: baseline-выравнивание во flex",
-     "status": "planned",
-     "size": "L",
-     "note": "Выравнивание по базовой линии во flex (`align-items`/`align-self` со значениями `baseline`, `first baseline`, `last baseline`, CSS Flexbox L1 §8.5 и CSS Align L3 §9): модель baseline бокса любого вида (строка текста, вложенный flex/grid/multicol, replaced и пустой бокс — синтез), выравнивание линии flex-контейнера по общей базовой, `last baseline`. Сейчас `flex.rs` не знает baseline вовсе. WPT-RUN-14-S1: 82 id `css/css-flexbox`, 336 упавших сабтестов (`flex-align-baseline*`, `align-items-baseline*`, `alignment/*`). Критерий готовности: id `flex-align-baseline-*` и `alignment/*` зелёные, остаток отнесён в баги",
-     "bugs": [
-      "BUG-1257"
-     ]
-    },
-    {
-     "id": "FLEX-VWM",
-     "title": "FLEX-VWM: flex в вертикальных writing-mode",
-     "status": "planned",
-     "size": "L",
-     "note": "Flex-контейнер и flex-элементы в вертикальных `writing-mode` (`vertical-rl`/`vertical-lr`/`sideways-*`) и при `direction: rtl`: физические оси из `writing-mode`/`direction`/`flex-direction`, `flex-wrap: wrap-reverse`, auto-margins, `justify-content`/`align-*`, статическая позиция abspos-детей (оставляет BUG-1251 только горизонтальный случай). Сейчас `flex.rs` не упоминает `writing_mode`, контейнер раскладывается как горизонтальный. WPT-RUN-14-S1: 116 id и 963 упавших сабтеста — крупнейший кластер `css-flexbox` (`flexbox-writing-mode-*`, `*-vert*`, `*-vlr`, `*-vrl`, `*-wmvert`). Критерий готовности: `flexbox-writing-mode-*` зелёные, остаток разобран в баги",
-     "bugs": [
-      "BUG-1258"
      ]
     }
    ],
@@ -2356,7 +2336,7 @@
        "title": "PERF-16: кэш display list по поддереву (цикл хрома)",
        "status": "done",
        "size": "L",
-       "note": "Кэш display list по поддереву для инкрементального цикла хрома: не эмитить заново неизменившиеся поддеревья. После BUG-341 (S44) emit display list — ~45% цикла CC-12 (~0.4 мс на 409 боксов, линейно ~0.9 мкс/бокс, горячей точки нет), микроправки `enter_fill`/`FillFrame` дают 0.05-0.1 мс при пиксельном риске. У `CC12_KEY` запас по p95 всего 7-15% (S46). Опора — существующий `crates/engine/paint/src/display_list_cache.rs`; критерий — p95 KEY с запасом ≥ 30% на спокойной машине без изменений пикселей (полный графтест). **Срез 1 (2026-10-03, P1) влит:** ключ — не хеш (у `ComputedStyle` нет `Hash`), а равенство со снимком, `lumen_layout::subtree_paint_eq` (`paint_eq.rs`), доказан дифференциально на корпусе `graphic_tests` (`display_list/tests/subtree_paint_eq.rs`); emit = 0,52 из 1,40 мс цикла CC-12. Дальше: срез 2 — кэш в `fill_buckets` для non-SC поддеревьев без SC-потомков (в ключе `dpr`, вьюпорт fixed-фонов, `anim == None`; снимок держит `Arc` стилей, provenance-спаны хранятся относительными), срез 3 — гейт CC-12 + голдены",
+       "note": "Кэш display list по поддереву для инкрементального цикла хрома: не эмитить заново неизменившиеся поддеревья. После BUG-341 (S44) emit display list — ~45% цикла CC-12 (~0.4 мс на 409 боксов, линейно ~0.9 мкс/бокс, горячей точки нет), микроправки `enter_fill`/`FillFrame` дают 0.05-0.1 мс при пиксельном риске. У `CC12_KEY` запас по p95 всего 7-15% (S46). Опора — существующий `crates/engine/paint/src/display_list_cache.rs`; критерий — p95 KEY с запасом ≥ 30% на спокойной машине без изменений пикселей (полный графтест). **Срез 1 (2026-10-03, P1) влит:** ключ — не хеш (у `ComputedStyle` нет `Hash`), а равенство со снимком, `lumen_layout::subtree_paint_eq` (`paint_eq.rs`), доказан дифференциально на корпусе `graphic_tests` (`display_list/tests/subtree_paint_eq.rs`); emit = 0,52 из 1,40 мс цикла CC-12. **Срез 2 (2026-10-03, P1) влит:** `SubtreeEmitCache` (`display_list/emit_cache.rs`) в `fill_buckets` — куски 4–64 боксов без SC, воспроизведение копированием, `LUMEN_NO_EMIT_CACHE=1` выключает; дифференциально равен сборке без кэша (корпус × 50 возмущений); CC-12 (стационар): emit p50 0,48→0,33 мс, ~360 из 409 боксов из кэша, p95 KEY в шуме (цель ≥30 % не достигнута). По пути найден и закрыт BUG-1261 (`translate_subtree` не двигал `svg_paint_matrix`). **Срез 3 (2026-10-03, P1) влит:** `InlineFrag::style` и `InlineSegment::style` — `Arc<ComputedStyle>` (сборщик сегментов делит `Arc` предка, а не клонирует 302 поля на каждый текстовый сегмент; `prev.kind.clone()` инкрементальной раскладки больше не копирует стили), `PartialEq for InlineFrag` сверяет стиль сначала по указателю; пиксели не менялись (`snapshot_cpu` — те же байты, что в BUG-1236; `dump_golden` 12/12); CC-12 (чередующийся A/B, 6 прогонов): KEY p50 ~1,1→~0,85 мс, p95 ~2,0→~1,4–1,9 мс (цель p95 ≥30 % запаса не достигнута, шум машины ×1,5). **Срез 4 (2026-10-03, P1) влит:** слой `layout` цикла CC-12 (0,49 мс) вне `layout_mutation_incremental_restyle` содержал построение `restyle_state_index` + `restyle_node_index` (по скану всех селекторов таблицы, 0,07 + 0,09 мс на проход) — `RestyleIndexCache` (`style/restyle_cache.rs`) держит оба индекса по `Stylesheet::revision()` и флагу author-shadow-root, `Lumen::chrome_restyle_indexes`; результаты не меняются (дифференциальный тест против свежих индексов); CC-12 (чередующийся A/B, 6 прогонов): total p50 ~0,75→~0,57 мс, layout ~0,49→~0,31 мс, KEY p95 ~1,85→~1,5 мс (цель p95 ≥30 % запаса не достигнута, шум). **Срез 5 (2026-10-03, P1) влит:** `build_shadow_sheets` (стадия каждого прохода инкрементального рестайла) спрашивала `is_shadow_host` у каждого узла арены — O(документ) на проход, 0,03 мс на 409 боксов хрома (~75 нс/узел, т.е. ~0,75 мс на флаш страницы в 10 тыс. узлов); теперь идёт по карте хостов (`Document::shadow_hosts`), стоимость — число хостов, стадия в профиле 0,03→0,00 мс; результат не меняется (`perf16_shadow_sheets`). Остаток слоя `layout` CC-12 плоский: cascade_walk ~0,09, lay_out ~0,09, build_box ~0,05 мс — единичных узких мест нет, цель p95 ≥30 % не достигнута. **ЗАКРЫТ 2026-10-03 (P1, по решению пользователя):** пять срезов выбрали все точечные узкие места, профиль CC-12 плоский (ни одна метка не больше ~0,1 мс), целевой запас p95 KEY ≥30 % не достигнут и без смены архитектуры не достижим; общий выигрыш за 5 срезов — total p50 CC-12 ~0,75→~0,57 мс в срезе 4, KEY p50 ~1,1→~0,85 мс в срезе 3.",
        "bugs": [
         "BUG-341"
        ]
@@ -5409,20 +5389,6 @@
         "BUG-1061",
         "BUG-1062"
        ]
-      },
-      {
-       "id": "TEST-9-S1",
-       "title": "TEST-9-S1: GPU-подмножество и self-test графтестов",
-       "status": "planned",
-       "size": "S",
-       "note": "graphic_tests/run.py: константа GPU_CAPTURE с id из строки TEST-9, функция capture_mode_for и флаг --self-test, исправлены устаревшие докстринги. Поведение захвата не меняется. Бриф [docs/tasks/TEST-9-S1.md](docs/tasks/TEST-9-S1.md)"
-      },
-      {
-       "id": "TEST-9-S2",
-       "title": "TEST-9-S2: гибридный захват по умолчанию",
-       "status": "planned",
-       "size": "M",
-       "note": "--ipc становится захватом по умолчанию, gdigrab остаётся только для GPU_CAPTURE. Отдельная таблица должников для ipc, разжалованы 135 и 136. Готово после полного прогона в foreground и сверки с results/20260919-131021.json и -133745.json. Зависит от S1. Бриф [docs/tasks/TEST-9-S2.md](docs/tasks/TEST-9-S2.md)"
       }
      ]
     },
@@ -5570,7 +5536,7 @@
        "title": "WPT-RUN-9: третья полная цифра pass-rate, с работающим https",
        "status": "ready",
        "size": "M",
-       "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-FIXED.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно Разблокирован 2026-10-01 решением пользователя: BUG-792 закрыт 2026-08-24, статус `blocked` был устаревшим; ссылка на баг снята из колонки `bugs`, чтобы генератор не вывел из закрытого бага `done` для непрогнанной задачи. Приоритет P2 №1 — последняя полная цифра снята 2026-08-21 на сборке с BUG-792/BUG-786, движок с тех пор не измерен."
+       "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-FIXED.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно Разблокирован 2026-10-01 решением пользователя: BUG-792 закрыт 2026-08-24, статус `blocked` был устаревшим; ссылка на баг снята из колонки `bugs`, чтобы генератор не вывел из закрытого бага `done` для непрогнанной задачи. Приоритет P2 №1 — последняя полная цифра снята 2026-08-21 на сборке с BUG-792/BUG-786, движок с тех пор не измерен. Подготовка 2026-10-04: `run_corpus.py --parallel-shards 2 --batch-small 150` даёт ×2.5–×4.7 по настенному времени при вердиктах в пределах шума повторов (замер — `docs/tasks/p2-wpt-runner-throughput.md` §WPT-RUN-9, подготовка), гонять в этом режиме; больше двух полос на 32 ГБ — только после [BUG-1267](bugs/BUG-1267-OPEN.md) (acid3 раздувает один `lumen` до 25 ГБ). Снято 2026-10-04 (ветка `p2-run9-memguard`): `run_corpus.py --max-browser-gb` (по умолчанию 4, `tests/wpt/browser_rss_cap.py`) убивает браузер своего прогона сверх порога — раздувают только тесты, которые и так TIMEOUT с 0 сабтестов (acid3, квотные `webstorage` — BUG-870, `Range-mutations-*`), их тест становится CRASH с пометкой `rss_cap_kills`, балл не меняется; 3 полосы на `dom`+8 держат ≥8 ГБ свободной памяти при балле внутри шума — гонять `--parallel-shards 3 --batch-small 150` (замер — там же, §ограничитель памяти). Снято 2026-10-04 (ветка `p2-wpt-fullpar`): `run_corpus.py --shared-queue` — тесты шарда из одной очереди (wptrunner `--fully-parallel --no-restart-on-new-group` + чередование по каталогам) вместо фиксированной хеш-раскладки по процессам: стена `dom`+8 −26 % (497 → 368 с), балл в шуме повторов; попутно найден [BUG-1268](bugs/BUG-1268-OPEN.md) — 2–4 id, чей вердикт зависит от предыдущего теста в процессе, «переезжают» при любом изменении порядка. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue` (замер — там же, §общая очередь)."
       },
       {
        "id": "WPT-RUN-10",
@@ -5619,125 +5585,6 @@
        "status": "ready",
        "size": "L",
        "note": "Полный прогон категории `css` и разбор провалов на кластеры для P1 (layout/paint) и P4 (CSS-свойства). Заведено 2026-10-01 решением пользователя по плану развития: `css` — 34 607 id, около половины автоматизируемого корпуса, а рефтесты дают 64 % балла цифры (`docs/wpt/pass-rate.md` срез 33), но категория прогнана выборочно — 382 id (`docs/wpt-status.md` §Охват), поэтому очереди P1/P4 сейчас не знают, какие layout/CSS-дефекты стоят больше всего тестов. Объём: (1) прогнать `css` целиком на текущей сборке (`run_corpus.py`/`run_report.py --root css --recursive`, чанками с `--resume`, после или вместе с WPT-RUN-9); (2) `score_audit.py`/`type_audit.py` — разложить FAIL/TIMEOUT по подкаталогам `css/<модуль>/` и по первопричине; (3) на каждый кластер с наибольшим числом id — один BUG-NNN (дефект) либо строка ROADMAP (нереализованная функциональность), с указателем в `STATUS-P1.md` (layout/paint) или `STATUS-P4.md` (свойство разобрано, но не подключено); (4) итог — таблица «кластер → id → владелец» в `docs/wpt-vendor-notes/css.md`. Критерий готовности: весь `css` имеет вердикт, топ-10 кластеров по числу id разнесены по очередям."
-      },
-      {
-       "id": "WPT-RUN-8-S1",
-       "title": "WPT-RUN-8-S1: исполнитель crashtest",
-       "status": "done",
-       "size": "S",
-       "note": "Исполнитель crashtest для wptrunner поверх BiDi: navigate, ожидание снятия test-wait, проверка, что процесс жив. Плюс crashtest в RUNNABLE_ITEM_TYPES и исправленный self-test run_corpus. Снимает вечный MISSING с 1892 id. Бриф [docs/tasks/WPT-RUN-8-S1.md](docs/tasks/WPT-RUN-8-S1.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S1",
-       "title": "WPT-RUN-14-S1: css-flexbox и фильтр префиксов",
-       "status": "done",
-       "size": "M",
-       "note": "Флаги --prefixes и --exclude-prefixes в run_corpus.py с self-test, затем прогон css/css-flexbox (около 1432 id) и таблица кластеров в docs/wpt-vendor-notes/css.md. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-03 (ветка `p2-wpt-run14-s1`): `--prefixes`/`--exclude-prefixes` в `run_corpus.py` (точное покрытие выбранных id: shard = префикс каталога, смешанный каталог режется до подкаталогов, файлы смешанного каталога — один `(bare)`-шард; фильтр записывается в `state.json`, `--resume` с другим фильтром отказывает; `score_audit.py`/`type_audit.py` читают фильтр из `state.json`; 8 проверок в `--selftest`). Прогон `css/css-flexbox`: 1395 automatable id, 30.28 % (422.47), 95 с на сборке `dev-release`; reftest 287 из 997, testharness 108.47 из 368, crashtest 27 из 27, 3 print-reftest без исполнителя. 1012 id упали; разнесены в 12 записей (BUG-1249…BUG-1260, `FLEX-BASELINE`, `FLEX-VWM`), таблица — `docs/wpt-vendor-notes/css.md` §css-flexbox. 487 id (671 сабтест) остались в «прочем» без первопричины — не разобраны, см. там же."
-      },
-      {
-       "id": "WPT-RUN-14-S2",
-       "title": "WPT-RUN-14-S2: css-writing-modes",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон css/css-writing-modes (около 1383 id) через run_corpus --prefixes, кластеры провалов и записи в очереди P1, P3 и P4. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S3",
-       "title": "WPT-RUN-14-S3: css-ui",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон css/css-ui (около 1356 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S4",
-       "title": "WPT-RUN-14-S4: css-break",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон css/css-break (около 1178 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S5",
-       "title": "WPT-RUN-14-S5: css-transforms",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон css/css-transforms (около 940 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S6",
-       "title": "WPT-RUN-14-S6: css-backgrounds",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон css/css-backgrounds (около 955 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S7",
-       "title": "WPT-RUN-14-S7: css-grid часть 1",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон первой половины css/css-grid (abspos, alignment, animation, grid-definition, grid-items и файлы в корне, около 1000 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S8",
-       "title": "WPT-RUN-14-S8: css-grid часть 2",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон второй половины css/css-grid (grid-lanes, grid-model, layout-algorithm, parsing, placement, subgrid и др., около 1220 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S9",
-       "title": "WPT-RUN-14-S9: css-text часть 1",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон первой половины css/css-text (подкаталоги от animations до text-align и файлы в корне, около 1040 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-14-S10",
-       "title": "WPT-RUN-14-S10: css-text часть 2",
-       "status": "planned",
-       "size": "S",
-       "note": "Прогон второй половины css/css-text (подкаталоги от text-autospace до writing-system, около 870 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-7-S1",
-       "title": "WPT-RUN-7-S1: baseline fenced-frame",
-       "status": "planned",
-       "size": "S",
-       "note": "Baseline expectations для категории fenced-frame: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-7-S2",
-       "title": "WPT-RUN-7-S2: baseline webrtc",
-       "status": "planned",
-       "size": "S",
-       "note": "Baseline expectations для категории webrtc: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-7-S3",
-       "title": "WPT-RUN-7-S3: baseline upgrade-insecure-requests и html-ruby-extensions",
-       "status": "planned",
-       "size": "S",
-       "note": "Baseline expectations для категорий upgrade-insecure-requests и html-ruby-extensions: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-7-S4",
-       "title": "WPT-RUN-7-S4: baseline WebCryptoAPI",
-       "status": "planned",
-       "size": "S",
-       "note": "Baseline expectations для категории WebCryptoAPI; если прогон дольше часа, делится по подкаталогам. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-7-S5",
-       "title": "WPT-RUN-7-S5: baseline permissions-policy и encrypted-media",
-       "status": "planned",
-       "size": "S",
-       "note": "Baseline expectations для категорий permissions-policy и encrypted-media: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
-      },
-      {
-       "id": "WPT-RUN-7-S6",
-       "title": "WPT-RUN-7-S6: baseline пяти подкатегорий html",
-       "status": "planned",
-       "size": "S",
-       "note": "Baseline expectations для html/anonymous-iframe, html/capability-delegation, html/user-activation, html/cross-origin-embedder-policy и html/cross-origin-opener-policy. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
       }
      ]
     },
@@ -5805,7 +5652,7 @@
     {
      "id": "CSSOM",
      "title": "CSSOM: объектная модель стилей",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка «CSSOM: объектная модель стилей» (владелец — P1, поставлена в очередь `STATUS-P1.md` 2026-08-28 после блока SPLIT), заведена 2026-08-28 по решению пользователя переклассифицировать зонтичные записи BUGS.md, которые описывают не дефект реализованного кода, а никогда не реализованную функциональность. Четыре записи (BUG-471/484/472/493) заведены 2026-08-02 в ходе WPT-RUN-3 и с тех пор не чинились, а ПОПОЛНЯЛИСЬ: их «срезы» — не куски работы, а прогоны категорий WPT, каждый из которых заново упирался в ту же дыру (у BUG-484 таких прогонов 16, у BUG-472 — 9). Файлы `bugs/BUG-NNN-OPEN.md` остаются на месте и служат детальной записью наблюдений (переименование порвало бы ссылки из CLAUDE.md, STATUS-файлов и питон-тулинга); что меняется — владение и очередь: это задачи фазы, а не строки для P3, который берёт баги по одному. Порядок внутри дорожки: CSSOM-1 (объекты) → CSSOM-2 (inline style) → CSSOM-3 (покрытие чтения) → CSSOM-4 (актуальность чтения); первые две дают классы и парсер, на которые опираются вторые две",
      "tasks": [
       {
@@ -5902,9 +5749,9 @@
       {
        "id": "CSSOM-9-S1",
        "title": "CSSOM-9-S1: sticky-инсеты в getComputedStyle",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Resolved value процентных инсетов position: sticky от ближайшего scrollport в resolved_geometry.rs (сейчас ветка Sticky пустая). Готово, когда getComputedStyle-sticky-pos-percent.html переходит из FAIL в PASS и есть юнит-тест. Бриф [docs/tasks/CSSOM-9-S1.md](docs/tasks/CSSOM-9-S1.md)",
+       "note": "**Сделано 2026-10-03 (P1, ветка `p1-cssom9-s1`):** `GeomCtx::scrollport` — padding box ближайшего предка со scroll-контейнером (`overflow` hidden/scroll/auto на любой оси), иначе вьюпорт; ветка `Sticky` в `apply_used_geometry` резолвит `%`-инсеты от него (`auto` остаётся `auto`). Основание — scrollport по css-overflow, а не content box из брифа (в WPT-кейсе совпадают). `getComputedStyle-sticky-pos-percent.html` FAIL→PASS (`.ini` снят), у `getComputedStyle-insets-sticky-container-for-abspos.html` −72 регрессий подтестов «Relative lengths»; юнит-тест `resolved_sticky_percent_insets_use_the_scrollport`. Исходная постановка: resolved value процентных инсетов position: sticky от ближайшего scrollport в resolved_geometry.rs. Готово, когда getComputedStyle-sticky-pos-percent.html переходит из FAIL в PASS и есть юнит-тест. Бриф [docs/tasks/CSSOM-9-S1.md](docs/tasks/CSSOM-9-S1.md)",
        "bugs": [
         "BUG-472"
        ]
@@ -5912,9 +5759,9 @@
       {
        "id": "CSSOM-9-S2",
        "title": "CSSOM-9-S2: fixed под transform в getComputedStyle",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Containing block position: fixed под предком с transform в resolved_geometry.rs (сейчас всегда вьюпорт) и used-значения auto-инсетов для такого CB. Критерий: юнит-тест по геометрии container-for-fixed из WPT, сам WPT-файл пока в TIMEOUT. Бриф [docs/tasks/CSSOM-9-S2.md](docs/tasks/CSSOM-9-S2.md)",
+       "note": "**Сделано 2026-10-04 (P1, ветка `p1-cssom9-s2`):** `GeomCtx::fixed_cb` — padding box ближайшего предка, создающего containing block для fixed-потомков (`transform`/`translate`/`rotate`/`scale`, `perspective`, `filter`, `backdrop-filter`, `contain: layout|paint`, `will-change` с ними), иначе вьюпорт; `containing_block` для `Fixed` берёт его, `%`-инсеты резолвятся от него, `auto`-инсеты отдаются used px (противоположная сторона задана — по CSS 2.1 §10.6.4, а не из `rect`: раскладка по-прежнему ставит fixed-бокс относительно вьюпорта, это отдельный дефект раскладки, не закрыт). Юнит-тест `resolved_fixed_insets_use_transformed_ancestor_padding_box` повторяет `#container-for-fixed`. Бриф [docs/tasks/CSSOM-9-S2.md](docs/tasks/CSSOM-9-S2.md)",
        "bugs": [
         "BUG-472"
        ]
@@ -5924,7 +5771,7 @@
     {
      "id": "SPLIT",
      "title": "SPLIT: разрезание монолитов",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка «разрезание монолитных файлов» (владелец — P1, заведена 2026-08-23 по итогам аудита здоровья кода). В workspace 15 файлов .rs >2000 строк, шесть >19000 (style.rs ~38k, shell/main.rs 29823, box_tree.rs 22551, renderer.rs 20919, display_list.rs 19698, layout/lib.rs 19115); цель — свести каждый к набору файлов ≤2000 строк чисто механическим переносом модулей без изменения поведения, pub-API и serde-поверхности (ADR-008 snapshots). Нарезка на батчи, анкеры регионов, железные правила (тесты едут с кодом, счётчик не уменьшается, #[allow]-реестр §10 обновляется тем же коммитом) и порядок по формуле «дешевизна × боль» — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md). Батчи не блокируют фичевые дорожки, но каждый резрезанный файл снимает трение со всех будущих правок этого файла",
      "tasks": [
       {
@@ -6651,9 +6498,9 @@
       {
        "id": "SPLIT-CP2",
        "title": "SPLIT-CP2: css-parser под потолок",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Механический разрез трёх файлов css-parser сверх 2000 строк: parser.rs (2021), parser/at_rules.rs (2051, домен supports в отдельный файл), parser/tests/at_rules.rs (2385, тесты Media Queries в отдельный файл). Без правок логики. Бриф [docs/tasks/SPLIT-CP2.md](docs/tasks/SPLIT-CP2.md)",
+       "note": "ЗАКРЫТ 2026-10-04 (ветка `p1-split-cp2`): три файла css-parser под потолок 2000 — `parser.rs` 2227 -> 1964 (`CssomOp` -> `parser/cssom_op.rs`, `LayerState` -> `parser/layer_state.rs`, `substitute_nesting_selector`/`expand_nesting` -> `parser/nesting_expand.rs`), `parser/at_rules.rs` 2058 -> 1654 (домен `@supports`, включая `parse_supports_rule`, -> `parser/supports.rs`), `parser/tests/at_rules.rs` 2385 -> 1392 (Media Queries -> `parser/tests/media.rs`, 86 тестов). Постановка устарела по числам (parser.rs 2021 -> 2227 за месяц) — границы сняты заново. Новые файлы без `#![allow(missing_docs)]`: долга за перенесённым кодом нет. Тестов 561 -> 561. Исходная постановка: Механический разрез трёх файлов css-parser сверх 2000 строк: parser.rs (2021), parser/at_rules.rs (2051, домен supports в отдельный файл), parser/tests/at_rules.rs (2385, тесты Media Queries в отдельный файл). Без правок логики. Бриф [docs/tasks/SPLIT-CP2.md](docs/tasks/SPLIT-CP2.md)",
        "bugs": [
         "BUG-1100"
        ]
@@ -6661,9 +6508,9 @@
       {
        "id": "SPLIT-LT1",
        "title": "SPLIT-LT1: тесты layout под потолок",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Механический разрез тестовых файлов layout сверх 2000 строк: filter_transform_snap_mask.rs (2042), layout_generation_misc.rs (2137), scroll_interaction_misc.rs (2553), style/tests/values.rs (2049). Делится по баннерам, число тестов не меняется. Бриф [docs/tasks/SPLIT-LT1.md](docs/tasks/SPLIT-LT1.md)",
+       "note": "ЗАКРЫТ 2026-10-04 (ветка `p1-split-lt1`): четыре тестовых файла layout под потолок 2000 — `tests/filter_transform_snap_mask.rs` 2184 -> 1067 (Scroll Snap L1/Overscroll/collect_snap_containers/Masking/scrollbar-gutter -> `tests/scroll_snap_masking.rs`, 1118), `tests/layout_generation_misc.rs` 2205 -> 1150 (Half-leading/multicol/::marker/list-style-position/float+clear/margin collapsing/intrinsic sizing -> `tests/half_leading_columns_floats.rs`, 1056), `tests/scroll_interaction_misc.rs` 2553 -> 1142 (Scroll container/text-wrap balance/find_scroll_container/view-transition/overscroll/BUG-728 -> `tests/scroll_container.rs`, 1412), `style/tests/values.rs` 2080 -> 1502 (`attr()`/`@function`/`@mixin`/scrollbar-gutter/overflow-anchor -> `style/tests/attr_mixins_scroll.rs`, 584). Числа брифа устарели (файлы выросли), точки разреза взяты по баннерам заново. Два общих хелпера стали `pub(super)` с явным `use` у читателя (`first_inline_run_frag`, `twrap_line_count`). Тестов 644 -> 644. Строки `scroll_interaction_misc.rs` и `style/tests/values.rs` убраны из `file-size-baseline.tsv`. `tests/table_grid_presentational.rs` (2293) остаётся над потолком — вне брифа. Бриф [docs/tasks/SPLIT-LT1.md](docs/tasks/SPLIT-LT1.md)",
        "bugs": [
         "BUG-1100"
        ]
@@ -6671,9 +6518,9 @@
       {
        "id": "SPLIT-LB11",
        "title": "SPLIT-LB11: layout_dispatch.rs под потолок",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Механический разрез box_tree/layout_dispatch.rs (2050): lay_out_cache_checked и finalize_block_height переезжают в box_tree/layout_cache.rs, dispatch_box не дробится. Полный графический прогон без дельт. Бриф [docs/tasks/SPLIT-LB11.md](docs/tasks/SPLIT-LB11.md)",
+       "note": "ЗАКРЫТ 2026-10-04 (ветка `p1-split-lb11`): `box_tree/layout_dispatch.rs` 2127 -> 1810 (число брифа 2050 устарело). `lay_out_cache_checked` (кэш результата раскладки, BUG-341 S36) и `finalize_block_height` вместе с единственным потребителем `replaced_percent_height_as_auto` переехали в `box_tree/layout_cache.rs` (326) байт в байт; `dispatch_box` не тронут. Видимость: `lay_out_cache_checked` и `lay_out_inner` -> `pub(super)`, импорты `finalize_block_height` в `block_flow_trampoline.rs`/`multicol_trampoline.rs` переведены на `layout_cache`. Бриф [docs/tasks/SPLIT-LB11.md](docs/tasks/SPLIT-LB11.md)",
        "bugs": [
         "BUG-1100"
        ]
@@ -6681,29 +6528,9 @@
       {
        "id": "SPLIT-PT1",
        "title": "SPLIT-PT1: paint под потолок",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Механический разрез paint: paint/src/lib.rs (2189, mod multi_font_tests в отдельный файл), display_list/tests/text_and_images.rs (2008), display_list/tests/anim_and_chrome.rs (2009). Без правок логики. Бриф [docs/tasks/SPLIT-PT1.md](docs/tasks/SPLIT-PT1.md)",
-       "bugs": [
-        "BUG-1100"
-       ]
-      },
-      {
-       "id": "SPLIT-JS8",
-       "title": "SPLIT-JS8: lumen-js под потолок",
-       "status": "planned",
-       "size": "M",
-       "note": "Механический разрез lumen-js: svg.rs (2742, tests_v8 в отдельный файл, raw-кусок SVG_SHIM в shim/svg_shim_head.js через include_str!), install/dom_core.rs (2069), dom/tests/v8_perf_observers.rs (2352), dom/tests/v8_ws_sse.rs (2162), по возможности canvas2d.rs (2002). Бриф [docs/tasks/SPLIT-JS8.md](docs/tasks/SPLIT-JS8.md)",
-       "bugs": [
-        "BUG-1100"
-       ]
-      },
-      {
-       "id": "SPLIT-ST19",
-       "title": "SPLIT-ST19: тесты shell под потолок",
-       "status": "planned",
-       "size": "S",
-       "note": "Механический разрез тестов shell сверх 2000 строк: tests/scripts_and_frames.rs (2220), tests/chrome_incremental.rs (2122), tests/bug341_census.rs (2104). Продакшн shell не трогается до закрытия BUG-935. Бриф [docs/tasks/SPLIT-ST19.md](docs/tasks/SPLIT-ST19.md)",
+       "note": "ЗАКРЫТ 2026-10-04 (ветка `p1-split-pt1`): три файла paint под потолок 2000 — `paint/src/lib.rs` 2202 -> 1362 (`mod multi_font_tests` -> `multi_font_tests.rs`, 841), `display_list/tests/text_and_images.rs` 2008 -> 1665 (`<img>`/lazy/`<video>`/`user-select` -> `tests/images_media.rs`, 350), `tests/anim_and_chrome.rs` 2236 -> 1391 (BoxModelOverlay/MaskMode/scroll/print/CrossFade -> `tests/chrome_overlays_print.rs`, 850). Числа брифа устарели. Тела байт в байт; число `#[test]` 284 -> 284, `lumen-paint --lib` 1325 ok. Видимость: `BODY_RESET` -> `pub(super)`.",
        "bugs": [
         "BUG-1100"
        ]
@@ -7290,9 +7117,9 @@
       {
        "id": "GAP-ANCHORCSSOM-S1",
        "title": "GAP-ANCHORCSSOM-S1: грамматика anchor()/anchor-size()",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Грамматика anchor() и anchor-size() в парсере layout: порядок имени и стороны через &&, стороны inside/outside/self-start/self-end, anchor-size(--a width) без запятой (сейчас валидный CSS не разбирается и на пути layout). Без calc() и position-area. Бриф [docs/tasks/GAP-ANCHORCSSOM-S1.md](docs/tasks/GAP-ANCHORCSSOM-S1.md)",
+       "note": "ВЫПОЛНЕН 2026-10-03 (P1, ветка `p1-gap-anchorcssom-s1`): `anchor(<name> && <side>)` в любом порядке, стороны `inside`/`outside` (по стороне самого инсета, `is_end_edge`) и `self-start`/`self-end` (как `start`/`end` — горизонтальный ltr), `anchor-size(<name> && <size>, <fallback>?)` через пробел, повтор компонента и старая форма `anchor-size(--a, width)` → невалидно; fallback `anchor-size()` теперь применяется (`resolve_anchor_size_or_fallback`). Исходная постановка: грамматика anchor() и anchor-size() в парсере layout: порядок имени и стороны через &&, стороны inside/outside/self-start/self-end, anchor-size(--a width) без запятой (сейчас валидный CSS не разбирается и на пути layout). Без calc() и position-area. Бриф [docs/tasks/GAP-ANCHORCSSOM-S1.md](docs/tasks/GAP-ANCHORCSSOM-S1.md)",
        "bugs": [
         "BUG-563"
        ]
@@ -7300,9 +7127,9 @@
       {
        "id": "GAP-ANCHORCSSOM-S2",
        "title": "GAP-ANCHORCSSOM-S2: CSSOM anchor() без calc",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "element.style для anchor() и anchor-size() верхнего уровня через настоящий парсер и канонический сериализатор (canonical_specified_anchor), невалидное значение отвергается. Цель: меньше FAIL в css/css-anchor-position/anchor-parse-* и anchor-size-parse-*, остаток с calc() идёт в S3. Зависит от S1. Бриф [docs/tasks/GAP-ANCHORCSSOM-S2.md](docs/tasks/GAP-ANCHORCSSOM-S2.md)",
+       "note": "ВЫПОЛНЕН 2026-10-03 (P1, ветка `p1-gap-anchorcssom-s2`): `canonical_specified_anchor` (`style/parse/box_sides.rs`) разбирает значение парсерами S1 и сериализует `anchor(<имя> <сторона>, <fallback>)` / `anchor-size(<имя> <размер>, <fallback>)` — имя первым, fallback через `, ` (`0` → `0px`), имя функции без учёта регистра; невалидное отвергается. Натив `_lumen_css_canonical_anchor` зовётся из `_lumen_canonicalize_longhand` (инсеты — оба вида, margin и размеры — только `anchor-size()`, padding — ни один) и из shorthand-канонизаторов `inset`/`margin`/`inset-block|inline`/`margin-block|inline`; токенизация shorthand'ов теперь не рвёт значение по пробелам внутри скобок (заодно заработал `margin: calc(1px + 2px)`). WPT `css/css-anchor-position` (подтесты с FAIL, до → после): `anchor-parse-valid` 2359 → 1206, `anchor-size-parse-valid` 3462 → 1757 (по `run_smoke.py` базового и нового бинаря), `*-invalid` 1 → 1 (`font-size` не имеет грамматики в shim); в `.ini` после — 1206/1/1493/1 (`--update-expected` и `--check` только по этим четырём файлам: `.ini` остальных тестов категории давно разошёлся с движком, полный `--update-expected` затёр бы комментарии с номерами багов в ~200 файлах). Остаток: вложенный `anchor()`/`anchor-size()` в fallback (~1300 подтестов, S4), `calc()`/`min()`/`max()` в стороне и в дереве (S3), неявный размер `anchor-size()` / `anchor-size(--foo)` / `anchor-size(10px)` (8 подтестов — `AnchorSizeFunc::dimension` обязателен). Исходная постановка: element.style для anchor() и anchor-size() верхнего уровня через настоящий парсер и канонический сериализатор (canonical_specified_anchor), невалидное значение отвергается. Цель: меньше FAIL в css/css-anchor-position/anchor-parse-* и anchor-size-parse-*, остаток с calc() идёт в S3. Зависит от S1. Бриф [docs/tasks/GAP-ANCHORCSSOM-S2.md](docs/tasks/GAP-ANCHORCSSOM-S2.md)",
        "bugs": [
         "BUG-563"
        ]
@@ -7310,23 +7137,23 @@
       {
        "id": "TOUCH-1-S3",
        "title": "TOUCH-1-S3: JS-диспатч касаний",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "JS-диспатч касаний: необязательные pointerType, pointerId и isPrimary у _lumen_dispatch_pointer_event (по умолчанию mouse) и новый _lumen_dispatch_touch_event, который собирает Touch, TouchList и TouchEvent. ontouch* и maxTouchPoints не трогаются, их включение ждёт решения по S5. Бриф [docs/tasks/TOUCH-1-S3.md](docs/tasks/TOUCH-1-S3.md)"
+       "note": "**Сделано 2026-10-04 (P1, ветка `p1-touch1-s3`):** `_lumen_dispatch_pointer_event` принимает необязательные `pointerId, pointerType, isPrimary, width, height, pressure` (по умолчанию мышь; доходят до coalesced/predicted), `_lumen_dispatch_touch_event` собирает `Touch`/`TouchList`/`TouchEvent` из дескрипторов и возвращает результат `dispatchEvent`; три V8-теста. Исходная постановка: JS-диспатч касаний: необязательные pointerType, pointerId и isPrimary у _lumen_dispatch_pointer_event (по умолчанию mouse) и новый _lumen_dispatch_touch_event, который собирает Touch, TouchList и TouchEvent. ontouch* и maxTouchPoints не трогаются, их включение ждёт решения по S5. Бриф [docs/tasks/TOUCH-1-S3.md](docs/tasks/TOUCH-1-S3.md)"
       },
       {
        "id": "TOUCH-1-S4",
        "title": "TOUCH-1-S4: трекер касаний в shell",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Чистый TouchTracker в crates/shell/src/touch_state.rs: активные касания, первичный указатель, pointerId начиная со 2, центроид и расстояние двух пальцев. Только юнит-тесты, к окну не подключается (это S5). Бриф [docs/tasks/TOUCH-1-S4.md](docs/tasks/TOUCH-1-S4.md)"
+       "note": "**Сделано 2026-10-04 (P1, ветка `p1-touch1-s4`):** `TouchTracker::on_touch` в `touch_state.rs` (Down/Move/Up/Cancel, pointerId с 2 без повторного использования, первичный указатель, `centroid()`/`distance()`), 10 юнит-тестов, к окну не подключён (S5). Исходная постановка: Чистый TouchTracker в crates/shell/src/touch_state.rs: активные касания, первичный указатель, pointerId начиная со 2, центроид и расстояние двух пальцев. Только юнит-тесты, к окну не подключается (это S5). Бриф [docs/tasks/TOUCH-1-S4.md](docs/tasks/TOUCH-1-S4.md)"
       },
       {
        "id": "GAP-SOFTNAV-S1",
        "title": "GAP-SOFTNAV-S1: синхронная детекция soft navigation",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Синхронная атрибуция мягкой навигации: доверенный click или keydown, внутри него pushState и вставка узла, на ближайшем rAF вызов _lumen_deliver_soft_nav, плюс soft-navigation в supportedEntryTypes. Без промисов и таймеров (S2) и без LCP (S3). Бриф [docs/tasks/GAP-SOFTNAV-S1.md](docs/tasks/GAP-SOFTNAV-S1.md)",
+       "note": "**Сделано 2026-10-04 (P1, ветка `p1-gap-softnav-s1`):** блок `_sn_*` в конце `web_api_shim_tail.js` оборачивает только shell-овские `_lumen_dispatch_mouse_event`/`_lumen_dispatch_key_event`/`_lumen_dispatch_bubble` (click/keydown) — собственный `dispatchEvent` страницы контекст не открывает; внутри него `pushState`/`replaceState` со сменой URL (`_sn_note_url` из `history`) и первая вставка в присоединённый документ (`appendChild`/`insertBefore`/`innerHTML =`), на ближайшем rAF при присоединённом узле с ненулевым боксом — одна запись через `_lumen_deliver_soft_nav`; `'soft-navigation'` в `_PERF_SUPPORTED_ENTRY_TYPES`. WPT `soft-navigation-heuristics`: `supported-entry-types.window.html` FAIL→PASS, `smoke/tentative/basic.html` ERROR→OK (оба сабтеста PASS), `almost-soft-navigation.html` ERROR→OK (4/4), `dom.html` innerHTML/appendChild/insertBefore PASS; baseline обновлён. Остаток — S2 (промисы/таймеры: `task-attribution*`, `dom.html` innerText/`textContent`), S3 (LCP/ICP), S4 (`navigationId`). Синхронная атрибуция мягкой навигации: мягкой навигации: доверенный click или keydown, внутри него pushState и вставка узла, на ближайшем rAF вызов _lumen_deliver_soft_nav, плюс soft-navigation в supportedEntryTypes. Без промисов и таймеров (S2) и без LCP (S3). Бриф [docs/tasks/GAP-SOFTNAV-S1.md](docs/tasks/GAP-SOFTNAV-S1.md)",
        "bugs": [
         "BUG-678"
        ]
@@ -8491,13 +8318,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1251": {
-   "status": "open",
-   "title": "Статическая позиция `position:absolute` ребёнка flex-контейнера (CSS Flexbox L1 §4.1) не учитывает `justify-content`/`align-items`/`align-self`/`align-content`…",
-   "component": "layout (`crates/engine/layout/src/box_tree/flex.rs` — статическая позиция абсолютно позиционированного ребёнка flex-контейнера)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1252": {
    "status": "open",
    "title": "`offsetLeft`/`offsetTop` элемента, чей `offsetParent` — `<body>`, отсчитываются от border-box тела (с учётом его `margin` 8 px), а CSSOM View §5 велит мерить от…",
@@ -8540,24 +8360,45 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1257": {
-   "status": "open",
-   "title": "`align-items/align-self: baseline` / `first baseline` / `last baseline` во flex не реализованы: в `flex.rs` нет ни одного упоминания baseline, элементы с разным…",
-   "component": "layout (`crates/engine/layout/src/box_tree/flex.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1258": {
-   "status": "open",
-   "title": "Flex-контейнер с вертикальным `writing-mode` (`vertical-rl`/`vertical-lr`/`sideways-*`) раскладывается как горизонтальный: главная ось `row` остаётся горизонтал…",
-   "component": "layout (`crates/engine/layout/src/box_tree/flex.rs`, `vertical_trampoline.rs`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1259": {
    "status": "open",
    "title": "`flex-wrap: balance` и `flex-line-count` (CSS Flexbox L2, `#algo-balance`) не реализованы: `enum FlexWrap` знает только `nowrap`/`wrap`/`wrap-reverse` (слово `b…",
    "component": "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — `FlexWrap`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1262": {
+   "status": "open",
+   "title": "`margin-top` первого flex-/grid-элемента схлопывается с полями предков контейнера: цепочка первых детей в `collapsed_top_margin` проходит сквозь `display: flex`…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`, `collapsed_top_margin`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1264": {
+   "status": "open",
+   "title": "flex-элементы с `writing-mode`, ортогональным контейнеру, считаются неверно. Сделано в FLEX-VWM-2: перенос вертикального текста по inline-size (колонки), flex-о…",
+   "component": "layout (`crates/engine/layout/src/box_tree/flex.rs`, `intrinsic.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1266": {
+   "status": "open",
+   "title": "`deep_grid_chain_lays_out_without_overflowing_the_stack` падает `STATUS_STACK_OVERFLOW` (0xc00000fd) и валит весь `cargo test -p lumen-layout --lib` (scoped-tes…",
+   "component": "layout (`crates/engine/layout/src/box_tree/tests/grid_trampoline.rs`, `box_tree/grid_trampoline.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1267": {
+   "status": "open",
+   "title": "`/acid/acid3/numbered-tests.html` раздувает один процесс `lumen` до ~25 ГБ RSS за ~60 с (свободная RAM 32-ГБ машины падает до 0.03 ГБ), тест заканчивается TIMEO…",
+   "component": "js/dom (не локализовано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1268": {
+   "status": "open",
+   "title": "Тест, открывающий `blob:`-навигацию (`FileAPI/url/url-in-tags-revoke.window.html`, `FileAPI/BlobURL/cross-partition.https.html`), роняет навигацию СЛЕДУЮЩЕГО те…",
+   "component": "shell / bidi-server (навигация верхнего контекста после `blob:`/`window.open`, не локализовано)",
    "date": null,
    "debtor": false
   },
@@ -15959,6 +15800,48 @@
    "component": "layout / css-parser (`@color-profile`, `color()`)",
    "date": "2026-10-03",
    "debtor": false
+  },
+  "BUG-1261": {
+   "status": "fixed",
+   "title": "`translate_subtree` (быстрый путь «чистое поддерево переехало») двигал только `rect`: `svg_paint_matrix` и содержимое `<mask>` SVG-фигур оставались на старом ме…",
+   "component": "layout (`crates/engine/layout/src/incremental.rs` — `translate_subtree`)",
+   "date": "2026-10-03",
+   "debtor": false
+  },
+  "BUG-1257": {
+   "status": "fixed",
+   "title": "`align-items/align-self: baseline` / `first baseline` / `last baseline` во flex: модель базовой линии бокса (текст, ряд atomic inline, вложенный flex, блок, кон…",
+   "component": "layout (`crates/engine/layout/src/box_tree/baseline.rs`, `flex_trampoline.rs`)",
+   "date": "2026-10-04",
+   "debtor": false
+  },
+  "BUG-1258": {
+   "status": "fixed",
+   "title": "Flex-контейнер с вертикальным `writing-mode` раскладывался как блок/горизонтальный, `direction: rtl` и `*-reverse` с `justify-content: flex-start` клали элемент…",
+   "component": "layout (`crates/engine/layout/src/box_tree/flex.rs`, `flex_trampoline.rs`, `layout_dispatch.rs`, `style/logical.rs`)",
+   "date": "2026-10-04",
+   "debtor": false
+  },
+  "BUG-1251": {
+   "status": "fixed",
+   "title": "Статическая позиция `position:absolute` ребёнка flex-контейнера (CSS Flexbox L1 §4.1) не учитывала `justify-content`/`align-items`/`align-self`: бокс всегда леж…",
+   "component": "layout (`crates/engine/layout/src/box_tree/flex_trampoline.rs` — `align_abs_static_positions`)",
+   "date": "2026-10-04",
+   "debtor": false
+  },
+  "BUG-1263": {
+   "status": "fixed",
+   "title": "В блоке с `writing-mode: vertical-rl`/`vertical-lr` строка `inline-block`-ов раскладывается горизонтально, `<br>` не начинает новую колонку: вертикально течёт т…",
+   "component": "layout (`crates/engine/layout/src/vertical.rs`, `box_tree/layout_dispatch.rs` — `InlineBlockRow` в вертикальном режиме)",
+   "date": "2026-10-04",
+   "debtor": false
+  },
+  "BUG-1265": {
+   "status": "fixed",
+   "title": "`AlignValue` склеивает `start`/`flex-start`/`self-start`: FLEX-VWM развёл `start`/`end` и `flex-*` флагами `ContentAlignExtra`, но `self-start`/`self-end` (отно…",
+   "component": "layout (`crates/engine/layout/src/style/values/flexgrid.rs`, `box_tree/flex_trampoline.rs`)",
+   "date": "2026-10-04",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -17029,6 +16912,9 @@
   "js/dom (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — `[nid, offset]` без перепривязки)": [
    "BUG-1232"
   ],
+  "js/dom (не локализовано)": [
+   "BUG-1267"
+  ],
   "js/layout (`crates/engine/layout/src/style/syntax_string.rs`, `crates/js/src/css_properties_values_api.rs`)": [
    "BUG-531"
   ],
@@ -17197,8 +17083,14 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738"
   ],
+  "layout (`crates/engine/layout/src/box_tree/baseline.rs`, `flex_trampoline.rs`)": [
+   "BUG-1257"
+  ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`, `collapsed_bottom_margin`; `block_flow_trampoline.rs`; `box_tree/types.rs` — `BoxRole`/`PseudoKind`)": [
    "BUG-1026"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`, `collapsed_top_margin`)": [
+   "BUG-1262"
   ],
   "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`)": [
    "BUG-1103"
@@ -17218,7 +17110,13 @@
   "layout (`crates/engine/layout/src/box_tree/flex.rs` — распределение свободного места при сумме `flex-grow`/`flex-shrink` < 1)": [
    "BUG-1260"
   ],
-  "layout (`crates/engine/layout/src/box_tree/flex.rs` — статическая позиция абсолютно позиционированного ребёнка flex-контейнера)": [
+  "layout (`crates/engine/layout/src/box_tree/flex.rs`, `flex_trampoline.rs`, `layout_dispatch.rs`, `style/logical.rs`)": [
+   "BUG-1258"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/flex.rs`, `intrinsic.rs`)": [
+   "BUG-1264"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/flex_trampoline.rs` — `align_abs_static_positions`)": [
    "BUG-1251"
   ],
   "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)": [
@@ -17251,11 +17149,17 @@
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::abs_box_shrinks_to_fit`)": [
    "BUG-1047"
   ],
+  "layout (`crates/engine/layout/src/box_tree/tests/grid_trampoline.rs`, `box_tree/grid_trampoline.rs`)": [
+   "BUG-1266"
+  ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
   "layout (`crates/engine/layout/src/incremental.rs` — `graft_geometry_with_cascade`, `segments_eq`)": [
    "BUG-1245"
+  ],
+  "layout (`crates/engine/layout/src/incremental.rs` — `translate_subtree`)": [
+   "BUG-1261"
   ],
   "layout (`crates/engine/layout/src/invariants.rs`)": [
    "BUG-1001"
@@ -17326,6 +17230,12 @@
   ],
   "layout (`crates/engine/layout/src/style/substitute.rs::expand_custom_functions_scoped`, `style/cascade.rs::shadow_function_chain`)": [
    "BUG-519"
+  ],
+  "layout (`crates/engine/layout/src/style/values/flexgrid.rs`, `box_tree/flex_trampoline.rs`)": [
+   "BUG-1265"
+  ],
+  "layout (`crates/engine/layout/src/vertical.rs`, `box_tree/layout_dispatch.rs` — `InlineBlockRow` в вертикальном режиме)": [
+   "BUG-1263"
   ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
@@ -17875,6 +17785,9 @@
   ],
   "shell (навигация)": [
    "BUG-308"
+  ],
+  "shell / bidi-server (навигация верхнего контекста после `blob:`/`window.open`, не локализовано)": [
+   "BUG-1268"
   ],
   "shell+font": [
    "BUG-170"

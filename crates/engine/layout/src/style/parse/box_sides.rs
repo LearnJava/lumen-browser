@@ -11,6 +11,7 @@
 use lumen_core::geom::Size;
 
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
+use crate::style::values::length::split_top_level_ws;
 use crate::style::{
     BorderStyle, BreakValue, ComputedStyle, CssColor, Length, LengthOrAuto, OutlineColor,
     OutlineStyle, OverscrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis,
@@ -545,7 +546,8 @@ pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {
 /// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
 /// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
 pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
-    let tokens: Vec<&str> = val.split_whitespace().collect();
+    // Top-level split: a colour like `rgba(0, 0, 255, 0.5)` is one token.
+    let tokens = split_top_level_ws(val);
     for tok in &tokens {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             style.border_top_width = v;
@@ -577,7 +579,7 @@ pub(in crate::style) fn apply_border_side_shorthand(
     viewport: Size,
     is_quirks: bool,
 ) {
-    for tok in val.split_whitespace() {
+    for tok in split_top_level_ws(val) {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             *width = v;
         } else if is_border_style_kw(tok) {
