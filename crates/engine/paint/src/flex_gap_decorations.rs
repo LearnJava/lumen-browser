@@ -17,6 +17,7 @@
 //! Работает с теми же `GridGapParams`/`GridGapGeometry`, что и grid-ветка.
 
 use lumen_core::geom::{Rect, Size};
+use lumen_layout::style::WritingMode;
 use lumen_layout::{
     AlignValue, BorderStyle, Direction, FlexDirection, FlexWrap, LayoutBox, RuleBreak, RuleInset, RuleInsets,
     RuleList,
@@ -65,7 +66,7 @@ type Endpoint = Option<(f32, f32)>;
 type ItemExtent = ((f32, f32), (f32, f32));
 
 /// Протяжённости margin-box ребёнка: `(по главной оси, по поперечной)`.
-fn item_extents(c: &LayoutBox, row_dir: bool, cw: f32, vp: Size) -> ItemExtent {
+fn item_extents(c: &LayoutBox, hmain: bool, cw: f32, vp: Size) -> ItemExtent {
     let s = &c.style;
     let em = s.font_size;
     let ml = s.margin_left.resolve_or_zero(em, cw, vp);
@@ -78,7 +79,7 @@ fn item_extents(c: &LayoutBox, row_dir: bool, cw: f32, vp: Size) -> ItemExtent {
     let ordered = |a: f32, b: f32| (a.min(b), b);
     let (x0, x1) = ordered(c.rect.x - ml, c.rect.x + c.rect.width + mr);
     let (y0, y1) = ordered(c.rect.y - mt, c.rect.y + c.rect.height + mb);
-    if row_dir {
+    if hmain {
         ((x0, x1), (y0, y1))
     } else {
         ((y0, y1), (x0, x1))
@@ -87,8 +88,8 @@ fn item_extents(c: &LayoutBox, row_dir: bool, cw: f32, vp: Size) -> ItemExtent {
 
 /// Группирует детей во flex-строки (по возрастанию поперечной координаты) и находит щели
 /// главной оси каждой строки.
-fn collect_lines(children: &[&LayoutBox], row_dir: bool, wrap: bool, main_gap: f32, cw: f32, vp: Size) -> Vec<FlexLine> {
-    let mut items: Vec<ItemExtent> = children.iter().map(|c| item_extents(c, row_dir, cw, vp)).collect();
+fn collect_lines(children: &[&LayoutBox], hmain: bool, wrap: bool, main_gap: f32, cw: f32, vp: Size) -> Vec<FlexLine> {
+    let mut items: Vec<ItemExtent> = children.iter().map(|c| item_extents(c, hmain, cw, vp)).collect();
     items.sort_by(|a, b| a.1 .0.partial_cmp(&b.1 .0).unwrap_or(std::cmp::Ordering::Equal));
     let mut groups: Vec<Vec<ItemExtent>> = Vec::new();
     // Верх и низ текущей строки; элемент нулевой высоты (пустой `div`) начинает новую строку
@@ -162,8 +163,14 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     let wrap = s.flex_wrap != FlexWrap::Nowrap;
     let rtl = s.direction == Direction::Rtl;
     let (main_gap, cross_gap) = if row_dir { (p.col_gap, p.row_gap) } else { (p.row_gap, p.col_gap) };
+    // `flex-direction: row` идёт по инлайновой оси: в вертикальном `writing-mode` это физическая
+    // вертикаль, и тогда `column-rule` рисуется горизонтальными линиями, а `row-rule` — вертикальными
+    // (Gap Decorations L1 §2: `column-*` — по инлайновой оси, `row-*` — по блоковой). `hmain` —
+    // главная ось физически горизонтальна.
+    let vertical_wm = s.writing_mode != WritingMode::HorizontalTb;
+    let hmain = row_dir != vertical_wm;
     // Протяжённость контента: по главной оси / по поперечной.
-    let (cm, cc) = if row_dir { ((cx, cx + cw), (cy, cy + ch)) } else { ((cy, cy + ch), (cx, cx + cw)) };
+    let (cm, cc) = if hmain { ((cx, cx + cw), (cy, cy + ch)) } else { ((cy, cy + ch), (cx, cx + cw)) };
 
     let col = Axis {
         visible: p.column_visible,
@@ -181,18 +188,20 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     };
     let (main_ax, cross_ax) = if row_dir { (col, row) } else { (row, col) };
 
-    let mut lines = collect_lines(children, row_dir, wrap, main_gap, cw, vp);
+    let mut lines = collect_lines(children, hmain, wrap, main_gap, cw, vp);
     let n = lines.len();
     stretch_lines(&mut lines, s.align_content, wrap, cc, cross_gap);
 
     // §4.6: значения раздаются в порядке размещения, сквозь все строки.
+    // Откуда стартует инлайновая / блоковая ось: справа или снизу (Writing Modes L4 §3.2).
+    let inline_start_at_end = if s.writing_mode == WritingMode::SidewaysLr { !rtl } else { rtl };
+    let block_start_at_end = matches!(s.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
+    let (main_start_at_end, cross_start_at_end) =
+        if row_dir { (inline_start_at_end, block_start_at_end) } else { (block_start_at_end, inline_start_at_end) };
     let wrap_rev = s.flex_wrap == FlexWrap::WrapReverse;
-    let cross_rev = wrap_rev ^ (!row_dir && rtl);
-    let main_rev = if row_dir {
-        rtl ^ (s.flex_direction == FlexDirection::RowReverse)
-    } else {
-        s.flex_direction == FlexDirection::ColumnReverse
-    };
+    let main_reverse_kw = matches!(s.flex_direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse);
+    let cross_rev = wrap_rev != cross_start_at_end;
+    let main_rev = main_reverse_kw != main_start_at_end;
     let order: Vec<usize> = if cross_rev { (0..n).rev().collect() } else { (0..n).collect() };
     let mut next = 0;
     for &k in &order {
@@ -208,7 +217,7 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
 
     // Прямоугольник по осям (главная, поперечная) → экранный.
     let mk = |m_lo: f32, m_len: f32, c_lo: f32, c_len: f32| {
-        if row_dir {
+        if hmain {
             Rect::new(m_lo, c_lo, m_len, c_len)
         } else {
             Rect::new(c_lo, m_lo, c_len, m_len)
@@ -235,7 +244,7 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     // у щели нет стыков внутри строки. Конец у соседней строки — junction (стык с поперечной
     // линией), у края контейнера — cap. Ось главных щелей в экранных координатах идёт вдоль
     // поперечной оси flex; зеркалится она лишь у горизонтальных отрезков под `direction: rtl`.
-    let mirror_main = !row_dir && rtl;
+    let mirror_main = cross_start_at_end;
     let junction = |gap: f32, idx: usize| {
         let w = cross_ax.width(idx, cross_total);
         (cross_ax.visible && w > 0.0).then_some((gap, w))
@@ -254,7 +263,7 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             for (&(a, b), &id) in line.gaps.iter().zip(&line.ids) {
                 out.segments.push(GapSegment {
                     rect: mk(a, b - a, lo + lo_inset, len),
-                    horizontal: !row_dir,
+                    horizontal: !hmain,
                     gap: id,
                 });
             }
@@ -263,7 +272,7 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
 
     // Щели поперечной оси: между строками, на всю длину контейнера; при `intersection`
     // режутся в стыках с главными щелями соседних строк.
-    let mirror_cross = row_dir && rtl;
+    let mirror_cross = main_start_at_end;
     if cross_ax.visible {
         for g in 0..cross_total {
             let (a, b) = (&lines[g], &lines[g + 1]);
@@ -326,7 +335,7 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 }
             }
             for (from, to) in spans.into_iter().flatten() {
-                out.segments.push(GapSegment { rect: mk(from, to - from, a.hi, size), horizontal: row_dir, gap: id });
+                out.segments.push(GapSegment { rect: mk(from, to - from, a.hi, size), horizontal: hmain, gap: id });
             }
         }
     }
