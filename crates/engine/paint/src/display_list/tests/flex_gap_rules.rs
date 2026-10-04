@@ -347,3 +347,18 @@ fn grid_leading_track_before_auto_fit_keeps_its_gap() {
     let dl = build(html, "");
     assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 6.0), (0.0, 212.0, 320.0, 6.0)]);
 }
+
+/// grid-gap-decorations-033: контейнер без элементов в потоке (дети нет вовсе или только
+/// `position: absolute`) всё равно рисует правила по щелям дорожек из шаблона, даже если
+/// дорожки шире самого контейнера (`width: 50px` над тремя 50px-колонками).
+#[test]
+fn empty_grid_with_fixed_template_still_paints_gap_rules() {
+    let html = r#"<div style="display:grid;grid-template-columns:repeat(3,50px);grid-template-rows:repeat(2,50px);
+        gap:10px;width:50px;height:50px;column-rule:10px solid blue;row-rule:5px solid red"></div>"#;
+    let dl = build(html, "");
+    let cols = rules(&dl, true);
+    let rows = rules(&dl, false);
+    assert_eq!(cols.len(), 2, "{cols:?}");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(close(cols[0], (50.0, 0.0, 10.0, 110.0)), "{cols:?}");
+}
