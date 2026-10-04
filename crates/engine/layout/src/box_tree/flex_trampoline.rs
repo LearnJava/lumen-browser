@@ -2,7 +2,7 @@ use super::*;
 use super::layout_dispatch::dispatch_box;
 use super::block_flow_trampoline::{self, DispatchOutcome};
 use super::baseline::{
-    align_baseline_side, baseline_phys_side, box_baseline_or_synth, is_vertical, resolved_align, PhysSide,
+    align_baseline_side, baseline_phys_side_in_axis, box_baseline_in_axis, resolved_align, PhysSide,
 };
 
 /// Per-line state `flex::build_flex_init` precomputes (CSS Flexbox L1 §9.3
@@ -577,15 +577,15 @@ pub(super) fn own_start_is_low(s: &ComputedStyle, horizontal_axis: bool) -> bool
 /// индекс группы (`0` — прижата к началу линии стартовой раскладки, `1` — к концу)
 /// и расстояния от её начала до базовой линии и от базовой линии до конца margin
 /// box item'а. `None` — item не участвует: другое значение `align-self` (либо `auto`
-/// в поперечном поле, которое приоритетнее, CSS Flexbox §8.1), ось строк item'а не
-/// параллельна главной оси контейнера (ортогональный режим — запасное выравнивание)
-/// или поперечные поля `auto`.
+/// в поперечном поле, которое приоритетнее, CSS Flexbox §8.1) или поперечные поля
+/// `auto`. Ортогональный item (ось строк которого не совпадает с осью базовой
+/// линии) тоже участвует — с линией, синтезированной по краю border box.
 ///
 /// `cross_vertical` — поперечная ось вертикальна (главная горизонтальна): тогда
-/// базовая линия горизонтальна и участвуют items горизонтального режима, иначе —
-/// вертикального. Группа определяется краем, к которому тянется базовая линия
-/// ([`baseline_phys_side`]: `first` — начало блока самого item'а, поэтому `first
-/// baseline` бокса `vertical-rl` и `last baseline` бокса `vertical-lr` делят
+/// базовая линия горизонтальна, иначе — вертикальна (положение по x). Группа
+/// определяется краем, к которому тянется базовая линия
+/// ([`baseline_phys_side_in_axis`]: `first` — начало блока самого item'а, поэтому
+/// `first baseline` бокса `vertical-rl` и `last baseline` бокса `vertical-lr` делят
 /// группу), с обращением при `wrap-reverse`.
 ///
 /// Работает в стартовой раскладке (`finish_frame` зеркалит её для `cross_rev`):
@@ -603,9 +603,6 @@ fn cross_item_baseline(
     let (container, wrap_reverse, cross_rev, content_width) =
         (&*init.s, init.wrap_reverse, init.cross_rev, init.content_width);
     let is = &item.style;
-    if is_vertical(is) == cross_vertical {
-        return None;
-    }
     let (lo, hi, extent) = if cross_vertical {
         (&is.margin_top, &is.margin_bottom, item.rect.height)
     } else {
@@ -618,9 +615,11 @@ fn cross_item_baseline(
     let iem = is.font_size;
     let (m_lo, m_hi) = (lo.resolve_or_zero(iem, content_width, viewport), hi.resolve_or_zero(iem, content_width, viewport));
     let outer = extent + m_lo + m_hi;
-    let ascent = m_lo + box_baseline_or_synth(item, side, measurer);
+    // Линия измеряется по оси, перпендикулярной поперечной: вертикальная линия
+    // (положение по x) — когда поперечная ось горизонтальна.
+    let ascent = m_lo + box_baseline_in_axis(item, !cross_vertical, side, measurer);
     let descent = outer - ascent;
-    let phys = baseline_phys_side(is, side);
+    let phys = baseline_phys_side_in_axis(item, !cross_vertical, side);
     let flips = usize::from(wrap_reverse) + usize::from(cross_rev);
     let max_side = (phys == PhysSide::Max) != (flips % 2 == 1);
     Some(if cross_rev { (usize::from(max_side), descent, ascent) } else { (usize::from(max_side), ascent, descent) })

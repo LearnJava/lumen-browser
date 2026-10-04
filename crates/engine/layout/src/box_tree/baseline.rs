@@ -209,11 +209,31 @@ pub(crate) fn box_baseline_in_axis(
     measurer: Option<&dyn TextMeasurer>,
 ) -> f32 {
     if is_vertical(&b.style) == vertical {
-        box_baseline_or_synth(b, side, measurer)
-    } else if vertical {
-        b.rect.width / 2.0
+        return box_baseline_or_synth(b, side, measurer);
+    }
+    // Ортогональный бокс (CSS Align L3 §9.1): линия синтезируется по краю border box
+    // — `first` у начала оси (верх/лево), `last` у конца (низ/право), так бокс целиком
+    // лежит по одну сторону общей линии (WPT `flex-align-baseline-005`,
+    // `align-items-baseline-column-horz`).
+    match side {
+        BaselineSide::First => 0.0,
+        BaselineSide::Last => {
+            if vertical { b.rect.width } else { b.rect.height }
+        }
+    }
+}
+
+/// Край линии выравнивания (верх/лево или низ/право), к которому тянется базовая
+/// линия стороны `side` бокса `b` в контексте с вертикальностью `vertical`: у бокса
+/// того же режима — край начала/конца его блока ([`baseline_phys_side`]), у
+/// ортогонального — начало оси для `first` и конец для `last`.
+pub(crate) fn baseline_phys_side_in_axis(b: &LayoutBox, vertical: bool, side: BaselineSide) -> PhysSide {
+    if is_vertical(&b.style) == vertical {
+        baseline_phys_side(&b.style, side)
+    } else if side == BaselineSide::First {
+        PhysSide::Min
     } else {
-        b.rect.height
+        PhysSide::Max
     }
 }
 
@@ -337,8 +357,18 @@ pub(crate) fn flex_container_baseline(
     // 2. Крайний item линии.
     let first_visited = *line.first()?;
     let last_visited = *line.last()?;
-    let extreme = match (side, is_reverse) {
-        (BaselineSide::First, false) | (BaselineSide::Last, true) => first_visited,
+    // «Первая» базовая линия — у item'а, ближайшего к началу строки контейнера в его
+    // режиме письма, «последняя» — к концу. В горизонтальном режиме это левый (верхний)
+    // край, и `*-reverse` его меняет (визуально первый — последний в обходе); в
+    // вертикальном начало главной оси задаёт режим: справа у блоков `vertical-rl`.
+    let first_is_first_visited = if cvert {
+        let start_is_low = super::flex_trampoline::own_start_is_low(s, !is_column);
+        start_is_low != is_reverse
+    } else {
+        !is_reverse
+    };
+    let extreme = match (side, first_is_first_visited) {
+        (BaselineSide::First, true) | (BaselineSide::Last, false) => first_visited,
         _ => last_visited,
     };
     Some(origin(extreme) + box_baseline_in_axis(extreme, cvert, side, measurer))
