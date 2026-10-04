@@ -299,6 +299,10 @@ use svg_text_decoration::{emit_svg_shape, emit_svg_shape_masked, emit_svg_text, 
 #[path = "display_list/tests/text_and_images.rs"]
 mod text_and_images;
 
+#[cfg(test)]
+#[path = "display_list/tests/images_media.rs"]
+mod images_media;
+
 mod text_highlight;
 pub use text_highlight::emit_text_with_highlights;
 
@@ -325,6 +329,10 @@ mod svg_table_and_hash;
 #[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]
 mod anim_and_chrome;
+
+#[cfg(test)]
+#[path = "display_list/tests/chrome_overlays_print.rs"]
+mod chrome_overlays_print;
 
 #[cfg(test)]
 #[path = "display_list/tests/flex_gap_rules.rs"]
