@@ -113,9 +113,22 @@ pub fn emit_gap_rules(
     out
 }
 
+/// A solid rule lies on whole device pixels: both edges are rounded (a tie goes down, as
+/// Chromium snaps the reftest rules) and the line keeps at least one pixel. A fractional rect
+/// would be anti-aliased over two columns, while Chromium paints one crisp line
+/// (`css-gaps/multicol/multicol-gap-decorations-017`, flex 040/042/043/044/056/058).
+fn snap_rule_rect(rect: Rect) -> Rect {
+    let snap = |v: f32| (v - 0.5).ceil();
+    let (x0, y0) = (snap(rect.x), snap(rect.y));
+    let x1 = snap(rect.x + rect.width).max(x0 + 1.0);
+    let y1 = snap(rect.y + rect.height).max(y0 + 1.0);
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
 /// One `DrawBorder` that paints only the bottom (`horizontal`) or right side of `rect`.
 fn rule_side_border(rect: Rect, horizontal: bool, style: BorderStyle, color: Color) -> DisplayCommand {
     let none = BorderStyle::None;
+    let rect = if style == BorderStyle::Solid { snap_rule_rect(rect) } else { rect };
     if horizontal {
         // Renderer draws the bottom side at rect.y + rect.height - widths[2].
         DisplayCommand::DrawBorder {
@@ -620,6 +633,24 @@ mod tests {
         }
         // Plain styles stay a single command.
         assert_eq!(rule_line_commands(rule, true, BorderStyle::Dashed, rgb(1, 2, 3)).len(), 1);
+    }
+
+    #[test]
+    fn solid_rule_snaps_to_device_pixels() {
+        let snapped = |x: f32, w: f32| {
+            let r = snap_rule_rect(Rect::new(x, 2.0, w, 50.0));
+            (r.x, r.width, r.y, r.height)
+        };
+        // A tie goes down (`58.5` → 58), the width follows the rounded far edge.
+        assert_eq!(snapped(58.5, 5.0), (58.0, 5.0, 2.0, 50.0));
+        assert_eq!(snapped(58.666, 20.0), (59.0, 20.0, 2.0, 50.0));
+        // A sub-pixel line keeps one pixel.
+        assert_eq!(snapped(10.2, 0.3), (10.0, 1.0, 2.0, 50.0));
+        // The command carries the snapped rect, a dashed one keeps the fractional rect.
+        let solid = rule_line_commands(Rect::new(58.666, 0.0, 20.0, 50.0), false, BorderStyle::Solid, red());
+        assert!(matches!(&solid[0], DisplayCommand::DrawBorder { rect, .. } if rect.x == 59.0));
+        let dashed = rule_line_commands(Rect::new(58.666, 0.0, 20.0, 50.0), false, BorderStyle::Dashed, red());
+        assert!(matches!(&dashed[0], DisplayCommand::DrawBorder { rect, .. } if rect.x == 58.666));
     }
 
     #[test]
