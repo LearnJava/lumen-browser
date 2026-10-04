@@ -186,6 +186,19 @@ fn grid_col_intrinsic_sum(
     }
     let template = &s.grid_template_columns;
     let n_cols = template.len();
+    // A container with no items (empty, or only out-of-flow children) is as
+    // wide as its fixed-length columns plus the gaps between them (Grid L1
+    // §7.1); any other track type has nothing to size it, so the caller's
+    // fallback applies.
+    if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
+        let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+        let mut sum = gap * (n_cols - 1) as f32;
+        for t in template {
+            let GridTrackSize::Length(l) = t else { return None };
+            sum += l.resolve(s.font_size, None, viewport)?.max(0.0);
+        }
+        return Some(sum);
+    }
     if n_cols <= 1 || matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
         return None;
     }

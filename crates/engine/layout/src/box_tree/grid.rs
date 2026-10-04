@@ -242,7 +242,20 @@ pub(crate) fn build_grid_init(
     // items with equal `order`, so auto-placement honours `order` like Edge does.
     item_idxs.sort_by_key(|&i| children[i].style.order);
 
-    if item_idxs.is_empty() {
+    // CSS Grid L1 §7.1: a grid container with no items still has its explicit
+    // tracks (`grid-template-*` of fixed lengths) — they give it a size and
+    // gaps, and `column-rule`/`row-rule` are painted in those gaps. Only a
+    // container with nothing to size (no explicit template, or a subgrid whose
+    // tracks come from the parent) takes the zero-height shortcut.
+    if item_idxs.is_empty()
+        && (inherited_cols.is_some()
+            || inherited_rows.is_some()
+            || (s.grid_template_columns.is_empty() && s.grid_template_rows.is_empty())
+            || s.grid_template_col_auto_repeat.is_some()
+            || s.grid_template_row_auto_repeat.is_some()
+            || s.grid_template_columns.first() == Some(&GridTrackSize::Subgrid)
+            || s.grid_template_rows.first() == Some(&GridTrackSize::Subgrid))
+    {
         return None;
     }
 
@@ -528,7 +541,12 @@ pub(crate) fn build_grid_init(
     // --- Step 2: Determine total grid dimensions ---
     let n_cols = placements.iter().map(|&(_, ce, _, _)| ce.saturating_sub(1)).max().unwrap_or(1)
         .max(n_explicit_cols as u32);
-    let n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
+    let mut n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
+    // An item-less container keeps all its explicit rows (§7.1); with items the
+    // row count still follows the placements (trailing empty rows are dropped).
+    if item_idxs.is_empty() {
+        n_rows = n_rows.max(eff_row_template.len() as u32);
+    }
 
     // CSS Grid L1 §7.2.3.2: `repeat(auto-fit, …)` tracks that hold no item collapse to zero
     // (the gutters on both sides merge into one). Placement above used the full expanded list.
