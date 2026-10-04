@@ -240,13 +240,91 @@ fn line_insets(insets: &lumen_layout::RuleInsets, lo: Cross, hi: Cross, em: f32,
 /// when the geometry cannot be read back (see [`occupied_cells`]) and the caller should paint
 /// the single-row rules instead.
 pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h: f32, out: &mut Vec<DisplayCommand>) -> bool {
-    let s = &b.style;
     let Some(bands) = read_bands(b, g) else {
         return false;
     };
+    emit_bands(b, g, &bands, content_h, false, out);
+    true
+}
+
+/// Reads the bands of a multicol container that has `column-span: all` children but no rows of
+/// columns (no `column-height`): the columns between two spanners form one band each. `None` when
+/// the container has no spanner.
+fn read_spanner_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
+    let step = g.col_w + g.col_gap;
+    let n = g.n_cols as usize;
+    if n <= 1 {
+        return None;
+    }
+    let mut frags: Vec<Frag> = Vec::new();
+    for c in b
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+    {
+        if c.rect.width <= 0.0 && c.rect.height <= 0.0 {
+            continue;
+        }
+        let col = if c.rect.width > g.col_w + 1.0 {
+            None
+        } else {
+            Some((((c.rect.x - g.content_x) / step).round().max(0.0) as usize).min(n - 1))
+        };
+        frags.push((c.rect.y, c.rect.y + c.rect.height, col));
+    }
+    if !frags.iter().any(|f| f.2.is_none()) {
+        return None;
+    }
+    frags.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut bands: Vec<Band> = Vec::new();
+    let mut open = false;
+    for &(top, bottom, col) in &frags {
+        match col {
+            None => open = false,
+            Some(c) if open => {
+                if let Some(last) = bands.last_mut() {
+                    last.bottom = last.bottom.max(bottom);
+                    last.cells[c] = true;
+                }
+            }
+            Some(c) => {
+                let mut cells = vec![false; n];
+                cells[c] = true;
+                // The first band starts at the content box, the others where the spanner ends.
+                let top = if bands.is_empty() { g.content_y } else { top };
+                bands.push(Band { top, bottom, cells, gap_after: false });
+                open = true;
+            }
+        }
+    }
+    // A rule never leaves the content box, even when overflowing columns run past it.
+    let limit = g.content_y + g.col_h;
+    for band in &mut bands {
+        band.top = band.top.min(limit);
+        band.bottom = band.bottom.min(limit);
+    }
+    Some(bands)
+}
+
+/// Paints the column rules of a multicol container whose `column-span: all` children cut the
+/// columns into bands (CSS Multicol L1 §6.1: a rule does not run through a spanner; with
+/// `column-rule-break: none` it does). Returns `false` when the container has no spanner.
+pub(crate) fn emit_multicol_spanner_rules(b: &LayoutBox, g: &MulticolGeom, content_h: f32, out: &mut Vec<DisplayCommand>) -> bool {
+    let Some(bands) = read_spanner_bands(b, g) else {
+        return false;
+    };
+    emit_bands(b, g, &bands, content_h, true, out);
+    true
+}
+
+/// `columns_all`: `column-rule-visibility-items: normal` paints every column gap (the reference of
+/// multicol-gap-decorations-020 draws full-height rules between columns that hold no content in a
+/// band); the explicit `between`/`around` values still hide pieces.
+fn emit_bands(b: &LayoutBox, g: &MulticolGeom, bands: &[Band], content_h: f32, columns_all: bool, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
     let rows = bands.len();
     if rows == 0 {
-        return true;
+        return;
     }
     let em = s.font_size;
     let vp = Size::new(g.content_w, content_h);
@@ -293,9 +371,13 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
         st.is_visible() && w > 0.0
     };
 
+    let col_vis = match s.column_rule_visibility_items {
+        RuleVisibilityItems::Normal if columns_all => RuleVisibilityItems::All,
+        v => v,
+    };
     // Is the column-gap-`i` piece of row `r` / the row-gap-`r` piece of column `c` painted?
     let col_piece = |i: usize, r: usize| {
-        col_visible(i) && piece_shown(s.column_rule_visibility_items, true, cells(r, i), cells(r, i + 1))
+        col_visible(i) && piece_shown(col_vis, true, cells(r, i), cells(r, i + 1))
     };
     let row_piece = |r: usize, c: usize| {
         gap_below(r)
@@ -325,7 +407,10 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
             // One line through the row gaps and under the spanners.
             if let (Some(first), Some(last)) = ((0..rows).find(|&r| both(r)), (0..rows).rfind(|&r| both(r))) {
                 let (a, bm) = line_insets(&s.column_rule_inset, None, None, em, vp);
-                let (top, bottom) = (bands[first].top, bands[last].bottom);
+                // The joined line starts at the spanner above its first visible piece (the reference of
+                // multicol-gap-decorations-029 paints it under that spanner).
+                let top = if first > 0 && !bands[first - 1].gap_after { bands[first - 1].bottom } else { bands[first].top };
+                let bottom = bands[last].bottom;
                 if let Some((y, h)) = inset_span(top, bottom - top, a, bm, false) {
                     col_cmds.extend(rule_line_commands(Rect::new(sep_x, y, w, h), false, st, color));
                 }
@@ -400,5 +485,4 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
             out.extend(col_cmds);
         }
     }
-    true
 }

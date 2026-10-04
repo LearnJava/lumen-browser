@@ -25,10 +25,14 @@ use super::*;
 /// (background-color) — no children or text that a slice would duplicate, no
 /// border whose cut edge would show. Anything else keeps the atomic
 /// one-box-per-column placement.
-fn box_is_column_sliceable(b: &LayoutBox) -> bool {
+fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
     // A whitespace-only text node leaves a `Skip` placeholder child (`<div style=…>\n</div>`) —
     // it has no paint, so it does not make the box unsliceable.
+    // CSS Writing Modes L3 §7.3 / Multicol L1 §8: a box in an orthogonal flow (its block axis is
+    // the container's inline axis) is monolithic — it is never cut across columns.
+    let vertical = |m: crate::style::WritingMode| !matches!(m, crate::style::WritingMode::HorizontalTb);
     matches!(b.kind, BoxKind::Block)
+        && vertical(b.style.writing_mode) == vertical(container.writing_mode)
         && b.children.iter().all(|c| matches!(c.kind, BoxKind::Skip))
         && b.style.border_top_width == 0.0
         && b.style.border_bottom_width == 0.0
@@ -210,7 +214,7 @@ pub(crate) fn build_multicol_init(
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
         if super::multicol_span::is_column_spanner(&work[i]) {
-            let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
+            let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
                 span_idx: Some(i),
@@ -220,7 +224,7 @@ pub(crate) fn build_multicol_init(
             seg.push(i);
         }
     }
-    let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
+    let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
     segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable });
 
     let consumed = vec![false; work.len()];

@@ -961,6 +961,31 @@ use lumen_dom::NodeId;
     }
 
     #[test]
+    fn multicol_spanner_cuts_column_rules_into_bands_without_column_height() {
+        // `p p <spanner 20px> p p p`, 3 columns, `column-fill: auto`, no `column-height`: both `p`
+        // stack in column 1, so the spanner sits at y 100..120; the rules of the band above stop at
+        // it, the band below starts under it (Multicol L1 §6.1).
+        let p = r#"<p style="height:50px;margin:0"></p>"#;
+        let html = format!(r#"{p}{p}<div style="column-span:all;height:20px;margin:0"></div>{p}{p}{p}"#);
+        let css = "width:200px;height:200px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto;                   column-rule:4px solid blue;";
+        let dl = build(&format!(r#"<div style="{css}">{html}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        assert!(!cols.is_empty(), "{cols:?}");
+        assert!(cols.iter().all(|c| c.1 + c.3 <= 100.01 || c.1 >= 119.99), "a rule crosses the spanner: {cols:?}");
+        assert!(cols.iter().any(|c| c.1 == 0.0) && cols.iter().any(|c| c.1 >= 119.99), "{cols:?}");
+    }
+
+    #[test]
+    fn multicol_spanner_with_column_rule_break_none_keeps_one_rule_through_it() {
+        let p = r#"<p style="height:50px;margin:0"></p>"#;
+        let html = format!(r#"{p}{p}<div style="column-span:all;height:20px;margin:0"></div>{p}{p}{p}"#);
+        let css = "width:200px;height:200px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto;                   column-rule:4px solid blue;column-rule-break:none;";
+        let dl = build(&format!(r#"<div style="{css}">{html}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        assert!(cols.iter().any(|c| c.1 == 0.0 && c.3 > 150.0), "{cols:?}");
+    }
+
+    #[test]
     fn multicol_without_column_height_ignores_column_wrap() {
         let dl = build(
             r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;column-wrap:wrap;

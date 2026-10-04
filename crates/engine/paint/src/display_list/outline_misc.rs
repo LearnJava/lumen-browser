@@ -150,6 +150,20 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 
     let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+    // CSS Multicol L1 §6.1: `column-span: all` children cut the columns into bands.
+    let geom = crate::multicol_gap_decorations::MulticolGeom {
+        content_x,
+        content_y,
+        content_w,
+        col_w,
+        col_gap,
+        n_cols,
+        col_h: content_h,
+        row_gap: 0.0,
+    };
+    if crate::multicol_gap_decorations::emit_multicol_spanner_rules(b, &geom, content_h, out) {
+        return;
+    }
     // CSS Multicol L1 §7.1: content that does not fit `n_cols` columns of the limited height
     // flows into overflow columns past the inline end — a rule separates those too, so the
     // column count is the one the laid-out fragments actually occupy.
