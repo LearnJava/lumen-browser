@@ -954,6 +954,49 @@ use lumen_dom::NodeId;
         assert!(row_rule_cmds(&dl).is_empty());
     }
 
+    #[test]
+    fn multicol_rows_rtl_deals_column_rule_list_from_the_right() {
+        // multicol-gap-decorations-multi-value-direction: under `direction: rtl` the first column
+        // gap (and the first list value) is the rightmost one.
+        let colour_of = |dl: &DisplayList| -> Vec<(f32, u8, u8)> {
+            col_rule_rects(dl)
+                .iter()
+                .take(2)
+                .map(|r| {
+                    let c = column_rule_cmds(dl)
+                        .into_iter()
+                        .find_map(|c| match c {
+                            DisplayCommand::DrawBorder { rect, colors, .. } if rect.x == r.0 && rect.y == r.1 => Some(colors[1]),
+                            _ => None,
+                        })
+                        .expect("rule");
+                    (r.0, c.r, c.b)
+                })
+                .collect()
+        };
+        let css = format!("{ROWS_CSS}column-rule-color:rgb(255,0,0),rgb(0,0,255);");
+        let ltr = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let rtl = build(&format!(r#"<div style="{css}direction:rtl">{SIX_P}</div>"#), "");
+        assert_eq!(colour_of(&ltr), vec![(63.0, 255, 0), (133.0, 0, 255)]);
+        assert_eq!(colour_of(&rtl), vec![(63.0, 0, 255), (133.0, 255, 0)]);
+    }
+
+    #[test]
+    fn multicol_rows_rtl_row_rule_inset_start_is_the_right_end() {
+        // multicol-gap-decorations-direction-inset: `row-rule-inset-start: 10px` trims the
+        // inline-start end of every piece — the left one in ltr, the right one in rtl.
+        let css = format!("{ROWS_CSS}row-rule-break:intersection;row-rule-inset-start:10px;row-rule-inset-end:0px;");
+        let ltr = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let rtl = build(&format!(r#"<div style="{css}direction:rtl">{SIX_P}</div>"#), "");
+        let xs = |dl: &DisplayList| row_rule_cmds(dl).iter().map(|r| (r.0, r.2)).collect::<Vec<_>>();
+        assert_eq!(xs(&ltr), vec![(10.0, 50.0), (80.0, 50.0), (150.0, 50.0)]);
+        assert_eq!(xs(&rtl), vec![(0.0, 50.0), (70.0, 50.0), (140.0, 50.0)]);
+        // Whole (un-cut) row rule: the cap inset sits at the right edge under rtl.
+        let css = format!("{ROWS_CSS}row-rule-inset-start:10px;row-rule-inset-end:0px;");
+        let rtl = build(&format!(r#"<div style="{css}direction:rtl">{SIX_P}</div>"#), "");
+        assert_eq!(xs(&rtl), vec![(0.0, 190.0)]);
+    }
+
     // ── position:sticky display list tests ──────────────────────────────────
 
     #[test]
