@@ -877,10 +877,25 @@ fn finish_line(
                         && stretch_h > 0.0
                         && matches!(is.display, Display::Flex | Display::InlineFlex)
                         && matches!(is.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
-                    if frame.b.children[i].rect.height < stretch_h {
+                    let old_h = frame.b.children[i].rect.height;
+                    let grew = old_h < stretch_h;
+                    if grew {
                         frame.b.children[i].rect.height = stretch_h;
                     }
                     frame.b.children[i].rect.y = content_y + cross_cursor + m_t;
+                    // FLEX-VWM-4: a stretched item's height is definite, so a
+                    // descendant's `height: <%>` resolves against it — which the
+                    // first pass (item height still `auto`) could not do. Also when
+                    // the first pass came out taller (§9.4 step 11: the stretched size
+                    // is the line's, however large the content was).
+                    if (grew || old_h > stretch_h + 0.01)
+                        && !relayout_column_flex
+                        && is.height.is_none()
+                        && !matches!(is.position, Position::Relative | Position::Sticky)
+                        && super::flex::subtree_has_percent_height(&frame.b.children[i])
+                    {
+                        relayout_stretched_row_item(frame, i, stretch_h, measurer, viewport, hp);
+                    }
                     if relayout_column_flex {
                         let rx = frame.b.children[i].rect.x;
                         let ry = frame.b.children[i].rect.y;
@@ -904,6 +919,48 @@ fn finish_line(
     }
 
     frame.init.cross_cursor += line_cross + frame.init.cross_gap;
+}
+
+/// FLEX-VWM-4: lays the row item `i` out again with its stretched border-box
+/// height `stretch_h` as an authored height, keeping its x and width.
+fn relayout_stretched_row_item(
+    frame: &mut Frame,
+    i: usize,
+    stretch_h: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    let content_width = frame.init.content_width;
+    let item = &frame.b.children[i];
+    let is = Arc::clone(&item.style);
+    let iem = is.font_size;
+    let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
+    let (rw, rx) = (item.rect.width, item.rect.x - m_l);
+    let ry = frame.init.content_y + frame.init.cross_cursor;
+    let pad_v = is.padding_top.resolve_or_zero(iem, content_width, viewport)
+        + is.padding_bottom.resolve_or_zero(iem, content_width, viewport)
+        + is.border_top_width
+        + is.border_bottom_width;
+    let pad_h = is.padding_left.resolve_or_zero(iem, content_width, viewport)
+        + is.padding_right.resolve_or_zero(iem, content_width, viewport)
+        + is.border_left_width
+        + is.border_right_width;
+    let (used_w, used_h) = match is.box_sizing {
+        BoxSizing::BorderBox => (rw, stretch_h),
+        BoxSizing::ContentBox => ((rw - pad_h).max(0.0), (stretch_h - pad_v).max(0.0)),
+    };
+    let pcb = frame.init.children_pcb;
+    lay_out_with_used_size(
+        &mut frame.b.children[i], rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false,
+        UsedSizeOverride {
+            width: Some(used_w),
+            height: Some(used_h),
+            clear_intrinsic_hint: true,
+            percentage_base: Some(content_width),
+            ..Default::default()
+        },
+    );
 }
 
 /// FLEX-VWM: turns the start-based layout `step_item`/`finish_line` produced
