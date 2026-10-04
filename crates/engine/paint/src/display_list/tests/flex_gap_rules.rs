@@ -411,3 +411,24 @@ fn flex_vertical_writing_mode_swaps_rule_axes() {
         assert_rules(&rules(&dl, true), &[(50.0, 0.0, 10.0, 170.0)]);
     }
 }
+
+/// flex-gap-decorations-067: отрицательные `junction`-вставки далеко за пределы куска сдвигают
+/// начало позднего куска перед началом раннего. Куски идут по возрастанию начала, ни один не
+/// теряет линию слева: объединение покрывает всё от `cap`-вставки до `cap`-вставки без дыр,
+/// и каждая точка закрашена один раз.
+#[test]
+fn flex_negative_junction_insets_keep_the_whole_cross_rule() {
+    let html = r#"<div style="display:flex;flex-wrap:wrap;gap:10px;width:320px;margin-left:100px;
+        row-rule:5px solid red;rule-break:intersection;
+        row-rule-inset-junction-start:-210px;row-rule-inset-cap-start:-50px;
+        row-rule-inset-junction-end:-210px;row-rule-inset-cap-end:-50px">
+        <div style="width:100px;height:100px"></div><div style="width:100px;height:100px"></div>
+        <div style="width:100px;height:100px"></div><div style="width:100px;height:100px"></div>
+        <div style="width:100px;height:100px"></div><div style="width:100px;height:100px"></div>
+        <div style="width:100px;height:100px"></div><div style="width:100px;height:100px"></div>
+        <div style="width:100px;height:100px"></div></div>"#;
+    let dl = build(html, "");
+    // Контейнер стоит на x = 100, шириной 320; эталон WPT — одна линия `left: 0; width: 520px`
+    // на каждую щель между строками (две щели, y = 102.5 и 212.5 при `top` страницы 0).
+    assert_rules(&rules(&dl, false), &[(0.0, 103.0, 520.0, 5.0), (0.0, 213.0, 520.0, 5.0)]);
+}
