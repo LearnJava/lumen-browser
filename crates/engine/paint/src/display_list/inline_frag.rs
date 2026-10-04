@@ -195,6 +195,25 @@ pub(crate) fn emit_text_shadows(
 /// CSS Backgrounds L3 §3.8: border-box = b.rect; padding-box = rect без border-а;
 /// content-box = rect без border-а и padding-а. Text — пустой rect (см. выше).
 pub(crate) fn background_clip_rect(b: &LayoutBox, clip: BackgroundClip) -> Rect {
+    snap_box_rect(background_clip_rect_exact(b, clip))
+}
+
+/// Pixel-snaps a box painting area, as Chromium does for box backgrounds (`PixelSnappedIntRect`):
+/// each edge goes to the nearest device pixel (a tie rounds up), so the width is the difference
+/// of the snapped edges and neighbouring boxes with fractional layout (`1fr` tracks, `33.33%`)
+/// share their seam instead of leaving an anti-aliased strip of the colour underneath.
+/// An empty rect stays empty (the `background-clip: text` marker must not grow).
+fn snap_box_rect(r: Rect) -> Rect {
+    if r.width <= 0.0 || r.height <= 0.0 {
+        return r;
+    }
+    let snap = |v: f32| (v + 0.5).floor();
+    let (x0, y0) = (snap(r.x), snap(r.y));
+    let (x1, y1) = (snap(r.x + r.width), snap(r.y + r.height));
+    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+fn background_clip_rect_exact(b: &LayoutBox, clip: BackgroundClip) -> Rect {
     let s = &b.style;
     match clip {
         BackgroundClip::BorderBox => b.rect,
