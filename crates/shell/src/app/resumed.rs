@@ -26,9 +26,11 @@ impl Lumen {
             .with_inner_size(LogicalSize::new(win_w, win_h))
             .with_position(LogicalPosition::new(0, 0))
             .with_maximized(self.maximized)
-            // PERF-10: `--no-paint` — окно существует (winit/HWND нужны движку),
-            // но не показывается: ни фокуса, ни увода foreground.
-            .with_visible(!no_paint_backend::no_paint_enabled());
+            // PERF-10: `--no-paint` — окно видимое (скрытое не получает
+            // `RedrawRequested`, а `load` у картинок и часть rAF-работы живёт
+            // только в нём: `relevant-mutations.html` висел в TIMEOUT), но не
+            // активируется, чтобы не уводить фокус.
+            .with_active(!no_paint_backend::no_paint_enabled());
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
