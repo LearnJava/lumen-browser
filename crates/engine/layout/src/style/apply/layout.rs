@@ -615,10 +615,34 @@ pub(in crate::style) fn apply_decl_layout(
                 style.column_width = Some(len);
             }
         }
+        "column-height" => {
+            // CSS Multi-column L2 §4.2: auto | <length [0,∞]>.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.column_height = None;
+            } else if let Some(len) = parse_length_q(trimmed, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.column_height = Some(len);
+            }
+        }
+        "column-wrap" => {
+            // CSS Multi-column L2 §4.4: auto | nowrap | wrap.
+            match val.trim().to_ascii_lowercase().as_str() {
+                "auto" | "wrap" => style.column_wrap_nowrap = false,
+                "nowrap" => style.column_wrap_nowrap = true,
+                _ => {}
+            }
+        }
         "columns" => {
             // CSS Multi-column L1 §3.4 shorthand: <column-width> || <column-count>.
             // Любой токен может быть `auto`. Length → width, integer → count.
-            let parts: Vec<&str> = val.split_whitespace().collect();
+            // CSS Multi-column L2 §4.5: `[ <column-width> || <column-count> ] [ / <column-height> ]?`.
+            let (head, height) = match val.split_once('/') {
+                Some((h, t)) => (h, Some(t.trim())),
+                None => (val, None),
+            };
+            let parts: Vec<&str> = head.split_whitespace().collect();
             let mut count: Option<u32> = None;
             let mut width: Option<Length> = None;
             let mut had_width = false;
@@ -642,9 +666,17 @@ pub(in crate::style) fn apply_decl_layout(
                     had_width = true;
                 }
             }
-            if had_width || had_count {
+            let height_len = match height {
+                None => Some(None),
+                Some(h) if h.eq_ignore_ascii_case("auto") => Some(None),
+                Some(h) => parse_length_q(h, is_quirks)
+                    .filter(|l| !matches!(l, Length::Px(v) if *v < 0.0))
+                    .map(Some),
+            };
+            if (had_width || had_count) && let Some(h) = height_len {
                 style.column_width = width;
                 style.column_count = count;
+                style.column_height = h;
             }
         }
         // CSS Multi-column L1 §4 + CSS Gap Decorations L1 §3: `column-rule*` / `row-rule*`

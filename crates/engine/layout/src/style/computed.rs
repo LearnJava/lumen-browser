@@ -495,6 +495,11 @@ pub struct ComputedStyle {
     /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. Typed.
     /// `None` = `auto`. Phase 0: parsing only.
     pub column_width: Option<Length>,
+    /// CSS Multi-column L2 §4.2 — `column-height: auto | <length>`. `None` = `auto`.
+    pub column_height: Option<Length>,
+    /// CSS Multi-column L2 §4.4 — `column-wrap: nowrap`. `false` = `auto`/`wrap`: with a
+    /// non-auto `column-height`, overflow columns open a new row in the block direction.
+    pub column_wrap_nowrap: bool,
     /// CSS Multi-column L1 §4.1 / CSS Gap Decorations L1 §4.5 — `column-rule-width`: список
     /// px-значений по щелям (`repeat()` сохранён). Default `[3]` (`medium`).
     pub column_rule_width: RuleList<f32>,
@@ -1114,6 +1119,19 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// CSS Multi-column L2 §4.2 — the `column-height` in px (`None` for `auto`). `%` has no
+    /// basis (the property takes no percentages), so only absolute and font-relative lengths
+    /// resolve.
+    pub fn column_height_px(&self, em: f32, viewport: lumen_core::geom::Size) -> Option<f32> {
+        self.column_height.as_ref()?.resolve(em, None, viewport).filter(|h| *h >= 0.0)
+    }
+
+    /// CSS Multi-column L2 §4.4 — overflow columns start a new multicol row in the block
+    /// direction: a non-auto `column-height` and `column-wrap` other than `nowrap`.
+    pub fn column_rows_wrap(&self, em: f32, viewport: lumen_core::geom::Size) -> bool {
+        !self.column_wrap_nowrap && self.column_height_px(em, viewport).is_some_and(|h| h > 0.0)
+    }
+
     /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`
     /// дают `color` элемента, остальное — явный цвет в sRGB.
     pub fn used_caret_color(&self) -> Color {
@@ -1297,6 +1315,8 @@ impl ComputedStyle {
             column_gap: Length::Px(0.0),
             column_count: None,
             column_width: None,
+            column_height: None,
+            column_wrap_nowrap: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),
@@ -1676,6 +1696,8 @@ impl ComputedStyle {
             // CSS Multi-column — не наследуются.
             column_count: None,
             column_width: None,
+            column_height: None,
+            column_wrap_nowrap: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),

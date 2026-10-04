@@ -39,6 +39,7 @@ pub mod display_list;
 pub mod fallback;
 pub mod flex_gap_decorations;
 pub mod gap_decorations;
+pub mod multicol_gap_decorations;
 pub mod fingerprint;
 pub mod hit_test;
 mod invariants;

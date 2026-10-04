@@ -154,7 +154,9 @@ pub(crate) fn build_multicol_init(
     // `height`, else a definite `max-height` (§7.1 — an auto-height multicol is
     // as tall as its content up to `max-height`). With no limit at all,
     // `column-fill: auto` keeps everything in the first column.
-    let container_h = container_h.or_else(|| {
+    // CSS Multicol L2 §4.2: a definite `column-height` is the column height whatever the
+    // container's own height is (`column-wrap: nowrap` then spills into inline overflow columns).
+    let container_h = s.column_height_px(em, viewport).filter(|h| *h > 0.0).or(container_h).or_else(|| {
         let max_len = s.max_height.as_ref()?;
         let max_h = resolve_block_size(max_len, em, available_height, viewport)?;
         Some(match s.box_sizing {
@@ -168,6 +170,15 @@ pub(crate) fn build_multicol_init(
         })
     });
     let balance = s.column_fill_balance;
+    // CSS Multicol L2 §4.2 / §4.4: a definite `column-height` fixes the block size of every
+    // column; overflow columns then open new rows (`row-gap` apart) instead of extending
+    // the inline axis.
+    let col_rows = s.column_height_px(em, viewport).filter(|_| s.column_rows_wrap(em, viewport)).map(|col_h| {
+        super::multicol_trampoline::ColRows {
+            col_h,
+            row_gap: s.row_gap.resolve_or_zero(em, container_h.unwrap_or(0.0), viewport).max(0.0),
+        }
+    });
 
     // CSS Multicol §6.1: a `column-span: all` descendant reached through plain
     // block wrappers spans the container too — split those wrappers around it so
@@ -223,6 +234,7 @@ pub(crate) fn build_multicol_init(
         col_w,
         balance,
         container_h,
+        col_rows,
         segments,
         children_pcb,
         s: Arc::clone(s),

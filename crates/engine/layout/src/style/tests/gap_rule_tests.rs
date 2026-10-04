@@ -509,3 +509,42 @@ fn rule_computed_color_keeps_srgb_function_form() {
     let s = parse_gap_rule("column-rule-color: color-mix(in oklab, red, blue);");
     assert!(rule_css(&s, "column-rule-color").starts_with("rgb("));
 }
+
+    // ── CSS Multicol L2 §4.2 / §4.4 / §4.5: `column-height`, `column-wrap`, `columns: … / <h>` ──
+
+    #[test]
+    fn column_height_and_wrap_parse() {
+        let s = parse_gap_rule("column-height: 60px; column-wrap: nowrap;");
+        assert_eq!(s.column_height, Some(Length::Px(60.0)));
+        assert!(s.column_wrap_nowrap);
+        assert!(!s.column_rows_wrap(16.0, VP), "nowrap keeps overflow columns in the inline direction");
+        let s = parse_gap_rule("column-height: 60px; column-wrap: wrap;");
+        assert!(s.column_rows_wrap(16.0, VP));
+        // auto: wraps only with a definite column-height.
+        assert!(parse_gap_rule("column-wrap: auto;").column_height.is_none());
+        assert!(!parse_gap_rule("column-wrap: wrap;").column_rows_wrap(16.0, VP));
+        assert!(parse_gap_rule("column-height: 60px;").column_rows_wrap(16.0, VP));
+    }
+
+    #[test]
+    fn column_height_rejects_negative_and_junk() {
+        assert_eq!(parse_gap_rule("column-height: -5px;").column_height, None);
+        assert_eq!(parse_gap_rule("column-height: 10px; column-height: bogus;").column_height, Some(Length::Px(10.0)));
+        assert_eq!(parse_gap_rule("column-height: 10px; column-height: auto;").column_height, None);
+        assert!(!parse_gap_rule("column-wrap: sideways;").column_wrap_nowrap);
+    }
+
+    #[test]
+    fn columns_shorthand_takes_a_column_height() {
+        let s = parse_gap_rule("columns: 3 60px / 80px;");
+        assert_eq!(s.column_count, Some(3));
+        assert_eq!(s.column_width, Some(Length::Px(60.0)));
+        assert_eq!(s.column_height, Some(Length::Px(80.0)));
+        // Without `/ <height>` the shorthand resets column-height.
+        let s = parse_gap_rule("column-height: 80px; columns: 2;");
+        assert_eq!(s.column_height, None);
+        // An invalid height drops the whole declaration.
+        let s = parse_gap_rule("column-height: 80px; columns: 2 / -1px;");
+        assert_eq!(s.column_height, Some(Length::Px(80.0)));
+        assert_eq!(s.column_count, None);
+    }
