@@ -175,10 +175,16 @@ mod v8_event_propagation;
 mod v8_ws_sse;
 
 #[cfg(feature = "v8-backend")]
+mod v8_websocket_sse;
+
+#[cfg(feature = "v8-backend")]
 mod v8_nav_url_storage;
 
 #[cfg(feature = "v8-backend")]
 mod v8_perf_observers;
+
+#[cfg(feature = "v8-backend")]
+mod v8_dom_observers;
 
 #[cfg(feature = "v8-backend")]
 mod v8_childnode_traversal;
