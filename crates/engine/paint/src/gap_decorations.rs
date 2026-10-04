@@ -415,6 +415,89 @@ fn gap_starts(edges: &[(f32, f32)], gap: f32) -> Vec<f32> {
     ends.into_iter().filter(|e| edges.iter().any(|&(lo, _)| (lo - (e + gap)).abs() < EPS)).collect()
 }
 
+/// Дорожки оси как `(начало, конец)` по возрастанию, если их можно взять из шаблона:
+/// `grid-template-*` целиком из фиксированных длин (`px`/`em`/`%`), без `repeat(auto-*)`.
+/// Так щели находятся и там, где ни один элемент не примыкает к соседу (пустые дорожки,
+/// элементы уже своей клетки). Возвращает `None`, если шаблон другой или дорожки не
+/// совпадают с рёбрами элементов (`justify-content`, неявные дорожки, subgrid) — тогда
+/// остаётся восстановление по элементам.
+///
+/// `start` — где начинается ось, `extent` — её длина (content box), `reversed` — ось идёт
+/// справа налево (`direction: rtl`: первая дорожка у правого края).
+#[allow(clippy::too_many_arguments)]
+fn template_tracks(
+    template: &[lumen_layout::GridTrackSize],
+    has_auto_repeat: bool,
+    start: f32,
+    extent: f32,
+    gap: f32,
+    reversed: bool,
+    em: f32,
+    vp: lumen_core::geom::Size,
+    edges: &[(f32, f32)],
+) -> Option<Vec<(f32, f32)>> {
+    use lumen_layout::GridTrackSize;
+    if has_auto_repeat || template.len() < 2 || gap <= 0.0 {
+        return None;
+    }
+    let mut sizes = Vec::with_capacity(template.len());
+    for t in template {
+        match t {
+            GridTrackSize::Length(l) => sizes.push(l.resolve(em, Some(extent), vp)?.max(0.0)),
+            _ => return None,
+        }
+    }
+    let total: f32 = sizes.iter().sum::<f32>() + gap * (sizes.len() - 1) as f32;
+    let mut pos = if reversed { start + extent - total } else { start };
+    if reversed {
+        sizes.reverse();
+    }
+    let tracks: Vec<(f32, f32)> = sizes
+        .iter()
+        .map(|&w| {
+            let t = (pos, pos + w);
+            pos += w + gap;
+            t
+        })
+        .collect();
+    let on_track = |v: f32, pick: fn(&(f32, f32)) -> f32| tracks.iter().any(|t| (pick(t) - v).abs() <= TRACK_TOL);
+    edges
+        .iter()
+        .all(|&(lo, hi)| on_track(lo, |t| t.0) && on_track(hi, |t| t.1))
+        .then_some(tracks)
+}
+
+/// Начала щелей фиксированных дорожек, написанных *перед* `repeat(auto-fit|auto-fill, …)`
+/// (`100px repeat(auto-fit, 100px) 1fr`). Пустые дорожки повтора схлопнуты (CSS Grid L1
+/// §7.2.3.2: размер 0, гутеры сливаются), поэтому первый элемент начинается ровно через
+/// один `gap` после последней ведущей дорожки: тогда они (в том числе пустые) настоящие и
+/// щели между ними видны. Иначе — `None`, и остаётся восстановление по элементам.
+fn leading_tops(
+    rep: Option<&lumen_layout::GridRepeat>,
+    start: f32,
+    extent: f32,
+    gap: f32,
+    em: f32,
+    vp: lumen_core::geom::Size,
+    first_item_lo: f32,
+) -> Option<Vec<f32>> {
+    use lumen_layout::GridTrackSize;
+    let rep = rep.filter(|r| !r.before.is_empty())?;
+    if gap <= 0.0 {
+        return None;
+    }
+    let mut tops = Vec::with_capacity(rep.before.len());
+    let mut pos = start;
+    for t in &rep.before {
+        let GridTrackSize::Length(l) = t else { return None };
+        pos += l.resolve(em, Some(extent), vp)?.max(0.0);
+        tops.push(pos);
+        pos += gap;
+    }
+    // `pos` — начало первой дорожки после ведущих.
+    ((first_item_lo - pos).abs() <= TRACK_TOL).then_some(tops)
+}
+
 /// CSS Gap Decorations L1 §3 для grid-контейнера: щели, разрезанные по `*-rule-break`,
 /// скрытые по `*-rule-visibility-items` и сдвинутые `*-rule-inset-*` (cap — у края
 /// контейнера, junction — у стыка с перпендикулярной щелью).
@@ -430,8 +513,54 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     let vp = lumen_core::geom::Size::new(cw, ch);
     let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
     let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
-    let col_tops = gap_starts(&xs, p.col_gap);
-    let row_tops = gap_starts(&ys, p.row_gap);
+    let rtl = s.direction == lumen_layout::Direction::Rtl;
+    let col_tracks = template_tracks(
+        &s.grid_template_columns,
+        s.grid_template_col_auto_repeat.is_some(),
+        cx,
+        cw,
+        p.col_gap,
+        rtl,
+        em,
+        vp,
+        &xs,
+    );
+    let row_tracks = template_tracks(
+        &s.grid_template_rows,
+        s.grid_template_row_auto_repeat.is_some(),
+        cy,
+        ch,
+        p.row_gap,
+        false,
+        em,
+        vp,
+        &ys,
+    );
+    let tops_of = |tracks: &Option<Vec<(f32, f32)>>, edges: &[(f32, f32)], gap: f32| match tracks {
+        Some(t) => t[..t.len() - 1].iter().map(|x| x.1).collect(),
+        None => gap_starts(edges, gap),
+    };
+    let mut col_tops = tops_of(&col_tracks, &xs, p.col_gap);
+    let mut row_tops = tops_of(&row_tracks, &ys, p.row_gap);
+    // `grid-template-*` с `repeat(auto-*)`: ведущие фиксированные дорожки до повтора.
+    let min_lo = |edges: &[(f32, f32)]| edges.iter().map(|e| e.0).fold(f32::INFINITY, f32::min);
+    let mut lead_lo = (None, None);
+    if col_tracks.is_none() && !xs.is_empty() {
+        let rep = s.grid_template_col_auto_repeat.as_ref();
+        if let Some(mut lead) = leading_tops(rep, cx, cw, p.col_gap, em, vp, min_lo(&xs)).filter(|_| !rtl) {
+            lead_lo.0 = Some(cx);
+            lead.append(&mut col_tops);
+            col_tops = lead;
+        }
+    }
+    if row_tracks.is_none() && !ys.is_empty() {
+        let rep = s.grid_template_row_auto_repeat.as_ref();
+        if let Some(mut lead) = leading_tops(rep, cy, ch, p.row_gap, em, vp, min_lo(&ys)) {
+            lead_lo.1 = Some(cy);
+            lead.append(&mut row_tops);
+            row_tops = lead;
+        }
+    }
     let (n_cols, n_rows) = (col_tops.len() + 1, row_tops.len() + 1);
     let spans: Vec<(usize, usize, usize, usize)> = xs
         .iter()
@@ -442,7 +571,6 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             (c0, c1, r0, r1)
         })
         .collect();
-    let rtl = s.direction == lumen_layout::Direction::Rtl;
     let mut out = GridGapGeometry {
         segments: Vec::new(),
         col_total: col_tops.len(),
@@ -513,9 +641,17 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
         // линию до своего края: Chromium рисует щель на всю протяжённость сетки.
         let (a_lo, a_hi) = {
             let along: &[(f32, f32)] = if horizontal { &xs } else { &ys };
-            let lo = along.iter().map(|e| e.0).fold(a_lo, f32::min);
-            let hi = along.iter().map(|e| e.1).fold(a_lo + a_len, f32::max);
-            (lo, hi)
+            let along_tracks = if horizontal { &col_tracks } else { &row_tracks };
+            match along_tracks {
+                // Дорожки из шаблона: линия идёт от первой до последней, как рисует Chromium.
+                Some(t) => (t[0].0, t[t.len() - 1].1),
+                None => {
+                    let lead = if horizontal { lead_lo.0 } else { lead_lo.1 };
+                    let lo = along.iter().map(|e| e.0).fold(lead.unwrap_or(a_lo), f32::min);
+                    let hi = along.iter().map(|e| e.1).fold(a_lo + a_len, f32::max);
+                    (lo, hi)
+                }
+            }
         };
         let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_hi, brk, vis);
         let (cross_w, cross_s, cross_total) = if horizontal {
