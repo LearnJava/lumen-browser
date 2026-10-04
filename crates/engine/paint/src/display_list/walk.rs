@@ -911,10 +911,6 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     if e.has_perspective {
         out.push(DisplayCommand::PopTransform);
     }
-    // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
-    if e.self_visible {
-        out.extend(gap_decoration_commands(b, None));
-    }
     if e.has_overflow_clip {
         if e.use_scroll_layer {
             out.push(DisplayCommand::PopScrollLayer);
@@ -1234,6 +1230,13 @@ fn dispatch<'a>(
             // (not the box itself): wrap only the descendants, inside the
             // overflow clip. See `perspective_matrix` for why a separate
             // wrapper rather than folding into each child's own matrix.
+            // CSS Gap Decorations L1 §2.1 — gap rules are «painted just above the border of the
+            // container»: after its own background/border, *under* the children (a translucent
+            // item shows the rule through it; flex-gap-decorations-033). Inside the overflow clip
+            // / scroll layer, flat (before the perspective wrapper).
+            if self_visible {
+                out.extend(gap_decoration_commands(b, None));
+            }
             let has_perspective = emit_push_perspective(b, out);
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;

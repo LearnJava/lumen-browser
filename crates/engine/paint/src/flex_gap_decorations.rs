@@ -120,7 +120,10 @@ fn collect_lines(children: &[&LayoutBox], hmain: bool, wrap: bool, main_gap: f32
             for it in &g[1..] {
                 let dist = it.0 .0 - reach;
                 // Щель — зазор не меньше `gap` (с допуском): меньший — это просто соседние элементы.
-                if dist > EPS && dist >= main_gap - EPS {
+                // При `gap: 0` швом считается и стык вплотную: линия встаёт по центру шва
+                // (flex-gap-decorations-033, как у grid в `gap: 0`).
+                let is_gap = if main_gap > EPS { dist > EPS && dist >= main_gap - EPS } else { dist >= -EPS };
+                if is_gap {
                     gaps.push((reach, it.0 .0));
                 }
                 reach = reach.max(it.0 .1);
@@ -277,7 +280,9 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
         for g in 0..cross_total {
             let (a, b) = (&lines[g], &lines[g + 1]);
             let size = b.lo - a.hi;
-            if size <= EPS {
+            // Строки вплотную (`row-gap: 0`) дают шов нулевой высоты: линия центрируется на нём.
+            let seam = if cross_gap > EPS { size > EPS } else { size >= -EPS };
+            if !seam {
                 continue;
             }
             // Стыки: объединение главных щелей обеих строк, `(от, до, ширина линии)`.
