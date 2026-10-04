@@ -238,3 +238,16 @@ fn place_shorthands_keep_two_word_baseline_as_one_token() {
     assert_eq!(d.style.align_self, AlignValue::Baseline);
     assert_eq!(d.style.justify_self, AlignValue::Baseline);
 }
+
+#[test]
+fn align_value_parses_first_and_last_baseline() {
+    use crate::style::AlignValue;
+    for (s, expected) in [
+        ("baseline", AlignValue::Baseline),
+        ("first baseline", AlignValue::Baseline),
+        ("last baseline", AlignValue::LastBaseline),
+        ("LAST   Baseline", AlignValue::LastBaseline),
+    ] {
+        assert_eq!(AlignValue::parse(s), Some(expected), "input: {s}");
+    }
+}
