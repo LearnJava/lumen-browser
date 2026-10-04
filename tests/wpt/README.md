@@ -292,6 +292,16 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   unaffected. Measured on the `legacy-mb-japanese` shard that set the corpus
   wall (BUG-1269) — `docs/tasks/p2-wpt-runner-throughput.md` §уход со
   страницы теста; pinned by `verify_navaway_early_timeout.py`.
+  Also in the executor, for every run: a hard per-test cap of `timeout + 2 ×
+  extra_timeout` (20 s, 70 s for `timeout: long`) around the whole test —
+  a BiDi call stuck on a page that never yields used to wait for Lumen's own
+  30–65 s automation timeout and end on wptrunner's external timer plus a
+  10 s runner `join`; now it ends as TIMEOUT at the cap and the browser is
+  restarted (`LUMEN_WPT_HARD_CAP=off` — old behaviour). And a result whose URL
+  differs from the test id only in percent-encoding (54 ids with raw spaces in
+  the query, mostly `xhr/xmlhttprequest-timeout-*`) is accepted instead of
+  becoming INTERNAL-ERROR + browser restart. §URL результата и потолок теста;
+  pinned by `verify_hard_cap.py`.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =

@@ -64,6 +64,7 @@ import os
 import socket
 import struct
 import traceback
+from urllib.parse import unquote
 
 from webdriver.bidi.client import BidiSession
 from webdriver.bidi.error import BidiException, UnknownErrorException
@@ -125,6 +126,82 @@ def foreign_grace_s():
     if raw in ("off", "none", "0"):
         return None
     return float(raw)
+
+
+#: Env var: `off` disables the per-test hard cap (`hard_cap_s`), for an A/B
+#: against the old behaviour. Anything else (or unset) leaves it on.
+HARD_CAP_ENV = "LUMEN_WPT_HARD_CAP"
+
+#: Seconds `LumenBidiProtocol.teardown` waits for the WebSocket close
+#: handshake. A healthy browser answers in milliseconds; a wedged one never
+#: does, and `websockets`' own `close_timeout` (10 s) would then eat exactly
+#: the time the cap below saved.
+TEARDOWN_CLOSE_S = 2.0
+
+
+def hard_cap_s(timeout, extra_timeout):
+    """Wall-clock ceiling for one whole test inside the executor, or `None`.
+
+    Lumen's executors do not run under `TimedRunner` (`executors/base.py`),
+    so nothing bounded a single BiDi call: a `script.evaluate` against a page
+    whose JS never yields only returns when Lumen's own automation timeout
+    fires (30-65 s). Until then the poll loop cannot even look at its
+    deadline, and the test ends on `testrunner.py`'s external timer
+    (`timeout + 3 * extra_timeout`) — after which the manager waits
+    `join(10)` for a runner process still stuck in that call and terminates
+    it. 168 such tests in 25 102 of the 2026-10 control runs, ~15-20 s lost on
+    each (`docs/tasks/p2-wpt-runner-throughput.md` §URL результата).
+
+    The cap is upstream's own leeway, `timeout + 2 * extra_timeout`
+    (`TimedRunner.run`): past the poll loop's deadline (`timeout +
+    extra_timeout`) and before the external timer, so a test whose calls
+    return is never affected — only a call that is itself stuck.
+    """
+    if timeout is None:
+        return None
+    if os.environ.get(HARD_CAP_ENV, "").strip().lower() in ("off", "none", "0"):
+        return None
+    return timeout + 2 * extra_timeout
+
+
+def run_capped(protocol, coro, cap, url):
+    """Run `coro` on `protocol`'s loop, at most `cap` seconds (`hard_cap_s`).
+
+    Over the cap the browser is treated as wedged: `EXTERNAL-TIMEOUT` (shown as
+    TIMEOUT, the verdict the external timer would have given) makes
+    `testrunner.py` restart it, and `protocol.wedged` makes the teardown skip
+    waiting for a close handshake that will not come.
+    """
+    if cap is None:
+        return protocol.run(coro)
+    try:
+        return protocol.run(asyncio.wait_for(coro, cap))
+    except asyncio.TimeoutError as e:
+        protocol.wedged = True
+        raise ExecutorException(
+            "EXTERNAL-TIMEOUT",
+            f"browser did not answer a BiDi call within {cap:g}s while running {url} "
+            f"({HARD_CAP_ENV})") from e
+
+
+def canonical_result_url(test, raw_result):
+    """`raw_result` with its URL replaced by `test.url` when the two differ
+    only in percent-encoding, otherwise unchanged.
+
+    `testharnessreport.js` reports `location.pathname + location.search`,
+    which the browser percent-encodes; `test.url` is the manifest's literal
+    id. For an id with a space or other raw character in its query (`/xhr/
+    xmlhttprequest-timeout-*.html?aborted immediately after send()` — 54
+    manifest ids) the two never match, and `TestharnessResultConverter`'s
+    `result_url == test.url` assertion threw away a real result as
+    INTERNAL-ERROR, restarting the browser each time. Comparing the decoded
+    forms keeps the assertion's real job — catching a result that belongs to a
+    *different* test (BUG-1268) — intact.
+    """
+    result_url = raw_result[0]
+    if result_url != test.url and unquote(result_url) == unquote(test.url):
+        return [test.url] + list(raw_result[1:])
+    return raw_result
 
 
 #: Text Lumen's BiDi server returns when its UI-thread automation channel did
@@ -209,6 +286,10 @@ class LumenBidiProtocol(Protocol):
         self.capabilities = capabilities
         self.loop = asyncio.new_event_loop()
         self.session = None
+        #: Set by `run_capped` when a test overran its hard cap: the browser
+        #: stopped answering, so `teardown` does not wait for its close
+        #: handshake.
+        self.wedged = False
         #: Top-level browsing context tests navigate in; fetched once in
         #: `after_connect` and reused for every test (single-window executor).
         self.context_id = None
@@ -238,7 +319,11 @@ class LumenBidiProtocol(Protocol):
     def teardown(self):
         if self.session is not None:
             try:
-                self.loop.run_until_complete(self.session.end())
+                # Bounded (`TEARDOWN_CLOSE_S`): a wedged browser never answers
+                # the close frame, and `testrunner.py` only gives the whole
+                # runner process `join(10)` before terminating it.
+                self.loop.run_until_complete(asyncio.wait_for(
+                    self.session.end(), 0.1 if self.wedged else TEARDOWN_CLOSE_S))
             except Exception:
                 self.logger.debug(traceback.format_exc())
             self.session = None
@@ -323,13 +408,14 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         timeout = (test.timeout * self.timeout_multiplier
                    if self.debug_info is None else None)
         try:
-            raw_result = self.protocol.run(self._run_testharness(url, timeout))
+            raw_result = run_capped(self.protocol, self._run_testharness(url, timeout),
+                                    hard_cap_s(timeout, self.extra_timeout), url)
         except Exception as e:
             lost = _lost_browser(self.protocol, url, e)  # BUG-1022
             if lost is not None:
                 raise lost from e
             raise
-        return self.convert_result(test, raw_result)
+        return self.convert_result(test, canonical_result_url(test, raw_result))
 
     async def _run_testharness(self, url, timeout):
         session = self.protocol.session
@@ -894,7 +980,8 @@ class LumenCrashtestExecutor(CrashtestExecutor):
         timeout = (test.timeout * self.timeout_multiplier
                    if self.debug_info is None else None)
         try:
-            self.protocol.run(self._run_crashtest(url, timeout))
+            run_capped(self.protocol, self._run_crashtest(url, timeout),
+                       hard_cap_s(timeout, self.extra_timeout), url)
         except ExecutorException as e:
             return test.make_result(e.status, e.message), []
         except Exception as e:
