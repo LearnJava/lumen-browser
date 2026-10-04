@@ -788,7 +788,7 @@ pub(in crate::style) fn apply_decl_layout(
         }
         // Shorthand: `place-items: <align-items> [<justify-items>]?`
         "place-items" => {
-            let parts: Vec<&str> = val.split_whitespace().collect();
+            let parts = place_tokens(val);
             if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
                 style.align_items = a;
                 style.justify_items = parts
@@ -798,7 +798,7 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "place-self" => {
-            let parts: Vec<&str> = val.split_whitespace().collect();
+            let parts = place_tokens(val);
             if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
                 style.align_self = a;
                 style.justify_self = parts
@@ -1167,6 +1167,23 @@ struct RuleTriplet {
     width: Option<f32>,
     style: Option<BorderStyle>,
     color: Option<crate::style::CssColor>,
+}
+
+/// Токены значения `place-items`/`place-self`: слова через пробел, но
+/// `first baseline` / `last baseline` — один токен (CSS Box Alignment L3 §6.1).
+fn place_tokens(val: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = val.split_whitespace().peekable();
+    while let Some(t) = it.next() {
+        let is_baseline_prefix = t.eq_ignore_ascii_case("first") || t.eq_ignore_ascii_case("last");
+        if is_baseline_prefix && it.peek().is_some_and(|n| n.eq_ignore_ascii_case("baseline")) {
+            it.next();
+            out.push(format!("{t} baseline"));
+        } else {
+            out.push(t.to_string());
+        }
+    }
+    out
 }
 
 /// Разбор значения шортхенда `column-rule` / `row-rule` / `rule`:

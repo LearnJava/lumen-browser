@@ -776,6 +776,7 @@ fn align_value_to_css(a: AlignValue) -> &'static str {
         AlignValue::End => "end",
         AlignValue::Center => "center",
         AlignValue::Baseline => "baseline",
+        AlignValue::LastBaseline => "last baseline",
         AlignValue::SpaceBetween => "space-between",
         AlignValue::SpaceAround => "space-around",
         AlignValue::SpaceEvenly => "space-evenly",

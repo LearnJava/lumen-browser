@@ -64,6 +64,8 @@ use inline_wrap::{caps_synthesis, char_break_offset, try_hyp_break, SMALL_CAPS_S
 mod grid;
 pub use grid::resolve_auto_fill_fit_count;
 
+mod baseline;
+use baseline::BaselineSide;
 mod flex;
 use flex::UsedSizeOverride;
 

@@ -978,6 +978,9 @@ pub enum AlignValue {
     Center,
     /// `baseline` — выровнять text-baseline (для align-items).
     Baseline,
+    /// `last baseline` — выровнять по последней базовой линии (CSS Box Alignment L3 §9.3);
+    /// во flex прижимает группу к cross-end, а не к cross-start, как `baseline`.
+    LastBaseline,
     /// `space-between` — равные промежутки между items, по краям нет.
     SpaceBetween,
     /// `space-around` — промежутки между + половинные по краям.
@@ -988,7 +991,7 @@ pub enum AlignValue {
 
 impl AlignValue {
     pub fn parse(s: &str) -> Option<Self> {
-        let lc = s.trim().to_ascii_lowercase();
+        let lc = s.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
         match lc.as_str() {
             "auto" => Some(Self::Auto),
             "normal" => Some(Self::Normal),
@@ -996,7 +999,8 @@ impl AlignValue {
             "start" | "flex-start" | "self-start" => Some(Self::Start),
             "end" | "flex-end" | "self-end" => Some(Self::End),
             "center" => Some(Self::Center),
-            "baseline" | "first baseline" | "last baseline" => Some(Self::Baseline),
+            "baseline" | "first baseline" => Some(Self::Baseline),
+            "last baseline" => Some(Self::LastBaseline),
             "space-between" => Some(Self::SpaceBetween),
             "space-around" => Some(Self::SpaceAround),
             "space-evenly" => Some(Self::SpaceEvenly),

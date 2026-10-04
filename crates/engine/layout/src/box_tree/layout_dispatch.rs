@@ -1299,10 +1299,20 @@ pub(super) fn dispatch_box(
                 let fs = b.style.font_size;
                 let fam = &b.style.font_family;
                 let gap = m.line_gap_px_with_families(fs, fam).round();
-                (
+                let (sa, sd) = (
                     m.ascent_px_with_families(fs, fam).round() + (gap / 2.0).floor(),
                     m.descent_px_with_families(fs, fam).round() + (gap / 2.0).ceil(),
-                )
+                );
+                // Явное межстрочье короче content area (`line-height: 0`/`1`) сжимает
+                // strut с обеих сторон поровну (CSS 2.1 §10.8.1: отрицательное
+                // half-leading). Положительное не добавляется — см. выше, а
+                // `normal` не трогаем вовсе: он и есть content area.
+                let shrink = if b.style.line_height_is_normal {
+                    0.0
+                } else {
+                    ((sa + sd - b.used_line_height) / 2.0).max(0.0)
+                };
+                (sa - shrink, sd - shrink)
             });
             // Half x-height of the row's font: locates `vertical-align: middle`
             // relative to the baseline (CSS 2.1 §10.8.1).
