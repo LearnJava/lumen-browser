@@ -310,6 +310,14 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   runner (re)start ~2 s. Shard startup 16.7 → 8.5 s, runner start 2.0 → 0.33 s
   median, verdicts unchanged — §старт шарда; pinned by
   `verify_lazy_startup.py`. Keep new imports in `run_smoke.py` lazy.
+  And in `browsers/lumen.py`: browser launches of one wptrunner process are
+  serialized (`_SPAWN_LOCK` around `ProcessHandler.run()`). On Windows
+  mozprocess spawns with `bInheritHandles=1`, so a browser launched by another
+  manager at the same moment inherited the previous launch's stdout pipe;
+  killing that browser on a restart then got no EOF and `kill(timeout=5)` sat
+  out the full timeout — 6.1 s (12.1 s two-deep) on ~1 restart in 5.
+  `LUMEN_WPT_SPAWN_LOCK=off` — old behaviour. §одновременный запуск
+  браузеров; pinned by `verify_spawn_lock.py`.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
