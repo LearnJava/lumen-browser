@@ -1018,3 +1018,40 @@ use super::text_and_images::Fixed8;
         // negative layer (y=40) first, then the in-flow white box (y=10).
         assert_eq!(fill_ys(&dl), vec![40.0, 10.0]);
     }
+
+    // ── overflow: hidden, сдвинутый скриптом ───────────────────────────
+
+    fn scroll_layers_of(dl: &[DisplayCommand]) -> Vec<(f32, f32)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushScrollLayer { scroll_x, scroll_y, .. } => Some((*scroll_x, *scroll_y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn overflow_hidden_scrolled_by_script_gets_scroll_layer() {
+        // `scrollBy()` moves an `overflow: hidden` box too (CSS Overflow L3 §2):
+        // its content is wrapped in a PushScrollLayer inside the clip, no scrollbars.
+        let mut tree = layout_for(
+            "<div class='s'><div class='tall'>x</div></div>",
+            "body { margin: 0; } .s { overflow: hidden; width: 100px; height: 80px; } .tall { height: 400px; }",
+        );
+        let before = ordered_of(&tree);
+        assert!(scroll_layers_of(&before).is_empty(), "без сдвига — обычный клип");
+        fn hidden_node(b: &lumen_layout::LayoutBox) -> Option<lumen_dom::NodeId> {
+            if b.style.overflow_y == lumen_layout::style::Overflow::Hidden {
+                return Some(b.node);
+            }
+            b.children.iter().find_map(hidden_node)
+        }
+        let node = hidden_node(&tree).expect("overflow:hidden box");
+        assert!(lumen_layout::set_scroll_position(&mut tree, node, 0.0, 30.0));
+        let dl = ordered_of(&tree);
+        assert_eq!(scroll_layers_of(&dl), vec![(0.0, 30.0)]);
+        let pushes = dl.iter().filter(|c| matches!(c, DisplayCommand::PushScrollLayer { .. })).count();
+        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopScrollLayer)).count();
+        assert_eq!(pushes, pops);
+        assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::DrawScrollbar { .. })));
+    }

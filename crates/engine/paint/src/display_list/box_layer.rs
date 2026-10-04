@@ -171,6 +171,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
                 // Стандартный PushClipRect (rect-только)
                 overflow_pre.push(DisplayCommand::PushClipRect { rect: cr });
             }
+            // `hidden` scrolled by script: see the same branch in `walk`.
+            if scrolled_hidden(b) {
+                overflow_pre.push(DisplayCommand::PushScrollLayer {
+                    clip_rect: cr,
+                    scroll_x: b.scroll_x,
+                    scroll_y: b.scroll_y,
+                });
+                overflow_post.push(DisplayCommand::PopScrollLayer);
+            }
             overflow_post.push(DisplayCommand::PopClip);
         }
     }
