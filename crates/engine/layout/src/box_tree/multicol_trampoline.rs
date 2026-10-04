@@ -21,6 +21,28 @@ pub(super) struct SegmentInit {
     pub(super) sliceable: bool,
 }
 
+/// CSS Multicol L2 §4.2 / §4.4 — rows of column boxes: a non-`auto` `column-height` with
+/// `column-wrap` other than `nowrap`. Content past `n_cols` columns of `col_h` opens a new
+/// row in the block direction (`row_gap` below the previous one) instead of an overflow
+/// column in the inline direction, and a row keeps `col_h` even when only partly filled.
+#[derive(Clone, Copy)]
+pub(super) struct ColRows {
+    pub(super) col_h: f32,
+    pub(super) row_gap: f32,
+}
+
+impl ColRows {
+    /// Distance between the tops of two consecutive rows.
+    fn pitch(self) -> f32 {
+        self.col_h + self.row_gap
+    }
+
+    /// Block extent of `rows` rows, `row_gap` between them.
+    fn extent(self, rows: usize) -> f32 {
+        rows as f32 * self.col_h + rows.saturating_sub(1) as f32 * self.row_gap
+    }
+}
+
 /// Loop-entry state for the multicol dispatch arm's per-segment placement
 /// pass (CSS Multicol §3.4) — everything the removed inline function
 /// (pre-LAYOUT-2-срез-7 `multicol_abspos.rs`'s `lay_out_multicol_children`)
@@ -45,6 +67,8 @@ pub(super) struct MulticolInit {
     pub(super) col_w: f32,
     pub(super) balance: bool,
     pub(super) container_h: Option<f32>,
+    /// `Some` when overflow columns wrap into rows (see [`ColRows`]).
+    pub(super) col_rows: Option<ColRows>,
     pub(super) segments: Vec<SegmentInit>,
     pub(super) children_pcb: Rect,
     // Phase-epilogue inputs (`finish_frame` only) — ride along unchanged from
@@ -305,7 +329,9 @@ pub(super) fn run(
                 let i = pending_index(&current);
                 let col = current.col_assignment[current.k];
                 let col_w = current.init.col_w;
-                let col_x = current.init.content_x + col as f32 * (col_w + current.init.col_gap);
+                // With rows the fragment number counts across rows; its column is the remainder.
+                let col_in_row = if current.init.col_rows.is_some() { col % current.init.n_cols as usize } else { col };
+                let col_x = current.init.content_x + col_in_row as f32 * (col_w + current.init.col_gap);
                 let col_y = current.col_y[col];
                 let pcb = current.init.children_pcb;
                 match dispatch_child(&mut current.init.work[i], col_x, col_y, col_w, pcb, measurer, viewport, hp) {
@@ -418,7 +444,11 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     let outer_hs = frame.outer_hs.clone();
 
     let total_h: f32 = outer_hs.iter().sum();
-    let col_h = column_height(balance, container_h, total_h, n_cols as usize);
+    let rows_cfg = frame.init.col_rows;
+    let col_h = match rows_cfg {
+        Some(r) => r.col_h.max(1.0),
+        None => column_height(balance, container_h, total_h, n_cols as usize),
+    };
 
     // Virtual single-column stack: each box's border-box occupies
     // [virtual_top, virtual_top + height), with margins as gaps.
@@ -434,12 +464,26 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     // Emit one clipped fragment per (column, box) overlap. Content that does
     // not fit into `n_cols` columns of `col_h` flows into overflow columns
     // laid out further along the inline axis (CSS Multicol L1 §7.1).
-    let used_cols = overflow_columns(total_h, col_h, n_cols as usize);
+    // With rows (L2 §4.4) the fragments are numbered across rows: fragment `f` is column
+    // `f % n_cols` of row `f / n_cols`, and the last row is completed to `n_cols` columns.
+    let (used_cols, rows_used) = match rows_cfg {
+        Some(_) => {
+            let needed = ((total_h - 0.01) / col_h).ceil().max(1.0) as usize;
+            let rows = needed.div_ceil(n_cols as usize).max(1);
+            (rows * n_cols as usize, rows)
+        }
+        None => (overflow_columns(total_h, col_h, n_cols as usize), 1),
+    };
     let mut seg_extent = 0.0f32;
     for c in 0..used_cols {
         let col_lo = c as f32 * col_h;
         let col_hi = col_lo + col_h;
-        let col_x = content_x + c as f32 * (col_w + col_gap);
+        let (col_in_row, row) = match rows_cfg {
+            Some(_) => (c % n_cols as usize, c / n_cols as usize),
+            None => (c, 0),
+        };
+        let col_x = content_x + col_in_row as f32 * (col_w + col_gap);
+        let row_y = rows_cfg.map_or(0.0, |r| row as f32 * r.pitch());
         for &(i, bt, bh) in &stack {
             let bb = bt + bh;
             let ov_lo = bt.max(col_lo);
@@ -447,7 +491,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
             if ov_hi > ov_lo {
                 let mut frag = frame.init.work[i].clone();
                 frag.rect.x = col_x;
-                frag.rect.y = cur_y + (ov_lo - col_lo);
+                frag.rect.y = cur_y + row_y + (ov_lo - col_lo);
                 frag.rect.width = col_w;
                 frag.rect.height = ov_hi - ov_lo;
                 seg_extent = seg_extent.max(ov_hi - col_lo);
@@ -457,6 +501,9 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     }
     for &i in &item_idxs {
         frame.init.consumed[i] = true;
+    }
+    if let Some(r) = rows_cfg {
+        seg_extent = r.extent(rows_used);
     }
     frame.init.cur_y += seg_extent.max(0.0);
 }
@@ -473,7 +520,9 @@ fn compute_col_assignment(frame: &mut Frame) {
     let cur_y = frame.init.cur_y;
     let outer_hs = &frame.outer_hs;
     let total_h: f32 = outer_hs.iter().sum();
-    let target_h = if balance {
+    let target_h = if let Some(r) = frame.init.col_rows {
+        r.col_h.max(1.0)
+    } else if balance {
         let balanced = balanced_column_height(outer_hs, n_cols);
         container_h.map_or(balanced, |limit| balanced.min(limit.max(1.0)))
     } else {
@@ -500,7 +549,11 @@ fn compute_col_assignment(frame: &mut Frame) {
         col_assignment[j] = cur_col;
         col_fill[cur_col] += oh;
     }
-    frame.col_y = vec![cur_y; col_fill.len()];
+    frame.col_y = match frame.init.col_rows {
+        // A fragment of row `f / n_cols` starts that row's distance below the segment top.
+        Some(r) => (0..col_fill.len()).map(|f| cur_y + (f / n_cols) as f32 * r.pitch()).collect(),
+        None => vec![cur_y; col_fill.len()],
+    };
     frame.col_assignment = col_assignment;
 }
 
@@ -524,7 +577,14 @@ fn post_place_item(frame: &mut Frame, i: usize, viewport: Size) {
 /// per-column cursors into `cur_y`, copied verbatim from the removed code's
 /// `cur_y = col_y.into_iter().fold(cur_y, f32::max)`.
 fn finish_place_phase(frame: &mut Frame) {
-    frame.init.cur_y = frame.col_y.iter().copied().fold(frame.init.cur_y, f32::max);
+    frame.init.cur_y = match frame.init.col_rows {
+        // A row keeps `column-height` however little of it the content fills.
+        Some(r) => {
+            let rows = frame.col_y.len().div_ceil(frame.init.n_cols as usize).max(1);
+            frame.init.cur_y + r.extent(rows)
+        }
+        None => frame.col_y.iter().copied().fold(frame.init.cur_y, f32::max),
+    };
     enter_span_phase(frame);
 }
 

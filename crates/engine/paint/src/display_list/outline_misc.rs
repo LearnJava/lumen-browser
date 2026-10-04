@@ -91,7 +91,10 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     if s.column_count.is_none() && s.column_width.is_none() {
         return;
     }
-    if !s.column_rule_style.iter().any(|st| st.is_visible()) || !s.column_rule_width.iter().any(|w| *w > 0.0) {
+    let rows = s.column_height.is_some() && !s.column_wrap_nowrap;
+    if !rows
+        && (!s.column_rule_style.iter().any(|st| st.is_visible()) || !s.column_rule_width.iter().any(|w| *w > 0.0))
+    {
         return;
     }
 
@@ -119,31 +122,28 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let vp = Size::new(content_w, content_h);
     let col_gap = s.column_gap.resolve_or_zero(em, content_w, vp).max(0.0);
 
-    // Mirror column count computation from lay_out_multicol_children.
-    let n_cols: u32 = match (s.column_count, &s.column_width) {
-        (Some(n), Some(w_len)) => {
-            if let Some(w) = w_len.resolve(em, Some(content_w), vp)
-                && w > 0.0
-            {
-                let n_from_w = ((content_w + col_gap) / (w + col_gap)).floor() as u32;
-                n.min(n_from_w).max(1)
-            } else {
-                n.max(1)
-            }
+    let n_cols = crate::multicol_gap_decorations::multicol_column_count(s, em, content_w, col_gap, vp);
+
+    // CSS Multicol L2 §4.4: with a `column-height` and `column-wrap: wrap` the overflow columns
+    // form rows, so both the column and the row rules are drawn per row.
+    if s.column_rows_wrap(em, vp)
+        && let Some(col_h) = s.column_height_px(em, vp)
+    {
+        let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+        let geom = crate::multicol_gap_decorations::MulticolGeom {
+            content_x,
+            content_y,
+            content_w,
+            col_w,
+            col_gap,
+            n_cols,
+            col_h,
+            row_gap: s.row_gap.resolve_or_zero(em, content_h, vp).max(0.0),
+        };
+        if crate::multicol_gap_decorations::emit_multicol_row_rules(b, &geom, content_h, out) {
+            return;
         }
-        (Some(n), None) => n.max(1),
-        (None, Some(w_len)) => {
-            if let Some(w) = w_len.resolve(em, Some(content_w), vp)
-                && w > 0.0
-            {
-                ((content_w + col_gap) / (w + col_gap)).floor() as u32
-            } else {
-                1
-            }
-        }
-        (None, None) => 1,
     }
-    .max(1);
 
     if n_cols <= 1 || col_gap <= 0.0 {
         return;

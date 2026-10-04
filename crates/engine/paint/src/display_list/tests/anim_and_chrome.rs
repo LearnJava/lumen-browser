@@ -862,6 +862,79 @@ use lumen_dom::NodeId;
         assert!((rect.height - 92.0).abs() < 0.01 && (rect.y - 4.0).abs() < 0.01, "rect {rect:?}");
     }
 
+    // ── CSS Multicol L2 rows of columns: column + row rules (WPT css-gaps/multicol 004/014/034) ──
+
+    fn row_rule_cmds(dl: &DisplayList) -> Vec<(f32, f32, f32, f32)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, widths: [0.0, 0.0, h, 0.0], .. } if *h > 0.0 => {
+                    Some((rect.x, rect.y, rect.width, rect.height))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn col_rule_rects(dl: &DisplayList) -> Vec<(f32, f32, f32, f32)> {
+        let mut v: Vec<_> = column_rule_cmds(dl)
+            .into_iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, .. } => Some((rect.x, rect.y, rect.width, rect.height)),
+                _ => None,
+            })
+            .collect();
+        v.sort_by(|a, b| (a.1, a.0).partial_cmp(&(b.1, b.0)).unwrap());
+        v
+    }
+
+    const ROWS_CSS: &str = "width:200px;column-count:3;column-width:60px;column-gap:10px;row-gap:10px;        column-height:60px;column-wrap:wrap;column-fill:auto;column-rule:4px solid blue;row-rule:4px solid gold;";
+    const SIX_P: &str = r#"<p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p>
+                           <p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p>"#;
+
+    #[test]
+    fn multicol_rows_draw_column_rules_per_row_and_a_row_rule() {
+        // multicol-gap-decorations-004: two rows → 2 column gaps × 2 rows of column rules and
+        // one row rule through the 10px row gap (y 60..70, rule 4px centred at y 63).
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}">{SIX_P}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        assert_eq!(cols.len(), 4, "{cols:?}");
+        assert_eq!((cols[0].0, cols[0].1, cols[0].3), (63.0, 0.0, 60.0));
+        assert_eq!((cols[2].0, cols[2].1, cols[2].3), (63.0, 70.0, 60.0));
+        let rows = row_rule_cmds(&dl);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!((rows[0].0, rows[0].1, rows[0].2, rows[0].3), (0.0, 63.0, 200.0, 4.0));
+    }
+
+    #[test]
+    fn multicol_rows_hide_rules_next_to_empty_cells() {
+        // Four items: row 2 holds one. `normal` column visibility is `between` — no column rule
+        // in row 2; the row rule stays whole (`normal` = `all` for rows).
+        let html = r#"<p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p>
+                      <p style="height:60px;margin:0"></p>"#;
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}">{html}</div>"#), "");
+        assert_eq!(col_rule_rects(&dl).len(), 2, "only row 1 has two filled neighbours");
+        assert_eq!(row_rule_cmds(&dl).len(), 1);
+    }
+
+    #[test]
+    fn multicol_rows_row_rule_break_intersection_cuts_at_column_gaps() {
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}row-rule-break:intersection">{SIX_P}</div>"#), "");
+        let rows = row_rule_cmds(&dl);
+        assert_eq!(rows.len(), 3, "one piece per column: {rows:?}");
+        assert_eq!((rows[0].0, rows[0].2), (0.0, 60.0));
+    }
+
+    #[test]
+    fn multicol_without_column_height_ignores_column_wrap() {
+        let dl = build(
+            r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;column-wrap:wrap;
+                           column-rule:10px solid gold;background:white"></div>"#,
+            "",
+        );
+        assert_eq!(column_rule_cmds(&dl).len(), 1);
+        assert!(row_rule_cmds(&dl).is_empty());
+    }
+
     // ── position:sticky display list tests ──────────────────────────────────
 
     #[test]
