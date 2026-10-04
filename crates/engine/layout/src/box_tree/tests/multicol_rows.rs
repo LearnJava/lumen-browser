@@ -67,3 +67,14 @@ fn a_spanner_splits_the_first_row_and_the_rest_fills_what_is_left() {
     let s = rect(&root, &doc, "s");
     assert_eq!((s.x, s.y, s.width, s.height), (0.0, 40.0, 200.0, 18.0));
 }
+
+#[test]
+fn a_single_column_is_sliced_into_rows_by_its_column_height() {
+    // WPT multicol-gap-decorations-021: `columns: 1 / 20px`, a 70px block. One column per row,
+    // so the block is cut into four rows of 20px (the last one keeps the full column height) a
+    // row-gap (10px) apart: 4 × 20 + 3 × 10.
+    let html = r#"<div id="c"><p id="a"></p></div>"#;
+    let css = "body{margin:0} p{height:70px;margin:0} #c{width:100px;columns:1/20px;gap:10px}";
+    let (doc, root) = lay(html, css);
+    assert_eq!(rect(&root, &doc, "c").height, 110.0);
+}
