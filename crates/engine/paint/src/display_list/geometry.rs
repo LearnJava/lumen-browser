@@ -386,7 +386,11 @@ pub fn fit_image_quad(
 pub(crate) fn border_style_short(s: BorderStyle) -> &'static str {
     match s {
         BorderStyle::None | BorderStyle::Hidden => "n",
-        BorderStyle::Solid | BorderStyle::Groove | BorderStyle::Ridge | BorderStyle::Inset | BorderStyle::Outset => "s",
+        BorderStyle::Solid => "s",
+        BorderStyle::Groove => "gr",
+        BorderStyle::Ridge => "ri",
+        BorderStyle::Inset => "in",
+        BorderStyle::Outset => "ou",
         BorderStyle::Dashed => "da",
         BorderStyle::Dotted => "do",
         BorderStyle::Double => "db",

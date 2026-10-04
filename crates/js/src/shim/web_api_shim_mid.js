@@ -2466,11 +2466,9 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // (`crates/engine/layout/src/style.rs::parse_overflow_kw` and neighbors),
 // NOT the full CSS spec grammar where the engine doesn't implement it yet
 // (e.g. `visibility: collapse` IS in this list — the engine recognizes it —
-// but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are NOT
-// (срез 13), since `BorderStyle` has no variants for them,
-// `style/values/box_model.rs` — the five values it does list
-// (`none`/`solid`/`dashed`/`dotted`/`double`) are the full grammar
-// `parse_border_style_kw` (`style/parse/box_sides.rs`) accepts.
+// but `border-style`'s `hidden` is NOT (срез 13) — `parse_border_style_kw`
+// (`style/parse/box_sides.rs`) accepts `none`/`solid`/`dashed`/`dotted`/`double`
+// and, since the volumetric-border slice, `groove`/`ridge`/`inset`/`outset`.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
 // exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
@@ -2563,19 +2561,19 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // logical ones resolve through the same `parse_border_style_kw` as their
     // physical counterparts, `crates/engine/layout/src/style/apply/paint.rs`
     // — identical grammar, same pattern as the border-*-width logical
-    // longhands, срез 2/4). List is the five keywords the engine's own
-    // parser accepts — see the срез-7-note edit above for why `hidden`/
-    // `groove`/`ridge`/`inset`/`outset` are excluded. The `border-style`
+    // longhands, срез 2/4). List is the nine keywords the engine's own
+    // parser accepts (`BorderStyle` has `groove`/`ridge`/`inset`/`outset` since
+    // the gap-rule slices; `hidden` stays unreachable from `border-style`). The `border-style`
     // shorthand itself is wired separately, through
     // `_LUMEN_TRBL_SHORTHAND_CANON` (it reuses `border-top-style`'s list).
-    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
     // CSS Box Alignment L3 (срез 15): all six align-/justify- longhands
     // share ONE list, mirroring `AlignValue::parse`
     // (`crates/engine/layout/src/style/values/flexgrid.rs`) — the engine

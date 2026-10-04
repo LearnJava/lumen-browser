@@ -349,17 +349,17 @@ pub enum BorderStyle {
     /// Из `border-style` недостижим (его разбор знает пять ключевых слов); приходит
     /// только из `*-rule-style` (CSS Gap Decorations L1 §4.2).
     Hidden,
-    /// `groove` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
-    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
+    /// `groove` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
     Groove,
-    /// `ridge` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
-    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
+    /// `ridge` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
     Ridge,
-    /// `inset` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
-    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
+    /// `inset` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
     Inset,
-    /// `outset` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
-    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
+    /// `outset` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
     Outset,
 }
 

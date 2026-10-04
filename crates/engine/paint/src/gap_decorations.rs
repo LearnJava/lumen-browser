@@ -222,7 +222,7 @@ fn darkened(c: Color) -> Color {
 /// derive them (`BoxBorderPainter::CalculateBorderStyleColor`): a very dark colour gets two
 /// lighter shades (`black` → `#545454` / `#A8A8A8`), any other one its `Dark()` and either
 /// itself (light colours) or its `Light()`. Alpha is kept.
-fn groove_shades(c: Color) -> (Color, Color) {
+pub(crate) fn groove_shades(c: Color) -> (Color, Color) {
     let lum = linear_luminance(c);
     if lum <= DARK_COLOR_LUMINANCE {
         return (lightened(c), lightened(lightened(c)));

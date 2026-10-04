@@ -177,7 +177,10 @@ pub(in crate::style) fn parse_padding_shorthand(val: &str, is_quirks: bool) -> O
 }
 
 fn is_border_style_kw(s: &str) -> bool {
-    matches!(s.trim(), "none" | "solid" | "dashed" | "dotted" | "double")
+    matches!(
+        s.trim(),
+        "none" | "solid" | "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset"
+    )
 }
 
 pub(in crate::style) fn parse_border_style_kw(s: &str) -> BorderStyle {
@@ -186,6 +189,10 @@ pub(in crate::style) fn parse_border_style_kw(s: &str) -> BorderStyle {
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
         "double" => BorderStyle::Double,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
         _ => BorderStyle::None,
     }
 }
@@ -197,20 +204,19 @@ pub(in crate::style) fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
         "dashed" => Some(BorderStyle::Dashed),
         "dotted" => Some(BorderStyle::Dotted),
         "double" => Some(BorderStyle::Double),
+        "groove" => Some(BorderStyle::Groove),
+        "ridge" => Some(BorderStyle::Ridge),
+        "inset" => Some(BorderStyle::Inset),
+        "outset" => Some(BorderStyle::Outset),
         _ => None,
     }
 }
 
 /// CSS Gap Decorations L1 §4.2 — `<line-style>` целиком (десять ключевых слов):
-/// в отличие от `border-style` у `*-rule-style` разбирается и `hidden`, и объёмные
-/// `groove`/`ridge`/`inset`/`outset`.
+/// в отличие от `border-style` у `*-rule-style` разбирается и `hidden`.
 pub(in crate::style) fn parse_rule_style_opt(s: &str) -> Option<BorderStyle> {
     match s.trim().to_ascii_lowercase().as_str() {
         "hidden" => Some(BorderStyle::Hidden),
-        "groove" => Some(BorderStyle::Groove),
-        "ridge" => Some(BorderStyle::Ridge),
-        "inset" => Some(BorderStyle::Inset),
-        "outset" => Some(BorderStyle::Outset),
         other => parse_border_style_opt(other),
     }
 }

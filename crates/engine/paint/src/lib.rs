@@ -14,6 +14,7 @@
 pub mod atlas;
 pub mod backend;
 pub mod blend_modes;
+pub mod border_bevel;
 pub mod color_management;
 pub mod dash_math;
 pub mod gradient_math;
