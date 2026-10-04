@@ -70,6 +70,47 @@ os.environ.setdefault("LUMEN_DISABLE_CANVAS_NOISE", "1")
 # rendered sample) the same way uncontrolled canvas noise did above.
 os.environ.setdefault("LUMEN_DISABLE_AUDIO_NOISE", "1")
 
+#: WPT-RUN-9 parallel lanes: path of a `config.json` that replaces
+#: `tests/wpt/config.json` for this one wptrunner process. Upstream reads the
+#: override from a fixed place (`environment.py::build_config`,
+#: `serve_path(test_paths)/config.json`), so two concurrent shards would both
+#: bind 18300/18443/… and the second would die at wptserve startup.
+#: `run_corpus.py --parallel-shards` writes one port-shifted copy per lane and
+#: points each shard at its lane's copy through this variable.
+SERVER_CONFIG_ENV = "LUMEN_WPT_SERVER_CONFIG"
+
+
+def _install_server_config_override() -> None:
+    """Make `TestEnvironment.build_config` apply `$LUMEN_WPT_SERVER_CONFIG`.
+
+    Patched rather than edited in `tools/wptrunner` so the vendored tree stays
+    upstream-identical. Upstream's `build_config` runs unchanged (defaults,
+    then `tests/wpt/config.json`); the lane file is merged on top through the
+    same `ConfigBuilder.update` upstream uses, so only the keys it names —
+    the ports — differ from a normal run.
+    """
+    path = os.environ.get(SERVER_CONFIG_ENV)
+    if not path:
+        return
+    if not os.path.isfile(path):
+        raise SystemExit(f"{SERVER_CONFIG_ENV}={path}: no such file")
+    import json  # noqa: PLC0415
+    from wptrunner import environment  # noqa: PLC0415 — after sys.path setup
+
+    with open(path, encoding="utf-8") as fh:
+        override = json.load(fh)
+    original_build_config = environment.TestEnvironment.build_config
+
+    def build_config(self):
+        config = original_build_config(self)
+        config.update(override)
+        return config
+
+    environment.TestEnvironment.build_config = build_config
+
+
+_install_server_config_override()
+
 
 def default_binary() -> str:
     profile = os.environ.get("LUMEN_PROFILE", "release")

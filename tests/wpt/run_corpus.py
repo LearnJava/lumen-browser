@@ -46,6 +46,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -389,6 +390,12 @@ def _shard(name: str, prefix, ids: list, automatable: set, long_tests: set) -> d
 
 
 def shard_report_path(out_dir: str, shard: dict) -> str:
+    # A batch (`plan_units`) keeps its own report out of `out_dir`'s top level:
+    # `load_results` reads every `*.json` there as a shard report, and the
+    # batch's verdicts reach it through the per-member files `split_batch`
+    # writes instead.
+    if shard.get("report_path"):
+        return shard["report_path"]
     return os.path.join(out_dir, shard["name"].replace("/", "__") + ".json")
 
 
@@ -597,10 +604,22 @@ def shard_produced_nothing(out_dir: str, shard: dict) -> bool:
     return not rescue_results(raw_path)
 
 
+def shard_targets(shard: dict) -> list:
+    """The positional test filters wptrunner gets for a shard or a batch."""
+    members = shard.get("members") or [shard]
+    targets = []
+    for member in members:
+        targets.extend(member["test_ids"] if member.get("test_ids") else [member["prefix"]])
+    return targets
+
+
 def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int,
-              exclude_file: str = None) -> dict:
-    """Run one shard as a subprocess; never raises on a failing shard."""
+              exclude_file: str = None, extra_env: dict = None) -> dict:
+    """Run one shard (or one batch of them, `plan_units`) as a subprocess;
+    never raises on a failing shard. `extra_env` carries the parallel lane's
+    server config (`run_smoke.SERVER_CONFIG_ENV`)."""
     report_path = shard_report_path(out_dir, shard)
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
     log_path = os.path.splitext(report_path)[0] + ".log"
     raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
     argv = [
@@ -620,7 +639,8 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         argv.append(f"--exclude-file={exclude_file}")
     if processes:
         argv.append(f"--processes={processes}")
-    argv.extend(shard["test_ids"] if shard.get("test_ids") else [shard["prefix"]])
+    argv.extend(shard_targets(shard))
+    env = dict(os.environ, **extra_env) if extra_env else None
 
     # A shard that dies before its first test is worth one immediate second
     # attempt: it costs seconds, and the failure it recovers from is transient.
@@ -641,7 +661,7 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         started = time.time()
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
-                                     start_new_session=(os.name != "nt"))
+                                     start_new_session=(os.name != "nt"), env=env)
             try:
                 returncode = proc.wait(timeout=timeout)
                 outcome = "ran"
@@ -683,6 +703,367 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
     if log_says_port_conflict(log_path):
         state["port_conflict"] = True
     return state
+
+
+# --- WPT-RUN-9: batching small shards and running lanes in parallel ----------
+#
+# Measured on the 2026-08-20 corpus runs (`docs/wpt/runs/*.json`): 367 of 479
+# shards finished in under 120 s, 186 held at most 20 ids, and each of them
+# paid a full wptserve boot (~38 s, WPT-RUN-5 slice 15) for a median of 22-31 s
+# of work. wptrunner also caps its process count at the number of directories
+# a shard holds, so a small shard leaves most of `--processes` idle. And the
+# shards ran one after another on a machine whose CPU sat at ~1.2 busy threads
+# of 16 (PERF-10 slice 2): the wall clock is spent waiting on test timeouts.
+# Two independent remedies follow, both off by default:
+#
+# * `--batch-small N` runs consecutive small shards as one wptrunner process
+#   and splits the report back per shard afterwards (`split_batch`), so
+#   `state.json`, `--resume`, `score_audit.py` and every other reader still see
+#   exactly the shards `plan_shards` produced;
+# * `--parallel-shards K` runs K units at once, each lane on its own copy of the
+#   server ports (`lane_server_config`), which is what makes two wptserves on
+#   one machine possible at all.
+
+#: Shards at most this many automatable ids are candidates for a batch.
+BATCH_SMALL_DEFAULT = 150
+#: A `(bare)` shard is addressed by an explicit id list; past this many ids it
+#: is not batched, to keep the shard's command line bounded (Windows: 32 767
+#: characters for the whole command).
+BATCH_MAX_EXPLICIT_IDS = 50
+#: Port offset between lanes. Lane 0 keeps `config.json` as is; lane k adds
+#: k * LANE_PORT_STEP to every port. 18300…19000 + 1000·k stays clear of the
+#: Hyper-V excluded ranges seen on the dev machine (1077-1703, 11688-12782,
+#: 50000-50059) and of every port `lumen-network`'s bad-port list blocks.
+LANE_PORT_STEP = 1000
+#: Batches live here, inside `out_dir` but out of `load_results`' reach — it
+#: reads `out_dir/*.json` only, and a batch report there would be scored twice.
+BATCH_SUBDIR = "batches"
+#: Environment variable `run_smoke.py` reads a lane's server config from — the
+#: same name as `run_smoke.SERVER_CONFIG_ENV`, repeated rather than imported
+#: because importing `run_smoke` pulls in the whole of `wptrunner`.
+SERVER_CONFIG_ENV = "LUMEN_WPT_SERVER_CONFIG"
+
+
+def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
+    """Group shards into run units: big shards alone, small ones in batches.
+
+    A unit is a shard dict (run as before) or a batch: a shard-shaped dict with
+    `members` (the original shards, untouched), summed `ids`/`auto_ids`/
+    `long_ids` for the budget and a `report_path` under `BATCH_SUBDIR`. Small
+    shards are taken in plan order — neighbours are usually the same category —
+    and a batch closes once adding the next one would pass `max_ids`. Shards
+    that are not small, and a batch of one, stay as they were — with
+    `small == 0` the result is `shards` itself. Ordering is the caller's.
+    """
+    units, batch = [], []
+
+    def close():
+        if not batch:
+            return
+        if len(batch) == 1:
+            units.append(batch[0])
+        else:
+            first = batch[0]["name"].replace("/", "__").replace(" ", "_")
+            name = f"batch {first} +{len(batch) - 1}"
+            units.append({
+                "name": name, "prefix": None, "members": list(batch),
+                "ids": sum(s["ids"] for s in batch),
+                "auto_ids": sum(s.get("auto_ids", s["ids"]) for s in batch),
+                "long_ids": sum(s.get("long_ids", 0) for s in batch),
+                "report_path": os.path.join(out_dir, BATCH_SUBDIR,
+                                            f"{first}+{len(batch) - 1}.json"),
+            })
+        batch.clear()
+
+    for shard in shards:
+        batchable = (small > 0 and shard.get("auto_ids", shard["ids"]) <= small
+                     and len(shard.get("test_ids") or ()) <= BATCH_MAX_EXPLICIT_IDS)
+        if not batchable:
+            close()
+            units.append(shard)
+            continue
+        if batch and sum(s.get("auto_ids", s["ids"]) for s in batch) \
+                + shard.get("auto_ids", shard["ids"]) > max_ids:
+            close()
+        batch.append(shard)
+    close()
+    return units
+
+
+def member_owner(members: list):
+    """`test_id -> member shard name` for a batch, longest prefix first — the
+    same attribution rule `score_audit.shard_index` uses."""
+    explicit = {i: m["name"] for m in members for i in (m.get("test_ids") or ())}
+    prefixes = sorted(((m["prefix"], m["name"]) for m in members if m.get("prefix")),
+                      key=lambda pair: -len(pair[0]))
+
+    def owner(test_id: str):
+        if test_id in explicit:
+            return explicit[test_id]
+        for prefix, name in prefixes:
+            if test_id.startswith(prefix):
+                return name
+        return None
+    return owner
+
+
+def _repo_relative(path: str) -> str:
+    """`path` relative to the checkout, or absolute when it lies on another
+    drive (a scratch out-dir on Windows, where `relpath` raises)."""
+    try:
+        return os.path.relpath(path, REPO_ROOT)
+    except ValueError:
+        return os.path.abspath(path)
+
+
+def split_batch(batch: dict, state: dict, out_dir: str) -> list:
+    """Turn one finished batch back into per-shard states and reports.
+
+    Each member gets `out_dir/<name>.json` holding exactly its own results —
+    the file a solo run of that shard would have produced — so nothing
+    downstream can tell a batched shard from a solo one. Results come from the
+    batch's `wptreport.json`, or from its raw stream when the batch was killed
+    (`rescue_results`), in which case the members say `salvaged`.
+
+    A member's outcome is the batch's, with one refinement: a member with no
+    verdict at all in a batch that otherwise ran is `no-tests` and gets no
+    report file — writing an empty one would read as a hollow shard
+    (`score_audit`'s `shard-empty`), and `ran` would make `--resume` trust it.
+    Its executable ids, if it has any, still show up as lost in the accounting.
+    Seconds are the batch's wall clock shared out by result count, so the sum
+    over members is the batch's real cost.
+    """
+    report_path = shard_report_path(out_dir, batch)
+    results, salvaged = [], False
+    if not report_is_empty(report_path):
+        try:
+            with open(report_path, encoding="utf-8") as fh:
+                results = json.load(fh).get("results", [])
+        except (json.JSONDecodeError, OSError):
+            results = []
+    if not results:
+        raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
+        results = list(rescue_results(raw_path).values())
+        salvaged = bool(results)
+
+    owner = member_owner(batch["members"])
+    by_member = {m["name"]: [] for m in batch["members"]}
+    for result in results:
+        name = owner(result["test"])
+        if name in by_member:
+            by_member[name].append(result)
+
+    total = max(len(results), 1)
+    states = []
+    for member in batch["members"]:
+        mine = by_member[member["name"]]
+        member_path = os.path.join(out_dir, member["name"].replace("/", "__") + ".json")
+        outcome = state["outcome"]
+        if mine:
+            with open(member_path, "w", encoding="utf-8") as fh:
+                json.dump({"results": mine}, fh)
+        elif outcome == "ran":
+            outcome = "no-tests"
+        member_state = {
+            "name": member["name"], "prefix": member["prefix"], "ids": member["ids"],
+            "auto_ids": member.get("auto_ids"), "outcome": outcome,
+            "returncode": state["returncode"],
+            "seconds": round(state["seconds"] * len(mine) / total, 1),
+            "report": _repo_relative(member_path) if mine else None,
+            "batch": batch["name"],
+        }
+        if salvaged and mine:
+            member_state["salvaged"] = True
+        if state.get("port_conflict"):
+            member_state["port_conflict"] = True
+        states.append(member_state)
+    return states
+
+
+def lane_server_config(lane: int, out_dir: str, base_path: str = None) -> str:
+    """Write lane `lane`'s server config and return its path (lane 0: None).
+
+    Only `ports` is written: `run_smoke` merges this file over the normal
+    `tests/wpt/config.json`, so everything else stays exactly as a solo run
+    has it. Every port of the base config moves by `lane * LANE_PORT_STEP`.
+    """
+    if lane == 0:
+        return None
+    with open(base_path or port_guard.CONFIG_PATH, encoding="utf-8") as fh:
+        base = json.load(fh)
+    ports = {}
+    for kind, values in (base.get("ports") or {}).items():
+        ports[kind] = [v + lane * LANE_PORT_STEP if isinstance(v, int) else v
+                       for v in values]
+    path = os.path.join(out_dir, BATCH_SUBDIR, f"lane{lane}-config.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"ports": ports}, fh, indent=2)
+    return path
+
+
+def lane_ports(config_path) -> list:
+    """The TCP ports a lane's wptserve binds — what its port guard checks."""
+    return port_guard.configured_ports(config_path or port_guard.CONFIG_PATH)
+
+
+def available_memory_gb():
+    """Free physical memory in GB, or None when psutil is not installed."""
+    try:
+        import psutil  # noqa: PLC0415 — optional, present in tests/wpt/.venv
+    except ImportError:
+        return None
+    return psutil.virtual_memory().available / 2**30
+
+
+class SharedHeavyLock:
+    """`heavy_lock` held while *any* lane runs, released when all are idle.
+
+    Taking it per unit, as the sequential loop does, cannot work with lanes:
+    on Windows `msvcrt.locking` refuses a second handle of the same process,
+    so lane 2 would sit out the 300 s courtesy timeout and then run unlocked
+    with a warning. Counting holders keeps the BUG-1029 courtesy — a build
+    waiting on `scripts/cargo-heavy.sh` still gets in whenever the run drains.
+    """
+
+    def __init__(self, owner: str):
+        self._owner = owner
+        self._count = 0
+        self._mutex = threading.Lock()
+        self._stack = None
+
+    def acquire(self):
+        with self._mutex:
+            if self._count == 0:
+                self._stack = contextlib.ExitStack()
+                self._stack.enter_context(heavy_lock.heavy_lock(self._owner))
+            self._count += 1
+
+    def release(self):
+        with self._mutex:
+            self._count -= 1
+            if self._count == 0 and self._stack is not None:
+                self._stack.close()
+                self._stack = None
+
+
+#: Poll interval of the memory gate, seconds.
+MEMORY_GATE_POLL = 10.0
+
+
+def run_units_parallel(units: list, binary: str, args, exclude_file, finish) -> int:
+    """Run `units` on `args.parallel_shards` lanes pulling from one queue.
+
+    Each lane is a thread driving one `run_shard` subprocess at a time on its
+    own server ports (`lane_server_config`); verdicts cannot depend on the lane
+    because nothing but the port numbers differs (`--self-test` and the A/B in
+    `docs/tasks/p2-wpt-runner-throughput.md` WPT-RUN-9 check that). The queue is
+    ordered longest budget first, which bounds the makespan by the longest
+    shard instead of leaving it to whichever lane drew it last.
+
+    Two guards the sequential loop does not need:
+
+    * orphaned `lumen` processes are reaped once, before any lane starts —
+      between units it would be wrong, since the reaper counts every browser
+      under this process as `stale`, the running lanes' included;
+    * a memory gate: a lane does not start a unit while less than
+      `--min-free-gb` of physical memory is available and another lane is
+      running. Paging stretches exactly the wall-clock timeouts the verdicts
+      depend on (PERF-10 slice 2 measured 18-21 GB peak for one lane at
+      `--processes 7`, and hit WinError 1455 on a 2 GB page file).
+
+    Returns 0, or 1 when a lane had to stop because its ports were taken.
+    """
+    lanes = args.parallel_shards
+    if not args.no_port_guard:
+        port_guard.reap_lumen_orphans(own_pid=os.getpid())
+    configs = [lane_server_config(lane, args.out_dir) for lane in range(lanes)]
+
+    def budget_of(unit):
+        return shard_timeout(unit, args.shard_timeout_base, args.shard_timeout_per_id,
+                             args.processes)
+
+    queue = sorted(units, key=budget_of, reverse=True)
+    total = len(queue)
+    mutex = threading.Lock()
+    running = [0]
+    started = [0]
+    failures = []
+    shared_lock = SharedHeavyLock(f"run_corpus.py pid={os.getpid()} --parallel-shards {lanes}")
+
+    def take():
+        with mutex:
+            if failures or not queue:
+                return None, 0
+            started[0] += 1
+            return queue.pop(0), started[0]
+
+    def wait_for_memory(lane):
+        warned = False
+        while args.min_free_gb > 0:
+            free = available_memory_gb()
+            with mutex:
+                others = running[0]
+            if free is None or free >= args.min_free_gb or others == 0:
+                return
+            if not warned:
+                print(f"  lane {lane}: {free:.1f} GB free < --min-free-gb "
+                      f"{args.min_free_gb} with {others} lane(s) busy — waiting", flush=True)
+                warned = True
+            time.sleep(MEMORY_GATE_POLL)
+
+    def lane_main(lane):
+        config = configs[lane]
+        extra_env = {SERVER_CONFIG_ENV: config} if config else None
+        ports = lane_ports(config)
+        while True:
+            wait_for_memory(lane)
+            unit, index = take()
+            if unit is None:
+                return
+            if not args.no_port_guard:
+                try:
+                    port_guard.ensure_free(ports=ports, own_pid=os.getpid())
+                except port_guard.PortsBusy as exc:
+                    with mutex:
+                        failures.append(f"lane {lane}: {exc}")
+                        queue.insert(0, unit)
+                    return
+            budget = budget_of(unit)
+            print(f"[{index}/{total}] lane {lane}: {unit['name']}: {unit['ids']} ids "
+                  f"(budget {budget}s) started", flush=True)
+            with mutex:
+                running[0] += 1
+            shared_lock.acquire()
+            try:
+                state = run_shard(unit, binary, args.out_dir, args.processes, budget,
+                                  exclude_file, extra_env)
+            finally:
+                shared_lock.release()
+                with mutex:
+                    running[0] -= 1
+            with mutex:
+                finish(unit, state)
+            print(f"[{index}/{total}] lane {lane}: {unit['name']}: {state['outcome']} "
+                  f"in {state['seconds']}s", flush=True)
+
+    threads = [threading.Thread(target=lane_main, args=(lane,), daemon=True,
+                                name=f"lane{lane}") for lane in range(lanes)]
+    for thread in threads:
+        thread.start()
+        # Staggered start: wptserve boots and the first browser launches are
+        # the burst of the whole unit; overlapping K of them buys nothing.
+        time.sleep(2)
+    for thread in threads:
+        while thread.is_alive():
+            thread.join(timeout=1.0)
+    if failures:
+        for failure in failures:
+            print(failure, file=sys.stderr)
+        print(f"stopped with {len(queue)} unit(s) not run — rerun the same command with "
+              f"--resume", file=sys.stderr, flush=True)
+        return 1
+    return 0
 
 
 def results_from_raw_log(raw_path: str) -> dict:
@@ -1145,6 +1526,7 @@ def _selftest() -> int:
     ]
     checks.extend(_selftest_resume())
     checks.extend(_selftest_prefixes())
+    checks.extend(_selftest_batches())
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     failed = [label for label, ok in checks if not ok]
@@ -1222,6 +1604,86 @@ def _selftest_prefixes() -> list:
     ]
 
 
+def _selftest_batches() -> list:
+    """Prove `--batch-small` and the lane configs of `--parallel-shards` (WPT-RUN-9).
+
+    The property that matters is that batching is invisible downstream: every
+    member ends up with the report and the state a solo run would have given
+    it, nothing is attributed to the wrong member (`/a/x/` must not take
+    `/a/xx/`), and a member with no verdict in a batch that ran is not passed
+    off as `ran`. Lanes must differ in ports and only in ports.
+    """
+    out_dir = tempfile.mkdtemp(prefix="lumen-batch-selftest-")
+    try:
+        shards = [
+            {"name": "big", "prefix": "/big/", "ids": 900, "auto_ids": 900, "long_ids": 0},
+            {"name": "a/x", "prefix": "/a/x/", "ids": 3, "auto_ids": 3, "long_ids": 0},
+            {"name": "a/xx", "prefix": "/a/xx/", "ids": 2, "auto_ids": 2, "long_ids": 1},
+            {"name": "a (bare)", "prefix": None, "ids": 1, "auto_ids": 1, "long_ids": 0,
+             "test_ids": ["/a/top.html"]},
+            {"name": "empty", "prefix": "/empty/", "ids": 4, "auto_ids": 4, "long_ids": 0},
+            {"name": "c", "prefix": "/c/", "ids": 5, "auto_ids": 5, "long_ids": 0},
+        ]
+        units = plan_units(shards, small=10, max_ids=10, out_dir=out_dir)
+        off = plan_units(shards, small=0, max_ids=10, out_dir=out_dir)
+        batch = units[1] if len(units) > 1 else {}
+        members = [m["name"] for m in batch.get("members", [])]
+
+        os.makedirs(os.path.dirname(shard_report_path(out_dir, batch)), exist_ok=True)
+        results = [{"test": t, "status": "OK", "subtests": []}
+                   for t in ("/a/x/1.html", "/a/xx/2.html", "/a/top.html")]
+        with open(shard_report_path(out_dir, batch), "w", encoding="utf-8") as fh:
+            json.dump({"results": results}, fh)
+        states = {s["name"]: s for s in split_batch(
+            batch, {"outcome": "ran", "returncode": 1, "seconds": 30.0}, out_dir)}
+        loaded, _recovered, _empty = load_results(out_dir)
+
+        def report_of(name):
+            path = shard_report_path(out_dir, {"name": name})
+            if not os.path.isfile(path):
+                return None
+            with open(path, encoding="utf-8") as fh:
+                return sorted(r["test"] for r in json.load(fh)["results"])
+
+        base = os.path.join(out_dir, "base-config.json")
+        with open(base, "w", encoding="utf-8") as fh:
+            json.dump({"ports": {"http": [18300, 18301], "dns": [None]}}, fh)
+        lane1 = lane_server_config(1, out_dir, base)
+        with open(lane1, encoding="utf-8") as fh:
+            lane1_cfg = json.load(fh)
+
+        return [
+            ("batch: big shard stays alone, small ones are grouped up to the cap",
+             [u["name"] for u in units][0] == "big"
+             and members == ["a/x", "a/xx", "a (bare)", "empty"]
+             and units[2]["name"] == "c"),
+            ("batch: off means the plan is untouched", off == shards),
+            ("batch: budget sums the members", batch.get("auto_ids") == 10
+             and batch.get("long_ids") == 1),
+            ("batch: wptrunner gets every member's filter",
+             shard_targets(batch) == ["/a/x/", "/a/xx/", "/a/top.html", "/empty/"]),
+            ("batch: its own report is out of load_results' reach",
+             os.path.dirname(shard_report_path(out_dir, batch)) != out_dir
+             and len(loaded) == 3),
+            ("batch: `/a/x/` does not take `/a/xx/`",
+             report_of("a/x") == ["/a/x/1.html"] and report_of("a/xx") == ["/a/xx/2.html"]),
+            ("batch: an explicit-id member gets its id",
+             report_of("a (bare)") == ["/a/top.html"]),
+            ("batch: a member with no verdict is no-tests and has no report",
+             states["empty"]["outcome"] == "no-tests" and report_of("empty") is None),
+            ("batch: members keep their own names and carry the batch",
+             set(states) == set(members)
+             and all(s["batch"] == batch["name"] for s in states.values())),
+            ("batch: wall clock is shared out, not multiplied",
+             abs(sum(s["seconds"] for s in states.values()) - 30.0) < 0.2),
+            ("lanes: lane 0 keeps config.json", lane_server_config(0, out_dir, base) is None),
+            ("lanes: lane 1 shifts every port and writes nothing else",
+             lane1_cfg == {"ports": {"http": [19300, 19301], "dns": [None]}}),
+        ]
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
 def _selftest_resume() -> list:
     """Prove that `--resume` prices a retry instead of merely offering one.
 
@@ -1281,6 +1743,20 @@ def main() -> int:
                              "Linux box into OOM — see kill_tree — pass a lower value "
                              "on a machine that small)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    parser.add_argument("--parallel-shards", type=int, default=1,
+                        help="run this many shards at once, each on its own copy of the wptserve "
+                             "ports (+1000 per lane) — WPT-RUN-9; memory, not CPU, is the limit: "
+                             "see --min-free-gb (default: 1, the old sequential run)")
+    parser.add_argument("--batch-small", type=int, default=0,
+                        help="run consecutive shards of at most this many automatable ids as one "
+                             "wptrunner process, split back per shard afterwards — saves a wptserve "
+                             f"boot per shard (suggested: {BATCH_SMALL_DEFAULT}; default: 0, off)")
+    parser.add_argument("--batch-max-ids", type=int, default=600,
+                        help="upper bound on automatable ids in one --batch-small batch (default: 600)")
+    parser.add_argument("--min-free-gb", type=float, default=6.0,
+                        help="with --parallel-shards, a lane waits to start a shard while less "
+                             "physical memory than this is free and another lane is busy "
+                             "(default: 6; 0 disables the gate)")
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=None,
                         help="flat per-id time budget, seconds; default is to derive the "
@@ -1418,11 +1894,37 @@ def main() -> int:
             shard_states = resumable_states(previous, args.out_dir, args.retry_timeouts,
                                             budgets)
         done = {s["name"] for s in shard_states}
-
         for index, shard in enumerate(shards, 1):
             if shard["name"] in done:
                 print(f"[{index}/{len(shards)}] {shard['name']}: cached", flush=True)
-                continue
+        pending = [s for s in shards if s["name"] not in done]
+        units = plan_units(pending, args.batch_small, args.batch_max_ids, args.out_dir)
+        if len(units) != len(pending):
+            batches = [u for u in units if u.get("members")]
+            print(f"--batch-small {args.batch_small}: {sum(len(b['members']) for b in batches)} "
+                  f"small shards run as {len(batches)} batches — {len(units)} wptrunner "
+                  f"processes instead of {len(pending)}", flush=True)
+
+        def write_checkpoint():
+            # Checkpoint after every unit: a corpus run outlives the session
+            # that started it, and must be resumable from wherever it stopped.
+            with open(state_path, "w", encoding="utf-8") as fh:
+                json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
+                           "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
+                           "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
+
+        def finish(unit, state):
+            """Record a finished unit — a batch as its member shards."""
+            states = split_batch(unit, state, args.out_dir) if unit.get("members") else [state]
+            shard_states.extend(states)
+            write_checkpoint()
+            return states
+
+        if args.parallel_shards > 1:
+            status = run_units_parallel(units, binary, args, exclude_file, finish)
+            if status:
+                return status
+        for index, shard in enumerate(units if args.parallel_shards <= 1 else [], 1):
             # A shard that cannot bind its own ports does not fail — it is
             # answered by whatever holds them, and scores against files and
             # route parameters that belong to a run nobody is watching
@@ -1433,7 +1935,7 @@ def main() -> int:
                     port_guard.ensure_free(own_pid=os.getpid())
                 except port_guard.PortsBusy as exc:
                     print(f"\n{exc}", file=sys.stderr)
-                    print(f"stopped before shard {index}/{len(shards)} "
+                    print(f"stopped before shard {index}/{len(units)} "
                           f"({shard['name']}); {len(shard_states)} shards are "
                           f"checkpointed — rerun the same command with --resume",
                           file=sys.stderr, flush=True)
@@ -1447,7 +1949,7 @@ def main() -> int:
                 port_guard.reap_lumen_orphans(own_pid=os.getpid())
             budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
                                    args.processes)
-            print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
+            print(f"[{index}/{len(units)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
             # BUG-1029 §3: held per shard, not for the whole (possibly
             # multi-day, --resume'd) run — a shard's browsers are the memory
             # spike, and releasing between shards lets a build waiting on
@@ -1455,14 +1957,8 @@ def main() -> int:
             # starved for as long as this corpus run keeps going.
             with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
                 state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
-            shard_states.append(state)
+            finish(shard, state)
             print(f" {state['outcome']} in {state['seconds']}s", flush=True)
-            # Checkpoint after every shard: a corpus run outlives the session
-            # that started it, and must be resumable from wherever it stopped.
-            with open(state_path, "w", encoding="utf-8") as fh:
-                json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
-                           "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
-                           "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
 
     # A run only gets to be scored against what it actually covered. The scope
     # is derived from the shards, not from the CLI selection, so a resumed or
@@ -1509,6 +2005,8 @@ def main() -> int:
             "commit": run_commit,
             "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "processes": args.processes,
+            "parallel_shards": getattr(args, "parallel_shards", 1),
+            "batch_small": getattr(args, "batch_small", 0),
             "scope": sorted(scope) if scope else "full-corpus",
             "prefixes": prefixes,
             "exclude_prefixes": exclude_prefixes,
