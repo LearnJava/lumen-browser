@@ -579,22 +579,20 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     };
 
     // Ширина линии пересекающей щели `k` — для `overlap-join`.
+    // Chromium берёт здесь *вычисленную* ширину, а не нарисованную: у пересекающей оси без
+    // `*-rule-style` (`none`) она остаётся начальной `medium` (3px), и концы `overlap-join`
+    // всё равно вытягиваются на её половину (`grid-gap-decorations-081`).
     let cross_width = |widths: &lumen_layout::RuleList<f32>,
-                       styles: &lumen_layout::RuleList<BorderStyle>,
+                       _styles: &lumen_layout::RuleList<BorderStyle>,
                        k: usize,
-                       total: usize| {
-        if styles.value_for_gap(k, total).is_visible() {
-            *widths.value_for_gap(k, total)
-        } else {
-            0.0
-        }
-    };
+                       total: usize| { *widths.value_for_gap(k, total) };
 
+    // Куски обеих осей считаются всегда: `overlap-join` смотрит, есть ли на стыке кусок
+    // пересекающей щели, даже когда её линия не рисуется (`*-rule-style: none`).
+    let mut axis_pieces: [Vec<GapPiece>; 2] = [Vec::new(), Vec::new()];
     for horizontal in [false, true] {
-        let (visible, insets, brk, vis, tops_t, tops_a, gap_t, gap_a, n_t, n_a, a_lo, a_len, reversed) = if horizontal {
+        let (brk, vis, tops_t, tops_a, gap_t, gap_a, n_t, n_a, a_lo, a_len) = if horizontal {
             (
-                p.row_visible,
-                &s.row_rule_inset,
                 s.row_rule_break,
                 s.row_rule_visibility_items,
                 &row_tops,
@@ -605,12 +603,9 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 n_cols,
                 cx,
                 cw,
-                rtl,
             )
         } else {
             (
-                p.column_visible,
-                &s.column_rule_inset,
                 s.column_rule_break,
                 s.column_rule_visibility_items,
                 &col_tops,
@@ -621,10 +616,9 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 n_rows,
                 cy,
                 ch,
-                false,
             )
         };
-        if !visible || gap_t <= 0.0 || tops_t.is_empty() {
+        if gap_t <= 0.0 || tops_t.is_empty() {
             continue;
         }
         let items: Vec<GridItemSpan> = spans
@@ -654,14 +648,35 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             }
         };
         let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_hi, brk, vis);
+        axis_pieces[usize::from(horizontal)] = pieces;
+    }
+
+    for horizontal in [false, true] {
+        let (visible, insets, tops_t, gap_t, gap_a, reversed) = if horizontal {
+            (p.row_visible, &s.row_rule_inset, &row_tops, p.row_gap, p.col_gap, rtl)
+        } else {
+            (p.column_visible, &s.column_rule_inset, &col_tops, p.col_gap, p.row_gap, false)
+        };
+        if !visible || gap_t <= 0.0 || tops_t.is_empty() {
+            continue;
+        }
+        let pieces = &axis_pieces[usize::from(horizontal)];
+        let crossing = &axis_pieces[usize::from(!horizontal)];
         let (cross_w, cross_s, cross_total) = if horizontal {
             (&s.column_rule_width, &s.column_rule_style, col_tops.len())
         } else {
             (&s.row_rule_width, &s.row_rule_style, row_tops.len())
         };
         // Смещение одного конца куска в px (положительное — внутрь куска).
-        let end_inset = |end: PieceEnd, is_start: bool| -> f32 {
-            let junction = matches!(end, PieceEnd::Junction(_));
+        let end_inset = |end: PieceEnd, is_start: bool, g: usize| -> f32 {
+            // Стык, на котором куска пересекающей щели `k` нет (щель скрыта `visibility-items`
+            // или оборвана), — «висячий» конец: на нём действует `cap`, а не `junction`
+            // (`grid-gap-decorations-069/078/080`); `%` при этом считается от ширины щели.
+            let meets = |k: usize| {
+                let (g_lo, g_hi) = (tops_t[g], tops_t[g] + gap_t);
+                crossing.iter().any(|c| c.gap == k && c.lo <= g_hi + TRACK_TOL && c.hi >= g_lo - TRACK_TOL)
+            };
+            let junction = matches!(end, PieceEnd::Junction(k) if meets(k));
             let slot = match (junction, is_start) {
                 (false, true) => &insets.cap_start,
                 (false, false) => &insets.cap_end,
@@ -671,16 +686,16 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             match (slot, end) {
                 (lumen_layout::RuleInset::Length(l), PieceEnd::Junction(_)) => l.resolve_or_zero(em, gap_a, vp),
                 (lumen_layout::RuleInset::Length(l), PieceEnd::Edge) => l.resolve_or_zero(em, 0.0, vp),
-                (lumen_layout::RuleInset::OverlapJoin, PieceEnd::Junction(k)) => {
+                (lumen_layout::RuleInset::OverlapJoin, PieceEnd::Junction(k)) if junction => {
                     -(gap_a * 0.5 + cross_width(cross_w, cross_s, k, cross_total) * 0.5)
                 }
-                (lumen_layout::RuleInset::OverlapJoin, PieceEnd::Edge) => 0.0,
+                (lumen_layout::RuleInset::OverlapJoin, _) => 0.0,
             }
         };
         for piece in pieces {
             // `reversed` — ось идёт справа налево: «начало» куска у его правого конца.
-            let lo_inset = end_inset(piece.lo_end, !reversed);
-            let hi_inset = end_inset(piece.hi_end, reversed);
+            let lo_inset = end_inset(piece.lo_end, !reversed, piece.gap);
+            let hi_inset = end_inset(piece.hi_end, reversed, piece.gap);
             let len = piece.hi - piece.lo - lo_inset - hi_inset;
             if len <= 0.0 {
                 continue;

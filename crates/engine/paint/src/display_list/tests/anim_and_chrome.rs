@@ -1290,6 +1290,42 @@ use lumen_dom::NodeId;
         assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 58 && c.2 == 74), "{cols:?}");
     }
 
+    /// grid-gap-decorations-081: `overlap-join` вытягивается на полширины *вычисленной* ширины
+    /// пересекающей оси, даже если её линия не рисуется (`row-rule-style: none`).
+    #[test]
+    fn grid_overlap_join_uses_computed_width_of_unpainted_cross_rule() {
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3(
+                "column-rule:4px solid red;row-rule-width:6px;column-rule-break:intersection;rule-inset:overlap-join",
+                &items,
+            ),
+            "",
+        );
+        let cols: Vec<_> = column_pieces(&dl).into_iter().filter(|c| c.0 < 100).map(|c| (c.1, c.2)).collect();
+        // Куски 0..50, 70..120, 140..190 → стыки (щели y=50..70, 120..140) дают по 10 + 3 = 13px.
+        assert_eq!(cols, vec![(0, 63), (57, 76), (127, 63)], "{cols:?}");
+    }
+
+    /// grid-gap-decorations-069: на стыке, где куска пересекающей щели нет (скрыт
+    /// `rule-visibility-items: between`), конец «висячий» — `overlap-join` его не вытягивает.
+    #[test]
+    fn grid_overlap_join_is_flush_where_cross_piece_is_hidden() {
+        // Нижний ряд пуст: строчная щель 1 (y=120..140) между рядом 1 и пустым рядом 2 скрыта.
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3(
+                "rule:4px solid red;rule-visibility-items:between;rule-inset-junction:overlap-join",
+                &items,
+            ),
+            "",
+        );
+        let cols: Vec<_> = column_pieces(&dl).into_iter().filter(|c| c.0 < 100).map(|c| (c.1, c.2)).collect();
+        // Низ куска ряда 1 упирается в скрытую строчную щель — вровень (120), не 133.
+        assert!(cols.iter().any(|c| c.0 + c.1 == 120), "{cols:?}");
+        assert!(!cols.iter().any(|c| c.0 + c.1 == 133), "{cols:?}");
+    }
+
     /// The ordered (stacking-context) path — the one the live window and
     /// `--screenshot` use — must draw gap rules too, not only `walk`.
     #[test]
