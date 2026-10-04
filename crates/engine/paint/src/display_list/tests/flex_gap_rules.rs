@@ -310,3 +310,40 @@ fn box_backgrounds_snap_to_device_pixels() {
     // 0–26.67, 36.67–63.33, 73.33–100 → 0–27, 37–63, 73–100.
     assert_eq!(green, vec![(0.0, 27.0), (37.0, 63.0), (73.0, 100.0)]);
 }
+
+/// grid-gap-decorations-040/057: сетка 4×4 по 100px с двумя элементами — дорожки без
+/// элементов (пустые строки/колонки) тоже дают щели, потому что шаблон из фиксированных
+/// длин задаёт их геометрию независимо от детей. Щелей три на 4 дорожки; щель 1 обрывается
+/// о широкий элемент (строки 1–2) и продолжается под ним до низа сетки (430px), остальные две
+/// идут на всю протяжённость.
+#[test]
+fn grid_fixed_template_gives_gaps_between_empty_tracks() {
+    let html = r#"<div style="display:grid;grid-template-columns:repeat(4,100px);grid-template-rows:repeat(4,100px);
+        gap:10px;width:430px;height:430px;column-rule:5px solid blue;row-rule:5px solid red">
+        <div style="grid-column:1/3;grid-row:1/3"></div><div style="grid-column:3/4;grid-row:1/3"></div></div>"#;
+    let dl = build(html, "");
+    let tops = |v: &[(f32, f32, f32, f32)], pick: fn(&(f32, f32, f32, f32)) -> f32| -> Vec<f32> {
+        let mut t: Vec<f32> = v.iter().map(pick).collect();
+        t.dedup_by(|a, b| (*a - *b).abs() < 0.6);
+        t
+    };
+    let cols = rules(&dl, true);
+    let rows = rules(&dl, false);
+    // Колоночные щели — x = 102, 212, 322; строчные — y = 102, 212, 322 (центр зазора).
+    // `rules` сортирует по (y, x): куски щели 1 под элементом идут после целых щелей.
+    assert_eq!(tops(&cols, |r| r.0).len(), 3, "{cols:?}");
+    assert_eq!(tops(&rows, |r| r.1).len(), 3, "{rows:?}");
+    assert!(close(cols[2], (102.0, 220.0, 5.0, 210.0)), "{cols:?}");
+}
+
+/// collapsed-middle-auto-fit: ведущая фиксированная дорожка перед `repeat(auto-fit, …)`
+/// даёт щель после себя, даже если в ней нет элементов (её граница известна из шаблона).
+#[test]
+fn grid_leading_track_before_auto_fit_keeps_its_gap() {
+    let html = r#"<div style="display:grid;grid-template-columns:100px 100px 100px;
+        grid-template-rows:100px repeat(auto-fit,100px) 100px 100px;gap:10px;width:320px;height:540px;
+        align-content:start;row-rule:6px solid red;row-rule-visibility-items:around;rule-inset:0px">
+        <div style="grid-column:1/4;grid-row:-3/-2"></div><div style="grid-column:1/4;grid-row:-2/-1"></div></div>"#;
+    let dl = build(html, "");
+    assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 6.0), (0.0, 212.0, 320.0, 6.0)]);
+}
