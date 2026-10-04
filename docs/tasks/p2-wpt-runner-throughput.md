@@ -2600,3 +2600,69 @@ raw-логов контрольных прогонов (`run9-ctl`, `capab`, 13 
 
 **Рекомендация для WPT-RUN-9 (заменяет предыдущую):** `--parallel-shards 3
 --batch-small 150 --shared-queue`.
+
+## WPT-RUN-9, уход со страницы теста (2026-10-04): ранний TIMEOUT вместо 65 с ожидания
+
+**Вопрос.** «Следующий рычаг» из §общая очередь — хвост `encoding`, 134 TIMEOUT
+по 60–65 с в `legacy-mb-japanese/*-encode-form-*`, — вопрос к движку или к
+раннеру.
+
+**Что там на самом деле.** К обоим. По raw-логу `capab/p4-cap4` (браузер
+печатает `Reload: <url>` на каждую навигацию верхнего документа) каждый такой
+тест через ~0.5 с после старта делает `form.submit()` формы с
+`target="frame-0"`, и Lumen навигирует не фрейм, а **верхний документ** на
+`/common/blank.html?input-1=…` — [BUG-1269](../../bugs/BUG-1269-OPEN.md). Страница
+теста и её testharness исчезают, а исполнитель (`executorlumen.py`) ещё 64 с
+опрашивает `__lumen_wpt_results` у `blank.html`, где его не будет никогда.
+Вердикт (TIMEOUT, 0 сабтестов) известен после первого опроса. В том же логе
+таких «ушедших» тестов 154 TIMEOUT / 8 861 с после ухода; в `run9-ctl` ещё 90
+(3 416 с) — `FileAPI/BlobURL`, `clear-site-data/*bfcache*`,
+`performance-timeline/navigation-id-*`. Тесты, которые уходят и *возвращаются*
+сами (`websockets/back-forward-cache-*` через `executor-window.py`), отсутствуют
+на своей странице ≤ 8.2 с и кончаются OK.
+
+**Что сделано.** `testharnessreport.js` уже ставит на каждом тестовом
+документе `window.__wptrunner_is_test_context = true`. `POLL_EXPRESSION`
+возвращает `{"k": "f", v: location.href}`, когда живой документ — не старый
+(`STALE_GLOBAL`) и без этого маркера; если такой документ живёт дольше 15 с
+подряд, тест кончается `TIMEOUT` с сообщением «navigated away to <url>».
+Возврат на тестовую страницу сбрасывает счётчик. `LUMEN_WPT_FOREIGN_GRACE_S`
+меняет порог, `off` возвращает прежнее поведение (плечо A/B ниже). Пин —
+`tests/wpt/verify_navaway_early_timeout.py` (обычный тест не задет; ушедший —
+TIMEOUT через 2 с при пороге 1.5 с и таймауте 30 с; `off` — прежний TIMEOUT по
+таймауту).
+
+**Замер, `dev-release` 9654cbbef, 435 id** (`encoding/legacy-mb-japanese/euc-jp`
+151 id + `performance-timeline`, `clear-site-data`, `page-visibility`,
+`webstorage`, `FileAPI`, `url/failure.html`, два
+`websockets/back-forward-cache-*`), `--parallel-shards 3 --batch-small 150
+--shared-queue --processes 7`, плечи чередовались `off, new, off, new`.
+
+| плечо | стена | шард `euc-jp` | батч `performance-timeline`+6 | балл |
+|---|---|---|---|---|
+| `off`, #0 | 736 с | 730 с | 279 с | 98.81 |
+| `off`, #1 | 745 с | 739 с | 281 с | 98.31 |
+| **новое, #0** | **303 с** | 297 с | 268 с | 99.03 |
+| **новое, #1** | **301 с** | 295 с | 269 с | 98.13 |
+
+Шард `euc-jp` −60 % (735 → 296 с). Балл в разбросе повторов (0.50 внутри `off`,
+0.90 внутри нового). Досрочно кончены 62 id в каждом из новых прогонов — **все
+62 в обоих `off`-прогонах TIMEOUT с 0 сабтестов**, то есть вердикт не изменился
+ни у одного. id, меняющих статус: 5 между двумя `off`, 11 между двумя новыми,
+8–10 между режимами. Устойчиво разных (одинаковы внутри режима, различны
+между режимами) — два, оба жертвы [BUG-1268](../../bugs/BUG-1268-OPEN.md)
+(«document was never replaced» после `FileAPI/BlobURL/*`/`clear-site-data`):
+`FileAPI/BlobURL/opaque-origin.html` ERROR → TIMEOUT 0/2,
+`webstorage/event_case_sensitive.html` TIMEOUT 0/2 → ERROR — ранние TIMEOUT
+сдвинули расписание, и жертва переехала; балл обоих 0 в обоих режимах.
+
+**Ожидаемо на корпусе.** Стену корпуса задавал шард `encoding` (бюджет
+≈14 000 с, 8 500 из 9 941 с работы — `legacy-mb-japanese`); тот же
+`encode-form-common.js` у всех 45 файлов `encoding/**/*-encode-form*` (583 id),
+так что выигрыш того же порядка ждётся на `legacy-mb-korean`/`-tchinese`/
+`-chinese`. Не перемерено целиком — это работа самого прогона WPT-RUN-9.
+
+**Оговорка для сравнения цифр.** Сообщение TIMEOUT у таких тестов теперь
+«navigated away to …» вместо «Timed out waiting for testharnessreport.js
+results», статус тот же. Тест, который ушёл и вернулся бы позже 15 с, получит
+TIMEOUT раньше, чем мог бы дать вердикт; на замере таких нет (максимум 8.2 с).

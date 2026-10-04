@@ -60,6 +60,7 @@ the live DOM and role/name read off the accessibility tree, BUG-1014).
 import asyncio
 import base64
 import json
+import os
 import socket
 import struct
 import traceback
@@ -95,6 +96,37 @@ POLL_INTERVAL_S = 0.05
 #: document-swap lag the "JS context not available" retry below covers.
 NAV_SETTLE_S = 2.0
 
+#: Global `tests/wpt/resources/testharnessreport.js` sets at parse time on
+#: every test document. A top-level document without it is not the test: the
+#: test navigated its own browsing context away (a `<form target>` Lumen
+#: resolves to the top level instead of the named `<iframe>`, `location =`,
+#: an un-returned bfcache round trip) and the harness that would report is
+#: gone with it.
+TEST_CONTEXT_GLOBAL = "__wptrunner_is_test_context"
+
+#: Env var: seconds a *foreign* top-level document (see `TEST_CONTEXT_GLOBAL`)
+#: may stay live before the test is ended as TIMEOUT early, instead of polling
+#: a page that can never report until the full `timeout` (60 s for
+#: `timeout: long`) runs out. Unset — the default below; `off` — never end
+#: early (only log, for an A/B against the old behaviour).
+FOREIGN_GRACE_ENV = "LUMEN_WPT_FOREIGN_GRACE_S"
+
+#: Default for `FOREIGN_GRACE_ENV`. Long enough for a test that leaves and
+#: comes back on its own (bfcache `executor-window.py` round trips, measured
+#: ≤ 8.2 s away on `websockets/back-forward-cache-*`, all still OK).
+FOREIGN_GRACE_DEFAULT_S = 15.0
+
+
+def foreign_grace_s():
+    """`FOREIGN_GRACE_ENV` parsed: a float, or `None` for `off`."""
+    raw = os.environ.get(FOREIGN_GRACE_ENV, "").strip().lower()
+    if not raw:
+        return FOREIGN_GRACE_DEFAULT_S
+    if raw in ("off", "none", "0"):
+        return None
+    return float(raw)
+
+
 #: Text Lumen's BiDi server returns when its UI-thread automation channel did
 #: not reply in time (`crates/driver/src/automation.rs`, `RecvTimeoutError::
 #: Timeout`) — the browser is alive but wedged (BUG-1022).
@@ -129,12 +161,20 @@ RESET_EXPRESSION = f"""(() => {{
 #: callback fires *after* the runner moved on would otherwise re-populate
 #: `RESULTS_GLOBAL` on the un-replaced document and hand the next test the
 #: previous one's result all over again.
+#:
+#: `{"k": "f", "v": <location.href>}` — the live document is neither the old
+#: one nor a test document (`TEST_CONTEXT_GLOBAL` missing): the test navigated
+#: its own top level away. Checked before arming the testdriver callback so
+#: nothing is planted on a page that is not ours.
 POLL_EXPRESSION = f"""(() => {{
   if (window.{STALE_GLOBAL} === true) {{
     return JSON.stringify({{k: "s", v: String(location.href)}});
   }}
   if (window.{RESULTS_GLOBAL} !== undefined) {{
     return JSON.stringify({{k: "r", v: window.{RESULTS_GLOBAL}}});
+  }}
+  if (window.{TEST_CONTEXT_GLOBAL} !== true) {{
+    return JSON.stringify({{k: "f", v: String(location.href)}});
   }}
   if (!window.__wptrunner_testdriver_callback) {{
     window.__wptrunner_testdriver_callback = (r) => {{ window.__lumen_td_slot = r; }};
@@ -310,6 +350,8 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout + self.extra_timeout
         settle_deadline = loop.time() + NAV_SETTLE_S
+        grace = foreign_grace_s()
+        foreign_since = None
         while True:
             try:
                 # `await_promise=False` is deliberate: async tests
@@ -336,26 +378,47 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 if "JS context not available" not in e.message:
                     raise
             else:
-                if value.get("type") == "string":
-                    outer = json.loads(value["value"])
-                    if outer["k"] == "s":
-                        # The document that was live before `navigate` is still
-                        # answering: the new page never replaced it.
-                        if loop.time() > settle_deadline:
-                            raise ExecutorException(
-                                "ERROR",
-                                f"browsingContext.navigate({url}) reported success but the "
-                                f"document was never replaced (still at {outer['v']}); "
-                                f"the page did not load")
-                    elif outer["k"] == "r":
-                        return json.loads(outer["v"])
-                    else:
-                        # outer["k"] == "a": [url, "action", {type, action, params, id}].
-                        # Dispatch and post the completion back, then keep polling
-                        # in the same loop — an action never ends the test itself.
-                        _, msg_type, payload = outer["v"]
-                        if msg_type == "action":
-                            await self._handle_action(session, context, payload)
+                outer = (json.loads(value["value"])
+                         if value.get("type") == "string" else {"k": None})
+                if outer["k"] == "f":
+                    # The test's own document is gone (see
+                    # `TEST_CONTEXT_GLOBAL`). Its harness cannot report any
+                    # more, so the old behaviour — poll until `deadline` —
+                    # spent the whole timeout to arrive at the very TIMEOUT
+                    # raised here. A test that leaves and comes back on its own
+                    # resets the clock on the first poll that sees it again.
+                    now = loop.time()
+                    if foreign_since is None:
+                        foreign_since = now
+                    elif grace is not None and now - foreign_since > grace:
+                        away = str(outer["v"])
+                        if len(away) > 160:
+                            away = away[:160] + "…"
+                        raise ExecutorException(
+                            "TIMEOUT",
+                            f"test document navigated away to {away} and did not "
+                            f"come back within {grace:g}s ({FOREIGN_GRACE_ENV}); its "
+                            f"harness can no longer report: {url}")
+                else:
+                    foreign_since = None
+                if outer["k"] == "s":
+                    # The document that was live before `navigate` is still
+                    # answering: the new page never replaced it.
+                    if loop.time() > settle_deadline:
+                        raise ExecutorException(
+                            "ERROR",
+                            f"browsingContext.navigate({url}) reported success but the "
+                            f"document was never replaced (still at {outer['v']}); "
+                            f"the page did not load")
+                elif outer["k"] == "r":
+                    return json.loads(outer["v"])
+                elif outer["k"] == "a":
+                    # [url, "action", {type, action, params, id}].
+                    # Dispatch and post the completion back, then keep polling
+                    # in the same loop — an action never ends the test itself.
+                    _, msg_type, payload = outer["v"]
+                    if msg_type == "action":
+                        await self._handle_action(session, context, payload)
             if deadline is not None and loop.time() > deadline:
                 raise ExecutorException(
                     "TIMEOUT",
