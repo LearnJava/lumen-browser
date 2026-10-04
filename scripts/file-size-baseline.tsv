@@ -26,8 +26,5 @@
 2637	crates/js/src/subtle_crypto.rs
 2378	crates/engine/layout/src/lib.rs
 2342	crates/js/src/web_audio.rs
-2080	crates/shell/src/tests/chrome_incremental.rs
-2066	crates/shell/src/tests/scripts_and_frames.rs
 2064	crates/shell/src/chrome_ui.rs
-2036	crates/shell/src/tests/bug341_census.rs
 2044	crates/shell/src/app/window_event/redraw_requested.rs
