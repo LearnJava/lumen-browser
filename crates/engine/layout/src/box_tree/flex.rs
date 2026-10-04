@@ -275,6 +275,7 @@ pub(crate) fn build_flex_init(
             is_reverse,
             cross_rev,
             wrap_reverse: axes.wrap_reverse,
+            reverse_kw: axes.reverse_kw,
             is_wrap,
             content_x,
             content_y,
@@ -556,7 +557,13 @@ pub(crate) fn build_flex_init(
             let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
             let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
-            match &is.flex_basis {
+            // CSS Flexbox §9.2: a percentage `flex-basis` against an indefinite
+            // container main size is `content`.
+            let basis = match &is.flex_basis {
+                FlexBasis::Length(Length::Percent(_)) if main_definite.is_none() => &FlexBasis::Content,
+                other => other,
+            };
+            match basis {
                 FlexBasis::Auto | FlexBasis::Content => {
                     if is_column {
                         probed_height + m_t + m_b
@@ -694,6 +701,7 @@ pub(crate) fn build_flex_init(
         is_reverse,
         cross_rev,
         wrap_reverse: axes.wrap_reverse,
+        reverse_kw: axes.reverse_kw,
         is_wrap,
         content_x,
         content_y,
@@ -909,11 +917,12 @@ fn build_line_inits(
                 0.0
             };
 
-            // `justify-content: left | right` — physical side keywords: along a
-            // horizontal main axis they pick the side, along a vertical one they
-            // behave as the writing-mode `start` (CSS Box Alignment L3 §6.1).
+            // `justify-content: left | right` (CSS Box Alignment L3 §6.1): along the
+            // inline axis they are the physical (line-)left/right edge — also in a
+            // vertical writing mode, where that is top/bottom; along the block axis
+            // they behave as the writing-mode `start`.
             let justify = match s.content_align_extra.justify_side {
-                Some(side) if !axes.main_vertical => {
+                Some(side) if !matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse) => {
                     let start_is_left = !axes.main_rev;
                     if (side == crate::style::ContentSide::Left) == start_is_left {
                         AlignValue::Start
@@ -925,6 +934,18 @@ fn build_line_inits(
                     if axes.reverse_kw { AlignValue::End } else { AlignValue::Start }
                 }
                 None => s.justify_content,
+            };
+            // `start`/`end` follow the writing mode, so a `*-reverse` flow swaps
+            // them relative to the start-based frame (`flex-start`/`flex-end`
+            // already are that frame).
+            let justify = if s.content_align_extra.justify_wm && axes.reverse_kw {
+                match justify {
+                    AlignValue::Start => AlignValue::End,
+                    AlignValue::End => AlignValue::Start,
+                    other => other,
+                }
+            } else {
+                justify
             };
             // `safe` (§4.4): when the items overflow, align to the writing-mode
             // `start` edge. In the start-based frame that edge is the logical

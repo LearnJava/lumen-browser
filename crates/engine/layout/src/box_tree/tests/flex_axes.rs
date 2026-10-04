@@ -285,3 +285,76 @@ fn justify_left_and_right_are_physical_along_a_horizontal_axis() {
     let r = run("direction:rtl;justify-content:left;width:300px");
     assert_eq!(xs(&r), vec![100.0, 50.0, 0.0]);
 }
+
+// ── статическая позиция abspos-ребёнка (CSS Flexbox §4.1) ──
+
+fn abs_child(container_css: &str, child_css: &str) -> Rect {
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    rects(
+        html,
+        &format!(
+            "#k{{display:flex;position:relative;width:100px;height:60px;{container_css}}}\
+             #a{{position:absolute;width:10px;height:10px;{child_css}}}"
+        ),
+        &["a"],
+    )[0]
+}
+
+#[test]
+fn abspos_static_position_follows_justify_content_and_align_items() {
+    let r = abs_child("justify-content:center;align-items:center", "");
+    assert_eq!((r.x, r.y), (45.0, 25.0), "{r:?}");
+    let r = abs_child("justify-content:flex-end;align-items:flex-end", "");
+    assert_eq!((r.x, r.y), (90.0, 50.0), "{r:?}");
+    let r = abs_child("justify-content:space-around", "");
+    assert_eq!((r.x, r.y), (45.0, 0.0), "{r:?}");
+}
+
+#[test]
+fn abspos_static_position_is_overridden_by_its_own_align_self_and_insets() {
+    let r = abs_child("align-items:flex-end", "align-self:center");
+    assert_eq!(r.y, 25.0, "{r:?}");
+    // `left` задан — статическая позиция по x не используется.
+    let r = abs_child("justify-content:flex-end", "left:5px");
+    assert_eq!(r.x, 5.0, "{r:?}");
+}
+
+#[test]
+fn abspos_static_position_uses_the_physical_axes() {
+    // vertical-lr + row: главная ось — вертикаль, поперечная — горизонталь.
+    let r = abs_child("writing-mode:vertical-lr;justify-content:flex-end;align-items:center", "");
+    assert_eq!((r.x, r.y), (45.0, 50.0), "{r:?}");
+    // row-reverse: flex-start — правый край.
+    let r = abs_child("flex-direction:row-reverse", "");
+    assert_eq!((r.x, r.y), (90.0, 0.0), "{r:?}");
+    // Переполнение: unsafe end выступает за start-кромку, safe — прижимается к ней.
+    let r = abs_child("justify-content:flex-end;width:5px", "");
+    assert_eq!(r.x, -5.0, "{r:?}");
+    let r = abs_child("justify-content:safe flex-end;width:5px", "");
+    assert_eq!(r.x, 0.0, "{r:?}");
+}
+
+#[test]
+fn justify_left_right_are_physical_along_the_inline_axis_and_start_along_the_block_axis() {
+    // column (блочная ось): и `left`, и `right` — writing-mode start.
+    let r = run("flex-direction:column;justify-content:right;height:200px;width:100px");
+    assert_eq!(ys(&r), vec![0.0, 20.0, 40.0]);
+    // row в вертикальном режиме (inline-ось вертикальна): left — верх, right — низ.
+    let r = run_v("writing-mode:vertical-rl;justify-content:right;width:100px;height:200px");
+    assert_eq!(ys(&r), vec![50.0, 100.0, 150.0]);
+    let r = run_v("writing-mode:vertical-rl;justify-content:left;width:100px;height:200px");
+    assert_eq!(ys(&r), vec![0.0, 50.0, 100.0]);
+}
+
+// ── `safe` в grid (общий разбор `AlignValue::parse_with_overflow`) ──
+
+#[test]
+fn grid_safe_alignment_falls_back_to_start_only_on_overflow() {
+    let html = r#"<div id="g"><div id="big"></div><div id="small"></div></div>"#;
+    let css = "#g{display:grid;grid-template:50px 50px / 50px;width:50px}\
+               #big{width:100px;height:20px;justify-self:safe center}\
+               #small{width:20px;height:20px;justify-self:safe center}";
+    let r = rects(html, css, &["big", "small"]);
+    assert_eq!(r[0].x, 0.0, "переполнение: к start-кромке, {:?}", r[0]);
+    assert_eq!(r[1].x, 15.0, "влезает: центр, {:?}", r[1]);
+}

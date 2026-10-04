@@ -143,9 +143,8 @@ fn nested_flex_exports_first_item_baseline() {
 }
 
 #[test]
-fn nested_flex_row_reverse_exports_the_startmost_item_baseline() {
-    // В `row-reverse` main-start — правый край: крайний по старту элемент —
-    // первый в DOM (CSS Flexbox §8.5), а не визуально левый.
+fn nested_flex_row_reverse_exports_visually_first_item_baseline() {
+    // В `row-reverse` визуально первый (левый) элемент — последний в DOM.
     let html = format!(
         r#"<div id="c"><div id="a">{}</div><div id="n" style="display:flex;flex-direction:row-reverse"><div>{}</div><div>{}</div></div></div>"#,
         span(40),
@@ -153,8 +152,8 @@ fn nested_flex_row_reverse_exports_the_startmost_item_baseline() {
         span(30)
     );
     let r = rects(&html, "#c{display:flex;align-items:baseline;width:300px}", &["a", "n"]);
-    // Первый по DOM элемент — базовая линия 10: n опущен на 30.
-    assert_eq!(r[1].y, 30.0, "n: {:?}", r[1]);
+    // Левый элемент — второй по DOM, его базовая линия 30: n опущен на 10.
+    assert_eq!(r[1].y, 10.0, "n: {:?}", r[1]);
 }
 
 #[test]

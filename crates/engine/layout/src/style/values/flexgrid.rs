@@ -1003,6 +1003,22 @@ pub struct ContentAlignExtra {
     /// `justify-content: left | right` (stored as `Start`/`End` in
     /// `justify_content`).
     pub justify_side: Option<ContentSide>,
+    /// `justify-content: start | end` — relative to the container's writing
+    /// mode, not to `flex-direction` like `flex-start`/`flex-end` (both are
+    /// stored as `Start`/`End`).
+    pub justify_wm: bool,
+    /// `align-content: start | end` — likewise for the cross axis.
+    pub align_wm: bool,
+    /// `align-self: safe …` / `align-items: safe …`.
+    pub self_safe: bool,
+    pub items_safe: bool,
+    /// `align-self: start | end | self-start | self-end` (writing-mode relative,
+    /// stored as `Start`/`End`), and the same for `align-items`.
+    pub self_wm: bool,
+    pub items_wm: bool,
+    /// `justify-self: safe …` / `justify-items: safe …` (read by grid).
+    pub justify_self_safe: bool,
+    pub justify_items_safe: bool,
 }
 
 /// A physical side keyword of `justify-content` (CSS Box Alignment L3 §6.1).
@@ -1014,16 +1030,19 @@ pub enum ContentSide {
 
 impl AlignValue {
     /// `[safe | unsafe]? <keyword>` of `justify-content`/`align-content`: the
-    /// keyword and whether it was `safe`.
-    pub fn parse_with_overflow(s: &str) -> Option<(Self, bool)> {
+    /// keyword, whether it was `safe`, and whether it was a writing-mode
+    /// relative `start`/`end` (as opposed to `flex-start`/`flex-end`).
+    pub fn parse_with_overflow(s: &str) -> Option<(Self, bool, bool)> {
         let lc = s.trim().to_ascii_lowercase();
-        if let Some(rest) = lc.strip_prefix("safe ") {
-            return Self::parse(rest).map(|v| (v, true));
-        }
-        if let Some(rest) = lc.strip_prefix("unsafe ") {
-            return Self::parse(rest).map(|v| (v, false));
-        }
-        Self::parse(&lc).map(|v| (v, false))
+        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
+            (rest, true)
+        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
+            (rest, false)
+        } else {
+            (lc.as_str(), false)
+        };
+        let wm_relative = matches!(rest.trim(), "start" | "end" | "self-start" | "self-end");
+        Self::parse(rest).map(|v| (v, safe, wm_relative))
     }
 
     /// `left` / `right` as a `justify-content` value.

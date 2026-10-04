@@ -178,8 +178,8 @@ pub(crate) fn align_baseline_side(align: AlignValue) -> Option<BaselineSide> {
 ///
 /// Линии восстанавливаются по раскладке: внутри линии позиция по главной оси
 /// монотонна, и новая линия начинается там, где она перестаёт расти (у
-/// `*-reverse` — убывать). «Первая» линия — первая по flex-flow, то есть у
-/// cross-start (при `wrap-reverse` — у нижнего края), а не визуально верхняя.
+/// `*-reverse` — убывать). «Первая» линия — визуально верхняя (при
+/// `wrap-reverse` это последняя в порядке обхода).
 pub(crate) fn flex_container_baseline(
     b: &LayoutBox,
     side: BaselineSide,
@@ -190,6 +190,7 @@ pub(crate) fn flex_container_baseline(
     // `row-reverse` — позиции по главной оси убывают.
     let axes = super::flex::flex_axes(s);
     let (is_column, is_reverse) = (axes.main_vertical, axes.main_rev);
+    let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     let mut items: Vec<&LayoutBox> = b
         .children
@@ -224,11 +225,13 @@ pub(crate) fn flex_container_baseline(
         prev = Some(it);
     }
 
-    // «Первая» линия — первая по flex-flow (у `wrap-reverse` она у нижнего
-    // края), «последняя» — последняя.
-    let line = match side {
-        BaselineSide::First => lines.first()?,
-        BaselineSide::Last => lines.last()?,
+    // Визуально первая линия — первая в обходе, кроме `wrap-reverse` строки, где
+    // линии идут снизу вверх: «первая» базовая линия — у верхней (так её считают
+    // WPT `flex-align-baseline-flex-003`, `flexbox-baseline-multi-line-horiz-004`).
+    let visual_first_is_first_visited = is_column || !is_wrap_reverse;
+    let line = match (side, visual_first_is_first_visited) {
+        (BaselineSide::First, true) | (BaselineSide::Last, false) => lines.first()?,
+        _ => lines.last()?,
     };
 
     let shift = |c: &LayoutBox, bl: f32| c.rect.y - b.rect.y + bl;
@@ -257,9 +260,9 @@ pub(crate) fn flex_container_baseline(
     // 2. Крайний item линии.
     let first_visited = *line.first()?;
     let last_visited = *line.last()?;
-    let extreme = match side {
-        BaselineSide::First => first_visited,
-        BaselineSide::Last => last_visited,
+    let extreme = match (side, is_reverse) {
+        (BaselineSide::First, false) | (BaselineSide::Last, true) => first_visited,
+        _ => last_visited,
     };
     Some(shift(extreme, box_baseline_or_synth(extreme, side, measurer)))
 }
