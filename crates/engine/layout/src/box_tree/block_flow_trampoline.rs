@@ -487,6 +487,23 @@ fn step_child(
 
     let justify_items = frame.init.s.justify_items;
     let child = &mut frame.b.children[i];
+    // Writing Modes L3 §7.3.1 (FLEX-VWM-4): an in-flow orthogonal block whose
+    // containing block has no definite height shrinks to its content along the
+    // inline axis (physical height) instead of filling the initial containing
+    // block. The root element is not one: its containing block is the ICB itself.
+    // A vertical flex container sizes itself from its items (`flex_trampoline`).
+    let children_available_height = if children_available_height.is_none()
+        && !child_is_root_element
+        && is_block
+        && !matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && child.style.height.is_none()
+        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && !matches!(child.style.display, Display::Flex | Display::InlineFlex)
+    {
+        Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport)))
+    } else {
+        children_available_height
+    };
     match dispatch_box(
         child, eff_left, start_y, eff_w, children_available_height, measurer, viewport,
         children_pcb, hp, !child_is_root_element, outer_for_child, justify_items, None,

@@ -843,6 +843,11 @@ pub(crate) fn flex_item_min_main_width(
                 .resolve(em, Some(cb), viewport)
                 .map_or(0.0, |v| outer_horiz(v.max(0.0)))
         };
+        // CSS Tables L3 §"used min width of table": a table is never narrower than
+        // its min-content width, whatever `min-width` says (FLEX-VWM-4).
+        if matches!(s.display, Display::Table | Display::InlineTable) {
+            return v.max(min_content_outer_width_of_contents(item, measurer, viewport)).max(0.0);
+        }
         return v.max(0.0);
     }
     if s.overflow_x != Overflow::Visible {

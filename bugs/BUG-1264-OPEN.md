@@ -39,11 +39,17 @@ FLEX-VWM, остаток `flexbox-writing-mode-*`: 010–016 не совпада
 
 Совпали с эталоном: `flexbox-writing-mode-010`, `013`, `014`, `015`, `016`, `flexbox_align-items-stretch-3`; `stretching-orthogonal-flows` — только тонкие линии.
 
+## Сделано в FLEX-VWM-4 (2026-10-04)
+
+- `flex_trampoline::relayout_stretched_row_item`: элемент ряда с `align-self: stretch`, `height: auto` и `height:%`/`calc()` в поддереве раскладывается заново с растянутой высотой линии (CSS Flexbox §9.8 — растянутый элемент определён; §9.4 шаг 11 — и когда первый проход вышел выше линии). `percentage-size-subitems-001`, `percentage-heights-021`, `flex-wrap-006` совпадают с эталоном.
+- `intrinsic::flex_item_min_main_width`: таблица-элемент не уже своего min-content при любом `min-width` (CSS Tables L3, «used min width of table») — `ortho-table-item-001`, `table-as-item-fixed-min-width-3`.
+- Ортогональный блок в in-flow родителе с неопределённой высотой (`block_flow_trampoline`) и вертикальный flex-контейнер блочного уровня (`flex_trampoline`, высота = размер содержимого по главной оси) обтягивают содержимое по inline-оси вместо заполнения вьюпорта (Writing Modes L3 §7.3.1); корневой элемент по-прежнему заполняет ICB. `flex-direction-row-vertical`, `webkit-box-vertical-writing-mode` (паритет с `display:flex`), `flex-aspect-ratio-img-vert-lr` (остались AA-линии картинки на дробном `y`).
+- A/B reftest: css-flexbox identical 463 → 472 (16 лучше, 2 хуже — `aspect-ratio-intrinsic-size-001/002`, оба и раньше не совпадали), css-writing-modes identical 94 → 97; A/B `--dump-display-list` по 182 страницам корпуса — без изменений.
+
 ## Остаток
 
-- `dynamic-orthogonal-flex-item`: shrink-to-fit `inline-flex` вокруг ортогонального элемента — число колонок зависит от высоты контейнера, которую intrinsic-функции не знают.
-- `percentage-size-subitems-001`: высота `100%` у детей растянутого по поперечной оси flex-элемента (overflow: scroll) — растянутый размер определён, но раскладка элемента не переигрывается с ним.
-- `grid-flex-item-001`, `ortho-table-item-001`: `grid`/`table` в вертикальном `writing-mode` не поддержаны.
-- `flex-aspect-ratio-img-vert-lr`: размеры скриншотов отличаются.
+- `dynamic-orthogonal-flex-item` (→ FLEX-VWM-6): ширина shrink-to-fit `inline-flex` считается до раскладки из intrinsic-функций, `vertical_block_extent` берёт ряд `InlineBlockRow` за одну колонку, а flex-проба элемента (`block_axis_width`) число колонок знает — контейнер 50 вместо 100, `flex-shrink` ужимает элемент до min-content одной колонки.
+- `aspect-ratio-intrinsic-size-001/002` (→ FLEX-VWM-6): `canvas` с `height:100%` в растянутом элементе — ширина элемента должна браться из растянутой высоты.
+- `grid-flex-item-001` (→ GRID-VWM): grid в вертикальном `writing-mode` не меняет оси.
 - `flexbox-writing-mode-011/012`: эталон держится на `float: left` в вертикальном потоке (линейный «левый» край — верх), а float-ы в вертикальных контекстах движок пока игнорирует (`vertical.rs`, «Limitations»); то же для 100+ тестов `css-writing-modes`/`css-shapes`.
 - Схлопывание margin предка с первым/последним ребёнком по block-оси вертикального потока (`css-writing-modes/margin-collapse-vlr-*`, `-vrl-*`).

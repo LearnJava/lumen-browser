@@ -211,6 +211,28 @@ pub(crate) fn column_item_stretches_block_axis(item: &LayoutBox, s: &ComputedSty
     matches!(cross_align, AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
 }
 
+/// FLEX-VWM-4: does a descendant of `b` size its height against `b`'s own
+/// (`height: <%>` / `calc()`)? Such a subtree must be laid out again once
+/// `align-self: stretch` has made `b`'s height definite (CSS Flexbox L1 §9.8
+/// "stretched flex items are treated as definite"). Bounded: past
+/// [`PERCENT_SCAN_LIMIT`] boxes the answer is `false` (the old behaviour).
+pub(crate) fn subtree_has_percent_height(b: &LayoutBox) -> bool {
+    const PERCENT_SCAN_LIMIT: usize = 4096;
+    let mut stack: Vec<&LayoutBox> = b.children.iter().collect();
+    let mut seen = 0;
+    while let Some(n) = stack.pop() {
+        seen += 1;
+        if seen > PERCENT_SCAN_LIMIT {
+            return false;
+        }
+        if matches!(n.style.height, Some(Length::Percent(_) | Length::Calc(_))) {
+            return true;
+        }
+        stack.extend(n.children.iter());
+    }
+    false
+}
+
 /// CSS Flexbox L1 §9 — multi-line flex layout, Steps 1–3/justify precompute.
 ///
 /// Алгоритм (LAYOUT-2 срез 3 — item-placement пасс вынесен в
