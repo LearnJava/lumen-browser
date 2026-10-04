@@ -735,7 +735,7 @@ pub(crate) fn gap_decoration_commands(
             let idx = if reversed { total - 1 - seg.gap } else { seg.gap };
             let ctx = GapDecorationContext {
                 rule_width: *widths.value_for_gap(idx, total),
-                rule_style: styles.value_for_gap(idx, total).painted_as(),
+                rule_style: *styles.value_for_gap(idx, total),
                 rule_color: colors.value_for_gap(idx, total).resolve(s.color),
             };
             out.extend(emit_gap_rules(&b.children, std::slice::from_ref(seg), &ctx));

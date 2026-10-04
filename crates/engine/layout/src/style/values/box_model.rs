@@ -349,30 +349,23 @@ pub enum BorderStyle {
     /// Из `border-style` недостижим (его разбор знает пять ключевых слов); приходит
     /// только из `*-rule-style` (CSS Gap Decorations L1 §4.2).
     Hidden,
-    /// `groove` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    /// `groove` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
+    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
     Groove,
-    /// `ridge` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    /// `ridge` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
+    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
     Ridge,
-    /// `inset` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    /// `inset` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
+    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
     Inset,
-    /// `outset` — объёмная линия; рисуется как `Solid`. Только из `*-rule-style`.
+    /// `outset` — объёмная линия (две тени, Backgrounds L3 §4.2); рисует `emit_gap_rules`.
+    /// Только из `*-rule-style`; у обычного `border` рисуется как `Solid`.
     Outset,
 }
 
 impl BorderStyle {
     pub fn is_visible(self) -> bool {
         !matches!(self, BorderStyle::None | BorderStyle::Hidden)
-    }
-
-    /// Вид, которым стиль реально рисуется: объёмные `groove`/`ridge`/`inset`/`outset`
-    /// отдельной растеризации не имеют и идут как сплошная линия.
-    pub fn painted_as(self) -> BorderStyle {
-        match self {
-            BorderStyle::Groove | BorderStyle::Ridge | BorderStyle::Inset | BorderStyle::Outset => {
-                BorderStyle::Solid
-            }
-            other => other,
-        }
     }
 }
 
