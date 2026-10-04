@@ -357,7 +357,10 @@ pub fn grid_gap_pieces(
             match brk {
                 RuleBreak::None => false,
                 RuleBreak::Intersection => sides > 0,
-                RuleBreak::Normal => sides == 1,
+                // «Т» с щелью-перекладиной (перпендикулярная щель примыкает только с одной
+                // стороны) линию не режет: обрывается примыкающая щель-ножка, а она кончается
+                // там, где элемент пересекает её саму (`across`); см. `grid-gap-decorations-009`.
+                RuleBreak::Normal => false,
             }
         };
         let mut start: Option<usize> = None;
@@ -788,15 +791,15 @@ mod tests {
     }
 
     #[test]
-    fn normal_breaks_at_t_junctions_only() {
-        // Колонка 0 держит один элемент на строки 0–1: он пересекает строковую щель 0,
-        // и для колоночной щели 0 стык с ней — «Т» (щель есть только справа).
+    fn normal_ends_at_t_junctions_by_the_crossing_item_only() {
+        // Колонка 0 держит один элемент на строки 0–1: он пересекает строковую щель 0.
+        // «Т» на стыке 0: строковая щель (ножка) примыкает к колоночной (перекладине) справа и
+        // обрывается об элемент, а колоночная щель 0 идёт сквозь стык целиком.
         let mut items: Vec<_> = full_grid().into_iter().filter(|c| !(c.t0 == 0 && c.a0 < 2)).collect();
         items.push(GridItemSpan { t0: 0, t1: 0, a0: 0, a1: 1 });
         let normal = pieces(&items, RuleBreak::Normal, RuleVisibilityItems::Normal);
-        // Щель 0: разрыв на «Т» (стык 0), сквозь «крест» (стык 1) линия идёт.
-        assert_eq!(normal, vec![(0, 0.0, 100.0), (0, 120.0, 340.0), (1, 0.0, 340.0)]);
-        // `intersection` режет и на кресте.
+        assert_eq!(normal, vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]);
+        // `intersection` режет и на «Т», и на кресте.
         let inter = pieces(&items, RuleBreak::Intersection, RuleVisibilityItems::Normal);
         assert_eq!(
             inter,
