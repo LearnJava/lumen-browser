@@ -121,7 +121,7 @@ pub(crate) fn build_multicol_init(
 ) -> Option<Box<super::multicol_trampoline::MulticolInit>> {
     use super::multicol_trampoline::{MulticolInit, SegmentInit};
 
-    let col_gap = s.column_gap.resolve_or_zero(em, content_width, viewport).max(0.0);
+    let col_gap = s.multicol_column_gap(em, content_width, viewport);
 
     // Compute column count from column-count / column-width.
     let n_cols: u32 = match (s.column_count, &s.column_width) {

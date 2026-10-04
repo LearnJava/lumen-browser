@@ -495,6 +495,10 @@ pub struct ComputedStyle {
     /// Typed `Length`; `%` = % cb_size. Default `Px(0)`. Phase 0: parse only.
     pub row_gap: Length,
     pub column_gap: Length,
+    /// CSS Box Alignment L3 §8.1 — `column-gap: normal` (the initial value) is `0` in flex/grid
+    /// but `1em` in a multicol container (Multicol L1 §3.3). `true` until a `<length-percentage>`
+    /// is declared; read through [`ComputedStyle::multicol_column_gap`].
+    pub column_gap_normal: bool,
     /// CSS Multi-column L1 §3.2 — `column-count: <integer> | auto`. `None`
     /// = `auto`. Phase 0: parsing only.
     pub column_count: Option<u32>,
@@ -1127,6 +1131,16 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// CSS Multi-column L1 §3.3 — the used `column-gap` of a multicol container in px:
+    /// `normal` is `1em`, any other value resolves against `basis` (the content-box width).
+    pub fn multicol_column_gap(&self, em: f32, basis: f32, viewport: lumen_core::geom::Size) -> f32 {
+        if self.column_gap_normal {
+            em.max(0.0)
+        } else {
+            self.column_gap.resolve_or_zero(em, basis, viewport).max(0.0)
+        }
+    }
+
     /// CSS Multi-column L2 §4.2 — the `column-height` in px (`None` for `auto`). `%` has no
     /// basis (the property takes no percentages), so only absolute and font-relative lengths
     /// resolve.
@@ -1322,6 +1336,7 @@ impl ComputedStyle {
             filter: Vec::new(),
             row_gap: Length::Px(0.0),
             column_gap: Length::Px(0.0),
+            column_gap_normal: true,
             column_count: None,
             column_width: None,
             column_height: None,
@@ -1704,6 +1719,7 @@ impl ComputedStyle {
             // Box Alignment gap / Sizing aspect-ratio — не наследуются.
             row_gap: Length::Px(0.0),
             column_gap: Length::Px(0.0),
+            column_gap_normal: true,
             // CSS Multi-column — не наследуются.
             column_count: None,
             column_width: None,

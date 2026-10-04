@@ -128,6 +128,34 @@
     }
 
     #[test]
+    fn column_gap_normal_is_zero_for_flex_and_one_em_for_multicol() {
+        // CSS Multicol L1 §3.3: `column-gap: normal` (initial) is `1em` in a multicol container.
+        let vp = lumen_core::geom::Size::new(800.0, 600.0);
+        let s = parse_gap_rule("font-size: 20px;");
+        assert!(s.column_gap_normal);
+        assert_eq!(s.column_gap, Length::Px(0.0));
+        assert_eq!(s.multicol_column_gap(20.0, 500.0, vp), 20.0);
+        // An explicit length wins, `0` included; `normal` and the `gap` shorthand reset it.
+        let s = parse_gap_rule("column-gap: 0;");
+        assert!(!s.column_gap_normal);
+        assert_eq!(s.multicol_column_gap(20.0, 500.0, vp), 0.0);
+        let s = parse_gap_rule("column-gap: 7px;");
+        assert_eq!(s.multicol_column_gap(20.0, 500.0, vp), 7.0);
+        let s = parse_gap_rule("column-gap: 7px; column-gap: normal;");
+        assert!(s.column_gap_normal);
+        assert_eq!(s.multicol_column_gap(20.0, 500.0, vp), 20.0);
+        let s = parse_gap_rule("gap: 3px;");
+        assert!(!s.column_gap_normal);
+        assert_eq!(s.row_gap, Length::Px(3.0));
+        let s = parse_gap_rule("gap: 3px normal;");
+        assert!(s.column_gap_normal);
+        assert_eq!(s.row_gap, Length::Px(3.0));
+        // `row-gap: normal` is 0.
+        let s = parse_gap_rule("row-gap: 5px; row-gap: normal;");
+        assert_eq!(s.row_gap, Length::Px(0.0));
+    }
+
+    #[test]
     fn rule_properties_are_supported() {
         for p in ["row-rule", "row-rule-width", "row-rule-style", "row-rule-color", "rule", "rule-width", "rule-style", "rule-color"] {
             assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing from SUPPORTED_PROPERTIES");
