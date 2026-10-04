@@ -286,3 +286,27 @@ fn flex_column_rule_after_item_with_oversized_negative_margin() {
     let want: Vec<_> = [-98.0, -38.0, 22.0, 82.0, 142.0].iter().map(|&x| (x, 2.0, 10.0, 50.0)).collect();
     assert_rules(&got, &want);
 }
+
+/// Срез 32: заливка `background-color` привязана к целым пикселям, поэтому соседние элементы
+/// на дробных дорожках `1fr` (100px − 2·10px = 26.67px) делят шов без полосы фона контейнера.
+#[test]
+fn box_backgrounds_snap_to_device_pixels() {
+    let html = r#"<div class="g"><div class="i"></div><div class="i"></div><div class="i"></div></div>"#;
+    let css = "*{margin:0}.g{display:grid;grid-template-columns:repeat(3,1fr);column-gap:10px;width:100px;\
+               height:20px;background:red}.i{background:green}";
+    let dl = build(html, css);
+    let green: Vec<(f32, f32)> = dl
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillRect { rect, color } if color.g > 0 && color.r == 0 => Some((rect.x, rect.x + rect.width)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(green.len(), 3, "три заливки элементов: {green:?}");
+    for (x0, x1) in &green {
+        assert_eq!(x0.fract(), 0.0, "левый край на целом пикселе: {green:?}");
+        assert_eq!(x1.fract(), 0.0, "правый край на целом пикселе: {green:?}");
+    }
+    // 0–26.67, 36.67–63.33, 73.33–100 → 0–27, 37–63, 73–100.
+    assert_eq!(green, vec![(0.0, 27.0), (37.0, 63.0), (73.0, 100.0)]);
+}

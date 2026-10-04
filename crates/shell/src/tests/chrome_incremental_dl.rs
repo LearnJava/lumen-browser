@@ -851,7 +851,10 @@ fn bug1059_chrome_dl_excludes_demo_bar_after_detach_but_floating_dl_includes_it(
                 cmd,
                 lumen_paint::DisplayCommand::FillRect { rect, .. }
                 | lumen_paint::DisplayCommand::FillRoundedRect { rect, .. }
-                    if *rect == demo_rect
+                    if (rect.x - demo_rect.x).abs() <= 0.5
+                        && (rect.y - demo_rect.y).abs() <= 0.5
+                        && (rect.width - demo_rect.width).abs() <= 1.0
+                        && (rect.height - demo_rect.height).abs() <= 1.0
             )
         })
     };
