@@ -47,9 +47,24 @@ sys.path[:0] = [
     os.path.join(REPO_ROOT, "tools", "wptrunner"),
 ]
 
-import localpaths  # noqa: E402,F401  (repo_root bootstrap wptrunner expects)
-from wptrunner import wptcommandline, wptrunner  # noqa: E402
-import shutdown_guard  # noqa: E402  (BUG-1006)
+# WPT-RUN-9, startup: nothing heavy is imported at module level. wptrunner
+# starts its wptserve daemons, managers and test runners with the `spawn`
+# start method, and on Windows `spawn` re-executes the parent's `__main__`
+# file — this one — in every child (`multiprocessing.spawn`,
+# `init_main_from_path`) before the child can even read its target. With
+# `wptrunner` imported up here that was ~0.9 s per child, and `ServerProc.start`
+# blocks the parent until the child has read its arguments, so the seven
+# servers came up strictly one after another, ~1.05 s each. `_load_wptrunner`
+# imports the same modules lazily, in the parent only (measurement —
+# `docs/tasks/p2-wpt-runner-throughput.md` §старт шарда).
+
+
+def _load_wptrunner():
+    """Import wptrunner (and its `localpaths` bootstrap) on first use."""
+    import localpaths  # noqa: PLC0415,F401  (repo_root bootstrap wptrunner expects)
+    from wptrunner import wptcommandline, wptrunner  # noqa: PLC0415
+    return wptcommandline, wptrunner
+
 
 # BUG-1024: the browser subprocess wptrunner spawns inherits this process's
 # environment, so setting this here (once, at import time — `run_report.py`
@@ -95,8 +110,11 @@ def _install_server_config_override() -> None:
     if not os.path.isfile(path):
         raise SystemExit(f"{SERVER_CONFIG_ENV}={path}: no such file")
     import json  # noqa: PLC0415
+    _load_wptrunner()
     from wptrunner import environment  # noqa: PLC0415 — after sys.path setup
 
+    if getattr(environment.TestEnvironment.build_config, "_lumen_lane_override", False):
+        return  # `run()` called again in the same process — already patched
     with open(path, encoding="utf-8") as fh:
         override = json.load(fh)
     original_build_config = environment.TestEnvironment.build_config
@@ -106,10 +124,8 @@ def _install_server_config_override() -> None:
         config.update(override)
         return config
 
+    build_config._lumen_lane_override = True
     environment.TestEnvironment.build_config = build_config
-
-
-_install_server_config_override()
 
 
 #: `run_smoke.py`'s own flag (not wptrunner's): run the selected tests from
@@ -161,6 +177,7 @@ def _install_shared_queue() -> None:
     `tools/wptrunner`, like `_install_server_config_override`; only takes
     effect for a run that passes `--fully-parallel`."""
     from urllib.parse import urlsplit  # noqa: PLC0415
+    _load_wptrunner()
     from wptrunner import testloader  # noqa: PLC0415 — after sys.path setup
 
     original_make_groups = testloader.FullyParallelGroupedSource.make_groups
@@ -192,6 +209,9 @@ def run(binary: str, test_ids: list, extra_args: list = None) -> int:
         return 1
 
     os.makedirs(METADATA_ROOT, exist_ok=True)
+    wptcommandline, wptrunner = _load_wptrunner()
+    import shutdown_guard  # noqa: PLC0415  (BUG-1006)
+    _install_server_config_override()
 
     argv = [
         "--product=lumen",
