@@ -150,33 +150,37 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 
     let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
-    // CSS Multicol L1 §6.1: `column-span: all` children cut the columns into bands.
-    let geom = crate::multicol_gap_decorations::MulticolGeom {
-        content_x,
-        content_y,
-        content_w,
-        col_w,
-        col_gap,
-        n_cols,
-        col_h: content_h,
-        row_gap: 0.0,
-    };
-    if crate::multicol_gap_decorations::emit_multicol_spanner_rules(b, &geom, content_h, out) {
-        return;
-    }
     // CSS Multicol L1 §7.1: content that does not fit `n_cols` columns of the limited height
     // flows into overflow columns past the inline end — a rule separates those too, so the
     // column count is the one the laid-out fragments actually occupy.
     let step = col_w + col_gap;
-    let n_cols = b
+    let used_cols = b
         .children
         .iter()
         .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .filter(|c| c.rect.width <= col_w + 1.0 && c.rect.width > 0.0)
         .map(|c| ((c.rect.x - content_x) / step).round().max(0.0) as u32 + 1)
         .max()
-        .unwrap_or(0)
-        .max(n_cols);
+        .unwrap_or(0);
+    let n_cols = used_cols.max(n_cols);
+    // CSS Multicol L1 §6.1: `column-span: all` children cut the columns into bands. With
+    // `column-count: auto` only the columns that really got a fragment exist
+    // (multicol-gap-decorations-026: `column-width` alone would make 14 of them, the content
+    // fills 3); an explicit `column-count` keeps its empty columns (`032`).
+    let band_cols = if s.column_count.is_none() { used_cols.max(1) } else { n_cols };
+    let geom = crate::multicol_gap_decorations::MulticolGeom {
+        content_x,
+        content_y,
+        content_w,
+        col_w,
+        col_gap,
+        n_cols: band_cols,
+        col_h: content_h,
+        row_gap: 0.0,
+    };
+    if crate::multicol_gap_decorations::emit_multicol_spanner_rules(b, &geom, content_h, out) {
+        return;
+    }
     let total = (n_cols - 1) as usize;
     // CSS Gap Decorations L1 §3.3: `column-rule-inset-cap-*` shorten (or, if negative, extend)
     // a rule at the container's block edges, where the crossing gap is 0 wide.

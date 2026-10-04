@@ -67,6 +67,9 @@ pub(super) struct MulticolInit {
     pub(super) col_w: f32,
     pub(super) balance: bool,
     pub(super) container_h: Option<f32>,
+    /// `container_h` is the container's block size (not a `column-height`): every segment gets
+    /// only what the segments and spanners above it left of it.
+    pub(super) limit_shared: bool,
     /// `Some` when overflow columns wrap into rows (see [`ColRows`]).
     pub(super) col_rows: Option<ColRows>,
     pub(super) segments: Vec<SegmentInit>,
@@ -408,6 +411,19 @@ fn finish_measure_phase(frame: &mut Frame, viewport: Size) {
     }
 }
 
+/// Column height limit of the current segment (see [`MulticolInit::limit_shared`]).
+fn segment_limit(init: &MulticolInit) -> Option<f32> {
+    let l = init.container_h?;
+    if !init.limit_shared {
+        return Some(l);
+    }
+    // A segment below a spanner has the rest of the container's height; once that is used up
+    // the full limit stays (a column of a few pixels would only split the content into
+    // hundreds of columns).
+    let rest = l - (init.cur_y - init.content_y);
+    Some(if rest >= 1.0 { rest } else { l })
+}
+
 /// CSS Multicol L1 §7 — used column height for a sliceable segment.
 /// `limit` is the column height limit (definite `height`, else `max-height`).
 /// `balance` spreads `total_h` over `n_cols` and never exceeds the limit;
@@ -443,7 +459,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     let col_w = frame.init.col_w;
     let content_x = frame.init.content_x;
     let balance = frame.init.balance;
-    let container_h = frame.init.container_h;
+    let container_h = segment_limit(&frame.init);
     let rows_cfg = frame.init.col_rows;
     // The rest of a row cut by a spanner; a row that is used up opens the next one.
     let mut row_rest = None;
@@ -561,7 +577,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
 fn compute_col_assignment(frame: &mut Frame) {
     let n_cols = frame.init.n_cols as usize;
     let balance = frame.init.balance;
-    let container_h = frame.init.container_h;
+    let container_h = segment_limit(&frame.init);
     let cur_y = frame.init.cur_y;
     let outer_hs = &frame.outer_hs;
     let total_h: f32 = outer_hs.iter().sum();

@@ -986,6 +986,22 @@ use lumen_dom::NodeId;
     }
 
     #[test]
+    fn multicol_spanner_does_not_cut_rules_of_overflow_columns() {
+        // multicol-gap-decorations-027: 3 columns in a 200px box, six 100px items under a 5px
+        // spanner in a 205px container -> six columns, the three gaps past the content box are
+        // full-height rules (the spanner is only as wide as the content box).
+        let p = r#"<p style="height:100px;margin:0"></p>"#;
+        let html = format!(r#"{p}<div style="column-span:all;height:5px;margin:0"></div>{p}{p}{p}{p}{p}{p}"#);
+        let css = "width:200px;height:205px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto;column-rule:5px solid blue;rule-visibility-items:all;";
+        let dl = build(&format!(r#"<div style="{css}">{html}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        let past: Vec<_> = cols.iter().filter(|c| c.0 > 200.0).collect();
+        assert_eq!(past.len(), 3, "{cols:?}");
+        assert!(past.iter().all(|c| c.1 == 0.0 && c.3 == 205.0), "{past:?}");
+        assert!(cols.iter().filter(|c| c.0 < 200.0).all(|c| c.1 + c.3 <= 100.01 || c.1 >= 104.99), "{cols:?}");
+    }
+
+    #[test]
     fn multicol_without_column_height_ignores_column_wrap() {
         let dl = build(
             r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;column-wrap:wrap;

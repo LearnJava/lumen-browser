@@ -403,7 +403,10 @@ fn emit_bands(b: &LayoutBox, g: &MulticolGeom, bands: &[Band], content_h: f32, c
         let gap_left = g.content_x + (i + 1) as f32 * g.col_w + i as f32 * g.col_gap;
         let sep_x = gap_left + (g.col_gap - w) * 0.5;
         let both = |r: usize| col_piece(i, r);
-        if col_joined {
+        // A spanner is as wide as the content box, so it does not cut the rule of an overflow
+        // column gap past that box's inline end (multicol-gap-decorations-027).
+        let past_content = gap_left >= g.content_x + g.content_w - 0.01;
+        if col_joined || past_content {
             // One line through the row gaps and under the spanners.
             if let (Some(first), Some(last)) = ((0..rows).find(|&r| both(r)), (0..rows).rfind(|&r| both(r))) {
                 let (a, bm) = line_insets(&s.column_rule_inset, None, None, em, vp);
