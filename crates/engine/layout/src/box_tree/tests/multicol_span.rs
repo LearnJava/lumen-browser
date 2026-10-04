@@ -126,3 +126,18 @@ fn multicol_column_span_all_ignored_on_float() {
         "a floated 'spanner' must not become full-width"
     );
 }
+
+#[test]
+fn multicol_column_gap_normal_is_one_em() {
+    // CSS Multicol L1 §3.3: without `column-gap` the columns are `1em` apart (16px here), so two
+    // columns of a 496px container are 240px wide and the second starts at x = 256.
+    let root = lay_measured(
+        "<div id='c'><div id='a'></div><div id='b'></div></div>",
+        "#c { width: 496px; column-count: 2; column-fill: auto; height: 20px; } #a { height: 20px; } #b { height: 20px; }",
+        800.0,
+    );
+    let c = first_element_child(&root);
+    assert_eq!(c.children.len(), 2);
+    assert!((c.children[0].rect.width - 240.0).abs() < 0.5, "col width={}", c.children[0].rect.width);
+    assert!((c.children[1].rect.x - c.children[0].rect.x - 256.0).abs() < 0.5, "col step");
+}

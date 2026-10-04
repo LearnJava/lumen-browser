@@ -120,7 +120,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 
     // Sentinel viewport for length resolution (good enough for px/em/%).
     let vp = Size::new(content_w, content_h);
-    let col_gap = s.column_gap.resolve_or_zero(em, content_w, vp).max(0.0);
+    let col_gap = s.multicol_column_gap(em, content_w, vp);
 
     let n_cols = crate::multicol_gap_decorations::multicol_column_count(s, em, content_w, col_gap, vp);
 

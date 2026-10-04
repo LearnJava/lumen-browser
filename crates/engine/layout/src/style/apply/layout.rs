@@ -485,68 +485,34 @@ pub(in crate::style) fn apply_decl_layout(
                 style.shape_image_threshold = n.clamp(0.0, 1.0);
             }
         }
-        "row-gap" => {
+        "row-gap" | "grid-row-gap" => {
             // Typed Length — % = % cb_height, резолвится при layout.
             // Отрицательные значения запрещены (CSS Multi-column §3.4).
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
+            // `grid-row-gap` — устаревший алиас (CSS Grid L1 §7.3). `normal` = 0 для строк.
+            if let Some(gap) = parse_gap_value(val, is_quirks) {
+                style.row_gap = gap.unwrap_or(Length::Px(0.0));
             }
         }
-        "column-gap" => {
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
-            }
-        }
-        "grid-column-gap" => {
-            // CSS Grid L1 §7.3: legacy alias for column-gap (deprecated).
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
-            }
-        }
-        "grid-row-gap" => {
-            // CSS Grid L1 §7.3: legacy alias for row-gap (deprecated).
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
+        "column-gap" | "grid-column-gap" => {
+            // `grid-column-gap` — устаревший алиас (CSS Grid L1 §7.3). `normal` — начальное
+            // значение: 0 во flex/grid, `1em` в multicol (`ComputedStyle::multicol_column_gap`).
+            if let Some(gap) = parse_gap_value(val, is_quirks) {
+                style.column_gap_normal = gap.is_none();
+                style.column_gap = gap.unwrap_or(Length::Px(0.0));
             }
         }
         "gap" | "grid-gap" => {
             // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
             // = row). `grid-gap` — устаревший алиас (CSS Grid L1 §7.3).
-            let clamp_gap = |len: Length| -> Length {
-                if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                }
-            };
             let parts: Vec<&str> = val.split_whitespace().collect();
             if !parts.is_empty()
-                && let Some(row) = parse_length_q(parts[0], is_quirks)
+                && let Some(row) = parse_gap_value(parts[0], is_quirks)
             {
-                let col = if parts.len() >= 2 {
-                    parse_length_q(parts[1], is_quirks)
-                } else {
-                    Some(row.clone())
-                };
+                let col = if parts.len() >= 2 { parse_gap_value(parts[1], is_quirks) } else { Some(row.clone()) };
                 if let Some(c) = col {
-                    style.row_gap = clamp_gap(row);
-                    style.column_gap = clamp_gap(c);
+                    style.row_gap = row.unwrap_or(Length::Px(0.0));
+                    style.column_gap_normal = c.is_none();
+                    style.column_gap = c.unwrap_or(Length::Px(0.0));
                 }
             }
         }
@@ -1174,6 +1140,16 @@ struct RuleTriplet {
 /// `safe` overflow position and the writing-mode relativity of `start`/`end`/
 /// `self-start`/`self-end` to [`ContentAlignExtra`] (shared by the longhands
 /// and the `place-*` shorthands).
+/// CSS Box Alignment L3 §8.1 — `<length-percentage [0,∞)> | normal`. `Some(None)` is `normal`,
+/// `Some(Some(len))` a length (negative ones clamp to 0), `None` an invalid value.
+fn parse_gap_value(val: &str, is_quirks: bool) -> Option<Option<Length>> {
+    if val.trim().eq_ignore_ascii_case("normal") {
+        return Some(None);
+    }
+    let len = parse_length_q(val, is_quirks)?;
+    Some(Some(if matches!(&len, Length::Px(v) if *v < 0.0) { Length::Px(0.0) } else { len }))
+}
+
 fn set_align_items(style: &mut ComputedStyle, val: &str) {
     if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
         style.align_items = v;
