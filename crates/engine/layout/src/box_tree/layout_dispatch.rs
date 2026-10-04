@@ -828,6 +828,18 @@ pub(super) fn dispatch_box(
         return DispatchOutcome::Done;
     }
 
+    // BUG-1263: a row of atomic inlines in a vertical writing mode flows down
+    // the inline axis and wraps into columns, not left-to-right.
+    if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::InlineBlockRow)
+    {
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        super::vertical_row::lay_out_vertical_inline_block_row(
+            b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+        );
+        return DispatchOutcome::Done;
+    }
+
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width, first_line_inset } = &mut b.kind {
         let row_continuation_width = *row_continuation_width;

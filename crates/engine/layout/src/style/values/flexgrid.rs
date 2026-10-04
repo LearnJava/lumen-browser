@@ -1016,6 +1016,10 @@ pub struct ContentAlignExtra {
     /// stored as `Start`/`End`), and the same for `align-items`.
     pub self_wm: bool,
     pub items_wm: bool,
+    /// `self-start` / `self-end`: relative to the item's *own* writing mode and
+    /// direction, not the container's (CSS Box Alignment L3 §4.2).
+    pub self_own: bool,
+    pub items_own: bool,
     /// `justify-self: safe …` / `justify-items: safe …` (read by grid).
     pub justify_self_safe: bool,
     pub justify_items_safe: bool,
@@ -1043,6 +1047,13 @@ impl AlignValue {
         };
         let wm_relative = matches!(rest.trim(), "start" | "end" | "self-start" | "self-end");
         Self::parse(rest).map(|v| (v, safe, wm_relative))
+    }
+
+    /// Was the keyword `self-start` / `self-end` (items' own axes)?
+    pub fn is_self_relative(s: &str) -> bool {
+        let lc = s.trim().to_ascii_lowercase();
+        let rest = lc.strip_prefix("safe ").or_else(|| lc.strip_prefix("unsafe ")).unwrap_or(&lc);
+        matches!(rest.trim(), "self-start" | "self-end")
     }
 
     /// `left` / `right` as a `justify-content` value.

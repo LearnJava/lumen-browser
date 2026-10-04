@@ -424,6 +424,16 @@ pub(crate) fn build_flex_init(
             );
         }
     }
+    // BUG-1264 — per item: the width a block-axis item (see
+    // `is_block_axis_probe`) measured when laid out at its inline size.
+    let mut block_axis_width: Vec<Option<f32>> = vec![None; item_idxs.len()];
+    let is_block_axis_probe = |item: &LayoutBox| {
+        !is_column
+            && !matches!(item.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+            && matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+            && item.style.width.is_none()
+            && matches!(item.style.flex_basis, FlexBasis::Auto | FlexBasis::Content)
+    };
     for (k, &i) in item_idxs.iter().enumerate() {
         let needs_prelayout = {
             let is = &children[i].style;
@@ -436,7 +446,9 @@ pub(crate) fn build_flex_init(
                 }
             } else {
                 match &is.flex_basis {
-                    FlexBasis::Auto | FlexBasis::Content => is.width.is_some(),
+                    FlexBasis::Auto | FlexBasis::Content => {
+                        is.width.is_some() || is_block_axis_probe(&children[i])
+                    }
                     FlexBasis::Length(_) => false,
                 }
             }
@@ -524,6 +536,21 @@ pub(crate) fn build_flex_init(
                         m.borrow_mut().insert(key, entry);
                     });
                 }
+            } else if is_block_axis_probe(&children[i]) {
+                // BUG-1264: the item's block axis lies along this horizontal
+                // main axis, so its content-based width is the number of
+                // columns its text wraps into at its inline size — the box has
+                // to be laid out to know. The room along y is the container's
+                // cross size (CSS Writing Modes L3 §7.3: an orthogonal flow
+                // is sized against the containing block's block size), or the
+                // viewport's when that is indefinite.
+                let is = &children[i].style;
+                let iem = is.font_size;
+                let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
+                let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
+                let avail_inline = (explicit_cross.unwrap_or(viewport.height) - m_t - m_b).max(0.0);
+                lay_out(&mut children[i], content_x, content_y, content_width, Some(avail_inline), measurer, viewport, children_pcb, hp, false);
+                block_axis_width[k] = Some(children[i].rect.width);
             } else {
                 lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, children_pcb, hp, false);
             }
@@ -614,6 +641,8 @@ pub(crate) fn build_flex_init(
                         };
                         let w = if let Some(t) = transferred {
                             t
+                        } else if let Some(bw) = block_axis_width[k] {
+                            flex_auto_base_main_width_from(item, bw, cb, measurer, viewport)
                         } else if is.width.is_none() {
                             flex_auto_base_main_width(item, cb, measurer, viewport)
                         } else {

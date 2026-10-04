@@ -192,4 +192,18 @@ fn finish_frame(frame: &mut Frame) {
             .min(frame.init.max_block)
             .max(frame.init.min_block)
     };
+    // `vertical-rl` stacks from the content box's right edge, but while the
+    // children were placed that edge was `content_block_avail` away (the room
+    // offered, not the size the box ended up with). A shrink-to-fit or
+    // min/max-clamped box has to pull them back onto its own right edge
+    // (FLEX-VWM-2, BUG-1263: a vertical-rl flex item sized by its content).
+    if frame.init.is_rtl {
+        let content_block = (frame.b.rect.width - frame.init.frame_horiz).max(0.0);
+        let dx = content_block - frame.init.content_block_avail;
+        if dx != 0.0 {
+            for child in &mut frame.b.children {
+                shift_subtree_x(child, dx);
+            }
+        }
+    }
 }

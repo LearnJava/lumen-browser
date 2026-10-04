@@ -49,29 +49,43 @@ pub(crate) fn max_content_outer_height(
         }
         .max(0.0);
     }
+    let child_outer_height = |c: &LayoutBox| {
+        let cem = c.style.font_size;
+        let mt = c.style.margin_top.resolve_or_zero(cem, 0.0, viewport);
+        let mb = c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
+        let ch = if matches!(c.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+            && !matches!(c.kind, BoxKind::InlineRun { .. })
+        {
+            c.style
+                .height
+                .as_ref()
+                .and_then(|h| h.resolve(cem, None, viewport))
+                .unwrap_or(0.0)
+        } else {
+            max_content_outer_height(c, measurer, viewport)
+        };
+        ch + mt + mb
+    };
     let content = match &b.kind {
         BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
+        // BUG-1263: a row of atomic inlines in a vertical mode is one unwrapped
+        // column — its inline size is the **sum** of the participants.
+        BoxKind::InlineBlockRow if is_vertical_mode(b) => b
+            .children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .map(|c| match c.kind {
+                BoxKind::InlineSpace => {
+                    measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size))
+                }
+                _ => child_outer_height(c),
+            })
+            .sum(),
         _ => b
             .children
             .iter()
             .filter(|c| contributes_to_intrinsic_width(c))
-            .map(|c| {
-                let cem = c.style.font_size;
-                let mt = c.style.margin_top.resolve_or_zero(cem, 0.0, viewport);
-                let mb = c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
-                let ch = if matches!(c.style.writing_mode, crate::style::WritingMode::HorizontalTb)
-                    && !matches!(c.kind, BoxKind::InlineRun { .. })
-                {
-                    c.style
-                        .height
-                        .as_ref()
-                        .and_then(|h| h.resolve(cem, None, viewport))
-                        .unwrap_or(0.0)
-                } else {
-                    max_content_outer_height(c, measurer, viewport)
-                };
-                ch + mt + mb
-            })
+            .map(child_outer_height)
             .fold(0.0_f32, f32::max),
     };
     (content + frame).max(0.0)
@@ -101,6 +115,10 @@ fn vertical_block_extent(
             w + ml + mr
         })
         .sum()
+}
+
+fn is_vertical_mode(b: &LayoutBox) -> bool {
+    !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
 }
 
 fn is_vertical_block(b: &LayoutBox) -> bool {
@@ -339,6 +357,23 @@ pub(crate) fn preferred_inline_block_width(
         flex_row_intrinsic_sum(b, viewport, &|c| {
             preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
         })
+    } else if matches!(b.kind, BoxKind::InlineBlockRow) && is_vertical_mode(b) {
+        // BUG-1263: в вертикальном режиме ряд течёт вниз по inline-оси, так что
+        // по ширине (block-оси) он — одна колонка: самый широкий участник.
+        b.children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c) && !matches!(c.kind, BoxKind::InlineSpace))
+            .map(|c| {
+                let cw = match c.kind {
+                    BoxKind::InlineRun { .. } => c.used_line_height,
+                    _ => preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0),
+                };
+                let cem = c.style.font_size;
+                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                cw + ml + mr
+            })
+            .fold(0.0_f32, f32::max)
     } else if matches!(b.kind, BoxKind::InlineBlockRow) {
         let sum: f32 = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
             if matches!(c.kind, BoxKind::InlineSpace) {
@@ -703,6 +738,19 @@ pub(crate) fn flex_auto_base_main_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
+    flex_auto_base_main_width_from(item, max_content_outer_width(item, measurer, viewport), cb, measurer, viewport)
+}
+
+/// [`flex_auto_base_main_width`] with the content size supplied by the caller
+/// instead of read off the item's max-content width — for an item whose width
+/// only a layout can tell (BUG-1264: columns of vertical text).
+pub(crate) fn flex_auto_base_main_width_from(
+    item: &LayoutBox,
+    content: f32,
+    cb: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
     let s = &item.style;
     let em = s.font_size;
     let pl = s.padding_left.resolve_or_zero(em, cb, viewport);
@@ -712,7 +760,7 @@ pub(crate) fn flex_auto_base_main_width(
         BoxSizing::ContentBox => v + pl + pr + s.border_left_width + s.border_right_width,
         BoxSizing::BorderBox => v,
     };
-    let mut base = max_content_outer_width(item, measurer, viewport);
+    let mut base = content;
     if let Some(max_len) = &s.max_width {
         let max_bb = if max_len.is_intrinsic() {
             Some(max_content_outer_width(item, measurer, viewport))
