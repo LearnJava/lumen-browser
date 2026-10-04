@@ -51,3 +51,15 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/run_corpus.py --binary "$BIN" \
   Следующий шаг — `--no-paint` (PERF-10) на том же тесте и снимок кучи V8.
 - Зависит ли рост от сборки до 02bc3d3d1 — старые прогоны 2026-08-20 RSS
   не писали.
+
+## Обход в раннере (2026-10-04)
+
+`run_corpus.py --max-browser-gb` (по умолчанию 4 ГБ, `tests/wpt/browser_rss_cap.py`)
+убивает `lumen` своего прогона, перешедший порог: тест пишется CRASH, в
+состоянии шарда — `rss_cap_kills`. Для цифры это нейтрально (тест и так
+TIMEOUT с 0 сабтестов), для соседних полос снимает давление на память.
+Сам дефект движка это не чинит — баг остаётся открытым. Тем же порогом
+ловятся квотные тесты `webstorage` (`storage_*_setitem_quotaexceedederr`,
+`storage_*_quota_independent_from_*`: до 15–20 ГБ на браузер, квота
+`localStorage` не срабатывает, [BUG-870](BUG-870-OPEN.md)) — замер в
+`docs/tasks/p2-wpt-runner-throughput.md` §ограничитель памяти.
