@@ -1,4 +1,4 @@
-//! PERF-10: режим прогона без растеризации и без видимого окна (`--no-paint`).
+//! PERF-10: режим прогона без растеризации (`--no-paint`).
 //!
 //! [`NoPaintBackend`] — [`RenderBackend`], который ничего не рисует и не трогает
 //! GPU: `render` — no-op, изображений/снимков он не хранит. Размер и DPR он
@@ -6,12 +6,12 @@
 //! (`viewport_size`/`scale_factor`) для layout — `getBoundingClientRect`,
 //! media queries и `innerWidth` продолжают работать как в обычном окне.
 //!
-//! Вместе с невидимым окном (`on_resumed` создаёт его `with_visible(false)`)
-//! это убирает из WPT-прогона категорий, не проверяющих пиксели, инициализацию
-//! wgpu/DX12, растеризацию и класс флейков живого окна (увод фокуса, окно
-//! поверх рабочего стола). Всё, что требует пикселей (`screenshot_rgba`,
-//! reftest через `--ipc-server`), этим режимом не обслуживается — он отдаёт
-//! `None`.
+//! Окно остаётся видимым, но не активируется (`on_resumed`,
+//! `with_active(false)`): скрытое окно не получает `RedrawRequested`, а на нём
+//! живут `load` картинок и часть rAF-работы. Режим убирает из WPT-прогона
+//! testharness-категорий инициализацию wgpu/DX12, растеризацию и увод фокуса.
+//! Всё, что требует пикселей (`screenshot_rgba`, reftest через
+//! `--ipc-server`), этим режимом не обслуживается — он отдаёт `None`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +26,7 @@ use lumen_paint::{DisplayCommand, RenderBackend, RenderError};
 /// запись в окружение процесса небезопасна при живых потоках.
 static NO_PAINT: AtomicBool = AtomicBool::new(false);
 
-/// Включить/выключить режим «без растеризации и без видимого окна».
+/// Включить/выключить режим «без растеризации» (`--no-paint`).
 pub(crate) fn set_no_paint(enabled: bool) {
     NO_PAINT.store(enabled, Ordering::Relaxed);
 }

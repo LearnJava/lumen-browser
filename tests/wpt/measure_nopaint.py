@@ -31,6 +31,7 @@ directories only; the script says so in the summary rather than filtering.
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import threading
@@ -118,8 +119,13 @@ def run_once(mode: str, repeat: int, args) -> dict:
     cmd = [sys.executable, os.path.join(HERE, "run_corpus.py"),
            "--binary", args.binary, "--prefixes", args.prefixes,
            "--out-dir", out_dir, "--processes", str(args.processes), "--skip-manifest-update"]
+    if mode == "paint":
+        # run_corpus defaults to no-paint since PERF-10 slice 2.
+        cmd.append("--paint")
     if args.skip_https:
         cmd.append("--skip-https")
+    if args.runner_args:
+        cmd.extend(shlex.split(args.runner_args))
     log_path = os.path.join(out_dir, "runner.log")
     started = time.time()
     with open(log_path, "w", encoding="utf-8") as log:
@@ -137,8 +143,17 @@ def run_once(mode: str, repeat: int, args) -> dict:
         "mode": mode, "repeat": repeat, "out_dir": out_dir, "exit": proc.returncode,
         "wall_s": round(wall, 1), "cpu_s": round(sampler.cpu_seconds, 1),
         "peak_rss_mb": round(sampler.peak_rss / 2**20), "mean_rss_mb": round(sampler.mean_rss / 2**20),
-        "peak_procs": sampler.peak_procs, "ids": len(verdicts), "verdicts": verdicts,
+        "peak_procs": sampler.peak_procs, "ids": len(verdicts),
+        "score": round(sum(score_of(r) for r in results.values()), 2), "verdicts": verdicts,
     }
+
+
+def score_of(result: dict) -> float:
+    """Per-id score, the same formula as `run_corpus.score_reports`."""
+    subtests = result.get("subtests") or []
+    if subtests:
+        return sum(1 for s in subtests if s.get("status") == "PASS") / len(subtests)
+    return 1.0 if result.get("status") == "PASS" else 0.0
 
 
 def category_of(test_id: str) -> str:
@@ -165,6 +180,7 @@ def summarize(runs: list) -> dict:
             "cpu_s_mean": round(sum(r["cpu_s"] for r in rs) / n, 1),
             "peak_rss_mb_max": max(r["peak_rss_mb"] for r in rs),
             "mean_rss_mb_mean": round(sum(r["mean_rss_mb"] for r in rs) / n),
+            "scores": [r["score"] for r in rs],
             "ids": rs[0]["ids"],
         }
         flaky = set()
@@ -190,10 +206,10 @@ def summarize(runs: list) -> dict:
 
 
 def print_summary(summary: dict) -> None:
-    print("\nmode      runs  ids   wall_s   cpu_s  peak_rss_MB  mean_rss_MB")
+    print("\nmode      runs  ids   wall_s   cpu_s  peak_rss_MB  mean_rss_MB  scores")
     for mode, m in summary["modes"].items():
         print(f"{mode:<9} {m['runs']:<5} {m['ids']:<5} {m['wall_s_mean']:<8} {m['cpu_s_mean']:<7} "
-              f"{m['peak_rss_mb_max']:<12} {m['mean_rss_mb_mean']}")
+              f"{m['peak_rss_mb_max']:<12} {m['mean_rss_mb_mean']:<12} {m['scores']}")
     for mode, ids in summary["flaky"].items():
         print(f"flaky inside {mode}: {len(ids)}")
     cross = summary.get("cross")
@@ -214,6 +230,9 @@ def main() -> int:
     parser.add_argument("--processes", type=int, default=4)
     parser.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
     parser.add_argument("--skip-https", action="store_true")
+    parser.add_argument("--runner-args", default="",
+                        help="extra run_corpus.py flags for both modes, e.g. "
+                             "'--parallel-shards 3 --batch-small 150 --shared-queue'")
     args = parser.parse_args()
 
     if not os.path.isfile(args.binary):

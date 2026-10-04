@@ -29,7 +29,7 @@ pub(crate) fn print_usage() {
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
     eprintln!("  [--maximized]                                   — развернуть окно на весь экран (живой перф-аудит)");
-    eprintln!("  [--no-paint]                                    — без растеризации и видимого окна: DOM+JS+layout (или LUMEN_NO_PAINT=1, PERF-10)");
+    eprintln!("  [--no-paint]                                    — без растеризации: DOM+JS+layout, окно не активируется (или LUMEN_NO_PAINT=1, PERF-10)");
     eprintln!("  [--forced-colors]                               — включить Forced Colors Mode (или LUMEN_FORCED_COLORS=1, BUG-755)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
@@ -266,9 +266,9 @@ pub(crate) fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
 
 /// Извлечь `--no-paint` из аргументов (PERF-10).
 ///
-/// Режим «DOM+JS+layout без paint и без видимого окна»: окно создаётся
-/// невидимым, вместо wgpu-бэкенда ставится `NoPaintBackend`. Для WPT-категорий,
-/// не проверяющих пиксели. Также включается `LUMEN_NO_PAINT=1`.
+/// Режим «DOM+JS+layout без paint»: вместо wgpu-бэкенда ставится
+/// `NoPaintBackend`, окно видимо, но не активируется (не уводит фокус). Для
+/// WPT-категорий, не проверяющих пиксели. Также включается `LUMEN_NO_PAINT=1`.
 pub(crate) fn extract_no_paint(args: &[String]) -> (bool, Vec<String>) {
     let mut found = std::env::var("LUMEN_NO_PAINT").is_ok_and(|v| v == "1");
     let mut rest = Vec::new();

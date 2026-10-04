@@ -2666,3 +2666,80 @@ TIMEOUT через 2 с при пороге 1.5 с и таймауте 30 с; `o
 «navigated away to …» вместо «Timed out waiting for testharnessreport.js
 results», статус тот же. Тест, который ушёл и вернулся бы позже 15 с, получит
 TIMEOUT раньше, чем мог бы дать вердикт; на замере таких нет (максимум 8.2 с).
+
+## PERF-10 срез 2 (2026-10-04): testharness без растеризации по умолчанию — CPU −14 %, память браузеров −40 %, балл тот же
+
+**Вопрос.** Срез 1 добавил `--no-paint` (DOM+JS+layout без растеризации) и
+на 115 id выигрыша по стене не увидел. Остались CPU, память, флейки и выбор
+категорий. Замер делался уже в режиме, рекомендованном для WPT-RUN-9
+(`--parallel-shards 3 --batch-small 150 --shared-queue`), а не на старом
+последовательном прогоне.
+
+**Что исправлено по дороге.** (1) В срезе 1 окно в режиме `--no-paint`
+создавалось невидимым — скрытое окно не получает `RedrawRequested`, а на нём
+живут `load` картинок и часть rAF-работы: `relevant-mutations.html` висел в
+TIMEOUT. Теперь окно видимое, но не активируется (`with_active(false)`,
+`crates/shell/src/app/resumed.rs`) — фокус не уводится. (2) `browsers/lumen.py`
+передаёт флаг только testharness-браузерам: reftest всё равно гоняется через
+`--ipc-server`, а вердикт crashtest — «не упал весь конвейер», без paint
+падение растеризатора спряталось бы. (3) `run_corpus.py` теперь по умолчанию ставит
+`LUMEN_NO_PAINT=1` для всех своих шардов (`--paint` — прежний полный
+конвейер) и пишет `no_paint` в снимок.
+`measure_nopaint.py` получил `--runner-args` (флаги прогона для обоих плеч) и
+считает балл каждого прогона.
+
+**Замер, `dev-release` a8ade8b12** (`tests/wpt/measure_nopaint.py`, плечи
+чередовались `paint, nopaint, nopaint, paint`).
+
+| набор | `--processes` | плечо | стена | CPU `lumen` | пик RSS всех `lumen` | средний RSS | балл |
+|---|---|---|---|---|---|---|---|
+| `dom,url,FileAPI,xhr,webstorage,console,html/dom` (1 803 id) | 7 | paint ×2 | 390 / 395 с | 2 726 / 2 813 с | 24.1 ГБ | 9.5 ГБ | 798.46 / 799.37 |
+| то же | 7 | **no-paint ×2** | **369 / 369 с** | **2 369 / 2 382 с** | 18.1 ГБ | **5.7 ГБ** | 798.90 / 798.54 |
+| то же | 10 | paint ×1 | 359 с | 2 879 с | 24.1 ГБ | 11.1 ГБ | 798.12 |
+| то же | 10 | **no-paint ×1** | **316 с** | 2 433 с | 21.2 ГБ | 7.0 ГБ | 800.89 |
+| пиксельно-зависимые testharness: `html/canvas/element/{pixel-manipulation,drawing-images-to-the-canvas}`, `the-img-element`, `intersection-observer`, `resize-observer`, `css/cssom-view`, `requestidlecallback`, `animation-worklet`, `web-animations/timing-model` (726 id) | 7 | paint ×2 | 178 / 184 с | 434 / 453 с | 10.1 ГБ | 4.8 ГБ | 297.11 / 297.11 |
+| то же | 7 | **no-paint ×2** | 178 / 182 с | **378 / 384 с** | 6.2 ГБ | **2.9 ГБ** | 297.11 / 297.11 |
+
+Стена при `--processes 7` −6 %, при `--processes 10` −12 %: на трёх полосах
+машина упирается не в CPU, а в память и в самый длинный шард, поэтому главный
+выигрыш — освобождённые CPU (−14 %) и память браузеров (−40 % среднего RSS),
+которые позволяют держать больше процессов. Пик RSS почти не меняется — его
+задают разбухающие тесты (BUG-1267/BUG-870), которые срезает сторож
+`--max-browser-gb`.
+
+**Вердикты.** Балл в разбросе повторов на обоих наборах; на пиксельно-зависимом
+наборе — совпадает до сотых во всех четырёх прогонах. id, меняющих статус
+внутри режима: 14 (paint) и 13 (no-paint) на 1 803 id. Устойчиво разных
+между режимами (одинаковы внутри режима) — 7 на большом наборе и 1 на
+пиксельном; все разобраны:
+
+* `html/dom/reflection-metadata.html` (OK ↔ ERROR «Got results from
+  /html/dom/idlharness…») и `url/historical.any.html` (OK ↔ TIMEOUT) — жертвы
+  предыдущего теста в том же `lumen` (`idlharness.https.html?exclude=…` и
+  `url/failure.html` соответственно), класс [BUG-1268](../../bugs/BUG-1268-OPEN.md):
+  `--shared-queue` раскладывает очередь по-разному, и в no-paint предыдущим
+  оказался другой тест. Изолированно (`--processes 1`, оба теста подряд,
+  2 прогона на режим) — в обоих режимах OK с одинаковыми сабтестами.
+* `FileAPI/url/url-with-xhr.any.html` — в paint ERROR навигации после
+  `FileAPI/BlobURL/cross-partition*` (тот же BUG-1268), в no-paint OK 13/14.
+* три `dom/events/non-cancelable-when-passive/*touch*` — известная семья,
+  зависящая от того, какие `test_driver.Actions` идут одновременно
+  (§общая очередь); в одну сторону два, в другую один.
+* `html/dom/partial-updates/tentative/template-for-multiple-cases.html` —
+  TIMEOUT 0/270 ↔ OK 0/270, балл 0 в обоих.
+* `the-img-element/already-loaded-image-sync-width.html` — OK с FAIL-сабтестом
+  (paint) ↔ TIMEOUT (no-paint), балл 0 в обоих; сосед
+  `image-loading-lazy-use-list-of-available-images.html` флапает так же внутри
+  no-paint. Единственный признак, что «картинка уже загружена» в no-paint
+  наступает позже, — на балл не влияет.
+
+Прогон с `--processes 10` сделан по одному разу на плечо: 22 различающихся id
+от флейка не отделимы (сам флейк — 13–14 id на повторе), балл в разбросе.
+
+**Решение: no-paint — по умолчанию в `run_corpus.py`.** Отдельного списка
+категорий не нужно: флаг сам ограничен testharness-браузерами, reftest/
+crashtest идут прежним конвейером. Рекомендация для WPT-RUN-9 не меняется по
+флагам — `--parallel-shards 3 --batch-small 150 --shared-queue`; сравнивать
+с прошлой цифрой — с оговоркой, что режим другой (`no_paint` в снимке),
+а `--paint` воспроизводит старый. Освобождённую память можно отдать `--processes 10` (−12 %
+стены на замере). Режим пишется в снимок (`no_paint`).

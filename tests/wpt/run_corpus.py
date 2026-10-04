@@ -1815,6 +1815,13 @@ def main() -> int:
                              "longest declared timeout first, instead of wptrunner's fixed "
                              "hash split — no process sits idle while another works off a "
                              "pile of TIMEOUTs (see SHARED_QUEUE_ARGS; default: off)")
+    parser.add_argument("--paint", action="store_true",
+                        help="run testharness tests with the full paint pipeline. By default "
+                             "run_corpus sets LUMEN_NO_PAINT=1 (PERF-10): wptrunner passes "
+                             "`--no-paint` (DOM+JS+layout, no rasterisation) to testharness "
+                             "browsers only — reftests and crashtests always keep the full "
+                             "pipeline. Measured: same score, -14%% lumen CPU, -40%% mean RSS "
+                             "(docs/tasks/p2-wpt-runner-throughput.md §PERF-10)")
     parser.add_argument("--min-free-gb", type=float, default=6.0,
                         help="with --parallel-shards, a lane waits to start a shard while less "
                              "physical memory than this is free and another lane is busy "
@@ -1863,6 +1870,14 @@ def main() -> int:
 
     if args.selftest:
         return _selftest()
+
+    # PERF-10: testharness without rasterisation unless `--paint`. The env var
+    # is inherited by every `run_smoke.py` subprocess (`run_shard` builds its
+    # env from `os.environ`); `browsers/lumen.py` turns it into `--no-paint`.
+    if args.paint:
+        os.environ.pop("LUMEN_NO_PAINT", None)
+    else:
+        os.environ["LUMEN_NO_PAINT"] = "1"
 
     binary = args.binary or os.path.join(REPO_ROOT, "target", os.environ.get("LUMEN_PROFILE", "release"), "lumen.exe")
     os.makedirs(args.out_dir, exist_ok=True)
@@ -2089,6 +2104,7 @@ def main() -> int:
             "parallel_shards": getattr(args, "parallel_shards", 1),
             "batch_small": getattr(args, "batch_small", 0),
             "shared_queue": getattr(args, "shared_queue", False),
+            "no_paint": os.environ.get("LUMEN_NO_PAINT") == "1",
             "max_browser_gb": getattr(args, "max_browser_gb", 0),
             "rss_cap_kills": len(browser_rss_cap.load_kills(args.out_dir)),
             "scope": sorted(scope) if scope else "full-corpus",

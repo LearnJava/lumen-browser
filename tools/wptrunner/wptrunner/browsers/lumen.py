@@ -103,10 +103,11 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
         "ca_cert_path": kwargs.get("ca_cert_path"),
         "forced_colors": os.environ.get("LUMEN_FORCED_COLORS") == "1",
         # PERF-10: `LUMEN_NO_PAINT=1` -> `--no-paint` (DOM+JS+layout, no GPU
-        # backend, hidden window). Same parent-env -> CLI-arg trick as above.
-        # Pixel-bearing runs (reftest, `--ipc-server`) ignore it: they need a
-        # real raster, see `make_command`.
-        "no_paint": os.environ.get("LUMEN_NO_PAINT") == "1",
+        # backend). Same parent-env -> CLI-arg trick as above. Only for
+        # testharness: reftests need a real raster (`--ipc-server` ignores it
+        # anyway, see `make_command`), and a crashtest's verdict is "the whole
+        # pipeline did not crash" — skipping paint would hide paint crashes.
+        "no_paint": test_type == "testharness" and os.environ.get("LUMEN_NO_PAINT") == "1",
     }
 
 
