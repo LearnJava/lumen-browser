@@ -251,6 +251,7 @@ pub(crate) fn build_multicol_init(
         consumed,
         out: Vec::with_capacity(0),
         cur_y: content_y,
+        row_used: None,
     }))
 }
 

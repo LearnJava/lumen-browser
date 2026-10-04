@@ -50,3 +50,20 @@ fn without_a_column_height_nothing_wraps() {
     let (doc, root) = lay(SIX, &format!("{BASE}height:60px;column-wrap:wrap}}"));
     assert_eq!(rect(&root, &doc, "e").y, 0.0, "no column-height: overflow stays in the inline direction");
 }
+
+#[test]
+fn a_spanner_splits_the_first_row_and_the_rest_fills_what_is_left() {
+    // WPT multicol-gap-decorations-002: 3 columns × 60px, row-gap 10px, `p`×2 then an 18px
+    // spanner then six more `p`. The columns before the spanner balance (2 × 60px over 3
+    // columns → 40px), the spanner follows, the rest of the row (60 − 40 − 18 = 2px) holds the
+    // start of the next block, then the second row begins one row-gap below.
+    let html = r#"<div id="c"><p id="a"></p><p id="b"></p><h2 id="s"></h2><p id="d"></p><p id="e"></p><p id="f"></p><p id="g"></p><p id="h"></p><p id="i"></p></div>"#;
+    let css = format!("{BASE}height:200px;column-height:60px;column-wrap:wrap}} h2{{column-span:all;height:18px;margin:0}}");
+    let (doc, root) = lay(html, &css);
+    assert_eq!((rect(&root, &doc, "a").x, rect(&root, &doc, "a").y), (0.0, 0.0));
+    assert_eq!(rect(&root, &doc, "a").height, 40.0, "balanced to the 40px the columns need");
+    // 120px of content over three 40px columns: `b` starts 20px into the second one.
+    assert_eq!((rect(&root, &doc, "b").x, rect(&root, &doc, "b").y), (70.0, 20.0));
+    let s = rect(&root, &doc, "s");
+    assert_eq!((s.x, s.y, s.width, s.height), (0.0, 40.0, 200.0, 18.0));
+}

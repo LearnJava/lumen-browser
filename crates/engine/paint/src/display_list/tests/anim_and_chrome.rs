@@ -925,6 +925,25 @@ use lumen_dom::NodeId;
     }
 
     #[test]
+    fn multicol_rows_split_by_a_spanner_get_a_rule_band_each() {
+        // multicol-gap-decorations-002: `p p <spanner 18px> p×6`, 60px columns → band 1 (balanced,
+        // 40px), the spanner (no rule, no row gap), band 2 (the 2px rest of the row), then the
+        // row gap at y 60..70 with the only row rule, then the last row.
+        let p = r#"<p style="height:60px;margin:0"></p>"#;
+        let html = format!(
+            r#"{p}{p}<div style="column-span:all;height:18px;margin:0"></div>{p}{p}{p}{p}{p}{p}"#
+        );
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}height:200px;">{html}</div>"#), "");
+        let rows = row_rule_cmds(&dl);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!((rows[0].1, rows[0].3), (63.0, 4.0), "gap under the first row, not under the spanner");
+        let cols = col_rule_rects(&dl);
+        // Column rules: band 1 (y 0..40), band 2 (y 58..60) and the rows below — two gaps each.
+        assert_eq!((cols[0].1, cols[0].3), (0.0, 40.0), "{cols:?}");
+        assert!(cols.iter().any(|c| (c.1, c.3) == (58.0, 2.0)), "{cols:?}");
+    }
+
+    #[test]
     fn multicol_without_column_height_ignores_column_wrap() {
         let dl = build(
             r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;column-wrap:wrap;
