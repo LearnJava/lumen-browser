@@ -564,6 +564,18 @@ fn place_float(
     let child = &mut frame.b.children[i];
 
     let cem = child.style.font_size;
+    // CSS 2.1 §10.3.5 shrink-to-fit applies to the float's *inline* size, which
+    // runs along y in a vertical writing mode: offer no more height than the
+    // box's max-content one (an auto-height vertical float used to fill it all).
+    let children_available_height = if !matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && child.style.height.is_none()
+        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+    {
+        let room = children_available_height.unwrap_or(viewport.height);
+        Some(room.min(max_content_outer_height(child, measurer, viewport)))
+    } else {
+        children_available_height
+    };
     // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
     // otherwise preferred content width, falling back to max-content
     // measurement for text-only floats (e.g. the ::first-letter drop-cap box,
@@ -583,6 +595,11 @@ fn place_float(
     // when squeezed next to prior floats, so it never dropped to a new line
     // under rule 8 below and poisoned every later `clear_y` computation that
     // depended on its true bottom edge (BUG-469).
+    // `lay_out` treats its `available_width` as the room for the margin box, so
+    // the shrink-to-fit border-box width has to be handed over with the
+    // float's horizontal margins added back.
+    let probe_margins = child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport)
+        + child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport);
     let probe_w = if child.style.width.is_some() {
         content_width
     } else {
@@ -591,7 +608,7 @@ fn place_float(
                 let w = max_content_outer_width(child, measurer, viewport);
                 (w > 0.0).then_some(w)
             })
-            .map(|pw| pw.min(probe_avail))
+            .map(|pw| (pw + probe_margins).min(probe_avail))
             .unwrap_or(probe_avail)
     };
     lay_out(child, fc.left_edge_at(child_y, content_x), child_y, probe_w,
@@ -639,7 +656,7 @@ fn place_float(
                     let w = max_content_outer_width(child, measurer, viewport);
                     (w > 0.0).then_some(w)
                 })
-                .map(|pw| pw.min(avail_w))
+                .map(|pw| (pw + probe_margins).min(avail_w))
                 .unwrap_or(avail_w)
         };
         lay_out(child, avail_left, child_y, w,

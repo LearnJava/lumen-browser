@@ -77,6 +77,10 @@ pub(crate) struct VerticalInit {
     pub(crate) frame_horiz: f32,
     pub(crate) pcb: Rect,
     pub(crate) cursor_block_consumed: f32,
+    /// Block-end margin of the last placed child, not yet added to
+    /// `cursor_block_consumed`: it collapses with the next sibling's block-start
+    /// margin (CSS 2.1 §8.3.1, along the block axis), or closes the box.
+    pub(crate) pending_end_margin: f32,
 }
 
 /// Precomputes the loop-entry state for laying out a Block/FlowRoot box in
@@ -283,6 +287,7 @@ pub(crate) fn build_vertical_init(
         frame_horiz,
         pcb,
         cursor_block_consumed: 0.0,
+        pending_end_margin: 0.0,
     }
 }
 
