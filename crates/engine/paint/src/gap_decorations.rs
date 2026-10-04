@@ -113,12 +113,12 @@ pub fn emit_gap_rules(
     out
 }
 
-/// A solid rule lies on whole device pixels: both edges are rounded (a tie goes down, as
-/// Chromium snaps the reftest rules) and the line keeps at least one pixel. A fractional rect
+/// A solid rule lies on whole device pixels: both edges are rounded (a tie goes up, as
+/// Chromium snaps the reftest rules: `top: 212.5px` + 5px fills rows 213..217) and the line keeps at least one pixel. A fractional rect
 /// would be anti-aliased over two columns, while Chromium paints one crisp line
 /// (`css-gaps/multicol/multicol-gap-decorations-017`, flex 040/042/043/044/056/058).
 fn snap_rule_rect(rect: Rect) -> Rect {
-    let snap = |v: f32| (v - 0.5).ceil();
+    let snap = |v: f32| (v + 0.5).floor();
     let (x0, y0) = (snap(rect.x), snap(rect.y));
     let x1 = snap(rect.x + rect.width).max(x0 + 1.0);
     let y1 = snap(rect.y + rect.height).max(y0 + 1.0);
@@ -788,8 +788,8 @@ mod tests {
             let r = snap_rule_rect(Rect::new(x, 2.0, w, 50.0));
             (r.x, r.width, r.y, r.height)
         };
-        // A tie goes down (`58.5` → 58), the width follows the rounded far edge.
-        assert_eq!(snapped(58.5, 5.0), (58.0, 5.0, 2.0, 50.0));
+        // A tie goes up (`58.5` → 59), the width follows the rounded far edge.
+        assert_eq!(snapped(58.5, 5.0), (59.0, 5.0, 2.0, 50.0));
         assert_eq!(snapped(58.666, 20.0), (59.0, 20.0, 2.0, 50.0));
         // A sub-pixel line keeps one pixel.
         assert_eq!(snapped(10.2, 0.3), (10.0, 1.0, 2.0, 50.0));

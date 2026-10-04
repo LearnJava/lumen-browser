@@ -250,8 +250,8 @@ fn grid_rules_span_tracks_overflowing_the_container() {
         column-rule:5px solid blue;row-rule:5px solid red">
         <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>"#;
     let dl = build(html, "");
-    assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 5.0), (0.0, 212.0, 320.0, 5.0)]);
-    assert_rules(&rules(&dl, true), &[(102.0, 0.0, 5.0, 320.0), (212.0, 0.0, 5.0, 320.0)]);
+    assert_rules(&rules(&dl, false), &[(0.0, 103.0, 320.0, 5.0), (0.0, 213.0, 320.0, 5.0)]);
+    assert_rules(&rules(&dl, true), &[(103.0, 0.0, 5.0, 320.0), (213.0, 0.0, 5.0, 320.0)]);
 }
 
 /// collapsed-trailing-auto-fit: пустые дорожки в хвосте не создают щелей.
@@ -333,7 +333,7 @@ fn grid_fixed_template_gives_gaps_between_empty_tracks() {
     // `rules` сортирует по (y, x): куски щели 1 под элементом идут после целых щелей.
     assert_eq!(tops(&cols, |r| r.0).len(), 3, "{cols:?}");
     assert_eq!(tops(&rows, |r| r.1).len(), 3, "{rows:?}");
-    assert!(close(cols[2], (102.0, 220.0, 5.0, 210.0)), "{cols:?}");
+    assert!(close(cols[2], (103.0, 220.0, 5.0, 210.0)), "{cols:?}");
 }
 
 /// collapsed-middle-auto-fit: ведущая фиксированная дорожка перед `repeat(auto-fit, …)`
