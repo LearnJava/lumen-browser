@@ -327,19 +327,21 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 let len = hi - lo - lo_inset - hi_inset;
                 spans.push((hi - lo > 0.01 && len > 0.0).then_some((lo + lo_inset, hi - hi_inset)));
             }
-            // `overlap-join` вытягивает соседние куски навстречу друг другу в один и тот же слитый
-            // стык: если они наложились, граница проходит посередине — иначе полупрозрачная линия
-            // в зоне наложения красится дважды и темнее эталона (flex-gap-decorations-064).
-            for k in 1..spans.len() {
-                if let (Some(prev), Some(next)) = (spans[k - 1], spans[k])
-                    && prev.1 > next.0
-                {
-                    let mid = (prev.1 + next.0) * 0.5;
-                    spans[k - 1] = Some((prev.0, mid));
-                    spans[k] = Some((mid, next.1));
-                }
+            // `overlap-join` и отрицательные insets вытягивают куски за точки разреза, и соседние
+            // куски накладываются (а при `-210px` — один целиком внутри другого): полупрозрачная
+            // линия в зоне наложения красится дважды и темнее эталона (flex-gap-decorations-064),
+            // а непрерывная теряет часть, если делить зону пополам (067: линия, вылезающая за
+            // контейнер, обрезалась по краям среднего куска). Куски идут по возрастанию начала,
+            // каждый теряет то, что уже закрыли предыдущие.
+            let mut spans: Vec<(f32, f32)> = spans.into_iter().flatten().collect();
+            spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut covered = f32::NEG_INFINITY;
+            for span in &mut spans {
+                let from = span.0.max(covered);
+                covered = covered.max(span.1);
+                *span = (from, span.1);
             }
-            for (from, to) in spans.into_iter().flatten() {
+            for (from, to) in spans.into_iter().filter(|&(from, to)| to > from) {
                 out.segments.push(GapSegment { rect: mk(from, to - from, a.hi, size), horizontal: hmain, gap: id });
             }
         }
