@@ -187,8 +187,10 @@ pub(crate) fn flex_container_baseline(
     measurer: Option<&dyn TextMeasurer>,
 ) -> Option<f32> {
     let s = &b.style;
-    let is_column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
-    let is_reverse = matches!(s.flex_direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse);
+    // Физические оси (FLEX-VWM): `direction: rtl` разворачивает ряд так же, как
+    // `row-reverse` — позиции по главной оси убывают.
+    let axes = super::flex::flex_axes(s);
+    let (is_column, is_reverse) = (axes.main_vertical, axes.main_rev);
     let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     let mut items: Vec<&LayoutBox> = b

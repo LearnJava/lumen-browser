@@ -190,9 +190,10 @@ use build::{build_box, build_box_or_reuse};
 pub use build::incremental_build_box;
 
 mod intrinsic;
+pub(crate) use intrinsic::{max_content_outer_width, min_content_outer_width_of_contents};
 use intrinsic::{
     flex_auto_base_main_width, flex_item_max_main_outer, flex_item_min_main_width,
-    form_control_fit_content_width, max_content_outer_width, min_content_outer_width,
+    form_control_fit_content_width, min_content_outer_width,
     preferred_inline_block_width,
 };
 

@@ -188,6 +188,8 @@ fn finish_frame(frame: &mut Frame) {
     frame.b.rect.width = if let Some(bs) = frame.init.explicit_block_size {
         bs.max(frame.init.frame_horiz)
     } else {
-        frame.init.cursor_block_consumed + frame.init.frame_horiz
+        (frame.init.cursor_block_consumed + frame.init.frame_horiz)
+            .min(frame.init.max_block)
+            .max(frame.init.min_block)
     };
 }

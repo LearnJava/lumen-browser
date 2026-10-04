@@ -9,7 +9,7 @@
 //! SPLIT-ST13 из `crates/engine/layout/src/style.rs` (анкер, следовавший
 //! непосредственно за регионом ST-13's `style/adjust.rs`) без правок тела.
 
-use crate::style::{ComputedStyle, Length, LengthOrAuto, Overflow, OverscrollBehavior, WritingMode};
+use crate::style::{ComputedStyle, Direction, Length, LengthOrAuto, Overflow, OverscrollBehavior, WritingMode};
 
 /// Resolve CSS Logical Properties based on writing-mode.
 ///
@@ -117,63 +117,135 @@ pub(in crate::style) fn resolve_logical_properties(style: &mut ComputedStyle) {
         style.max_height = max_h;
     }
 
-    // CSS Logical Properties L1 §4 — inset-inline-* / inset-block-* → top/right/bottom/left.
-    // Phase 0: horizontal-tb (inline-start=left, inline-end=right).
-    if style.inset_inline_start != LengthOrAuto::Auto && style.left == LengthOrAuto::Auto {
-        style.left = style.inset_inline_start.clone();
-    }
-    if style.inset_inline_end != LengthOrAuto::Auto && style.right == LengthOrAuto::Auto {
-        style.right = style.inset_inline_end.clone();
-    }
-    if style.inset_block_start != LengthOrAuto::Auto && style.top == LengthOrAuto::Auto {
-        style.top = style.inset_block_start.clone();
-    }
-    if style.inset_block_end != LengthOrAuto::Auto && style.bottom == LengthOrAuto::Auto {
-        style.bottom = style.inset_block_end.clone();
+    // CSS Logical Properties L1 §4–§7 — inset / margin / padding / border-width,
+    // `*-inline-*` and `*-block-*` → the physical side the element's own
+    // `writing-mode` + `direction` map each flow-relative side onto.
+    let [inline_start, inline_end, block_start, block_end] = flow_relative_sides(style);
+
+    // inset-inline-* / inset-block-* → top/right/bottom/left.
+    let insets = [
+        style.inset_inline_start.clone(),
+        style.inset_inline_end.clone(),
+        style.inset_block_start.clone(),
+        style.inset_block_end.clone(),
+    ];
+    for (v, side) in insets.into_iter().zip([inline_start, inline_end, block_start, block_end]) {
+        let slot = match side {
+            Side::Top => &mut style.top,
+            Side::Right => &mut style.right,
+            Side::Bottom => &mut style.bottom,
+            Side::Left => &mut style.left,
+        };
+        if v != LengthOrAuto::Auto && *slot == LengthOrAuto::Auto {
+            *slot = v;
+        }
     }
 
-    // CSS Logical Properties L1 §5 — margin-inline-* / margin-block-* → margin-left/right/top/bottom.
-    if style.margin_inline_start != LengthOrAuto::ZERO && style.margin_left == LengthOrAuto::ZERO {
-        style.margin_left = style.margin_inline_start.clone();
-    }
-    if style.margin_inline_end != LengthOrAuto::ZERO && style.margin_right == LengthOrAuto::ZERO {
-        style.margin_right = style.margin_inline_end.clone();
-    }
-    if style.margin_block_start != LengthOrAuto::ZERO && style.margin_top == LengthOrAuto::ZERO {
-        style.margin_top = style.margin_block_start.clone();
-    }
-    if style.margin_block_end != LengthOrAuto::ZERO && style.margin_bottom == LengthOrAuto::ZERO {
-        style.margin_bottom = style.margin_block_end.clone();
-    }
-
-    // CSS Logical Properties L1 §6 — padding-inline-* / padding-block-* → padding-left/right/top/bottom.
-    if style.padding_inline_start != Length::Px(0.0) && style.padding_left == Length::Px(0.0) {
-        style.padding_left = style.padding_inline_start.clone();
-    }
-    if style.padding_inline_end != Length::Px(0.0) && style.padding_right == Length::Px(0.0) {
-        style.padding_right = style.padding_inline_end.clone();
-    }
-    if style.padding_block_start != Length::Px(0.0) && style.padding_top == Length::Px(0.0) {
-        style.padding_top = style.padding_block_start.clone();
-    }
-    if style.padding_block_end != Length::Px(0.0) && style.padding_bottom == Length::Px(0.0) {
-        style.padding_bottom = style.padding_block_end.clone();
+    // margin-inline-* / margin-block-*.
+    let margins = [
+        style.margin_inline_start.clone(),
+        style.margin_inline_end.clone(),
+        style.margin_block_start.clone(),
+        style.margin_block_end.clone(),
+    ];
+    for (v, side) in margins.into_iter().zip([inline_start, inline_end, block_start, block_end]) {
+        let slot = match side {
+            Side::Top => &mut style.margin_top,
+            Side::Right => &mut style.margin_right,
+            Side::Bottom => &mut style.margin_bottom,
+            Side::Left => &mut style.margin_left,
+        };
+        if v != LengthOrAuto::ZERO && *slot == LengthOrAuto::ZERO {
+            *slot = v;
+        }
     }
 
-    // CSS Logical Properties L1 §7 — border-inline-*-width / border-block-*-width.
-    if style.border_inline_start_width > 0.0 && style.border_left_width == 0.0 {
-        style.border_left_width = style.border_inline_start_width;
+    // padding-inline-* / padding-block-*.
+    let paddings = [
+        style.padding_inline_start.clone(),
+        style.padding_inline_end.clone(),
+        style.padding_block_start.clone(),
+        style.padding_block_end.clone(),
+    ];
+    for (v, side) in paddings.into_iter().zip([inline_start, inline_end, block_start, block_end]) {
+        let slot = match side {
+            Side::Top => &mut style.padding_top,
+            Side::Right => &mut style.padding_right,
+            Side::Bottom => &mut style.padding_bottom,
+            Side::Left => &mut style.padding_left,
+        };
+        if v != Length::Px(0.0) && *slot == Length::Px(0.0) {
+            *slot = v;
+        }
     }
-    if style.border_inline_end_width > 0.0 && style.border_right_width == 0.0 {
-        style.border_right_width = style.border_inline_end_width;
-    }
-    if style.border_block_start_width > 0.0 && style.border_top_width == 0.0 {
-        style.border_top_width = style.border_block_start_width;
-    }
-    if style.border_block_end_width > 0.0 && style.border_bottom_width == 0.0 {
-        style.border_bottom_width = style.border_block_end_width;
+
+    // border-inline-*-width / border-block-*-width.
+    let borders = [
+        style.border_inline_start_width,
+        style.border_inline_end_width,
+        style.border_block_start_width,
+        style.border_block_end_width,
+    ];
+    for (v, side) in borders.into_iter().zip([inline_start, inline_end, block_start, block_end]) {
+        let slot = match side {
+            Side::Top => &mut style.border_top_width,
+            Side::Right => &mut style.border_right_width,
+            Side::Bottom => &mut style.border_bottom_width,
+            Side::Left => &mut style.border_left_width,
+        };
+        if v > 0.0 && *slot == 0.0 {
+            *slot = v;
+        }
     }
 }
+
+/// A physical box side.
+#[derive(Clone, Copy)]
+enum Side {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// CSS Writing Modes L3 §6.1 — the physical sides of `[inline-start,
+/// inline-end, block-start, block-end]` for the element's own `writing-mode` and
+/// `direction`. `sideways-lr` runs its inline axis bottom-to-top (Writing Modes
+/// L4 §3.2), so there `ltr` starts at the bottom.
+fn flow_relative_sides(style: &ComputedStyle) -> [Side; 4] {
+    let rtl = style.direction == Direction::Rtl;
+    match style.writing_mode {
+        WritingMode::HorizontalTb => {
+            if rtl {
+                [Side::Right, Side::Left, Side::Top, Side::Bottom]
+            } else {
+                [Side::Left, Side::Right, Side::Top, Side::Bottom]
+            }
+        }
+        WritingMode::VerticalRl | WritingMode::SidewaysRl => {
+            if rtl {
+                [Side::Bottom, Side::Top, Side::Right, Side::Left]
+            } else {
+                [Side::Top, Side::Bottom, Side::Right, Side::Left]
+            }
+        }
+        WritingMode::VerticalLr => {
+            if rtl {
+                [Side::Bottom, Side::Top, Side::Left, Side::Right]
+            } else {
+                [Side::Top, Side::Bottom, Side::Left, Side::Right]
+            }
+        }
+        WritingMode::SidewaysLr => {
+            if rtl {
+                [Side::Top, Side::Bottom, Side::Left, Side::Right]
+            } else {
+                [Side::Bottom, Side::Top, Side::Left, Side::Right]
+            }
+        }
+    }
+}
+
 
 /// CSS Overflow L3 §logical (BUG-505) — resolve `overflow-block`/
 /// `overflow-inline` to the physical `overflow_x`/`overflow_y` pair.
