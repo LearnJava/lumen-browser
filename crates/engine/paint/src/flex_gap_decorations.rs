@@ -72,8 +72,12 @@ fn item_extents(c: &LayoutBox, row_dir: bool, cw: f32, vp: Size) -> ItemExtent {
     let mr = s.margin_right.resolve_or_zero(em, cw, vp);
     let mt = s.margin_top.resolve_or_zero(em, cw, vp);
     let mb = s.margin_bottom.resolve_or_zero(em, cw, vp);
-    let (x0, x1) = (c.rect.x - ml, c.rect.x + c.rect.width + mr);
-    let (y0, y1) = (c.rect.y - mt, c.rect.y + c.rect.height + mb);
+    // Отрицательное поле больше самого элемента переворачивает margin-box (`start > end`):
+    // такой элемент занимает в раскладке нулевую протяжённость на своём `end`, и щель
+    // начинается там же. Без зажима он попадал в конец сортировки, а щель после него терялась.
+    let ordered = |a: f32, b: f32| (a.min(b), b);
+    let (x0, x1) = ordered(c.rect.x - ml, c.rect.x + c.rect.width + mr);
+    let (y0, y1) = ordered(c.rect.y - mt, c.rect.y + c.rect.height + mb);
     if row_dir {
         ((x0, x1), (y0, y1))
     } else {
