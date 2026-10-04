@@ -188,6 +188,29 @@ fn column_item_avail_cross(
     used_cross + m_l + m_r
 }
 
+/// FLEX-VWM-3: a column item in a vertical writing mode whose block size
+/// (physical width) is `auto` and that `align-self` stretches — its block
+/// axis is the container's cross axis, so the flexbox algorithm, not the
+/// item's own content, decides the width (CSS Flexbox L1 §9.4 step 11 with
+/// the orthogonal-flow remark of §9.2). A horizontal item needs nothing: its
+/// `width: auto` already fills the cross size it is laid out at.
+pub(crate) fn column_item_stretches_block_axis(item: &LayoutBox, s: &ComputedStyle) -> bool {
+    let is = &item.style;
+    // Only an orthogonal item: a vertical container's own cross axis is
+    // already sized by the vertical-flex path.
+    if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || matches!(is.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || is.width.is_some()
+        || !matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || matches!(is.margin_left, LengthOrAuto::Auto)
+        || matches!(is.margin_right, LengthOrAuto::Auto)
+    {
+        return false;
+    }
+    let cross_align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
+    matches!(cross_align, AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
+}
+
 /// CSS Flexbox L1 §9 — multi-line flex layout, Steps 1–3/justify precompute.
 ///
 /// Алгоритм (LAYOUT-2 срез 3 — item-placement пасс вынесен в

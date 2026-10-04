@@ -653,6 +653,11 @@ fn place_float(
     let fw  = child.rect.width;
     let fh  = child.rect.height;
 
+    // The trial layout put the float at the left edge of the line; its
+    // descendants are absolute, so every move of the float box below has to
+    // carry the subtree along (a right float otherwise left its text behind
+    // at the container's left edge).
+    let laid_out_at = (child.rect.x, child.rect.y);
     match child.style.float_side {
         FloatSide::Left => {
             let lx = fc.left_edge_at(child_y, content_x);
@@ -680,6 +685,22 @@ fn place_float(
         }
         FloatSide::None => unreachable!(),
     }
+    // `position: relative` was already applied to the subtree by the trial
+    // layout; the new margin-box position has to carry it too.
+    let (rel_x, rel_y) = if matches!(child.style.position, Position::Relative) {
+        let rel = |a: &LengthOrAuto, b: &LengthOrAuto| match (a, b) {
+            (LengthOrAuto::Length(l), _) => l.resolve(cem, Some(content_width), viewport).unwrap_or(0.0),
+            (LengthOrAuto::Auto, LengthOrAuto::Length(r)) => -r.resolve(cem, Some(content_width), viewport).unwrap_or(0.0),
+            (LengthOrAuto::Auto, LengthOrAuto::Auto) => 0.0,
+        };
+        (rel(&child.style.left, &child.style.right), rel(&child.style.top, &child.style.bottom))
+    } else {
+        (0.0, 0.0)
+    };
+    let (final_x, final_y) = (child.rect.x + rel_x, child.rect.y + rel_y);
+    child.rect.x = laid_out_at.0;
+    child.rect.y = laid_out_at.1;
+    shift_tree(child, final_x - laid_out_at.0, final_y - laid_out_at.1);
 }
 
 /// Margin-box geometry of a just-placed float (see [`wire_shape_outside`]).
@@ -775,6 +796,36 @@ fn finish_frame(
     );
 }
 
+/// CSS 2.1 §10.3.3 — an over-constrained block-level box (a used width
+/// narrower than the room, neither horizontal margin `auto`) ignores
+/// `margin-left` when the *containing block's* `direction` is `rtl`, so the
+/// box sits against the right edge instead of the left. `lay_out_inner`
+/// places every such box at the left edge (it never sees the parent's
+/// direction), so the parent shifts the finished child here.
+fn align_rtl_overconstrained_child(frame: &mut Frame, idx: usize, viewport: Size) {
+    if frame.b.style.direction != crate::style::Direction::Rtl {
+        return;
+    }
+    let content_width = frame.init.content_width;
+    let right = frame.init.container_right;
+    let child = &mut frame.b.children[idx];
+    let cs = &child.style;
+    if !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || cs.margin_left.is_auto()
+        || cs.margin_right.is_auto()
+        || matches!(cs.position, Position::Absolute | Position::Fixed)
+        || !matches!(cs.justify_self, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch)
+        || !matches!(frame.init.s.justify_items, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch)
+    {
+        return;
+    }
+    let mr = cs.margin_right.resolve_or_zero(cs.font_size, content_width, viewport);
+    let dx = right - mr - child.rect.width - child.rect.x;
+    if dx > 0.01 {
+        shift_tree(child, dx, 0.0);
+    }
+}
+
 /// Runs right after a normal-flow child finishes — CSS 2.1 §8.3.1 margin
 /// collapsing and the `child_y` advance, copied verbatim from immediately
 /// after the removed loop's recursive call. `frame.pending_is_block`/
@@ -794,6 +845,7 @@ fn post_child_bookkeeping(
     }
     frame.init.seen_inflow_child = true;
     let content_width = frame.init.content_width;
+    align_rtl_overconstrained_child(frame, idx, viewport);
     // CSS 2.1 §8.3.1: the child's effective bottom margin is its own bottom
     // margin folded with any bottom margin escaping from its last-child chain
     // (collapse-through), mirroring `collapsed_mt` on the top edge. For
