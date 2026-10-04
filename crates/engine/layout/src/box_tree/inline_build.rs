@@ -595,6 +595,11 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             if matches!(b.style.display, Display::Flex | Display::InlineFlex) {
                 return super::baseline::flex_container_baseline(b, BaselineSide::First, measurer);
             }
+            // CSS 2.1 §17.5.1 / Tables L3 §3.7: базовая линия `inline-table` — линия его первой
+            // строки (подпись не считается).
+            if matches!(b.kind, BoxKind::Table) {
+                return super::table_valign::table_baseline(b, BaselineSide::First, measurer);
+            }
             // CSS Grid L1 §6.1: у grid-контейнера — первая базовая линия сетки (ее считает
             // раскладка), а не последнего ребёнка потока.
             if matches!(b.style.display, Display::Grid | Display::InlineGrid) {

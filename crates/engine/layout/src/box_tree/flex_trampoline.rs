@@ -617,9 +617,9 @@ fn cross_item_baseline(
     let outer = extent + m_lo + m_hi;
     // Линия измеряется по оси, перпендикулярной поперечной: вертикальная линия
     // (положение по x) — когда поперечная ось горизонтальна.
-    let ascent = m_lo + box_baseline_in_axis(item, !cross_vertical, side, measurer);
+    let ascent = m_lo + box_baseline_in_axis(item, container, !cross_vertical, side, measurer);
     let descent = outer - ascent;
-    let phys = baseline_phys_side_in_axis(item, !cross_vertical, side);
+    let phys = baseline_phys_side_in_axis(item, container, !cross_vertical, side);
     let flips = usize::from(wrap_reverse) + usize::from(cross_rev);
     let max_side = (phys == PhysSide::Max) != (flips % 2 == 1);
     Some(if cross_rev { (usize::from(max_side), descent, ascent) } else { (usize::from(max_side), ascent, descent) })

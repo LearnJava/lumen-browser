@@ -199,11 +199,34 @@ pub(crate) fn box_baseline_or_synth(
     box_baseline(b, side, measurer).unwrap_or_else(|| synth_baseline(b))
 }
 
+/// Край линии выравнивания (верх/лево или низ/право), к которому тянется базовая
+/// линия стороны `side` бокса `b` в контексте с вертикальностью `vertical`: у бокса
+/// того же режима — край начала/конца его блока ([`baseline_phys_side`]), у
+/// ортогонального — начало оси для `first` и конец для `last` в режиме письма
+/// контейнера `container` (справа у `direction: rtl`, WPT
+/// `flex-align-baseline-column-rtl-direction`).
+pub(crate) fn baseline_phys_side_in_axis(
+    b: &LayoutBox,
+    container: &ComputedStyle,
+    vertical: bool,
+    side: BaselineSide,
+) -> PhysSide {
+    if is_vertical(&b.style) == vertical {
+        return baseline_phys_side(&b.style, side);
+    }
+    let start_is_low = super::flex_trampoline::own_start_is_low(container, vertical);
+    if (side == BaselineSide::First) == start_is_low { PhysSide::Min } else { PhysSide::Max }
+}
+
 /// Базовая линия `b` в контексте выравнивания с вертикальностью `vertical`
-/// (`false` — линия горизонтальная, положение по y). Бокс с ортогональным
-/// режимом своей базовой линии в этом контексте не имеет — синтезируется.
+/// (`false` — линия горизонтальная, положение по y) контейнера `container`.
+/// Ортогональный бокс своей базовой линии в этом контексте не имеет —
+/// синтезируется по краю border box (CSS Align L3 §9.1): тому, к которому он
+/// тянется ([`baseline_phys_side_in_axis`]), так бокс целиком лежит по одну сторону
+/// общей линии (WPT `flex-align-baseline-005`, `align-items-baseline-column-horz`).
 pub(crate) fn box_baseline_in_axis(
     b: &LayoutBox,
+    container: &ComputedStyle,
     vertical: bool,
     side: BaselineSide,
     measurer: Option<&dyn TextMeasurer>,
@@ -211,29 +234,11 @@ pub(crate) fn box_baseline_in_axis(
     if is_vertical(&b.style) == vertical {
         return box_baseline_or_synth(b, side, measurer);
     }
-    // Ортогональный бокс (CSS Align L3 §9.1): линия синтезируется по краю border box
-    // — `first` у начала оси (верх/лево), `last` у конца (низ/право), так бокс целиком
-    // лежит по одну сторону общей линии (WPT `flex-align-baseline-005`,
-    // `align-items-baseline-column-horz`).
-    match side {
-        BaselineSide::First => 0.0,
-        BaselineSide::Last => {
+    match baseline_phys_side_in_axis(b, container, vertical, side) {
+        PhysSide::Min => 0.0,
+        PhysSide::Max => {
             if vertical { b.rect.width } else { b.rect.height }
         }
-    }
-}
-
-/// Край линии выравнивания (верх/лево или низ/право), к которому тянется базовая
-/// линия стороны `side` бокса `b` в контексте с вертикальностью `vertical`: у бокса
-/// того же режима — край начала/конца его блока ([`baseline_phys_side`]), у
-/// ортогонального — начало оси для `first` и конец для `last`.
-pub(crate) fn baseline_phys_side_in_axis(b: &LayoutBox, vertical: bool, side: BaselineSide) -> PhysSide {
-    if is_vertical(&b.style) == vertical {
-        baseline_phys_side(&b.style, side)
-    } else if side == BaselineSide::First {
-        PhysSide::Min
-    } else {
-        PhysSide::Max
     }
 }
 
@@ -370,7 +375,7 @@ pub(crate) fn flex_container_baseline(
         (BaselineSide::First, true) | (BaselineSide::Last, false) => first_visited,
         _ => last_visited,
     };
-    Some(origin(extreme) + box_baseline_in_axis(extreme, cvert, side, measurer))
+    Some(origin(extreme) + box_baseline_in_axis(extreme, s, cvert, side, measurer))
 }
 
 /// Базовая линия строки `k` текстового прогона `b` от верхней кромки прогона.
@@ -449,7 +454,7 @@ fn vertical_content_baseline(b: &LayoutBox, side: BaselineSide, measurer: Option
                 if !is_in_flow_baseline_source(c) || !matches!(inline_v_align(c), VerticalAlign::Baseline) {
                     return None;
                 }
-                Some(c.rect.x - b.rect.x + box_baseline_in_axis(c, true, side, measurer))
+                Some(c.rect.x - b.rect.x + box_baseline_in_axis(c, &b.style, true, side, measurer))
             };
             match side {
                 BaselineSide::First => b.children.iter().find_map(part),

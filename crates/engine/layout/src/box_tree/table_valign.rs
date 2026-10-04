@@ -7,7 +7,7 @@
 //! Базовая линия считается по уже разложенному дереву (как и вся модель в
 //! [`super::baseline`]), поэтому сдвиг содержимого учитывается сам собой.
 
-use super::baseline::{box_baseline, BaselineSide};
+use super::baseline::{box_baseline, is_vertical, BaselineSide};
 use super::*;
 
 /// Участвует ли ячейка в выравнивании по базовой линии строки: CSS 2.1 §17.5.3
@@ -69,9 +69,24 @@ fn content_bottom(cell: &LayoutBox) -> f32 {
     (cell.rect.height - pb - st.border_bottom_width).max(0.0)
 }
 
-/// Базовая линия ячейки стороны `side` от верхней кромки её border box.
-pub(super) fn cell_baseline(cell: &LayoutBox, side: BaselineSide, measurer: Option<&dyn TextMeasurer>) -> f32 {
-    box_baseline(cell, side, measurer).unwrap_or_else(|| content_bottom(cell))
+/// Собственная базовая линия ячейки (строка текста внутри) от верхней кромки её
+/// border box; `None` — линий нет: такая ячейка в общую линию строки не входит и
+/// стоит у верха (так её видят браузеры, WPT `synthesized-baseline-table-cell-001`).
+pub(super) fn cell_own_baseline(
+    cell: &LayoutBox,
+    side: BaselineSide,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Option<f32> {
+    if is_vertical(&cell.style) {
+        return None;
+    }
+    box_baseline(cell, side, measurer)
+}
+
+/// Базовая линия ячейки стороны `side` от верхней кромки её border box: своя, а без
+/// строк — нижняя кромка content box (CSS 2.1 §17.5.3).
+fn cell_baseline(cell: &LayoutBox, side: BaselineSide, measurer: Option<&dyn TextMeasurer>) -> f32 {
+    cell_own_baseline(cell, side, measurer).unwrap_or_else(|| content_bottom(cell))
 }
 
 /// Сдвигает содержимое ячейки по вертикали. Абсолютно позиционированные дети
@@ -94,8 +109,11 @@ pub(super) fn shift_cell_content(cell: &mut LayoutBox, dy: f32) {
 /// последней для `Last`). `None` у строки без ячеек.
 fn row_baseline(row: &LayoutBox, side: BaselineSide, measurer: Option<&dyn TextMeasurer>) -> Option<f32> {
     let cells = || row.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip));
-    if let Some(c) = cells().find(|c| is_baseline_aligned(c)) {
-        return Some(c.rect.y - row.rect.y + cell_baseline(c, BaselineSide::First, measurer));
+    if let Some((c, bl)) = cells()
+        .filter(|c| is_baseline_aligned(c))
+        .find_map(|c| cell_own_baseline(c, BaselineSide::First, measurer).map(|bl| (c, bl)))
+    {
+        return Some(c.rect.y - row.rect.y + bl);
     }
     let c = match side {
         BaselineSide::First => cells().next()?,
