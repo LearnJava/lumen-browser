@@ -253,3 +253,23 @@ fn grid_auto_fit_collapsed_trailing_rows_have_no_gap() {
     // Один зазор между двумя рядами: y = 100 + (10 − 6) / 2 = 102, на всю ширину 320.
     assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 6.0)]);
 }
+
+/// flex-gap-decorations-027: отрицательное поле шире самого элемента переворачивает его
+/// margin-box; щель после такого элемента всё равно рисуется (в потоке он занимает нулевую
+/// протяжённость на своём конце, по эталону щели стоят на x = 102, 162, 222, 282, 342 при
+/// контейнере на x = 200).
+#[test]
+fn flex_column_rule_after_item_with_oversized_negative_margin() {
+    let html = r#"<div style="display:flex;border:2px solid #000;column-gap:10px;
+        column-rule:10px solid red;width:200px;flex-wrap:nowrap">
+        <div style="width:50px;height:50px;flex-shrink:0;margin-left:-150px"></div>
+        <div style="width:50px;height:50px;flex-shrink:0"></div>
+        <div style="width:50px;height:50px;flex-shrink:0"></div>
+        <div style="width:50px;height:50px;flex-shrink:0"></div>
+        <div style="width:50px;height:50px;flex-shrink:0"></div>
+        <div style="width:50px;height:50px;flex-shrink:0"></div></div>"#;
+    let dl = build(html, "");
+    let got = rules(&dl, true);
+    let want: Vec<_> = [-98.0, -38.0, 22.0, 82.0, 142.0].iter().map(|&x| (x, 2.0, 10.0, 50.0)).collect();
+    assert_rules(&got, &want);
+}
