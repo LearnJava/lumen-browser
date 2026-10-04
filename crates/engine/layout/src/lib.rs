@@ -176,7 +176,7 @@ pub use style::{
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, CaptionSide, TableLayout, FilterFn, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
     FontStyle,
-    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
