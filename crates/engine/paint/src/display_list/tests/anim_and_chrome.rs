@@ -925,6 +925,23 @@ use lumen_dom::NodeId;
     }
 
     #[test]
+    fn multicol_rows_overlap_join_paints_a_crossing_once() {
+        // multicol-gap-decorations-033: `row-rule-inset: overlap-join` extends every piece of a cut
+        // row rule over the column gaps; neighbouring pieces must not overlap (a translucent rule
+        // would be blended twice). The union of the pieces is the whole 200px line.
+        let css = format!("{ROWS_CSS}row-rule-break:intersection;row-rule-inset:overlap-join;");
+        let dl = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let mut xs: Vec<(f32, f32)> = row_rule_cmds(&dl).iter().map(|r| (r.0, r.2)).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(!xs.is_empty());
+        let mut end = xs[0].0;
+        for (x, w) in &xs {
+            assert!(*x >= end - 0.01, "pieces overlap: {xs:?}");
+            end = x + w;
+        }
+    }
+
+    #[test]
     fn multicol_rows_split_by_a_spanner_get_a_rule_band_each() {
         // multicol-gap-decorations-002: `p p <spanner 18px> p×6`, 60px columns → band 1 (balanced,
         // 40px), the spanner (no rule, no row gap), band 2 (the 2px rest of the row), then the

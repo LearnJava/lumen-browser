@@ -211,6 +211,24 @@ fn end_inset(inset: &RuleInset, cross: Cross, em: f32, vp: Size) -> f32 {
     }
 }
 
+/// Paints each point of one *row* rule line once. Pieces of a line are extended past their cut
+/// points (`overlap-join`, a negative inset), so neighbouring pieces overlap at a column gap, and
+/// a translucent colour would be blended twice there (Chromium blends it once).
+/// `spans` are `(start, len)` along the line in ascending order; each span loses the part already covered by the spans before it.
+fn without_overlap(spans: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    let mut end = f32::NEG_INFINITY;
+    let mut out = Vec::with_capacity(spans.len());
+    for (start, len) in spans {
+        let from = start.max(end);
+        let to = start + len;
+        if to > from {
+            out.push((from, to - from));
+        }
+        end = end.max(to);
+    }
+    out
+}
+
 /// The two end insets `(start, end)` of a line whose ends meet `lo`/`hi` crossings.
 fn line_insets(insets: &lumen_layout::RuleInsets, lo: Cross, hi: Cross, em: f32, vp: Size) -> (f32, f32) {
     let start = if lo.is_some() { &insets.junction_start } else { &insets.cap_start };
@@ -328,6 +346,8 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
             let lo = if r > 0 { cross(r - 1) } else { None };
             let hi = if r + 1 < rows { cross(r) } else { None };
             let (a, bm) = line_insets(&s.column_rule_inset, lo, hi, em, vp);
+            // Column pieces keep their `overlap-join` overlap (the reference of
+            // multicol-gap-decorations-033 blends the doubled strip twice); row pieces do not.
             if let Some((y, h)) = inset_span(bands[r].top, bands[r].bottom - bands[r].top, a, bm, false) {
                 col_cmds.extend(rule_line_commands(Rect::new(sep_x, y, w, h), false, st, color));
             }
@@ -351,6 +371,7 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
             continue;
         }
         // Cut at the column gaps: one piece per column that holds content in either row.
+        let mut spans: Vec<(f32, f32)> = Vec::new();
         for c in (0..n).filter(|&c| row_piece(r, c)) {
             let cross = |gap_idx: usize| {
                 let touches = col_joined && col_visible(gap_idx) || col_piece(gap_idx, r) || col_piece(gap_idx, r + 1);
@@ -361,9 +382,10 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
             // `inset-start` is the inline-start end of the line: the right one under `rtl`.
             let (a, bm) = if rtl { line_insets(&s.row_rule_inset, hi, lo, em, vp) } else { line_insets(&s.row_rule_inset, lo, hi, em, vp) };
             let col_left = g.content_x + c as f32 * (g.col_w + g.col_gap);
-            if let Some((x, len)) = inset_span(col_left, g.col_w, a, bm, rtl) {
-                row_cmds.extend(rule_line_commands(Rect::new(x, sep_y, len, w), true, st, color));
-            }
+            spans.extend(inset_span(col_left, g.col_w, a, bm, rtl));
+        }
+        for (x, len) in without_overlap(spans) {
+            row_cmds.extend(rule_line_commands(Rect::new(x, sep_y, len, w), true, st, color));
         }
     }
 
