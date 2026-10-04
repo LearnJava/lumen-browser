@@ -316,6 +316,12 @@ pub struct ComputedStyle {
     /// positioned- и flex/grid-item элементов это запускает создание
     /// stacking context.
     pub z_index: Option<i32>,
+    /// CSS Flexbox L1 §4.3 / Grid L1 §6.4 — the box is an in-flow child of a
+    /// flex or grid container (`inherited.display` at cascade time), so a
+    /// `z-index` other than `auto` applies to it even with `position: static`
+    /// and makes it a stacking context (`creates_stacking_context`). Not
+    /// inherited; set by the cascade, never by a declaration.
+    pub is_flex_grid_item: bool,
     /// CSS 2.1 §9.5.1 — `float`. Не наследуется. `Left`/`Right` выводят
     /// элемент из нормального потока. `None` — нормальный поток.
     pub float_side: FloatSide,
@@ -1267,6 +1273,7 @@ impl ComputedStyle {
             bottom: LengthOrAuto::Auto,
             left: LengthOrAuto::Auto,
             z_index: None,
+            is_flex_grid_item: false,
             float_side: FloatSide::None,
             clear: ClearSide::None,
             initial_letter_size: 1.0,
@@ -1646,6 +1653,7 @@ impl ComputedStyle {
             bottom: LengthOrAuto::Auto,
             left: LengthOrAuto::Auto,
             z_index: None,
+            is_flex_grid_item: false,
             float_side: FloatSide::None,
             clear: ClearSide::None,
             initial_letter_size: 1.0,

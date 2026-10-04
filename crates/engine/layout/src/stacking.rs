@@ -186,10 +186,9 @@ fn z_sort_key(ctx: &StackingContext) -> i32 {
 ///   `filter`, `position`, `z-index`, `clip-path`, `mask`, `mix-blend-mode`,
 ///   `isolation`, `perspective`).
 ///
-/// Отложено до flex/grid layout: flex/grid item с z-index ≠ auto. Сейчас
-/// проверяется только для положенных боксов (если родитель использует
-/// `display: flex|grid`, мы ещё не пересчитываем — флаг flex/grid item
-/// добавим вместе с реальным flex/grid pass).
+/// Flex/grid item с `z-index` ≠ auto (Flexbox L1 §4.3, Grid L1 §6.4) — тоже
+/// stacking context, даже при `position: static` (`ComputedStyle::is_flex_grid_item`,
+/// ставится каскадом по `display` родителя).
 pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
     match style.position {
         Position::Fixed | Position::Sticky => return true,
@@ -198,7 +197,14 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
                 return true;
             }
         }
-        Position::Static => {}
+        // Flexbox L1 §4.3 / Grid L1 §6.4: flex and grid items honour `z-index`
+        // even when `position: static` and then paint like a positioned box
+        // with a stacking context of its own.
+        Position::Static => {
+            if style.is_flex_grid_item && style.z_index.is_some() {
+                return true;
+            }
+        }
     }
     if style.opacity < 1.0 {
         return true;
@@ -779,6 +785,44 @@ mod tests {
         // z-index применяется только к positioned (или flex/grid-item) — на
         // static-боксах он по spec игнорируется.
         let tree = build_tree("<div>x</div>", "div { z-index: 5; }");
+        assert_eq!(tree.contexts.len(), 1);
+    }
+
+    #[test]
+    fn flex_item_with_z_index_creates_stacking_context_without_position() {
+        // Flexbox L1 §4.3: `z-index` applies to a static flex item.
+        let tree = build_tree(
+            "<div id=c><p>x</p></div>",
+            "#c { display: flex; } p { z-index: 3; }",
+        );
+        assert_eq!(tree.contexts.len(), 2);
+        assert_eq!(tree.contexts[1].z_index, Some(3));
+    }
+
+    #[test]
+    fn grid_item_with_z_index_creates_stacking_context_without_position() {
+        // Grid L1 §6.4: same for a static grid item.
+        let tree = build_tree(
+            "<div id=c><p>x</p></div>",
+            "#c { display: grid; } p { z-index: -1; }",
+        );
+        assert_eq!(tree.contexts.len(), 2);
+        assert_eq!(tree.contexts[1].z_index, Some(-1));
+    }
+
+    #[test]
+    fn flex_item_with_z_index_auto_is_no_stacking_context() {
+        let tree = build_tree("<div id=c><p>x</p></div>", "#c { display: flex; } p { z-index: auto; }");
+        assert_eq!(tree.contexts.len(), 1);
+    }
+
+    #[test]
+    fn grandchild_of_flex_container_ignores_z_index() {
+        // Only direct children are items; `is_flex_grid_item` is not inherited.
+        let tree = build_tree(
+            "<div id=c><p><span style=\"display:block\">x</span></p></div>",
+            "#c { display: flex; } span { z-index: 3; }",
+        );
         assert_eq!(tree.contexts.len(), 1);
     }
 
