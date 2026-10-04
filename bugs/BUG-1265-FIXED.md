@@ -1,6 +1,6 @@
 # BUG-1265 — `self-start`/`self-end` и `safe` у выравнивания самих flex-items и статической позиции абсолютных детей
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-04 (P1, FLEX-VWM-2)
 **Заведён:** 2026-10-04 (P1, FLEX-VWM)
 **Область:** layout (`crates/engine/layout/src/style/values/flexgrid.rs` — `AlignValue::parse`; `box_tree/flex_trampoline.rs`)
 
