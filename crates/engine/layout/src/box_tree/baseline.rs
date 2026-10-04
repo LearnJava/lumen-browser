@@ -313,16 +313,15 @@ pub(crate) fn flex_container_baseline(
         prev = Some(it);
     }
 
-    // Визуально первая линия — у начала блока контейнера: при `wrap-reverse` строки
-    // линии идут снизу вверх, и «первая» базовая линия — у верхней (так её считают
-    // WPT `flex-align-baseline-flex-003`, `flexbox-baseline-multi-line-horiz-004`).
-    // Когда поперечная ось контейнера — его ось блоков, начало блока совпадает с
-    // началом поперечной оси лишь без обращения (`cross_rev` — поперечное начало у
-    // нижнего/правого края); иначе линии идут вдоль строки — берётся первая в обходе.
+    // «Первая» линия — у края поперечной оси, ближайшего к началу строки/блока контейнера
+    // в его режиме письма (сверху для горизонтального режима; слева у `ltr`-колонки;
+    // справа у блоков `vertical-rl`), а не поперечное начало flex: при `wrap-reverse` линии
+    // идут снизу вверх (справа налево), и «первая» базовая линия — у верхней (так её
+    // считают WPT `flex-align-baseline-flex-003`, `flexbox-baseline-multi-line-horiz-004`).
+    // Линии посещаются от поперечного начала: оно у низкого края без `cross_rev`.
     let cross_is_block_axis = cvert == is_column;
-    let block_start_at_max = cvert && block_flow_is_rtl(s);
-    let visual_first_is_first_visited =
-        if cross_is_block_axis { block_start_at_max == axes.cross_rev } else { true };
+    let cross_start_low = super::flex_trampoline::own_start_is_low(s, is_column);
+    let visual_first_is_first_visited = cross_start_low != axes.cross_rev;
     let line = match (side, visual_first_is_first_visited) {
         (BaselineSide::First, true) | (BaselineSide::Last, false) => lines.first()?,
         _ => lines.last()?,

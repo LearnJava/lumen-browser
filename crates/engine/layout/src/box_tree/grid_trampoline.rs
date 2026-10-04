@@ -912,7 +912,9 @@ fn container_baselines(frame: &Frame, measurer: Option<&dyn TextMeasurer>) -> Op
     let mut placed: Vec<usize> = (0..init.item_idxs.len())
         .filter(|&k| init.placements[k].0 != 0 && init.placements[k].2 != 0)
         .collect();
-    placed.sort_by_key(|&k| frame.b.children[init.item_idxs[k]].style.order);
+    // Порядок сетки: `order`, затем по колонкам (в пределах строки) и порядку документа
+    // (WPT `grid-baseline-004`: берётся item первой колонки независимо от порядка в DOM).
+    placed.sort_by_key(|&k| (frame.b.children[init.item_idxs[k]].style.order, init.placements[k].0));
     let top = frame.b.rect.y;
     let row_top = |r: usize| init.content_y + init.row_offsets[r];
     let item_baseline = |k: usize, side: BaselineSide| {
