@@ -117,6 +117,15 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
     (v, h)
 }
 
+/// An `overflow: hidden` box (either axis) whose content a script scrolled
+/// (`scrollTo()`/`scrollBy()`/`scrollTop = …` leave a non-zero offset on the
+/// layout box): paint wraps its content in a `PushScrollLayer` inside the clip,
+/// without scrollbars. `scroll`/`auto` boxes take the scroll-layer path anyway.
+pub(crate) fn scrolled_hidden(b: &LayoutBox) -> bool {
+    (b.scroll_x != 0.0 || b.scroll_y != 0.0)
+        && (matches!(b.style.overflow_x, Overflow::Hidden) || matches!(b.style.overflow_y, Overflow::Hidden))
+}
+
 /// Emit `DrawScrollbar` track+thumb commands for a scroll container's padding box.
 ///
 /// Shared by the legacy `walk` path and the ordered (stacking-context)

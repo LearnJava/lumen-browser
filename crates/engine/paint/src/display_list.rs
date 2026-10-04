@@ -275,7 +275,7 @@ mod box_shadow;
 use box_shadow::{emit_box_shadows, emit_inset_box_shadows};
 
 mod scrollbars;
-use scrollbars::emit_scrollbars;
+use scrollbars::{emit_scrollbars, scrolled_hidden};
 pub use scrollbars::patch_scroll_layer;
 // Used only by `display_list/tests/anim_and_chrome.rs` (via `super::*`).
 #[cfg(test)]

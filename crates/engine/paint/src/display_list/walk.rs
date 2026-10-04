@@ -791,6 +791,8 @@ struct BlockEpilogue {
     self_visible: bool,
     has_overflow_clip: bool,
     use_scroll_layer: bool,
+    /// `overflow: hidden` box scrolled by script: a `PushScrollLayer` sits inside its clip.
+    hidden_scrolled: bool,
     scroll_padding_box: Option<(f32, f32, f32, f32)>,
     is_scroll_x: bool,
     is_scroll_y: bool,
@@ -919,6 +921,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
                 emit_scrollbars(b, padding_box, e.is_scroll_x, e.is_scroll_y, out);
             }
         } else {
+            if e.hidden_scrolled {
+                out.push(DisplayCommand::PopScrollLayer);
+            }
             out.push(DisplayCommand::PopClip);
         }
     }
@@ -1149,6 +1154,7 @@ fn dispatch<'a>(
             let is_scroll_x = matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto);
             let is_scroll_y = matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto);
             let use_scroll_layer = (is_scroll_x || is_scroll_y) && has_overflow_clip;
+            let hidden_scrolled = !use_scroll_layer && scrolled_hidden(b);
             // Capture padding-box rect for scrollbar geometry (used after PopScrollLayer).
             let scroll_padding_box: Option<(f32, f32, f32, f32)> = if use_scroll_layer {
                 let s = &b.style;
@@ -1208,6 +1214,16 @@ fn dispatch<'a>(
                     });
                 } else {
                     out.push(DisplayCommand::PushClipRect { rect: cr });
+                    // CSS Overflow L3 §2: `hidden` is a scroll container too —
+                    // only the user cannot scroll it; `scrollTo()`/`scrollBy()`
+                    // move its content, so a non-zero offset translates it.
+                    if hidden_scrolled {
+                        out.push(DisplayCommand::PushScrollLayer {
+                            clip_rect: cr,
+                            scroll_x: b.scroll_x,
+                            scroll_y: b.scroll_y,
+                        });
+                    }
                 }
             }
             // CSS Transforms L2 §4 — `perspective` projects the box's children
@@ -1235,6 +1251,7 @@ fn dispatch<'a>(
                 self_visible,
                 has_overflow_clip,
                 use_scroll_layer,
+                hidden_scrolled,
                 scroll_padding_box,
                 is_scroll_x,
                 is_scroll_y,

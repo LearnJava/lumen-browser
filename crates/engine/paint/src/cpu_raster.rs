@@ -274,6 +274,8 @@ pub(crate) fn rasterize_cpu_with_fonts(
     // документа — поэтому внутри слоя они пересчитываются обратной матрицей,
     // а на `PopTransform` восстанавливаются отсюда.
     let mut clip_saves: Vec<Vec<Rect>> = Vec::new();
+    // One flag per open `PushScrollLayer`: did it open a translated layer (non-zero scroll).
+    let mut scroll_layer_shifted: Vec<bool> = Vec::new();
 
     for cmd in commands {
         match cmd {
@@ -418,17 +420,48 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 }
             }
             // CSS Overflow L3 §3.2 — `overflow: scroll/auto` (and the `auto`
-            // axis a mismatched `overflow` pair coerces to). Treated as a clip
-            // to `clip_rect`; the scroll translation is not modelled, matching
-            // the CPU path's handling of `PushTransform`. Offscreen snapshots
-            // render a freshly-loaded page, so `scroll_x`/`scroll_y` are always
-            // 0 and the clip is exact.
-            DisplayCommand::PushScrollLayer { clip_rect: cr, .. } => {
+            // axis a mismatched `overflow` pair coerces to): a clip to `clip_rect`
+            // plus a `(-scroll_x, -scroll_y)` translation of the content. A freshly
+            // loaded page has both offsets at 0 and this is a plain clip; a page
+            // script that scrolled a container (`el.scrollBy()` before the
+            // snapshot) makes the content an off-screen group translated at
+            // composite time, exactly like `PushTransform` — the clip is mapped
+            // through the inverse so it still gates the pre-translation draws.
+            DisplayCommand::PushScrollLayer { clip_rect: cr, scroll_x, scroll_y } => {
                 clip_stack.push(*cr);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
+                let shifted = *scroll_x != 0.0 || *scroll_y != 0.0;
+                scroll_layer_shifted.push(shifted);
+                if shifted {
+                    let matrix = lumen_layout::Mat4::translation_2d(-*scroll_x, -*scroll_y);
+                    let [a, b, c, d, e, f] = mat4_to_2d_affine(&matrix);
+                    let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
+                    let layer = tiny_skia::Pixmap::new(width, height)
+                        .ok_or("Failed to create scroll layer")?;
+                    layers.push(CpuLayer::new(layer));
+                    layer_ops.push(LayerComposite::Transform(t));
+                    clip_saves.push(clip_stack.clone());
+                    if let Some(active) = clip_rect
+                        && let Some(inv) = matrix.invert_2d_affine()
+                    {
+                        clip_stack = vec![transform_rect_bbox(active, &inv)];
+                        clip_rect = clip_intersection(&clip_stack);
+                        clip_mask = build_clip_mask(width, height, clip_rect);
+                    }
+                }
             }
             DisplayCommand::PopScrollLayer => {
+                if scroll_layer_shifted.pop() == Some(true)
+                    && let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
+                {
+                    if let Some(saved) = clip_saves.pop() {
+                        clip_stack = saved;
+                    }
+                    if let Some(dst) = layers.last_mut() {
+                        close_layer(dst, &top, &op);
+                    }
+                }
                 clip_stack.pop();
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
@@ -3438,6 +3471,41 @@ mod tests {
     fn px(img: &Image, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * img.width + x) * 4) as usize;
         (img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3])
+    }
+
+    /// `PushScrollLayer` with a non-zero offset shifts the content up by
+    /// `scroll_y` inside the clip: a 100px-tall grey block above a green one
+    /// ends at y=90 after a 10px scroll, and nothing leaks outside the clip.
+    #[test]
+    fn scroll_layer_translates_content_inside_clip() {
+        let grey = Color { r: 128, g: 128, b: 128, a: 255 };
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { clip_rect: rect(0.0, 0.0, 40.0, 60.0), scroll_x: 0.0, scroll_y: 10.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
+            DisplayCommand::FillRect { rect: rect(0.0, 40.0, 40.0, 100.0), color: green },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(64, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 5), (128, 128, 128, 255), "grey still covers y<30");
+        assert_eq!(px(&img, 10, 25), (128, 128, 128, 255), "grey ends at 40-10=30");
+        assert_eq!(px(&img, 10, 35), (0, 128, 0, 255), "green starts at 30");
+        assert_eq!(px(&img, 10, 65), (255, 255, 255, 255), "clip stops at y=60");
+        assert_eq!(px(&img, 50, 35), (255, 255, 255, 255), "clip stops at x=40");
+    }
+
+    /// With a zero offset the scroll layer is a plain clip (no extra layer).
+    #[test]
+    fn scroll_layer_at_origin_is_plain_clip() {
+        let grey = Color { r: 128, g: 128, b: 128, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { clip_rect: rect(0.0, 0.0, 20.0, 20.0), scroll_x: 0.0, scroll_y: 0.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 10), (128, 128, 128, 255));
+        assert_eq!(px(&img, 30, 30), (255, 255, 255, 255));
     }
 
     /// `DrawSvgPath` fills the tessellated triangle interior with the solid
