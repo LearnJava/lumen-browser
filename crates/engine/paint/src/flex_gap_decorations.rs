@@ -305,14 +305,28 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             }
             pieces.push((pos, pos_x, cm.1, None));
             let id = cross_idx(g);
+            // Концы кусков после insets, в координатах главной оси: `(от, до)`.
+            let mut spans: Vec<Option<(f32, f32)>> = Vec::with_capacity(pieces.len());
             for (lo, lo_x, hi, hi_x) in pieces {
                 let lo_inset = end_inset(cross_ax.insets, lo_x, !mirror_cross);
                 let hi_inset = end_inset(cross_ax.insets, hi_x, mirror_cross);
                 let len = hi - lo - lo_inset - hi_inset;
-                if hi - lo <= 0.01 || len <= 0.0 {
-                    continue;
+                spans.push((hi - lo > 0.01 && len > 0.0).then_some((lo + lo_inset, hi - hi_inset)));
+            }
+            // `overlap-join` вытягивает соседние куски навстречу друг другу в один и тот же слитый
+            // стык: если они наложились, граница проходит посередине — иначе полупрозрачная линия
+            // в зоне наложения красится дважды и темнее эталона (flex-gap-decorations-064).
+            for k in 1..spans.len() {
+                if let (Some(prev), Some(next)) = (spans[k - 1], spans[k])
+                    && prev.1 > next.0
+                {
+                    let mid = (prev.1 + next.0) * 0.5;
+                    spans[k - 1] = Some((prev.0, mid));
+                    spans[k] = Some((mid, next.1));
                 }
-                out.segments.push(GapSegment { rect: mk(lo + lo_inset, len, a.hi, size), horizontal: row_dir, gap: id });
+            }
+            for (from, to) in spans.into_iter().flatten() {
+                out.segments.push(GapSegment { rect: mk(from, to - from, a.hi, size), horizontal: row_dir, gap: id });
             }
         }
     }
