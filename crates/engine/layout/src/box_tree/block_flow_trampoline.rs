@@ -598,8 +598,14 @@ fn place_float(
     // `lay_out` treats its `available_width` as the room for the margin box, so
     // the shrink-to-fit border-box width has to be handed over with the
     // float's horizontal margins added back.
-    let probe_margins = child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport)
-        + child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport);
+    // A bare text run (the `::first-letter` box) takes `available_width` as its
+    // own width, margins not included.
+    let probe_margins = if matches!(child.kind, BoxKind::InlineRun { .. }) {
+        0.0
+    } else {
+        child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport)
+            + child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport)
+    };
     let probe_w = if child.style.width.is_some() {
         content_width
     } else {
@@ -838,7 +844,7 @@ fn align_rtl_overconstrained_child(frame: &mut Frame, idx: usize, viewport: Size
     }
     let mr = cs.margin_right.resolve_or_zero(cs.font_size, content_width, viewport);
     let dx = right - mr - child.rect.width - child.rect.x;
-    if dx > 0.01 {
+    if dx.abs() > 0.01 {
         shift_tree(child, dx, 0.0);
     }
 }

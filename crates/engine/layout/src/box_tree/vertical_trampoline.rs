@@ -196,6 +196,23 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size) {
     if dx != 0.0 {
         shift_subtree_x(child, dx);
     }
+    // CSS 2.1 §10.3.3 along the inline (y) axis: an over-constrained block
+    // ignores its inline-start margin, which for `direction: rtl` (bottom-to-top
+    // inline direction, top-to-bottom for `sideways-lr`) puts it against the
+    // bottom edge instead of the top one.
+    let inline_start_at_end = (frame.b.style.direction == crate::style::Direction::Rtl)
+        != matches!(frame.b.style.writing_mode, crate::style::WritingMode::SidewaysLr);
+    if inline_start_at_end
+        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && !child.style.margin_top.is_auto()
+        && !child.style.margin_bottom.is_auto()
+    {
+        let mb = child.style.margin_bottom.resolve_or_zero(cem, content_inline, viewport);
+        let dy = frame.init.content_y + content_inline - mb - child.rect.height - child.rect.y;
+        if dy.abs() > 0.01 {
+            shift_tree(child, 0.0, dy);
+        }
+    }
     frame.init.cursor_block_consumed += child_block;
     frame.init.pending_end_margin = m_end;
 }

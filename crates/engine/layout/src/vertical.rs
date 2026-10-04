@@ -135,7 +135,10 @@ pub(crate) fn build_vertical_init(
     // *physical* meaning (top stays top, left stays left): the cascade does
     // not re-map padding/border to logical sides. This matches the Writing
     // Modes L3 spec — only width/height swap roles.
-    let cb_for_percents = available_width.max(0.0);
+    // CSS Box 3 §5.2: percentage margins and padding resolve against the
+    // containing block's *inline* size — the height here, since the inline axis
+    // of a vertical box runs along y.
+    let cb_for_percents = available_height.unwrap_or(viewport.height).max(0.0);
     let margin_left = s.margin_left.resolve_or_zero(em, cb_for_percents, viewport);
     let margin_top = s.margin_top.resolve_or_zero(em, cb_for_percents, viewport);
     let padding_left = s.padding_left.resolve_or_zero(em, cb_for_percents, viewport);
