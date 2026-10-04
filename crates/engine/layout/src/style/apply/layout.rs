@@ -525,9 +525,9 @@ pub(in crate::style) fn apply_decl_layout(
                 };
             }
         }
-        "gap" => {
+        "gap" | "grid-gap" => {
             // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
-            // = row).
+            // = row). `grid-gap` — устаревший алиас (CSS Grid L1 §7.3).
             let clamp_gap = |len: Length| -> Length {
                 if matches!(&len, Length::Px(v) if *v < 0.0) {
                     Length::Px(0.0)

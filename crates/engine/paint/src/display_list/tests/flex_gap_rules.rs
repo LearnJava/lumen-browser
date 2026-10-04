@@ -241,6 +241,19 @@ fn grid_auto_fit_collapsed_middle_rows_keep_one_gap() {
     assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 6.0), (0.0, 212.0, 320.0, 6.0)]);
 }
 
+/// grid-gap-decorations-029 (`grid-gap` — устаревший алиас `gap`): дорожки 3×100px + 2×10px
+/// шире контейнера `120px`, но линии идут на всю протяжённость сетки (320px), а не на 120px.
+#[test]
+fn grid_rules_span_tracks_overflowing_the_container() {
+    let html = r#"<div style="display:grid;grid-gap:10px;grid-template-columns:100px 100px 100px;
+        grid-template-rows:100px 100px 100px;width:120px;height:120px;
+        column-rule:5px solid blue;row-rule:5px solid red">
+        <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>"#;
+    let dl = build(html, "");
+    assert_rules(&rules(&dl, false), &[(0.0, 102.0, 320.0, 5.0), (0.0, 212.0, 320.0, 5.0)]);
+    assert_rules(&rules(&dl, true), &[(102.0, 0.0, 5.0, 320.0), (212.0, 0.0, 5.0, 320.0)]);
+}
+
 /// collapsed-trailing-auto-fit: пустые дорожки в хвосте не создают щелей.
 #[test]
 fn grid_auto_fit_collapsed_trailing_rows_have_no_gap() {

@@ -225,6 +225,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "grid-column-end",
     "grid-column-gap",
     "grid-column-start",
+    "grid-gap",
     "grid-row",
     "grid-row-end",
     "grid-row-gap",

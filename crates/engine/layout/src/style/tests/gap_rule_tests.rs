@@ -117,6 +117,17 @@
     }
 
     #[test]
+    fn grid_gap_is_the_legacy_alias_of_gap() {
+        // CSS Grid L1 §7.3: `grid-gap` = `gap` (WPT `css-gaps/grid/*` писали `grid-gap: 10px`).
+        let s = parse_gap_rule("grid-gap: 10px 20px;");
+        assert_eq!(s.row_gap, Length::Px(10.0));
+        assert_eq!(s.column_gap, Length::Px(20.0));
+        let s = parse_gap_rule("grid-gap: 7px;");
+        assert_eq!((s.row_gap, s.column_gap), (Length::Px(7.0), Length::Px(7.0)));
+        assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&"grid-gap"));
+    }
+
+    #[test]
     fn rule_properties_are_supported() {
         for p in ["row-rule", "row-rule-width", "row-rule-style", "row-rule-color", "rule", "rule-width", "rule-style", "rule-color"] {
             assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing from SUPPORTED_PROPERTIES");
