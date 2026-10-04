@@ -260,6 +260,16 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   stale), each lane guards only its own ports, and `heavy_lock` is held while
   any lane runs. Measured A/B — `docs/tasks/p2-wpt-runner-throughput.md`
   §WPT-RUN-9.
+  `--shared-queue` (off by default) — inside a shard, wptrunner normally deals
+  the tests out to its `--processes` up front (`hash(test.id) % N`), so the
+  shard waits for whichever process drew the most TIMEOUTs. The flag makes
+  `run_smoke.py` (`--lumen-shared-queue`) run wptrunner with `--fully-parallel
+  --no-restart-on-new-group` — one queue, longest declared timeout first, one
+  browser per process, still restarted on a real crash/hang — and interleaves
+  the queue by directory (`interleave_by_directory`), because seven
+  neighbouring files of one directory started together can starve each other
+  (`non-cancelable-when-passive/*touch*`). Measured −26 % wall on `dom`+8 with
+  the score inside the noise — §общая очередь.
   `--max-browser-gb G` (default 4, `0` off) — `browser_rss_cap.py` watches the
   run's own `lumen` processes (descendants of `run_corpus.py` only — another
   session's browsers are never looked at) and kills one whose RSS passes G GB;

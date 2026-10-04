@@ -112,6 +112,67 @@ def _install_server_config_override() -> None:
 _install_server_config_override()
 
 
+#: `run_smoke.py`'s own flag (not wptrunner's): run the selected tests from
+#: one shared queue instead of wptrunner's fixed per-process split. See
+#: `_install_shared_queue` and `run_corpus.py --shared-queue`.
+SHARED_QUEUE_FLAG = "--lumen-shared-queue"
+
+#: wptrunner arguments the shared queue translates to. `--fully-parallel` makes
+#: every test its own group (`FullyParallelGroupedSource`), and groups are
+#: pulled by whichever process is free — a shared queue, ordered by declared
+#: timeout, longest first (`TestQueueBuilder.make_queue`).
+#: `--no-restart-on-new-group` keeps that from turning into one browser launch
+#: per test: upstream restarts the browser on every group change. A real
+#: crash or hang still restarts it (`restart_before_next`, `testrunner.py`).
+SHARED_QUEUE_WPT_ARGS = ["--fully-parallel", "--no-restart-on-new-group"]
+
+
+def interleave_by_directory(items: list, key) -> list:
+    """Round-robin `items` over their directories, keeping order inside each.
+
+    `key(item)` is the item's URL path. Used on `FullyParallelGroupedSource`'s
+    groups, which come out in manifest order: with `--processes 7` the queue
+    head then starts seven neighbouring files of one directory at the same
+    moment, and directories of near-identical tests that compete for the same
+    thing (the ten `dom/events/non-cancelable-when-passive/*touch*` tests,
+    each driving `test_driver.Actions` for ~10 s) all TIMEOUT together — a
+    verdict the old per-process hash split, which scatters a directory across
+    processes, never produced (A/B in `docs/tasks/p2-wpt-runner-throughput.md`
+    §общая очередь). `make_queue` sorts the result by timeout with a stable
+    sort, so the interleaving survives inside every timeout tier.
+    """
+    buckets = {}
+    for item in items:
+        buckets.setdefault(key(item).rsplit("/", 1)[0], []).append(item)
+    queues = list(buckets.values())
+    out = []
+    depth = 0
+    while len(out) < len(items):
+        for queue in queues:
+            if depth < len(queue):
+                out.append(queue[depth])
+        depth += 1
+    return out
+
+
+def _install_shared_queue() -> None:
+    """Make `FullyParallelGroupedSource` hand out its groups interleaved by
+    directory (`interleave_by_directory`). Patched rather than edited in
+    `tools/wptrunner`, like `_install_server_config_override`; only takes
+    effect for a run that passes `--fully-parallel`."""
+    from urllib.parse import urlsplit  # noqa: PLC0415
+    from wptrunner import testloader  # noqa: PLC0415 — after sys.path setup
+
+    original_make_groups = testloader.FullyParallelGroupedSource.make_groups
+
+    def make_groups(self, tests_by_type):
+        groups = original_make_groups(self, tests_by_type)
+        return interleave_by_directory(
+            groups, lambda group: urlsplit(group.test_queue[0].url).path)
+
+    testloader.FullyParallelGroupedSource.make_groups = make_groups
+
+
 def default_binary() -> str:
     profile = os.environ.get("LUMEN_PROFILE", "release")
     return os.path.join(REPO_ROOT, "target", profile, "lumen.exe")
@@ -207,6 +268,10 @@ def main() -> int:
     # args are forwarded verbatim instead of being enumerated here, so this
     # stays a passthrough rather than a second copy of wptcommandline.
     args, extra_args = parser.parse_known_args()
+
+    if SHARED_QUEUE_FLAG in extra_args:
+        extra_args = [a for a in extra_args if a != SHARED_QUEUE_FLAG] + SHARED_QUEUE_WPT_ARGS
+        _install_shared_queue()
 
     return run(args.binary, args.test_ids, extra_args)
 
