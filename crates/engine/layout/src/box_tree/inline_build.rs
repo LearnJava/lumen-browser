@@ -280,6 +280,7 @@ pub(crate) fn anon_inline_run(
         node,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
         style: Arc::new(style),
         kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
         children: vec![],
@@ -336,6 +337,7 @@ pub(crate) fn build_anon_text_item(
         node: id,
         rect: Rect::ZERO,
         used_line_height: item_style.font_size * item_style.line_height,
+        grid_baselines: None,
         style: Arc::new(item_style),
         kind: BoxKind::Block,
         children: vec![run],
@@ -593,6 +595,16 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             if matches!(b.style.display, Display::Flex | Display::InlineFlex) {
                 return super::baseline::flex_container_baseline(b, BaselineSide::First, measurer);
             }
+            // CSS 2.1 §17.5.1 / Tables L3 §3.7: базовая линия `inline-table` — линия его первой
+            // строки (подпись не считается).
+            if matches!(b.kind, BoxKind::Table) {
+                return super::table_valign::table_baseline(b, BaselineSide::First, measurer);
+            }
+            // CSS Grid L1 §6.1: у grid-контейнера — первая базовая линия сетки (ее считает
+            // раскладка), а не последнего ребёнка потока.
+            if matches!(b.style.display, Display::Grid | Display::InlineGrid) {
+                return b.grid_baselines.map(|(first, _)| first);
+            }
             if let Some(bl) = last_in_flow_baseline(b, measurer) {
                 return Some(bl);
             }
@@ -713,6 +725,7 @@ pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items:
         node,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
         style: Arc::new(style),
         kind: BoxKind::InlineBlockRow,
         children: items,
@@ -1123,6 +1136,7 @@ pub(crate) fn inject_pseudo(
                 node: parent_id,
                 rect: Rect::ZERO,
                 used_line_height: ps.font_size * ps.line_height,
+                grid_baselines: None,
                 style: Arc::new(ps),
                 kind: BoxKind::Block,
                 children: inner,
@@ -1393,6 +1407,7 @@ pub(crate) fn inject_marker(
         node:     parent_id,
         rect:     Rect::ZERO,
         used_line_height: ms.font_size * ms.line_height,
+        grid_baselines: None,
         style:    Arc::new(ms),
         kind:     BoxKind::Marker {
             text,

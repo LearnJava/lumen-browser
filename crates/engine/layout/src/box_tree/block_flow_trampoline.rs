@@ -124,6 +124,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         rect: Rect::ZERO,
         style: Arc::clone(&slot.style),
         used_line_height: 0.0,
+        grid_baselines: None,
         kind: BoxKind::Skip,
         children: Vec::new(),
         col_span: 1,

@@ -398,6 +398,7 @@ mod tests {
             node: NodeId::from_index(1),
             rect,
             used_line_height: style.font_size * style.line_height,
+            grid_baselines: None,
             style,
             kind: BoxKind::InlineRun {
                 segments: vec![],

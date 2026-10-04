@@ -202,7 +202,7 @@ pub(super) fn run(
 
         let n_cells = row_init_ref(&current.init.top_level[current.t], current.r).cell_idxs.len();
         if current.cell >= n_cells {
-            finish_row(&mut current, viewport);
+            finish_row(&mut current, measurer, viewport);
             current.r += 1;
             current.cell = 0;
             continue;
@@ -353,7 +353,7 @@ fn step_cell(
 /// for a direct row, `frame.group_row_y` for a grouped one) — copied from the
 /// removed code's per-row epilogue (`lay_out_table_row`'s Step 4 plus
 /// `lay_out_table`'s per-row wrapper tail).
-fn finish_row(frame: &mut Frame, viewport: Size) {
+fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: Size) {
     let t = frame.t;
     let r = frame.r;
     let content_width = frame.init.content_width;
@@ -367,34 +367,64 @@ fn finish_row(frame: &mut Frame, viewport: Size) {
     };
 
     let row = row_box_mut(&mut frame.b, &frame.init.top_level, t, r);
-    let row_h = cell_idxs
+    // CSS 2.1 §17.5.3: ячейки, выровненные по базовой линии, ставятся так, чтобы
+    // их базовые линии совпали; высота строки — не меньше суммы наибольшего
+    // подъёма и наибольшего спуска.
+    let baselines: Vec<(usize, f32)> = cell_idxs
+        .iter()
+        .filter(|&&i| super::table_valign::is_baseline_aligned(&row.children[i]))
+        .filter_map(|&i| {
+            super::table_valign::cell_own_baseline(&row.children[i], BaselineSide::First, measurer).map(|bl| (i, bl))
+        })
+        .collect();
+    let above = baselines.iter().map(|&(_, bl)| bl).fold(0.0_f32, f32::max);
+    let below = baselines
+        .iter()
+        .map(|&(i, bl)| super::table_valign::natural_height(&row.children[i]) - bl)
+        .fold(0.0_f32, f32::max);
+    let mut row_h = cell_idxs
         .iter()
         .filter(|&&i| row.children[i].row_span == 1)
         .map(|&i| row.children[i].rect.height)
         .fold(0.0_f32, f32::max);
-    for &i in &cell_idxs {
-        if row.children[i].row_span == 1 {
-            row.children[i].rect.height = row_h;
-        }
+    if !baselines.is_empty() {
+        row_h = row_h.max(above + below);
     }
 
     let em = row.style.font_size;
+    let row_pad = {
+        let pt = row.style.padding_top.resolve_or_zero(em, content_width, viewport);
+        let pb = row.style.padding_bottom.resolve_or_zero(em, content_width, viewport);
+        pt + pb + row.style.border_top_width + row.style.border_bottom_width
+    };
     let row_style_h = if let Some(h_len) = &row.style.height
         && let Some(h) = h_len.resolve(em, None, viewport)
     {
-        let pt = row.style.padding_top.resolve_or_zero(em, content_width, viewport);
-        let pb = row.style.padding_bottom.resolve_or_zero(em, content_width, viewport);
         match row.style.box_sizing {
-            BoxSizing::ContentBox => {
-                (h + pt + pb + row.style.border_top_width + row.style.border_bottom_width).max(0.0)
-            }
-            BoxSizing::BorderBox => h.max(pt + pb + row.style.border_top_width + row.style.border_bottom_width),
+            BoxSizing::ContentBox => (h + row_pad).max(0.0),
+            BoxSizing::BorderBox => h.max(row_pad),
         }
     } else {
-        let pt = row.style.padding_top.resolve_or_zero(em, content_width, viewport);
-        let pb = row.style.padding_bottom.resolve_or_zero(em, content_width, viewport);
-        row_h + pt + pb + row.style.border_top_width + row.style.border_bottom_width
+        row_h + row_pad
     };
+    // Ячейки занимают всю высоту строки (§17.5.3), в том числе заданную `height` строки.
+    let row_h = row_h.max(row_style_h - row_pad);
+    for &i in &cell_idxs {
+        let cell = &mut row.children[i];
+        if cell.row_span != 1 {
+            continue;
+        }
+        let dy = match cell.style.vertical_align {
+            VerticalAlign::Top => 0.0,
+            va @ (VerticalAlign::Middle | VerticalAlign::Bottom) => {
+                super::table_valign::free_space_shift(cell, row_h, va)
+            }
+            _ => baselines.iter().find(|&&(j, _)| j == i).map_or(0.0, |&(_, bl)| above - bl),
+        };
+        super::table_valign::shift_cell_content(cell, dy);
+        cell.rect.height = row_h;
+    }
+    let row_style_h = row_style_h.max(row_h + row_pad);
     row.rect.height = row_style_h;
     let row_rect_y = row.rect.y;
 
@@ -460,7 +490,12 @@ fn finish_table(
             None => &mut frame.b.children[row].children[child_idx],
             Some(g) => &mut frame.b.children[g].children[row].children[child_idx],
         };
-        cell.rect.height = (target_bottom - cell.rect.y).max(cell.rect.height);
+        let grown = (target_bottom - cell.rect.y).max(cell.rect.height);
+        // §17.5.3: ячейка, растянутая на несколько строк, выравнивает содержимое по
+        // всей высоте (`baseline` для неё равносильно `top`).
+        let dy = super::table_valign::free_space_shift(cell, grown, cell.style.vertical_align);
+        super::table_valign::shift_cell_content(cell, dy);
+        cell.rect.height = grown;
     }
 
     let s = Arc::clone(&frame.init.s);

@@ -226,6 +226,7 @@ mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
 mod table_trampoline;
+mod table_valign;
 mod multicol_trampoline;
 mod vertical_trampoline;
 mod vertical_row;

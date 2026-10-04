@@ -210,17 +210,34 @@ pub(in crate::style) fn ua_font_size_factor(doc: &Document, node: NodeId) -> Opt
         _ => None,
     }
 }
-/// UA stylesheet: `vertical-align` для `<sub>` и `<sup>`.
-/// HTML5 §15.3.3: sub → Sub, sup → Super.
-pub(in crate::style) fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
+/// UA stylesheet: `vertical-align` для `<sub>`/`<sup>` (HTML5 §15.3.3: sub → Sub,
+/// sup → Super) и табличных элементов (HTML LS §15.3.8: `tbody, thead, tfoot, tr
+/// { vertical-align: middle }`, `td, th { vertical-align: inherit }`). Атрибут
+/// `valign` на них — presentational hint (§15.3.8): `top`/`middle`/`bottom`/
+/// `baseline` без учёта регистра. `inherited_va` — значение родителя для `inherit`.
+pub(in crate::style) fn ua_vertical_align(
+    doc: &Document,
+    node: NodeId,
+    inherited_va: VerticalAlign,
+) -> Option<VerticalAlign> {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return None;
     };
-    match name.local.as_str() {
-        "sub" => Some(VerticalAlign::Sub),
-        "sup" => Some(VerticalAlign::Super),
-        _ => None,
+    let tag = name.local.as_str();
+    match tag {
+        "sub" => return Some(VerticalAlign::Sub),
+        "sup" => return Some(VerticalAlign::Super),
+        "tbody" | "thead" | "tfoot" | "tr" | "td" | "th" => {}
+        _ => return None,
     }
+    let hinted = doc.get(node).get_attr("valign").and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+        "top" => Some(VerticalAlign::Top),
+        "middle" => Some(VerticalAlign::Middle),
+        "bottom" => Some(VerticalAlign::Bottom),
+        "baseline" => Some(VerticalAlign::Baseline),
+        _ => None,
+    });
+    Some(hinted.unwrap_or(if matches!(tag, "td" | "th") { inherited_va } else { VerticalAlign::Middle }))
 }
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
 /// получают bold по умолчанию (HTML §15.3.3).

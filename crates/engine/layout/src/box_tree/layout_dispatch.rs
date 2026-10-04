@@ -1517,6 +1517,7 @@ pub(super) fn dispatch_box(
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_line_height,
+                            grid_baselines: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {
                                 segments: Vec::new(),

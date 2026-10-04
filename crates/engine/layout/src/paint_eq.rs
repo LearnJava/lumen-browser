@@ -50,7 +50,8 @@ fn box_self_paint_eq<'a>(
     work: &mut Vec<(&'a LayoutBox, &'a LayoutBox)>,
 ) -> bool {
     // `LayoutBox` разобран поимённо, без `..`: новое поле не скомпилируется, пока его не отнесут
-    // к «читает emit» или «не читает». `dirty` — единственное сознательно пропущенное.
+    // к «читает emit» или «не читает». `dirty` и `grid_baselines` (читает только раскладка родителя) —
+    // сознательно пропущены.
     let LayoutBox {
         node,
         rect,
@@ -64,6 +65,7 @@ fn box_self_paint_eq<'a>(
         scroll_x,
         scroll_y,
         dirty: _,
+        grid_baselines: _,
         origin,
     } = a;
     node == &b.node

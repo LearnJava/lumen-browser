@@ -39,6 +39,12 @@ pub struct LayoutBox {
     /// `LayoutBox` without ever calling into that pass (tests, ad-hoc
     /// fixtures).
     pub used_line_height: f32,
+    /// CSS Grid L1 §6.1 — первая и последняя базовая линия grid-контейнера,
+    /// от верхней кромки его border box. Пишется раскладкой сетки (строки и
+    /// выравнивание items известны только ей, по готовому дереву их не
+    /// восстановить), читается моделью базовой линии [`super::baseline`] у
+    /// flex/grid-родителя. `None` — не grid-контейнер или сетка без items.
+    pub grid_baselines: Option<(f32, f32)>,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
     /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.

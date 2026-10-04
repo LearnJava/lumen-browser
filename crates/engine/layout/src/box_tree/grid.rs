@@ -670,6 +670,8 @@ pub(crate) fn build_grid_init(
     // that genuinely differs between this estimated-tracks probe and the
     // final pass's resolved-tracks pass.
     let probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
+    let item_baselines = vec![None; item_idxs.len()];
+    let row_groups = vec![(0.0_f32, 0.0_f32); n_rows as usize];
 
     Some(Box::new(GridInit {
         item_idxs,
@@ -700,6 +702,9 @@ pub(crate) fn build_grid_init(
         is_positioned,
         own_pcb,
         probe_reuse,
+        item_baselines,
+        row_first_group: row_groups.clone(),
+        row_last_group: row_groups,
     }))
 }
 

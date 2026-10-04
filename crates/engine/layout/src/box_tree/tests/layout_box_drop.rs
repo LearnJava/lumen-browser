@@ -20,6 +20,7 @@ fn block(children: Vec<LayoutBox>) -> LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
         style: std::sync::Arc::new(style),
         kind: BoxKind::Block,
         children,
@@ -48,6 +49,7 @@ fn svg_shape_with_mask(mask_content: Vec<LayoutBox>) -> LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
         style: std::sync::Arc::new(style),
         kind: BoxKind::SvgShape {
             shape: SvgShapeKind::Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0, rx: 0.0, ry: 0.0 },

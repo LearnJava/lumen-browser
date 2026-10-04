@@ -376,8 +376,8 @@ pub(crate) fn compute_style_shareable(
     if let Some(factor) = ua_font_size_factor(doc, node) {
         style.font_size = inherited.font_size * factor;
     }
-    // UA stylesheet: <sub>/<sup> → vertical-align. HTML5 §15.3.3.
-    if let Some(va) = ua_vertical_align(doc, node) {
+    // UA stylesheet: <sub>/<sup> и табличные элементы → vertical-align. HTML5 §15.3.3, §15.3.8.
+    if let Some(va) = ua_vertical_align(doc, node, inherited.vertical_align) {
         style.vertical_align = va;
     }
     // UA stylesheet: <h1>–<h6> → font-size + vertical margins. HTML Rendering §15.3.3.
