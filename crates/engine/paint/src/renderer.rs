@@ -1497,6 +1497,24 @@ impl Renderer {
                     let fill_v_start = fill_vertices.len() as u32;
                     let circle_v_start = circle_vertices.len() as u32;
 
+                    // groove/ridge/inset/outset (общая геометрия `border_bevel`, как в CPU-растре):
+                    // эти стороны закрашены здесь и ниже идут как `None`. Со скруглением
+                    // угловые дуги остаются сплошными (объёмный стиль у скруглённой рамки — отдельный пробел).
+                    let styles_rest = crate::border_bevel::paint_bevel_sides(
+                        r,
+                        [*wt, *wr, *wb, *wl],
+                        [*ct, *cr, *cb, *cl],
+                        [*st, *sr, *sb, *sl],
+                        |piece, color| {
+                            push_fill_quad(
+                                &mut fill_vertices,
+                                piece,
+                                apply_alpha_to_color(color_to_array(&color), alpha),
+                            );
+                        },
+                    );
+                    let [st, sr, sb, sl] = &styles_rest;
+
                     if radii.all_zero() {
                         // CSS Backgrounds L3 §6.3 — прямоугольные рёбра без угловых дуг.
                         // Каждая сторона укорочена на corner-квадраты, чтобы dash/dot

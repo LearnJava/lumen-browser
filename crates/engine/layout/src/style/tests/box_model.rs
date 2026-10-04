@@ -40,6 +40,25 @@ use super::*;
     }
 
     #[test]
+    fn border_style_accepts_groove_ridge_inset_outset() {
+        let s = style_for("border-style: groove ridge inset outset");
+        assert_eq!(s.border_top_style, BorderStyle::Groove);
+        assert_eq!(s.border_right_style, BorderStyle::Ridge);
+        assert_eq!(s.border_bottom_style, BorderStyle::Inset);
+        assert_eq!(s.border_left_style, BorderStyle::Outset);
+        let s = style_for("border: 6px ridge #c00");
+        assert_eq!(s.border_left_style, BorderStyle::Ridge);
+        assert!((s.border_left_width - 6.0).abs() < 0.01);
+        let s = style_for("border-left: 4px outset red");
+        assert_eq!(s.border_left_style, BorderStyle::Outset);
+        let s = style_for("border-block-start-style: groove");
+        assert_eq!(s.border_top_style, BorderStyle::Groove);
+        // `hidden` у `border-style` по-прежнему не разбирается.
+        let s = style_for("border-style: hidden");
+        assert_eq!(s.border_top_style, BorderStyle::None);
+    }
+
+    #[test]
     fn border_color_shorthand() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let s = style_for("border-color: blue");

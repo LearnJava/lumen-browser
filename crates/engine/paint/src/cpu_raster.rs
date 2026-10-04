@@ -9,6 +9,7 @@ use lumen_layout::{
     ObjectPosition,
 };
 use lumen_layout::style::TextOrientation;
+use crate::border_bevel::paint_bevel_sides;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
@@ -1909,7 +1910,14 @@ fn rasterize_draw_border(
     // tiny-skia's hairline_aa::fill_dot8 debug_assert for sub-pixel rects (BUG-052).
     let [top_w, right_w, bottom_w, left_w] = widths;
     let [top_c, right_c, bottom_c, left_c] = colors;
-    let [top_s, right_s, bottom_s, left_s] = styles;
+    // groove/ridge/inset/outset — общая геометрия `border_bevel` (две полосы / один оттенок
+    // на сторону, стыки по диагонали); остальные стороны идут обычным путём ниже.
+    let styles = paint_bevel_sides(*rect, *widths, *colors, *styles, |piece, color| {
+        if let Some(r) = tiny_skia::Rect::from_xywh(piece.x, piece.y, piece.width, piece.height) {
+            pixmap.fill_rect(r, &border_paint(color), tiny_skia::Transform::identity(), clip);
+        }
+    });
+    let [top_s, right_s, bottom_s, left_s] = &styles;
 
     draw_border_side_h(pixmap, rect.x, rect.y, rect.width, *top_w, *top_c, *top_s, clip)?;
     draw_border_side_v(pixmap, rect.x + rect.width - right_w, rect.y, *right_w, rect.height, *right_c, *right_s, clip)?;
@@ -5079,6 +5087,24 @@ mod tests {
     }
 
     /// Dashed border: `BorderStyle::None` sides render nothing (zero colored pixels).
+    /// `groove` — две полосы разных оттенков (Edge: `border: 6px groove #808080` =
+    /// `#2c2c2c` ×3, затем `#d4d4d4` ×3), а не сплошная линия.
+    #[test]
+    fn draw_border_groove_paints_two_shades() {
+        let grey = Color { r: 0x80, g: 0x80, b: 0x80, a: 255 };
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(2.0, 2.0, 40.0, 40.0),
+            widths: [6.0; 4],
+            colors: [grey; 4],
+            styles: [lumen_layout::BorderStyle::Groove; 4],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(44, 44, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let r = |y: u32| px(&img, 22, y).0;
+        assert_eq!([r(2), r(4), r(5), r(7)], [0x2c, 0x2c, 0xd4, 0xd4]);
+        assert_eq!(px(&img, 22, 20), (255, 255, 255, 255), "внутренность не закрашена");
+    }
+
     #[test]
     fn draw_border_none_style_renders_nothing() {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
