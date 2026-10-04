@@ -40,7 +40,7 @@
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BoxKind, Cursor, Display, LayoutBox,
+    owns_paint_layer, BoxKind, Cursor, Display, LayoutBox,
     Mat4, PointerEvents, TransformFn, UserSelect,
 };
 
@@ -126,13 +126,13 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     // нужно было бы только для опт-цели «не лезть в children без hit-rect».
     let mut positive: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
+    let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
     for child in &b.children {
-        let creates_sc = box_can_own_stacking_context(child)
-            && creates_stacking_context(&child.style);
-        match (creates_sc, child.style.z_index) {
+        match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
             (true, Some(z)) if z < 0 => negative.push((child, z)),
+            (true, _) => layer6.push(child),
             _ => in_flow.push(child),
         }
     }
@@ -149,14 +149,22 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
             return Some(hit);
         }
     }
-    // 2. in-flow + auto/0-z children в reverse DOM (фазы 3-6).
+    // 2. auto/0-z stacking contexts и positioned `z-index: auto` боксы (фаза 6) —
+    //    над in-flow потомками независимо от порядка в DOM.
+    for child in layer6.iter().rev() {
+        if let Some(mut hit) = hit_test_box(child_point, child) {
+            hit.path.push(b.node);
+            return Some(hit);
+        }
+    }
+    // 3. in-flow children в reverse DOM (фазы 3-5).
     for child in in_flow.iter().rev() {
         if let Some(mut hit) = hit_test_box(child_point, child) {
             hit.path.push(b.node);
             return Some(hit);
         }
     }
-    // 3. negative-z children (фаза 2).
+    // 4. negative-z children (фаза 2).
     for (child, _) in &negative {
         if let Some(mut hit) = hit_test_box(child_point, child) {
             hit.path.push(b.node);
@@ -206,13 +214,13 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 
     let mut positive: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
+    let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
     for child in &b.children {
-        let creates_sc = box_can_own_stacking_context(child)
-            && creates_stacking_context(&child.style);
-        match (creates_sc, child.style.z_index) {
+        match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
             (true, Some(z)) if z < 0 => negative.push((child, z)),
+            (true, _) => layer6.push(child),
             _ => in_flow.push(child),
         }
     }
@@ -221,6 +229,9 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 
     let start = out.len();
     for (child, _) in &positive {
+        hit_test_all_box(child_point, child, out);
+    }
+    for child in layer6.iter().rev() {
         hit_test_all_box(child_point, child, out);
     }
     for child in in_flow.iter().rev() {

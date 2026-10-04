@@ -24,7 +24,8 @@ use std::ops::Range;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, forward_box_transform, perspective_matrix,
+    box_can_own_stacking_context, forward_box_transform, is_positioned_layer_auto,
+    owns_paint_layer, perspective_matrix,
     transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
