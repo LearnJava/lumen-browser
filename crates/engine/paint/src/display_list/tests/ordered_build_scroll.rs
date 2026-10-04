@@ -961,3 +961,60 @@ use super::text_and_images::Fixed8;
         assert!(dl.is_empty(), "пустой PaintOrder → пустой display list");
         assert!(provenance.spans().is_empty(), "пустой display list → пустой provenance");
     }
+
+    // ── positioned `z-index: auto` (CSS 2.1 App. E step 8) ──────────────
+
+    fn fill_ys(dl: &[DisplayCommand]) -> Vec<f32> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { rect, .. } => Some(rect.y),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn positioned_auto_precedes_in_flow_in_dom_but_paints_above_it() {
+        // The absolute box (y=20) comes first in the DOM, the in-flow box (y=0..100)
+        // after it. Step 8 paints positioned descendants after step 3-5 content,
+        // so the absolute one must be the *later* command.
+        let dl = build_ordered(
+            r#"<div id="a"></div><div id="f"></div>"#,
+            "body{margin:0}#a{position:absolute;top:20px;left:0;width:50px;height:5px;background:gold}
+             #f{height:100px;background:white}",
+        );
+        assert_eq!(fill_ys(&dl), vec![0.0, 20.0]);
+    }
+
+    #[test]
+    fn positioned_auto_stays_in_dom_order_among_positioned() {
+        // Two positioned z-auto boxes keep tree order between themselves.
+        let dl = build_ordered(
+            r#"<div id="a"></div><div id="b"></div>"#,
+            "body{margin:0}#a,#b{position:relative;height:10px}
+             #a{background:red} #b{background:blue}",
+        );
+        let colors: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { color, .. } => Some((color.r, color.b)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors, vec![(255, 0), (0, 255)]);
+    }
+
+    #[test]
+    fn positioned_auto_inner_negative_z_still_paints_below_in_flow() {
+        // `z-index: -1` inside a positioned z-auto box belongs to the *enclosing*
+        // context (the box is not a stacking context), so it goes under the
+        // in-flow content of that context, not just under its parent box.
+        let dl = build_ordered(
+            r#"<div id="p"><div id="n"></div></div><div id="f"></div>"#,
+            "body{margin:0}#p{position:relative;height:10px}
+             #n{position:absolute;z-index:-1;top:40px;left:0;width:5px;height:5px;background:red}
+             #f{height:100px;background:white}",
+        );
+        // negative layer (y=40) first, then the in-flow white box (y=10).
+        assert_eq!(fill_ys(&dl), vec![40.0, 10.0]);
+    }

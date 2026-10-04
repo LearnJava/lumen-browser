@@ -154,7 +154,8 @@ pub use content_visibility::{
 };
 pub use invariants::{count_geometry_violations, GeometryViolationCounts};
 pub use stacking::{
-    box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
+    box_can_own_stacking_context, creates_stacking_context, is_positioned_layer_auto, owns_paint_layer,
+    PaintOrder, PaintPhase,
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{

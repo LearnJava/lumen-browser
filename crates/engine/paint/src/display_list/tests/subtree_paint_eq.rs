@@ -74,7 +74,7 @@ pub(super) fn corpus() -> Vec<(String, String)> {
 
 /// Бокс сам — владелец stacking context (его emit уходит в чужой бакет).
 fn owns_sc(b: &LayoutBox) -> bool {
-    box_can_own_stacking_context(b) && creates_stacking_context(&b.style)
+    owns_paint_layer(b)
 }
 
 /// Поддерево можно эмитить в один бакет: ни сам корень, ни потомок не создают SC.
