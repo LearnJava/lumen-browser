@@ -210,7 +210,7 @@ pub(crate) fn build_multicol_init(
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
         if super::multicol_span::is_column_spanner(&work[i]) {
-            let sliceable = n_cols > 1 && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
+            let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
                 span_idx: Some(i),
@@ -220,7 +220,7 @@ pub(crate) fn build_multicol_init(
             seg.push(i);
         }
     }
-    let sliceable = n_cols > 1 && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
+    let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j]));
     segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable });
 
     let consumed = vec![false; work.len()];
