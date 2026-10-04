@@ -117,6 +117,17 @@
     }
 
     #[test]
+    fn grid_gap_is_the_legacy_alias_of_gap() {
+        // CSS Grid L1 §7.3: `grid-gap` = `gap` (WPT `css-gaps/grid/*` писали `grid-gap: 10px`).
+        let s = parse_gap_rule("grid-gap: 10px 20px;");
+        assert_eq!(s.row_gap, Length::Px(10.0));
+        assert_eq!(s.column_gap, Length::Px(20.0));
+        let s = parse_gap_rule("grid-gap: 7px;");
+        assert_eq!((s.row_gap, s.column_gap), (Length::Px(7.0), Length::Px(7.0)));
+        assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&"grid-gap"));
+    }
+
+    #[test]
     fn rule_properties_are_supported() {
         for p in ["row-rule", "row-rule-width", "row-rule-style", "row-rule-color", "rule", "rule-width", "rule-style", "rule-color"] {
             assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&p), "{p} missing from SUPPORTED_PROPERTIES");
@@ -374,9 +385,13 @@ fn rule_shorthand_accepts_gap_rule_lists() {
     assert_eq!(rule_css(&s, "column-rule-color"), "rgb(255, 0, 0), repeat(auto, rgb(0, 0, 255))");
     assert_eq!(
         rule_css(&s, "column-rule"),
-        "", // repeat() не сворачивается в шортхенд-строку
+        "1px solid rgb(255, 0, 0), repeat(auto, 2px dashed rgb(0, 0, 255))"
     );
-    assert_eq!(rule_css(&s, "row-rule"), "4px dotted currentcolor");
+    // `currentcolor` в computed value — уже цвет элемента.
+    assert_eq!(rule_css(&s, "row-rule"), "4px dotted rgb(0, 0, 0)");
+    // Стиль `none` в тройке опускается (круг через `style.rule`).
+    let s = parse_gap_rule("");
+    assert_eq!(rule_css(&s, "column-rule"), "3px rgb(0, 0, 0)");
     let s = parse_gap_rule("rule: 2px solid red, 3px dashed blue;");
     for axis in ["column", "row"] {
         assert_eq!(
@@ -419,3 +434,128 @@ fn rule_lists_css_wide_keywords_and_reset() {
     assert_eq!(rule_css(&span_style, "row-rule-width"), "3px");
     assert_eq!(rule_css(&span_style, "row-rule-style"), "solid");
 }
+
+#[test]
+fn rule_computed_shorthands_merge_axes_or_stay_empty() {
+    let s = parse_gap_rule("column-rule: 5px solid lime; row-rule: 5px solid lime;");
+    assert_eq!(rule_css(&s, "rule"), "5px solid rgb(0, 255, 0)");
+    assert_eq!(rule_css(&s, "rule-width"), "5px");
+    assert_eq!(rule_css(&s, "rule-color"), "rgb(0, 255, 0)");
+    // Оси расходятся — шортхенд обеих осей не собрать, шортхенд оси — собирается.
+    let s = parse_gap_rule("column-rule: 5px solid lime; row-rule: 6px solid lime;");
+    assert_eq!(rule_css(&s, "rule"), "");
+    assert_eq!(rule_css(&s, "rule-width"), "");
+    assert_eq!(rule_css(&s, "rule-style"), "solid");
+    assert_eq!(rule_css(&s, "column-rule"), "5px solid rgb(0, 255, 0)");
+    // Списки разной формы по трём свойствам — шортхенд пуст, лонгхенды целы.
+    let s = parse_gap_rule("column-rule-width: 1px, 2px; column-rule-style: solid;");
+    assert_eq!(rule_css(&s, "column-rule"), "");
+    assert_eq!(rule_css(&s, "column-rule-width"), "1px, 2px");
+}
+
+#[test]
+fn rule_computed_keywords_and_extended_line_styles() {
+    let s = parse_gap_rule(
+        "column-rule-style: groove, hidden, inset, outset, ridge; column-rule-break: none; row-rule-break: none;          column-rule-visibility-items: around; row-rule-visibility-items: around;",
+    );
+    assert_eq!(rule_css(&s, "column-rule-style"), "groove, hidden, inset, outset, ridge");
+    assert_eq!(rule_css(&s, "rule-break"), "none");
+    assert_eq!(rule_css(&s, "rule-visibility-items"), "around");
+    let s = parse_gap_rule("column-rule-break: none; row-rule-break: intersection;");
+    assert_eq!(rule_css(&s, "rule-break"), "");
+    // `hidden` и `none` линии не рисуют, объёмные стили рисует `emit_gap_rules`.
+    assert!(!BorderStyle::Hidden.is_visible());
+    assert!(BorderStyle::Ridge.is_visible());
+}
+
+#[test]
+fn rule_computed_widths_clamp_and_repeat_count_calc() {
+    let s = parse_gap_rule(
+        "font-size: 40px; column-rule-width: calc(10px - 0.5em); row-rule-width: repeat(calc(5 + 3), 10px);",
+    );
+    assert_eq!(rule_css(&s, "column-rule-width"), "0px");
+    assert_eq!(rule_css(&s, "row-rule-width"), "repeat(8, 10px)");
+    // Отрицательная простая длина по-прежнему невалидна.
+    let s = parse_gap_rule("column-rule-width: -1px;");
+    assert_eq!(rule_css(&s, "column-rule-width"), "3px");
+}
+
+#[test]
+fn rule_computed_inset_resolves_font_relative_units() {
+    let s = parse_gap_rule(
+        "font-size: 40px; column-rule-inset: 0.5em 5% / calc(10px + 0.5em) overlap-join;          row-rule-inset-cap: calc(25% + 10px);",
+    );
+    assert_eq!(rule_css(&s, "column-rule-inset-cap-start"), "20px");
+    assert_eq!(rule_css(&s, "column-rule-inset-cap-end"), "5%");
+    assert_eq!(rule_css(&s, "column-rule-inset-junction-start"), "30px");
+    assert_eq!(rule_css(&s, "column-rule-inset"), "20px 5% / 30px overlap-join");
+    assert_eq!(rule_css(&s, "column-rule-inset-cap"), "20px 5%");
+    // Слоты `start` расходятся — шортхенд `*-inset-start` не собрать.
+    assert_eq!(rule_css(&s, "column-rule-inset-start"), "");
+    assert_eq!(rule_css(&s, "row-rule-inset-cap"), "calc(25% + 10px)");
+    assert_eq!(rule_css(&s, "rule-inset"), "");
+    let s = parse_gap_rule("rule-inset: 10px 20px;");
+    assert_eq!(rule_css(&s, "rule-inset"), "10px 20px / 10px 20px");
+    assert_eq!(rule_css(&s, "rule-inset-cap"), "10px 20px");
+}
+
+#[test]
+fn rule_computed_color_keeps_srgb_function_form() {
+    // CSS Color L4 §4.2: `color-mix(in srgb, …)` и относительный `rgb(from …)` остаются в
+    // форме `color(srgb …)`, остальные цвета — `rgb()`.
+    let s = parse_gap_rule(
+        "column-rule-color: color-mix(in srgb, red 50%, blue 50%);          row-rule-color: repeat(auto, rgb(from lime r g b)), color-mix(in srgb, lime 25%, yellow 75%);",
+    );
+    assert_eq!(rule_css(&s, "column-rule-color"), "color(srgb 0.5 0 0.5)");
+    assert_eq!(
+        rule_css(&s, "row-rule-color"),
+        "repeat(auto, color(srgb 0 1 0)), color(srgb 0.75 1 0)"
+    );
+    let s = parse_gap_rule("rule-color: rgb(from yellow calc(255 - r) calc(255 - g) calc(255 - b));");
+    assert_eq!(rule_css(&s, "rule-color"), "color(srgb 0 0 1)");
+    // Шортхенд `rule` тоже хранит `color(srgb …)`.
+    let s = parse_gap_rule("column-rule: 2px solid color-mix(in srgb, red 50%, blue 50%);");
+    assert_eq!(rule_css(&s, "column-rule"), "2px solid color(srgb 0.5 0 0.5)");
+    // Не-srgb пространство смешивания по-прежнему сводится к `rgb()`.
+    let s = parse_gap_rule("column-rule-color: color-mix(in oklab, red, blue);");
+    assert!(rule_css(&s, "column-rule-color").starts_with("rgb("));
+}
+
+    // ── CSS Multicol L2 §4.2 / §4.4 / §4.5: `column-height`, `column-wrap`, `columns: … / <h>` ──
+
+    #[test]
+    fn column_height_and_wrap_parse() {
+        let s = parse_gap_rule("column-height: 60px; column-wrap: nowrap;");
+        assert_eq!(s.column_height, Some(Length::Px(60.0)));
+        assert!(s.column_wrap_nowrap);
+        assert!(!s.column_rows_wrap(16.0, VP), "nowrap keeps overflow columns in the inline direction");
+        let s = parse_gap_rule("column-height: 60px; column-wrap: wrap;");
+        assert!(s.column_rows_wrap(16.0, VP));
+        // auto: wraps only with a definite column-height.
+        assert!(parse_gap_rule("column-wrap: auto;").column_height.is_none());
+        assert!(!parse_gap_rule("column-wrap: wrap;").column_rows_wrap(16.0, VP));
+        assert!(parse_gap_rule("column-height: 60px;").column_rows_wrap(16.0, VP));
+    }
+
+    #[test]
+    fn column_height_rejects_negative_and_junk() {
+        assert_eq!(parse_gap_rule("column-height: -5px;").column_height, None);
+        assert_eq!(parse_gap_rule("column-height: 10px; column-height: bogus;").column_height, Some(Length::Px(10.0)));
+        assert_eq!(parse_gap_rule("column-height: 10px; column-height: auto;").column_height, None);
+        assert!(!parse_gap_rule("column-wrap: sideways;").column_wrap_nowrap);
+    }
+
+    #[test]
+    fn columns_shorthand_takes_a_column_height() {
+        let s = parse_gap_rule("columns: 3 60px / 80px;");
+        assert_eq!(s.column_count, Some(3));
+        assert_eq!(s.column_width, Some(Length::Px(60.0)));
+        assert_eq!(s.column_height, Some(Length::Px(80.0)));
+        // Without `/ <height>` the shorthand resets column-height.
+        let s = parse_gap_rule("column-height: 80px; columns: 2;");
+        assert_eq!(s.column_height, None);
+        // An invalid height drops the whole declaration.
+        let s = parse_gap_rule("column-height: 80px; columns: 2 / -1px;");
+        assert_eq!(s.column_height, Some(Length::Px(80.0)));
+        assert_eq!(s.column_count, None);
+    }

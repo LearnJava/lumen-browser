@@ -87,7 +87,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     seg_style.font_size_adjust = FontSizeAdjust::Value(0.5);
     let seg = super::super::InlineSegment {
         text: "hi".into(),
-        style: seg_style,
+        style: std::sync::Arc::new(seg_style),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,

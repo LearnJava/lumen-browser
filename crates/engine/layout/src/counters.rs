@@ -37,6 +37,7 @@ use crate::style::{
     compute_pseudo_element_style, Content, ComputedStyle, ContentItem, ListStyleType, ShareCache,
 };
 use lumen_css_parser::Stylesheet;
+use lumen_core::id_hash::IdSet;
 use lumen_core::Size;
 
 /// Per-element counter stacks snapshot.
@@ -445,7 +446,10 @@ pub struct CounterMap {
     /// `LayoutBox` subtree from the previous pass instead of rebuilding it —
     /// see that function's doc comment for why content dirtiness (not style
     /// equality alone) is the correctness precondition.
-    clean_subtrees: HashSet<NodeId>,
+    clean_subtrees: IdSet<NodeId>,
+    /// BUG-935 срез 78 — the ids the incremental box build took out of the previous tree's dirty
+    /// area ([`crate::incremental::ReleasedIds`]); `None` for a pass that did not record them.
+    released: Option<crate::incremental::ReleasedIds>,
     /// THREAD-4 срез 2 — intra-pass structural memo, reset every pass (`style::share_cache`).
     share_cache: ShareCache,
 }
@@ -461,7 +465,7 @@ impl CounterMap {
     fn with_capacity(elements: usize) -> Self {
         Self {
             styles: CascadeStyles::with_capacity(elements),
-            clean_subtrees: HashSet::with_capacity(elements),
+            clean_subtrees: IdSet::with_capacity_and_hasher(elements, Default::default()),
             ..Self::default()
         }
     }
@@ -485,7 +489,7 @@ impl CounterMap {
     /// third because nothing was recomputed, so nothing was displaced.
     fn carried_unchanged(doc: &Document, flat: &FlatTree, styles: CascadeStyles) -> Self {
         let roots = flat.children_of(doc, doc.root());
-        let mut clean_subtrees = HashSet::with_capacity(roots.len());
+        let mut clean_subtrees = IdSet::with_capacity_and_hasher(roots.len(), Default::default());
         for &child in roots {
             if matches!(doc.get(child).data, NodeData::Element { .. }) {
                 clean_subtrees.insert(child);
@@ -500,7 +504,7 @@ impl CounterMap {
         styles.begin_pass();
         Self {
             styles,
-            clean_subtrees: HashSet::with_capacity(elements),
+            clean_subtrees: IdSet::with_capacity_and_hasher(elements, Default::default()),
             ..Self::default()
         }
     }
@@ -595,8 +599,19 @@ impl CounterMap {
     /// Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
     /// `clean_subtrees` field doc for the correctness precondition
     /// (`RestyleDelta::content_dirty`) that gates population.
-    pub fn clean_subtrees(&self) -> &HashSet<NodeId> {
+    pub fn clean_subtrees(&self) -> &IdSet<NodeId> {
         &self.clean_subtrees
+    }
+
+    /// BUG-935 срез 78 — records the ids [`crate::incremental::ReleasedIds`] names for this pass.
+    pub(crate) fn set_released(&mut self, released: crate::incremental::ReleasedIds) {
+        self.released = Some(released);
+    }
+
+    /// BUG-935 срез 78 — takes the ids the pass released from the previous tree's dirty area, if it
+    /// recorded them.
+    pub fn take_released(&mut self) -> Option<crate::incremental::ReleasedIds> {
+        self.released.take()
     }
 }
 

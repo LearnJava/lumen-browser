@@ -48,6 +48,7 @@ pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
+pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
 pub mod scroll_initial_target;
@@ -92,7 +93,7 @@ pub use ruby::{
     resolve_level_sides,
 };
 pub use animation::{
-    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
+    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator, interpolate_gap_rules,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
     CompositorAnimFrame, CompositorOverride,
     AnimationScheduler, TransitionScheduler, TransitionEventInfo, TransitionEventKind,
@@ -109,7 +110,7 @@ pub use box_tree::{
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
 };
-pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
+pub use incremental::{ReleasedIds, DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
@@ -153,7 +154,8 @@ pub use content_visibility::{
 };
 pub use invariants::{count_geometry_violations, GeometryViolationCounts};
 pub use stacking::{
-    box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
+    box_can_own_stacking_context, creates_stacking_context, is_positioned_layer_auto, owns_paint_layer,
+    PaintOrder, PaintPhase,
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
@@ -165,16 +167,16 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
-    AnimationFillMode, AnimationPlayState,
+    AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, CaptionSide, TableLayout, FilterFn, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
     FontStyle,
-    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
@@ -2357,9 +2359,9 @@ pub fn find_box_by_node(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&La
 /// `NodeId` labels more than one box (an anonymous wrapper and the element's
 /// own box) — pre-order visits the outer/element box first, matching
 /// `collect_layout_rects_rec`'s BUG-382 "first box in tree order wins" rule.
-pub fn find_dirty_root_boxes<'a>(
+pub fn find_dirty_root_boxes<'a, S: std::hash::BuildHasher>(
     root: &'a LayoutBox,
-    roots: &std::collections::HashSet<lumen_dom::NodeId>,
+    roots: &std::collections::HashSet<lumen_dom::NodeId, S>,
 ) -> Vec<&'a LayoutBox> {
     let mut out = Vec::new();
     if roots.is_empty() {
@@ -2391,12 +2393,12 @@ pub fn find_dirty_root_boxes<'a>(
 ///
 /// BUG-935 срез 74: one search and one walk of each subtree for both sets (they were built by four
 /// walks over the same boxes: 0,36 мс of a 5 мс flush on `lenta.ru`, where the dirty root is `body`).
-pub fn collect_dirty_subtree_ids(
+pub fn collect_dirty_subtree_ids<S: std::hash::BuildHasher>(
     root: &LayoutBox,
-    roots: &std::collections::HashSet<lumen_dom::NodeId>,
-) -> (std::collections::HashSet<u32>, std::collections::HashSet<u32>) {
-    let mut indices = std::collections::HashSet::new();
-    let mut raws = std::collections::HashSet::new();
+    roots: &std::collections::HashSet<lumen_dom::NodeId, S>,
+) -> (lumen_core::id_hash::IdSet<u32>, lumen_core::id_hash::IdSet<u32>) {
+    let mut indices = lumen_core::id_hash::IdSet::default();
+    let mut raws = lumen_core::id_hash::IdSet::default();
     let mut stack: Vec<&LayoutBox> = find_dirty_root_boxes(root, roots);
     while let Some(b) = stack.pop() {
         indices.insert(b.node.index() as u32);
@@ -2700,6 +2702,10 @@ mod filter_transform_snap_mask;
 pub(crate) use filter_transform_snap_mask::first_p_style;
 
 #[cfg(test)]
+#[path = "tests/scroll_snap_masking.rs"]
+mod scroll_snap_masking;
+
+#[cfg(test)]
 #[path = "tests/animation_gradient_quirks.rs"]
 mod animation_gradient_quirks;
 
@@ -2712,8 +2718,16 @@ mod table_grid_presentational;
 mod layout_generation_misc;
 
 #[cfg(test)]
+#[path = "tests/half_leading_columns_floats.rs"]
+mod half_leading_columns_floats;
+
+#[cfg(test)]
 #[path = "tests/scroll_interaction_misc.rs"]
 mod scroll_interaction_misc;
+
+#[cfg(test)]
+#[path = "tests/scroll_container.rs"]
+mod scroll_container;
 
 #[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]

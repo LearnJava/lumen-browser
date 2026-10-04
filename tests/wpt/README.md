@@ -242,6 +242,56 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   shard, a mixed one is cut into subdirectories, and the files lying directly in
   it become one explicit-id `(bare)` shard. `--selftest` checks this on a
   hand-made manifest.
+  `--parallel-shards K` / `--batch-small N` (WPT-RUN-9, both off by default)
+  speed a run up without touching the verdicts. `--batch-small` runs
+  consecutive shards of at most N automatable ids as one wptrunner process
+  (capped by `--batch-max-ids`) and splits its report back into the per-shard
+  `<name>.json` files a solo run would have written (`split_batch`), so
+  `state.json`, `--resume` and every audit see the same shards as before; the
+  batch's own report lives under `<out-dir>/batches/`, out of `load_results`'
+  reach. `--parallel-shards` runs K units at once, longest budget first; lane
+  k > 0 serves on every `config.json` port + 1000·k through
+  `$LUMEN_WPT_SERVER_CONFIG`, which `run_smoke.py` merges over `config.json`
+  (the vendored wptrunner is not patched on disk). A lane waits to start while
+  less than `--min-free-gb` (6) of RAM is free and another lane is busy —
+  paging stretches the very timeouts the verdicts depend on. Lane-specific
+  rules: orphaned `lumen` processes are reaped once before the lanes start (not
+  between units, where the reaper would count a running lane's browsers as
+  stale), each lane guards only its own ports, and `heavy_lock` is held while
+  any lane runs. Measured A/B — `docs/tasks/p2-wpt-runner-throughput.md`
+  §WPT-RUN-9.
+  `--shared-queue` (off by default) — inside a shard, wptrunner normally deals
+  the tests out to its `--processes` up front (`hash(test.id) % N`), so the
+  shard waits for whichever process drew the most TIMEOUTs. The flag makes
+  `run_smoke.py` (`--lumen-shared-queue`) run wptrunner with `--fully-parallel
+  --no-restart-on-new-group` — one queue, longest declared timeout first, one
+  browser per process, still restarted on a real crash/hang — and interleaves
+  the queue by directory (`interleave_by_directory`), because seven
+  neighbouring files of one directory started together can starve each other
+  (`non-cancelable-when-passive/*touch*`). Measured −26 % wall on `dom`+8 with
+  the score inside the noise — §общая очередь.
+  `--max-browser-gb G` (default 4, `0` off) — `browser_rss_cap.py` watches the
+  run's own `lumen` processes (descendants of `run_corpus.py` only — another
+  session's browsers are never looked at) and kills one whose RSS passes G GB;
+  wptrunner records its test as CRASH and restarts the browser. Healthy
+  browsers peak at ~1 GB, the runaways (acid3 BUG-1267, the `webstorage`
+  quota tests) at 15-25 GB and TIMEOUT with no subtests anyway, so the cap
+  costs no score and keeps the other lanes out of the page file. Kills go to
+  `<out-dir>/rss-cap-kills.jsonl`, the shard state carries `rss_cap_kills`
+  (`batch_rss_cap_kills` on batch members), the snapshot `max_browser_gb` and
+  the kill count. Needs `psutil` (in the documented venv); without it the cap
+  is off and the run says so.
+  Not a flag but the executor itself (`executorlumen.py`, on for every run): a
+  test whose top-level document was replaced by a page that is not a test
+  (no `__wptrunner_is_test_context`, which `resources/testharnessreport.js`
+  sets) ends as TIMEOUT once that page has been live for 15 s
+  (`LUMEN_WPT_FOREIGN_GRACE_S`, `off` restores the old full-timeout wait),
+  instead of polling a page whose harness is gone until the 60-65 s
+  `timeout: long` runs out. The TIMEOUT message names the foreign URL. A test
+  that leaves and comes back on its own (bfcache helpers, ≤ 8.2 s away) is
+  unaffected. Measured on the `legacy-mb-japanese` shard that set the corpus
+  wall (BUG-1269) — `docs/tasks/p2-wpt-runner-throughput.md` §уход со
+  страницы теста; pinned by `verify_navaway_early_timeout.py`.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =

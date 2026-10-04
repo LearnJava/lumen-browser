@@ -19,6 +19,7 @@
 
 mod constructed_stylesheets;
 mod dom_core;
+mod dom_editing;
 pub(super) mod net;
 mod platform;
 mod storage;
@@ -26,6 +27,7 @@ mod stylesheets;
 
 pub(super) use constructed_stylesheets::*;
 pub(super) use dom_core::*;
+pub(super) use dom_editing::*;
 pub(super) use net::*;
 pub(super) use platform::*;
 pub(super) use storage::*;

@@ -70,9 +70,17 @@ pub(crate) struct VerticalInit {
     pub(crate) content_block_avail: f32,
     pub(crate) content_inline: f32,
     pub(crate) explicit_block_size: Option<f32>,
+    /// `min-width`/`max-width` — the clamp on the block size (physical width),
+    /// border-box; `0.0`/`INFINITY` when unset.
+    pub(crate) min_block: f32,
+    pub(crate) max_block: f32,
     pub(crate) frame_horiz: f32,
     pub(crate) pcb: Rect,
     pub(crate) cursor_block_consumed: f32,
+    /// Block-end margin of the last placed child, not yet added to
+    /// `cursor_block_consumed`: it collapses with the next sibling's block-start
+    /// margin (CSS 2.1 §8.3.1, along the block axis), or closes the box.
+    pub(crate) pending_end_margin: f32,
 }
 
 /// Precomputes the loop-entry state for laying out a Block/FlowRoot box in
@@ -83,6 +91,7 @@ pub(crate) struct VerticalInit {
 /// `SidewaysRl`, or `SidewaysLr`.
 ///
 /// # Parameters
+/// - `style`: `b.style`, or the clone carrying a flex item's used-size override.
 /// - `b`: the box to lay out (`rect.x`/`rect.y`/`rect.height` written in
 ///   place here; `rect.width` is finalised later by the trampoline once the
 ///   children's block-extent is known).
@@ -91,6 +100,7 @@ pub(crate) struct VerticalInit {
 ///   available *block-size* (room for children to stack horizontally).
 /// - `available_height`: physical height available; in vertical mode this is the
 ///   available *inline-size* (room for the inline axis = lines of text).
+/// - `measurer`: for the intrinsic `min-width`/`max-width` keywords.
 /// - `viewport`, `pcb`: forwarded to child layout via the returned init.
 ///
 /// # Axis mapping
@@ -103,23 +113,32 @@ pub(crate) struct VerticalInit {
 /// - Margin collapsing along the block axis is not implemented.
 /// - Floats / `clear` are ignored inside vertical contexts.
 /// - `min-/max-width` / `min-/max-height` are not clamped in vertical mode.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_vertical_init(
     b: &mut LayoutBox,
+    style: &std::sync::Arc<crate::style::ComputedStyle>,
     start_x: f32,
     start_y: f32,
     available_width: f32,
     available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
 ) -> VerticalInit {
-    let s = b.style.clone();
+    // `style` is `b.style` with the flex item's `UsedSizeOverride` applied (the
+    // caller's `style_with_used_size`) — `width`/`height` are what the used
+    // block/inline size derive from below.
+    let s = style.clone();
     let em = s.font_size;
 
     // Physical box-model offsets. In vertical mode CSS sides keep their
     // *physical* meaning (top stays top, left stays left): the cascade does
     // not re-map padding/border to logical sides. This matches the Writing
     // Modes L3 spec — only width/height swap roles.
-    let cb_for_percents = available_width.max(0.0);
+    // CSS Box 3 §5.2: percentage margins and padding resolve against the
+    // containing block's *inline* size — the height here, since the inline axis
+    // of a vertical box runs along y.
+    let cb_for_percents = available_height.unwrap_or(viewport.height).max(0.0);
     let margin_left = s.margin_left.resolve_or_zero(em, cb_for_percents, viewport);
     let margin_top = s.margin_top.resolve_or_zero(em, cb_for_percents, viewport);
     let padding_left = s.padding_left.resolve_or_zero(em, cb_for_percents, viewport);
@@ -155,6 +174,20 @@ pub(crate) fn build_vertical_init(
     )
     .unwrap_or(inline_size_avail);
 
+    // CSS Sizing L3 §5 — `min-height`/`max-height` are the bounds of the
+    // *inline* size in a vertical writing mode, however the size was reached
+    // (an explicit `height` or the room offered, e.g. a flex stretch).
+    let inline_limit = |len: Option<&Length>| -> Option<f32> {
+        let raw = len.filter(|l| !l.is_intrinsic())?.resolve(em, Some(inline_size_avail), viewport)?;
+        Some(match s.box_sizing {
+            BoxSizing::ContentBox => raw + frame_vert,
+            BoxSizing::BorderBox => raw.max(frame_vert),
+        })
+    };
+    let inline_size = inline_size
+        .min(inline_limit(s.max_height.as_ref()).unwrap_or(f32::INFINITY))
+        .max(inline_limit(s.min_height.as_ref()).unwrap_or(0.0));
+
     b.rect.height = inline_size.max(frame_vert);
 
     // Block-size (physical width) — from CSS `width`. If absent, the container
@@ -168,6 +201,30 @@ pub(crate) fn build_vertical_init(
         s.box_sizing,
         frame_horiz,
     );
+
+    // CSS Sizing L3 §5 — `min-width`/`max-width` bound the block size (physical
+    // width) the same way they bound the inline size of a horizontal box; the
+    // content keywords measure the box's own contents.
+    let block_limit = |len: Option<&Length>| -> Option<f32> {
+        let len = len?;
+        if len.is_intrinsic() {
+            return match len {
+                Length::MinContent => Some(crate::box_tree::min_content_outer_width_of_contents(b, measurer, viewport)),
+                Length::MaxContent => Some(crate::box_tree::max_content_outer_width(b, measurer, viewport)),
+                _ => None,
+            };
+        }
+        let raw = len.resolve(em, Some(available_width.max(0.0)), viewport)?;
+        let bb = match s.box_sizing {
+            BoxSizing::ContentBox => raw + frame_horiz,
+            BoxSizing::BorderBox => raw.max(frame_horiz),
+        };
+        Some(bb.max(0.0))
+    };
+    let max_block = block_limit(s.max_width.as_ref()).unwrap_or(f32::INFINITY);
+    let min_block = block_limit(s.min_width.as_ref()).unwrap_or(0.0);
+    // The explicit size is clamped too: max first, then min (min wins).
+    let explicit_block_size = explicit_block_size.map(|v| v.min(max_block).max(min_block));
 
     // CSS Scrollbars L1 §6.2: the block axis is physically horizontal in a
     // vertical writing mode, so `scrollbar-gutter: stable`'s reservation for
@@ -228,9 +285,12 @@ pub(crate) fn build_vertical_init(
         content_block_avail,
         content_inline,
         explicit_block_size,
+        min_block,
+        max_block,
         frame_horiz,
         pcb,
         cursor_block_consumed: 0.0,
+        pending_end_margin: 0.0,
     }
 }
 
@@ -278,12 +338,11 @@ pub(crate) fn shift_subtree_x(b: &mut LayoutBox, dx: f32) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(node) = stack.pop() {
         node.rect.x += dx;
-        if let BoxKind::InlineRun { lines, .. } = &mut node.kind {
-            for line in lines.iter_mut() {
-                for frag in line.iter_mut() {
-                    frag.x += dx;
-                }
-            }
+        // `InlineFrag::x` is an offset from the run's own origin (along y for a
+        // vertical run), so it must NOT follow the box: shifting it by `dx`
+        // threw vertical text off the bottom of its container.
+        if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut node.kind {
+            svg_paint_matrix.matrix[4] += dx;
         }
         stack.extend(node.children.iter_mut());
     }
@@ -337,14 +396,24 @@ pub(crate) fn lay_out_vertical_inline_run(
         s.text_orientation,
     );
 
-    let total_advance: f32 = lines.iter().flat_map(|l| l.iter()).map(|f| f.width).sum();
+    // The run's inline extent is its longest column, not the sum over all of
+    // them, and each wrapped line is a column of its own: the box is
+    // `lines × line-height` wide (BUG-1264 — text wrapped by the box's
+    // inline-size). `emit_inline_run_vertical` places column N at the same
+    // `N * used_line_height` step inside this rect.
+    let longest_column = lines
+        .iter()
+        // The empty spacer frag a soft wrap leaves at a column's end is
+        // trailing whitespace: it hangs, it doesn't lengthen the column.
+        .map(|l| l.iter().filter(|f| !f.text.is_empty()).map(|f| f.x + f.width).fold(0.0_f32, f32::max))
+        .fold(0.0_f32, f32::max);
     let min_height = b.used_line_height;
-    let total_vertical_extent = total_advance.max(min_height);
+    let total_vertical_extent = longest_column.max(min_height);
 
     b.rect.x = start_x;
     b.rect.y = start_y;
     let col_width = b.used_line_height;
-    b.rect.width = col_width;
+    b.rect.width = col_width * lines.len().max(1) as f32;
     b.rect.height = total_vertical_extent;
 }
 
@@ -528,6 +597,12 @@ pub(crate) fn wrap_inline_run_vertical(
             }
 
             let _entry_pre = if is_seg_first { pre } else { 0.0 };
+            // The word gap decided `needs_wrap` above; when the word stays on
+            // this column it also has to advance the cursor, or words run
+            // together ("helloworld").
+            if !needs_wrap && !current_line.is_empty() {
+                current_y += gap + pre;
+            }
             current_line.push(InlineFrag {
                 x: current_y,
                 y_offset: 0.0,

@@ -38,17 +38,25 @@
 #![allow(missing_docs)]
 
 mod at_rules;
+mod cssom_op;
 mod declarations;
+mod layer_state;
 mod media;
 mod mixins;
+mod nesting_expand;
 mod selectors;
 mod sheet_diff;
+mod supports;
 
 pub use at_rules::*;
+pub use cssom_op::*;
 pub use declarations::*;
 pub use media::*;
 pub use mixins::*;
 pub use selectors::*;
+pub use supports::*;
+use layer_state::LayerState;
+use nesting_expand::{expand_nesting, substitute_nesting_selector};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
@@ -1008,78 +1016,6 @@ impl Stylesheet {
     }
 }
 
-/// One recorded CSSOM write against an owned sheet — CSSOM-8 вариант C.
-///
-/// The page cascade is an independent parse of every `<style>`/`<link>` body
-/// concatenated together, so a write applied to one node's own
-/// `Stylesheet` (which is what `document.styleSheets[i]` hands out) does not
-/// reach it. Rather than serialising the mutated node back to CSS text and
-/// re-parsing the page — which would need a byte-exact writer for every
-/// at-rule CSSOM cannot represent, and would corrupt the whole page's styles
-/// if that writer were ever wrong — each write is also recorded here and
-/// **replayed** onto the freshly parsed cascade sheet on demand
-/// ([`Stylesheet::replay_cssom_ops`]). A wrong address can then only misplace
-/// the one edit it describes, and the page's own CSS is never rewritten.
-///
-/// Indices are in the owning node's own `cssRules` space; the base that maps
-/// them into the cascade's space is resolved at replay time, so a recorded op
-/// survives any number of cascade rebuilds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CssomOp {
-    /// `CSSStyleSheet.insertRule(text, index)`.
-    InsertRule {
-        /// Position in the owning node's own `cssRules`.
-        index: usize,
-        /// The rule text exactly as JS passed it.
-        text: String,
-    },
-    /// `CSSStyleSheet.deleteRule(index)`.
-    DeleteRule {
-        /// Position in the owning node's own `cssRules`.
-        index: usize,
-    },
-    /// A top-level `CSSStyleRule.style` write.
-    SetRuleStyle {
-        /// Position in the owning node's own `cssRules`.
-        index: usize,
-        /// The rule's whole new declaration list.
-        css_text: String,
-    },
-    /// A `CSSStyleRule.style` write on a rule nested in a top-level `@media`.
-    SetMediaChildStyle {
-        /// The `@media` block's own position in the node's `cssRules`.
-        media_index: usize,
-        /// The rule's position inside that block (not rebased — a `@media`
-        /// block's children are addressed relative to the block itself).
-        child_index: usize,
-        /// The rule's whole new declaration list.
-        css_text: String,
-    },
-    /// A `.style` write on a node inside a top-level `@mixin`'s `@result`
-    /// tree (CSSOM-8, вложенные правила).
-    SetMixinResultStyle {
-        /// The `@mixin`'s own position in the node's `cssRules`.
-        mixin_index: usize,
-        /// Path from `@result`'s own children down to the target node —
-        /// not rebased, structural (see [`Stylesheet::set_mixin_result_style`]'s
-        /// doc comment).
-        path: Vec<usize>,
-        /// The node's whole new declaration list.
-        css_text: String,
-    },
-    /// `CSSGroupingRule.insertRule` of an `@apply` statement into a
-    /// TOP-LEVEL style rule's own body.
-    InsertRuleBodyApply {
-        /// The owning style rule's position in the node's `cssRules`.
-        rule_index: usize,
-        /// Position in that rule's own `@apply`-marker sub-list — see
-        /// [`Rule::insert_apply_marker`].
-        index: usize,
-        /// The rule text exactly as JS passed it.
-        text: String,
-    },
-}
-
 /// One `<style>`/`<link rel=stylesheet>` DOM node paired with its own parsed
 /// sheet — the per-element granularity `document.styleSheets`/`element.sheet`
 /// (CSSOM-1) need, as opposed to a page's single merged cascade [`Stylesheet`].
@@ -1137,89 +1073,6 @@ pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
 /// stored), so this parses `[<name>][(<args>)] [{ <block> }] [;]`.
 pub fn parse_apply_call(input: &str) -> Option<ApplyRule> {
     Parser::new(input).parse_apply_rule()
-}
-
-/// Накопитель `@layer`-данных одного прохода [`Parser::parse_stylesheet`]:
-/// порядок объявления layer-ов, их блоки и счётчик анонимных имён.
-#[derive(Default)]
-struct LayerState {
-    order: Vec<String>,
-    blocks: Vec<LayerRule>,
-    anon_counter: usize,
-    /// `@mixin`-ы из `@layer`-блоков, уже с проставленным `layer`; вызывающая
-    /// сторона забирает их через [`Self::take_outputs`] после `register`.
-    mixins: Vec<MixinRule>,
-    /// Layer-независимые at-rules из `@layer`-блоков (`@font-face` и т.п.) —
-    /// вызывающая сторона обрабатывает их как верхнеуровневые.
-    hoisted: Vec<AtRuleOutcome>,
-}
-
-impl LayerState {
-    /// Забирает накопленные `register`-ом `@mixin`-ы и поднятые at-rules.
-    fn take_outputs(&mut self) -> (Vec<MixinRule>, Vec<AtRuleOutcome>) {
-        (std::mem::take(&mut self.mixins), std::mem::take(&mut self.hoisted))
-    }
-
-    /// Регистрирует имя в порядке объявления (первое упоминание побеждает).
-    fn declare(&mut self, name: String) {
-        if !self.order.iter().any(|e| e == &name) {
-            self.order.push(name);
-        }
-    }
-
-    /// Блок `@layer [name] { … }`. `prefix` — полное имя внешнего layer-а
-    /// (`None` на верхнем уровне): вложенный layer получает dotted-имя
-    /// `outer.inner` (Cascade L5 §6.4.2). Содержимое `nested`:
-    /// `@media`/`@supports` превращаются в [`LayerRule`] с условием, вложенные
-    /// `@layer` регистрируются рекурсивно, всё прочее уходит в `hoisted` —
-    /// вызывающая сторона обрабатывает это как обычные верхнеуровневые
-    /// at-rules.
-    fn register(
-        &mut self,
-        prefix: Option<&str>,
-        name: Option<String>,
-        rules: Vec<Rule>,
-        mixins: Vec<MixinRule>,
-        nested: Vec<AtRuleOutcome>,
-    ) {
-        let local = name.unwrap_or_else(|| {
-            self.anon_counter += 1;
-            format!("__anon_{}__", self.anon_counter)
-        });
-        let full = match prefix {
-            Some(p) => format!("{p}.{local}"),
-            None => local,
-        };
-        self.declare(full.clone());
-        for mut m in mixins {
-            m.layer = Some(full.clone());
-            self.mixins.push(m);
-        }
-        self.blocks.push(LayerRule { name: full.clone(), rules, condition: None });
-        for o in nested {
-            match o {
-                AtRuleOutcome::Media(m) => self.blocks.push(LayerRule {
-                    name: full.clone(),
-                    rules: m.rules,
-                    condition: Some(LayerCondition::Media(m.query)),
-                }),
-                AtRuleOutcome::Supports(sr) => self.blocks.push(LayerRule {
-                    name: full.clone(),
-                    rules: sr.rules,
-                    condition: Some(LayerCondition::Supports(sr.condition)),
-                }),
-                AtRuleOutcome::LayerNames(names) => {
-                    for n in names {
-                        self.declare(format!("{full}.{n}"));
-                    }
-                }
-                AtRuleOutcome::LayerBlock { name, rules, mixin_rules: lmr, nested } => {
-                    self.register(Some(&full), name, rules, lmr, nested);
-                }
-                other => self.hoisted.push(other),
-            }
-        }
-    }
 }
 
 struct Parser<'a> {
@@ -2076,125 +1929,6 @@ fn is_ident_continue(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit()
 }
 
-/// Заменяет каждый `&` prelude-а legacy `@nest` на `parent_css`. `None`, если
-/// в каком-либо complex-селекторе (части списка по запятой верхнего уровня)
-/// нет `&` — для `@nest` это делает правило невалидным. `&` внутри строк и
-/// `[attr]`-скобок — не nesting-селектор и не трогается.
-fn substitute_nesting_selector(prelude: &str, parent_css: &str) -> Option<String> {
-    let mut out = String::with_capacity(prelude.len() + parent_css.len());
-    let mut has_amp = false;
-    let mut depth_paren = 0i32;
-    let mut in_attr = false;
-    let mut quote: Option<char> = None;
-    let mut chars = prelude.chars();
-    while let Some(c) = chars.next() {
-        if let Some(q) = quote {
-            out.push(c);
-            if c == '\\' {
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            } else if c == q {
-                quote = None;
-            }
-            continue;
-        }
-        match c {
-            '"' | '\'' => {
-                quote = Some(c);
-                out.push(c);
-            }
-            '\\' => {
-                out.push(c);
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            }
-            '[' => {
-                in_attr = true;
-                out.push(c);
-            }
-            ']' => {
-                in_attr = false;
-                out.push(c);
-            }
-            '(' => {
-                depth_paren += 1;
-                out.push(c);
-            }
-            ')' => {
-                depth_paren -= 1;
-                out.push(c);
-            }
-            '&' if !in_attr => {
-                has_amp = true;
-                out.push_str(parent_css);
-            }
-            ',' if !in_attr && depth_paren == 0 => {
-                if !has_amp {
-                    return None;
-                }
-                has_amp = false;
-                out.push(c);
-            }
-            _ => out.push(c),
-        }
-    }
-    has_amp.then_some(out)
-}
-
-/// Hard cap on selectors a single [`expand_nesting`] call can produce.
-///
-/// CSS Nesting L1 doesn't bound cartesian growth (`parents.len() *
-/// nested.len()`), and the expanded list becomes the `parents` of the next
-/// nesting level — so on malformed input where recovery keeps entering
-/// [`Parser::parse_implicit_nested_rule`] instead of terminating, the
-/// selector count compounds multiplicatively *per level of nesting depth*
-/// instead of growing additively with input size. A 676-byte fuzzer
-/// minimization reached 50 MiB / ×74 000 blowup this way (BUG-788). Real
-/// stylesheets never come close to four figures of selectors from nesting
-/// alone, so truncating here only ever discards pathological expansion, not
-/// legitimate rules.
-const MAX_EXPANDED_SELECTORS: usize = 1024;
-
-/// CSS Nesting L1 §3 — expand `& (combinator) nested` into concrete selectors.
-///
-/// `combinator = None`  → compound join (e.g. `&.foo` → `parent.foo`)
-/// `combinator = Some(c)` → `parent c nested` (e.g. `& span` → `parent descendant span`)
-fn expand_nesting(
-    parents: &[ComplexSelector],
-    combinator: Option<Combinator>,
-    nested: &[ComplexSelector],
-) -> Vec<ComplexSelector> {
-    let mut result = Vec::new();
-    'outer: for parent in parents {
-        for n in nested {
-            if result.len() >= MAX_EXPANDED_SELECTORS {
-                break 'outer;
-            }
-            let expanded = match combinator {
-                None => {
-                    // `&.foo` → merge parent head with nested head, keep tails.
-                    let mut head = parent.head.clone();
-                    head.parts.extend_from_slice(&n.head.parts);
-                    let mut tail = parent.tail.clone();
-                    tail.extend_from_slice(&n.tail);
-                    ComplexSelector { head, tail }
-                }
-                Some(comb) => {
-                    // `& span` → parent + (comb, nested_head) + nested_tail
-                    let mut tail = parent.tail.clone();
-                    tail.push((comb, n.head.clone()));
-                    tail.extend_from_slice(&n.tail);
-                    ComplexSelector { head: parent.head.clone(), tail }
-                }
-            };
-            result.push(expanded);
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 #[path = "parser/tests/revision.rs"]
 mod revision_tests;
@@ -2208,6 +1942,10 @@ pub(crate) use selectors_tests::one;
 #[cfg(test)]
 #[path = "parser/tests/at_rules.rs"]
 mod at_rules_tests;
+
+#[cfg(test)]
+#[path = "parser/tests/media.rs"]
+mod media_tests;
 
 #[cfg(test)]
 #[path = "parser/tests/nesting.rs"]

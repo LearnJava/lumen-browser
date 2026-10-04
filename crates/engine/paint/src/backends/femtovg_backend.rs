@@ -3948,6 +3948,15 @@ impl FemtovgBackend {
                 if !radii.all_zero() && uniform_solid {
                     self.draw_rounded_border_ring(*rect, *widths, colors[0], *radii);
                 } else {
+                    // groove/ridge/inset/outset — общая геометрия `border_bevel`; эти стороны
+                    // закрашены здесь, ниже идут как `None`.
+                    let styles = &crate::border_bevel::paint_bevel_sides(
+                        *rect,
+                        *widths,
+                        *colors,
+                        *styles,
+                        |piece, color| self.draw_fill_rect(piece.x, piece.y, piece.width, piece.height, color),
+                    );
                     // Side rect order: [top, right, bottom, left]. Each side is rendered
                     // according to its `BorderStyle` (Solid → full quad, Dashed/Dotted →
                     // segment pattern, Double → two thin lines). Geometry mirrors the wgpu

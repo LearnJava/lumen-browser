@@ -24,7 +24,8 @@ use std::ops::Range;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, forward_box_transform, perspective_matrix,
+    box_can_own_stacking_context, forward_box_transform, is_positioned_layer_auto,
+    owns_paint_layer, perspective_matrix,
     transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
@@ -274,7 +275,7 @@ mod box_shadow;
 use box_shadow::{emit_box_shadows, emit_inset_box_shadows};
 
 mod scrollbars;
-use scrollbars::emit_scrollbars;
+use scrollbars::{emit_scrollbars, scrolled_hidden};
 pub use scrollbars::patch_scroll_layer;
 // Used only by `display_list/tests/anim_and_chrome.rs` (via `super::*`).
 #[cfg(test)]
@@ -298,6 +299,10 @@ use svg_text_decoration::{emit_svg_shape, emit_svg_shape_masked, emit_svg_text, 
 #[cfg(test)]
 #[path = "display_list/tests/text_and_images.rs"]
 mod text_and_images;
+
+#[cfg(test)]
+#[path = "display_list/tests/images_media.rs"]
+mod images_media;
 
 mod text_highlight;
 pub use text_highlight::emit_text_with_highlights;
@@ -325,6 +330,10 @@ mod svg_table_and_hash;
 #[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]
 mod anim_and_chrome;
+
+#[cfg(test)]
+#[path = "display_list/tests/chrome_overlays_print.rs"]
+mod chrome_overlays_print;
 
 #[cfg(test)]
 #[path = "display_list/tests/flex_gap_rules.rs"]

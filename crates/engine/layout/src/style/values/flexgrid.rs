@@ -166,6 +166,12 @@ pub struct GridRepeat {
     pub count: RepeatCount,
     /// The track sizing functions inside the parentheses, e.g. `minmax(100px, 1fr)`.
     pub tracks: Vec<GridTrackSize>,
+    /// Tracks written before the auto `repeat()` in the same track list
+    /// (`100px repeat(auto-fit, 50px) 1fr` → `[100px]`). CSS Grid L2 §7.2.3.2: only one
+    /// auto repeat may appear, fixed tracks around it keep their place.
+    pub before: Vec<GridTrackSize>,
+    /// Tracks written after the auto `repeat()` (`[1fr]` in the example above).
+    pub after: Vec<GridTrackSize>,
 }
 
 /// Count type for grid-template-columns/rows `repeat()`.
@@ -348,30 +354,51 @@ impl GridTrackSize {
     }
 }
 
-/// Extracts auto-fill/auto-fit repeat metadata from a track-list string.
-/// Returns `Some(GridRepeat)` when the string is exactly `repeat(auto-fill|auto-fit, ...)`.
-/// Used in Phase 2 of CSS Grid auto-repeat expansion (CSS Grid L1 §7.2.3.4).
+/// Extracts auto-fill/auto-fit repeat metadata from a track-list string: the single auto
+/// `repeat(auto-fill|auto-fit, ...)` plus the fixed tracks written before and after it
+/// (CSS Grid L1 §7.2.3.4, CSS Grid L2 §7.2.3.2). `None` when the list has no auto repeat,
+/// or has more than one (invalid).
 pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
-    let trimmed = s.trim();
-    // Must start with "repeat(" (case-insensitive) and end with ")"
-    let lc = trimmed.to_ascii_lowercase();
-    let inner = lc.strip_prefix("repeat(")?.strip_suffix(')')?;
-    let (count_s, rest) = split_paren_aware_comma(inner)?;
-    let count = match count_s.trim() {
-        "auto-fill" => RepeatCount::AutoFill,
-        "auto-fit" => RepeatCount::AutoFit,
-        _ => return None,
-    };
-    // Re-parse from original string to preserve case in track sizes
-    let orig_inner = trimmed
-        .get("repeat(".len()..trimmed.len() - 1)?;
-    let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
-    let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
-    if tracks.is_empty() {
-        return None;
+    let mut found: Option<(RepeatCount, Vec<GridTrackSize>)> = None;
+    let (mut before, mut after): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    for tok in split_track_list_tokens(s.trim()) {
+        let lc = tok.to_ascii_lowercase();
+        if let Some(inner) = lc.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')'))
+            && let Some((count_s, _)) = split_paren_aware_comma(inner)
+        {
+            let count = match count_s.trim() {
+                "auto-fill" => Some(RepeatCount::AutoFill),
+                "auto-fit" => Some(RepeatCount::AutoFit),
+                _ => None,
+            };
+            if let Some(count) = count {
+                if found.is_some() {
+                    return None;
+                }
+                // Re-parse from the original token to preserve case in track sizes.
+                let orig_inner = tok.get("repeat(".len()..tok.len() - 1)?;
+                let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
+                let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
+                if tracks.is_empty() {
+                    return None;
+                }
+                found = Some((count, tracks));
+                continue;
+            }
+        }
+        if found.is_some() {
+            after.push(tok);
+        } else {
+            before.push(tok);
+        }
     }
-    let _ = rest; // suppress unused warning from lc version
-    Some(GridRepeat { count, tracks })
+    let (count, tracks) = found?;
+    Some(GridRepeat {
+        count,
+        tracks,
+        before: GridTrackSize::parse_track_list(&before.join(" "), false),
+        after: GridTrackSize::parse_track_list(&after.join(" "), false),
+    })
 }
 
 /// Split a comma inside a track-list token that may contain nested parens.
@@ -951,6 +978,9 @@ pub enum AlignValue {
     Center,
     /// `baseline` — выровнять text-baseline (для align-items).
     Baseline,
+    /// `last baseline` — выровнять по последней базовой линии (CSS Box Alignment L3 §9.3);
+    /// во flex прижимает группу к cross-end, а не к cross-start, как `baseline`.
+    LastBaseline,
     /// `space-between` — равные промежутки между items, по краям нет.
     SpaceBetween,
     /// `space-around` — промежутки между + половинные по краям.
@@ -959,9 +989,86 @@ pub enum AlignValue {
     SpaceEvenly,
 }
 
+/// The parts of `justify-content`/`align-content` that [`AlignValue`] alone does
+/// not carry, because only a flex container reads them (`flex.rs`):
+/// the `safe` overflow position (CSS Box Alignment L3 §4.4) and the physical
+/// `left`/`right` keywords of `justify-content`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentAlignExtra {
+    /// `justify-content: safe …` — on overflow the items align to the
+    /// writing-mode `start` edge instead of the alignment mode's own side.
+    pub justify_safe: bool,
+    /// `align-content: safe …`.
+    pub align_safe: bool,
+    /// `justify-content: left | right` (stored as `Start`/`End` in
+    /// `justify_content`).
+    pub justify_side: Option<ContentSide>,
+    /// `justify-content: start | end` — relative to the container's writing
+    /// mode, not to `flex-direction` like `flex-start`/`flex-end` (both are
+    /// stored as `Start`/`End`).
+    pub justify_wm: bool,
+    /// `align-content: start | end` — likewise for the cross axis.
+    pub align_wm: bool,
+    /// `align-self: safe …` / `align-items: safe …`.
+    pub self_safe: bool,
+    pub items_safe: bool,
+    /// `align-self: start | end | self-start | self-end` (writing-mode relative,
+    /// stored as `Start`/`End`), and the same for `align-items`.
+    pub self_wm: bool,
+    pub items_wm: bool,
+    /// `self-start` / `self-end`: relative to the item's *own* writing mode and
+    /// direction, not the container's (CSS Box Alignment L3 §4.2).
+    pub self_own: bool,
+    pub items_own: bool,
+    /// `justify-self: safe …` / `justify-items: safe …` (read by grid).
+    pub justify_self_safe: bool,
+    pub justify_items_safe: bool,
+}
+
+/// A physical side keyword of `justify-content` (CSS Box Alignment L3 §6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentSide {
+    Left,
+    Right,
+}
+
+impl AlignValue {
+    /// `[safe | unsafe]? <keyword>` of `justify-content`/`align-content`: the
+    /// keyword, whether it was `safe`, and whether it was a writing-mode
+    /// relative `start`/`end` (as opposed to `flex-start`/`flex-end`).
+    pub fn parse_with_overflow(s: &str) -> Option<(Self, bool, bool)> {
+        let lc = s.trim().to_ascii_lowercase();
+        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
+            (rest, true)
+        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
+            (rest, false)
+        } else {
+            (lc.as_str(), false)
+        };
+        let wm_relative = matches!(rest.trim(), "start" | "end" | "self-start" | "self-end");
+        Self::parse(rest).map(|v| (v, safe, wm_relative))
+    }
+
+    /// Was the keyword `self-start` / `self-end` (items' own axes)?
+    pub fn is_self_relative(s: &str) -> bool {
+        let lc = s.trim().to_ascii_lowercase();
+        let rest = lc.strip_prefix("safe ").or_else(|| lc.strip_prefix("unsafe ")).unwrap_or(&lc);
+        matches!(rest.trim(), "self-start" | "self-end")
+    }
+
+    /// `left` / `right` as a `justify-content` value.
+    pub fn parse_content_side(s: &str) -> Option<ContentSide> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "left" => Some(ContentSide::Left),
+            "right" => Some(ContentSide::Right),
+            _ => None,
+        }
+    }
+}
+
 impl AlignValue {
     pub fn parse(s: &str) -> Option<Self> {
-        let lc = s.trim().to_ascii_lowercase();
+        let lc = s.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
         match lc.as_str() {
             "auto" => Some(Self::Auto),
             "normal" => Some(Self::Normal),
@@ -969,7 +1076,8 @@ impl AlignValue {
             "start" | "flex-start" | "self-start" => Some(Self::Start),
             "end" | "flex-end" | "self-end" => Some(Self::End),
             "center" => Some(Self::Center),
-            "baseline" | "first baseline" | "last baseline" => Some(Self::Baseline),
+            "baseline" | "first baseline" => Some(Self::Baseline),
+            "last baseline" => Some(Self::LastBaseline),
             "space-between" => Some(Self::SpaceBetween),
             "space-around" => Some(Self::SpaceAround),
             "space-evenly" => Some(Self::SpaceEvenly),

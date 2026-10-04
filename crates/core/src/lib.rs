@@ -21,6 +21,7 @@ pub mod form;
 pub mod geom;
 pub mod hash;
 pub mod icc;
+pub mod id_hash;
 pub mod idn;
 pub mod json;
 pub mod memory_pressure;

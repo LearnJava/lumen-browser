@@ -1425,7 +1425,8 @@ function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
 // sample for _lumen_dispatch_pointer_event's getCoalescedEvents()/
 // getPredictedEvents() arrays (Pointer Events L3 §4.1). Mirrors the main
 // event's fields except position.
-function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles) {
+function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles, ident) {
+    ident = ident || _lumen_pointer_identity(buttons);
     var cev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
         clientX: cx, clientY: cy,
@@ -1434,10 +1435,10 @@ function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod,
         button: button, buttons: buttons,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
-        pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0,
+        pointerId: ident.pointerId, pointerType: ident.pointerType, isPrimary: ident.isPrimary,
+        pressure: ident.pressure,
         altitudeAngle: Math.PI / 2, azimuthAngle: 0,
-        width: 1, height: 1,
+        width: ident.width, height: ident.height,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
     cev.getCoalescedEvents = function() { return [cev]; };
@@ -1458,14 +1459,30 @@ function _lumen_predict_pointer_events(coalesced) {
     var dy = last.clientY - prev.clientY;
     var mod = (last.ctrlKey ? 1 : 0) | (last.shiftKey ? 2 : 0) |
               (last.altKey  ? 4 : 0) | (last.metaKey  ? 8 : 0);
+    var ident = _lumen_pointer_identity(last.buttons, last.pointerId, last.pointerType,
+        last.isPrimary, last.width, last.height, last.pressure);
     var out = [];
     for (var i = 1; i <= 2; i++) {
         out.push(_lumen_make_coalesced_pointer_event(
             last.type, last.clientX + dx * i, last.clientY + dy * i,
-            last.button, last.buttons, mod, last.bubbles
+            last.button, last.buttons, mod, last.bubbles, ident
         ));
     }
     return out;
+}
+
+// The pointer-identity members of a PointerEvent. Every argument is optional:
+// an omitted one (`undefined`) takes the mouse default, so callers that only
+// ever sent mouse events are unchanged.
+function _lumen_pointer_identity(buttons, pointerId, pointerType, isPrimary, width, height, pressure) {
+    return {
+        pointerId: pointerId === undefined ? 1 : pointerId,
+        pointerType: pointerType === undefined ? 'mouse' : pointerType,
+        isPrimary: isPrimary === undefined ? true : !!isPrimary,
+        width: width === undefined ? 1 : width,
+        height: height === undefined ? 1 : height,
+        pressure: pressure === undefined ? (buttons ? 0.5 : 0.0) : pressure
+    };
 }
 
 // Called from shell for pointer events (W3C Pointer Events Level 2/3).
@@ -1475,8 +1492,19 @@ function _lumen_predict_pointer_events(coalesced) {
 // coalesced: optional array of [x,y] CSS-pixel positions buffered since the
 // last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
 // (clientX, clientY). Omitted/empty for non-move event types.
-function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
-    _lumen_note_activation_input(type);
+// pointerId / pointerType / isPrimary / width / height / pressure: optional
+// identity of the pointer, default 1 / 'mouse' / true / 1 / 1 / 0.5 while a
+// button is down (else 0). A touch contact passes pointerType 'touch' and its
+// own id. HTML LS §6.4.3 makes `pointerdown` activation-triggering only for a
+// mouse and `pointerup` only for the other types, hence the type shuffle below.
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced,
+                                       pointerId, pointerType, isPrimary, width, height, pressure) {
+    var ident = _lumen_pointer_identity(buttons, pointerId, pointerType, isPrimary, width, height, pressure);
+    if (ident.pointerType === 'mouse') {
+        _lumen_note_activation_input(type);
+    } else if (type === 'pointerup') {
+        _lumen_mark_user_activation();
+    }
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -1486,11 +1514,11 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         button: button, buttons: buttons,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
-        pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0,
-        // Pointer Events Level 3 §4.1 — mouse always perpendicular to surface
+        pointerId: ident.pointerId, pointerType: ident.pointerType, isPrimary: ident.isPrimary,
+        pressure: ident.pressure,
+        // Pointer Events Level 3 §4.1 — perpendicular to the surface
         altitudeAngle: Math.PI / 2, azimuthAngle: 0,
-        width: 1, height: 1,
+        width: ident.width, height: ident.height,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
     // Level 3 §4.1: intermediate samples buffered since the last dispatch,
@@ -1502,13 +1530,50 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
     if (Array.isArray(coalesced)) {
         for (var i = 0; i < coalesced.length; i++) {
             coalescedEvents.push(_lumen_make_coalesced_pointer_event(
-                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles
+                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles, ident
             ));
         }
     }
     coalescedEvents.push(ev);
     ev.getCoalescedEvents = function() { return coalescedEvents; };
     ev.getPredictedEvents = function() { return _lumen_predict_pointer_events(coalescedEvents); };
+    return _lumen_dispatch_rich(start_nid, ev);
+}
+
+// Touch Events L2 §5 — called from the shell for one touch contact change.
+// `touches` / `changedTouches` / `targetTouches` are arrays of descriptors
+// `{identifier, target_nid, clientX, clientY, radiusX, radiusY, force}` (the
+// shell owns the contact state, S4/S5). `touches` = every contact on the
+// surface, `targetTouches` = those that started on this event's target,
+// `changedTouches` = those this event is about. The event goes to `start_nid`
+// and bubbles; per L2 §5 only `touchcancel` is not cancelable. Returns the
+// `dispatchEvent` result: false when a listener called preventDefault().
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_touch_event(start_nid, type, touches, changedTouches, targetTouches, mod) {
+    if (type === 'touchend') _lumen_mark_user_activation();
+    function build(descs) {
+        var out = [];
+        for (var i = 0; descs && i < descs.length; i++) {
+            var d = descs[i];
+            out.push(new Touch({
+                identifier: d.identifier,
+                target: _lumen_make_element(d.target_nid),
+                clientX: d.clientX, clientY: d.clientY,
+                screenX: d.clientX, screenY: d.clientY,
+                pageX: d.clientX + (window.scrollX || 0), pageY: d.clientY + (window.scrollY || 0),
+                radiusX: d.radiusX || 0, radiusY: d.radiusY || 0,
+                force: d.force || 0
+            }));
+        }
+        return out;
+    }
+    var ev = new TouchEvent(type, {
+        bubbles: true, cancelable: type !== 'touchcancel', isTrusted: true,
+        touches: build(touches), targetTouches: build(targetTouches),
+        changedTouches: build(changedTouches),
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
@@ -1857,6 +1922,18 @@ function _lumen_parse_style(s) {
         var prop = decl.slice(0, idx).trim();
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
+        if (_lumen_gap_rule_key_re.test(prop)) {
+            // `!important` is not part of the value (the priority is not tracked here).
+            var gapVal = _lumen_close_open_parens(val.replace(/\s*!\s*important\s*$/i, ''));
+            if (_lumen_pending_substitution_value(gapVal) === undefined) {
+                var gapPairs = _lumen_gap_rule_expand(prop, gapVal);
+                if (gapPairs === false) return;
+                if (gapPairs !== null) {
+                    gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+                    return;
+                }
+            }
+        }
         if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(prop)) {
             var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[prop], val);
             if (expanded !== null) {
@@ -1953,12 +2030,12 @@ function _lumen_shorthand_value(obj, shorthand) {
 // `_LUMEN_KEYWORD_PROPERTIES` below) — its canon fn reuses that same
 // `border-top-style` keyword list rather than duplicating it.
 var _LUMEN_TRBL_SHORTHAND_CANON = {
-    'margin':       function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'margin':       function(v) { return _lumen_length_or_anchor_canon(1, v, true, false); },
     'padding':      function(v) { return _lumen_css_canonical_length(v, false, true); },
     'border-width': function(v) { return _lumen_css_canonical_line_width(v); },
     'border-style': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['border-top-style']); },
     'border-color': function(v) { return _lumen_css_canonical_color(v); },
-    'inset':        function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'inset':        function(v) { return _lumen_length_or_anchor_canon(2, v, true, false); },
     'scroll-margin':  function(v) { return _lumen_css_canonical_scroll_offset(v, false, false); },
     'scroll-padding': function(v) { return _lumen_css_canonical_scroll_offset(v, true, true); },
 };
@@ -1982,7 +2059,7 @@ function _lumen_expand_trbl_shorthand(canonFn, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { top: lowerVal, right: lowerVal, bottom: lowerVal, left: lowerVal };
     }
-    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    var tokens = _lumen_split_top_level_ws(strVal);
     if (tokens.length < 1 || tokens.length > 4) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
@@ -2168,12 +2245,12 @@ var _LUMEN_2V_SHORTHANDS = {
 // list, `align-content`/`align-items`/`align-self` already need to exist
 // there for the plain longhand assignment path (`style.alignContent = …`).
 var _LUMEN_2V_SHORTHAND_CANON = {
-    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_length_or_anchor_canon(1, v, g.allowAuto, g.nonNegative); },
+    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_length_or_anchor_canon(1, v, g.allowAuto, g.nonNegative); },
     'padding-inline': function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-inline-start']; return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
     'padding-block':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-block-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_length_or_anchor_canon(2, v, g.allowAuto, g.nonNegative); },
+    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_length_or_anchor_canon(2, v, g.allowAuto, g.nonNegative); },
     'place-content':  function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-content']); },
     'place-items':    function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-items']); },
     'place-self':     function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-self']); },
@@ -2199,7 +2276,7 @@ function _lumen_expand_2v_shorthand(canonFn, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { start: lowerVal, end: lowerVal };
     }
-    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    var tokens = _lumen_split_top_level_ws(strVal);
     if (tokens.length < 1 || tokens.length > 2) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
@@ -2389,11 +2466,9 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // (`crates/engine/layout/src/style.rs::parse_overflow_kw` and neighbors),
 // NOT the full CSS spec grammar where the engine doesn't implement it yet
 // (e.g. `visibility: collapse` IS in this list — the engine recognizes it —
-// but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are NOT
-// (срез 13), since `BorderStyle` has no variants for them,
-// `style/values/box_model.rs` — the five values it does list
-// (`none`/`solid`/`dashed`/`dotted`/`double`) are the full grammar
-// `parse_border_style_kw` (`style/parse/box_sides.rs`) accepts.
+// but `border-style`'s `hidden` is NOT (срез 13) — `parse_border_style_kw`
+// (`style/parse/box_sides.rs`) accepts `none`/`solid`/`dashed`/`dotted`/`double`
+// and, since the volumetric-border slice, `groove`/`ridge`/`inset`/`outset`.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
 // exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
@@ -2486,19 +2561,19 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // logical ones resolve through the same `parse_border_style_kw` as their
     // physical counterparts, `crates/engine/layout/src/style/apply/paint.rs`
     // — identical grammar, same pattern as the border-*-width logical
-    // longhands, срез 2/4). List is the five keywords the engine's own
-    // parser accepts — see the срез-7-note edit above for why `hidden`/
-    // `groove`/`ridge`/`inset`/`outset` are excluded. The `border-style`
+    // longhands, срез 2/4). List is the nine keywords the engine's own
+    // parser accepts (`BorderStyle` has `groove`/`ridge`/`inset`/`outset` since
+    // the gap-rule slices; `hidden` stays unreachable from `border-style`). The `border-style`
     // shorthand itself is wired separately, through
     // `_LUMEN_TRBL_SHORTHAND_CANON` (it reuses `border-top-style`'s list).
-    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
     // CSS Box Alignment L3 (срез 15): all six align-/justify- longhands
     // share ONE list, mirroring `AlignValue::parse`
     // (`crates/engine/layout/src/style/values/flexgrid.rs`) — the engine
@@ -2958,6 +3033,53 @@ function _lumen_css_canonical_zoom(strVal) {
     return v;
 }
 
+// CSS Anchor Positioning L1 (BUG-563, GAP-ANCHORCSSOM-S2): a value that starts
+// with `anchor(` / `anchor-size(` is canonicalized by the real parser
+// (`_lumen_css_canonical_anchor`) instead of the length grammar, which has no
+// notion of either function. `anchor()` is valid only in the inset properties,
+// `anchor-size()` also in margin and sizing ones (padding takes neither); the
+// per-property mode is 2 / 1 / 0 for those three cases. `anchor()` nested in
+// `calc()`/`min()`/`max()` is not a top-level call and keeps going through the
+// regular grammar (S3/S4).
+var _LUMEN_ANCHOR_FN_RE = /^\s*anchor(?:-size)?\(/i;
+var _LUMEN_ANCHOR_INSET_KEY_RE = /^(?:top|right|bottom|left|inset-(?:block|inline)-(?:start|end))$/;
+var _LUMEN_ANCHOR_SIZE_ONLY_KEY_RE = /^(?:margin-.+|(?:min-|max-)?(?:width|height|block-size|inline-size))$/;
+function _lumen_anchor_fn_mode(key) {
+    if (_LUMEN_ANCHOR_INSET_KEY_RE.test(key)) return 2;
+    if (_LUMEN_ANCHOR_SIZE_ONLY_KEY_RE.test(key)) return 1;
+    return 0;
+}
+// Returns `undefined` when `strVal` is not a top-level anchor function (or the
+// property takes none), so the caller continues with its own grammar; else the
+// canonical string or `null` for an invalid value.
+function _lumen_anchor_fn_canon(mode, strVal) {
+    if (mode === 0 || !_LUMEN_ANCHOR_FN_RE.test(strVal)) return undefined;
+    return _lumen_css_canonical_anchor(strVal, mode === 2);
+}
+// `<length-percentage>` grammar of a shorthand with `mode` as above.
+function _lumen_length_or_anchor_canon(mode, strVal, allowAuto, nonNegative) {
+    var a = _lumen_anchor_fn_canon(mode, strVal);
+    return a !== undefined ? a : _lumen_css_canonical_length(strVal, allowAuto, nonNegative);
+}
+// Splits a shorthand value on whitespace outside parentheses, so
+// `anchor(--a top)` / `calc(1px + 2px)` stay one token.
+function _lumen_split_top_level_ws(strVal) {
+    var tokens = [], depth = 0, start = -1;
+    var s = strVal.trim();
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')' && depth > 0) depth--;
+        if (depth === 0 && /\s/.test(c)) {
+            if (start >= 0) { tokens.push(s.substring(start, i)); start = -1; }
+        } else if (start < 0) {
+            start = i;
+        }
+    }
+    if (start >= 0) tokens.push(s.substring(start));
+    return tokens;
+}
+
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
 // longhand value", shared by `setProperty` and `_lumen_parse_style`'s
 // per-declaration loop above — previously each had its own copy of this
@@ -2975,6 +3097,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     var pending = _lumen_pending_substitution_value(strVal);
     if (pending !== undefined) return pending;
+    var anchorFn = _lumen_anchor_fn_canon(_lumen_anchor_fn_mode(key), strVal);
+    if (anchorFn !== undefined) return anchorFn;
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_color(strVal);
     }
@@ -3115,18 +3239,72 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
         var v2v = _lumen_2v_shorthand_value(obj, key);
         if (v2v !== undefined) return v2v;
     }
+    if (_lumen_gap_rule_key_re.test(key)) {
+        var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
+        if (gapSh !== null && gapSh !== undefined) return gapSh;
+    }
     return '';
 };
+// CSS Syntax §5.4.7: the end of the value closes every function still open, so
+// `repeat(auto, red, blue` is the value `repeat(auto, red, blue)`. Without the
+// closing here the unclosed `(` would swallow the `;` the style attribute is
+// serialized with and the whole declaration would be lost on re-parse. Applied to
+// the CSS Gap Decorations properties (`rule*`, `{column,row}-rule*`) whose lists
+// are the only grammar with a function that tests feed an unclosed value.
+var _lumen_gap_rule_key_re = /^(rule|(column|row)-rule)(-|$)/;
+function _lumen_close_open_parens(v) {
+    var depth = 0, quote = '';
+    for (var i = 0; i < v.length; i++) {
+        var c = v[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+        else if (c === '"' || c === "'") quote = c;
+        else if (c === '(') depth++;
+        else if (c === ')') { if (depth === 0) return v; depth--; }
+    }
+    if (quote) return v;
+    for (var d = 0; d < depth; d++) v += ')';
+    return v;
+}
+// CSS Gap Decorations L1 §3–§4 (BUG-553): `rule*`/`{column,row}-rule*` are stored in the
+// inline-style object as canonical LONGHANDS only (`_lumen_css_expand_gap_rule`, Rust
+// `style/values/rule_cssom.rs`); a shorthand is composed back on read
+// (`_lumen_css_gap_rule_shorthand`). Returns `null` when `key` is not one of these
+// properties, `false` when the value is invalid (declaration dropped), else the list of
+// `[longhand, value]` pairs.
+function _lumen_gap_rule_expand(key, strVal) {
+    if (!_lumen_gap_rule_key_re.test(key)) return null;
+    var r = JSON.parse(_lumen_css_expand_gap_rule(key, strVal));
+    if (r.k === 'not') return null;
+    if (r.k === 'invalid') return false;
+    return r.l;
+}
+// Drops `key` — and, for a gap shorthand, every longhand it covers — from `obj`.
+function _lumen_gap_rule_delete(obj, key) {
+    if (_lumen_gap_rule_key_re.test(key)) {
+        JSON.parse(_lumen_css_gap_rule_longhands(key)).forEach(function(n) { delete obj[n]; });
+    }
+    delete obj[key];
+}
 CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
     var strVal = String(val);
+    if (_lumen_gap_rule_key_re.test(key)) strVal = _lumen_close_open_parens(strVal);
     var obj = _lumen_style_get_parsed(nid);
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property.
-        delete obj[key];
+        _lumen_gap_rule_delete(obj, key);
         _lumen_style_set_parsed(nid, obj);
         return;
+    }
+    if (_lumen_pending_substitution_value(strVal) === undefined) {
+        var gapPairs = _lumen_gap_rule_expand(key, strVal);
+        if (gapPairs === false) return; // invalid gap-decoration value: declaration dropped
+        if (gapPairs !== null) {
+            gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+            _lumen_style_set_parsed(nid, obj);
+            return;
+        }
     }
     // BUG-514: `var()`/`env()` values bypass every per-property grammar below
     // (shorthand expansion included) — see `_lumen_pending_substitution_value`.
@@ -3227,8 +3405,9 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
     var nid = this;
     var obj = _lumen_style_get_parsed(nid);
     var key = _lumen_camel_to_kebab(String(prop));
-    var old = obj[key] || '';
-    delete obj[key]; _lumen_style_set_parsed(nid, obj); return old;
+    var old = Object.prototype.hasOwnProperty.call(obj, key) ? obj[key]
+        : (_lumen_gap_rule_key_re.test(key) ? (this.getPropertyValue(key) || '') : '');
+    _lumen_gap_rule_delete(obj, key); _lumen_style_set_parsed(nid, obj); return old;
 };
 Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
     // CSSOM §6.7.2: cssText always reflects the current declarations'

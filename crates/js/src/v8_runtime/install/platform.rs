@@ -551,6 +551,62 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Gap Decorations L1 §4.7 — interpolation of `*-rule-width`/`-color`/
+    // `-inset-*` between two specified values (Web Animations shim,
+    // `_wa_gap_compute`). `None` = the pair does not interpolate (the caller
+    // flips discretely at 50%).
+    reg!(scope, ctx, store,
+        "_lumen_css_interpolate_gap_rule",
+        |prop: String, from: String, to: String, t: f64| -> Option<String> {
+            lumen_layout::style::interpolate_gap_rule_value(&prop, &from, &to, t)
+        }
+    );
+
+    // CSS Gap Decorations L1 §4.7 — computed-form serialization of one specified
+    // value (`red` → `rgb(255, 0, 0)`, `thin` → `1px`, `repeat()` form kept), used
+    // where an animation/transition flips discretely and no arithmetic runs.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_gap_rule",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_gap_rule_value(&prop, &value)
+        }
+    );
+
+    // CSS Gap Decorations L1 §3–§4 in the inline-`style` CSSOM: one `rule*` /
+    // `{column,row}-rule*` declaration → canonical longhands. Returns JSON
+    // `{"k":"not"|"invalid"|"ok","l":[[longhand,value],…]}` (`not` = not a gap
+    // property, the shim takes its usual path; `invalid` = declaration dropped).
+    reg!(scope, ctx, store,
+        "_lumen_css_expand_gap_rule",
+        |prop: String, value: String| -> String {
+            use lumen_layout::style::{GapDecl, expand_gap_rule_declaration};
+            match expand_gap_rule_declaration(&prop, &value) {
+                GapDecl::NotGap => r#"{"k":"not"}"#.to_string(),
+                GapDecl::Invalid => r#"{"k":"invalid"}"#.to_string(),
+                GapDecl::Longhands(l) => serde_json::json!({ "k": "ok", "l": l }).to_string(),
+            }
+        }
+    );
+
+    // Longhand names a gap property sets (JSON array; `[]` = not a gap property).
+    reg!(scope, ctx, store,
+        "_lumen_css_gap_rule_longhands",
+        |prop: String| -> String {
+            serde_json::to_string(&lumen_layout::style::gap_rule_longhand_names(&prop))
+                .unwrap_or_else(|_| "[]".to_string())
+        }
+    );
+
+    // Shorthand value of a gap property from the stored longhands (`obj` is a JSON
+    // object of longhand → value); `None` when it cannot be composed.
+    reg!(scope, ctx, store,
+        "_lumen_css_gap_rule_shorthand",
+        |prop: String, obj: String| -> Option<String> {
+            let map: std::collections::HashMap<String, String> = serde_json::from_str(&obj).ok()?;
+            lumen_layout::style::gap_rule_shorthand_value(&prop, &|n| map.get(n).cloned())
+        }
+    );
+
     // Canonical `<length-percentage>` serialization for inline-`style`
     // margin-*/padding-* longhands (CSS Box §8, CSSOM-2/BUG-484) — same role
     // as `_lumen_css_canonical_color` above but for lengths: rejects a
@@ -586,6 +642,18 @@ pub(crate) fn install_css_supports_and_lazy_images(
         "_lumen_css_canonical_sizing_length",
         |value: String| -> Option<String> {
             lumen_layout::style::canonical_specified_sizing_length(&value)
+        }
+    );
+
+    // Canonical top-level `anchor()` / `anchor-size()` serialization for
+    // inline-`style` inset/margin/sizing properties (CSS Anchor Positioning L1
+    // §3.1/§4, BUG-563, GAP-ANCHORCSSOM-S2). `allow_anchor` — `anchor()` is
+    // valid only in the inset properties, `anchor-size()` also in margin and
+    // sizing ones. `None` = invalid, so the shim rejects the assignment.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_anchor",
+        |value: String, allow_anchor: bool| -> Option<String> {
+            lumen_layout::style::canonical_specified_anchor(&value, allow_anchor)
         }
     );
 

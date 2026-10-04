@@ -123,6 +123,36 @@ pub(crate) fn install_stylesheets(
             sync.index_for_owner(nid)
         });
     }
+    // CSS Animations L1 §3 — the winning `@keyframes <name>` of the document's
+    // sheets (a later sheet / a later rule of one sheet overrides an earlier one)
+    // as `[{"offset": f, "decls": [[property, value], ...]}, ...]`, `None` when no
+    // enabled sheet defines it. Read by the JS shim to drive `*-rule-*` animations
+    // (`_wa_gap_an_value`), the Rust `AnimationScheduler` knowing only five properties.
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_keyframes_json", move |name: String| -> Option<String> {
+            sync.sync();
+            let guard = sync.nodes.lock().unwrap_or_else(|e| e.into_inner());
+            let rule = guard
+                .iter()
+                .filter(|e| !e.disabled)
+                .flat_map(|e| e.sheet.keyframes.iter())
+                .rfind(|k| k.name == name)?;
+            let frames: Vec<serde_json::Value> = rule
+                .frames
+                .iter()
+                .map(|f| {
+                    let decls: Vec<serde_json::Value> = f
+                        .declarations
+                        .iter()
+                        .map(|d| serde_json::json!([d.property.to_ascii_lowercase(), d.value]))
+                        .collect();
+                    serde_json::json!({ "offset": f.offset, "decls": decls })
+                })
+                .collect();
+            Some(serde_json::Value::Array(frames).to_string())
+        });
+    }
     {
         let s = Arc::clone(&stylesheet_nodes);
         reg!(scope, ctx, store, "_lumen_stylesheet_disabled", move |idx: u32| -> bool {

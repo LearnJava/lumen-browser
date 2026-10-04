@@ -142,25 +142,26 @@ impl Lumen {
                 // BUG-341 S7: computed once per pass, not once per axis — the
                 // stylesheet/shadow-DOM shape doesn't change between the three
                 // hover/focus/active calls below.
-                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+                // PERF-16 срез 4: and kept from pass to pass, the sheet being the same one.
+                let (state_index, node_index) = self.chrome_restyle_indexes.indexes(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_hover,
                     new_interactive.0,
-                    &state_index,
+                    state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_focus,
                     new_interactive.1,
-                    &state_index,
+                    state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_active,
                     new_interactive.2,
-                    &state_index,
+                    state_index,
                 ));
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
                 // interactive-state one above — `touched` is empty on a pure
@@ -169,11 +170,10 @@ impl Lumen {
                 // BUG-341 S17: the report names the mutated attributes, so the
                 // root-set can narrow each one to the node itself unless some
                 // selector reaches a sibling from a compound matching it.
-                let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
                     chrome_node_changes(&touched),
-                    &node_index,
+                    node_index,
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: std::mem::take(&mut self.chrome_prev_cascade_styles),

@@ -91,7 +91,10 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     if s.column_count.is_none() && s.column_width.is_none() {
         return;
     }
-    if !s.column_rule_style.iter().any(|st| st.is_visible()) || !s.column_rule_width.iter().any(|w| *w > 0.0) {
+    let rows = s.column_height.is_some() && !s.column_wrap_nowrap;
+    if !rows
+        && (!s.column_rule_style.iter().any(|st| st.is_visible()) || !s.column_rule_width.iter().any(|w| *w > 0.0))
+    {
         return;
     }
 
@@ -119,38 +122,58 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let vp = Size::new(content_w, content_h);
     let col_gap = s.column_gap.resolve_or_zero(em, content_w, vp).max(0.0);
 
-    // Mirror column count computation from lay_out_multicol_children.
-    let n_cols: u32 = match (s.column_count, &s.column_width) {
-        (Some(n), Some(w_len)) => {
-            if let Some(w) = w_len.resolve(em, Some(content_w), vp)
-                && w > 0.0
-            {
-                let n_from_w = ((content_w + col_gap) / (w + col_gap)).floor() as u32;
-                n.min(n_from_w).max(1)
-            } else {
-                n.max(1)
-            }
+    let n_cols = crate::multicol_gap_decorations::multicol_column_count(s, em, content_w, col_gap, vp);
+
+    // CSS Multicol L2 §4.4: with a `column-height` and `column-wrap: wrap` the overflow columns
+    // form rows, so both the column and the row rules are drawn per row.
+    if s.column_rows_wrap(em, vp)
+        && let Some(col_h) = s.column_height_px(em, vp)
+    {
+        let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+        let geom = crate::multicol_gap_decorations::MulticolGeom {
+            content_x,
+            content_y,
+            content_w,
+            col_w,
+            col_gap,
+            n_cols,
+            col_h,
+            row_gap: s.row_gap.resolve_or_zero(em, content_h, vp).max(0.0),
+        };
+        if crate::multicol_gap_decorations::emit_multicol_row_rules(b, &geom, content_h, out) {
+            return;
         }
-        (Some(n), None) => n.max(1),
-        (None, Some(w_len)) => {
-            if let Some(w) = w_len.resolve(em, Some(content_w), vp)
-                && w > 0.0
-            {
-                ((content_w + col_gap) / (w + col_gap)).floor() as u32
-            } else {
-                1
-            }
-        }
-        (None, None) => 1,
     }
-    .max(1);
 
     if n_cols <= 1 || col_gap <= 0.0 {
         return;
     }
 
     let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+    // CSS Multicol L1 §7.1: content that does not fit `n_cols` columns of the limited height
+    // flows into overflow columns past the inline end — a rule separates those too, so the
+    // column count is the one the laid-out fragments actually occupy.
+    let step = col_w + col_gap;
+    let n_cols = b
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .filter(|c| c.rect.width <= col_w + 1.0 && c.rect.width > 0.0)
+        .map(|c| ((c.rect.x - content_x) / step).round().max(0.0) as u32 + 1)
+        .max()
+        .unwrap_or(0)
+        .max(n_cols);
     let total = (n_cols - 1) as usize;
+    // CSS Gap Decorations L1 §3.3: `column-rule-inset-cap-*` shorten (or, if negative, extend)
+    // a rule at the container's block edges, where the crossing gap is 0 wide.
+    let cap = |inset: &lumen_layout::RuleInset| match inset {
+        lumen_layout::RuleInset::Length(l) => l.resolve_or_zero(em, 0.0, vp),
+        lumen_layout::RuleInset::OverlapJoin => 0.0,
+    };
+    let (cap_start, cap_end) = (cap(&s.column_rule_inset.cap_start), cap(&s.column_rule_inset.cap_end));
+    let Some((rule_y, rule_h)) = crate::gap_decorations::inset_span(content_y, content_h, cap_start, cap_end, false) else {
+        return;
+    };
 
     for i in 0..(n_cols - 1) {
         // CSS Gap Decorations L1 §4.6: значения списков — по номеру щели
@@ -167,20 +190,12 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         // Rule centered in the gap.
         let sep_x = gap_left + (col_gap - rule_w) * 0.5;
 
-        // Reuse DrawBorder: emit as right-side only with rect.width = rule_w.
-        // Renderer draws right side at: rect.x + rect.width - wr = sep_x ✓.
-        out.push(DisplayCommand::DrawBorder {
-            rect: Rect::new(sep_x, content_y, rule_w, content_h),
-            widths: [0.0, rule_w, 0.0, 0.0],
-            colors: [Color::TRANSPARENT, rule_color, Color::TRANSPARENT, Color::TRANSPARENT],
-            styles: [
-                BorderStyle::None,
-                rule_style,
-                BorderStyle::None,
-                BorderStyle::None,
-            ],
-            radii: CornerRadii::default(),
-        });
+        out.extend(crate::gap_decorations::rule_line_commands(
+            Rect::new(sep_x, rule_y, rule_w, rule_h),
+            false,
+            rule_style,
+            rule_color,
+        ));
     }
 }
 

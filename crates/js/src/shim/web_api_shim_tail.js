@@ -17,11 +17,11 @@ var _perf_po_task_queued = false;
 
 // Single source of truth for supportedEntryTypes AND observe()'s admission
 // check (BUG-354): only types an entry constructor actually produces belong
-// here, so the two cannot drift apart again. 'element'/'event'/'first-input'/
-// 'soft-navigation' are intentionally excluded — no PerformanceEntry of those
-// types is ever produced on the live document (soft-navigation has a
-// PerformanceSoftNavigationEntry class but nothing calls its delivery hook
-// outside unit tests). 'taskattribution' (LONGTASK-1) is excluded on purpose
+// here, so the two cannot drift apart again. 'element'/'event'/'first-input'
+// are intentionally excluded — no PerformanceEntry of those types is ever
+// produced on the live document. 'soft-navigation' is in since GAP-SOFTNAV-S1
+// (the `_sn_*` block at the end of this file feeds `_lumen_deliver_soft_nav`).
+// 'taskattribution' (LONGTASK-1) is excluded on purpose
 // too — spec-visible only via `PerformanceLongTaskTiming.attribution`, never
 // independently observable (`longtask-timing/supported-longtask-types.window.js`).
 // 'longtask'/'long-animation-frame' (LONGTASK-1): the shell times every
@@ -29,7 +29,7 @@ var _perf_po_task_queued = false;
 // `crates/shell/src/persistent_js.rs`/`relayout.rs`.
 var _PERF_SUPPORTED_ENTRY_TYPES = ['largest-contentful-paint', 'layout-shift',
     'long-animation-frame', 'longtask', 'mark', 'measure', 'navigation',
-    'paint', 'resource'];
+    'paint', 'resource', 'soft-navigation'];
 
 function _perf_po_warn(msg) {
     if (typeof console !== 'undefined' && console.warn) console.warn('PerformanceObserver: ' + msg);
@@ -776,3 +776,79 @@ function cancelIdleCallback(id) {
         }
     }
 }
+
+// ── Soft Navigations, slice 1 (WICG soft-navigation-heuristics; GAP-SOFTNAV-S1) ──
+// Synchronous attribution only: while the shell's TRUSTED click/keydown is being
+// dispatched, remember (a) a same-document URL change through
+// `pushState`/`replaceState` and (b) the first node inserted into the connected
+// document. When one interaction produced both, the next animation frame — if the
+// inserted node is connected and has a box — delivers one `soft-navigation` entry.
+// No promise/timer propagation of the context (S2), no LCP/ICP (S3). The scope
+// wraps the shell-only dispatch helpers, never `_lumen_propagate`, so a page's own
+// `dispatchEvent(new Event('click'))` cannot open it (same rule as
+// `_lumen_note_activation_input`).
+var _sn_ctx = null;
+
+function _sn_node_has_box(nid) {
+    var el = _lumen_make_element(nid);
+    var r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    return !!r && r.width > 0 && r.height > 0;
+}
+
+function _sn_note_insert(nid) {
+    if (_sn_ctx === null || _sn_ctx.node !== null) return;
+    if (typeof nid === 'number' && _lumen_resource_is_connected(nid)) _sn_ctx.node = nid;
+}
+
+// Called by `history.pushState`/`replaceState` after the document URL moved.
+function _sn_note_url(href) {
+    if (_sn_ctx !== null) _sn_ctx.url = String(href);
+}
+
+function _sn_close(ctx) {
+    if (ctx.url === null || ctx.node === null) return;
+    requestAnimationFrame(function() {
+        // The node may have been detached or hidden again before the frame ran.
+        if (!_lumen_resource_is_connected(ctx.node) || !_sn_node_has_box(ctx.node)) return;
+        _lumen_deliver_soft_nav(ctx.url, ctx.start, 0);
+    });
+}
+
+function _sn_scope_dispatch(native, args) {
+    var type = args[1];
+    if (_sn_ctx !== null || (type !== 'click' && type !== 'keydown')) {
+        return native.apply(this, args);
+    }
+    var ctx = _sn_ctx = { start: performance.now(), url: null, node: null };
+    try {
+        return native.apply(this, args);
+    } finally {
+        _sn_ctx = null;
+        _sn_close(ctx);
+    }
+}
+
+var _sn_native_dispatch_bubble = _lumen_dispatch_bubble;
+_lumen_dispatch_bubble = function() { return _sn_scope_dispatch(_sn_native_dispatch_bubble, arguments); };
+var _sn_native_dispatch_mouse = _lumen_dispatch_mouse_event;
+_lumen_dispatch_mouse_event = function() { return _sn_scope_dispatch(_sn_native_dispatch_mouse, arguments); };
+var _sn_native_dispatch_key = _lumen_dispatch_key_event;
+_lumen_dispatch_key_event = function() { return _sn_scope_dispatch(_sn_native_dispatch_key, arguments); };
+
+var _sn_native_append_child = _lumen_append_child;
+_lumen_append_child = function(parent, child) {
+    _sn_native_append_child(parent, child);
+    if (_sn_ctx !== null) _sn_note_insert(child);
+};
+var _sn_native_insert_before = _lumen_insert_before;
+_lumen_insert_before = function(parent, child, reference) {
+    _sn_native_insert_before(parent, child, reference);
+    if (_sn_ctx !== null) _sn_note_insert(child);
+};
+// `innerHTML =` is the other everyday way a router swaps the view in; the
+// container itself stands for the new content.
+var _sn_native_set_inner_html = _lumen_set_inner_html;
+_lumen_set_inner_html = function(nid, html) {
+    _sn_native_set_inner_html(nid, html);
+    if (_sn_ctx !== null) _sn_note_insert(nid);
+};

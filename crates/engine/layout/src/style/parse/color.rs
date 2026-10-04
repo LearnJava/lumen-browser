@@ -175,6 +175,34 @@ pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Opti
     parse_color_legacy(s, is_quirks).map(CssColor::Rgba)
 }
 
+/// `<color>` для значений, чей computed value обязан сохранять `color(srgb …)`-форму
+/// (CSS Color L4 §4.2): как [`parse_css_color_legacy`], но `color-mix(in srgb, …)` и
+/// относительный `rgb(from …)`/`rgba(from …)` остаются `CssColor::Wide` с float-каналами
+/// вместо схлопывания в `rgb()` (Gap Decorations: `*-rule-color`, BUG-553). Прочие
+/// формы идут прежним путём.
+pub(in crate::style) fn parse_css_color_keep_srgb_form(s: &str, is_quirks: bool) -> Option<CssColor> {
+    let t = s.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("color-mix(") {
+        if let Some(wide) = parse_color_function(t) {
+            return Some(CssColor::Wide(wide));
+        }
+    } else if let Some(body) =
+        lower.strip_prefix("rgb(").or_else(|| lower.strip_prefix("rgba("))
+        && body.trim_start().starts_with("from ")
+        && let Some(c) = parse_function_color(t)
+    {
+        return Some(CssColor::Wide(ColorFloat {
+            r: f32::from(c.r) / 255.0,
+            g: f32::from(c.g) / 255.0,
+            b: f32::from(c.b) / 255.0,
+            a: f32::from(c.a) / 255.0,
+            space: ColorSpace::Srgb,
+        }));
+    }
+    parse_css_color_legacy(t, is_quirks)
+}
+
 /// CSS Color L4 §10.1 — парсит `color(<space> c1 c2 c3 [/ alpha])`.
 ///
 /// Displayable spaces — `srgb`, `display-p3`, `rec2020` — хранятся как

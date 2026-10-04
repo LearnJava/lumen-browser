@@ -178,7 +178,7 @@ pub(crate) fn render_source_to_png(
         Some((w, h)) => Size::new(w, h),
         None => Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H),
     };
-    let parsed = parse_and_layout(
+    let mut parsed = parse_and_layout(
         &raw.bytes,
         raw.content_type.as_deref(),
         &raw.base,
@@ -211,6 +211,21 @@ pub(crate) fn render_source_to_png(
         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
+
+    // Программные скроллы контейнеров, запрошенные скриптами страницы
+    // (`el.scrollBy()`/`scrollTo()`/`scrollTop = …`): живой цикл применяет их
+    // в `about_to_wait` через `set_scroll_position`, headless-путь их никогда
+    // не дренировал, и снимок показывал контейнер непрокрученным.
+    if let Some(js) = parsed.js_ctx.as_ref() {
+        for (nid, x, y) in js.take_scroll_requests() {
+            lumen_layout::set_scroll_position(
+                &mut parsed.layout,
+                lumen_dom::NodeId::from_index(nid as usize),
+                x,
+                y,
+            );
+        }
+    }
 
     // Полная высота страницы (контент может быть длиннее экрана), с потолком.
     let content_h = parsed

@@ -64,6 +64,8 @@ use inline_wrap::{caps_synthesis, char_break_offset, try_hyp_break, SMALL_CAPS_S
 mod grid;
 pub use grid::resolve_auto_fill_fit_count;
 
+mod baseline;
+use baseline::BaselineSide;
 mod flex;
 use flex::UsedSizeOverride;
 
@@ -188,9 +190,12 @@ use build::{build_box, build_box_or_reuse};
 pub use build::incremental_build_box;
 
 mod intrinsic;
+pub(crate) use intrinsic::{
+    max_content_outer_height, max_content_outer_width, min_content_outer_width_of_contents,
+};
 use intrinsic::{
-    flex_auto_base_main_width, flex_item_max_main_outer, flex_item_min_main_width,
-    form_control_fit_content_width, max_content_outer_width, min_content_outer_width,
+    flex_auto_base_main_width, flex_auto_base_main_width_from, flex_item_max_main_outer, flex_item_min_main_width,
+    form_control_fit_content_width, min_content_outer_width,
     preferred_inline_block_width,
 };
 
@@ -215,6 +220,7 @@ use shapes_floats::{
 use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_edge_at_y};
 
 mod bfc;
+mod layout_cache;
 mod layout_dispatch;
 mod block_flow_trampoline;
 mod flex_trampoline;
@@ -222,6 +228,7 @@ mod grid_trampoline;
 mod table_trampoline;
 mod multicol_trampoline;
 mod vertical_trampoline;
+mod vertical_row;
 
 use bfc::{
     collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc,

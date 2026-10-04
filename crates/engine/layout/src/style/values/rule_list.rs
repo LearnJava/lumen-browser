@@ -6,6 +6,9 @@
 //! сохраняется (computed value = as specified), а раскрытие в плоский ряд делается
 //! при раздаче значений щелям ([`RuleList::value_for_gap`]).
 
+use crate::style::calc::{looks_like_function_call, parse_math_function_value};
+use crate::style::{CalcNode, Length};
+
 /// Элемент списка: одиночное значение или повторитель.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleItem<T> {
@@ -124,6 +127,10 @@ impl<T: Clone> RuleList<T> {
     /// `<gap-rule>`). `None` — невалидно: пустой элемент, `repeat(0, …)`, два `auto`,
     /// вложенный `repeat()`.
     pub fn parse(val: &str, item: &impl Fn(&str) -> Option<T>) -> Option<Self> {
+        // CSS Syntax §5.4.7: конец значения закрывает открытые функции, так что
+        // `repeat(auto, red, blue` — то же значение, что `repeat(auto, red, blue)`.
+        let closed = close_open_parens(val)?;
+        let val = closed.as_str();
         let mut items = Vec::new();
         let mut has_auto = false;
         for part in split_commas(val) {
@@ -180,11 +187,7 @@ fn parse_repeat<T>(
     let n = if count.eq_ignore_ascii_case("auto") {
         None
     } else {
-        // `<integer [1,∞]>`: только цифры, без знака и дробей.
-        if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        Some(count.parse::<u32>().ok().filter(|&n| n >= 1)?)
+        Some(parse_repeat_count(count)?)
     };
     if rest.is_empty() {
         return None;
@@ -198,6 +201,37 @@ fn parse_repeat<T>(
         })
         .collect::<Option<Vec<T>>>()?;
     Some(Some((n, vs)))
+}
+
+/// `<integer [1,∞]>`: цифры без знака и дробей либо `calc()` из одних чисел
+/// (`calc(5 + 3)` → 8, CSS Values L4 §10.2: целочисленный результат).
+fn parse_repeat_count(count: &str) -> Option<u32> {
+    if !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()) {
+        return count.parse::<u32>().ok().filter(|&n| n >= 1);
+    }
+    if !looks_like_function_call(count) {
+        return None;
+    }
+    match parse_math_function_value(count)? {
+        Length::Calc(node) => match *node {
+            CalcNode::Number(n) if n >= 1.0 && n.fract() == 0.0 && n <= u32::MAX as f32 => Some(n as u32),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Дописывает `)` для функций, не закрытых до конца значения; `None` — лишняя `)`.
+fn close_open_parens(s: &str) -> Option<String> {
+    let mut depth = 0usize;
+    for c in s.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+    }
+    Some(format!("{s}{}", ")".repeat(depth)))
 }
 
 /// Делит по запятым вне скобок.
@@ -269,6 +303,14 @@ mod tests {
     }
 
     #[test]
+    fn unclosed_function_is_closed_at_end_of_value() {
+        let l = list("repeat(2, 1").unwrap();
+        assert_eq!(l.to_css(|v| v.to_string()), "repeat(2, 1)");
+        let l = list("9, repeat(auto, 1, 2").unwrap();
+        assert_eq!(l.to_css(|v| v.to_string()), "9, repeat(auto, 1, 2)");
+    }
+
+    #[test]
     fn invalid_lists_are_rejected() {
         for bad in [
             "",
@@ -282,7 +324,7 @@ mod tests {
             "repeat(2,)",
             "repeat(auto, 1), repeat(auto, 2)",
             "repeat(2, repeat(2, 1))",
-            "repeat(2, 1",
+            "repeat(2, 1))",
             "1 2",
             "repeat(x, 1)",
         ] {

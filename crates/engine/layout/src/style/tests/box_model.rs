@@ -40,6 +40,25 @@ use super::*;
     }
 
     #[test]
+    fn border_style_accepts_groove_ridge_inset_outset() {
+        let s = style_for("border-style: groove ridge inset outset");
+        assert_eq!(s.border_top_style, BorderStyle::Groove);
+        assert_eq!(s.border_right_style, BorderStyle::Ridge);
+        assert_eq!(s.border_bottom_style, BorderStyle::Inset);
+        assert_eq!(s.border_left_style, BorderStyle::Outset);
+        let s = style_for("border: 6px ridge #c00");
+        assert_eq!(s.border_left_style, BorderStyle::Ridge);
+        assert!((s.border_left_width - 6.0).abs() < 0.01);
+        let s = style_for("border-left: 4px outset red");
+        assert_eq!(s.border_left_style, BorderStyle::Outset);
+        let s = style_for("border-block-start-style: groove");
+        assert_eq!(s.border_top_style, BorderStyle::Groove);
+        // `hidden` у `border-style` по-прежнему не разбирается.
+        let s = style_for("border-style: hidden");
+        assert_eq!(s.border_top_style, BorderStyle::None);
+    }
+
+    #[test]
     fn border_color_shorthand() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let s = style_for("border-color: blue");
@@ -57,6 +76,29 @@ use super::*;
         // Остальные стороны — не изменены.
         assert!((s.border_right_width - 0.0).abs() < 0.01);
         assert_eq!(s.border_right_style, BorderStyle::None);
+    }
+
+    #[test]
+    fn border_shorthands_keep_functional_colour_with_spaces_as_one_token() {
+        // `rgba(0, 0, 255, 0.5)` has spaces inside the parentheses: a plain
+        // whitespace split cut it into `rgba(0,` / `0,` / ... and dropped the colour.
+        let half_blue = Color { r: 0, g: 0, b: 255, a: 128 };
+        let s = style_for("border: 10px solid rgba(0, 0, 255, 0.5)");
+        assert!((s.border_left_width - 10.0).abs() < 0.01);
+        assert_eq!(s.border_left_style, BorderStyle::Solid);
+        assert_eq!(s.border_left_color, CssColor::Rgba(half_blue));
+        let s = style_for("border-right: 10px rgba(0, 0, 255, 0.5) solid");
+        assert!((s.border_right_width - 10.0).abs() < 0.01);
+        assert_eq!(s.border_right_style, BorderStyle::Solid);
+        assert_eq!(s.border_right_color, CssColor::Rgba(half_blue));
+    }
+
+    #[test]
+    fn outline_shorthand_keeps_functional_colour_with_spaces_as_one_token() {
+        let s = style_for("outline: 4px solid rgba(255, 0, 0, 0.5)");
+        assert!((s.outline_width - 4.0).abs() < 0.01);
+        assert_eq!(s.outline_style, OutlineStyle::Solid);
+        assert_eq!(s.outline_color, OutlineColor::Color(Color { r: 255, g: 0, b: 0, a: 128 }));
     }
 
     #[test]

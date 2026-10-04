@@ -87,58 +87,160 @@ pub fn emit_gap_rules(
             continue;
         }
 
-        let cmd = if gap.horizontal {
-            // Row gap: draw a horizontal rule centered vertically in the gap.
+        if gap.horizontal {
+            // Row gap: a horizontal rule centered vertically in the gap.
             let rule_h = ctx.rule_width.min(gap.rect.height);
             let rule_y = gap.rect.y + (gap.rect.height - rule_h) * 0.5;
-            // Emit as bottom-side only: rect.y = rule_y, rect.height = rule_h.
-            // Renderer draws bottom side at rect.y + rect.height - widths[2].
-            DisplayCommand::DrawBorder {
-                rect: Rect::new(gap.rect.x, rule_y, gap.rect.width, rule_h),
-                widths: [0.0, 0.0, rule_h, 0.0],
-                colors: [
-                    Color::TRANSPARENT,
-                    Color::TRANSPARENT,
-                    ctx.rule_color,
-                    Color::TRANSPARENT,
-                ],
-                styles: [
-                    BorderStyle::None,
-                    BorderStyle::None,
-                    ctx.rule_style,
-                    BorderStyle::None,
-                ],
-                radii: CornerRadii::default(),
-            }
+            out.extend(rule_line_commands(
+                Rect::new(gap.rect.x, rule_y, gap.rect.width, rule_h),
+                true,
+                ctx.rule_style,
+                ctx.rule_color,
+            ));
         } else {
-            // Column gap: draw a vertical rule centered horizontally in the gap.
+            // Column gap: a vertical rule centered horizontally in the gap.
             let rule_w = ctx.rule_width.min(gap.rect.width);
             let rule_x = gap.rect.x + (gap.rect.width - rule_w) * 0.5;
-            // Emit as right-side only: rect.x = rule_x, rect.width = rule_w.
-            // Renderer draws right side at rect.x + rect.width - widths[1].
-            DisplayCommand::DrawBorder {
-                rect: Rect::new(rule_x, gap.rect.y, rule_w, gap.rect.height),
-                widths: [0.0, rule_w, 0.0, 0.0],
-                colors: [
-                    Color::TRANSPARENT,
-                    ctx.rule_color,
-                    Color::TRANSPARENT,
-                    Color::TRANSPARENT,
-                ],
-                styles: [
-                    BorderStyle::None,
-                    ctx.rule_style,
-                    BorderStyle::None,
-                    BorderStyle::None,
-                ],
-                radii: CornerRadii::default(),
-            }
-        };
-
-        out.push(cmd);
+            out.extend(rule_line_commands(
+                Rect::new(rule_x, gap.rect.y, rule_w, gap.rect.height),
+                false,
+                ctx.rule_style,
+                ctx.rule_color,
+            ));
+        }
     }
 
     out
+}
+
+/// A solid rule lies on whole device pixels: both edges are rounded (a tie goes up, as
+/// Chromium snaps the reftest rules: `top: 212.5px` + 5px fills rows 213..217) and the line keeps at least one pixel. A fractional rect
+/// would be anti-aliased over two columns, while Chromium paints one crisp line
+/// (`css-gaps/multicol/multicol-gap-decorations-017`, flex 040/042/043/044/056/058).
+fn snap_rule_rect(rect: Rect) -> Rect {
+    let snap = |v: f32| (v + 0.5).floor();
+    let (x0, y0) = (snap(rect.x), snap(rect.y));
+    let x1 = snap(rect.x + rect.width).max(x0 + 1.0);
+    let y1 = snap(rect.y + rect.height).max(y0 + 1.0);
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// One `DrawBorder` that paints only the bottom (`horizontal`) or right side of `rect`.
+fn rule_side_border(rect: Rect, horizontal: bool, style: BorderStyle, color: Color) -> DisplayCommand {
+    let none = BorderStyle::None;
+    let rect = if style == BorderStyle::Solid { snap_rule_rect(rect) } else { rect };
+    if horizontal {
+        // Renderer draws the bottom side at rect.y + rect.height - widths[2].
+        DisplayCommand::DrawBorder {
+            rect,
+            widths: [0.0, 0.0, rect.height, 0.0],
+            colors: [Color::TRANSPARENT, Color::TRANSPARENT, color, Color::TRANSPARENT],
+            styles: [none, none, style, none],
+            radii: CornerRadii::default(),
+        }
+    } else {
+        // Renderer draws the right side at rect.x + rect.width - widths[1].
+        DisplayCommand::DrawBorder {
+            rect,
+            widths: [0.0, rect.width, 0.0, 0.0],
+            colors: [Color::TRANSPARENT, color, Color::TRANSPARENT, Color::TRANSPARENT],
+            styles: [none, style, none, none],
+            radii: CornerRadii::default(),
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §4.2 / CSS Backgrounds L3 §4.2: the commands that paint one
+/// rule line occupying `rect` (`horizontal` — a row gap's rule, `false` — a column gap's).
+///
+/// `groove`/`ridge` are two half-width bands (a dark and a light shade of the colour);
+/// a gap rule has no inside, so `inset` paints like `ridge` and `outset` like `groove`.
+/// Every other visible style is one solid/dashed/dotted/double side.
+pub fn rule_line_commands(rect: Rect, horizontal: bool, style: BorderStyle, color: Color) -> Vec<DisplayCommand> {
+    let ridge = match style {
+        BorderStyle::Groove | BorderStyle::Outset => false,
+        BorderStyle::Ridge | BorderStyle::Inset => true,
+        other => return vec![rule_side_border(rect, horizontal, other, color)],
+    };
+    let (dark, light) = groove_shades(color);
+    // Like the bottom/right side of a bordered box: the outer half is `floor(w / 2)`,
+    // the inner one the rest (Edge: `border-bottom: 5px groove` = 3px dark, then 2px light).
+    let (outer_color, inner_color) = if ridge { (dark, light) } else { (light, dark) };
+    let extent = if horizontal { rect.height } else { rect.width };
+    let outer = (extent * 0.5).floor();
+    if outer <= 0.0 || extent - outer <= 0.0 {
+        // A 1px line has no room for two bands: Edge paints it in the colour itself.
+        return vec![rule_side_border(rect, horizontal, BorderStyle::Solid, color)];
+    }
+    // The rule is the bottom/right side of a box: the inner band (the larger one) comes first
+    // along the axis, the outer one last.
+    let (inner_rect, outer_rect) = if horizontal {
+        (
+            Rect::new(rect.x, rect.y, rect.width, extent - outer),
+            Rect::new(rect.x, rect.y + extent - outer, rect.width, outer),
+        )
+    } else {
+        (
+            Rect::new(rect.x, rect.y, extent - outer, rect.height),
+            Rect::new(rect.x + extent - outer, rect.y, outer, rect.height),
+        )
+    };
+    vec![
+        rule_side_border(inner_rect, horizontal, BorderStyle::Solid, inner_color),
+        rule_side_border(outer_rect, horizontal, BorderStyle::Solid, outer_color),
+    ]
+}
+
+/// Luminance (linear sRGB, Rec. 709) below which a `groove`/`ridge` colour counts as
+/// «dark» and is lightened instead of darkened — Chromium's `kBaseDarkColorLuminance`
+/// (the luminance of `#202020`; measured in Edge: `#202020` is dark, `#212121` is not).
+const DARK_COLOR_LUMINANCE: f32 = 0.014_443_844;
+
+/// Luminance from which the «light» shade of a `groove`/`ridge` colour is the colour itself
+/// (Edge: `#ececec` keeps its colour, `#ebebeb` is lightened to white).
+const LIGHT_COLOR_LUMINANCE: f32 = 0.835;
+
+fn linear_luminance(c: Color) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// Chromium `Color::Light()`: every channel scaled so the largest one gains `0.33`
+/// (clamped at 1); black becomes `#545454`. Channels are truncated, not rounded.
+fn lightened(c: Color) -> Color {
+    let v = c.r.max(c.g).max(c.b) as f32 / 255.0;
+    if v == 0.0 {
+        return Color { r: 0x54, g: 0x54, b: 0x54, a: c.a };
+    }
+    let m = (v + 0.33).min(1.0) / v;
+    let ch = |x: u8| (m * (x as f32 / 255.0) * 255.999_97) as u8;
+    Color { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: c.a }
+}
+
+/// Chromium `Color::Dark()`: the largest channel loses `0.33` (clamped at 0); truncated.
+fn darkened(c: Color) -> Color {
+    let v = c.r.max(c.g).max(c.b) as f32 / 255.0;
+    if v == 0.0 {
+        return c;
+    }
+    let m = ((v - 0.33) / v).max(0.0);
+    let ch = |x: u8| (m * (x as f32 / 255.0) * 255.999_97) as u8;
+    Color { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: c.a }
+}
+
+/// `(dark, light)` shades of a `groove`/`ridge`/`inset`/`outset` colour as Chromium/Edge
+/// derive them (`BoxBorderPainter::CalculateBorderStyleColor`): a very dark colour gets two
+/// lighter shades (`black` → `#545454` / `#A8A8A8`), any other one its `Dark()` and either
+/// itself (light colours) or its `Light()`. Alpha is kept.
+pub(crate) fn groove_shades(c: Color) -> (Color, Color) {
+    let lum = linear_luminance(c);
+    if lum <= DARK_COLOR_LUMINANCE {
+        return (lightened(c), lightened(lightened(c)));
+    }
+    (darkened(c), if lum >= LIGHT_COLOR_LUMINANCE { c } else { lightened(c) })
 }
 
 /// Допуск сравнения границ дорожек с рёбрами элементов (px, float-округление layout).
@@ -255,7 +357,10 @@ pub fn grid_gap_pieces(
             match brk {
                 RuleBreak::None => false,
                 RuleBreak::Intersection => sides > 0,
-                RuleBreak::Normal => sides == 1,
+                // «Т» с щелью-перекладиной (перпендикулярная щель примыкает только с одной
+                // стороны) линию не режет: обрывается примыкающая щель-ножка, а она кончается
+                // там, где элемент пересекает её саму (`across`); см. `grid-gap-decorations-009`.
+                RuleBreak::Normal => false,
             }
         };
         let mut start: Option<usize> = None;
@@ -310,6 +415,89 @@ fn gap_starts(edges: &[(f32, f32)], gap: f32) -> Vec<f32> {
     ends.into_iter().filter(|e| edges.iter().any(|&(lo, _)| (lo - (e + gap)).abs() < EPS)).collect()
 }
 
+/// Дорожки оси как `(начало, конец)` по возрастанию, если их можно взять из шаблона:
+/// `grid-template-*` целиком из фиксированных длин (`px`/`em`/`%`), без `repeat(auto-*)`.
+/// Так щели находятся и там, где ни один элемент не примыкает к соседу (пустые дорожки,
+/// элементы уже своей клетки). Возвращает `None`, если шаблон другой или дорожки не
+/// совпадают с рёбрами элементов (`justify-content`, неявные дорожки, subgrid) — тогда
+/// остаётся восстановление по элементам.
+///
+/// `start` — где начинается ось, `extent` — её длина (content box), `reversed` — ось идёт
+/// справа налево (`direction: rtl`: первая дорожка у правого края).
+#[allow(clippy::too_many_arguments)]
+fn template_tracks(
+    template: &[lumen_layout::GridTrackSize],
+    has_auto_repeat: bool,
+    start: f32,
+    extent: f32,
+    gap: f32,
+    reversed: bool,
+    em: f32,
+    vp: lumen_core::geom::Size,
+    edges: &[(f32, f32)],
+) -> Option<Vec<(f32, f32)>> {
+    use lumen_layout::GridTrackSize;
+    if has_auto_repeat || template.len() < 2 || gap <= 0.0 {
+        return None;
+    }
+    let mut sizes = Vec::with_capacity(template.len());
+    for t in template {
+        match t {
+            GridTrackSize::Length(l) => sizes.push(l.resolve(em, Some(extent), vp)?.max(0.0)),
+            _ => return None,
+        }
+    }
+    let total: f32 = sizes.iter().sum::<f32>() + gap * (sizes.len() - 1) as f32;
+    let mut pos = if reversed { start + extent - total } else { start };
+    if reversed {
+        sizes.reverse();
+    }
+    let tracks: Vec<(f32, f32)> = sizes
+        .iter()
+        .map(|&w| {
+            let t = (pos, pos + w);
+            pos += w + gap;
+            t
+        })
+        .collect();
+    let on_track = |v: f32, pick: fn(&(f32, f32)) -> f32| tracks.iter().any(|t| (pick(t) - v).abs() <= TRACK_TOL);
+    edges
+        .iter()
+        .all(|&(lo, hi)| on_track(lo, |t| t.0) && on_track(hi, |t| t.1))
+        .then_some(tracks)
+}
+
+/// Начала щелей фиксированных дорожек, написанных *перед* `repeat(auto-fit|auto-fill, …)`
+/// (`100px repeat(auto-fit, 100px) 1fr`). Пустые дорожки повтора схлопнуты (CSS Grid L1
+/// §7.2.3.2: размер 0, гутеры сливаются), поэтому первый элемент начинается ровно через
+/// один `gap` после последней ведущей дорожки: тогда они (в том числе пустые) настоящие и
+/// щели между ними видны. Иначе — `None`, и остаётся восстановление по элементам.
+fn leading_tops(
+    rep: Option<&lumen_layout::GridRepeat>,
+    start: f32,
+    extent: f32,
+    gap: f32,
+    em: f32,
+    vp: lumen_core::geom::Size,
+    first_item_lo: f32,
+) -> Option<Vec<f32>> {
+    use lumen_layout::GridTrackSize;
+    let rep = rep.filter(|r| !r.before.is_empty())?;
+    if gap <= 0.0 {
+        return None;
+    }
+    let mut tops = Vec::with_capacity(rep.before.len());
+    let mut pos = start;
+    for t in &rep.before {
+        let GridTrackSize::Length(l) = t else { return None };
+        pos += l.resolve(em, Some(extent), vp)?.max(0.0);
+        tops.push(pos);
+        pos += gap;
+    }
+    // `pos` — начало первой дорожки после ведущих.
+    ((first_item_lo - pos).abs() <= TRACK_TOL).then_some(tops)
+}
+
 /// CSS Gap Decorations L1 §3 для grid-контейнера: щели, разрезанные по `*-rule-break`,
 /// скрытые по `*-rule-visibility-items` и сдвинутые `*-rule-inset-*` (cap — у края
 /// контейнера, junction — у стыка с перпендикулярной щелью).
@@ -325,8 +513,54 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     let vp = lumen_core::geom::Size::new(cw, ch);
     let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
     let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
-    let col_tops = gap_starts(&xs, p.col_gap);
-    let row_tops = gap_starts(&ys, p.row_gap);
+    let rtl = s.direction == lumen_layout::Direction::Rtl;
+    let col_tracks = template_tracks(
+        &s.grid_template_columns,
+        s.grid_template_col_auto_repeat.is_some(),
+        cx,
+        cw,
+        p.col_gap,
+        rtl,
+        em,
+        vp,
+        &xs,
+    );
+    let row_tracks = template_tracks(
+        &s.grid_template_rows,
+        s.grid_template_row_auto_repeat.is_some(),
+        cy,
+        ch,
+        p.row_gap,
+        false,
+        em,
+        vp,
+        &ys,
+    );
+    let tops_of = |tracks: &Option<Vec<(f32, f32)>>, edges: &[(f32, f32)], gap: f32| match tracks {
+        Some(t) => t[..t.len() - 1].iter().map(|x| x.1).collect(),
+        None => gap_starts(edges, gap),
+    };
+    let mut col_tops = tops_of(&col_tracks, &xs, p.col_gap);
+    let mut row_tops = tops_of(&row_tracks, &ys, p.row_gap);
+    // `grid-template-*` с `repeat(auto-*)`: ведущие фиксированные дорожки до повтора.
+    let min_lo = |edges: &[(f32, f32)]| edges.iter().map(|e| e.0).fold(f32::INFINITY, f32::min);
+    let mut lead_lo = (None, None);
+    if col_tracks.is_none() && !xs.is_empty() {
+        let rep = s.grid_template_col_auto_repeat.as_ref();
+        if let Some(mut lead) = leading_tops(rep, cx, cw, p.col_gap, em, vp, min_lo(&xs)).filter(|_| !rtl) {
+            lead_lo.0 = Some(cx);
+            lead.append(&mut col_tops);
+            col_tops = lead;
+        }
+    }
+    if row_tracks.is_none() && !ys.is_empty() {
+        let rep = s.grid_template_row_auto_repeat.as_ref();
+        if let Some(mut lead) = leading_tops(rep, cy, ch, p.row_gap, em, vp, min_lo(&ys)) {
+            lead_lo.1 = Some(cy);
+            lead.append(&mut row_tops);
+            row_tops = lead;
+        }
+    }
     let (n_cols, n_rows) = (col_tops.len() + 1, row_tops.len() + 1);
     let spans: Vec<(usize, usize, usize, usize)> = xs
         .iter()
@@ -337,7 +571,6 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             (c0, c1, r0, r1)
         })
         .collect();
-    let rtl = s.direction == lumen_layout::Direction::Rtl;
     let mut out = GridGapGeometry {
         segments: Vec::new(),
         col_total: col_tops.len(),
@@ -404,7 +637,23 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 }
             })
             .collect();
-        let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_lo + a_len, brk, vis);
+        // Дорожки, вылезшие за content box (`width: 120px` при трёх 100px-колонках), тянут
+        // линию до своего края: Chromium рисует щель на всю протяжённость сетки.
+        let (a_lo, a_hi) = {
+            let along: &[(f32, f32)] = if horizontal { &xs } else { &ys };
+            let along_tracks = if horizontal { &col_tracks } else { &row_tracks };
+            match along_tracks {
+                // Дорожки из шаблона: линия идёт от первой до последней, как рисует Chromium.
+                Some(t) => (t[0].0, t[t.len() - 1].1),
+                None => {
+                    let lead = if horizontal { lead_lo.0 } else { lead_lo.1 };
+                    let lo = along.iter().map(|e| e.0).fold(lead.unwrap_or(a_lo), f32::min);
+                    let hi = along.iter().map(|e| e.1).fold(a_lo + a_len, f32::max);
+                    (lo, hi)
+                }
+            }
+        };
+        let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_hi, brk, vis);
         let (cross_w, cross_s, cross_total) = if horizontal {
             (&s.column_rule_width, &s.column_rule_style, col_tops.len())
         } else {
@@ -468,6 +717,87 @@ mod tests {
 
     fn row_gap(x: f32, y: f32, w: f32, h: f32) -> GapSegment {
         GapSegment { rect: Rect::new(x, y, w, h), horizontal: true, gap: 0 }
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> Color {
+        Color { r, g, b, a: 255 }
+    }
+
+    /// Reference values measured in Edge (`border: 4px inset <colour>`: top = dark, bottom = light).
+    #[test]
+    fn groove_shades_match_edge() {
+        let cases = [
+            ((0, 0, 0), (84, 84, 84), (168, 168, 168)),
+            ((30, 0, 0), (114, 0, 0), (198, 0, 0)),
+            ((32, 32, 32), (116, 116, 116), (200, 200, 200)),
+            ((20, 20, 60), (48, 48, 144), (76, 76, 229)),
+            ((33, 33, 33), (0, 0, 0), (117, 117, 117)),
+            ((0, 40, 0), (0, 0, 0), (0, 124, 0)),
+            ((136, 136, 136), (52, 52, 52), (221, 221, 221)),
+            ((204, 0, 0), (120, 0, 0), (255, 0, 0)),
+            ((10, 200, 30), (5, 116, 17), (12, 255, 38)),
+            ((200, 200, 200), (116, 116, 116), (255, 255, 255)),
+            ((235, 235, 235), (151, 151, 151), (255, 255, 255)),
+            ((236, 236, 236), (152, 152, 152), (236, 236, 236)),
+            ((250, 250, 200), (166, 166, 133), (250, 250, 200)),
+            ((255, 255, 255), (171, 171, 171), (255, 255, 255)),
+            ((255, 255, 0), (171, 171, 0), (255, 255, 0)),
+        ];
+        for (c, dark, light) in cases {
+            assert_eq!(groove_shades(rgb(c.0, c.1, c.2)), (rgb(dark.0, dark.1, dark.2), rgb(light.0, light.1, light.2)), "{c:?}");
+        }
+    }
+
+    /// `ridge` is the bottom/right side of Edge's `border: 5px ridge #000`: outer 2px dark,
+    /// inner 3px light (so top→bottom: 3px light, 2px dark); `groove` (and `outset`) the other way round.
+    #[test]
+    fn ridge_and_groove_split_the_line_in_two_shades() {
+        let rule = Rect::new(10.0, 50.0, 100.0, 5.0);
+        let bands = |style| -> Vec<(f32, f32, u8)> {
+            rule_line_commands(rule, true, style, rgb(0, 0, 0))
+                .iter()
+                .map(|c| match c {
+                    DisplayCommand::DrawBorder { rect, colors, .. } => (rect.y, rect.height, colors[2].r),
+                    _ => panic!("expected DrawBorder"),
+                })
+                .collect()
+        };
+        assert_eq!(bands(BorderStyle::Ridge), vec![(50.0, 3.0, 168), (53.0, 2.0, 84)]);
+        assert_eq!(bands(BorderStyle::Inset), bands(BorderStyle::Ridge));
+        assert_eq!(bands(BorderStyle::Groove), vec![(50.0, 3.0, 84), (53.0, 2.0, 168)]);
+        assert_eq!(bands(BorderStyle::Outset), bands(BorderStyle::Groove));
+        // A 1px line has no room for two bands: one stripe in the colour itself.
+        let thin = rule_line_commands(Rect::new(0.0, 0.0, 10.0, 1.0), true, BorderStyle::Ridge, rgb(7, 8, 9));
+        assert_eq!(thin.len(), 1);
+        assert!(matches!(&thin[0], DisplayCommand::DrawBorder { colors, .. } if colors[2] == rgb(7, 8, 9)));
+        // Vertical rule: the bands split the width, painted as right sides.
+        let cmds = rule_line_commands(Rect::new(20.0, 0.0, 10.0, 80.0), false, BorderStyle::Groove, rgb(136, 136, 136));
+        assert_eq!(cmds.len(), 2);
+        if let DisplayCommand::DrawBorder { rect, widths, colors, .. } = &cmds[1] {
+            assert_eq!((rect.x, rect.width, widths[1], colors[1].r), (25.0, 5.0, 5.0, 221));
+        } else {
+            panic!("expected DrawBorder");
+        }
+        // Plain styles stay a single command.
+        assert_eq!(rule_line_commands(rule, true, BorderStyle::Dashed, rgb(1, 2, 3)).len(), 1);
+    }
+
+    #[test]
+    fn solid_rule_snaps_to_device_pixels() {
+        let snapped = |x: f32, w: f32| {
+            let r = snap_rule_rect(Rect::new(x, 2.0, w, 50.0));
+            (r.x, r.width, r.y, r.height)
+        };
+        // A tie goes up (`58.5` → 59), the width follows the rounded far edge.
+        assert_eq!(snapped(58.5, 5.0), (59.0, 5.0, 2.0, 50.0));
+        assert_eq!(snapped(58.666, 20.0), (59.0, 20.0, 2.0, 50.0));
+        // A sub-pixel line keeps one pixel.
+        assert_eq!(snapped(10.2, 0.3), (10.0, 1.0, 2.0, 50.0));
+        // The command carries the snapped rect, a dashed one keeps the fractional rect.
+        let solid = rule_line_commands(Rect::new(58.666, 0.0, 20.0, 50.0), false, BorderStyle::Solid, red());
+        assert!(matches!(&solid[0], DisplayCommand::DrawBorder { rect, .. } if rect.x == 59.0));
+        let dashed = rule_line_commands(Rect::new(58.666, 0.0, 20.0, 50.0), false, BorderStyle::Dashed, red());
+        assert!(matches!(&dashed[0], DisplayCommand::DrawBorder { rect, .. } if rect.x == 58.666));
     }
 
     #[test]
@@ -597,15 +927,15 @@ mod tests {
     }
 
     #[test]
-    fn normal_breaks_at_t_junctions_only() {
-        // Колонка 0 держит один элемент на строки 0–1: он пересекает строковую щель 0,
-        // и для колоночной щели 0 стык с ней — «Т» (щель есть только справа).
+    fn normal_ends_at_t_junctions_by_the_crossing_item_only() {
+        // Колонка 0 держит один элемент на строки 0–1: он пересекает строковую щель 0.
+        // «Т» на стыке 0: строковая щель (ножка) примыкает к колоночной (перекладине) справа и
+        // обрывается об элемент, а колоночная щель 0 идёт сквозь стык целиком.
         let mut items: Vec<_> = full_grid().into_iter().filter(|c| !(c.t0 == 0 && c.a0 < 2)).collect();
         items.push(GridItemSpan { t0: 0, t1: 0, a0: 0, a1: 1 });
         let normal = pieces(&items, RuleBreak::Normal, RuleVisibilityItems::Normal);
-        // Щель 0: разрыв на «Т» (стык 0), сквозь «крест» (стык 1) линия идёт.
-        assert_eq!(normal, vec![(0, 0.0, 100.0), (0, 120.0, 340.0), (1, 0.0, 340.0)]);
-        // `intersection` режет и на кресте.
+        assert_eq!(normal, vec![(0, 0.0, 340.0), (1, 0.0, 340.0)]);
+        // `intersection` режет и на «Т», и на кресте.
         let inter = pieces(&items, RuleBreak::Intersection, RuleVisibilityItems::Normal);
         assert_eq!(
             inter,

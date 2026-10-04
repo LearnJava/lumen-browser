@@ -55,6 +55,7 @@ mod property_syntax;
 mod pseudo;
 mod quirks;
 mod restyle;
+mod restyle_cache;
 mod rule_roots;
 mod share_cache;
 mod share_safety;
@@ -191,6 +192,7 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 // three re-exports above — `selector_query::length_to_css`'s `Length::Calc`
 // arm is its only caller.
 pub(crate) use calc::calc_node_to_css;
+pub use parse::box_sides::canonical_specified_anchor;
 pub use values::length::{
     canonical_specified_length, canonical_specified_line_width, canonical_specified_sizing_length,
     canonical_specified_block_step_size, canonical_specified_overflow_clip_margin,
@@ -228,7 +230,7 @@ pub use values::box_model::{
 };
 pub use values::timing::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
-    CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction,
+    CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction, TransitionBehavior,
     parse_css_wide_keyword,
 };
 // SPLIT-ST17. Хвост типов значений — содержимое/списки/перенос/интерактивность
@@ -240,6 +242,13 @@ pub use values::timing::{
 // (`pub mod style` в `lib.rs`; `style::apply::*` и другие крейты зовут их по
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
+pub(crate) use values::rule_computed::insert_gap_rule_computed;
+pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
+pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
+pub use values::rule_anim::{
+    GapRuleOverride, PAINTED_GAP_RULE_PROPERTIES, gap_rule_computed_css, gap_rule_endpoint_css,
+    transition_token_covers,
+};
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
@@ -264,9 +273,9 @@ pub use values::background::{
     ObjectFit, ParsedGradient, RadialShape, RadialSize, radial_gradient_radii,
 };
 pub use values::flexgrid::{
-    AlignValue, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat,
-    GridTrackSize, MasonryAutoFlow, ObjectPosition, PositionComponent, RepeatCount,
-    TextWrapMode, TextWrapStyle,
+    AlignValue, ContentAlignExtra, ContentSide, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow,
+    GridLine, GridRepeat, GridTrackSize, MasonryAutoFlow, ObjectPosition, PositionComponent,
+    RepeatCount, TextWrapMode, TextWrapStyle,
 };
 // `parse_auto_repeat` была `pub(crate)` в доноре (зовёт только `style::apply::layout`
 // внутри крейта, не публичная поверхность наружу) — реэкспорт сужен так же.
@@ -310,8 +319,9 @@ pub use env::{
 };
 pub(crate) use env::{animated_height_for, animated_heights_active};
 pub use rule_roots::restyle_roots_for_rule_changes;
+pub use restyle_cache::RestyleIndexCache;
 pub use restyle::{
-    restyle_node_index, restyle_node_index_shared, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
+    restyle_node_index, restyle_node_index_shared, restyle_state_index_owned, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
     restyle_roots_for_node_changes, restyle_state_index, NodeChange, NodeRestyleIndex, RestyleRoots, StateRestyleIndex,
 };
 // `CONTAINER_CQ`/`FONT_CH_EX` читает `style::values::length` по старому пути

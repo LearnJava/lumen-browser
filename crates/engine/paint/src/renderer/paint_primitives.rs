@@ -1478,7 +1478,13 @@ pub(crate) fn emit_border_side(
             push_fill_quad(out, r1, color);
             push_fill_quad(out, r2, color);
         }
-        BorderStyle::Solid | BorderStyle::None => {
+        BorderStyle::Solid
+        | BorderStyle::None
+        | BorderStyle::Hidden
+        | BorderStyle::Groove
+        | BorderStyle::Ridge
+        | BorderStyle::Inset
+        | BorderStyle::Outset => {
             push_fill_quad(out, side_rect, color);
         }
     }

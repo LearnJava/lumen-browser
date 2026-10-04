@@ -282,6 +282,13 @@ pub(crate) fn compute_style_shareable(
     let prof_init = lumen_core::profile::scope_detail("cs_init");
     let mut style = ComputedStyle::inheriting(inherited);
     style.display = default_display(doc, node);
+    // `inherited` is the parent's computed style: a flex/grid parent makes this
+    // box an item, and a `z-index` on a static item must create a stacking
+    // context (CSS Flexbox L1 §4.3, Grid L1 §6.4).
+    style.is_flex_grid_item = matches!(
+        inherited.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    );
     if let Some(ws) = ua_white_space(doc, node) {
         style.white_space = ws;
         style.white_space_collapse = ws.collapse_component();
@@ -1298,6 +1305,19 @@ pub(crate) fn compute_style_shareable(
     // instead. Runs after the cascade loop so it sees the final `display`.
     if style.display == Display::Contents && doc.document_element() == Some(node) {
         style.display = Display::Block;
+    }
+
+    // CSS Align L3 §vertical-align / Flexbox §4, Grid §6 — an in-flow child of a
+    // flex or grid container is blockified, and `vertical-align` only applies
+    // to inline-level boxes and table cells: the computed value has no effect
+    // on a flex/grid item, so its text must not be shifted by it (WPT
+    // `flex-item-vertical-align.html`).
+    if matches!(
+        inherited.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    ) && style.display != Display::TableCell
+    {
+        style.vertical_align = crate::style::VerticalAlign::Baseline;
     }
 
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in

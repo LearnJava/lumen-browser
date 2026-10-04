@@ -31,7 +31,7 @@ fn build_ruby_box(
     dark_mode: bool,
     prev_index: Option<&crate::incremental::ReuseIndex>,
 ) -> LayoutBox {
-    let group = |owner: NodeId, nodes: &[NodeId], parent: &ComputedStyle| {
+    let group = |owner: NodeId, nodes: &[NodeId], parent: &Arc<ComputedStyle>| {
         build_ruby_group_box(
             doc, sheet, owner, nodes, parent, viewport, flat, counters, registry, dark_mode,
             prev_index,
@@ -41,7 +41,7 @@ fn build_ruby_box(
     // as its own element box it was a block stretched to the whole line
     // (1008px for `ān`), so neighbouring rubies' annotations overlapped (WPT
     // `css-ruby/ruby-overhang-no-overlap.html`).
-    let annotation = |node: NodeId, parent: &ComputedStyle| group(node, &[node], parent);
+    let annotation = |node: NodeId, parent: &Arc<ComputedStyle>| group(node, &[node], parent);
     // CSS Ruby L1 §2.1: a floated or absolutely positioned `<rt>` is
     // blockified and stops being ruby text — it stays in the base level
     // (WPT `css-ruby/rt-display-blockified.html`).
@@ -188,7 +188,7 @@ fn build_ruby_group_box(
     sheet: &Stylesheet,
     owner_id: NodeId,
     group: &[NodeId],
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     viewport: Size,
     flat: &FlatTree,
     counters: &CounterMap,
@@ -294,7 +294,7 @@ fn build_base_select_box(
     if !label.is_empty() {
         let seg = InlineSegment {
             text: label,
-            style: anon_style(style),
+            style: Arc::new(anon_style(style)),
             pre_space: 0.0,
             post_space: 0.0,
             is_element_box: false,
@@ -456,8 +456,27 @@ pub fn incremental_build_box(
     dark_mode: bool,
     prev: &mut LayoutBox,
 ) -> LayoutBox {
+    incremental_build_box_unplaced(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev).0
+}
+
+/// [`incremental_build_box`], also handing back the subtrees it took out of `prev` and did not
+/// place in the new tree (BUG-935 срез 78: their ids are ones the caches must forget).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn incremental_build_box_unplaced(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev: &mut LayoutBox,
+) -> (LayoutBox, Vec<LayoutBox>) {
     if !incremental_box_build_enabled() {
-        return build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+        let built = build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+        return (built, Vec::new());
     }
     let t = std::time::Instant::now();
     let (prev_index, visited) = crate::incremental::extract_clean_subtrees(prev, counters.clean_subtrees());
@@ -469,7 +488,10 @@ pub fn incremental_build_box(
     if box_build_diagnostics_on() {
         note_prev_index(t.elapsed().as_nanos() as u64, visited);
     }
-    build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
+    let built =
+        build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index));
+    let unplaced = prev_index.into_values().filter_map(|slot| slot.into_inner().ok().flatten()).collect();
+    (built, unplaced)
 }
 
 /// BUG-341 S20 — timing shim around [`build_box_inner`].

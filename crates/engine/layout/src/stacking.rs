@@ -186,10 +186,9 @@ fn z_sort_key(ctx: &StackingContext) -> i32 {
 ///   `filter`, `position`, `z-index`, `clip-path`, `mask`, `mix-blend-mode`,
 ///   `isolation`, `perspective`).
 ///
-/// Отложено до flex/grid layout: flex/grid item с z-index ≠ auto. Сейчас
-/// проверяется только для положенных боксов (если родитель использует
-/// `display: flex|grid`, мы ещё не пересчитываем — флаг flex/grid item
-/// добавим вместе с реальным flex/grid pass).
+/// Flex/grid item с `z-index` ≠ auto (Flexbox L1 §4.3, Grid L1 §6.4) — тоже
+/// stacking context, даже при `position: static` (`ComputedStyle::is_flex_grid_item`,
+/// ставится каскадом по `display` родителя).
 pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
     match style.position {
         Position::Fixed | Position::Sticky => return true,
@@ -198,7 +197,14 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
                 return true;
             }
         }
-        Position::Static => {}
+        // Flexbox L1 §4.3 / Grid L1 §6.4: flex and grid items honour `z-index`
+        // even when `position: static` and then paint like a positioned box
+        // with a stacking context of its own.
+        Position::Static => {
+            if style.is_flex_grid_item && style.z_index.is_some() {
+                return true;
+            }
+        }
     }
     if style.opacity < 1.0 {
         return true;
@@ -272,6 +278,33 @@ pub fn box_can_own_stacking_context(b: &LayoutBox) -> bool {
     matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::FormControl { .. })
 }
 
+/// CSS 2.1 Appendix E, step 8: a `position: relative | absolute` element with
+/// `z-index: auto` does **not** create a stacking context, but it is painted
+/// as if it did — atomically, in the «z-index: auto/0 and positioned
+/// descendants» layer of the nearest real stacking context, i.e. above every
+/// in-flow non-positioned box of that context regardless of DOM order.
+///
+/// Such a box gets its own node and paint bucket (`owns_paint_layer`) while the
+/// stacking contexts and `z-index`ed descendants inside it stay children of the
+/// *enclosing* context (`walk`), so their z-order is resolved there. Its own
+/// `opacity`/`transform` triggers are absent by definition (they would have made
+/// it a real context). `fixed`/`sticky` are always real contexts
+/// (`creates_stacking_context`).
+pub fn is_positioned_layer_auto(style: &ComputedStyle) -> bool {
+    matches!(style.position, Position::Relative | Position::Absolute)
+        && style.z_index.is_none()
+        && !creates_stacking_context(style)
+}
+
+/// True when the box is painted in a layer of its own: a real stacking
+/// context owner or a positioned `z-index: auto` box ([`is_positioned_layer_auto`]).
+/// `StackingTree::build`, the display-list bucket walk and hit testing all key
+/// on this one predicate so they enumerate the layers in the same order.
+pub fn owns_paint_layer(b: &LayoutBox) -> bool {
+    box_can_own_stacking_context(b)
+        && (creates_stacking_context(&b.style) || is_positioned_layer_auto(&b.style))
+}
+
 /// Pre-order обход layout-дерева с накоплением stacking-контекстов —
 /// explicit heap-stack (LAYOUT-2 срез 2), not native recursion: nothing after
 /// the loop over `children` reads a value the walk produced, so this is the
@@ -282,19 +315,21 @@ pub fn box_can_own_stacking_context(b: &LayoutBox) -> bool {
 fn walk(root: &LayoutBox, root_sc: StackingContextId, tree: &mut StackingTree) {
     let mut stack: Vec<(&LayoutBox, StackingContextId)> = vec![(root, root_sc)];
     while let Some((b, parent_sc)) = stack.pop() {
-        let current_sc =
-            if box_can_own_stacking_context(b) && creates_stacking_context(&b.style) {
-                let new_id = StackingContextId(tree.contexts.len() as u32);
-                tree.contexts.push(StackingContext {
-                    id: new_id,
-                    z_index: b.style.z_index,
-                    children: Vec::new(),
-                });
-                tree.contexts[parent_sc.0 as usize].children.push(new_id);
-                new_id
-            } else {
-                parent_sc
-            };
+        // A positioned `z-index: auto` box gets a node (its own paint layer) but is
+        // not a stacking context: its descendants' contexts stay children of
+        // `parent_sc`, so their z-order is resolved against the enclosing context.
+        let current_sc = if owns_paint_layer(b) {
+            let new_id = StackingContextId(tree.contexts.len() as u32);
+            tree.contexts.push(StackingContext {
+                id: new_id,
+                z_index: b.style.z_index,
+                children: Vec::new(),
+            });
+            tree.contexts[parent_sc.0 as usize].children.push(new_id);
+            if creates_stacking_context(&b.style) { new_id } else { parent_sc }
+        } else {
+            parent_sc
+        };
         for child in b.children.iter().rev() {
             stack.push((child, current_sc));
         }
@@ -754,6 +789,44 @@ mod tests {
     }
 
     #[test]
+    fn flex_item_with_z_index_creates_stacking_context_without_position() {
+        // Flexbox L1 §4.3: `z-index` applies to a static flex item.
+        let tree = build_tree(
+            "<div id=c><p>x</p></div>",
+            "#c { display: flex; } p { z-index: 3; }",
+        );
+        assert_eq!(tree.contexts.len(), 2);
+        assert_eq!(tree.contexts[1].z_index, Some(3));
+    }
+
+    #[test]
+    fn grid_item_with_z_index_creates_stacking_context_without_position() {
+        // Grid L1 §6.4: same for a static grid item.
+        let tree = build_tree(
+            "<div id=c><p>x</p></div>",
+            "#c { display: grid; } p { z-index: -1; }",
+        );
+        assert_eq!(tree.contexts.len(), 2);
+        assert_eq!(tree.contexts[1].z_index, Some(-1));
+    }
+
+    #[test]
+    fn flex_item_with_z_index_auto_is_no_stacking_context() {
+        let tree = build_tree("<div id=c><p>x</p></div>", "#c { display: flex; } p { z-index: auto; }");
+        assert_eq!(tree.contexts.len(), 1);
+    }
+
+    #[test]
+    fn grandchild_of_flex_container_ignores_z_index() {
+        // Only direct children are items; `is_flex_grid_item` is not inherited.
+        let tree = build_tree(
+            "<div id=c><p><span style=\"display:block\">x</span></p></div>",
+            "#c { display: flex; } span { z-index: 3; }",
+        );
+        assert_eq!(tree.contexts.len(), 1);
+    }
+
+    #[test]
     fn position_relative_with_z_index_creates_stacking_context() {
         let tree = build_tree(
             "<div>x</div>",
@@ -765,8 +838,61 @@ mod tests {
 
     #[test]
     fn position_relative_without_z_index_does_not_create_stacking_context() {
-        let tree = build_tree("<div>x</div>", "div { position: relative; }");
-        assert_eq!(tree.contexts.len(), 1);
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let sheet = lumen_css_parser::parse("div { position: relative; }");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let mut stack = vec![&root];
+        let mut found = None;
+        while let Some(b) = stack.pop() {
+            if b.style.position == Position::Relative && box_can_own_stacking_context(b) {
+                found = Some(b);
+            }
+            stack.extend(b.children.iter());
+        }
+        let div = found.expect("positioned div");
+        assert!(!creates_stacking_context(&div.style));
+        // …but it is a paint layer of its own (App. E step 8): one node, z auto.
+        assert!(owns_paint_layer(div));
+        let tree = StackingTree::build(&root);
+        assert_eq!(tree.contexts.len(), 2);
+        assert_eq!(tree.contexts[1].z_index, None);
+    }
+
+    #[test]
+    fn positioned_auto_layer_is_not_a_parent_of_inner_contexts() {
+        // `.p` is positioned z-auto (a layer, not a context); the `z-index: 5`
+        // box inside it is resolved against the enclosing (root) context, so
+        // both nodes are children of the root and the inner one is not nested.
+        let html = r#"<div class="p"><div class="z">x</div></div>"#;
+        let css = ".p { position: relative; } .z { position: relative; z-index: 5; }";
+        let tree = build_tree(html, css);
+        assert_eq!(tree.contexts.len(), 3);
+        assert_eq!(tree.root().children.len(), 2);
+        assert!(tree.contexts[1].children.is_empty());
+        let z: Vec<Option<i32>> =
+            tree.root().children.iter().map(|id| tree.contexts[id.0 as usize].z_index).collect();
+        assert_eq!(z, vec![None, Some(5)]);
+    }
+
+    #[test]
+    fn positioned_auto_layer_paints_after_in_flow_siblings_in_dom_order() {
+        // An absolute z-auto box that precedes an in-flow sibling in the DOM
+        // still lands in phase 6, after the sibling's phase 3-5 content.
+        let html = r#"<div class="a"></div><div class="f">x</div>"#;
+        let css = ".a { position: absolute; }";
+        let tree = build_tree(html, css);
+        let order = PaintOrder::from_tree(&tree);
+        let root_content = order
+            .steps
+            .iter()
+            .position(|&(id, ph)| id == StackingContextId::ROOT && ph == PaintPhase::InlineContent)
+            .unwrap();
+        let layer = order
+            .steps
+            .iter()
+            .position(|&(id, ph)| id.0 == 1 && ph == PaintPhase::RootBackground)
+            .unwrap();
+        assert!(layer > root_content);
     }
 
     #[test]

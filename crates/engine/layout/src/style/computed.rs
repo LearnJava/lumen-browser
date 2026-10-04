@@ -32,7 +32,7 @@ use lumen_core::ColorSpace;
 // путь `crate::style::<Имя>` работает и для тех имён, которые донор сам
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
-    AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
+    AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
@@ -316,6 +316,12 @@ pub struct ComputedStyle {
     /// positioned- и flex/grid-item элементов это запускает создание
     /// stacking context.
     pub z_index: Option<i32>,
+    /// CSS Flexbox L1 §4.3 / Grid L1 §6.4 — the box is an in-flow child of a
+    /// flex or grid container (`inherited.display` at cascade time), so a
+    /// `z-index` other than `auto` applies to it even with `position: static`
+    /// and makes it a stacking context (`creates_stacking_context`). Not
+    /// inherited; set by the cascade, never by a declaration.
+    pub is_flex_grid_item: bool,
     /// CSS 2.1 §9.5.1 — `float`. Не наследуется. `Left`/`Right` выводят
     /// элемент из нормального потока. `None` — нормальный поток.
     pub float_side: FloatSide,
@@ -495,6 +501,11 @@ pub struct ComputedStyle {
     /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. Typed.
     /// `None` = `auto`. Phase 0: parsing only.
     pub column_width: Option<Length>,
+    /// CSS Multi-column L2 §4.2 — `column-height: auto | <length>`. `None` = `auto`.
+    pub column_height: Option<Length>,
+    /// CSS Multi-column L2 §4.4 — `column-wrap: nowrap`. `false` = `auto`/`wrap`: with a
+    /// non-auto `column-height`, overflow columns open a new row in the block direction.
+    pub column_wrap_nowrap: bool,
     /// CSS Multi-column L1 §4.1 / CSS Gap Decorations L1 §4.5 — `column-rule-width`: список
     /// px-значений по щелям (`repeat()` сохранён). Default `[3]` (`medium`).
     pub column_rule_width: RuleList<f32>,
@@ -594,6 +605,8 @@ pub struct ComputedStyle {
     pub justify_items: AlignValue,
     pub justify_self: AlignValue,
     pub justify_content: AlignValue,
+    /// `safe`/`left`/`right` of `justify-content`/`align-content` — see [`ContentAlignExtra`].
+    pub content_align_extra: ContentAlignExtra,
     /// CSS Backgrounds L3 §3 — стек фоновых слоёв. Первый элемент = верхний (рендерится поверх).
     /// Пустой Vec соответствует `background-image: none` без слоёв. `background-color` отдельно.
     pub background_layers: Vec<BackgroundLayer>,
@@ -710,6 +723,9 @@ pub struct ComputedStyle {
     /// Parallels animation-fill-mode; используется для сохранения значений
     /// в delay-периоде (backwards) и после завершения (forwards).
     pub transition_fill_modes: Vec<AnimationFillMode>,
+    /// CSS Transitions L2 §3.1 — `transition-behavior: <transition-behavior-value>#`.
+    /// Пустой список = `normal`; читается через `getComputedStyle` и JS-шимом переходов.
+    pub transition_behaviors: Vec<TransitionBehavior>,
     /// CSS Animations L1 §3.1 — `animation-name: none | <keyframes-name>#`.
     /// `none` хранится как пустой `Vec` (нет анимаций); иначе список имён.
     /// Имя соответствует `@keyframes name { ... }` в [`Stylesheet`].
@@ -1111,6 +1127,19 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// CSS Multi-column L2 §4.2 — the `column-height` in px (`None` for `auto`). `%` has no
+    /// basis (the property takes no percentages), so only absolute and font-relative lengths
+    /// resolve.
+    pub fn column_height_px(&self, em: f32, viewport: lumen_core::geom::Size) -> Option<f32> {
+        self.column_height.as_ref()?.resolve(em, None, viewport).filter(|h| *h >= 0.0)
+    }
+
+    /// CSS Multi-column L2 §4.4 — overflow columns start a new multicol row in the block
+    /// direction: a non-auto `column-height` and `column-wrap` other than `nowrap`.
+    pub fn column_rows_wrap(&self, em: f32, viewport: lumen_core::geom::Size) -> bool {
+        !self.column_wrap_nowrap && self.column_height_px(em, viewport).is_some_and(|h| h > 0.0)
+    }
+
     /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`
     /// дают `color` элемента, остальное — явный цвет в sRGB.
     pub fn used_caret_color(&self) -> Color {
@@ -1244,6 +1273,7 @@ impl ComputedStyle {
             bottom: LengthOrAuto::Auto,
             left: LengthOrAuto::Auto,
             z_index: None,
+            is_flex_grid_item: false,
             float_side: FloatSide::None,
             clear: ClearSide::None,
             initial_letter_size: 1.0,
@@ -1294,6 +1324,8 @@ impl ComputedStyle {
             column_gap: Length::Px(0.0),
             column_count: None,
             column_width: None,
+            column_height: None,
+            column_wrap_nowrap: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),
@@ -1327,6 +1359,7 @@ impl ComputedStyle {
             justify_items: AlignValue::Auto,
             justify_self: AlignValue::Auto,
             justify_content: AlignValue::Auto,
+            content_align_extra: ContentAlignExtra::default(),
             background_layers: Vec::new(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
@@ -1373,6 +1406,7 @@ impl ComputedStyle {
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
             transition_fill_modes: Vec::new(),
+            transition_behaviors: Vec::new(),
             animation_names: Vec::new(),
             animation_durations: Vec::new(),
             animation_timing_functions: Vec::new(),
@@ -1619,6 +1653,7 @@ impl ComputedStyle {
             bottom: LengthOrAuto::Auto,
             left: LengthOrAuto::Auto,
             z_index: None,
+            is_flex_grid_item: false,
             float_side: FloatSide::None,
             clear: ClearSide::None,
             initial_letter_size: 1.0,
@@ -1672,6 +1707,8 @@ impl ComputedStyle {
             // CSS Multi-column — не наследуются.
             column_count: None,
             column_width: None,
+            column_height: None,
+            column_wrap_nowrap: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),
@@ -1700,6 +1737,7 @@ impl ComputedStyle {
             justify_items: AlignValue::Auto,
             justify_self: AlignValue::Auto,
             justify_content: AlignValue::Auto,
+            content_align_extra: ContentAlignExtra::default(),
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
             // Will Change — не наследуется; Pointer Events — наследуется.
@@ -1760,6 +1798,7 @@ impl ComputedStyle {
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
             transition_fill_modes: Vec::new(),
+            transition_behaviors: Vec::new(),
             animation_names: Vec::new(),
             animation_durations: Vec::new(),
             animation_timing_functions: Vec::new(),

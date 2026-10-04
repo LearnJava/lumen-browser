@@ -345,11 +345,27 @@ pub enum BorderStyle {
     Dashed,
     Dotted,
     Double,
+    /// `hidden` — как `none`, но выигрывает конфликт (CSS Backgrounds L3 §4.3).
+    /// Из `border-style` недостижим (его разбор знает пять ключевых слов); приходит
+    /// только из `*-rule-style` (CSS Gap Decorations L1 §4.2).
+    Hidden,
+    /// `groove` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Groove,
+    /// `ridge` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Ridge,
+    /// `inset` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Inset,
+    /// `outset` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Outset,
 }
 
 impl BorderStyle {
     pub fn is_visible(self) -> bool {
-        !matches!(self, BorderStyle::None)
+        !matches!(self, BorderStyle::None | BorderStyle::Hidden)
     }
 }
 

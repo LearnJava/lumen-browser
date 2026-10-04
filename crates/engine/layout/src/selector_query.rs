@@ -742,13 +742,18 @@ fn length_or_auto_to_css(l: &LengthOrAuto) -> String {
     }
 }
 
-fn border_style_to_css(bs: BorderStyle) -> &'static str {
+pub(crate) fn border_style_to_css(bs: BorderStyle) -> &'static str {
     match bs {
         BorderStyle::None => "none",
         BorderStyle::Solid => "solid",
         BorderStyle::Dashed => "dashed",
         BorderStyle::Dotted => "dotted",
         BorderStyle::Double => "double",
+        BorderStyle::Hidden => "hidden",
+        BorderStyle::Groove => "groove",
+        BorderStyle::Ridge => "ridge",
+        BorderStyle::Inset => "inset",
+        BorderStyle::Outset => "outset",
     }
 }
 
@@ -771,6 +776,7 @@ fn align_value_to_css(a: AlignValue) -> &'static str {
         AlignValue::End => "end",
         AlignValue::Center => "center",
         AlignValue::Baseline => "baseline",
+        AlignValue::LastBaseline => "last baseline",
         AlignValue::SpaceBetween => "space-between",
         AlignValue::SpaceAround => "space-around",
         AlignValue::SpaceEvenly => "space-evenly",
@@ -1237,56 +1243,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("block-step-align".into(), style.block_step_align.to_css().into());
     m.insert("block-step-round".into(), style.block_step_round.to_css().into());
     m.insert("block-step".into(), block_step_shorthand_computed(style));
-    // CSS Gap Decorations L1 §3.2 / §3.4 / §3.5 — keyword longhands, computed = specified.
-    m.insert("column-rule-break".into(), style.column_rule_break.to_css().into());
-    m.insert("row-rule-break".into(), style.row_rule_break.to_css().into());
-    m.insert(
-        "column-rule-visibility-items".into(),
-        style.column_rule_visibility_items.to_css().into(),
-    );
-    m.insert(
-        "row-rule-visibility-items".into(),
-        style.row_rule_visibility_items.to_css().into(),
-    );
-    m.insert("rule-overlap".into(), style.rule_overlap.to_css().into());
-    // §4.1–§4.3 — per-axis width/style/color lists (computed = as specified, `repeat()` kept).
-    for (axis, w, st, c) in [
-        ("column", &style.column_rule_width, &style.column_rule_style, &style.column_rule_color),
-        ("row", &style.row_rule_width, &style.row_rule_style, &style.row_rule_color),
-    ] {
-        let (ws, ss, cs) = (
-            w.to_css(|v| px_str(*v)),
-            st.to_css(|v| border_style_to_css(*v).into()),
-            c.to_css(css_color_to_css),
-        );
-        // §4.4 shorthand: one `<width> <style> <color>` per gap, only for plain lists of equal length.
-        let (wi, si, ci) = (w.items(), st.items(), c.items());
-        let all_one = wi.len() == si.len()
-            && si.len() == ci.len()
-            && wi.iter().all(|i| matches!(i, crate::style::RuleItem::One(_)))
-            && si.iter().all(|i| matches!(i, crate::style::RuleItem::One(_)))
-            && ci.iter().all(|i| matches!(i, crate::style::RuleItem::One(_)));
-        let shorthand = if all_one {
-            w.iter()
-                .zip(st.iter())
-                .zip(c.iter())
-                .map(|((w, s), c)| format!("{} {} {}", px_str(*w), border_style_to_css(*s), css_color_to_css(c)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            String::new()
-        };
-        m.insert(format!("{axis}-rule-width"), ws);
-        m.insert(format!("{axis}-rule-style"), ss);
-        m.insert(format!("{axis}-rule-color"), cs);
-        m.insert(format!("{axis}-rule"), shorthand);
-    }
-    // §3.3 — `<inset-value>` longhands, computed = specified.
-    for (axis, insets) in [("column", &style.column_rule_inset), ("row", &style.row_rule_inset)] {
-        for (i, part) in ["cap-start", "cap-end", "junction-start", "junction-end"].iter().enumerate() {
-            m.insert(format!("{axis}-rule-inset-{part}"), insets.slot(i).to_css());
-        }
-    }
+    // CSS Gap Decorations L1 §3–§4: `column-rule*` / `row-rule*` / `rule*`.
+    crate::style::insert_gap_rule_computed(style, &mut m);
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
@@ -1843,6 +1801,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     ] {
         m.insert(name.into(), v.map_or_else(|| "normal".into(), |s| seconds_list_to_css(&[s])));
     }
+    m.insert("transition-behavior".into(), {
+        if style.transition_behaviors.is_empty() {
+            "normal".to_string()
+        } else {
+            style.transition_behaviors.iter().map(|b| b.to_css()).collect::<Vec<_>>().join(", ")
+        }
+    });
     m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
     m.insert("transition-property".into(), if style.transition_properties.is_empty() {
         "all".into()

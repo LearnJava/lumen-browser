@@ -247,7 +247,7 @@ fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSeg
     style.font_variant_caps = caps;
     super::InlineSegment {
         text: text.to_string(),
-        style,
+        style: std::sync::Arc::new(style),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -353,7 +353,7 @@ fn caps_synthesis_baseline_compensation_lowers_capitals() {
 fn caps_synthesis_respects_author_vertical_align() {
     use crate::style::{FontVariantCaps, VerticalAlign};
     let mut seg = caps_seg("ab", FontVariantCaps::SmallCaps);
-    seg.style.vertical_align = VerticalAlign::Super;
+    std::sync::Arc::make_mut(&mut seg.style).vertical_align = VerticalAlign::Super;
     let (segs, _) = super::caps_synthesis(&[seg], None).expect("must be synthesized");
     // Автор задал выравнивание явно — компенсацию не навязываем.
     assert_eq!(segs[0].style.vertical_align, VerticalAlign::Super);
@@ -453,6 +453,10 @@ mod pseudo_first_line;
 mod generated_float;
 mod shapes_and_contain;
 mod flex_align_content;
+mod flex_baseline;
+mod flex_column_wrap;
+mod multicol_rows;
+mod flex_axes;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
@@ -460,14 +464,18 @@ mod bug935_attr_local_roots;
 mod bug935_shallow_roots;
 mod bug935_cascade_bench;
 mod bug935_svg_root_children;
+mod perf16_shadow_sheets;
 mod bfc_margin_collapse;
 mod layout_box_drop;
 mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
+mod grid_item_percent_height;
 mod table_trampoline;
 mod table_caption_layout;
 mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;
+mod vertical_row;
+mod flex_vwm3;
 mod ruby_pipeline;

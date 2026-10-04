@@ -1021,7 +1021,7 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     'background': 1, 'background-image': 1, 'background-position': 1, 'background-size': 1,
     'background-repeat': 1, 'mask': 1, 'mask-image': 1,
     'transition': 1, 'transition-property': 1, 'transition-duration': 1,
-    'transition-timing-function': 1, 'transition-delay': 1,
+    'transition-timing-function': 1, 'transition-delay': 1, 'transition-behavior': 1,
     'animation': 1, 'animation-name': 1, 'animation-duration': 1, 'animation-timing-function': 1,
     'animation-delay': 1, 'animation-iteration-count': 1, 'animation-direction': 1,
     'animation-fill-mode': 1, 'animation-play-state': 1,

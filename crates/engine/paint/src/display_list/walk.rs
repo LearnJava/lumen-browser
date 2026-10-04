@@ -604,9 +604,8 @@ pub(crate) fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
 ///
 /// Returns an empty `Vec` when the container is not flex/grid, when both gap
 /// values are zero, or when neither axis has a visible rule.
-fn collect_gap_segments(b: &LayoutBox) -> GridGapGeometry {
+fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
     let none = || GridGapGeometry { segments: Vec::new(), col_total: 0, row_total: 0, column_reversed: false };
-    let s = &b.style;
     // Only flex/grid containers produce gap rules.
     let is_flex_or_grid = matches!(
         s.display,
@@ -656,7 +655,13 @@ fn collect_gap_segments(b: &LayoutBox) -> GridGapGeometry {
         })
         .collect();
 
-    if children.len() < 2 {
+    // Grid с фиксированным шаблоном дорожек имеет щели и без элементов в потоке (пустой
+    // контейнер, дети только `position: absolute`): дорожки берутся из шаблона, а если
+    // шаблон другой, `grid_gap_segments` не найдёт ни одной щели. С одним элементом щели
+    // не рисуются: `*-rule-visibility-items: around` для одиночного элемента ещё не разобран
+    // (collapsed-leading-auto-fit, repaint-on-item-position-change ухудшались).
+    let empty_grid = children.is_empty() && matches!(s.display, Display::Grid | Display::InlineGrid);
+    if children.len() < 2 && !empty_grid {
         return none();
     }
 
@@ -697,14 +702,29 @@ fn collect_gap_segments(b: &LayoutBox) -> GridGapGeometry {
 ///
 /// Shared by `walk`'s epilogue and the ordered/stacking-context path
 /// (`box_layer_ops`); the caller owns the visibility check.
-pub(crate) fn gap_decoration_commands(b: &LayoutBox) -> Vec<DisplayCommand> {
-    let geom = collect_gap_segments(b);
+///
+/// `gap_rules` — animated `*-rule-width` / `*-rule-color` (CSS Gap Decorations L1 §4.7),
+/// which replace the computed values for this paint without a relayout.
+pub(crate) fn gap_decoration_commands(
+    b: &LayoutBox,
+    gap_rules: Option<&lumen_layout::GapRuleOverride>,
+) -> Vec<DisplayCommand> {
+    let animated;
+    let s: &ComputedStyle = match gap_rules {
+        Some(o) if !o.is_empty() => {
+            let mut st = (*b.style).clone();
+            o.apply_to(&mut st);
+            animated = st;
+            &animated
+        }
+        _ => &b.style,
+    };
+    let geom = collect_gap_segments(b, s);
     if geom.segments.is_empty() {
         return Vec::new();
     }
     let (col_total, row_total, column_reversed) = (geom.col_total, geom.row_total, geom.column_reversed);
     let gap_segs = geom.segments;
-    let s = &b.style;
     let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
         gap_segs.into_iter().partition(|g| !g.horizontal);
     // CSS Gap Decorations L1 §4.6: значения списков раздаются щелям оси по порядку
@@ -771,6 +791,8 @@ struct BlockEpilogue {
     self_visible: bool,
     has_overflow_clip: bool,
     use_scroll_layer: bool,
+    /// `overflow: hidden` box scrolled by script: a `PushScrollLayer` sits inside its clip.
+    hidden_scrolled: bool,
     scroll_padding_box: Option<(f32, f32, f32, f32)>,
     is_scroll_x: bool,
     is_scroll_y: bool,
@@ -887,7 +909,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     }
     // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
     if e.self_visible {
-        out.extend(gap_decoration_commands(b));
+        out.extend(gap_decoration_commands(b, None));
     }
     if e.has_overflow_clip {
         if e.use_scroll_layer {
@@ -899,6 +921,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
                 emit_scrollbars(b, padding_box, e.is_scroll_x, e.is_scroll_y, out);
             }
         } else {
+            if e.hidden_scrolled {
+                out.push(DisplayCommand::PopScrollLayer);
+            }
             out.push(DisplayCommand::PopClip);
         }
     }
@@ -1129,6 +1154,7 @@ fn dispatch<'a>(
             let is_scroll_x = matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto);
             let is_scroll_y = matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto);
             let use_scroll_layer = (is_scroll_x || is_scroll_y) && has_overflow_clip;
+            let hidden_scrolled = !use_scroll_layer && scrolled_hidden(b);
             // Capture padding-box rect for scrollbar geometry (used after PopScrollLayer).
             let scroll_padding_box: Option<(f32, f32, f32, f32)> = if use_scroll_layer {
                 let s = &b.style;
@@ -1188,6 +1214,16 @@ fn dispatch<'a>(
                     });
                 } else {
                     out.push(DisplayCommand::PushClipRect { rect: cr });
+                    // CSS Overflow L3 §2: `hidden` is a scroll container too —
+                    // only the user cannot scroll it; `scrollTo()`/`scrollBy()`
+                    // move its content, so a non-zero offset translates it.
+                    if hidden_scrolled {
+                        out.push(DisplayCommand::PushScrollLayer {
+                            clip_rect: cr,
+                            scroll_x: b.scroll_x,
+                            scroll_y: b.scroll_y,
+                        });
+                    }
                 }
             }
             // CSS Transforms L2 §4 — `perspective` projects the box's children
@@ -1215,6 +1251,7 @@ fn dispatch<'a>(
                 self_visible,
                 has_overflow_clip,
                 use_scroll_layer,
+                hidden_scrolled,
                 scroll_padding_box,
                 is_scroll_x,
                 is_scroll_y,

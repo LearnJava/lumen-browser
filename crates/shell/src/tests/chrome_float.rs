@@ -37,13 +37,19 @@ fn action_at(doc: &lumen_dom::Document, hit: &lumen_paint::HitTestResult) -> Opt
 }
 
 /// Есть ли в списке отрисовки собственная заливка бокса панели в точке `rect`.
+/// Заливка привязана к целым пикселям (`background_clip_rect`), поэтому каждый край
+/// может отличаться от дробного края бокса не более чем на полпикселя.
 fn fills_rect(dl: &lumen_paint::DisplayList, rect: Rect) -> bool {
+    let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
     dl.iter().any(|cmd| {
         matches!(
             cmd,
             lumen_paint::DisplayCommand::FillRect { rect: r, .. }
             | lumen_paint::DisplayCommand::FillRoundedRect { rect: r, .. }
-                if *r == rect
+                if near(r.x, rect.x)
+                    && near(r.y, rect.y)
+                    && near(r.x + r.width, rect.x + rect.width)
+                    && near(r.y + r.height, rect.y + rect.height)
         )
     })
 }

@@ -175,10 +175,16 @@ mod v8_event_propagation;
 mod v8_ws_sse;
 
 #[cfg(feature = "v8-backend")]
+mod v8_websocket_sse;
+
+#[cfg(feature = "v8-backend")]
 mod v8_nav_url_storage;
 
 #[cfg(feature = "v8-backend")]
 mod v8_perf_observers;
+
+#[cfg(feature = "v8-backend")]
+mod v8_dom_observers;
 
 #[cfg(feature = "v8-backend")]
 mod v8_childnode_traversal;
@@ -274,13 +280,17 @@ mod v8_bug504_scroll_flush;
 mod v8_bug1238_scoped_collectors;
 mod v8_bug935_s58_has_flush;
 mod v8_bug935_s76_stand;
+mod v8_bug935_s78_released_evict;
 mod v8_bug935_s59_style_skip;
 mod v8_bug935_s60_shallow_roots;
 mod v8_bug935_s68_attr_local_roots;
 mod v8_bug935_s70_scope_prune;
 mod v8_bug935_s74_node_index_cache;
+mod v8_bug935_s77_scroll_rollup_cache;
 mod v8_bug935_s64_sheet_delta;
 mod v8_bug1245_inline_restyle;
+mod v8_gap_rule_cssom;
+mod v8_gap_rule_interp;
 mod v8_bug935_s61_positioned_skip;
 mod v8_bug935_s62_translated_chain;
 
@@ -413,6 +423,7 @@ mod v8_bug671_selection_interface;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1137_history_interface;
+mod v8_soft_navigation_s1;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1138_html_document;

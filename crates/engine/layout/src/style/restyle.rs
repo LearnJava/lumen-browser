@@ -211,7 +211,7 @@ pub struct StateRestyleIndex<'a> {
     conservative: bool,
     /// S14 — every compound in `sheet` whose match can flip with the state of
     /// the node it is matched against ([`collect_state_compounds`]).
-    state_compounds: Vec<&'a CompoundSelector>,
+    state_compounds: Vec<CompoundRef<'a>>,
 }
 
 impl StateRestyleIndex<'_> {
@@ -311,6 +311,21 @@ fn document_has_shadow_roots(doc: &Document) -> bool {
 /// `needs_fanout` alone), then one structural match per flipped node per
 /// state-dependent compound.
 pub fn restyle_state_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> StateRestyleIndex<'a> {
+    build_state_index(doc, sheet, CompoundRef::Borrowed)
+}
+
+/// PERF-16 срез 4 — [`restyle_state_index`] that owns its compounds instead of borrowing them
+/// from `sheet`, so a caller can keep it from one pass to the next for as long as the sheet's
+/// revision stays the same (`doc` matters only through whether it has an author shadow root).
+pub fn restyle_state_index_owned(doc: &Document, sheet: &Stylesheet) -> StateRestyleIndex<'static> {
+    build_state_index(doc, sheet, CompoundRef::owned)
+}
+
+fn build_state_index<'a, 's>(
+    doc: &Document,
+    sheet: &'s Stylesheet,
+    wrap: impl Fn(&'s CompoundSelector) -> CompoundRef<'a>,
+) -> StateRestyleIndex<'a> {
     let shadow = document_has_shadow_roots(doc);
     let mut needs_fanout = false;
     let mut conservative = shadow;
@@ -320,7 +335,11 @@ pub fn restyle_state_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> StateRe
         conservative |= rules_have_dynamic_has(rules);
         collect_rules_state_compounds(rules, &mut state_compounds);
     }
-    StateRestyleIndex { needs_fanout: needs_fanout || shadow, conservative, state_compounds }
+    StateRestyleIndex {
+        needs_fanout: needs_fanout || shadow,
+        conservative,
+        state_compounds: state_compounds.into_iter().map(wrap).collect(),
+    }
 }
 
 /// BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state

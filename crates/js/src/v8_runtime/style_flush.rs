@@ -59,12 +59,14 @@ use super::runtime::{CustomPropertySnapshot, PseudoComputedStyles};
 type IncrFlushResult = (
     lumen_layout::LayoutBox,
     lumen_layout::CounterMap,
-    std::collections::HashSet<lumen_dom::NodeId>,
-    std::collections::HashSet<u32>,
-    std::collections::HashSet<u32>,
+    lumen_core::id_hash::IdSet<lumen_dom::NodeId>,
+    lumen_core::id_hash::IdSet<u32>,
+    lumen_core::id_hash::IdSet<u32>,
     // BUG-935 срез 59: the content record this flush's cascade was licensed by
     // (`None` — it had none), for the computed-style collector's change test.
     Option<std::collections::HashSet<lumen_dom::NodeId>>,
+    // BUG-935 срез 77: the scroll-extent rollups kept with the basis tree this flush was built on.
+    lumen_layout::RollupCache,
 );
 
 /// Bundled embedder-pushed state a same-tick accessor native needs to force
@@ -206,6 +208,14 @@ pub(crate) struct FlushHandles {
     /// BUG-935 срез 70: boxes the incremental flushes left alone inside a dirty root; read
     /// through `V8JsRuntime::scope_pruned_count`.
     pub(crate) scope_pruned: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-935 срез 78: this runtime's own `LUMEN_NO_RELEASED_EVICT`, for a differential test.
+    pub(crate) released_evict_off: Arc<std::sync::atomic::AtomicBool>,
+    /// BUG-935 срез 77: this runtime's own `LUMEN_NO_SCROLL_ROLLUP_CACHE`, for a differential test.
+    pub(crate) scroll_rollup_off: Arc<std::sync::atomic::AtomicBool>,
+    /// BUG-935 срез 77: subtrees whose scroll-extent rollup the flush took from the cache / had to
+    /// walk; read through `V8JsRuntime::scroll_rollup_counts`.
+    pub(crate) scroll_rollup_served: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) scroll_rollup_walked: Arc<std::sync::atomic::AtomicU64>,
     /// BUG-935 срез 70: the previous flush's full collect, for `LUMEN_VERIFY_SCOPE_PRUNE`.
     pub(crate) verify_shadow: Arc<Mutex<VerifyShadow>>,
     /// BUG-935 срез 74: the restyle index of the last flush, kept for as long as the stylesheet
@@ -274,6 +284,10 @@ pub(crate) struct IncrFlushBasis {
     /// doc comment) and would otherwise re-widen `dirty_roots` to every
     /// node touched since the page loaded on every single flush.
     pub(crate) touch_epoch: u64,
+    /// BUG-935 срез 77: what the subtrees the flush that made `layout` left alone add to their
+    /// parents' scrollable-overflow extent — read against `layout` only (see
+    /// [`lumen_layout::ScopedCollection::scroll_containers_cached`]).
+    pub(crate) scroll_rollups: lumen_layout::RollupCache,
 }
 
 /// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
@@ -345,6 +359,21 @@ fn node_index_cache_disabled() -> bool {
 fn scope_prune_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SCOPE_PRUNE").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 77: `LUMEN_NO_SCROLL_ROLLUP_CACHE=1` walks every box for the scroll-container list
+/// again instead of folding in the extents the previous flush kept for the subtrees it left alone.
+fn scroll_rollup_cache_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SCROLL_ROLLUP_CACHE").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 78: `LUMEN_NO_RELEASED_EVICT=1` evicts the cache entries of a dirty root by listing
+/// its whole subtree in the previous tree and subtracting the subtrees the plan left alone, as
+/// before, instead of taking the ids the box build released plus the boxes the plan collects.
+fn released_evict_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_RELEASED_EVICT").is_some_and(|v| v != "0"))
 }
 
 /// BUG-935 срез 70: `LUMEN_VERIFY_SCOPE_PRUNE=1` re-collects every cache in full after each
@@ -531,14 +560,14 @@ impl FlushHandles {
         // means the full path ran and every collector below must rebuild its
         // whole-document map from scratch, same as before this slice.
         drop(incr_scope_guard);
-        let (mut layout_root, counters, incr_scope) = match incr {
-            Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)) => {
-                (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)))
+        let (mut layout_root, mut counters, incr_scope, mut cached_rollups) = match incr {
+            Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes, scroll_rollups)) => {
+                (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)), scroll_rollups)
             }
             None => {
                 let (lr, c) =
                     lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
-                (lr, c, None)
+                (lr, c, None, lumen_layout::RollupCache::default())
             }
         };
         lumen_layout::clear_interactive_state();
@@ -584,7 +613,11 @@ impl FlushHandles {
         // refreshed from it below.
         let mut scoped_plan: Option<lumen_layout::ScopedCollection<'_>> = None;
         let mut plan_census = (0usize, 0usize);
+        // BUG-935 срез 78: the ids to evict by when the box build's release list stands in for the
+        // previous tree's dirty-area listing (`released_evict_on`); `(index-keyed, raw-keyed)`.
+        let mut evict_sets: Option<(lumen_core::id_hash::IdSet<u32>, lumen_core::id_hash::IdSet<u32>)> = None;
         if let Some((dirty_roots, prev_node_ids, _, content_nodes)) = &incr_scope {
+            let released_on = self.released_evict_on();
             let mut lr = self.layout_rects.lock().unwrap_or_else(|e| e.into_inner());
             let plan_scope = lumen_core::profile::scope("flush.collect_plan");
             // BUG-935 срез 59: which elements the cascade really changed, so the
@@ -615,9 +648,22 @@ impl FlushHandles {
                 &lr,
                 viewport,
                 changed.as_ref(),
-                lumen_layout::PlanOptions { styles: styles_on, prune: prune_on },
+                lumen_layout::PlanOptions {
+                    styles: styles_on,
+                    prune: prune_on,
+                    ids: !released_on || verify_scope_prune(),
+                },
             );
             drop(plan_scope);
+            let evict_scope = lumen_core::profile::scope("flush.evict_ids");
+            if released_on {
+                let released = counters.take_released().unwrap_or_default();
+                let (mut index, mut raw) = (released.index, released.raw);
+                plan.evictable(&mut index, &mut raw);
+                evict_sets = Some((index, raw));
+            }
+            let prev_node_ids = evict_sets.as_ref().map_or(prev_node_ids, |(index, _)| index);
+            drop(evict_scope);
             let (pruned_boxes, planned_items) = plan.census();
             self.scope_pruned.fetch_add(pruned_boxes as u64, Ordering::Relaxed);
             plan_census = (pruned_boxes, planned_items);
@@ -747,7 +793,9 @@ impl FlushHandles {
         // this cache unconditionally (no `_needed` gate), so it was paying
         // the full-document cost on every single incremental flush.
         let scroll_collect_scope = lumen_core::profile::scope("flush.scroll_collect");
+        let mut next_rollups = lumen_layout::RollupCache::default();
         if let Some((dirty_roots, _, prev_node_raw_ids, _)) = &incr_scope {
+            let prev_node_raw_ids = evict_sets.as_ref().map_or(prev_node_raw_ids, |(_, raw)| raw);
             let mut ss = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
             // BUG-935 срез 70: the boxes the plan collected — a dirty root's subtree minus what it
             // left alone, plus the boxes above it — instead of every dirty root whole.
@@ -758,7 +806,18 @@ impl FlushHandles {
                             ss.remove(nid);
                         }
                     }
-                    plan.scroll_containers()
+                    // BUG-935 срез 77: the subtrees the plan left alone are folded in from the
+                    // rollups the previous flush kept with the tree they came from.
+                    if scroll_rollup_cache_disabled() || self.scroll_rollup_off.load(Ordering::Relaxed) {
+                        plan.scroll_containers()
+                    } else {
+                        let (containers, kept, (served, walked)) =
+                            plan.scroll_containers_cached(std::mem::take(&mut cached_rollups));
+                        next_rollups = kept;
+                        self.scroll_rollup_served.fetch_add(u64::from(served), Ordering::Relaxed);
+                        self.scroll_rollup_walked.fetch_add(u64::from(walked), Ordering::Relaxed);
+                        containers
+                    }
                 }
                 None => {
                     for nid in prev_node_raw_ids {
@@ -804,6 +863,7 @@ impl FlushHandles {
             sheet: Arc::clone(&sheet),
             focus: current_focus,
             touch_epoch: touched.epoch,
+            scroll_rollups: next_rollups,
         });
         drop(basis_scope);
         self.never_flushed.store(false, Ordering::Relaxed);
@@ -823,7 +883,7 @@ impl FlushHandles {
         // `[js-stall]` sample can be matched to its forced-reflow count.
         if lumen_paint::frame_log_enabled() {
             eprintln!(
-                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={} planned={} pruned_boxes={}",
+                "[engine] maybe_flush done {:.1}ms (rect collectors {:.1}ms) path={} dirty_roots={} touched={} planned={} pruned_subtrees={}",
                 flush_t0.elapsed().as_secs_f64() * 1000.0,
                 collect_ms,
                 if incr_scope.is_some() { "incremental" } else { "full" },
@@ -982,6 +1042,11 @@ impl FlushHandles {
             });
         }
         slot
+    }
+
+    /// BUG-935 срез 78: whether a flush evicts by the ids the box build released ([`released_evict_disabled`]).
+    fn released_evict_on(&self) -> bool {
+        !released_evict_disabled() && !self.released_evict_off.load(Ordering::Relaxed)
     }
 
     /// BUG-1211: attempt the incremental cascade+layout path instead of a
@@ -1192,10 +1257,14 @@ impl FlushHandles {
         // BUG-935 срез 60: the *scope* of the flush — what the collectors and the cache
         // eviction treat as changed — is the deep roots plus the shallow ones' whole
         // subtrees; the cascade itself restyles less than that.
-        let scope_roots: std::collections::HashSet<lumen_dom::NodeId> =
+        let scope_roots: lumen_core::id_hash::IdSet<lumen_dom::NodeId> =
             dirty_roots.iter().chain(shallow_roots.iter()).copied().collect();
         let prev_ids_scope = lumen_core::profile::scope("incr.prev_node_ids");
-        let (prev_node_ids, prev_node_raw_ids) = lumen_layout::collect_dirty_subtree_ids(&basis.layout, &scope_roots);
+        let (prev_node_ids, prev_node_raw_ids) = if self.released_evict_on() {
+            Default::default()
+        } else {
+            lumen_layout::collect_dirty_subtree_ids(&basis.layout, &scope_roots)
+        };
         drop(prev_ids_scope);
         let (deep_count, shallow_count) = (dirty_roots.len(), shallow_roots.len());
         let has_dependency = node_index.has_has_dependency();
@@ -1212,6 +1281,7 @@ impl FlushHandles {
             point_roots,
             content_dirty,
         };
+        let scroll_rollups = basis.scroll_rollups;
         let null_hp = lumen_core::ext::NullHyphenationProvider;
         lumen_layout::counters::set_incremental_restyle(true);
         lumen_layout::box_tree::set_incremental_box_build(true);
@@ -1229,7 +1299,7 @@ impl FlushHandles {
             eprintln!("[engine] incr cascade {:?}", lumen_layout::counters::take_cascade_stats());
             eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} sheet_roots={sheet_delta_count} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
-        Some((result.0, result.1, scope_roots, prev_node_ids, prev_node_raw_ids, content_nodes))
+        Some((result.0, result.1, scope_roots, prev_node_ids, prev_node_raw_ids, content_nodes, scroll_rollups))
     }
 
     /// CSSOM-8 вариант C: replay every recorded CSSOM write onto a throwaway

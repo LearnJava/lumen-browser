@@ -171,6 +171,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
                 // Стандартный PushClipRect (rect-только)
                 overflow_pre.push(DisplayCommand::PushClipRect { rect: cr });
             }
+            // `hidden` scrolled by script: see the same branch in `walk`.
+            if scrolled_hidden(b) {
+                overflow_pre.push(DisplayCommand::PushScrollLayer {
+                    clip_rect: cr,
+                    scroll_x: b.scroll_x,
+                    scroll_y: b.scroll_y,
+                });
+                overflow_post.push(DisplayCommand::PopScrollLayer);
+            }
             overflow_post.push(DisplayCommand::PopClip);
         }
     }
@@ -188,7 +197,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     // drew them at all, so the live window and `--screenshot` lost every rule.
     if is_paint_visible(b) && !is_hidden_empty_cell(b) {
         let at = usize::from(matches!(overflow_post.first(), Some(DisplayCommand::PopTransform)));
-        for (i, cmd) in gap_decoration_commands(b).into_iter().enumerate() {
+        for (i, cmd) in gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())).into_iter().enumerate() {
             overflow_post.insert(at + i, cmd);
         }
     }
@@ -314,8 +323,9 @@ struct ContinueFrame<'a> {
     is_sc_root: bool,
     next_idx: usize,
     /// Clips to offer to non-fixed/non-sticky children (BUG-131/BUG-159).
-    /// Always empty when `is_sc_root` — the SC-root branch always recursed
-    /// with `&[]`.
+    /// Empty for a real stacking-context root (its root_bg/post wrap the child
+    /// contexts); a positioned `z-index: auto` layer root carries its own and
+    /// inherited clips here because its descendants' contexts are emitted outside it.
     child_clips: Vec<DisplayCommand>,
     /// Closing-time state captured back when `b` itself was entered,
     /// carried untouched through every `Continue` visit until the last
@@ -461,13 +471,39 @@ fn enter_fill<'a>(
     if is_sc_root {
         split.sc_entries += 1;
         if split.enabled && ov.is_some() {
-            if current_sc == StackingContextId::ROOT {
+            if current_sc == StackingContextId::ROOT || is_positioned_layer_auto(&b.style) {
                 // Override на владельце корневого SC анимирует всю страницу —
-                // статики не остаётся, split бессмыслен.
+                // статики не остаётся, split бессмыслен. Positioned `z-index: auto`
+                // бокс — слой без собственного SC: настоящие SC его потомков лежат
+                // в чужих бакетах вне диапазона RootBackground..CloseLayer, так что
+                // диапазон не покрыл бы всё анимируемое поддерево.
                 split.invalid = true;
             } else {
                 split.animated_scs.push(current_sc.0);
             }
+        }
+        // Positioned `z-index: auto` box (CSS 2.1 App. E step 8): its own bucket,
+        // but it is not a stacking context, so its descendants' real contexts hang
+        // off the *enclosing* one and are emitted outside this bucket's
+        // root_bg..post. Their clip chain must therefore carry this box's own
+        // clips (and the ones it inherited), exactly as for a non-SC box.
+        let pseudo = current_sc != StackingContextId::ROOT && is_positioned_layer_auto(&b.style);
+        let mut layer_child_clips: Vec<DisplayCommand> = Vec::new();
+        if pseudo {
+            layer_child_clips.extend(inherited_clips.iter().cloned());
+            layer_child_clips.extend(
+                ops.overflow_pre
+                    .iter()
+                    .filter(|c| {
+                        matches!(
+                            c,
+                            DisplayCommand::PushClipRect { .. }
+                                | DisplayCommand::PushClipRoundedRect { .. }
+                                | DisplayCommand::PushScrollLayer { .. }
+                        )
+                    })
+                    .cloned(),
+            );
         }
         let bucket = &mut buckets[current_sc.0 as usize];
         // BUG-131: переустановить клипы non-SC предков как внешний слой SC.
@@ -514,7 +550,7 @@ fn enter_fill<'a>(
             current_sc,
             is_sc_root: true,
             next_idx: 0,
-            child_clips: Vec::new(),
+            child_clips: layer_child_clips,
             leave_payload: LeavePayload::ScRoot,
         }));
     } else {
@@ -597,8 +633,7 @@ fn continue_fill<'a>(
         return;
     }
     let child = &b.children[next_idx];
-    let child_creates_sc =
-        box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
+    let child_creates_sc = owns_paint_layer(child);
     let (child_sc, child_is_sc_root, child_inherited) = if child_creates_sc {
         let id = StackingContextId(*next_sc_id);
         *next_sc_id += 1;
@@ -606,9 +641,10 @@ fn continue_fill<'a>(
         // собственную scroll-aware машинерию — ни тот, ни другой не должны
         // наследовать scroll-translate предка, иначе fixed-оверлей уезжал бы
         // вместе со страницей. Rect-клипы они по-прежнему наследуют (BUG-131).
-        let inherited = if is_sc_root {
-            Vec::new()
-        } else if matches!(child.style.position, Position::Fixed | Position::Sticky) {
+        // `child_clips` is empty for a real SC root (see `ContinueFrame`), so this
+        // is the old `is_sc_root => Vec::new()` for it; a positioned-auto layer
+        // root carries its clip chain here.
+        let inherited = if matches!(child.style.position, Position::Fixed | Position::Sticky) {
             child_clips
                 .iter()
                 .filter(|c| !matches!(c, DisplayCommand::PushScrollLayer { .. }))
@@ -619,8 +655,7 @@ fn continue_fill<'a>(
         };
         (id, true, inherited)
     } else {
-        let inherited = if is_sc_root { Vec::new() } else { child_clips.clone() };
-        (current_sc, false, inherited)
+        (current_sc, false, child_clips.clone())
     };
     // PERF-16: a non-SC child is a candidate for the subtree emit cache — it
     // writes only into this SC's `contents`, so a replay is a plain append.

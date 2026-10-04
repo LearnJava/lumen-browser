@@ -261,6 +261,7 @@ pub(crate) fn run_window_mode(
         chrome_float_drag: None,
         chrome_float_last_press: None,
         chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
+        chrome_restyle_indexes: lumen_layout::style::RestyleIndexCache::default(),
         chrome_prev_interactive: (None, None, None),
         chrome_prev_viewport: None,
         chrome_prev_forced_colors: false,

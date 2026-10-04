@@ -17,8 +17,10 @@ use crate::{
     collect_computed_styles_parts, collect_layout_rects_box,
     collect_layout_rects_rec, BoxKind, CounterMap, LayoutBox, Position,
 };
+use lumen_core::id_hash::IdSet;
 use lumen_dom::NodeId;
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 type StyleMaps = HashMap<u32, crate::StyleMap>;
@@ -33,14 +35,14 @@ type StyleMaps = HashMap<u32, crate::StyleMap>;
 /// this to leave such entries published.
 pub struct ChangedNodes {
     /// Elements the cascade recomputed to a *different* style.
-    own: HashSet<NodeId>,
+    own: IdSet<NodeId>,
     /// The subset of `own` whose change can alter what its *descendants'* entries
     /// are resolved in — see [`context_style_eq`]. A new background colour is in
     /// `own` and not here.
-    context: HashSet<NodeId>,
+    context: IdSet<NodeId>,
     /// `own`, the nodes whose content changed, and every ancestor of either: a node
     /// outside it has an unchanged subtree, style and content alike.
-    closure: HashSet<NodeId>,
+    closure: IdSet<NodeId>,
     /// A float is among the nodes that changed (or contains one): its size, or its being
     /// there at all, moves the lines of the siblings after it without moving their boxes.
     floats: bool,
@@ -53,13 +55,17 @@ impl ChangedNodes {
     ///
     /// `None` for a document with an author shadow root — the closure walks DOM
     /// parents, which is not the composed tree there.
-    pub fn new(doc: &lumen_dom::Document, counters: &CounterMap, content: &HashSet<NodeId>) -> Option<Self> {
+    pub fn new<S: BuildHasher>(
+        doc: &lumen_dom::Document,
+        counters: &CounterMap,
+        content: &HashSet<NodeId, S>,
+    ) -> Option<Self> {
         if doc.has_author_shadow_roots() {
             return None;
         }
         let styles = counters.styles();
-        let mut own = HashSet::new();
-        let mut context = HashSet::new();
+        let mut own = IdSet::default();
+        let mut context = IdSet::default();
         for (&id, old) in counters.replaced_styles() {
             match styles.get(&id) {
                 Some(new) if Arc::ptr_eq(old, new) || **old == **new => {}
@@ -75,7 +81,7 @@ impl ChangedNodes {
                 }
             }
         }
-        let mut closure = HashSet::with_capacity(own.len() + content.len());
+        let mut closure = IdSet::with_capacity_and_hasher(own.len() + content.len(), Default::default());
         for &seed in own.iter().chain(content.iter()) {
             let mut cur = Some(seed).filter(|&id| doc.contains_id(id));
             while let Some(id) = cur.filter(|&id| closure.insert(id)) {
@@ -122,10 +128,10 @@ fn context_style_eq(a: &crate::style::ComputedStyle, b: &crate::style::ComputedS
 struct StyleSkips {
     /// Nodes whose own entry is still right: style, used geometry and the context
     /// it is resolved in are all what they were when it was published.
-    own: HashSet<u32>,
+    own: IdSet<u32>,
     /// Owners of an `InlineRun` whose subtree is untouched, so the entries it
     /// flattens (text and plain inline elements) are still right.
-    runs: HashSet<u32>,
+    runs: IdSet<u32>,
     reasons: Reasons,
 }
 
@@ -224,6 +230,9 @@ struct Item<'a> {
     /// Whether the computed-style map needs this item. `false` for a clean
     /// subtree that was merely translated vertically: see [`translation_keeps_styles`].
     styles: bool,
+    /// BUG-935 срез 78: the item lies inside a dirty root, i.e. in the area whose published entries
+    /// the flush evicts ([`ScopedCollection::evictable`]).
+    in_root: bool,
 }
 
 /// The boxes of an incrementally laid-out tree whose collector entries may differ
@@ -231,15 +240,23 @@ struct Item<'a> {
 /// keeps the meaning it has in the whole-tree collectors.
 pub struct ScopedCollection<'a> {
     items: Vec<Item<'a>>,
+    /// BUG-935 срез 77: the top boxes of the subtrees the plan left alone, inside a dirty root or
+    /// not — what the scroll-container pass folds in from the rollup cache instead of walking.
+    skipped: Vec<&'a LayoutBox>,
     skips: StyleSkips,
     /// BUG-935 срез 70: the node ids (`NodeId::index` / `NodeId::raw`) of the boxes in the
     /// subtrees inside a dirty root that the plan proved unchanged and leaves alone — the ids a
     /// caller evicts for the whole dirty root must not include these.
-    pruned_ids: HashSet<u32>,
-    pruned_raw_ids: HashSet<u32>,
+    ///
+    /// BUG-935 срез 78: built only with [`PlanOptions::ids`] — they cost a walk of everything the plan
+    /// left alone, which the flush no longer needs ([`Self::evictable`]).
+    pruned_ids: IdSet<u32>,
+    pruned_raw_ids: IdSet<u32>,
+    /// BUG-935 срез 78: how many subtrees inside a dirty root the plan left alone.
+    pruned_tops: usize,
     /// The boxes of subtrees inside a dirty root that moved but whose computed-style entries did
     /// not ([`translation_keeps_styles`]): their rects are collected, their styles stay.
-    style_kept_ids: HashSet<u32>,
+    style_kept_ids: IdSet<u32>,
 }
 
 /// What [`ScopedCollection::plan_with`] may do beyond the plain BUG-1238 walk.
@@ -250,6 +267,10 @@ pub struct PlanOptions {
     /// Walk a dirty root like any other box and leave its unchanged subtrees alone (срез 70)
     /// instead of collecting it whole. Needs the change record.
     pub prune: bool,
+    /// BUG-935 срез 78: list the ids of the boxes in the subtrees left alone
+    /// ([`ScopedCollection::keeps_published`] and friends). A flush that evicts through
+    /// [`ScopedCollection::evictable`] does not need them.
+    pub ids: bool,
 }
 
 impl<'a> ScopedCollection<'a> {
@@ -273,15 +294,15 @@ impl<'a> ScopedCollection<'a> {
     /// style entry provably did not change is left out of the *computed-style*
     /// collection ([`Self::keeps_computed_style`]); the rect collectors still
     /// visit every box of the item, they are two orders of magnitude cheaper.
-    pub fn plan(
+    pub fn plan<S: BuildHasher>(
         root: &'a LayoutBox,
-        dirty_roots: &HashSet<NodeId>,
-        clean_subtrees: &HashSet<NodeId>,
+        dirty_roots: &HashSet<NodeId, S>,
+        clean_subtrees: &IdSet<NodeId>,
         layout_rects: &HashMap<u32, [f32; 4]>,
         viewport: lumen_core::geom::Size,
         changed: Option<&ChangedNodes>,
     ) -> Self {
-        let opts = PlanOptions { styles: true, prune: false };
+        let opts = PlanOptions { styles: true, prune: false, ids: true };
         Self::plan_with(root, dirty_roots, clean_subtrees, layout_rects, viewport, changed, opts)
     }
 
@@ -296,10 +317,10 @@ impl<'a> ScopedCollection<'a> {
     /// entries and the walk goes on to its children; a box that moved, or is new, is collected
     /// whole as it was before.
     #[allow(clippy::too_many_arguments)]
-    pub fn plan_with(
+    pub fn plan_with<S: BuildHasher>(
         root: &'a LayoutBox,
-        dirty_roots: &HashSet<NodeId>,
-        clean_subtrees: &HashSet<NodeId>,
+        dirty_roots: &HashSet<NodeId, S>,
+        clean_subtrees: &IdSet<NodeId>,
         layout_rects: &HashMap<u32, [f32; 4]>,
         viewport: lumen_core::geom::Size,
         changed: Option<&ChangedNodes>,
@@ -309,9 +330,10 @@ impl<'a> ScopedCollection<'a> {
         let style_changed = changed.filter(|_| opts.styles);
         let mut items = Vec::new();
         let mut pruned = Vec::new();
+        let mut skipped = Vec::new();
         let mut translated = Vec::new();
         let mut skips = StyleSkips::default();
-        let mut seen = HashSet::new();
+        let mut seen = IdSet::default();
         // The third member: the parent's published `x`/`width` are where the map
         // says they are, i.e. its content box — this box's flow containing block —
         // did not move horizontally. The root's parent is the initial containing
@@ -325,7 +347,7 @@ impl<'a> ScopedCollection<'a> {
             let is_root = dirty_roots.contains(&b.node);
             let in_root = in_root || is_root;
             if is_root && prune_changed.is_none() {
-                items.push(Item { b, ctx, whole: true, styles: true });
+                items.push(Item { b, ctx, whole: true, styles: true, in_root });
                 if let Some(changed) = style_changed {
                     plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                 }
@@ -356,17 +378,18 @@ impl<'a> ScopedCollection<'a> {
                         chain && !c.floats && (full || !has_positioned_box(b))
                     });
                 if unmoved && safe {
+                    skipped.push(b);
                     if in_root {
                         pruned.push(b);
                     }
                 } else if unmoved {
-                    items.push(Item { b, ctx, whole: true, styles: true });
+                    items.push(Item { b, ctx, whole: true, styles: true, in_root });
                     if let Some(changed) = style_changed {
                         plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                     }
                 } else {
                     let styles = !translation_keeps_styles(b, r, published, parent_stable);
-                    items.push(Item { b, ctx, whole: true, styles });
+                    items.push(Item { b, ctx, whole: true, styles, in_root });
                     if !styles && in_root {
                         translated.push(b);
                     }
@@ -376,7 +399,7 @@ impl<'a> ScopedCollection<'a> {
                 }
                 continue;
             }
-            items.push(Item { b, ctx, whole: false, styles: true });
+            items.push(Item { b, ctx, whole: false, styles: true, in_root });
             let first = seen.insert(b.node);
             let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
             let stable = published.is_some_and(|p| p[0] == r.x && p[2] == r.width);
@@ -405,9 +428,9 @@ impl<'a> ScopedCollection<'a> {
             }
             stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, stable, child_chain, child_full, in_root)));
         }
-        let mut pruned_ids = HashSet::new();
-        let mut pruned_raw_ids = HashSet::new();
-        for &top in &pruned {
+        let mut pruned_ids = IdSet::default();
+        let mut pruned_raw_ids = IdSet::default();
+        for &top in pruned.iter().filter(|_| opts.ids) {
             let mut walk = vec![top];
             while let Some(b) = walk.pop() {
                 pruned_ids.insert(b.node.index() as u32);
@@ -415,7 +438,7 @@ impl<'a> ScopedCollection<'a> {
                 walk.extend(b.children.iter());
             }
         }
-        let mut style_kept_ids = HashSet::new();
+        let mut style_kept_ids = IdSet::default();
         for &top in &translated {
             let mut walk = vec![top];
             while let Some(b) = walk.pop() {
@@ -423,7 +446,7 @@ impl<'a> ScopedCollection<'a> {
                 walk.extend(b.children.iter());
             }
         }
-        Self { items, skips, pruned_ids, pruned_raw_ids, style_kept_ids }
+        Self { items, skipped, skips, pruned_ids, pruned_raw_ids, pruned_tops: pruned.len(), style_kept_ids }
     }
 
     /// Whether the plan leaves `node`'s published computed-style entry alone, so the
@@ -432,14 +455,32 @@ impl<'a> ScopedCollection<'a> {
         self.skips.own.contains(&node) || self.pruned_ids.contains(&node) || self.style_kept_ids.contains(&node)
     }
 
-    /// How many boxes lie in the subtrees the plan left alone, and how many planned items there are.
+    /// How many subtrees inside a dirty root the plan left alone, and how many planned items there are.
     pub fn census(&self) -> (usize, usize) {
-        (self.pruned_ids.len(), self.items.len())
+        (self.pruned_tops, self.items.len())
+    }
+
+    /// BUG-935 срез 78: adds to `index`/`raw` the ids of the boxes the plan collects inside a dirty
+    /// root — the subtrees it walked, as opposed to the ones it left alone. Together with the ids the
+    /// box build released from the previous tree ([`crate::incremental::ReleasedIds`]) these are the
+    /// ones whose published entries a flush evicts before collecting: every other box of the dirty
+    /// area is a subtree that was carried over and kept, with its entries.
+    pub fn evictable(&self, index: &mut IdSet<u32>, raw: &mut IdSet<u32>) {
+        for item in self.items.iter().filter(|i| i.in_root) {
+            let mut stack = vec![item.b];
+            while let Some(b) = stack.pop() {
+                index.insert(b.node.index() as u32);
+                raw.insert(b.node.raw());
+                if item.whole {
+                    stack.extend(b.children.iter());
+                }
+            }
+        }
     }
 
     /// The ids ([`Self::keeps_published`]) and raw ids ([`Self::keeps_scroll_state`]) of the
     /// boxes in the subtrees left alone — for the `LUMEN_VERIFY_SCOPE_PRUNE` self-check.
-    pub fn pruned_node_ids(&self) -> (&HashSet<u32>, &HashSet<u32>) {
+    pub fn pruned_node_ids(&self) -> (&IdSet<u32>, &IdSet<u32>) {
         (&self.pruned_ids, &self.pruned_raw_ids)
     }
 
@@ -460,7 +501,26 @@ impl<'a> ScopedCollection<'a> {
         // BUG-935 срез 75: one walk from the topmost item. A spine box's extent used to be a walk of
         // its own subtree, so a chain `html > body > …` walked the document once per link.
         let items: Vec<_> = self.items.iter().map(|it| (it.b, it.whole)).collect();
-        crate::scroll_rollup::collect_for_items(&items)
+        crate::scroll_rollup::collect_for_items(&items, None)
+    }
+
+    /// [`Self::scroll_containers`] that folds the subtrees the plan left alone in from `cache`
+    /// (BUG-935 срез 77) instead of walking them, and hands back the cache for the next flush with
+    /// the rollups of this flush's skipped subtrees, plus `(served, walked)` — how many of those
+    /// came from `cache` and how many had to be computed.
+    ///
+    /// `cache` must come from the flush whose tree this one was built on: a skipped subtree is the
+    /// previous tree's, unchanged and unmoved, so its rollup is the one computed then. A cache from
+    /// anywhere else (or none) only costs the walks it would have saved.
+    pub fn scroll_containers_cached(
+        &self,
+        cache: crate::scroll_rollup::RollupCache,
+    ) -> (Vec<crate::ScrollContainer>, crate::scroll_rollup::RollupCache, (u32, u32)) {
+        let items: Vec<_> = self.items.iter().map(|it| (it.b, it.whole)).collect();
+        let mut skips = crate::scroll_rollup::Skips::new(&self.skipped, cache);
+        let out = crate::scroll_rollup::collect_for_items(&items, Some(&mut skips));
+        let counts = (skips.hits, skips.misses);
+        (out, skips.into_kept(), counts)
     }
 
     /// Rebuilds the planned boxes' `getBoundingClientRect` entries and overwrites
@@ -662,7 +722,7 @@ fn plan_style_skips(
     layout_rects: &HashMap<u32, [f32; 4]>,
     viewport: lumen_core::geom::Size,
     changed: &ChangedNodes,
-    seen: &mut HashSet<NodeId>,
+    seen: &mut IdSet<NodeId>,
     skips: &mut StyleSkips,
 ) {
     let mut stack = vec![(root, root_ctx, root_chain.0, root_chain.1)];
@@ -831,7 +891,7 @@ mod tests {
         let after = laid(100);
         let (a, b) = (block_with_height(&after, 100.0), block_with_height(&after, 20.0));
         let dirty = HashSet::from([a.node]);
-        let clean = HashSet::from([b.node]);
+        let clean: IdSet<NodeId> = [b.node].into_iter().collect();
         let plan = ScopedCollection::plan(&after, &dirty, &clean, &published(&before), VIEWPORT, None);
         assert_eq!(planned(&plan, 100.0), [(true, true)], "the dirty root is collected whole");
         // Moved 50 → 100 px down with the same size and `x`: rect entries refresh, the
@@ -845,7 +905,7 @@ mod tests {
         let after = laid(50);
         let (a, b) = (block_with_height(&after, 50.0), block_with_height(&after, 20.0));
         let dirty = HashSet::from([b.node]);
-        let clean = HashSet::from([a.node]);
+        let clean: IdSet<NodeId> = [a.node].into_iter().collect();
         let plan = ScopedCollection::plan(&after, &dirty, &clean, &published(&before), VIEWPORT, None);
         assert!(planned(&plan, 50.0).is_empty(), "the unmoved clean sibling is skipped");
         assert_eq!(planned(&plan, 20.0), [(true, true)]);
@@ -860,7 +920,7 @@ mod tests {
         );
         let after = crate::layout(&doc, &lumen_css_parser::parse(""), VIEWPORT);
         let dirty = HashSet::from([doc.find_by_id("d").unwrap()]);
-        let plan = ScopedCollection::plan(&after, &dirty, &HashSet::new(), &published(&after), VIEWPORT, None);
+        let plan = ScopedCollection::plan(&after, &dirty, &IdSet::default(), &published(&after), VIEWPORT, None);
         assert!(plan.items.iter().any(|it| it.whole) && plan.items.iter().any(|it| !it.whole), "needs a spine and a whole item");
         let mut old = Vec::new();
         for it in &plan.items {
@@ -878,6 +938,86 @@ mod tests {
         let new = plan.scroll_containers();
         assert!(!new.is_empty());
         assert_eq!(new.iter().map(key).collect::<Vec<_>>(), old.iter().map(key).collect::<Vec<_>>());
+    }
+
+    /// BUG-935 срез 77: two flushes in a row on a page whose scroll container `p` gets its extent
+    /// from a subtree the plan leaves alone. The second flush folds that subtree in from the cache the
+    /// first one left, and publishes what a walk of every box publishes; a change inside the subtree
+    /// is not served from the cache.
+    #[test]
+    fn a_skipped_subtrees_scroll_extent_is_served_from_the_cache_and_matches_a_full_walk() {
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = "<body style=\"margin:0\"><div id=\"p\" style=\"overflow:auto;width:100px;height:60px\">                    <div id=\"a\"><div id=\"a1\" style=\"width:300px;height:10px\"></div></div>                    <div id=\"b\" style=\"height:20px\"><div style=\"margin-left:-20px;width:40px;height:5px\"></div></div></div></body>";
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let hp = NullHyphenationProvider;
+        let (mut prev, mut prev_counters) = layout_measured_hyp_with_counters(&doc, &sheet, VIEWPORT, &Fixed, &hp, false);
+        let p = doc.find_by_id("p").unwrap();
+        let a1 = doc.find_by_id("a1").unwrap();
+        let key = |v: &[crate::ScrollContainer]| {
+            v.iter()
+                .map(|c| (c.node, c.clip_rect.width.to_bits(), c.scroll_width.to_bits(), c.scroll_height.to_bits()))
+                .collect::<Vec<_>>()
+        };
+        let mut cache = crate::scroll_rollup::RollupCache::default();
+        // Flush 1 and 2 append a child to `p` (a shallow root: its children are carried over);
+        // flush 3 resizes `a1` instead.
+        for step in 0..3 {
+            let published = crate::collect_layout_rects(&prev, &doc);
+            let (dirty, shallow, content) = if step < 2 {
+                let n = doc.create_element(lumen_dom::QualName::html("span"));
+                doc.append_child(p, n);
+                (HashSet::new(), HashSet::from([p]), HashSet::from([p, n]))
+            } else {
+                if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(a1).data {
+                    for attr in attrs.iter_mut().filter(|a| a.name.local == "style") {
+                        attr.value = "width:500px;height:10px".to_string();
+                    }
+                }
+                (HashSet::from([a1]), HashSet::new(), HashSet::from([a1]))
+            };
+            let delta = RestyleDelta {
+                prev_styles: prev_counters.into_styles(),
+                dirty_roots: dirty.clone(),
+                content_dirty: ContentDirty::Nodes(&content),
+                shallow_roots: shallow.clone(),
+                point_roots: Default::default(),
+            };
+            set_incremental_restyle(true);
+            let (after, counters) =
+                layout_mutation_incremental_restyle(&doc, &sheet, VIEWPORT, &Fixed, &hp, false, prev, delta);
+            set_incremental_restyle(false);
+            let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
+            let scope: HashSet<NodeId> = dirty.iter().chain(&shallow).copied().collect();
+            let plan = ScopedCollection::plan_with(
+                &after, &scope, counters.clean_subtrees(), &published, VIEWPORT, Some(&changed),
+                PlanOptions { styles: false, prune: true, ids: true },
+            );
+            let (cached, next, (served, walked)) = plan.scroll_containers_cached(std::mem::take(&mut cache));
+            let walk_all = plan.scroll_containers();
+            assert_eq!(key(&cached), key(&walk_all), "step {step}");
+            let pc = cached.iter().find(|c| c.node == p).expect("p is a scroll container");
+            // 20 px more: the box in `b` sticks out to the left of the padding box.
+            let want = if step < 2 { 320.0 } else { 520.0 };
+            assert_eq!(pc.scroll_width, want, "step {step}");
+            match step {
+                // Nothing cached yet: `a1`, the box inside `b` (their parents are re-cascaded with
+                // the shallow root `p`) and the unmoved `head` outside the root are walked.
+                0 => assert_eq!((served, walked), (0, 3)),
+                // The same subtrees are skipped again, and the first flush kept every one of them.
+                1 => assert_eq!((served, walked), (3, 0), "second flush is served from the cache"),
+                // `a1` is the dirty root now, so it is no longer a skipped top and its stale entry is
+                // not read; `b` is a skipped top for the first time (its inner box was before), so it
+                // is walked; `head` is served.
+                _ => assert_eq!((served, walked), (1, 1), "a changed subtree is not served from the cache"),
+            }
+            cache = next;
+            prev = after;
+            prev_counters = counters;
+        }
     }
 
     struct Fixed;
@@ -1043,7 +1183,8 @@ mod tests {
 
     /// BUG-935 срез 70: the `lenta.ru` font-probe loop in miniature — a child appended to a
     /// shallow root whose existing children are carried over untouched.
-    fn append_to_shallow_root() -> (Vec<(&'static str, bool, bool)>, usize, usize) {
+    #[allow(clippy::type_complexity)]
+    fn append_to_shallow_root() -> (Vec<(&'static str, bool, bool, bool)>, usize, usize) {
         use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
         use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
         use lumen_core::ext::NullHyphenationProvider;
@@ -1067,20 +1208,40 @@ mod tests {
             point_roots: Default::default(),
         };
         set_incremental_restyle(true);
-        let (after, counters) =
+        crate::box_tree::set_incremental_box_build(true);
+        let (after, mut counters) =
             layout_mutation_incremental_restyle(&doc, &sheet, VIEWPORT, &Fixed, &hp, false, prev, delta);
+        crate::box_tree::set_incremental_box_build(false);
         set_incremental_restyle(false);
         let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
-        let opts = PlanOptions { styles: true, prune: true };
+        let opts = PlanOptions { styles: true, prune: true, ids: true };
         let plan = ScopedCollection::plan_with(
             &after, &HashSet::from([p]), counters.clean_subtrees(), &published, VIEWPORT, Some(&changed), opts,
         );
+        // The flush evicts by the ids the build released plus the boxes the plan collects.
+        let released = counters.take_released().expect("the pass records what it released");
+        let (mut evict, mut evict_raw) = (released.index, released.raw);
+        plan.evictable(&mut evict, &mut evict_raw);
+        // Listing the ids of what was left alone is optional and changes nothing else.
+        let unlisted = ScopedCollection::plan_with(
+            &after,
+            &HashSet::from([p]),
+            counters.clean_subtrees(),
+            &published,
+            VIEWPORT,
+            Some(&changed),
+            PlanOptions { ids: false, ..opts },
+        );
+        assert_eq!(unlisted.census(), plan.census());
+        assert!(!unlisted.keeps_published(doc.find_by_id("a1").unwrap().index() as u32));
         let ids = ["p", "a", "a1", "b", "b1"];
         let rows = ids
             .iter()
             .map(|id| {
-                let n = doc.find_by_id(id).unwrap().index() as u32;
-                (*id, plan.keeps_published(n), plan.keeps_computed_style(n))
+                let n = doc.find_by_id(id).unwrap();
+                assert_eq!(evict.contains(&(n.index() as u32)), evict_raw.contains(&n.raw()));
+                let n = n.index() as u32;
+                (*id, plan.keeps_published(n), plan.keeps_computed_style(n), evict.contains(&n))
             })
             .collect();
         let whole_items = plan.items.iter().filter(|it| it.whole).count();
@@ -1097,6 +1258,9 @@ mod tests {
         assert!(!get("p").1 && !get("a").1 && !get("b").1, "the spine is collected for its rects: {rows:?}");
         // The spine's computed-style entries stay too: nothing in them changed.
         assert!(get("p").2 && get("a").2 && get("b").2 && get("a1").2 && get("b1").2, "styles kept: {rows:?}");
+        // The spine is evicted before it is collected again; what was carried over is not.
+        assert!(get("p").3 && get("a").3 && get("b").3, "the spine is evicted: {rows:?}");
+        assert!(!get("a1").3 && !get("b1").3, "carried-over grandchildren keep their entries: {rows:?}");
         // The new span is in the change record, so it is a spine item too; nothing needs a whole walk.
         assert_eq!(whole, 0, "no subtree is collected whole ({items} items)");
     }
@@ -1120,7 +1284,7 @@ mod tests {
     fn nothing_is_pruned_without_a_clean_record() {
         let after = laid(50);
         let plan =
-            ScopedCollection::plan(&after, &HashSet::new(), &HashSet::new(), &published(&after), VIEWPORT, None);
+            ScopedCollection::plan(&after, &HashSet::new(), &IdSet::default(), &published(&after), VIEWPORT, None);
         let mut boxes = 0;
         let mut stack = vec![&after];
         while let Some(b) = stack.pop() {
