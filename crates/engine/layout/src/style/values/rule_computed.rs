@@ -20,7 +20,12 @@ use crate::style::{BorderStyle, Color, ComputedStyle, CssColor, Length};
 const INSET_PARTS: [&str; 4] = ["cap-start", "cap-end", "junction-start", "junction-end"];
 
 fn color_css(c: &CssColor, current: Color) -> String {
-    color_to_css(c.resolve(current))
+    match c {
+        // `color(srgb …)` / `color-mix(in srgb, …)` сохраняют функциональную форму
+        // (CSS Color L4 §4.2), а не сводятся к `rgb()`.
+        CssColor::Wide(f) => f.to_css_string(),
+        _ => color_to_css(c.resolve(current)),
+    }
 }
 
 /// Длина inset в computed-форме: px, если известна без базиса процента.
