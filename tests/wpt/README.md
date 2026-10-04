@@ -260,6 +260,17 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   stale), each lane guards only its own ports, and `heavy_lock` is held while
   any lane runs. Measured A/B — `docs/tasks/p2-wpt-runner-throughput.md`
   §WPT-RUN-9.
+  `--max-browser-gb G` (default 4, `0` off) — `browser_rss_cap.py` watches the
+  run's own `lumen` processes (descendants of `run_corpus.py` only — another
+  session's browsers are never looked at) and kills one whose RSS passes G GB;
+  wptrunner records its test as CRASH and restarts the browser. Healthy
+  browsers peak at ~1 GB, the runaways (acid3 BUG-1267, the `webstorage`
+  quota tests) at 15-25 GB and TIMEOUT with no subtests anyway, so the cap
+  costs no score and keeps the other lanes out of the page file. Kills go to
+  `<out-dir>/rss-cap-kills.jsonl`, the shard state carries `rss_cap_kills`
+  (`batch_rss_cap_kills` on batch members), the snapshot `max_browser_gb` and
+  the kill count. Needs `psutil` (in the documented venv); without it the cap
+  is off and the run says so.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =

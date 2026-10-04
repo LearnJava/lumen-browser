@@ -56,6 +56,7 @@ MANIFEST_PATH = os.path.join(METADATA_ROOT, "MANIFEST.json")
 DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, ".tmp", "wpt-corpus")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import browser_rss_cap  # noqa: E402
 import corpus_stats  # noqa: E402
 import heavy_lock  # noqa: E402
 import port_guard  # noqa: E402
@@ -614,10 +615,13 @@ def shard_targets(shard: dict) -> list:
 
 
 def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int,
-              exclude_file: str = None, extra_env: dict = None) -> dict:
+              exclude_file: str = None, extra_env: dict = None, rss_cap=None) -> dict:
     """Run one shard (or one batch of them, `plan_units`) as a subprocess;
     never raises on a failing shard. `extra_env` carries the parallel lane's
-    server config (`run_smoke.SERVER_CONFIG_ENV`)."""
+    server config (`run_smoke.SERVER_CONFIG_ENV`); `rss_cap` is the run's
+    `browser_rss_cap.BrowserRssCap`, used only to count the browsers it killed
+    under this shard."""
+    attempt_pids = []
     report_path = shard_report_path(out_dir, shard)
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
     log_path = os.path.splitext(report_path)[0] + ".log"
@@ -662,6 +666,7 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
                                      start_new_session=(os.name != "nt"), env=env)
+            attempt_pids.append(proc.pid)
             try:
                 returncode = proc.wait(timeout=timeout)
                 outcome = "ran"
@@ -702,6 +707,12 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
              "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
     if log_says_port_conflict(log_path):
         state["port_conflict"] = True
+    if rss_cap is not None:
+        killed = sum(len(rss_cap.kills_under(pid)) for pid in attempt_pids)
+        if killed:
+            # The test that browser was running is reported CRASH by wptrunner;
+            # this is what tells such a CRASH apart from an engine crash.
+            state["rss_cap_kills"] = killed
     return state
 
 
@@ -876,6 +887,11 @@ def split_batch(batch: dict, state: dict, out_dir: str) -> list:
             member_state["salvaged"] = True
         if state.get("port_conflict"):
             member_state["port_conflict"] = True
+        if state.get("rss_cap_kills"):
+            # Counted per wptrunner process, so per batch: which member's test
+            # the killed browser was running is in `rss-cap-kills.jsonl` time
+            # order, not here.
+            member_state["batch_rss_cap_kills"] = state["rss_cap_kills"]
         states.append(member_state)
     return states
 
@@ -951,7 +967,8 @@ class SharedHeavyLock:
 MEMORY_GATE_POLL = 10.0
 
 
-def run_units_parallel(units: list, binary: str, args, exclude_file, finish) -> int:
+def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
+                       rss_cap=None) -> int:
     """Run `units` on `args.parallel_shards` lanes pulling from one queue.
 
     Each lane is a thread driving one `run_shard` subprocess at a time on its
@@ -1037,7 +1054,7 @@ def run_units_parallel(units: list, binary: str, args, exclude_file, finish) -> 
             shared_lock.acquire()
             try:
                 state = run_shard(unit, binary, args.out_dir, args.processes, budget,
-                                  exclude_file, extra_env)
+                                  exclude_file, extra_env, rss_cap)
             finally:
                 shared_lock.release()
                 with mutex:
@@ -1527,6 +1544,10 @@ def _selftest() -> int:
     checks.extend(_selftest_resume())
     checks.extend(_selftest_prefixes())
     checks.extend(_selftest_batches())
+    with contextlib.redirect_stdout(io.StringIO()):
+        cap_status = browser_rss_cap._selftest()  # noqa: SLF001 — its own selftest
+    checks.append(("browser rss cap kills only an oversized lumen of this run",
+                   cap_status == 0))
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     failed = [label for label, ok in checks if not ok]
@@ -1757,6 +1778,12 @@ def main() -> int:
                         help="with --parallel-shards, a lane waits to start a shard while less "
                              "physical memory than this is free and another lane is busy "
                              "(default: 6; 0 disables the gate)")
+    parser.add_argument("--max-browser-gb", type=float, default=browser_rss_cap.DEFAULT_CAP_GB,
+                        help="kill a lumen of this run whose resident memory passes this many GB; "
+                             "wptrunner reports its test CRASH and restarts the browser "
+                             "(tests/wpt/browser_rss_cap.py — healthy browsers peak at ~1 GB, "
+                             "the few runaways at 15-25 GB and TIMEOUT with no subtests anyway; "
+                             f"default: {browser_rss_cap.DEFAULT_CAP_GB}, 0 disables)")
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=None,
                         help="flat per-id time budget, seconds; default is to derive the "
@@ -1920,45 +1947,57 @@ def main() -> int:
             write_checkpoint()
             return states
 
-        if args.parallel_shards > 1:
-            status = run_units_parallel(units, binary, args, exclude_file, finish)
-            if status:
-                return status
-        for index, shard in enumerate(units if args.parallel_shards <= 1 else [], 1):
-            # A shard that cannot bind its own ports does not fail — it is
-            # answered by whatever holds them, and scores against files and
-            # route parameters that belong to a run nobody is watching
-            # (slice 18). Checking here rather than once at startup is what
-            # catches the leak this run leaves behind itself.
-            if not args.no_port_guard:
-                try:
-                    port_guard.ensure_free(own_pid=os.getpid())
-                except port_guard.PortsBusy as exc:
-                    print(f"\n{exc}", file=sys.stderr)
-                    print(f"stopped before shard {index}/{len(units)} "
-                          f"({shard['name']}); {len(shard_states)} shards are "
-                          f"checkpointed — rerun the same command with --resume",
-                          file=sys.stderr, flush=True)
-                    return 1
-                # `kill_tree` reaps a timed-out shard's own `lumen` orphans
-                # immediately; this is the fallback for the ones it can't
-                # reach — a *previous, external* SIGKILL of this very process
-                # (session teardown, another OOM kill) skips `kill_tree`
-                # entirely, since a caught-nothing SIGKILL runs no Python at
-                # all (BUG-1029).
-                port_guard.reap_lumen_orphans(own_pid=os.getpid())
-            budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
-                                   args.processes)
-            print(f"[{index}/{len(units)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
-            # BUG-1029 §3: held per shard, not for the whole (possibly
-            # multi-day, --resume'd) run — a shard's browsers are the memory
-            # spike, and releasing between shards lets a build waiting on
-            # scripts/cargo-heavy.sh get in during the gap instead of being
-            # starved for as long as this corpus run keeps going.
-            with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
-                state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
-            finish(shard, state)
-            print(f" {state['outcome']} in {state['seconds']}s", flush=True)
+        rss_cap = browser_rss_cap.BrowserRssCap(args.max_browser_gb, args.out_dir)
+        if rss_cap.start():
+            print(f"--max-browser-gb {args.max_browser_gb}: a lumen of this run above it is "
+                  f"killed (test -> CRASH), kills logged to {browser_rss_cap.KILLS_FILE}",
+                  flush=True)
+        else:
+            rss_cap = None
+        try:
+            if args.parallel_shards > 1:
+                status = run_units_parallel(units, binary, args, exclude_file, finish, rss_cap)
+                if status:
+                    return status
+            for index, shard in enumerate(units if args.parallel_shards <= 1 else [], 1):
+                # A shard that cannot bind its own ports does not fail — it is
+                # answered by whatever holds them, and scores against files and
+                # route parameters that belong to a run nobody is watching
+                # (slice 18). Checking here rather than once at startup is what
+                # catches the leak this run leaves behind itself.
+                if not args.no_port_guard:
+                    try:
+                        port_guard.ensure_free(own_pid=os.getpid())
+                    except port_guard.PortsBusy as exc:
+                        print(f"\n{exc}", file=sys.stderr)
+                        print(f"stopped before shard {index}/{len(units)} "
+                              f"({shard['name']}); {len(shard_states)} shards are "
+                              f"checkpointed — rerun the same command with --resume",
+                              file=sys.stderr, flush=True)
+                        return 1
+                    # `kill_tree` reaps a timed-out shard's own `lumen` orphans
+                    # immediately; this is the fallback for the ones it can't
+                    # reach — a *previous, external* SIGKILL of this very process
+                    # (session teardown, another OOM kill) skips `kill_tree`
+                    # entirely, since a caught-nothing SIGKILL runs no Python at
+                    # all (BUG-1029).
+                    port_guard.reap_lumen_orphans(own_pid=os.getpid())
+                budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
+                                       args.processes)
+                print(f"[{index}/{len(units)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
+                # BUG-1029 §3: held per shard, not for the whole (possibly
+                # multi-day, --resume'd) run — a shard's browsers are the memory
+                # spike, and releasing between shards lets a build waiting on
+                # scripts/cargo-heavy.sh get in during the gap instead of being
+                # starved for as long as this corpus run keeps going.
+                with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
+                    state = run_shard(shard, binary, args.out_dir, args.processes, budget,
+                                      exclude_file, rss_cap=rss_cap)
+                finish(shard, state)
+                print(f" {state['outcome']} in {state['seconds']}s", flush=True)
+        finally:
+            if rss_cap is not None:
+                rss_cap.stop()
 
     # A run only gets to be scored against what it actually covered. The scope
     # is derived from the shards, not from the CLI selection, so a resumed or
@@ -2007,6 +2046,8 @@ def main() -> int:
             "processes": args.processes,
             "parallel_shards": getattr(args, "parallel_shards", 1),
             "batch_small": getattr(args, "batch_small", 0),
+            "max_browser_gb": getattr(args, "max_browser_gb", 0),
+            "rss_cap_kills": len(browser_rss_cap.load_kills(args.out_dir)),
             "scope": sorted(scope) if scope else "full-corpus",
             "prefixes": prefixes,
             "exclude_prefixes": exclude_prefixes,
