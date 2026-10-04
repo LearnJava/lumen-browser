@@ -24,6 +24,7 @@ the static `executor_kwargs()` dict below.
 import errno
 import io
 import os
+import threading
 import time
 import traceback
 
@@ -54,6 +55,35 @@ _IPC_TOKEN_LINE_PREFIX = b"LUMEN_IPC_TOKEN="
 _LUMEN_TESTHARNESSREPORT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "..", "..", "..", "tests", "wpt", "resources", "testharnessreport.js"))
+
+#: Env var: `off` launches browsers without `_SPAWN_LOCK` (the old behaviour),
+#: for an A/B. Anything else (or unset) serializes the launch.
+SPAWN_LOCK_ENV = "LUMEN_WPT_SPAWN_LOCK"
+
+#: Serializes `ProcessHandler.run()` across the `TestRunnerManager` threads
+#: of one wptrunner process. On Windows mozprocess creates the child with
+#: `bInheritHandles=1` and no handle list (`processhandler.py`,
+#: `winprocess.CreateProcess(..., 1, ...)`), after `subprocess` has made the
+#: child ends of *this* launch's stdout/stderr pipes inheritable. A second
+#: manager launching its browser in that window inherits them too — so the
+#: first browser's stdout pipe has two writers. When the first browser is
+#: killed on a restart, its pipe gets no EOF while the second one lives,
+#: mozprocess's reader thread never ends, and `WebDriverBrowser.stop`'s
+#: `proc.kill(timeout=5)` waits it out: 6.1 s (12.1 s when the leak is
+#: two-deep) per restart instead of 0.1 s. Measured on the 2026-10-04 A/B
+#: logs: 14-18 of ~88 restarts per run, 7 managers. The whole `run()` is
+#: held — pipe creation through `CreateProcess` through closing the child
+#: ends — which is ~20 ms, so the launches themselves are not slowed.
+_SPAWN_LOCK = threading.Lock()
+
+
+def _start_process(proc):
+    """`proc.run()` under `_SPAWN_LOCK` (unless `SPAWN_LOCK_ENV` is `off`)."""
+    if os.environ.get(SPAWN_LOCK_ENV, "").strip().lower() in ("off", "none", "0"):
+        proc.run()
+        return
+    with _SPAWN_LOCK:
+        proc.run()
 
 __wptrunner__ = {
     "product": "lumen",
@@ -289,7 +319,7 @@ class LumenBrowser(WebDriverBrowser):
             # BUG-961: see `_run_server_bidi`'s comment — same fix, same reason.
             bufsize=io.DEFAULT_BUFFER_SIZE)
         self.logger.info("Starting Lumen --ipc-server: %s" % " ".join(cmd))
-        self._proc.run()
+        _start_process(self._proc)
         self._output_handler.after_process_start(self._proc.pid)
         try:
             while (self._output_handler.ipc_port is None
@@ -366,7 +396,7 @@ class LumenBrowser(WebDriverBrowser):
 
         self.logger.info("Starting WebDriver: %s" % " ".join(cmd))
         try:
-            self._proc.run()
+            _start_process(self._proc)
         except OSError as e:
             if e.errno == errno.ENOENT:
                 raise OSError(
