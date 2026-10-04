@@ -832,6 +832,36 @@ use lumen_dom::NodeId;
         assert_eq!(rules.len(), 0, "no column-count/width → no separators");
     }
 
+    #[test]
+    fn column_rule_separates_overflow_columns() {
+        // `column-fill:auto` + a definite height: 400px of content in 100px columns spills
+        // into overflow columns past `column-count` (Multicol L1 §7.1) — every column gets a rule.
+        let dl = build(
+            r#"<div style="width:100px;height:100px;columns:2;column-fill:auto;column-gap:10px;
+                           column-rule:10px solid gold">
+                 <div style="height:400px;background:cyan"></div>
+               </div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        // 4 columns of 45px (content 400px / 100px) → 3 separators, not column-count - 1 = 1.
+        assert_eq!(rules.len(), 3, "got {}", rules.len());
+    }
+
+    #[test]
+    fn column_rule_cap_inset_shortens_the_line() {
+        // CSS Gap Decorations L1 §3.3: `column-rule-inset: 4px` trims 4px off both block ends.
+        let dl = build(
+            r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;
+                           column-rule:10px solid gold;column-rule-inset:4px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 1);
+        let DisplayCommand::DrawBorder { rect, .. } = rules[0] else { panic!("DrawBorder") };
+        assert!((rect.height - 92.0).abs() < 0.01 && (rect.y - 4.0).abs() < 0.01, "rect {rect:?}");
+    }
+
     // ── position:sticky display list tests ──────────────────────────────────
 
     #[test]
