@@ -1455,10 +1455,49 @@ use lumen_dom::NodeId;
         let dl = super::ordered_build_scroll::build_ordered(&html, "");
         assert_eq!(column_rule_cmds(&dl).len(), 1, "ordered path: one column rule");
         assert_eq!(horizontal_rule_cmds(&dl).len(), 1, "ordered path: one row rule");
-        // Rules sit inside the overflow clip, after the children's fills.
-        let last_fill = dl.iter().rposition(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
-        let first_rule = dl.iter().position(|c| matches!(c, DisplayCommand::DrawBorder { .. })).unwrap();
-        assert!(first_rule > last_fill, "gap rules must paint over the children");
+        // Rules sit inside the overflow clip, «just above the border» of the container and
+        // *under* the children (Gap Decorations L1 §2.1): before the children's fills.
+        let first_fill = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+        let last_rule = dl.iter().rposition(|c| matches!(c, DisplayCommand::DrawBorder { .. })).unwrap();
+        assert!(last_rule < first_fill, "gap rules must paint under the children");
+    }
+
+    /// flex-gap-decorations-033: `gap: 0` в wrap-flex — линия по центру шва соседних
+    /// элементов, а не потерянная щель.
+    const FLEX_WRAP_0GAP: &str = r#"<div style="display:flex;flex-wrap:wrap;width:150px;{}">
+        <div style="width:50px;height:50px"></div><div style="width:50px;height:50px"></div>
+        <div style="width:50px;height:50px"></div><div style="width:100px;height:50px"></div>
+        <div style="width:50px;height:50px"></div></div>"#;
+
+    #[test]
+    fn flex_rules_at_the_seams_when_gap_is_zero() {
+        let html = FLEX_WRAP_0GAP.replace("{}", "column-rule:10px solid red;row-rule:10px solid blue");
+        let dl = build(&html, "");
+        let cols: Vec<_> = column_pieces(&dl);
+        // Строка 1: швы x=50 и x=100; строка 2: шов x=100 (после элемента в 100px).
+        assert_eq!(cols, vec![(45, 0, 50), (95, 0, 50), (95, 50, 50)], "{cols:?}");
+        let rows = horizontal_rule_cmds(&dl);
+        assert_eq!(rows.len(), 1, "две строки → один шов, получили {}", rows.len());
+    }
+
+    #[test]
+    fn flex_rules_with_a_real_gap_do_not_count_touching_items() {
+        // `column-gap: 10px`: элементы вплотную (без зазора) — не щель; щель только настоящая.
+        let html = r#"<div style="display:flex;width:200px;column-gap:10px;column-rule:2px solid red">
+            <div style="width:50px;height:20px"></div><div style="width:50px;height:20px"></div></div>"#;
+        let dl = build(html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1);
+    }
+
+    /// Gap Decorations L1 §2.1: rules are painted just above the container's border, under its
+    /// children — a translucent item shows the rule through it (flex-gap-decorations-033).
+    #[test]
+    fn gap_rules_paint_under_the_children() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red").replace("<div></div>", "<div style=\"background:blue\"></div>");
+        let dl = build(&html, "");
+        let first_fill = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+        let last_rule = dl.iter().rposition(|c| matches!(c, DisplayCommand::DrawBorder { .. })).unwrap();
+        assert!(last_rule < first_fill, "walk: gap rules must precede the children's fills");
     }
 
     // ── CSS Lists L3 §2.1 — list marker geometric rendering ─────────────────
