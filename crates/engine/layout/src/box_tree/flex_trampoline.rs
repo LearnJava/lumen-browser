@@ -269,7 +269,9 @@ fn step_item(
             // code's comment (the one page of the graphic-test corpus where
             // an A/B caught the 0.01px difference).
             let dy = ((content_y + main_cursor) + m_t) - (content_y + m_t);
-            shift_tree(&mut frame.b.children[pos.i], 0.0, dy);
+            // Wrapped column: the probe laid the item at the first line's x; later
+            // lines are offset by the cross cursor (CSS Flexbox L1 §9.4).
+            shift_tree(&mut frame.b.children[pos.i], frame.init.cross_cursor, dy);
             post_item_place(frame, li, &pos, viewport);
             return StepOutcome::Advance;
         }
@@ -283,7 +285,7 @@ fn step_item(
         let width_hinted = frame.b.children[pos.i].style.width_is_intrinsic_hint;
         let height_hinted = frame.b.children[pos.i].style.height_is_intrinsic_hint;
         match dispatch_box(
-            &mut frame.b.children[pos.i], content_x, content_y + main_cursor, item_avail_cross,
+            &mut frame.b.children[pos.i], content_x + frame.init.cross_cursor, content_y + main_cursor, item_avail_cross,
             Some(inner_main), measurer, viewport, pcb, hp, false, None, AlignValue::Auto,
             Some(UsedSizeOverride {
                 height: Some(inner_main),
@@ -438,35 +440,11 @@ fn step_item(
 /// `ItemPos` (via `locate_item`) gives the same answer either way; nothing
 /// needs to be stashed across the suspension.
 fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) {
-    if frame.init.is_column {
-        let content_width = frame.init.content_width;
-        let item = &frame.b.children[pos.i];
-        let is = &item.style;
-        let iem = is.font_size;
-        let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
-        let m_r = is.margin_right.resolve_or_zero(iem, content_width, viewport);
-        let avail_cross = (content_width - m_l - m_r).max(0.0);
-        let auto_cross_l = matches!(is.margin_left, LengthOrAuto::Auto);
-        let auto_cross_r = matches!(is.margin_right, LengthOrAuto::Auto);
-        let cross_align = if matches!(is.align_self, AlignValue::Auto) {
-            frame.init.s.align_items
-        } else {
-            is.align_self
-        };
-        let free_cross = (avail_cross - item.rect.width).max(0.0);
-        let cross_shift = if auto_cross_l && auto_cross_r {
-            free_cross / 2.0
-        } else if auto_cross_l {
-            free_cross
-        } else if auto_cross_r {
-            0.0
-        } else {
-            match cross_align {
-                AlignValue::Center => free_cross / 2.0,
-                AlignValue::End => free_cross,
-                _ => 0.0,
-            }
-        };
+    // A wrapped column aligns across the *line* cross size, known only once the
+    // line is complete — `finish_line` does it (`align_column_line`).
+    if frame.init.is_column && !frame.init.is_wrap {
+        let cross_shift =
+            column_item_cross_shift(&frame.b.children[pos.i], frame.init.content_width, &frame.init.s, viewport);
         if cross_shift != 0.0 {
             shift_tree(&mut frame.b.children[pos.i], cross_shift, 0.0);
         }
@@ -476,6 +454,51 @@ fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) 
     if pos.auto_after {
         frame.init.main_cursor += pos.auto_main_share;
     }
+}
+
+/// CSS Flexbox §8.3/§8.1 — horizontal shift of a COLUMN item inside `cross_size`
+/// (the container's content width, or the width of the item's own line when the
+/// column wraps): auto margins first, then `align-self`/`align-items`.
+fn column_item_cross_shift(item: &LayoutBox, cross_size: f32, container: &ComputedStyle, viewport: Size) -> f32 {
+    let is = &item.style;
+    let iem = is.font_size;
+    let m_l = is.margin_left.resolve_or_zero(iem, cross_size, viewport);
+    let m_r = is.margin_right.resolve_or_zero(iem, cross_size, viewport);
+    let avail_cross = (cross_size - m_l - m_r).max(0.0);
+    let auto_cross_l = matches!(is.margin_left, LengthOrAuto::Auto);
+    let auto_cross_r = matches!(is.margin_right, LengthOrAuto::Auto);
+    let cross_align = if matches!(is.align_self, AlignValue::Auto) { container.align_items } else { is.align_self };
+    let free_cross = (avail_cross - item.rect.width).max(0.0);
+    if auto_cross_l && auto_cross_r {
+        free_cross / 2.0
+    } else if auto_cross_l {
+        free_cross
+    } else if auto_cross_r {
+        0.0
+    } else {
+        match cross_align {
+            AlignValue::Center => free_cross / 2.0,
+            AlignValue::End => free_cross,
+            _ => 0.0,
+        }
+    }
+}
+
+/// Width of a wrapped column's line `li` — the widest margin box among its items
+/// (CSS Flexbox §9.4 step 8: the line's cross size is its largest outer cross size).
+fn column_line_cross_size(frame: &Frame, li: usize, viewport: Size) -> f32 {
+    let cw = frame.init.content_width;
+    frame.init.line_inits[li]
+        .line_keys
+        .iter()
+        .map(|&k| {
+            let item = &frame.b.children[frame.init.item_idxs[k]];
+            let iem = item.style.font_size;
+            let m_l = item.style.margin_left.resolve_or_zero(iem, cw, viewport);
+            let m_r = item.style.margin_right.resolve_or_zero(iem, cw, viewport);
+            item.rect.width + m_l + m_r
+        })
+        .fold(0.0_f32, f32::max)
 }
 
 /// Runs once all items of line `li` are placed — CSS Flexbox §9.5 cross-axis
@@ -495,7 +518,9 @@ fn finish_line(
     let is_column = frame.init.is_column;
     let n_items = frame.init.line_inits[li].line_keys.len();
     let line_cross: f32 = if is_column {
-        0.0
+        // A wrapped column has one vertical line per wrap; a single-line column
+        // keeps the zero (its cross cursor is never read).
+        if frame.init.is_wrap { column_line_cross_size(frame, li, viewport) } else { 0.0 }
     } else {
         let mut max_h = 0.0_f32;
         for jx in 0..n_items {
@@ -506,6 +531,17 @@ fn finish_line(
         max_h
     };
     frame.init.line_cross_sizes.push(line_cross);
+
+    if is_column && frame.init.is_wrap {
+        for jx in 0..n_items {
+            let k = frame.init.line_inits[li].line_keys[jx];
+            let i = frame.init.item_idxs[k];
+            let shift = column_item_cross_shift(&frame.b.children[i], line_cross, &frame.init.s, viewport);
+            if shift != 0.0 {
+                shift_tree(&mut frame.b.children[i], shift, 0.0);
+            }
+        }
+    }
 
     if !is_column {
         let s = Arc::clone(&frame.init.s);
@@ -671,14 +707,34 @@ fn finish_frame(
             }
 
             for (li, &offset) in line_offsets.iter().enumerate() {
-                if !is_column && offset > 0.0 {
+                if !is_column && (offset > 0.0 || matches!(effective, AlignValue::Stretch)) {
                     let n_items = frame.init.line_inits[li].line_keys.len();
                     for jx in 0..n_items {
                         let k = frame.init.line_inits[li].line_keys[jx];
                         let i = frame.init.item_idxs[k];
                         // Shift the whole item subtree — see the removed
                         // code's BUG-165 comment.
-                        shift_y_box(&mut frame.b.children[i], offset);
+                        if offset > 0.0 {
+                            shift_y_box(&mut frame.b.children[i], offset);
+                        }
+                        // CSS Flexbox §9.4 step 9 + §8.3: `align-content: stretch` grew the
+                        // line, so an auto-height `align-self: stretch` item grows with it.
+                        if matches!(effective, AlignValue::Stretch) {
+                            let item = &mut frame.b.children[i];
+                            let is = &item.style;
+                            let own = if matches!(is.align_self, AlignValue::Auto) {
+                                frame.init.s.align_items
+                            } else {
+                                is.align_self
+                            };
+                            if is.height.is_none()
+                                && matches!(own, AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
+                                && !matches!(is.margin_top, LengthOrAuto::Auto)
+                                && !matches!(is.margin_bottom, LengthOrAuto::Auto)
+                            {
+                                item.rect.height += free_cross / n_lines as f32;
+                            }
+                        }
                     }
                 }
             }

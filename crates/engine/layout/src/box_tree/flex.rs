@@ -544,8 +544,10 @@ pub(crate) fn build_flex_init(
         .collect();
 
     // Step 2 — break items into flex lines.
-    // Wrap only applies to row direction (column wrapping requires known container height, Phase 0: skip).
-    let lines: Vec<Vec<usize>> = if is_wrap && !is_column && container_main > 0.0 {
+    // CSS Flexbox L1 §9.3: lines are cut against the container's main size. For a
+    // column container the main size is its height, so wrapping needs a definite one
+    // (`main_definite`); an auto-height column is a single line (it grows to fit).
+    let lines: Vec<Vec<usize>> = if is_wrap && main_definite.is_some() && container_main > 0.0 {
         let mut lines: Vec<Vec<usize>> = Vec::new();
         let mut cur_line: Vec<usize> = Vec::new();
         let mut cur_main = 0.0_f32;
