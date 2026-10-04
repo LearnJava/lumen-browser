@@ -94,6 +94,10 @@ struct Frame {
     /// `CV_AUTO_TOUCHED`'s doc comment for why the save/restore must bracket
     /// the *whole* subtree, descend included, not just a synchronous call.
     probe_outer_cv: bool,
+    /// Same bracket for `INDEFINITE_HEIGHT_CONSULTED`: an item whose probe
+    /// (indefinite grid-area height) resolved a `%` block size to `auto` must be
+    /// laid out again against the final cell height (CSS Grid §11.5 / CSS 2.1 §10.5).
+    probe_outer_ih: bool,
 }
 
 enum StepOutcome {
@@ -125,6 +129,7 @@ pub(super) fn run(
         pass: Pass::Probe,
         k: 0,
         probe_outer_cv: false,
+        probe_outer_ih: false,
     };
     let mut stack: Vec<Frame> = Vec::new();
 
@@ -148,6 +153,7 @@ pub(super) fn run(
                             pass: Pass::Probe,
                             k: 0,
                             probe_outer_cv: false,
+        probe_outer_ih: false,
                         };
                         stack.push(current);
                         current = child_frame;
@@ -186,6 +192,7 @@ pub(super) fn run(
                             pass: Pass::Probe,
                             k: 0,
                             probe_outer_cv: false,
+        probe_outer_ih: false,
                         };
                         stack.push(current);
                         current = child_frame;
@@ -292,6 +299,7 @@ fn step_probe_item(
         // `post_probe_item`, not inline after this call the way a purely
         // synchronous recursive call could get away with.
         frame.probe_outer_cv = CV_AUTO_TOUCHED.with(|c| c.replace(false));
+        frame.probe_outer_ih = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.replace(false));
         match dispatch_box(
             &mut frame.b.children[i], probe_x, 0.0, cell_w, None, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
@@ -350,7 +358,9 @@ fn post_probe_item(frame: &mut Frame, i: usize) {
         let touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
         let outer = frame.probe_outer_cv;
         CV_AUTO_TOUCHED.with(|c| c.set(outer || touched_here));
-        if !touched_here {
+        let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(frame.probe_outer_ih || ih_here));
+        if !touched_here && !ih_here {
             let n_cols = frame.init.n_cols;
             let c0 = (frame.init.placements[k].0 - 1).min(n_cols.saturating_sub(1)) as usize;
             let probe_x = frame.init.content_x + frame.init.col_offsets.get(c0).copied().unwrap_or(0.0);
@@ -590,8 +600,11 @@ fn step_final_item(
         // No usable probe: an unplaced-at-probe-time item can't reach here
         // (handled by the early-return above), so this is a subtree whose
         // probe touched `content-visibility: auto` and was refused for reuse.
+        // The grid area's block size is definite by now (rows are resolved), so a
+        // `%` height/min-height/max-height of the item resolves against it.
+        let cell_h = grid_track_span(&frame.init.row_offsets, &frame.init.row_heights, r0, r1);
         match dispatch_box(
-            &mut frame.b.children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp,
+            &mut frame.b.children[i], cell_x, cell_y, cell_w, Some(cell_h), measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
             DispatchOutcome::Done => { post_final_item(frame, i, viewport, measurer, hp); StepOutcome::Advance }
