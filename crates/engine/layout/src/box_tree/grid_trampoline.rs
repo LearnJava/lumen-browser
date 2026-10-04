@@ -64,6 +64,23 @@ pub(super) struct GridInit {
     /// `(probe_x, probe_y, laid-out subtree)`, taken (and consumed) by the
     /// Final phase's `step_final_item`.
     pub(super) probe_reuse: Vec<Option<(f32, f32, LayoutBox)>>,
+    /// CSS Grid L1 §6.2 baseline-выравнивание: подъём/спуск item'а, выровненного по
+    /// базовой линии (индекс как у `item_idxs`); заполняется в Probe-фазе.
+    pub(super) item_baselines: Vec<Option<ItemBaseline>>,
+    /// По строкам: `(подъём, спуск)` группы `first baseline` (items с началом в
+    /// строке) — общая базовая линия отстоит от верха строки на подъём.
+    pub(super) row_first_group: Vec<(f32, f32)>,
+    /// То же для группы `last baseline` (items с концом в строке) — базовая линия
+    /// отстоит от низа строки на спуск.
+    pub(super) row_last_group: Vec<(f32, f32)>,
+}
+
+/// Базовая линия item'а, участвующего в baseline-группе строки.
+#[derive(Clone, Copy)]
+pub(super) struct ItemBaseline {
+    pub(super) side: BaselineSide,
+    /// От верхней кромки margin box до базовой линии.
+    pub(super) ascent: f32,
 }
 
 /// Which of the two per-item loops a [`Frame`] is currently driving.
@@ -172,7 +189,7 @@ pub(super) fn run(
                             let i = parent.init.item_idxs[parent.k];
                             parent.b.children[i] = current.b;
                             match parent.pass {
-                                Pass::Probe => post_probe_item(&mut parent, i),
+                                Pass::Probe => post_probe_item(&mut parent, i, measurer, viewport),
                                 Pass::Final => post_final_item(&mut parent, i, viewport, measurer, hp),
                             }
                             parent.k += 1;
@@ -256,15 +273,15 @@ fn step_probe_item(
         );
         drop(_guard);
         match outcome {
-            DispatchOutcome::Done => { post_probe_item(frame, i); StepOutcome::Advance }
+            DispatchOutcome::Done => { post_probe_item(frame, i, measurer, viewport); StepOutcome::Advance }
             DispatchOutcome::NeedsBlockFlowLoop(ci) => {
                 block_flow_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(ci) => {
                 super::flex_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
@@ -272,7 +289,7 @@ fn step_probe_item(
             // same shape as the flex/block-flow arms above.
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             // LAYOUT-2 срез 7: a (subgrid) grid item that is itself a
@@ -280,14 +297,14 @@ fn step_probe_item(
             // arms above.
             DispatchOutcome::NeedsMulticolLoop(ci) => {
                 super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             // LAYOUT-2 срез 8: same shape, for a (subgrid) grid item that is
             // itself a vertical writing-mode container.
             DispatchOutcome::NeedsVerticalLoop(ci) => {
                 super::vertical_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
         }
@@ -304,33 +321,33 @@ fn step_probe_item(
             &mut frame.b.children[i], probe_x, 0.0, cell_w, None, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
-            DispatchOutcome::Done => { post_probe_item(frame, i); StepOutcome::Advance }
+            DispatchOutcome::Done => { post_probe_item(frame, i, measurer, viewport); StepOutcome::Advance }
             DispatchOutcome::NeedsBlockFlowLoop(ci) => {
                 block_flow_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(ci) => {
                 super::flex_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsMulticolLoop(ci) => {
                 super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
             // LAYOUT-2 срез 8: same shape, for a (subgrid) grid item that is
             // itself a vertical writing-mode container.
             DispatchOutcome::NeedsVerticalLoop(ci) => {
                 super::vertical_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_probe_item(frame, i);
+                post_probe_item(frame, i, measurer, viewport);
                 StepOutcome::Advance
             }
         }
@@ -347,7 +364,7 @@ fn step_probe_item(
 /// item, so re-deriving position from `frame.init.placements[k]` gives the
 /// same answer either way; nothing needs to be stashed across the suspension
 /// beyond `probe_outer_cv`, already on the frame.
-fn post_probe_item(frame: &mut Frame, i: usize) {
+fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasurer>, viewport: Size) {
     let k = frame.k;
     let (_, _, rs, _) = frame.init.placements[k];
     let child_col_subgrid = frame.b.children[i].style.grid_template_columns.first()
@@ -381,6 +398,41 @@ fn post_probe_item(frame: &mut Frame, i: usize) {
             frame.init.row_heights[r0] = item_h;
         }
     }
+    record_item_baseline(frame, i, measurer, viewport);
+}
+
+/// CSS Grid L1 §6.2 — item с `align-self: [first|last] baseline` входит в группу
+/// строки: `first` — строки, где item начинается, `last` — где заканчивается.
+/// Запоминает подъём/спуск item'а и обновляет размеры группы.
+fn record_item_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasurer>, viewport: Size) {
+    let k = frame.k;
+    let (cs, _, rs, re) = frame.init.placements[k];
+    let item = &frame.b.children[i];
+    let Some(side) = super::baseline::align_baseline_side(super::baseline::resolved_align(&item.style, &frame.init.s))
+    else {
+        return;
+    };
+    // Строки subgrid'а — часть родительских: общая группа с соседями родителя здесь не
+    // строится, item остаётся у начала области (как до baseline-выравнивания).
+    if cs == 0 || rs == 0 || frame.init.row_heights.is_empty() || frame.init.inherited_rows.is_some() {
+        return;
+    }
+    let n_rows = frame.init.n_rows;
+    let first_row = (rs - 1).min(n_rows.saturating_sub(1)) as usize;
+    let last_row = ((re - 1).min(n_rows) as usize).saturating_sub(1).max(first_row);
+    let st = &item.style;
+    let em = st.font_size;
+    let m_t = st.margin_top.resolve_or_zero(em, frame.init.content_width, viewport);
+    let m_b = st.margin_bottom.resolve_or_zero(em, frame.init.content_width, viewport);
+    let ascent = m_t + super::baseline::box_baseline_or_synth(item, side, measurer);
+    let descent = (item.rect.height + m_t + m_b - ascent).max(0.0);
+    frame.init.item_baselines[k] = Some(ItemBaseline { side, ascent });
+    let group = match side {
+        BaselineSide::First => &mut frame.init.row_first_group[first_row],
+        BaselineSide::Last => &mut frame.init.row_last_group[last_row],
+    };
+    group.0 = group.0.max(ascent);
+    group.1 = group.1.max(descent);
 }
 
 /// Runs once every item has been probed — CSS Grid L1 §11.7 fr-track
@@ -393,6 +445,22 @@ fn finish_probe_pass(init: &mut GridInit) {
     let row_gap = init.row_gap;
     let total_row_gap = row_gap * super::grid::gutter_count(&init.row_collapsed, n_rows as usize) as f32;
     if init.inherited_rows.is_none() {
+        // CSS Grid L1 §6.2 / §11.5 — группа baseline-выравнивания занимает в строке
+        // «наибольший подъём + наибольший спуск»; растут только строки, размер
+        // которых зависит от содержимого.
+        for r in 0..n_rows as usize {
+            if !matches!(
+                grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows),
+                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
+            ) {
+                continue;
+            }
+            for (asc, desc) in [init.row_first_group[r], init.row_last_group[r]] {
+                if asc + desc > init.row_heights[r] {
+                    init.row_heights[r] = asc + desc;
+                }
+            }
+        }
         // CSS Grid L1 §11.7 — the free space available to flexible (`fr`) tracks is
         // the container's content size minus the base sizes of the OTHER tracks
         // only. `row_heights[r]` for an `fr` track was seeded from its content's
@@ -708,6 +776,20 @@ fn post_final_item(
         AlignValue::Center => {
             item.rect.y = cell_y + (cell_h - item_outer_h) / 2.0 + m_t;
         }
+        AlignValue::Baseline | AlignValue::LastBaseline if frame.init.item_baselines[k].is_some() => {
+            // CSS Grid L1 §6.2: items группы стоят так, чтобы их базовые линии
+            // совпали с общей — на подъёме группы от верха строки (`first`) либо на
+            // спуске группы от низа строки (`last`).
+            let ib = frame.init.item_baselines[k].unwrap_or(ItemBaseline { side: BaselineSide::First, ascent: m_t });
+            let bl = ib.ascent - m_t;
+            item.rect.y = match ib.side {
+                BaselineSide::First => cell_y + frame.init.row_first_group[r0].0 - bl,
+                BaselineSide::Last => {
+                    let last_row = r1.saturating_sub(1).max(r0);
+                    cell_y + cell_h - frame.init.row_last_group[last_row].1 - bl
+                }
+            };
+        }
         AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
             // CSS Grid §11.2: `stretch` only grows items whose used block size is
             // `auto`; an explicit `height` is preserved (the item is top-aligned in
@@ -809,10 +891,67 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
         viewport,
         content_height,
     );
+    frame.b.grid_baselines = container_baselines(frame, measurer);
     lay_out_abs(
         &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
         frame.init.content_x, frame.init.content_y, measurer, viewport, hp,
     );
+}
+
+/// CSS Grid L1 §6.1 — первая и последняя базовая линия контейнера, от верхней
+/// кромки его border box. Первая: общая линия группы `first baseline` первой
+/// строки, а без неё — первая (в порядке `order`) item'а, чья область задевает
+/// первую строку; последняя — то же для последней строки и `last baseline`.
+/// `None` у сетки без размещённых items.
+fn container_baselines(frame: &Frame, measurer: Option<&dyn TextMeasurer>) -> Option<(f32, f32)> {
+    let init = &frame.init;
+    let n_rows = init.n_rows as usize;
+    if n_rows == 0 || init.row_offsets.len() < n_rows {
+        return None;
+    }
+    let mut placed: Vec<usize> = (0..init.item_idxs.len())
+        .filter(|&k| init.placements[k].0 != 0 && init.placements[k].2 != 0)
+        .collect();
+    placed.sort_by_key(|&k| frame.b.children[init.item_idxs[k]].style.order);
+    let top = frame.b.rect.y;
+    let row_top = |r: usize| init.content_y + init.row_offsets[r];
+    let item_baseline = |k: usize, side: BaselineSide| {
+        let c = &frame.b.children[init.item_idxs[k]];
+        c.rect.y + super::baseline::box_baseline_or_synth(c, side, measurer)
+    };
+    let starts_in_row = |k: usize, r: usize| init.placements[k].2 as usize == r + 1;
+    let ends_in_row = |k: usize, r: usize| {
+        let end = init.placements[k].3 as usize;
+        end.saturating_sub(1).min(n_rows).saturating_sub(1).max(init.placements[k].2 as usize - 1) == r
+    };
+    // Участники baseline-выравнивания строки: сначала группа запрошенной стороны, а
+    // при её отсутствии — группа другой стороны (§6.1: «участвуют в выравнивании»).
+    let group_baseline = |r: usize, want: BaselineSide| -> Option<f32> {
+        let in_group = |k: usize, side: BaselineSide| match side {
+            BaselineSide::First => starts_in_row(k, r),
+            BaselineSide::Last => ends_in_row(k, r),
+        } && init.item_baselines[k].is_some_and(|ib| ib.side == side);
+        let other = if want == BaselineSide::First { BaselineSide::Last } else { BaselineSide::First };
+        [want, other].into_iter().find(|&side| placed.iter().any(|&k| in_group(k, side))).map(|side| match side {
+            BaselineSide::First => row_top(r) + init.row_first_group[r].0,
+            BaselineSide::Last => row_top(r) + init.row_heights[r] - init.row_last_group[r].1,
+        })
+    };
+
+    let first = group_baseline(0, BaselineSide::First).or_else(|| {
+        placed.iter().copied().find(|&k| starts_in_row(k, 0)).map(|k| item_baseline(k, BaselineSide::First))
+    });
+    let last_row = n_rows - 1;
+    let last = group_baseline(last_row, BaselineSide::Last).or_else(|| {
+        placed.iter().rev().copied().find(|&k| ends_in_row(k, last_row)).map(|k| item_baseline(k, BaselineSide::Last))
+    });
+    match (first, last) {
+        (None, None) => None,
+        (f, l) => {
+            let f = f.or(l)?;
+            Some((f - top, l.unwrap_or(f) - top))
+        }
+    }
 }
 
 /// CSS Grid L1 §9.1 / CSS Position L3 §4 — lay out the absolutely-positioned

@@ -376,7 +376,10 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
         .map(|&i| (i, super::table_valign::cell_baseline(&row.children[i], BaselineSide::First, measurer)))
         .collect();
     let above = baselines.iter().map(|&(_, bl)| bl).fold(0.0_f32, f32::max);
-    let below = baselines.iter().map(|&(i, bl)| row.children[i].rect.height - bl).fold(0.0_f32, f32::max);
+    let below = baselines
+        .iter()
+        .map(|&(i, bl)| super::table_valign::natural_height(&row.children[i]) - bl)
+        .fold(0.0_f32, f32::max);
     let mut row_h = cell_idxs
         .iter()
         .filter(|&&i| row.children[i].row_span == 1)

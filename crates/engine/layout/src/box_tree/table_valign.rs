@@ -18,12 +18,10 @@ pub(super) fn is_baseline_aligned(cell: &LayoutBox) -> bool {
         && !matches!(cell.style.vertical_align, VerticalAlign::Top | VerticalAlign::Middle | VerticalAlign::Bottom)
 }
 
-/// Сдвиг содержимого ячейки по вертикали при выравнивании `middle`/`bottom` в
-/// ячейке высотой `target_h` (border box): свободное место — высота за вычетом
-/// border/padding и фактической высоты содержимого (последний in-flow бокс
-/// вместе с нижним margin), а не `rect.height`, в которую уже входит заданная
-/// `height` ячейки.
-pub(super) fn free_space_shift(cell: &LayoutBox, target_h: f32, align: VerticalAlign) -> f32 {
+/// Отступы ячейки сверху/снизу (border + padding) и фактическая высота её
+/// содержимого — последний in-flow бокс вместе с нижним margin (заданная `height`
+/// ячейки сюда не входит).
+fn cell_extents(cell: &LayoutBox) -> (f32, f32, f32) {
     let st = &cell.style;
     let em = st.font_size;
     let top = st.border_top_width + st.padding_top.resolve_or_zero(em, 0.0, Size::ZERO);
@@ -38,7 +36,24 @@ pub(super) fn free_space_shift(cell: &LayoutBox, target_h: f32, align: VerticalA
             c.rect.y + c.rect.height + mb
         })
         .fold(content_top, f32::max);
-    let free = (target_h - top - bottom - (content_bottom - content_top)).max(0.0);
+    (top, bottom, content_bottom - content_top)
+}
+
+/// Высота ячейки по содержимому (border box без заданной `height`): от неё, а не
+/// от `rect.height`, считается спуск под базовой линией — иначе `height` ячейки
+/// раздувает строку (CSS Tables L3 §3.4, как в Chrome: WPT `baseline-td`).
+pub(super) fn natural_height(cell: &LayoutBox) -> f32 {
+    let (top, bottom, content) = cell_extents(cell);
+    (top + content + bottom).min(cell.rect.height)
+}
+
+/// Сдвиг содержимого ячейки по вертикали при выравнивании `middle`/`bottom` в
+/// ячейке высотой `target_h` (border box): свободное место — высота за вычетом
+/// border/padding и фактической высоты содержимого, а не `rect.height`, в которую
+/// уже входит заданная `height` ячейки.
+pub(super) fn free_space_shift(cell: &LayoutBox, target_h: f32, align: VerticalAlign) -> f32 {
+    let (top, bottom, content) = cell_extents(cell);
+    let free = (target_h - top - bottom - content).max(0.0);
     match align {
         VerticalAlign::Middle => free / 2.0,
         VerticalAlign::Bottom => free,

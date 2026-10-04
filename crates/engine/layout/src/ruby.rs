@@ -750,6 +750,7 @@ fn make_anonymous_box_with_style(style: std::sync::Arc<crate::style::ComputedSty
         node: NodeId::from_index(0),
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
         style,
         kind: BoxKind::Block,
         children: vec![],

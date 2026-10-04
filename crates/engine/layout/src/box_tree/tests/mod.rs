@@ -474,6 +474,7 @@ mod grid_item_percent_height;
 mod table_trampoline;
 mod table_caption_layout;
 mod table_valign;
+mod baseline_containers;
 mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;

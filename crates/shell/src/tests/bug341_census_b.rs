@@ -820,6 +820,7 @@ fn bug341_s4_incremental_box_build_share() {
         node: doc.root(),
         rect: Rect::ZERO,
         used_line_height: root_style.font_size * root_style.line_height,
+        grid_baselines: None,
         style: std::sync::Arc::new(root_style.clone()),
         kind: lumen_layout::BoxKind::Skip,
         children: vec![],
