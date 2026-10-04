@@ -588,6 +588,11 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             {
                 return None;
             }
+            // CSS Flexbox L1 §8.5: у flex-контейнера своя базовая линия по оси
+            // строки (а не последнего ребёнка потока) — её и берёт inline-flex в строке.
+            if matches!(b.style.display, Display::Flex | Display::InlineFlex) {
+                return super::baseline::flex_container_baseline(b, BaselineSide::First, measurer);
+            }
             if let Some(bl) = last_in_flow_baseline(b, measurer) {
                 return Some(bl);
             }
@@ -597,32 +602,27 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             // центру content box — ровно так, как её рисует
             // `emit_input_value_text`, иначе раскладка и отрисовка разъедутся.
             if matches!(b.kind, BoxKind::FormControl { .. }) {
-                let m = measurer?;
-                let s = &b.style;
-                let em = s.font_size;
-                let pt = s.padding_top.resolve_or_zero(em, 0.0, Size::ZERO);
-                let pb = s.padding_bottom.resolve_or_zero(em, 0.0, Size::ZERO);
-                let inner_h = (b.rect.height
-                    - s.border_top_width
-                    - s.border_bottom_width
-                    - pt
-                    - pb)
-                    .max(0.0);
-                let line_h = step_line_height(em * s.line_height, s.line_height_step);
-                let ascent = m.ascent_px_with_families(em, &s.font_family);
-                let descent = m.descent_px_with_families(em, &s.font_family);
-                let half_leading = (line_h - (ascent + descent)) / 2.0;
-                return Some(
-                    s.border_top_width
-                        + pt
-                        + ((inner_h - line_h) / 2.0).max(0.0)
-                        + half_leading
-                        + ascent,
-                );
+                return control_value_baseline(b, measurer);
             }
             None
         }
     }
+}
+
+/// Базовая линия строки значения текстового контрола — центр content box
+/// (см. комментарий в `inline_baseline`); отсчёт от верхней кромки border box.
+pub(crate) fn control_value_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Option<f32> {
+    let m = measurer?;
+    let s = &b.style;
+    let em = s.font_size;
+    let pt = s.padding_top.resolve_or_zero(em, 0.0, Size::ZERO);
+    let pb = s.padding_bottom.resolve_or_zero(em, 0.0, Size::ZERO);
+    let inner_h = (b.rect.height - s.border_top_width - s.border_bottom_width - pt - pb).max(0.0);
+    let line_h = step_line_height(em * s.line_height, s.line_height_step);
+    let ascent = m.ascent_px_with_families(em, &s.font_family);
+    let descent = m.descent_px_with_families(em, &s.font_family);
+    let half_leading = (line_h - (ascent + descent)) / 2.0;
+    Some(s.border_top_width + pt + ((inner_h - line_h) / 2.0).max(0.0) + half_leading + ascent)
 }
 
 /// Несёт ли контрол текст, по которому браузер берёт его базовую линию.
@@ -633,7 +633,7 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
 /// строкой. `<textarea>` тоже выравнивается по нижней кромке (проверено против
 /// Edge на TEST-34: `<select>` рядом с ним садится НИЖЕ его нижнего края —
 /// значит базовая линия строки идёт по textarea, а не по его первой строке).
-fn form_control_has_text_baseline(kind: &FormControlKind) -> bool {
+pub(crate) fn form_control_has_text_baseline(kind: &FormControlKind) -> bool {
     match kind {
         FormControlKind::Button | FormControlKind::Select { .. } => true,
         FormControlKind::Input { input_type, .. } => matches!(

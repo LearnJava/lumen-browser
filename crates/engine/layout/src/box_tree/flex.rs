@@ -101,9 +101,11 @@ fn column_item_avail_cross(
     } else {
         is.align_self
     };
+    // `baseline`/`last baseline` в колонке — запасное выравнивание start/end
+    // (CSS Align §9.3): элемент не растягивается, а занимает fit-content.
     let aligned_cross = matches!(
         cross_align,
-        AlignValue::Start | AlignValue::End | AlignValue::Center
+        AlignValue::Start | AlignValue::End | AlignValue::Center | AlignValue::Baseline | AlignValue::LastBaseline
     );
     // Выровненный (не растянутый) элемент занимает по поперечной оси свой
     // fit-content, а не всю ширину — иначе двигать нечего.

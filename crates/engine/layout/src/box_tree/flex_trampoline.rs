@@ -1,6 +1,7 @@
 use super::*;
 use super::layout_dispatch::dispatch_box;
 use super::block_flow_trampoline::{self, DispatchOutcome};
+use super::baseline::{align_baseline_side, box_baseline_or_synth, resolved_align, BaselineSide};
 
 /// Per-line state `flex::build_flex_init` precomputes (CSS Flexbox L1 §9.3
 /// line-breaking, §9.7 grow/shrink, §9.5 justify-content) before Phase A
@@ -456,6 +457,24 @@ fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) 
     }
 }
 
+/// Для items строки: сторона базовой линии, по которой item выравнивается, и
+/// расстояние от верхней кромки его margin box до этой линии. `None` — item не
+/// участвует в baseline-выравнивании (другое значение `align-self` либо `auto`
+/// в поперечном поле, которое приоритетнее, CSS Flexbox §8.1).
+fn row_item_baseline(
+    item: &LayoutBox,
+    container: &ComputedStyle,
+    m_t: f32,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Option<(BaselineSide, f32)> {
+    let is = &item.style;
+    if matches!(is.margin_top, LengthOrAuto::Auto) || matches!(is.margin_bottom, LengthOrAuto::Auto) {
+        return None;
+    }
+    let side = align_baseline_side(resolved_align(is, container))?;
+    Some((side, m_t + box_baseline_or_synth(item, side, measurer)))
+}
+
 /// CSS Flexbox §8.3/§8.1 — horizontal shift of a COLUMN item inside `cross_size`
 /// (the container's content width, or the width of the item's own line when the
 /// column wraps): auto margins first, then `align-self`/`align-items`.
@@ -478,7 +497,7 @@ fn column_item_cross_shift(item: &LayoutBox, cross_size: f32, container: &Comput
     } else {
         match cross_align {
             AlignValue::Center => free_cross / 2.0,
-            AlignValue::End => free_cross,
+            AlignValue::End | AlignValue::LastBaseline => free_cross,
             _ => 0.0,
         }
     }
@@ -517,18 +536,41 @@ fn finish_line(
 ) {
     let is_column = frame.init.is_column;
     let n_items = frame.init.line_inits[li].line_keys.len();
-    let line_cross: f32 = if is_column {
+    // CSS Flexbox L1 §9.4 шаг 7: размер линии по поперечной оси — наибольший
+    // внешний (с полями) поперечный размер items; items, выровненные по базовой
+    // линии, считаются группой: наибольшее расстояние от верхней кромки margin
+    // box до базовой линии плюс наибольшее расстояние от неё до нижней.
+    let (line_cross, baseline_groups): (f32, [(f32, f32); 2]) = if is_column {
         // A wrapped column has one vertical line per wrap; a single-line column
         // keeps the zero (its cross cursor is never read).
-        if frame.init.is_wrap { column_line_cross_size(frame, li, viewport) } else { 0.0 }
+        let cross = if frame.init.is_wrap { column_line_cross_size(frame, li, viewport) } else { 0.0 };
+        (cross, [(0.0, 0.0); 2])
     } else {
-        let mut max_h = 0.0_f32;
+        let s = Arc::clone(&frame.init.s);
+        let content_width = frame.init.content_width;
+        let mut max_outer = 0.0_f32;
+        // (наибольший подъём, наибольший спуск) группы `first baseline` / `last baseline`.
+        let mut groups = [(0.0_f32, 0.0_f32); 2];
         for jx in 0..n_items {
             let k = frame.init.line_inits[li].line_keys[jx];
             let i = frame.init.item_idxs[k];
-            max_h = max_h.max(frame.b.children[i].rect.height);
+            let item = &frame.b.children[i];
+            let is = &item.style;
+            let iem = is.font_size;
+            let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
+            let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
+            let outer = item.rect.height + m_t + m_b;
+            match row_item_baseline(item, &s, m_t, measurer) {
+                Some((side, ascent)) => {
+                    let g = &mut groups[side as usize];
+                    g.0 = g.0.max(ascent);
+                    g.1 = g.1.max(outer - ascent);
+                }
+                None => max_outer = max_outer.max(outer),
+            }
         }
-        max_h
+        let line = max_outer.max(groups[0].0 + groups[0].1).max(groups[1].0 + groups[1].1);
+        (line, groups)
     };
     frame.init.line_cross_sizes.push(line_cross);
 
@@ -580,6 +622,18 @@ fn finish_line(
                 let new_y = content_y + cross_cursor + m_t + shift;
                 let item_y = frame.b.children[i].rect.y;
                 shift_y_box(&mut frame.b.children[i], new_y - item_y);
+                continue;
+            }
+            // §9.4 шаг 8 / §8.5: выравнивание по базовой линии. `first baseline` —
+            // группа прижата к cross-start линии, `last baseline` — к cross-end.
+            if let Some((side, ascent)) = row_item_baseline(&frame.b.children[i], &s, m_t, measurer) {
+                let line_top = content_y + cross_cursor;
+                let margin_top_y = match side {
+                    BaselineSide::First => line_top + (baseline_groups[0].0 - ascent),
+                    BaselineSide::Last => line_top + effective_cross - baseline_groups[1].1 - ascent,
+                };
+                let item_y = frame.b.children[i].rect.y;
+                shift_y_box(&mut frame.b.children[i], margin_top_y + m_t - item_y);
                 continue;
             }
             match align {
