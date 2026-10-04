@@ -452,10 +452,9 @@ fn rule_computed_keywords_and_extended_line_styles() {
     assert_eq!(rule_css(&s, "rule-visibility-items"), "around");
     let s = parse_gap_rule("column-rule-break: none; row-rule-break: intersection;");
     assert_eq!(rule_css(&s, "rule-break"), "");
-    // `hidden` и `none` линии не рисуют, `groove` рисуется сплошной.
+    // `hidden` и `none` линии не рисуют, объёмные стили рисует `emit_gap_rules`.
     assert!(!BorderStyle::Hidden.is_visible());
     assert!(BorderStyle::Ridge.is_visible());
-    assert_eq!(BorderStyle::Outset.painted_as(), BorderStyle::Solid);
 }
 
 #[test]

@@ -87,58 +87,147 @@ pub fn emit_gap_rules(
             continue;
         }
 
-        let cmd = if gap.horizontal {
-            // Row gap: draw a horizontal rule centered vertically in the gap.
+        if gap.horizontal {
+            // Row gap: a horizontal rule centered vertically in the gap.
             let rule_h = ctx.rule_width.min(gap.rect.height);
             let rule_y = gap.rect.y + (gap.rect.height - rule_h) * 0.5;
-            // Emit as bottom-side only: rect.y = rule_y, rect.height = rule_h.
-            // Renderer draws bottom side at rect.y + rect.height - widths[2].
-            DisplayCommand::DrawBorder {
-                rect: Rect::new(gap.rect.x, rule_y, gap.rect.width, rule_h),
-                widths: [0.0, 0.0, rule_h, 0.0],
-                colors: [
-                    Color::TRANSPARENT,
-                    Color::TRANSPARENT,
-                    ctx.rule_color,
-                    Color::TRANSPARENT,
-                ],
-                styles: [
-                    BorderStyle::None,
-                    BorderStyle::None,
-                    ctx.rule_style,
-                    BorderStyle::None,
-                ],
-                radii: CornerRadii::default(),
-            }
+            out.extend(rule_line_commands(
+                Rect::new(gap.rect.x, rule_y, gap.rect.width, rule_h),
+                true,
+                ctx.rule_style,
+                ctx.rule_color,
+            ));
         } else {
-            // Column gap: draw a vertical rule centered horizontally in the gap.
+            // Column gap: a vertical rule centered horizontally in the gap.
             let rule_w = ctx.rule_width.min(gap.rect.width);
             let rule_x = gap.rect.x + (gap.rect.width - rule_w) * 0.5;
-            // Emit as right-side only: rect.x = rule_x, rect.width = rule_w.
-            // Renderer draws right side at rect.x + rect.width - widths[1].
-            DisplayCommand::DrawBorder {
-                rect: Rect::new(rule_x, gap.rect.y, rule_w, gap.rect.height),
-                widths: [0.0, rule_w, 0.0, 0.0],
-                colors: [
-                    Color::TRANSPARENT,
-                    ctx.rule_color,
-                    Color::TRANSPARENT,
-                    Color::TRANSPARENT,
-                ],
-                styles: [
-                    BorderStyle::None,
-                    ctx.rule_style,
-                    BorderStyle::None,
-                    BorderStyle::None,
-                ],
-                radii: CornerRadii::default(),
-            }
-        };
-
-        out.push(cmd);
+            out.extend(rule_line_commands(
+                Rect::new(rule_x, gap.rect.y, rule_w, gap.rect.height),
+                false,
+                ctx.rule_style,
+                ctx.rule_color,
+            ));
+        }
     }
 
     out
+}
+
+/// One `DrawBorder` that paints only the bottom (`horizontal`) or right side of `rect`.
+fn rule_side_border(rect: Rect, horizontal: bool, style: BorderStyle, color: Color) -> DisplayCommand {
+    let none = BorderStyle::None;
+    if horizontal {
+        // Renderer draws the bottom side at rect.y + rect.height - widths[2].
+        DisplayCommand::DrawBorder {
+            rect,
+            widths: [0.0, 0.0, rect.height, 0.0],
+            colors: [Color::TRANSPARENT, Color::TRANSPARENT, color, Color::TRANSPARENT],
+            styles: [none, none, style, none],
+            radii: CornerRadii::default(),
+        }
+    } else {
+        // Renderer draws the right side at rect.x + rect.width - widths[1].
+        DisplayCommand::DrawBorder {
+            rect,
+            widths: [0.0, rect.width, 0.0, 0.0],
+            colors: [Color::TRANSPARENT, color, Color::TRANSPARENT, Color::TRANSPARENT],
+            styles: [none, style, none, none],
+            radii: CornerRadii::default(),
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §4.2 / CSS Backgrounds L3 §4.2: the commands that paint one
+/// rule line occupying `rect` (`horizontal` — a row gap's rule, `false` — a column gap's).
+///
+/// `groove`/`ridge` are two half-width bands (a dark and a light shade of the colour);
+/// a gap rule has no inside, so `inset` paints like `ridge` and `outset` like `groove`.
+/// Every other visible style is one solid/dashed/dotted/double side.
+pub fn rule_line_commands(rect: Rect, horizontal: bool, style: BorderStyle, color: Color) -> Vec<DisplayCommand> {
+    let ridge = match style {
+        BorderStyle::Groove | BorderStyle::Outset => false,
+        BorderStyle::Ridge | BorderStyle::Inset => true,
+        other => return vec![rule_side_border(rect, horizontal, other, color)],
+    };
+    let (dark, light) = groove_shades(color);
+    // Like the bottom/right side of a bordered box: the outer half is `floor(w / 2)`,
+    // the inner one the rest (Edge: `border-bottom: 5px groove` = 3px dark, then 2px light).
+    let (outer_color, inner_color) = if ridge { (dark, light) } else { (light, dark) };
+    let extent = if horizontal { rect.height } else { rect.width };
+    let outer = (extent * 0.5).floor();
+    if outer <= 0.0 || extent - outer <= 0.0 {
+        // A 1px line has no room for two bands: Edge paints it in the colour itself.
+        return vec![rule_side_border(rect, horizontal, BorderStyle::Solid, color)];
+    }
+    // The rule is the bottom/right side of a box: the inner band (the larger one) comes first
+    // along the axis, the outer one last.
+    let (inner_rect, outer_rect) = if horizontal {
+        (
+            Rect::new(rect.x, rect.y, rect.width, extent - outer),
+            Rect::new(rect.x, rect.y + extent - outer, rect.width, outer),
+        )
+    } else {
+        (
+            Rect::new(rect.x, rect.y, extent - outer, rect.height),
+            Rect::new(rect.x + extent - outer, rect.y, outer, rect.height),
+        )
+    };
+    vec![
+        rule_side_border(inner_rect, horizontal, BorderStyle::Solid, inner_color),
+        rule_side_border(outer_rect, horizontal, BorderStyle::Solid, outer_color),
+    ]
+}
+
+/// Luminance (linear sRGB, Rec. 709) below which a `groove`/`ridge` colour counts as
+/// «dark» and is lightened instead of darkened — Chromium's `kBaseDarkColorLuminance`
+/// (the luminance of `#202020`; measured in Edge: `#202020` is dark, `#212121` is not).
+const DARK_COLOR_LUMINANCE: f32 = 0.014_443_844;
+
+/// Luminance from which the «light» shade of a `groove`/`ridge` colour is the colour itself
+/// (Edge: `#ececec` keeps its colour, `#ebebeb` is lightened to white).
+const LIGHT_COLOR_LUMINANCE: f32 = 0.835;
+
+fn linear_luminance(c: Color) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// Chromium `Color::Light()`: every channel scaled so the largest one gains `0.33`
+/// (clamped at 1); black becomes `#545454`. Channels are truncated, not rounded.
+fn lightened(c: Color) -> Color {
+    let v = c.r.max(c.g).max(c.b) as f32 / 255.0;
+    if v == 0.0 {
+        return Color { r: 0x54, g: 0x54, b: 0x54, a: c.a };
+    }
+    let m = (v + 0.33).min(1.0) / v;
+    let ch = |x: u8| (m * (x as f32 / 255.0) * 255.999_97) as u8;
+    Color { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: c.a }
+}
+
+/// Chromium `Color::Dark()`: the largest channel loses `0.33` (clamped at 0); truncated.
+fn darkened(c: Color) -> Color {
+    let v = c.r.max(c.g).max(c.b) as f32 / 255.0;
+    if v == 0.0 {
+        return c;
+    }
+    let m = ((v - 0.33) / v).max(0.0);
+    let ch = |x: u8| (m * (x as f32 / 255.0) * 255.999_97) as u8;
+    Color { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: c.a }
+}
+
+/// `(dark, light)` shades of a `groove`/`ridge`/`inset`/`outset` colour as Chromium/Edge
+/// derive them (`BoxBorderPainter::CalculateBorderStyleColor`): a very dark colour gets two
+/// lighter shades (`black` → `#545454` / `#A8A8A8`), any other one its `Dark()` and either
+/// itself (light colours) or its `Light()`. Alpha is kept.
+fn groove_shades(c: Color) -> (Color, Color) {
+    let lum = linear_luminance(c);
+    if lum <= DARK_COLOR_LUMINANCE {
+        return (lightened(c), lightened(lightened(c)));
+    }
+    (darkened(c), if lum >= LIGHT_COLOR_LUMINANCE { c } else { lightened(c) })
 }
 
 /// Допуск сравнения границ дорожек с рёбрами элементов (px, float-округление layout).
@@ -468,6 +557,69 @@ mod tests {
 
     fn row_gap(x: f32, y: f32, w: f32, h: f32) -> GapSegment {
         GapSegment { rect: Rect::new(x, y, w, h), horizontal: true, gap: 0 }
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> Color {
+        Color { r, g, b, a: 255 }
+    }
+
+    /// Reference values measured in Edge (`border: 4px inset <colour>`: top = dark, bottom = light).
+    #[test]
+    fn groove_shades_match_edge() {
+        let cases = [
+            ((0, 0, 0), (84, 84, 84), (168, 168, 168)),
+            ((30, 0, 0), (114, 0, 0), (198, 0, 0)),
+            ((32, 32, 32), (116, 116, 116), (200, 200, 200)),
+            ((20, 20, 60), (48, 48, 144), (76, 76, 229)),
+            ((33, 33, 33), (0, 0, 0), (117, 117, 117)),
+            ((0, 40, 0), (0, 0, 0), (0, 124, 0)),
+            ((136, 136, 136), (52, 52, 52), (221, 221, 221)),
+            ((204, 0, 0), (120, 0, 0), (255, 0, 0)),
+            ((10, 200, 30), (5, 116, 17), (12, 255, 38)),
+            ((200, 200, 200), (116, 116, 116), (255, 255, 255)),
+            ((235, 235, 235), (151, 151, 151), (255, 255, 255)),
+            ((236, 236, 236), (152, 152, 152), (236, 236, 236)),
+            ((250, 250, 200), (166, 166, 133), (250, 250, 200)),
+            ((255, 255, 255), (171, 171, 171), (255, 255, 255)),
+            ((255, 255, 0), (171, 171, 0), (255, 255, 0)),
+        ];
+        for (c, dark, light) in cases {
+            assert_eq!(groove_shades(rgb(c.0, c.1, c.2)), (rgb(dark.0, dark.1, dark.2), rgb(light.0, light.1, light.2)), "{c:?}");
+        }
+    }
+
+    /// `ridge` is the bottom/right side of Edge's `border: 5px ridge #000`: outer 2px dark,
+    /// inner 3px light (so top→bottom: 3px light, 2px dark); `groove` (and `outset`) the other way round.
+    #[test]
+    fn ridge_and_groove_split_the_line_in_two_shades() {
+        let rule = Rect::new(10.0, 50.0, 100.0, 5.0);
+        let bands = |style| -> Vec<(f32, f32, u8)> {
+            rule_line_commands(rule, true, style, rgb(0, 0, 0))
+                .iter()
+                .map(|c| match c {
+                    DisplayCommand::DrawBorder { rect, colors, .. } => (rect.y, rect.height, colors[2].r),
+                    _ => panic!("expected DrawBorder"),
+                })
+                .collect()
+        };
+        assert_eq!(bands(BorderStyle::Ridge), vec![(50.0, 3.0, 168), (53.0, 2.0, 84)]);
+        assert_eq!(bands(BorderStyle::Inset), bands(BorderStyle::Ridge));
+        assert_eq!(bands(BorderStyle::Groove), vec![(50.0, 3.0, 84), (53.0, 2.0, 168)]);
+        assert_eq!(bands(BorderStyle::Outset), bands(BorderStyle::Groove));
+        // A 1px line has no room for two bands: one stripe in the colour itself.
+        let thin = rule_line_commands(Rect::new(0.0, 0.0, 10.0, 1.0), true, BorderStyle::Ridge, rgb(7, 8, 9));
+        assert_eq!(thin.len(), 1);
+        assert!(matches!(&thin[0], DisplayCommand::DrawBorder { colors, .. } if colors[2] == rgb(7, 8, 9)));
+        // Vertical rule: the bands split the width, painted as right sides.
+        let cmds = rule_line_commands(Rect::new(20.0, 0.0, 10.0, 80.0), false, BorderStyle::Groove, rgb(136, 136, 136));
+        assert_eq!(cmds.len(), 2);
+        if let DisplayCommand::DrawBorder { rect, widths, colors, .. } = &cmds[1] {
+            assert_eq!((rect.x, rect.width, widths[1], colors[1].r), (25.0, 5.0, 5.0, 221));
+        } else {
+            panic!("expected DrawBorder");
+        }
+        // Plain styles stay a single command.
+        assert_eq!(rule_line_commands(rule, true, BorderStyle::Dashed, rgb(1, 2, 3)).len(), 1);
     }
 
     #[test]

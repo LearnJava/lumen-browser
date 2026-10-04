@@ -157,7 +157,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         // (геометрия multicol-колонок здесь слева направо при любом `direction`).
         let gap_idx = i as usize;
         let rule_w = *s.column_rule_width.value_for_gap(gap_idx, total);
-        let rule_style = s.column_rule_style.value_for_gap(gap_idx, total).painted_as();
+        let rule_style = *s.column_rule_style.value_for_gap(gap_idx, total);
         let rule_color = s.column_rule_color.value_for_gap(gap_idx, total).resolve(s.color);
         if !rule_style.is_visible() || rule_w <= 0.0 {
             continue;
@@ -167,20 +167,12 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         // Rule centered in the gap.
         let sep_x = gap_left + (col_gap - rule_w) * 0.5;
 
-        // Reuse DrawBorder: emit as right-side only with rect.width = rule_w.
-        // Renderer draws right side at: rect.x + rect.width - wr = sep_x ✓.
-        out.push(DisplayCommand::DrawBorder {
-            rect: Rect::new(sep_x, content_y, rule_w, content_h),
-            widths: [0.0, rule_w, 0.0, 0.0],
-            colors: [Color::TRANSPARENT, rule_color, Color::TRANSPARENT, Color::TRANSPARENT],
-            styles: [
-                BorderStyle::None,
-                rule_style,
-                BorderStyle::None,
-                BorderStyle::None,
-            ],
-            radii: CornerRadii::default(),
-        });
+        out.extend(crate::gap_decorations::rule_line_commands(
+            Rect::new(sep_x, content_y, rule_w, content_h),
+            false,
+            rule_style,
+            rule_color,
+        ));
     }
 }
 
