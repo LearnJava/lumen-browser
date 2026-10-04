@@ -70,6 +70,10 @@ pub(crate) struct VerticalInit {
     pub(crate) content_block_avail: f32,
     pub(crate) content_inline: f32,
     pub(crate) explicit_block_size: Option<f32>,
+    /// `min-width`/`max-width` — the clamp on the block size (physical width),
+    /// border-box; `0.0`/`INFINITY` when unset.
+    pub(crate) min_block: f32,
+    pub(crate) max_block: f32,
     pub(crate) frame_horiz: f32,
     pub(crate) pcb: Rect,
     pub(crate) cursor_block_consumed: f32,
@@ -83,6 +87,7 @@ pub(crate) struct VerticalInit {
 /// `SidewaysRl`, or `SidewaysLr`.
 ///
 /// # Parameters
+/// - `style`: `b.style`, or the clone carrying a flex item's used-size override.
 /// - `b`: the box to lay out (`rect.x`/`rect.y`/`rect.height` written in
 ///   place here; `rect.width` is finalised later by the trampoline once the
 ///   children's block-extent is known).
@@ -91,6 +96,7 @@ pub(crate) struct VerticalInit {
 ///   available *block-size* (room for children to stack horizontally).
 /// - `available_height`: physical height available; in vertical mode this is the
 ///   available *inline-size* (room for the inline axis = lines of text).
+/// - `measurer`: for the intrinsic `min-width`/`max-width` keywords.
 /// - `viewport`, `pcb`: forwarded to child layout via the returned init.
 ///
 /// # Axis mapping
@@ -103,16 +109,22 @@ pub(crate) struct VerticalInit {
 /// - Margin collapsing along the block axis is not implemented.
 /// - Floats / `clear` are ignored inside vertical contexts.
 /// - `min-/max-width` / `min-/max-height` are not clamped in vertical mode.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_vertical_init(
     b: &mut LayoutBox,
+    style: &std::sync::Arc<crate::style::ComputedStyle>,
     start_x: f32,
     start_y: f32,
     available_width: f32,
     available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
 ) -> VerticalInit {
-    let s = b.style.clone();
+    // `style` is `b.style` with the flex item's `UsedSizeOverride` applied (the
+    // caller's `style_with_used_size`) — `width`/`height` are what the used
+    // block/inline size derive from below.
+    let s = style.clone();
     let em = s.font_size;
 
     // Physical box-model offsets. In vertical mode CSS sides keep their
@@ -168,6 +180,30 @@ pub(crate) fn build_vertical_init(
         s.box_sizing,
         frame_horiz,
     );
+
+    // CSS Sizing L3 §5 — `min-width`/`max-width` bound the block size (physical
+    // width) the same way they bound the inline size of a horizontal box; the
+    // content keywords measure the box's own contents.
+    let block_limit = |len: Option<&Length>| -> Option<f32> {
+        let len = len?;
+        if len.is_intrinsic() {
+            return match len {
+                Length::MinContent => Some(crate::box_tree::min_content_outer_width_of_contents(b, measurer, viewport)),
+                Length::MaxContent => Some(crate::box_tree::max_content_outer_width(b, measurer, viewport)),
+                _ => None,
+            };
+        }
+        let raw = len.resolve(em, Some(available_width.max(0.0)), viewport)?;
+        let bb = match s.box_sizing {
+            BoxSizing::ContentBox => raw + frame_horiz,
+            BoxSizing::BorderBox => raw.max(frame_horiz),
+        };
+        Some(bb.max(0.0))
+    };
+    let max_block = block_limit(s.max_width.as_ref()).unwrap_or(f32::INFINITY);
+    let min_block = block_limit(s.min_width.as_ref()).unwrap_or(0.0);
+    // The explicit size is clamped too: max first, then min (min wins).
+    let explicit_block_size = explicit_block_size.map(|v| v.min(max_block).max(min_block));
 
     // CSS Scrollbars L1 §6.2: the block axis is physically horizontal in a
     // vertical writing mode, so `scrollbar-gutter: stable`'s reservation for
@@ -228,6 +264,8 @@ pub(crate) fn build_vertical_init(
         content_block_avail,
         content_inline,
         explicit_block_size,
+        min_block,
+        max_block,
         frame_horiz,
         pcb,
         cursor_block_consumed: 0.0,

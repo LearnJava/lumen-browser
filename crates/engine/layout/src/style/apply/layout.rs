@@ -11,7 +11,7 @@
 //! семантики не несёт, потому что все метки уникальны.
 
 use crate::style::{
-    AlignValue,
+    AlignValue, ContentSide,
     BlockStepAlign,
     BlockStepInsert,
     BlockStepRound,
@@ -789,33 +789,54 @@ pub(in crate::style) fn apply_decl_layout(
         // значение (полная грамматика с baseline-fallback и safe/unsafe —
         // отложена).
         "align-items" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
                 style.align_items = v;
+                style.content_align_extra.items_safe = safe;
+                style.content_align_extra.items_wm = wm;
             }
         }
         "align-self" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
                 style.align_self = v;
+                style.content_align_extra.self_safe = safe;
+                style.content_align_extra.self_wm = wm;
             }
         }
         "align-content" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
                 style.align_content = v;
+                style.content_align_extra.align_safe = safe;
+                style.content_align_extra.align_wm = wm;
             }
         }
         "justify-items" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
                 style.justify_items = v;
+                style.content_align_extra.justify_items_safe = safe;
             }
         }
         "justify-self" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
                 style.justify_self = v;
+                style.content_align_extra.justify_self_safe = safe;
             }
         }
         "justify-content" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
                 style.justify_content = v;
+                style.content_align_extra.justify_safe = safe;
+                style.content_align_extra.justify_wm = wm;
+                style.content_align_extra.justify_side = None;
+            } else if let Some(side) = AlignValue::parse_content_side(val) {
+                // `left`/`right`: the flex container resolves the side against
+                // its axes; until then it reads as `start`/`end`.
+                style.justify_content = match side {
+                    ContentSide::Left => AlignValue::Start,
+                    ContentSide::Right => AlignValue::End,
+                };
+                style.content_align_extra.justify_safe = false;
+                style.content_align_extra.justify_wm = false;
+                style.content_align_extra.justify_side = Some(side);
             }
         }
         // Shorthand: `place-items: <align-items> [<justify-items>]?`

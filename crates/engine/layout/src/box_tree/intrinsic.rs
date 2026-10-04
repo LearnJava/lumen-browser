@@ -10,6 +10,104 @@
 
 use super::*;
 
+/// max-content advance of a text run — all segments on one line (no wrapping).
+fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasurer>) -> f32 {
+    measurer.map_or(0.0, |m| {
+        segments.iter().map(|seg| {
+            let ls = seg.style.letter_spacing;
+            let fams = &seg.style.font_family;
+            let ts = seg.style.tab_size
+                * m.char_width_with_families(' ', seg.style.font_size, fams);
+            measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
+        }).sum()
+    })
+}
+
+/// max-content border-box **height** of a box in a vertical writing mode — its
+/// inline size (CSS Writing Modes L3 §3), the extent text advances along. The
+/// mirror of [`max_content_outer_width`]: an explicit `height` wins, a text run
+/// is its unwrapped advance, a block is its longest in-flow child. A child in
+/// the orthogonal (horizontal) mode has no inline size along y that is known
+/// without laying it out, so only its explicit `height` counts.
+pub(crate) fn max_content_outer_height(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pt = s.padding_top.resolve_or_zero(em, 0.0, viewport);
+    let pb = s.padding_bottom.resolve_or_zero(em, 0.0, viewport);
+    let frame = pt + pb + s.border_top_width + s.border_bottom_width;
+    if let Some(h_len) = &s.height
+        && !h_len.is_intrinsic()
+        && let Some(h) = h_len.resolve(em, None, viewport)
+    {
+        return match s.box_sizing {
+            BoxSizing::ContentBox => h + frame,
+            BoxSizing::BorderBox => h.max(frame),
+        }
+        .max(0.0);
+    }
+    let content = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
+        _ => b
+            .children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .map(|c| {
+                let cem = c.style.font_size;
+                let mt = c.style.margin_top.resolve_or_zero(cem, 0.0, viewport);
+                let mb = c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
+                let ch = if matches!(c.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+                    && !matches!(c.kind, BoxKind::InlineRun { .. })
+                {
+                    c.style
+                        .height
+                        .as_ref()
+                        .and_then(|h| h.resolve(cem, None, viewport))
+                        .unwrap_or(0.0)
+                } else {
+                    max_content_outer_height(c, measurer, viewport)
+                };
+                ch + mt + mb
+            })
+            .fold(0.0_f32, f32::max),
+    };
+    (content + frame).max(0.0)
+}
+
+/// A block container in a vertical `writing-mode` stacks its children along the
+/// physical x axis (CSS Writing Modes L3 §3), so its intrinsic *width* — the
+/// block size — is the **sum** of its children's, not the widest. A text run
+/// contributes its line box (one column per line; intrinsic sizing assumes a
+/// single line, so `used_line_height`).
+fn vertical_block_extent(
+    b: &LayoutBox,
+    viewport: Size,
+    child_outer_width: &dyn Fn(&LayoutBox) -> f32,
+) -> f32 {
+    b.children
+        .iter()
+        .filter(|c| contributes_to_intrinsic_width(c))
+        .map(|c| {
+            let cem = c.style.font_size;
+            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+            let w = match c.kind {
+                BoxKind::InlineRun { .. } => c.used_line_height,
+                _ => child_outer_width(c),
+            };
+            w + ml + mr
+        })
+        .sum()
+}
+
+fn is_vertical_block(b: &LayoutBox) -> bool {
+    !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+}
+
 /// CSS Intrinsic Sizing L3 §4.1 / CSS 2.1 §10.3.7 — does `c` contribute to its
 /// parent's intrinsic (max-content / min-content / shrink-to-fit) width?
 ///
@@ -333,18 +431,7 @@ pub(crate) fn max_content_outer_width(
         inflow_max.max(float_sum)
     };
     let content_w = match &b.kind {
-        BoxKind::InlineRun { segments, .. } => {
-            // max-content = all segments on one line (no wrapping).
-            measurer.map_or(0.0, |m| {
-                segments.iter().map(|seg| {
-                    let ls = seg.style.letter_spacing;
-                    let fams = &seg.style.font_family;
-                    let ts = seg.style.tab_size
-                        * m.char_width_with_families(' ', seg.style.font_size, fams);
-                    measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
-                }).sum()
-            })
-        }
+        BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
         BoxKind::InlineBlockRow => {
             b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {
@@ -370,6 +457,9 @@ pub(crate) fn max_content_outer_width(
         _ if is_grid_container(b) => {
             grid_col_intrinsic_sum(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
                 .unwrap_or_else(block_flow)
+        }
+        _ if is_vertical_block(b) => {
+            vertical_block_extent(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
         }
         _ => block_flow(),
     };
@@ -416,7 +506,7 @@ pub(crate) fn min_content_outer_width(
 /// nothing still has a content size suggestion of 0, and so may be shrunk below
 /// its preferred width. Descendants keep their own explicit widths; only the
 /// box's own preferred size is bypassed.
-fn min_content_outer_width_of_contents(
+pub(crate) fn min_content_outer_width_of_contents(
     b: &LayoutBox,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
@@ -513,6 +603,9 @@ fn min_content_outer_width_of_contents(
                         .fold(0.0_f32, f32::max)
                 })
         }
+        _ if is_vertical_block(b) => {
+            vertical_block_extent(b, viewport, &|c| min_content_outer_width(c, measurer, viewport))
+        }
         _ => {
             b.children.iter()
                 .filter(|c| contributes_to_intrinsic_width(c))
@@ -538,17 +631,34 @@ fn min_content_outer_width_of_contents(
 /// элемент обязан замереть на своём `max-width`/`max-height`, а не забирать
 /// всё свободное место строки. Величина внешняя, потому что гипотетические
 /// главные размеры в `lay_out_flex` тоже внешние.
-pub(crate) fn flex_item_max_main_outer(item: &LayoutBox, cb: f32, viewport: Size, is_column: bool) -> f32 {
+pub(crate) fn flex_item_max_main_outer(
+    item: &LayoutBox,
+    cb: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    is_column: bool,
+) -> f32 {
     let s = &item.style;
     let em = s.font_size;
     let max_len = if is_column { s.max_height.as_ref() } else { s.max_width.as_ref() };
     let Some(max_len) = max_len else {
         return f32::INFINITY;
     };
-    // Внутренние ключевые слова (`max-content` и родня) здесь не ограничивают:
-    // их разрешение требует измерения содержимого, а промах в бо́льшую сторону
-    // безопаснее, чем ложная заморозка элемента.
+    // Внутренние ключевые слова: по главной оси-ширине `min-content`/`max-content`
+    // измеряются по содержимому (граничная рамка — вместе с padding и border);
+    // остальные (`fit-content` и родня), как и высота, здесь не ограничивают —
+    // промах в бо́льшую сторону безопаснее, чем ложная заморозка элемента.
     if max_len.is_intrinsic() {
+        if !is_column && matches!(max_len, Length::MinContent | Length::MaxContent) {
+            let border_box = if matches!(max_len, Length::MinContent) {
+                min_content_outer_width(item, measurer, viewport)
+            } else {
+                max_content_outer_width(item, measurer, viewport)
+            };
+            let m_l = s.margin_left.resolve_or_zero(em, cb, viewport);
+            let m_r = s.margin_right.resolve_or_zero(em, cb, viewport);
+            return (border_box + m_l + m_r).max(0.0);
+        }
         return f32::INFINITY;
     }
     let Some(v) = max_len.resolve(em, Some(cb), viewport) else {

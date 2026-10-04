@@ -13,8 +13,9 @@ pub(super) struct FlexLineInit {
     /// Keys into `FlexInit::item_idxs` — `lines[li]` from Step 2, source order.
     pub(super) line_keys: Vec<usize>,
     /// Positions into `line_keys` (0..line_keys.len()), in the order items are
-    /// actually placed — reversed from source order for `row-reverse`/
-    /// `column-reverse` (mirrors the removed `ordered_keys` local).
+    /// actually placed — always source order: `*-reverse` is a mirror applied
+    /// after placement (`finish_frame`), so `justify-content: flex-start` packs
+    /// at main-start whichever physical edge that is.
     pub(super) ordered_keys: Vec<usize>,
     /// Resolved outer (margin-box) main size per position in `line_keys`,
     /// after CSS Flexbox §9.7 grow/shrink.
@@ -43,13 +44,30 @@ pub(super) struct FlexInit {
     /// position. `ordered_line_idxs` gives the visiting order separately.
     pub(super) line_inits: Vec<FlexLineInit>,
     pub(super) ordered_line_idxs: Vec<usize>,
+    /// The main axis is physically vertical — see `flex::flex_axes`.
     pub(super) is_column: bool,
+    /// Main-start is at the physical bottom/right: the auto-margin sides swap
+    /// here, the items themselves are mirrored in `finish_frame`.
     pub(super) is_reverse: bool,
+    /// Cross-start is at the physical bottom/right — mirrored in `finish_frame`.
+    pub(super) cross_rev: bool,
+    /// `flex-wrap: wrap-reverse` — what a `safe` align-content falls back across.
+    pub(super) wrap_reverse: bool,
+    /// `flex-direction: *-reverse` (the keyword, not the physical result).
+    pub(super) reverse_kw: bool,
     pub(super) is_wrap: bool,
     pub(super) content_x: f32,
     pub(super) content_y: f32,
     pub(super) content_width: f32,
     pub(super) explicit_cross: Option<f32>,
+    /// The container's definite content-box main size (`None` — content-sized).
+    pub(super) main_definite: Option<f32>,
+    /// The cross size (physical width of a vertical main axis) is content-sized:
+    /// items align inside their line, not the container, and the container's
+    /// width is the sum of its lines.
+    pub(super) cross_indefinite: bool,
+    /// `Some` for a flex container in a vertical `writing-mode`.
+    pub(super) vertical: Option<super::flex::VerticalFlex>,
     pub(super) item_gap: f32,
     pub(super) cross_gap: f32,
     pub(super) s: Arc<ComputedStyle>,
@@ -443,9 +461,9 @@ fn step_item(
 fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) {
     // A wrapped column aligns across the *line* cross size, known only once the
     // line is complete — `finish_line` does it (`align_column_line`).
-    if frame.init.is_column && !frame.init.is_wrap {
+    if frame.init.is_column && !frame.init.is_wrap && !frame.init.cross_indefinite {
         let cross_shift =
-            column_item_cross_shift(&frame.b.children[pos.i], frame.init.content_width, &frame.init.s, viewport);
+            column_item_cross_shift(&frame.b.children[pos.i], frame.init.content_width, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
         if cross_shift != 0.0 {
             shift_tree(&mut frame.b.children[pos.i], cross_shift, 0.0);
         }
@@ -457,14 +475,38 @@ fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) 
     }
 }
 
+/// The `align-self` (resolved against the container's `align-items`) of `item`
+/// in the start-based frame: `start`/`end` follow the writing mode, so
+/// `wrap-reverse` — which makes the frame's start the physical end — swaps them
+/// (`flex-start`/`flex-end` are the frame already).
+fn frame_align(item: &ComputedStyle, container: &ComputedStyle, wrap_reverse: bool) -> AlignValue {
+    let (value, wm) = if matches!(item.align_self, AlignValue::Auto) {
+        (container.align_items, container.content_align_extra.items_wm)
+    } else {
+        (item.align_self, item.content_align_extra.self_wm)
+    };
+    match value {
+        AlignValue::Start if wm && wrap_reverse => AlignValue::End,
+        AlignValue::End if wm && wrap_reverse => AlignValue::Start,
+        other => other,
+    }
+}
+
 /// Для items строки: сторона базовой линии, по которой item выравнивается, и
 /// расстояние от верхней кромки его margin box до этой линии. `None` — item не
 /// участвует в baseline-выравнивании (другое значение `align-self` либо `auto`
 /// в поперечном поле, которое приоритетнее, CSS Flexbox §8.1).
+///
+/// Работает в стартовой раскладке (`finish_frame` зеркалит её для `cross_rev`):
+/// там cross-start — нижняя кромка margin box, поэтому «подъём» — расстояние от
+/// неё до базовой линии (`outer` минус физический подъём), чтобы после
+/// зеркалирования базовые линии items остались на одной прямой.
 fn row_item_baseline(
     item: &LayoutBox,
     container: &ComputedStyle,
     m_t: f32,
+    outer: f32,
+    cross_rev: bool,
     measurer: Option<&dyn TextMeasurer>,
 ) -> Option<(BaselineSide, f32)> {
     let is = &item.style;
@@ -472,21 +514,35 @@ fn row_item_baseline(
         return None;
     }
     let side = align_baseline_side(resolved_align(is, container))?;
-    Some((side, m_t + box_baseline_or_synth(item, side, measurer)))
+    let ascent = m_t + box_baseline_or_synth(item, side, measurer);
+    Some((side, if cross_rev { outer - ascent } else { ascent }))
 }
 
 /// CSS Flexbox §8.3/§8.1 — horizontal shift of a COLUMN item inside `cross_size`
 /// (the container's content width, or the width of the item's own line when the
 /// column wraps): auto margins first, then `align-self`/`align-items`.
-fn column_item_cross_shift(item: &LayoutBox, cross_size: f32, container: &ComputedStyle, viewport: Size) -> f32 {
+///
+/// Works in the start-based frame `finish_frame` mirrors afterwards for
+/// `cross_rev`: there the cross-START margin is the physical *right* one, so the
+/// two auto flags swap.
+fn column_item_cross_shift(
+    item: &LayoutBox,
+    cross_size: f32,
+    container: &ComputedStyle,
+    cross_rev: bool,
+    wrap_reverse: bool,
+    viewport: Size,
+) -> f32 {
     let is = &item.style;
     let iem = is.font_size;
     let m_l = is.margin_left.resolve_or_zero(iem, cross_size, viewport);
     let m_r = is.margin_right.resolve_or_zero(iem, cross_size, viewport);
     let avail_cross = (cross_size - m_l - m_r).max(0.0);
-    let auto_cross_l = matches!(is.margin_left, LengthOrAuto::Auto);
-    let auto_cross_r = matches!(is.margin_right, LengthOrAuto::Auto);
-    let cross_align = if matches!(is.align_self, AlignValue::Auto) { container.align_items } else { is.align_self };
+    let (auto_cross_l, auto_cross_r) = {
+        let (l, r) = (matches!(is.margin_left, LengthOrAuto::Auto), matches!(is.margin_right, LengthOrAuto::Auto));
+        if cross_rev { (r, l) } else { (l, r) }
+    };
+    let cross_align = frame_align(is, container, wrap_reverse);
     let free_cross = (avail_cross - item.rect.width).max(0.0);
     if auto_cross_l && auto_cross_r {
         free_cross / 2.0
@@ -543,7 +599,11 @@ fn finish_line(
     let (line_cross, baseline_groups): (f32, [(f32, f32); 2]) = if is_column {
         // A wrapped column has one vertical line per wrap; a single-line column
         // keeps the zero (its cross cursor is never read).
-        let cross = if frame.init.is_wrap { column_line_cross_size(frame, li, viewport) } else { 0.0 };
+        let cross = if frame.init.is_wrap || frame.init.cross_indefinite {
+            column_line_cross_size(frame, li, viewport)
+        } else {
+            0.0
+        };
         (cross, [(0.0, 0.0); 2])
     } else {
         let s = Arc::clone(&frame.init.s);
@@ -560,7 +620,7 @@ fn finish_line(
             let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
             let outer = item.rect.height + m_t + m_b;
-            match row_item_baseline(item, &s, m_t, measurer) {
+            match row_item_baseline(item, &s, m_t, outer, frame.init.cross_rev, measurer) {
                 Some((side, ascent)) => {
                     let g = &mut groups[side as usize];
                     g.0 = g.0.max(ascent);
@@ -574,11 +634,11 @@ fn finish_line(
     };
     frame.init.line_cross_sizes.push(line_cross);
 
-    if is_column && frame.init.is_wrap {
+    if is_column && (frame.init.is_wrap || frame.init.cross_indefinite) {
         for jx in 0..n_items {
             let k = frame.init.line_inits[li].line_keys[jx];
             let i = frame.init.item_idxs[k];
-            let shift = column_item_cross_shift(&frame.b.children[i], line_cross, &frame.init.s, viewport);
+            let shift = column_item_cross_shift(&frame.b.children[i], line_cross, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
             if shift != 0.0 {
                 shift_tree(&mut frame.b.children[i], shift, 0.0);
             }
@@ -605,9 +665,16 @@ fn finish_line(
             let iem = is.font_size;
             let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
-            let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
-            let auto_cross_start = matches!(is.margin_top, LengthOrAuto::Auto);
-            let auto_cross_end = matches!(is.margin_bottom, LengthOrAuto::Auto);
+            let align = frame_align(&is, &s, frame.init.wrap_reverse);
+            // In the start-based frame (mirrored afterwards for `cross_rev`) the
+            // cross-start margin is the physical bottom one.
+            let (auto_cross_start, auto_cross_end) = {
+                let (t, b) = (
+                    matches!(is.margin_top, LengthOrAuto::Auto),
+                    matches!(is.margin_bottom, LengthOrAuto::Auto),
+                );
+                if frame.init.cross_rev { (b, t) } else { (t, b) }
+            };
             let item_rect_height = frame.b.children[i].rect.height;
             let outer_cross = item_rect_height + m_t + m_b;
             if auto_cross_start || auto_cross_end {
@@ -626,7 +693,9 @@ fn finish_line(
             }
             // §9.4 шаг 8 / §8.5: выравнивание по базовой линии. `first baseline` —
             // группа прижата к cross-start линии, `last baseline` — к cross-end.
-            if let Some((side, ascent)) = row_item_baseline(&frame.b.children[i], &s, m_t, measurer) {
+            if let Some((side, ascent)) =
+                row_item_baseline(&frame.b.children[i], &s, m_t, outer_cross, frame.init.cross_rev, measurer)
+            {
                 let line_top = content_y + cross_cursor;
                 let margin_top_y = match side {
                     BaselineSide::First => line_top + (baseline_groups[0].0 - ascent),
@@ -688,6 +757,70 @@ fn finish_line(
     frame.init.cross_cursor += line_cross + frame.init.cross_gap;
 }
 
+/// FLEX-VWM: turns the start-based layout `step_item`/`finish_line` produced
+/// into the physical one when main-start and/or cross-start sit at the
+/// bottom/right edge (`row-reverse`, `direction: rtl`, `wrap-reverse`,
+/// `vertical-rl` …, see `flex::flex_axes`).
+///
+/// Each item's margin box is reflected inside the container's content box
+/// along the affected axis. Margins keep their physical sides — the item's own
+/// offset inside its margin box is part of the reflected span — so a box is
+/// moved by `extent - 2 * span_start - span_size`, a pure translation of its
+/// whole subtree. The extent is the definite content size when there is one
+/// and the occupied size otherwise (a content-sized container has no free
+/// space, so its items just swap places).
+fn mirror_reversed_axes(frame: &mut Frame, total_cross: f32, viewport: Size) {
+    if !frame.init.is_reverse && !frame.init.cross_rev {
+        return;
+    }
+    let (cx, cy, cw) = (frame.init.content_x, frame.init.content_y, frame.init.content_width);
+    let is_column = frame.init.is_column;
+    // Per item: [x_start, x_size, y_start, y_size] of the margin box relative to
+    // the content-box origin.
+    let spans: Vec<(usize, [f32; 4])> = frame
+        .init
+        .item_idxs
+        .iter()
+        .map(|&i| {
+            let it = &frame.b.children[i];
+            let iem = it.style.font_size;
+            let m_l = it.style.margin_left.resolve_or_zero(iem, cw, viewport);
+            let m_r = it.style.margin_right.resolve_or_zero(iem, cw, viewport);
+            let m_t = it.style.margin_top.resolve_or_zero(iem, cw, viewport);
+            let m_b = it.style.margin_bottom.resolve_or_zero(iem, cw, viewport);
+            (
+                i,
+                [
+                    it.rect.x - m_l - cx,
+                    it.rect.width + m_l + m_r,
+                    it.rect.y - m_t - cy,
+                    it.rect.height + m_t + m_b,
+                ],
+            )
+        })
+        .collect();
+    // Axis 0 = x, 1 = y; (start, size) index pairs into the arrays above.
+    let (main_axis, cross_axis) = if is_column { (1, 0) } else { (0, 1) };
+    let occupied = |axis: usize| spans.iter().map(|(_, s)| s[axis * 2] + s[axis * 2 + 1]).fold(0.0_f32, f32::max);
+    let main_extent = frame.init.main_definite.unwrap_or_else(|| occupied(main_axis));
+    let cross_extent = if is_column {
+        if frame.init.cross_indefinite { total_cross } else { cw }
+    } else {
+        frame.init.explicit_cross.unwrap_or(total_cross)
+    };
+    for (i, sp) in spans {
+        let delta = |axis: usize, extent: f32| extent - 2.0 * sp[axis * 2] - sp[axis * 2 + 1];
+        let mut d = [0.0_f32; 2];
+        if frame.init.is_reverse {
+            d[main_axis] = delta(main_axis, main_extent);
+        }
+        if frame.init.cross_rev {
+            d[cross_axis] = delta(cross_axis, cross_extent);
+        }
+        shift_tree(&mut frame.b.children[i], d[0], d[1]);
+    }
+}
+
 /// Runs once every line is placed — CSS Flexbox §8.3 align-content across
 /// lines, the container content-height/total-cross return value, and (moved
 /// in from `layout_dispatch.rs`'s former post-`lay_out_flex` code) the
@@ -716,13 +849,44 @@ fn finish_frame(
         let used_cross: f32 = frame.init.line_cross_sizes.iter().sum::<f32>() + line_gap_total;
         // Row: the container's definite height. Column: its content width — the
         // cross axis of a wrapped column is horizontal and always definite here.
-        let cross_size = if is_column { Some(frame.init.content_width) } else { frame.init.explicit_cross };
+        let cross_size = if is_column {
+            (!frame.init.cross_indefinite).then_some(frame.init.content_width)
+        } else {
+            frame.init.explicit_cross
+        };
         let free_cross = cross_size.map_or(0.0, |h| (h - used_cross).max(0.0));
+        // `align-content: safe …` with the lines overflowing: align to the
+        // writing-mode `start` edge — the logical start, or the logical end
+        // under `wrap-reverse` (mirrored below like everything else).
+        if frame.init.s.content_align_extra.align_safe
+            && matches!(frame.init.s.align_content, AlignValue::Start | AlignValue::End | AlignValue::Center)
+            && let Some(h) = cross_size
+            && h < used_cross
+            && frame.init.wrap_reverse
+        {
+            let shift = h - used_cross;
+            for k in 0..frame.init.item_idxs.len() {
+                let i = frame.init.item_idxs[k];
+                if is_column {
+                    shift_tree(&mut frame.b.children[i], shift, 0.0);
+                } else {
+                    shift_tree(&mut frame.b.children[i], 0.0, shift);
+                }
+            }
+        }
 
         if free_cross > 0.0 {
             let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
             let effective = match frame.init.s.align_content {
                 AlignValue::Auto | AlignValue::Normal => AlignValue::Stretch,
+                // `start`/`end` follow the writing mode: `wrap-reverse` swaps them
+                // relative to this start-based frame (see `mirror_reversed_axes`).
+                AlignValue::Start if frame.init.s.content_align_extra.align_wm && frame.init.wrap_reverse => {
+                    AlignValue::End
+                }
+                AlignValue::End if frame.init.s.content_align_extra.align_wm && frame.init.wrap_reverse => {
+                    AlignValue::Start
+                }
                 other => other,
             };
 
@@ -776,8 +940,8 @@ fn finish_frame(
                         let k = frame.init.line_inits[li].line_keys[jx];
                         let i = frame.init.item_idxs[k];
                         let dx = offset
-                            + column_item_cross_shift(&frame.b.children[i], new_cross, &frame.init.s, viewport)
-                            - column_item_cross_shift(&frame.b.children[i], old_cross, &frame.init.s, viewport);
+                            + column_item_cross_shift(&frame.b.children[i], new_cross, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport)
+                            - column_item_cross_shift(&frame.b.children[i], old_cross, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
                         if dx != 0.0 {
                             shift_tree(&mut frame.b.children[i], dx, 0.0);
                         }
@@ -822,6 +986,33 @@ fn finish_frame(
         }
     }
 
+    // FLEX-VWM: a content-sized block size (`width: auto` in a vertical writing
+    // mode) is what the lines occupy: the sum of the lines for a vertical main
+    // axis, the longest line for a horizontal one.
+    if let Some(v) = frame.init.vertical
+        && v.block_size_auto
+    {
+        let occupied = if is_column {
+            total_cross
+        } else {
+            let cx = frame.init.content_x;
+            frame
+                .init
+                .item_idxs
+                .iter()
+                .map(|&i| {
+                    let it = &frame.b.children[i];
+                    let m_r = it.style.margin_right.resolve_or_zero(it.style.font_size, frame.init.content_width, viewport);
+                    it.rect.x + it.rect.width + m_r - cx
+                })
+                .fold(0.0_f32, f32::max)
+        };
+        frame.b.rect.width = occupied + v.frame_horiz;
+        frame.init.content_width = occupied;
+    }
+
+    mirror_reversed_axes(frame, total_cross, viewport);
+
     let content_height = if is_column {
         frame
             .init
@@ -857,6 +1048,11 @@ fn finish_frame(
         && ah > 0.0
     {
         (frame.b.rect.width * ah / aw).max(0.0)
+    } else if frame.init.vertical.is_some_and(|v| v.fill_inline_size) {
+        // The inline size of a vertical writing mode fills what is available
+        // (Writing Modes L3 §7.3 — `height: auto` there is `width: auto` of a
+        // horizontal box).
+        frame.init.available_height.unwrap_or(viewport.height).max(0.0)
     } else {
         let ch = contained_content_height(frame.init.size_contained, &s, em, viewport, content_height);
         ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
@@ -882,5 +1078,140 @@ fn finish_frame(
             frame.init.own_pcb
         };
         lay_out_abs_children(&mut frame.b, &flex_abs, measurer, viewport, my_pcb, hp);
+        align_abs_static_positions(frame, &flex_abs, viewport);
     }
+}
+
+/// Physical position of a lone item inside `free` space along one axis, as a
+/// fraction (0 — top/left edge, 1 — bottom/right) — CSS Flexbox §4.1: the static
+/// position of an abspos child is where it would sit as the only flex item.
+///
+/// `safe_overflow`: the item is `safe`-aligned *and* overflows (the caller decides
+/// against what — see `align_abs_static_positions`).
+/// `rev`: the axis' start edge is the physical bottom/right one; `dir_rev`: the
+/// `*-reverse`/`wrap-reverse` keyword is on (it makes the writing-mode `start`/
+/// `end` the *opposite* of `flex-start`/`flex-end`).
+fn lone_item_fraction(
+    value: AlignValue,
+    wm_relative: bool,
+    safe_overflow: bool,
+    rev: bool,
+    dir_rev: bool,
+) -> f32 {
+    let safe = safe_overflow;
+    let mut logical = match value {
+        AlignValue::End => 1.0,
+        AlignValue::Center | AlignValue::SpaceAround | AlignValue::SpaceEvenly => 0.5,
+        _ => 0.0,
+    };
+    if wm_relative && dir_rev && matches!(value, AlignValue::Start | AlignValue::End) {
+        logical = 1.0 - logical;
+    }
+    // `safe` and overflowing: the writing-mode start edge instead.
+    if safe && matches!(value, AlignValue::Start | AlignValue::End | AlignValue::Center) {
+        logical = if dir_rev { 1.0 } else { 0.0 };
+    }
+    if rev { 1.0 - logical } else { logical }
+}
+
+/// CSS Flexbox §4.1 — moves each abspos child whose inset on an axis is `auto` on
+/// both sides from the content-box corner `lay_out_abs_children` left it at to
+/// where `justify-content` (main axis) / `align-self` (cross axis) put a lone
+/// item.
+fn align_abs_static_positions(frame: &mut Frame, abs: &[(usize, f32, f32)], viewport: Size) {
+    let s = Arc::clone(&frame.init.s);
+    let main_vertical = frame.init.is_column;
+    let extra = s.content_align_extra;
+    let width = frame.init.content_width;
+    let height = (frame.b.rect.height
+        - frame.init.padding_top
+        - frame.init.padding_bottom
+        - s.border_top_width
+        - s.border_bottom_width)
+        .max(0.0);
+    for &(idx, _, _) in abs {
+        let child = &frame.b.children[idx];
+        let cs = &child.style;
+        let em = cs.font_size;
+        let m_l = cs.margin_left.resolve_or_zero(em, width, viewport);
+        let m_r = cs.margin_right.resolve_or_zero(em, width, viewport);
+        let m_t = cs.margin_top.resolve_or_zero(em, width, viewport);
+        let m_b = cs.margin_bottom.resolve_or_zero(em, width, viewport);
+        let free_x = width - (child.rect.width + m_l + m_r);
+        let free_y = height - (child.rect.height + m_t + m_b);
+        let (mut cross_value, cross_safe, mut cross_wm) = if matches!(cs.align_self, AlignValue::Auto) {
+            (s.align_items, extra.items_safe, extra.items_wm)
+        } else {
+            (cs.align_self, cs.content_align_extra.self_safe, cs.content_align_extra.self_wm)
+        };
+        // `baseline`/`last baseline` of a lone item fall back to the writing-mode
+        // `start`/`end` (CSS Box Alignment §9.3).
+        match cross_value {
+            AlignValue::Baseline => {
+                cross_value = AlignValue::Start;
+                cross_wm = true;
+            }
+            AlignValue::LastBaseline => {
+                cross_value = AlignValue::End;
+                cross_wm = true;
+            }
+            _ => {}
+        }
+        // `justify-content: left|right`: physical along the inline axis (also a
+        // vertical one), the writing-mode `start` along the block axis.
+        let main_value = match extra.justify_side {
+            Some(side) if !matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse) => {
+                return_side_value(side, frame.init.is_reverse)
+            }
+            Some(_) => if frame.init.reverse_kw { AlignValue::End } else { AlignValue::Start },
+            None => s.justify_content,
+        };
+        let main_wm = extra.justify_wm;
+        // `safe` asks whether the item overflows its *containing block*: the flex
+        // container's content box when it is itself the containing block, the
+        // outer positioned ancestor's padding box otherwise (WPT
+        // `flex-abspos-align-self-safe-outer-cb-*`).
+        let (overflow_x, overflow_y) = if frame.init.is_positioned || matches!(cs.position, Position::Fixed) {
+            (free_x < 0.0, free_y < 0.0)
+        } else {
+            // The height of a positioned ancestor's rect is not known yet while
+            // its descendants are laid out (it reads 0): fall back to the flex
+            // container's own content box then.
+            let cb = frame.init.own_pcb;
+            let cb_w = if cb.width > 0.0 { cb.width } else { width };
+            let cb_h = if cb.height > 0.0 { cb.height } else { height };
+            (cb_w - (child.rect.width + m_l + m_r) < 0.0, cb_h - (child.rect.height + m_t + m_b) < 0.0)
+        };
+        let (fx, fy) = {
+            let main = |overflow: bool| {
+                lone_item_fraction(
+                    main_value, main_wm, extra.justify_safe && overflow,
+                    frame.init.is_reverse, frame.init.reverse_kw,
+                )
+            };
+            let cross = |overflow: bool| {
+                lone_item_fraction(
+                    cross_value, cross_wm, cross_safe && overflow,
+                    frame.init.cross_rev, frame.init.wrap_reverse,
+                )
+            };
+            if main_vertical {
+                (cross(overflow_x), main(overflow_y))
+            } else {
+                (main(overflow_x), cross(overflow_y))
+            }
+        };
+        let auto_x = matches!(cs.left, LengthOrAuto::Auto) && matches!(cs.right, LengthOrAuto::Auto);
+        let auto_y = matches!(cs.top, LengthOrAuto::Auto) && matches!(cs.bottom, LengthOrAuto::Auto);
+        let dx = if auto_x { free_x * fx } else { 0.0 };
+        let dy = if auto_y { free_y * fy } else { 0.0 };
+        shift_tree(&mut frame.b.children[idx], dx, dy);
+    }
+}
+
+/// `justify-content: left | right` along a horizontal main axis as the
+/// start-based `Start`/`End` it is: `left` is the start edge when the axis is not
+/// mirrored.
+fn return_side_value(side: crate::style::ContentSide, main_rev: bool) -> AlignValue {
+    if (side == crate::style::ContentSide::Left) == !main_rev { AlignValue::Start } else { AlignValue::End }
 }

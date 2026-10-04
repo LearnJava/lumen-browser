@@ -245,6 +245,39 @@ fn lay_out_inner_impl(
     }
 }
 
+/// The style a box is laid out with: its own `Arc` when there is no
+/// [`UsedSizeOverride`] (the overwhelming majority — an `Arc` bump, not a deep
+/// copy, see BUG-341 S12), otherwise a locally cloned `ComputedStyle` with the
+/// override applied. `b.style` itself is never touched (BUG-341 S34).
+fn style_with_used_size(style: &Arc<ComputedStyle>, used_size_override: Option<UsedSizeOverride>) -> Arc<ComputedStyle> {
+    let Some(ov) = used_size_override else {
+        return Arc::clone(style);
+    };
+    let mut owned = (**style).clone();
+    // BUG-736: an intrinsic-hint width/height is a presentational fallback for
+    // ordinary block/inline layout, not an authored size — a flex item must see
+    // `auto` here so its used size comes from this override plus `aspect_ratio`
+    // instead of the raw intrinsic pixels.
+    if ov.clear_intrinsic_hint {
+        if owned.width_is_intrinsic_hint {
+            owned.width = None;
+        }
+        if owned.height_is_intrinsic_hint {
+            owned.height = None;
+        }
+    }
+    if let Some(bs) = ov.box_sizing {
+        owned.box_sizing = bs;
+    }
+    if let Some(w) = ov.width {
+        owned.width = Some(Length::Px(w));
+    }
+    if let Some(h) = ov.height {
+        owned.height = Some(Length::Px(h));
+    }
+    Arc::new(owned)
+}
+
 /// BUG-1242 — how far a clean box moves to land where a fresh layout at `start_*` would
 /// put it, or `None` when its placement is not just `start + margin` (auto inline
 /// margins, a non-start `justify-self`, `position: relative`).
@@ -402,8 +435,13 @@ pub(super) fn dispatch_box(
     // Glyph rotation is a paint concern — CPU rasterizer and wgpu renderer (live
     // default backend, ADR-017) both honor it, including the per-glyph `mixed`
     // CJK-upright/Latin-rotated split; femtovg (fallback backend) does not.
+    //
+    // A vertical-writing-mode flex container is not stacked as a block: it goes
+    // on to the flex arm below, whose axes come from `flex::flex_axes`
+    // (FLEX-VWM).
     if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && !matches!(b.style.display, Display::Flex | Display::InlineFlex)
     {
         // BUG-802: `available_height` is consumed inside `crate::vertical`,
         // out of reach of `resolve_block_size`'s per-site bookkeeping.
@@ -414,8 +452,9 @@ pub(super) fn dispatch_box(
         // deferred to `vertical_trampoline::run` so a chain of nested
         // vertical containers drives on an explicit heap stack instead of
         // recursing.
+        let vs = style_with_used_size(&b.style, used_size_override);
         let init = crate::vertical::build_vertical_init(
-            b, start_x, start_y, available_width, available_height, viewport, pcb,
+            b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb,
         );
         return DispatchOutcome::NeedsVerticalLoop(Box::new(init));
     }
@@ -433,35 +472,7 @@ pub(super) fn dispatch_box(
     // function, so its pointer identity survives this call unconditionally.
     let s = {
         let _prof = lumen_core::profile::scope_detail("lo_style_ref");
-        match used_size_override {
-            Some(ov) => {
-                let mut owned = (*b.style).clone();
-                // BUG-736: an intrinsic-hint width/height is a presentational
-                // fallback for ordinary block/inline layout, not an authored
-                // size — a flex item must see `auto` here so its used size
-                // comes from this override plus `aspect_ratio` instead of the
-                // raw intrinsic pixels.
-                if ov.clear_intrinsic_hint {
-                    if owned.width_is_intrinsic_hint {
-                        owned.width = None;
-                    }
-                    if owned.height_is_intrinsic_hint {
-                        owned.height = None;
-                    }
-                }
-                if let Some(bs) = ov.box_sizing {
-                    owned.box_sizing = bs;
-                }
-                if let Some(w) = ov.width {
-                    owned.width = Some(Length::Px(w));
-                }
-                if let Some(h) = ov.height {
-                    owned.height = Some(Length::Px(h));
-                }
-                Arc::new(owned)
-            }
-            None => Arc::clone(&b.style),
-        }
+        style_with_used_size(&b.style, used_size_override)
     };
     let em = s.font_size;
     // BUG-974: the percentage base can differ from the free space
@@ -1057,42 +1068,40 @@ pub(super) fn dispatch_box(
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
-                // For row flex, align-content needs the explicit container height (cross axis).
-                let flex_explicit_cross = if !matches!(
-                    s.flex_direction,
-                    FlexDirection::Column | FlexDirection::ColumnReverse
-                ) {
-                    s.height.as_ref()
-                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
-                        .map(|h| match s.box_sizing {
-                            BoxSizing::ContentBox => h,
-                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
-                                - s.border_top_width - s.border_bottom_width)
-                                .max(0.0),
+                // FLEX-VWM: which physical axis is main comes from `flex-direction`
+                // *and* `writing-mode`; in a vertical writing mode the container's
+                // inline size (physical height) is the definite one — an explicit
+                // `height`, else what is available — and its block size (physical
+                // width) is content-sized unless `width` is explicit.
+                let main_vertical = flex::flex_axes(&s).main_vertical;
+                let vertical_flex = !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb);
+                let frame_vert = padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width;
+                let explicit_height = s.height.as_ref()
+                    .and_then(|h| resolve_block_size(h, em, available_height, viewport))
+                    .map(|h| match s.box_sizing {
+                        BoxSizing::ContentBox => h,
+                        BoxSizing::BorderBox => (h - frame_vert).max(0.0),
+                    })
+                    .or_else(|| {
+                        (vertical_flex && s.display == Display::Flex).then(|| {
+                            (available_height.unwrap_or(viewport.height) - frame_vert).max(0.0)
                         })
-                } else {
-                    None
-                };
+                    });
+                // For row flex, align-content needs the explicit container height (cross axis).
+                let flex_explicit_cross = if !main_vertical { explicit_height } else { None };
                 // CSS Flexbox §9.7: for a column flex container with a definite
                 // main (block) size, free space is distributed to flex-grow items.
                 // Compute that definite content-box height here so `lay_out_flex`
                 // can grow children instead of collapsing them to flex-basis
                 // (BUG-104 — `.right-col` children with `flex:1` were height 0).
-                let flex_explicit_main = if matches!(
-                    s.flex_direction,
-                    FlexDirection::Column | FlexDirection::ColumnReverse
-                ) {
-                    s.height.as_ref()
-                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
-                        .map(|h| match s.box_sizing {
-                            BoxSizing::ContentBox => h,
-                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
-                                - s.border_top_width - s.border_bottom_width)
-                                .max(0.0),
-                        })
-                } else {
-                    None
-                };
+                let flex_explicit_main = if main_vertical { explicit_height } else { None };
+                let vertical = vertical_flex.then(|| flex::VerticalFlex {
+                    block_size_auto: s.width.is_none(),
+                    fill_inline_size: s.display == Display::Flex,
+                    frame_horiz: padding_left + padding_right
+                        + s.border_left_width + s.border_right_width,
+                });
                 // LAYOUT-2 срез 3: Steps 1–3/justify precompute run here
                 // (native — see `build_flex_init`'s doc comment for why), but
                 // the item-placement pass (and this container's own height +
@@ -1103,6 +1112,7 @@ pub(super) fn dispatch_box(
                     &mut b.children, &s, content_x, content_y, content_width,
                     flex_explicit_cross, flex_explicit_main, measurer, viewport, children_pcb, hp,
                     em, available_height, padding_top, padding_bottom, size_contained, is_positioned, pcb,
+                    vertical,
                 );
                 return DispatchOutcome::NeedsFlexLoop(init);
             }

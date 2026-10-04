@@ -61,6 +61,75 @@ pub(crate) struct UsedSizeOverride {
     pub(crate) percentage_base: Option<f32>,
 }
 
+/// The physical flex axes of a container — CSS Flexbox L1 §5.1 (main/cross
+/// axes) resolved through CSS Writing Modes L3 §6.1 (flow-relative → physical).
+///
+/// `row` runs along the inline axis, `column` along the block axis; the inline
+/// axis is physically horizontal in `horizontal-tb` and vertical otherwise, the
+/// block axis the other one. `*-reverse` and `wrap-reverse` swap the start and
+/// end edge of the main and cross axis respectively.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FlexAxes {
+    /// The main axis is physically vertical (y); `false` — horizontal (x).
+    pub(crate) main_vertical: bool,
+    /// Main-start sits at the physical bottom/right edge (so items are placed
+    /// bottom-up / right-to-left).
+    pub(crate) main_rev: bool,
+    /// Cross-start sits at the physical bottom/right edge.
+    pub(crate) cross_rev: bool,
+    /// `flex-direction` is `*-reverse`: main-start is the *opposite* of the
+    /// writing-mode `start` edge (what a `safe` overflow falls back to).
+    pub(crate) reverse_kw: bool,
+    /// `flex-wrap: wrap-reverse`: likewise for the cross axis.
+    pub(crate) wrap_reverse: bool,
+}
+
+/// A flex container in a vertical `writing-mode` — what the container's own
+/// sizing needs beyond the axes (see `layout_dispatch::dispatch_box`'s flex arm).
+/// Its inline size (physical height) is always definite there; its block size
+/// (physical width) is definite only with an explicit `width`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VerticalFlex {
+    /// `width: auto` — the container shrinks to its content: `content_width`
+    /// is only the room available, not a size items may fill or free space
+    /// to distribute.
+    pub(crate) block_size_auto: bool,
+    /// A block-level container: its inline size (physical height) fills what is
+    /// available. `inline-flex` shrinks to its content instead.
+    pub(crate) fill_inline_size: bool,
+    /// Left + right padding and border, added to the occupied content width
+    /// once it is known.
+    pub(crate) frame_horiz: f32,
+}
+
+pub(crate) fn flex_axes(s: &ComputedStyle) -> FlexAxes {
+    use crate::style::{Direction, WritingMode};
+    let vertical = !matches!(s.writing_mode, WritingMode::HorizontalTb);
+    let rtl = s.direction == Direction::Rtl;
+    // Inline-start edge: left (ltr) / right (rtl) in horizontal modes; top
+    // (ltr) / bottom (rtl) in vertical ones — except `sideways-lr`, whose
+    // inline direction is bottom-to-top (Writing Modes L4 §3.2).
+    let inline_start_at_end =
+        if matches!(s.writing_mode, WritingMode::SidewaysLr) { !rtl } else { rtl };
+    // Block-start edge: top in `horizontal-tb`; right in `*-rl`; left in `*-lr`.
+    let block_start_at_end = matches!(s.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
+    let column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
+    let reverse = matches!(s.flex_direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse);
+    let wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
+    let (main_start_at_end, cross_start_at_end) = if column {
+        (block_start_at_end, inline_start_at_end)
+    } else {
+        (inline_start_at_end, block_start_at_end)
+    };
+    FlexAxes {
+        main_vertical: vertical != column,
+        main_rev: main_start_at_end != reverse,
+        cross_rev: cross_start_at_end != wrap_reverse,
+        reverse_kw: reverse,
+        wrap_reverse,
+    }
+}
+
 /// The **margin-box** cross width a column flex item is laid out at — the value
 /// `lay_out_flex` hands `lay_out_inner` as its `available_width`, in both the
 /// Step-1 probe and the final placement pass (BUG-341 S41).
@@ -163,15 +232,19 @@ pub(crate) fn build_flex_init(
     size_contained: bool,
     is_positioned: bool,
     own_pcb: Rect,
+    vertical: Option<VerticalFlex>,
 ) -> Box<super::flex_trampoline::FlexInit> {
     use super::flex_trampoline::FlexInit;
-    let is_column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
-    let is_reverse = matches!(
-        s.flex_direction,
-        FlexDirection::RowReverse | FlexDirection::ColumnReverse
-    );
+    // FLEX-VWM: the physical axes, not the raw `flex-direction` keyword —
+    // `writing-mode`/`direction` decide which physical axis is main and which
+    // edge main-start/cross-start sit on. Everything below is laid out in
+    // *start-based* coordinates; `flex_trampoline::finish_frame` mirrors the
+    // placed items afterwards for `main_rev`/`cross_rev`.
+    let axes = flex_axes(s);
+    let is_column = axes.main_vertical;
+    let is_reverse = axes.main_rev;
+    let cross_rev = axes.cross_rev;
     let is_wrap = matches!(s.flex_wrap, FlexWrap::Wrap | FlexWrap::WrapReverse);
-    let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     // Indices of non-Skip children (actual flex items).
     // CSS Flexbox L1 §4.1: an absolutely-positioned child of a flex container does
@@ -200,11 +273,17 @@ pub(crate) fn build_flex_init(
             ordered_line_idxs: Vec::new(),
             is_column,
             is_reverse,
+            cross_rev,
+            wrap_reverse: axes.wrap_reverse,
+            reverse_kw: axes.reverse_kw,
             is_wrap,
             content_x,
             content_y,
             content_width,
             explicit_cross,
+            main_definite: None,
+            cross_indefinite: false,
+            vertical,
             item_gap: 0.0,
             cross_gap: 0.0,
             s: Arc::clone(s),
@@ -231,7 +310,18 @@ pub(crate) fn build_flex_init(
     // parent-imposed stretch — `explicit_main`), otherwise indefinite (auto):
     // the container then sizes to its items and flex-grow has no free space to
     // distribute (CSS Flexbox §9.7).
-    let main_definite = if is_column { explicit_main } else { Some(content_width) };
+    // FLEX-VWM: with a content-sized block size (`width: auto` in a vertical
+    // writing mode) the horizontal main axis is indefinite too, and the cross
+    // axis of a vertical main axis is the content-sized one.
+    let block_size_auto = vertical.is_some_and(|v| v.block_size_auto);
+    let main_definite = if is_column {
+        explicit_main
+    } else if block_size_auto {
+        None
+    } else {
+        Some(content_width)
+    };
+    let cross_indefinite = is_column && block_size_auto;
     let container_main = main_definite.unwrap_or(0.0);
 
     // CSS Box Alignment §8: gap is fixed space between items, subtracted before
@@ -240,12 +330,16 @@ pub(crate) fn build_flex_init(
     // from the same `s`) — not re-derived here to avoid a same-value shadow.
     // item_gap: gap between items along the main axis.
     // cross_gap: gap between flex lines along the cross axis (wrap only).
-    let item_gap = if is_column {
+    // `column-gap` separates along the inline axis and `row-gap` along the block
+    // axis whatever the writing mode (CSS Box Alignment L3 §8), so the choice
+    // follows `flex-direction`, not the physical axis.
+    let main_is_block = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
+    let item_gap = if main_is_block {
         s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
     } else {
         s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
     };
-    let cross_gap = if is_column {
+    let cross_gap = if main_is_block {
         s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
     } else {
         s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
@@ -445,14 +539,31 @@ pub(crate) fn build_flex_init(
             // BUG-802: the height Step-1 measured — from the probe just run, or
             // remembered from the identical probe of an earlier pass over this
             // same item. `unwrap_or` covers the items Step-1 never probed.
-            let probed_height = probed_main[k].unwrap_or(item.rect.height);
+            // FLEX-VWM: a vertical item's inline size (the physical height a
+            // vertical main axis flexes) is content-sized from its unwrapped
+            // text, not the room the probe was handed.
+            let probed_height = if is_column
+                && !matches!(item.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+                && item.style.height.is_none()
+                && matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+            {
+                max_content_outer_height(item, measurer, viewport)
+            } else {
+                probed_main[k].unwrap_or(item.rect.height)
+            };
             let is = &item.style;
             let iem = is.font_size;
             let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
             let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
             let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
-            match &is.flex_basis {
+            // CSS Flexbox §9.2: a percentage `flex-basis` against an indefinite
+            // container main size is `content`.
+            let basis = match &is.flex_basis {
+                FlexBasis::Length(Length::Percent(_)) if main_definite.is_none() => &FlexBasis::Content,
+                other => other,
+            };
+            match basis {
                 FlexBasis::Auto | FlexBasis::Content => {
                     if is_column {
                         probed_height + m_t + m_b
@@ -576,14 +687,10 @@ pub(crate) fn build_flex_init(
     // `build_line_inits`'s doc comment for why this is safe to do for every
     // line up front, independent of visiting order.
     let n_lines = lines.len();
-    let ordered_line_idxs: Vec<usize> = if is_wrap_reverse {
-        (0..n_lines).rev().collect()
-    } else {
-        (0..n_lines).collect()
-    };
+    let ordered_line_idxs: Vec<usize> = (0..n_lines).collect();
     let line_inits = build_line_inits(
         &lines, &item_idxs, children, &all_hyp, s, container_main, main_definite,
-        item_gap, content_width, measurer, viewport, is_column, is_reverse,
+        item_gap, content_width, measurer, viewport, axes,
     );
 
     Box::new(FlexInit {
@@ -592,11 +699,17 @@ pub(crate) fn build_flex_init(
         ordered_line_idxs,
         is_column,
         is_reverse,
+        cross_rev,
+        wrap_reverse: axes.wrap_reverse,
+        reverse_kw: axes.reverse_kw,
         is_wrap,
         content_x,
         content_y,
         content_width,
         explicit_cross,
+        main_definite,
+        cross_indefinite,
+        vertical,
         item_gap,
         cross_gap,
         s: Arc::clone(s),
@@ -640,11 +753,11 @@ fn build_line_inits(
     content_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
-    is_column: bool,
-    is_reverse: bool,
+    axes: FlexAxes,
 ) -> Vec<super::flex_trampoline::FlexLineInit> {
     use super::flex_trampoline::FlexLineInit;
     let cb = content_width;
+    let is_column = axes.main_vertical;
 
     lines
         .iter()
@@ -673,7 +786,7 @@ fn build_line_inits(
                     let maxes: Vec<f32> = line_keys
                         .iter()
                         .map(|&k| {
-                            flex_item_max_main_outer(&children[item_idxs[k]], cb, viewport, is_column)
+                            flex_item_max_main_outer(&children[item_idxs[k]], cb, measurer, viewport, is_column)
                         })
                         .collect();
                     let base: Vec<f32> = hyp_mains.clone();
@@ -771,11 +884,12 @@ fn build_line_inits(
 
             // Justify-content within the line.
             let resolved_main: f32 = hyp_mains.iter().sum();
-            let remaining = if main_definite.is_some() {
-                (container_main - resolved_main - line_gap_total).max(0.0)
+            let raw_remaining = if main_definite.is_some() {
+                container_main - resolved_main - line_gap_total
             } else {
                 0.0
             };
+            let remaining = raw_remaining.max(0.0);
             // CSS Flexbox §8.1: `margin: auto` на ГЛАВНОЙ оси съедает всё
             // положительное свободное место ДО того, как спрашивают
             // `justify-content` — см. комментарий в удалённом коде (tbank.ru/login/).
@@ -803,11 +917,49 @@ fn build_line_inits(
                 0.0
             };
 
+            // `justify-content: left | right` (CSS Box Alignment L3 §6.1): along the
+            // inline axis they are the physical (line-)left/right edge — also in a
+            // vertical writing mode, where that is top/bottom; along the block axis
+            // they behave as the writing-mode `start`.
+            let justify = match s.content_align_extra.justify_side {
+                Some(side) if !matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse) => {
+                    let start_is_left = !axes.main_rev;
+                    if (side == crate::style::ContentSide::Left) == start_is_left {
+                        AlignValue::Start
+                    } else {
+                        AlignValue::End
+                    }
+                }
+                Some(_) => {
+                    if axes.reverse_kw { AlignValue::End } else { AlignValue::Start }
+                }
+                None => s.justify_content,
+            };
+            // `start`/`end` follow the writing mode, so a `*-reverse` flow swaps
+            // them relative to the start-based frame (`flex-start`/`flex-end`
+            // already are that frame).
+            let justify = if s.content_align_extra.justify_wm && axes.reverse_kw {
+                match justify {
+                    AlignValue::Start => AlignValue::End,
+                    AlignValue::End => AlignValue::Start,
+                    other => other,
+                }
+            } else {
+                justify
+            };
+            // `safe` (§4.4): when the items overflow, align to the writing-mode
+            // `start` edge. In the start-based frame that edge is the logical
+            // start for a plain direction and the logical end for `*-reverse`.
+            let safe_overflow = s.content_align_extra.justify_safe
+                && raw_remaining < 0.0
+                && matches!(justify, AlignValue::Start | AlignValue::End | AlignValue::Center);
             let (jc_start, jc_gap) = if auto_main_share > 0.0 {
                 // Свободного места уже нет — распределять `justify-content` нечего.
                 (0.0, 0.0)
+            } else if safe_overflow {
+                (if axes.reverse_kw { raw_remaining } else { 0.0 }, 0.0)
             } else {
-                match s.justify_content {
+                match justify {
                     AlignValue::End => (remaining, 0.0),
                     AlignValue::Center => (remaining / 2.0, 0.0),
                     AlignValue::SpaceBetween => {
@@ -825,8 +977,7 @@ fn build_line_inits(
                 }
             };
 
-            let ordered_keys: Vec<usize> =
-                if is_reverse { (0..n).rev().collect() } else { (0..n).collect() };
+            let ordered_keys: Vec<usize> = (0..n).collect();
 
             FlexLineInit {
                 line_keys: line_keys.clone(),
