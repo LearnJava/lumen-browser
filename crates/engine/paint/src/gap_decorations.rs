@@ -66,8 +66,8 @@ pub fn inset_span(origin: f32, len: f32, start: f32, end: f32, reversed: bool) -
 /// - `ctx.rule_style` is `BorderStyle::None`, or
 /// - `ctx.rule_width` ≤ 0.
 ///
-/// Rules are centered inside each gap rectangle. Thin gaps (smaller than the
-/// rule width) are clamped so the rule stays within the gap bounds.
+/// Rules are centered on each gap rectangle; a rule wider than its gap (or a gap of
+/// zero width) overflows it on both sides.
 ///
 /// Phase 0: Solid/Dashed/Dotted are fully supported. Double and other styles
 /// render as Solid (same behaviour as `emit_column_rules`).
@@ -83,13 +83,18 @@ pub fn emit_gap_rules(
     let mut out = Vec::with_capacity(gaps.len());
 
     for gap in gaps {
-        if gap.rect.width <= 0.0 || gap.rect.height <= 0.0 {
+        // Нулевая ширина щели (`gap: 0`) — нормальный случай: линия центрируется на шве
+        // элементов (`grid-gap-decorations-042`); пустой кусок вдоль оси не рисуется.
+        let along = if gap.horizontal { gap.rect.width } else { gap.rect.height };
+        if along <= 0.0 {
             continue;
         }
 
+        // Линия шире щели не обрезается по ней: Chromium центрирует её и пускает поверх
+        // соседних элементов.
         if gap.horizontal {
             // Row gap: a horizontal rule centered vertically in the gap.
-            let rule_h = ctx.rule_width.min(gap.rect.height);
+            let rule_h = ctx.rule_width;
             let rule_y = gap.rect.y + (gap.rect.height - rule_h) * 0.5;
             out.extend(rule_line_commands(
                 Rect::new(gap.rect.x, rule_y, gap.rect.width, rule_h),
@@ -99,7 +104,7 @@ pub fn emit_gap_rules(
             ));
         } else {
             // Column gap: a vertical rule centered horizontally in the gap.
-            let rule_w = ctx.rule_width.min(gap.rect.width);
+            let rule_w = ctx.rule_width;
             let rule_x = gap.rect.x + (gap.rect.width - rule_w) * 0.5;
             out.extend(rule_line_commands(
                 Rect::new(rule_x, gap.rect.y, rule_w, gap.rect.height),
@@ -251,8 +256,11 @@ const TRACK_TOL: f32 = 0.5;
 /// лежит между `tops[t-1] + gap` и `tops[t]` (первая и последняя открыты наружу).
 pub fn track_span(lo: f32, hi: f32, tops: &[f32], gap: f32) -> (usize, usize) {
     let n = tops.len() + 1;
-    let first = (0..n).find(|&t| t == n - 1 || lo <= tops[t] + TRACK_TOL).unwrap_or(0);
-    let last = (0..n).rev().find(|&t| t == 0 || hi >= tops[t - 1] + gap - TRACK_TOL).unwrap_or(0);
+    // При `gap: 0` соседние дорожки смыкаются на `tops[t]`: край элемента на шве принадлежит
+    // той дорожке, которую элемент заканчивает/начинает, а не обеим.
+    let seam = if gap > TRACK_TOL { TRACK_TOL } else { -TRACK_TOL };
+    let first = (0..n).find(|&t| t == n - 1 || lo <= tops[t] + seam).unwrap_or(0);
+    let last = (0..n).rev().find(|&t| t == 0 || hi >= tops[t - 1] + gap - seam).unwrap_or(0);
     (first, last.max(first))
 }
 
@@ -406,9 +414,6 @@ pub struct GridGapParams<'a> {
 /// другой элемент (так же, как это делают flex-щели). По возрастанию, без дублей.
 fn gap_starts(edges: &[(f32, f32)], gap: f32) -> Vec<f32> {
     const EPS: f32 = 1.5;
-    if gap <= 0.0 {
-        return Vec::new();
-    }
     let mut ends: Vec<f32> = edges.iter().map(|&(_, hi)| hi).collect();
     ends.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     ends.dedup_by(|a, b| (*a - *b).abs() < EPS);
@@ -437,7 +442,7 @@ fn template_tracks(
     edges: &[(f32, f32)],
 ) -> Option<Vec<(f32, f32)>> {
     use lumen_layout::GridTrackSize;
-    if has_auto_repeat || template.len() < 2 || gap <= 0.0 {
+    if has_auto_repeat || template.len() < 2 {
         return None;
     }
     let mut sizes = Vec::with_capacity(template.len());
@@ -483,9 +488,6 @@ fn leading_tops(
 ) -> Option<Vec<f32>> {
     use lumen_layout::GridTrackSize;
     let rep = rep.filter(|r| !r.before.is_empty())?;
-    if gap <= 0.0 {
-        return None;
-    }
     let mut tops = Vec::with_capacity(rep.before.len());
     let mut pos = start;
     for t in &rep.before {
@@ -591,13 +593,12 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     // пересекающей щели, даже когда её линия не рисуется (`*-rule-style: none`).
     let mut axis_pieces: [Vec<GapPiece>; 2] = [Vec::new(), Vec::new()];
     for horizontal in [false, true] {
-        let (brk, vis, tops_t, tops_a, gap_t, gap_a, n_t, n_a, a_lo, a_len) = if horizontal {
+        let (brk, vis, tops_t, tops_a, gap_a, n_t, n_a, a_lo, a_len) = if horizontal {
             (
                 s.row_rule_break,
                 s.row_rule_visibility_items,
                 &row_tops,
                 &col_tops,
-                p.row_gap,
                 p.col_gap,
                 n_rows,
                 n_cols,
@@ -610,7 +611,6 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 s.column_rule_visibility_items,
                 &col_tops,
                 &row_tops,
-                p.col_gap,
                 p.row_gap,
                 n_cols,
                 n_rows,
@@ -618,7 +618,7 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 ch,
             )
         };
-        if gap_t <= 0.0 || tops_t.is_empty() {
+        if tops_t.is_empty() {
             continue;
         }
         let items: Vec<GridItemSpan> = spans
@@ -657,7 +657,7 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
         } else {
             (p.column_visible, &s.column_rule_inset, &col_tops, p.col_gap, p.row_gap, false)
         };
-        if !visible || gap_t <= 0.0 || tops_t.is_empty() {
+        if !visible || tops_t.is_empty() {
             continue;
         }
         let pieces = &axis_pieces[usize::from(horizontal)];
@@ -872,16 +872,32 @@ mod tests {
     }
 
     #[test]
-    fn rule_wider_than_gap_is_clamped_to_gap_width() {
-        // rule_width=30 > gap.width=20 → rule_w clamped to 20, rule_x = gap.x (no centering offset)
+    fn rule_wider_than_gap_is_centered_and_overflows_it() {
+        // rule_width=30 > gap.width=20 → the rule stays 30 wide, centred on the gap (x = 10 - 5).
         let cmds = emit_gap_rules(&[], &[col_gap(10.0, 0.0, 20.0, 100.0)], &ctx(BorderStyle::Solid, 30.0));
         assert_eq!(cmds.len(), 1);
         if let DisplayCommand::DrawBorder { rect, widths, .. } = &cmds[0] {
-            assert!((rect.width - 20.0).abs() < 0.01);
-            assert!((widths[1] - 20.0).abs() < 0.01);
+            assert!((rect.width - 30.0).abs() < 0.01);
+            assert!((rect.x - 5.0).abs() < 0.01);
+            assert!((widths[1] - 30.0).abs() < 0.01);
         } else {
             panic!("expected DrawBorder");
         }
+    }
+
+    #[test]
+    fn zero_width_gap_still_paints_a_centered_rule() {
+        // `gap: 0`: the rule sits on the seam of the items (grid-gap-decorations-042).
+        let cmds = emit_gap_rules(&[], &[col_gap(100.0, 0.0, 0.0, 50.0)], &ctx(BorderStyle::Solid, 5.0));
+        assert_eq!(cmds.len(), 1);
+        if let DisplayCommand::DrawBorder { rect, .. } = &cmds[0] {
+            // 97.5 snaps up to 98 (a tie goes up), the width stays 5.
+            assert!((rect.x - 98.0).abs() < 0.01 && (rect.width - 5.0).abs() < 0.01);
+        } else {
+            panic!("expected DrawBorder");
+        }
+        // A piece of zero length along the axis paints nothing.
+        assert!(emit_gap_rules(&[], &[col_gap(100.0, 0.0, 0.0, 0.0)], &ctx(BorderStyle::Solid, 5.0)).is_empty());
     }
 
     #[test]
@@ -915,6 +931,13 @@ mod tests {
 
     fn full_grid() -> Vec<GridItemSpan> {
         (0..3).flat_map(|a| (0..3).map(move |t| cell(t, a))).collect()
+    }
+
+    #[test]
+    fn track_span_at_a_zero_gap_seam_belongs_to_one_track() {
+        // gap: 0, seams at 100 and 200: an item 0..100 is track 0 only, 100..300 is tracks 1..2.
+        assert_eq!(track_span(0.0, 100.0, &[100.0, 200.0], 0.0), (0, 0));
+        assert_eq!(track_span(100.0, 300.0, &[100.0, 200.0], 0.0), (1, 2));
     }
 
     #[test]
