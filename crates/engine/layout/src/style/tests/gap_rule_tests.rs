@@ -488,3 +488,25 @@ fn rule_computed_inset_resolves_font_relative_units() {
     assert_eq!(rule_css(&s, "rule-inset"), "10px 20px / 10px 20px");
     assert_eq!(rule_css(&s, "rule-inset-cap"), "10px 20px");
 }
+
+#[test]
+fn rule_computed_color_keeps_srgb_function_form() {
+    // CSS Color L4 §4.2: `color-mix(in srgb, …)` и относительный `rgb(from …)` остаются в
+    // форме `color(srgb …)`, остальные цвета — `rgb()`.
+    let s = parse_gap_rule(
+        "column-rule-color: color-mix(in srgb, red 50%, blue 50%);          row-rule-color: repeat(auto, rgb(from lime r g b)), color-mix(in srgb, lime 25%, yellow 75%);",
+    );
+    assert_eq!(rule_css(&s, "column-rule-color"), "color(srgb 0.5 0 0.5)");
+    assert_eq!(
+        rule_css(&s, "row-rule-color"),
+        "repeat(auto, color(srgb 0 1 0)), color(srgb 0.75 1 0)"
+    );
+    let s = parse_gap_rule("rule-color: rgb(from yellow calc(255 - r) calc(255 - g) calc(255 - b));");
+    assert_eq!(rule_css(&s, "rule-color"), "color(srgb 0 0 1)");
+    // Шортхенд `rule` тоже хранит `color(srgb …)`.
+    let s = parse_gap_rule("column-rule: 2px solid color-mix(in srgb, red 50%, blue 50%);");
+    assert_eq!(rule_css(&s, "column-rule"), "2px solid color(srgb 0.5 0 0.5)");
+    // Не-srgb пространство смешивания по-прежнему сводится к `rgb()`.
+    let s = parse_gap_rule("column-rule-color: color-mix(in oklab, red, blue);");
+    assert!(rule_css(&s, "column-rule-color").starts_with("rgb("));
+}

@@ -11,7 +11,9 @@
 //! `rule-overlap`, все `*-rule-inset*`. CSS-wide ключевое слово раскладывается во все
 //! лонгхенды шортхенда.
 
-use crate::style::parse::color::{canonical_specified_color, parse_color};
+use crate::style::parse::color::{
+    canonical_specified_color, parse_color, parse_css_color_keep_srgb_form,
+};
 use crate::style::values::length::{canonical_specified_line_width, split_top_level_ws};
 use crate::style::values::misc::{RuleInsetProp, RuleOverlap};
 use crate::style::values::rule_list::{RuleItem, RuleList};
@@ -175,6 +177,12 @@ fn color_item(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() || is_css_wide(t) {
         return None;
+    }
+    // `color-mix(in srgb, …)` и `rgb(from …)` хранят функциональную форму `color(srgb …)`
+    // (CSS Color L4 §4.2) — каноникализатор свёл бы их в `rgb()`, поэтому они остаются
+    // как записаны, а `getComputedStyle()` сериализует их сам.
+    if matches!(parse_css_color_keep_srgb_form(t, false), Some(crate::style::CssColor::Wide(_))) {
+        return Some(t.to_string());
     }
     canonical_specified_color(t).or_else(|| parse_color(t).map(|_| t.to_string()))
 }

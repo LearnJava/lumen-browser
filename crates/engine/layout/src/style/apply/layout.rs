@@ -72,7 +72,7 @@ use crate::style::parse::box_sides::{
     set_padding_side,
     split_box_tokens,
 };
-use crate::style::parse::color::parse_css_color_legacy;
+use crate::style::parse::color::parse_css_color_keep_srgb_form;
 use crate::style::values::length::split_top_level_ws;
 use crate::style::values::misc::RuleInsetProp;
 use crate::style::shorthand::{
@@ -1196,7 +1196,7 @@ fn parse_rule_triplet(
                 return None;
             }
         } else {
-            let c = parse_css_color_legacy(tok, is_quirks)?;
+            let c = parse_css_color_keep_srgb_form(tok, is_quirks)?;
             if t.color.replace(c).is_some() {
                 return None;
             }
@@ -1239,7 +1239,7 @@ fn apply_gap_rule_declaration(
         (px >= 0.0 || looks_like_function_call(t.trim())).then(|| px.max(0.0))
     };
     let style_item = parse_rule_style_opt;
-    let color_item = |t: &str| parse_css_color_legacy(t.trim(), is_quirks);
+    let color_item = |t: &str| parse_css_color_keep_srgb_form(t.trim(), is_quirks);
     // CSS Gap Decorations L1 §4.4: шортхенд — список `<gap-rule>` (с `repeat()`); каждый
     // элемент раскладывается в три списка одинаковой формы, пропущенное — initial.
     let mut width_list = None;
