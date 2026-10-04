@@ -93,3 +93,16 @@ fn a_height_limit_below_a_spanner_is_what_the_spanner_left() {
     assert_eq!((rect(&root, &doc, "h").x, rect(&root, &doc, "h").y), (350.0, 105.0));
     assert_eq!(rect(&root, &doc, "c").height, 205.0);
 }
+
+#[test]
+fn multicol_container_places_its_own_abspos_child() {
+    // multicol-gap-decorations-006-ref: a `position: absolute` child of a positioned multicol
+    // container was left at the zero rect (`finish_frame` passed an empty `abs_deferred`), so the
+    // «gap rule» drawn by hand in the reference never appeared. It is placed against the padding
+    // box of the container like any other abspos child.
+    let html = r#"<div id="c"><p id="a"></p><i id="g"></i></div>"#;
+    let css = "body{margin:0} p{height:250px;margin:0} #c{position:relative;width:620px;height:100px;columns:3;column-fill:auto;gap:10px} i{display:block;position:absolute;top:10px;left:100px;width:1px;height:80px}";
+    let (doc, root) = lay(html, css);
+    let g = rect(&root, &doc, "g");
+    assert_eq!((g.x, g.y, g.width, g.height), (100.0, 10.0, 1.0, 80.0));
+}
