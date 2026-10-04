@@ -123,6 +123,7 @@ fn content_baseline(
                 None
             }
         }
+        BoxKind::Table => super::table_valign::table_baseline(b, side, measurer),
         _ => {
             if matches!(b.style.display, Display::Flex | Display::InlineFlex) {
                 return flex_container_baseline(b, side, measurer);
