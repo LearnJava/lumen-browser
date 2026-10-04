@@ -60,6 +60,7 @@
     mod timeline;
     mod ua;
     mod values;
+    mod attr_mixins_scroll;
     // Хвостовые модули style.rs, перенесённые батчем SPLIT-ST2: у каждого своё
     // авторское имя, поэтому они не сведены к темам будущих ST-3…ST-18, как выше.
     mod anchor_positioning_tests;

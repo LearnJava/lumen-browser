@@ -2701,6 +2701,10 @@ mod filter_transform_snap_mask;
 pub(crate) use filter_transform_snap_mask::first_p_style;
 
 #[cfg(test)]
+#[path = "tests/scroll_snap_masking.rs"]
+mod scroll_snap_masking;
+
+#[cfg(test)]
 #[path = "tests/animation_gradient_quirks.rs"]
 mod animation_gradient_quirks;
 
@@ -2713,8 +2717,16 @@ mod table_grid_presentational;
 mod layout_generation_misc;
 
 #[cfg(test)]
+#[path = "tests/half_leading_columns_floats.rs"]
+mod half_leading_columns_floats;
+
+#[cfg(test)]
 #[path = "tests/scroll_interaction_misc.rs"]
 mod scroll_interaction_misc;
+
+#[cfg(test)]
+#[path = "tests/scroll_container.rs"]
+mod scroll_container;
 
 #[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]
