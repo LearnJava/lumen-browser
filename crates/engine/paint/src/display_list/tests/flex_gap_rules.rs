@@ -362,3 +362,28 @@ fn empty_grid_with_fixed_template_still_paints_gap_rules() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(close(cols[0], (50.0, 0.0, 10.0, 110.0)), "{cols:?}");
 }
+
+/// flex-gap-decorations-064: `overlap-join` тянет куски поперечной линии к одному слитому стыку
+/// с обеих сторон — соседние куски не должны перекрываться (полупрозрачная линия иначе
+/// красится дважды), граница проходит посередине наложения.
+#[test]
+fn flex_overlap_join_pieces_of_cross_rule_do_not_overlap() {
+    let html = r#"<div style="display:flex;flex-wrap:wrap;width:600px;gap:90px;
+        column-rule:5px solid rgba(0,0,255,0.5);row-rule:5px solid rgba(255,0,0,0.5);
+        column-rule-break:intersection;column-rule-inset:overlap-join;
+        row-rule-break:intersection;row-rule-inset:overlap-join">
+        <div style="width:100px;height:100px"></div><div style="width:200px;height:100px"></div>
+        <div style="width:90px;height:100px"></div><div style="width:160px;height:100px"></div>
+        <div style="width:110px;height:100px"></div><div style="width:120px;height:100px"></div></div>"#;
+    let dl = build(html, "");
+    let rows = rules(&dl, false);
+    assert!(!rows.is_empty(), "{rows:?}");
+    for pair in rows.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if (a.1 - b.1).abs() < 0.1 {
+            assert!(a.0 + a.2 <= b.0 + 0.6, "куски наложились: {rows:?}");
+        }
+    }
+    let reach = rows.iter().map(|r| r.0 + r.2).fold(0.0_f32, f32::max);
+    assert!((reach - 600.0).abs() < 0.6, "{rows:?}");
+}
