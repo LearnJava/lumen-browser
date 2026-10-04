@@ -77,6 +77,10 @@ pub(crate) struct VerticalInit {
     pub(crate) frame_horiz: f32,
     pub(crate) pcb: Rect,
     pub(crate) cursor_block_consumed: f32,
+    /// Block-end margin of the last placed child, not yet added to
+    /// `cursor_block_consumed`: it collapses with the next sibling's block-start
+    /// margin (CSS 2.1 §8.3.1, along the block axis), or closes the box.
+    pub(crate) pending_end_margin: f32,
 }
 
 /// Precomputes the loop-entry state for laying out a Block/FlowRoot box in
@@ -131,7 +135,10 @@ pub(crate) fn build_vertical_init(
     // *physical* meaning (top stays top, left stays left): the cascade does
     // not re-map padding/border to logical sides. This matches the Writing
     // Modes L3 spec — only width/height swap roles.
-    let cb_for_percents = available_width.max(0.0);
+    // CSS Box 3 §5.2: percentage margins and padding resolve against the
+    // containing block's *inline* size — the height here, since the inline axis
+    // of a vertical box runs along y.
+    let cb_for_percents = available_height.unwrap_or(viewport.height).max(0.0);
     let margin_left = s.margin_left.resolve_or_zero(em, cb_for_percents, viewport);
     let margin_top = s.margin_top.resolve_or_zero(em, cb_for_percents, viewport);
     let padding_left = s.padding_left.resolve_or_zero(em, cb_for_percents, viewport);
@@ -283,6 +290,7 @@ pub(crate) fn build_vertical_init(
         frame_horiz,
         pcb,
         cursor_block_consumed: 0.0,
+        pending_end_margin: 0.0,
     }
 }
 

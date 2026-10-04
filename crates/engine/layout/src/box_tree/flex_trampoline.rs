@@ -256,8 +256,12 @@ fn step_item(
         let item_avail_cross = frame.init.probe_cross[pos.k];
         // BUG-341 S41 — exact bit equality, not an epsilon: see the removed
         // code's comment on why an approximate match is unsafe here.
-        let replayable = frame.init.column_probe[pos.k]
-            .is_some_and(|probed| probed.to_bits() == inner_main.to_bits());
+        // FLEX-VWM-3: the probe left a vertical item at its content-sized
+        // width; stretching it to the cross size is a different layout.
+        let block_axis_stretch = super::flex::column_item_stretches_block_axis(&frame.b.children[pos.i], &frame.b.style);
+        let replayable = !block_axis_stretch
+            && frame.init.column_probe[pos.k]
+                .is_some_and(|probed| probed.to_bits() == inner_main.to_bits());
 
         if let Some(probed_at) = frame.init.probe_ran.get(pos.k).copied().flatten() {
             let cross_differs = probed_at.to_bits() != item_avail_cross.to_bits();
@@ -308,7 +312,26 @@ fn step_item(
             Some(inner_main), measurer, viewport, pcb, hp, false, None, AlignValue::Auto,
             Some(UsedSizeOverride {
                 height: Some(inner_main),
-                width: width_hinted.then_some(item_avail_cross),
+                width: width_hinted.then_some(item_avail_cross).or_else(|| {
+                    let m_l = item_s.margin_left.resolve_or_zero(iem, content_width, viewport);
+                    let m_r = item_s.margin_right.resolve_or_zero(iem, content_width, viewport);
+                    block_axis_stretch.then_some((item_avail_cross - m_l - m_r).max(0.0))
+                }).or_else(|| {
+                    // `BorderBox` is forced below for the main size, so an
+                    // authored content-box width has to be handed over as the
+                    // border-box width it stands for — otherwise a re-layout
+                    // (probe memo hit, so no replay) loses its padding+border.
+                    if item_s.box_sizing != BoxSizing::ContentBox {
+                        return None;
+                    }
+                    let w = item_s.width.as_ref().filter(|w| !w.is_intrinsic())?;
+                    let px = w.resolve(iem, Some(content_width), viewport)?;
+                    let frame_h = item_s.padding_left.resolve_or_zero(iem, content_width, viewport)
+                        + item_s.padding_right.resolve_or_zero(iem, content_width, viewport)
+                        + item_s.border_left_width
+                        + item_s.border_right_width;
+                    Some(px + frame_h)
+                }),
                 box_sizing: Some(BoxSizing::BorderBox),
                 clear_intrinsic_hint: width_hinted || height_hinted,
                 percentage_base: None,

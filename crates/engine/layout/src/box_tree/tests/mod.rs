@@ -477,4 +477,5 @@ mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;
 mod vertical_row;
+mod flex_vwm3;
 mod ruby_pipeline;
