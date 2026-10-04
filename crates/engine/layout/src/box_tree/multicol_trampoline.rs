@@ -672,11 +672,10 @@ fn post_span_item(frame: &mut Frame, span_i: usize, viewport: Size) {
 /// the placed/fragmented boxes plus any never-consumed non-flow boxes
 /// (absolute/fixed, `Skip` placeholders, copied unchanged), then the
 /// container's own height (`finalize_block_height`) and the same
-/// `finish_after_match` tail (`position: relative` offset; `abs_deferred` is
-/// always empty here — a multicol container's own absolutely-positioned
-/// children were never collected into it, a pre-existing gap this slice
-/// reproduces unchanged, not introduces; see `build_multicol_init`'s
-/// `flow_idxs` filter) that the removed code fell through to.
+/// `finish_after_match` tail (`position: relative` offset, and the container's
+/// own absolutely-positioned children, collected into `abs_deferred` here
+/// because `build_multicol_init`'s `flow_idxs` filter leaves them out of the
+/// column segments) that the removed code fell through to.
 fn finish_frame(
     frame: &mut Frame,
     measurer: Option<&dyn TextMeasurer>,
@@ -698,9 +697,18 @@ fn finish_frame(
         frame.init.padding_top, frame.init.padding_bottom, frame.init.size_contained,
         frame.init.field_intrinsic, content_height, frame.init.cb,
     );
-    let empty_abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
+    // CSS Positioned Layout L3 §4: the container's own abspos children (never part of a column
+    // segment) are placed once its height is final; the static position is the content-box origin.
+    let abs_deferred: Vec<(usize, f32, f32)> = frame
+        .b
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|(i, _)| (i, frame.init.content_x, frame.init.content_y))
+        .collect();
     finish_after_match(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
-        frame.init.own_pcb, &empty_abs_deferred, measurer, viewport, hp,
+        frame.init.own_pcb, &abs_deferred, measurer, viewport, hp,
     );
 }
