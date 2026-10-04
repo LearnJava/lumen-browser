@@ -1254,11 +1254,17 @@ fn finish_frame(
         && ah > 0.0
     {
         (frame.b.rect.width * ah / aw).max(0.0)
-    } else if frame.init.vertical.is_some_and(|v| v.fill_inline_size) {
+    } else if frame.init.vertical.is_some_and(|v| v.fill_inline_size) && frame.init.available_height.is_some() {
         // The inline size of a vertical writing mode fills what is available
         // (Writing Modes L3 §7.3 — `height: auto` there is `width: auto` of a
         // horizontal box).
         frame.init.available_height.unwrap_or(viewport.height).max(0.0)
+    } else if frame.init.vertical.is_some_and(|v| v.fill_inline_size) {
+        // No definite room along the inline axis (the parent's height is auto):
+        // an orthogonal flow root shrinks to its content, wrapping at the initial
+        // containing block (Writing Modes L3 §7.3.1, FLEX-VWM-4).
+        let ch = contained_content_height(frame.init.size_contained, &s, em, viewport, content_height);
+        (ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width).min(viewport.height.max(0.0))
     } else {
         let ch = contained_content_height(frame.init.size_contained, &s, em, viewport, content_height);
         ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width

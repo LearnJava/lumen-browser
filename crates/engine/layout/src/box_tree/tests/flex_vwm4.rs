@@ -52,3 +52,50 @@ fn stretched_item_shrinks_to_the_line_when_percent_child_asks() {
     );
     assert_eq!(r[0].height, 100.0, "{:?}", r[0]);
 }
+
+/// CSS Tables L3 «used min width of table»: таблица-элемент не уже своего
+/// min-content, даже при `min-width: 0` в контейнере нулевой ширины.
+#[test]
+fn table_flex_item_is_not_narrower_than_its_min_content() {
+    let r = rects(
+        r#"<div id="f"><div id="t"><div id="c"><div style="width:100px;height:10px"></div></div></div></div>"#,
+        "#f{display:flex;width:0}\
+         #t{display:table;min-width:0;width:50px}#c{display:table-cell}",
+        &["t"],
+    );
+    assert_eq!(r[0].width, 100.0, "{:?}", r[0]);
+}
+
+/// Writing Modes L3 §7.3.1: ортогональный блок в родителе с неопределённой
+/// высотой обтягивает содержимое по inline-оси, а не заполняет вьюпорт.
+#[test]
+fn orthogonal_block_in_auto_height_parent_shrinks_to_content() {
+    let r = rects(
+        r#"<div id="p"><div id="v"><div style="height:70px"></div></div></div>"#,
+        "#v{writing-mode:vertical-lr}",
+        &["v"],
+    );
+    assert_eq!(r[0].height, 70.0, "{:?}", r[0]);
+}
+
+/// …но корневой элемент заполняет начальный содержащий блок.
+#[test]
+fn vertical_root_element_still_fills_the_viewport() {
+    let doc = lumen_html_parser::parse("<div id=\"v\"></div>");
+    let sheet = lumen_css_parser::parse("html{writing-mode:vertical-lr}body{margin:0}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let html = root.children.iter().find(|c| !matches!(c.kind, super::super::BoxKind::Skip)).unwrap();
+    assert_eq!(html.rect.height, 600.0, "{:?}", html.rect);
+}
+
+/// Вертикальный flex-контейнер блочного уровня в родителе с auto-высотой:
+/// высота — размер содержимого по главной оси, а не вьюпорт (`flex-aspect-ratio-img-vert-lr`).
+#[test]
+fn vertical_flex_container_in_auto_height_parent_is_content_tall() {
+    let r = rects(
+        r#"<div id="f"><div style="height:40px"></div><div style="height:60px"></div></div>"#,
+        "#f{display:flex;writing-mode:vertical-lr}",
+        &["f"],
+    );
+    assert_eq!(r[0].height, 100.0, "{:?}", r[0]);
+}
