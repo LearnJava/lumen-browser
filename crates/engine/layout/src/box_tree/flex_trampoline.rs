@@ -51,6 +51,8 @@ pub(super) struct FlexInit {
     pub(super) is_reverse: bool,
     /// Cross-start is at the physical bottom/right — mirrored in `finish_frame`.
     pub(super) cross_rev: bool,
+    /// `flex-wrap: wrap-reverse` — what a `safe` align-content falls back across.
+    pub(super) wrap_reverse: bool,
     pub(super) is_wrap: bool,
     pub(super) content_x: f32,
     pub(super) content_y: f32,
@@ -475,10 +477,17 @@ fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) 
 /// расстояние от верхней кромки его margin box до этой линии. `None` — item не
 /// участвует в baseline-выравнивании (другое значение `align-self` либо `auto`
 /// в поперечном поле, которое приоритетнее, CSS Flexbox §8.1).
+///
+/// Работает в стартовой раскладке (`finish_frame` зеркалит её для `cross_rev`):
+/// там cross-start — нижняя кромка margin box, поэтому «подъём» — расстояние от
+/// неё до базовой линии (`outer` минус физический подъём), чтобы после
+/// зеркалирования базовые линии items остались на одной прямой.
 fn row_item_baseline(
     item: &LayoutBox,
     container: &ComputedStyle,
     m_t: f32,
+    outer: f32,
+    cross_rev: bool,
     measurer: Option<&dyn TextMeasurer>,
 ) -> Option<(BaselineSide, f32)> {
     let is = &item.style;
@@ -486,7 +495,8 @@ fn row_item_baseline(
         return None;
     }
     let side = align_baseline_side(resolved_align(is, container))?;
-    Some((side, m_t + box_baseline_or_synth(item, side, measurer)))
+    let ascent = m_t + box_baseline_or_synth(item, side, measurer);
+    Some((side, if cross_rev { outer - ascent } else { ascent }))
 }
 
 /// CSS Flexbox §8.3/§8.1 — horizontal shift of a COLUMN item inside `cross_size`
@@ -590,7 +600,7 @@ fn finish_line(
             let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
             let outer = item.rect.height + m_t + m_b;
-            match row_item_baseline(item, &s, m_t, measurer) {
+            match row_item_baseline(item, &s, m_t, outer, frame.init.cross_rev, measurer) {
                 Some((side, ascent)) => {
                     let g = &mut groups[side as usize];
                     g.0 = g.0.max(ascent);
@@ -663,7 +673,9 @@ fn finish_line(
             }
             // §9.4 шаг 8 / §8.5: выравнивание по базовой линии. `first baseline` —
             // группа прижата к cross-start линии, `last baseline` — к cross-end.
-            if let Some((side, ascent)) = row_item_baseline(&frame.b.children[i], &s, m_t, measurer) {
+            if let Some((side, ascent)) =
+                row_item_baseline(&frame.b.children[i], &s, m_t, outer_cross, frame.init.cross_rev, measurer)
+            {
                 let line_top = content_y + cross_cursor;
                 let margin_top_y = match side {
                     BaselineSide::First => line_top + (baseline_groups[0].0 - ascent),
@@ -823,6 +835,25 @@ fn finish_frame(
             frame.init.explicit_cross
         };
         let free_cross = cross_size.map_or(0.0, |h| (h - used_cross).max(0.0));
+        // `align-content: safe …` with the lines overflowing: align to the
+        // writing-mode `start` edge — the logical start, or the logical end
+        // under `wrap-reverse` (mirrored below like everything else).
+        if frame.init.s.content_align_extra.align_safe
+            && matches!(frame.init.s.align_content, AlignValue::Start | AlignValue::End | AlignValue::Center)
+            && let Some(h) = cross_size
+            && h < used_cross
+            && frame.init.wrap_reverse
+        {
+            let shift = h - used_cross;
+            for k in 0..frame.init.item_idxs.len() {
+                let i = frame.init.item_idxs[k];
+                if is_column {
+                    shift_tree(&mut frame.b.children[i], shift, 0.0);
+                } else {
+                    shift_tree(&mut frame.b.children[i], 0.0, shift);
+                }
+            }
+        }
 
         if free_cross > 0.0 {
             let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
@@ -989,7 +1020,7 @@ fn finish_frame(
         && ah > 0.0
     {
         (frame.b.rect.width * ah / aw).max(0.0)
-    } else if frame.init.vertical.is_some() {
+    } else if frame.init.vertical.is_some_and(|v| v.fill_inline_size) {
         // The inline size of a vertical writing mode fills what is available
         // (Writing Modes L3 §7.3 — `height: auto` there is `width: auto` of a
         // horizontal box).

@@ -1084,7 +1084,7 @@ pub(super) fn dispatch_box(
                         BoxSizing::BorderBox => (h - frame_vert).max(0.0),
                     })
                     .or_else(|| {
-                        vertical_flex.then(|| {
+                        (vertical_flex && s.display == Display::Flex).then(|| {
                             (available_height.unwrap_or(viewport.height) - frame_vert).max(0.0)
                         })
                     });
@@ -1098,6 +1098,7 @@ pub(super) fn dispatch_box(
                 let flex_explicit_main = if main_vertical { explicit_height } else { None };
                 let vertical = vertical_flex.then(|| flex::VerticalFlex {
                     block_size_auto: s.width.is_none(),
+                    fill_inline_size: s.display == Display::Flex,
                     frame_horiz: padding_left + padding_right
                         + s.border_left_width + s.border_right_width,
                 });

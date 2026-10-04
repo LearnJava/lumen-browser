@@ -11,7 +11,7 @@
 //! семантики не несёт, потому что все метки уникальны.
 
 use crate::style::{
-    AlignValue,
+    AlignValue, ContentSide,
     BlockStepAlign,
     BlockStepInsert,
     BlockStepRound,
@@ -767,8 +767,9 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "align-content" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe)) = AlignValue::parse_with_overflow(val) {
                 style.align_content = v;
+                style.content_align_extra.align_safe = safe;
             }
         }
         "justify-items" => {
@@ -782,8 +783,19 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "justify-content" => {
-            if let Some(v) = AlignValue::parse(val) {
+            if let Some((v, safe)) = AlignValue::parse_with_overflow(val) {
                 style.justify_content = v;
+                style.content_align_extra.justify_safe = safe;
+                style.content_align_extra.justify_side = None;
+            } else if let Some(side) = AlignValue::parse_content_side(val) {
+                // `left`/`right`: the flex container resolves the side against
+                // its axes; until then it reads as `start`/`end`.
+                style.justify_content = match side {
+                    ContentSide::Left => AlignValue::Start,
+                    ContentSide::Right => AlignValue::End,
+                };
+                style.content_align_extra.justify_safe = false;
+                style.content_align_extra.justify_side = Some(side);
             }
         }
         // Shorthand: `place-items: <align-items> [<justify-items>]?`

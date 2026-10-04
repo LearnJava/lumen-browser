@@ -10,6 +10,73 @@
 
 use super::*;
 
+/// max-content advance of a text run — all segments on one line (no wrapping).
+fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasurer>) -> f32 {
+    measurer.map_or(0.0, |m| {
+        segments.iter().map(|seg| {
+            let ls = seg.style.letter_spacing;
+            let fams = &seg.style.font_family;
+            let ts = seg.style.tab_size
+                * m.char_width_with_families(' ', seg.style.font_size, fams);
+            measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
+        }).sum()
+    })
+}
+
+/// max-content border-box **height** of a box in a vertical writing mode — its
+/// inline size (CSS Writing Modes L3 §3), the extent text advances along. The
+/// mirror of [`max_content_outer_width`]: an explicit `height` wins, a text run
+/// is its unwrapped advance, a block is its longest in-flow child. A child in
+/// the orthogonal (horizontal) mode has no inline size along y that is known
+/// without laying it out, so only its explicit `height` counts.
+pub(crate) fn max_content_outer_height(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pt = s.padding_top.resolve_or_zero(em, 0.0, viewport);
+    let pb = s.padding_bottom.resolve_or_zero(em, 0.0, viewport);
+    let frame = pt + pb + s.border_top_width + s.border_bottom_width;
+    if let Some(h_len) = &s.height
+        && !h_len.is_intrinsic()
+        && let Some(h) = h_len.resolve(em, None, viewport)
+    {
+        return match s.box_sizing {
+            BoxSizing::ContentBox => h + frame,
+            BoxSizing::BorderBox => h.max(frame),
+        }
+        .max(0.0);
+    }
+    let content = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
+        _ => b
+            .children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .map(|c| {
+                let cem = c.style.font_size;
+                let mt = c.style.margin_top.resolve_or_zero(cem, 0.0, viewport);
+                let mb = c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
+                let ch = if matches!(c.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+                    && !matches!(c.kind, BoxKind::InlineRun { .. })
+                {
+                    c.style
+                        .height
+                        .as_ref()
+                        .and_then(|h| h.resolve(cem, None, viewport))
+                        .unwrap_or(0.0)
+                } else {
+                    max_content_outer_height(c, measurer, viewport)
+                };
+                ch + mt + mb
+            })
+            .fold(0.0_f32, f32::max),
+    };
+    (content + frame).max(0.0)
+}
+
 /// A block container in a vertical `writing-mode` stacks its children along the
 /// physical x axis (CSS Writing Modes L3 §3), so its intrinsic *width* — the
 /// block size — is the **sum** of its children's, not the widest. A text run
@@ -364,18 +431,7 @@ pub(crate) fn max_content_outer_width(
         inflow_max.max(float_sum)
     };
     let content_w = match &b.kind {
-        BoxKind::InlineRun { segments, .. } => {
-            // max-content = all segments on one line (no wrapping).
-            measurer.map_or(0.0, |m| {
-                segments.iter().map(|seg| {
-                    let ls = seg.style.letter_spacing;
-                    let fams = &seg.style.font_family;
-                    let ts = seg.style.tab_size
-                        * m.char_width_with_families(' ', seg.style.font_size, fams);
-                    measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
-                }).sum()
-            })
-        }
+        BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
         BoxKind::InlineBlockRow => {
             b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {

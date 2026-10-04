@@ -989,6 +989,53 @@ pub enum AlignValue {
     SpaceEvenly,
 }
 
+/// The parts of `justify-content`/`align-content` that [`AlignValue`] alone does
+/// not carry, because only a flex container reads them (`flex.rs`):
+/// the `safe` overflow position (CSS Box Alignment L3 §4.4) and the physical
+/// `left`/`right` keywords of `justify-content`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentAlignExtra {
+    /// `justify-content: safe …` — on overflow the items align to the
+    /// writing-mode `start` edge instead of the alignment mode's own side.
+    pub justify_safe: bool,
+    /// `align-content: safe …`.
+    pub align_safe: bool,
+    /// `justify-content: left | right` (stored as `Start`/`End` in
+    /// `justify_content`).
+    pub justify_side: Option<ContentSide>,
+}
+
+/// A physical side keyword of `justify-content` (CSS Box Alignment L3 §6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentSide {
+    Left,
+    Right,
+}
+
+impl AlignValue {
+    /// `[safe | unsafe]? <keyword>` of `justify-content`/`align-content`: the
+    /// keyword and whether it was `safe`.
+    pub fn parse_with_overflow(s: &str) -> Option<(Self, bool)> {
+        let lc = s.trim().to_ascii_lowercase();
+        if let Some(rest) = lc.strip_prefix("safe ") {
+            return Self::parse(rest).map(|v| (v, true));
+        }
+        if let Some(rest) = lc.strip_prefix("unsafe ") {
+            return Self::parse(rest).map(|v| (v, false));
+        }
+        Self::parse(&lc).map(|v| (v, false))
+    }
+
+    /// `left` / `right` as a `justify-content` value.
+    pub fn parse_content_side(s: &str) -> Option<ContentSide> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "left" => Some(ContentSide::Left),
+            "right" => Some(ContentSide::Right),
+            _ => None,
+        }
+    }
+}
+
 impl AlignValue {
     pub fn parse(s: &str) -> Option<Self> {
         let lc = s.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();

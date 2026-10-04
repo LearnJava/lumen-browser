@@ -273,9 +273,9 @@ pub use values::background::{
     ObjectFit, ParsedGradient, RadialShape, RadialSize, radial_gradient_radii,
 };
 pub use values::flexgrid::{
-    AlignValue, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat,
-    GridTrackSize, MasonryAutoFlow, ObjectPosition, PositionComponent, RepeatCount,
-    TextWrapMode, TextWrapStyle,
+    AlignValue, ContentAlignExtra, ContentSide, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow,
+    GridLine, GridRepeat, GridTrackSize, MasonryAutoFlow, ObjectPosition, PositionComponent,
+    RepeatCount, TextWrapMode, TextWrapStyle,
 };
 // `parse_auto_repeat` была `pub(crate)` в доноре (зовёт только `style::apply::layout`
 // внутри крейта, не публичная поверхность наружу) — реэкспорт сужен так же.

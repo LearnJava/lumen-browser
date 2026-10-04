@@ -77,6 +77,11 @@ pub(crate) struct FlexAxes {
     pub(crate) main_rev: bool,
     /// Cross-start sits at the physical bottom/right edge.
     pub(crate) cross_rev: bool,
+    /// `flex-direction` is `*-reverse`: main-start is the *opposite* of the
+    /// writing-mode `start` edge (what a `safe` overflow falls back to).
+    pub(crate) reverse_kw: bool,
+    /// `flex-wrap: wrap-reverse`: likewise for the cross axis.
+    pub(crate) wrap_reverse: bool,
 }
 
 /// A flex container in a vertical `writing-mode` — what the container's own
@@ -89,6 +94,9 @@ pub(crate) struct VerticalFlex {
     /// is only the room available, not a size items may fill or free space
     /// to distribute.
     pub(crate) block_size_auto: bool,
+    /// A block-level container: its inline size (physical height) fills what is
+    /// available. `inline-flex` shrinks to its content instead.
+    pub(crate) fill_inline_size: bool,
     /// Left + right padding and border, added to the occupied content width
     /// once it is known.
     pub(crate) frame_horiz: f32,
@@ -117,6 +125,8 @@ pub(crate) fn flex_axes(s: &ComputedStyle) -> FlexAxes {
         main_vertical: vertical != column,
         main_rev: main_start_at_end != reverse,
         cross_rev: cross_start_at_end != wrap_reverse,
+        reverse_kw: reverse,
+        wrap_reverse,
     }
 }
 
@@ -264,6 +274,7 @@ pub(crate) fn build_flex_init(
             is_column,
             is_reverse,
             cross_rev,
+            wrap_reverse: axes.wrap_reverse,
             is_wrap,
             content_x,
             content_y,
@@ -527,7 +538,18 @@ pub(crate) fn build_flex_init(
             // BUG-802: the height Step-1 measured — from the probe just run, or
             // remembered from the identical probe of an earlier pass over this
             // same item. `unwrap_or` covers the items Step-1 never probed.
-            let probed_height = probed_main[k].unwrap_or(item.rect.height);
+            // FLEX-VWM: a vertical item's inline size (the physical height a
+            // vertical main axis flexes) is content-sized from its unwrapped
+            // text, not the room the probe was handed.
+            let probed_height = if is_column
+                && !matches!(item.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+                && item.style.height.is_none()
+                && matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+            {
+                max_content_outer_height(item, measurer, viewport)
+            } else {
+                probed_main[k].unwrap_or(item.rect.height)
+            };
             let is = &item.style;
             let iem = is.font_size;
             let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
@@ -661,7 +683,7 @@ pub(crate) fn build_flex_init(
     let ordered_line_idxs: Vec<usize> = (0..n_lines).collect();
     let line_inits = build_line_inits(
         &lines, &item_idxs, children, &all_hyp, s, container_main, main_definite,
-        item_gap, content_width, measurer, viewport, is_column,
+        item_gap, content_width, measurer, viewport, axes,
     );
 
     Box::new(FlexInit {
@@ -671,6 +693,7 @@ pub(crate) fn build_flex_init(
         is_column,
         is_reverse,
         cross_rev,
+        wrap_reverse: axes.wrap_reverse,
         is_wrap,
         content_x,
         content_y,
@@ -722,10 +745,11 @@ fn build_line_inits(
     content_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
-    is_column: bool,
+    axes: FlexAxes,
 ) -> Vec<super::flex_trampoline::FlexLineInit> {
     use super::flex_trampoline::FlexLineInit;
     let cb = content_width;
+    let is_column = axes.main_vertical;
 
     lines
         .iter()
@@ -852,11 +876,12 @@ fn build_line_inits(
 
             // Justify-content within the line.
             let resolved_main: f32 = hyp_mains.iter().sum();
-            let remaining = if main_definite.is_some() {
-                (container_main - resolved_main - line_gap_total).max(0.0)
+            let raw_remaining = if main_definite.is_some() {
+                container_main - resolved_main - line_gap_total
             } else {
                 0.0
             };
+            let remaining = raw_remaining.max(0.0);
             // CSS Flexbox §8.1: `margin: auto` на ГЛАВНОЙ оси съедает всё
             // положительное свободное место ДО того, как спрашивают
             // `justify-content` — см. комментарий в удалённом коде (tbank.ru/login/).
@@ -884,11 +909,36 @@ fn build_line_inits(
                 0.0
             };
 
+            // `justify-content: left | right` — physical side keywords: along a
+            // horizontal main axis they pick the side, along a vertical one they
+            // behave as the writing-mode `start` (CSS Box Alignment L3 §6.1).
+            let justify = match s.content_align_extra.justify_side {
+                Some(side) if !axes.main_vertical => {
+                    let start_is_left = !axes.main_rev;
+                    if (side == crate::style::ContentSide::Left) == start_is_left {
+                        AlignValue::Start
+                    } else {
+                        AlignValue::End
+                    }
+                }
+                Some(_) => {
+                    if axes.reverse_kw { AlignValue::End } else { AlignValue::Start }
+                }
+                None => s.justify_content,
+            };
+            // `safe` (§4.4): when the items overflow, align to the writing-mode
+            // `start` edge. In the start-based frame that edge is the logical
+            // start for a plain direction and the logical end for `*-reverse`.
+            let safe_overflow = s.content_align_extra.justify_safe
+                && raw_remaining < 0.0
+                && matches!(justify, AlignValue::Start | AlignValue::End | AlignValue::Center);
             let (jc_start, jc_gap) = if auto_main_share > 0.0 {
                 // Свободного места уже нет — распределять `justify-content` нечего.
                 (0.0, 0.0)
+            } else if safe_overflow {
+                (if axes.reverse_kw { raw_remaining } else { 0.0 }, 0.0)
             } else {
-                match s.justify_content {
+                match justify {
                     AlignValue::End => (remaining, 0.0),
                     AlignValue::Center => (remaining / 2.0, 0.0),
                     AlignValue::SpaceBetween => {

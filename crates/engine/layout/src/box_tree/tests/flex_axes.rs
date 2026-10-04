@@ -226,3 +226,62 @@ fn vertical_rl_wrap_puts_the_second_line_to_the_left() {
     assert_eq!(ys(&r), vec![0.0, 50.0, 0.0]);
     assert_eq!(xs(&r), vec![80.0, 80.0, 60.0]);
 }
+
+// ── `safe` и `left`/`right` у justify-content/align-content ──
+
+fn one_item(container_css: &str) -> Rect {
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    rects(
+        html,
+        &format!("#k{{display:flex;width:90px;height:90px;{container_css}}}#a{{flex:0 0 100px;width:100px;height:100px}}"),
+        &["a"],
+    )[0]
+}
+
+#[test]
+fn safe_start_in_wrap_reverse_falls_back_to_the_top() {
+    // Без `safe` элемент прижат к cross-start (низу) и торчит вверх; с `safe`
+    // при переполнении — к верху (writing-mode start).
+    let r = one_item("flex-wrap:wrap-reverse;align-content:safe flex-start");
+    assert_eq!(r.y, 0.0, "{r:?}");
+    let r = one_item("flex-wrap:wrap-reverse;align-content:flex-start");
+    assert_eq!(r.y, -10.0, "{r:?}");
+}
+
+#[test]
+fn safe_start_in_row_reverse_falls_back_to_the_left() {
+    let r = one_item("flex-direction:row-reverse;justify-content:safe flex-start");
+    assert_eq!(r.x, 0.0, "{r:?}");
+    let r = one_item("flex-direction:row-reverse;justify-content:flex-start");
+    assert_eq!(r.x, -10.0, "{r:?}");
+}
+
+#[test]
+fn safe_start_in_column_reverse_falls_back_to_the_top() {
+    let r = one_item("flex-direction:column-reverse;justify-content:safe flex-start");
+    assert_eq!(r.y, 0.0, "{r:?}");
+}
+
+#[test]
+fn safe_does_not_change_alignment_without_overflow() {
+    let r = run("flex-direction:row-reverse;justify-content:safe flex-start;width:300px");
+    assert_eq!(xs(&r), vec![250.0, 200.0, 150.0]);
+}
+
+#[test]
+fn justify_left_in_a_column_is_the_writing_mode_start() {
+    // Вертикальная главная ось: `left` ведёт себя как `start` — верх, даже у
+    // column-reverse (где flex-start — низ).
+    let r = run("flex-direction:column-reverse;justify-content:left;height:200px;width:100px");
+    assert_eq!(ys(&r), vec![40.0, 20.0, 0.0]);
+}
+
+#[test]
+fn justify_left_and_right_are_physical_along_a_horizontal_axis() {
+    let r = run("flex-direction:row-reverse;justify-content:left;width:300px");
+    assert_eq!(xs(&r), vec![100.0, 50.0, 0.0]);
+    let r = run("justify-content:right;width:300px");
+    assert_eq!(xs(&r), vec![150.0, 200.0, 250.0]);
+    let r = run("direction:rtl;justify-content:left;width:300px");
+    assert_eq!(xs(&r), vec![100.0, 50.0, 0.0]);
+}
