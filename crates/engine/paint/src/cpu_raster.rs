@@ -1916,6 +1916,14 @@ fn rasterize_fill_rounded_rect(
     Ok(())
 }
 
+/// Краи бокса рамки по целым пикселям, ничья — вверх (Chromium `PixelSnappedIntRect`):
+/// отличается от «пиксель, чей центр внутри» только на ровно дробной `.5` границе.
+fn snap_border_box(rect: Rect) -> Rect {
+    let snap = |v: f32| (v + 0.5).floor();
+    let (x0, y0) = (snap(rect.x), snap(rect.y));
+    Rect::new(x0, y0, snap(rect.x + rect.width) - x0, snap(rect.y + rect.height) - y0)
+}
+
 fn rasterize_draw_border(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
@@ -1943,6 +1951,12 @@ fn rasterize_draw_border(
     // tiny-skia's hairline_aa::fill_dot8 debug_assert for sub-pixel rects (BUG-052).
     let [top_w, right_w, bottom_w, left_w] = widths;
     let [top_c, right_c, bottom_c, left_c] = colors;
+    // Рамка рисуется без сглаживания: tiny-skia берёт пиксель, чей центр лежит в
+    // `[край, край)`, и на ровно дробной `.5` границе (`top: 212.5px`) округляет вниз, а
+    // Chromium (`PixelSnappedIntRect`) — вверх; полосы `groove`/`ridge` из `border_bevel`
+    // уже округляют вверх, и одна и та же рамка расходилась со своим `solid`-соседом.
+    let snapped = snap_border_box(*rect);
+    let rect = &snapped;
     // groove/ridge/inset/outset — общая геометрия `border_bevel` (две полосы / один оттенок
     // на сторону, стыки по диагонали); остальные стороны идут обычным путём ниже.
     let styles = paint_bevel_sides(*rect, *widths, *colors, *styles, |piece, color| {
