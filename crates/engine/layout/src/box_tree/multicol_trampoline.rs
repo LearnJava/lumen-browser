@@ -1,5 +1,6 @@
 use super::*;
-use super::layout_dispatch::{dispatch_box, finalize_block_height, finish_after_match};
+use super::layout_cache::finalize_block_height;
+use super::layout_dispatch::{dispatch_box, finish_after_match};
 use super::block_flow_trampoline::{self, DispatchOutcome};
 use super::multicol_abspos::balanced_column_height;
 

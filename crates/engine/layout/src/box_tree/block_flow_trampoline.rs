@@ -1,5 +1,6 @@
 use super::*;
-use super::layout_dispatch::{dispatch_box, finalize_block_height, finish_after_match, FontContext};
+use super::layout_cache::finalize_block_height;
+use super::layout_dispatch::{dispatch_box, finish_after_match, FontContext};
 
 /// LAYOUT-2 срез 1 — see `dispatch_box`'s doc comment (`layout_dispatch.rs`)
 /// for why this split exists. `Done` matches every dispatch arm that already

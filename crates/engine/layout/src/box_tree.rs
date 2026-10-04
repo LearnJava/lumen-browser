@@ -215,6 +215,7 @@ use shapes_floats::{
 use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_edge_at_y};
 
 mod bfc;
+mod layout_cache;
 mod layout_dispatch;
 mod block_flow_trampoline;
 mod flex_trampoline;
