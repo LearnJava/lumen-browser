@@ -657,10 +657,13 @@ fn finish_frame(
         frame.init.cross_cursor
     };
 
-    if !is_column && frame.init.is_wrap {
+    if frame.init.is_wrap {
         let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
         let used_cross: f32 = frame.init.line_cross_sizes.iter().sum::<f32>() + line_gap_total;
-        let free_cross = frame.init.explicit_cross.map_or(0.0, |h| (h - used_cross).max(0.0));
+        // Row: the container's definite height. Column: its content width — the
+        // cross axis of a wrapped column is horizontal and always definite here.
+        let cross_size = if is_column { Some(frame.init.content_width) } else { frame.init.explicit_cross };
+        let free_cross = cross_size.map_or(0.0, |h| (h - used_cross).max(0.0));
 
         if free_cross > 0.0 {
             let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
@@ -704,6 +707,28 @@ fn finish_frame(
                     }
                 }
                 _ => {}
+            }
+
+            if is_column {
+                // CSS Flexbox §8.3 for a wrapped column: lines are spread along x.
+                // `finish_line` aligned each item inside the line's *natural* width;
+                // a stretched line is wider, so the align shift is redone for it.
+                let per_stretch = if matches!(effective, AlignValue::Stretch) { free_cross / n_lines as f32 } else { 0.0 };
+                for (li, &offset) in line_offsets.iter().enumerate() {
+                    let new_cross = frame.init.line_cross_sizes[li];
+                    let old_cross = new_cross - per_stretch;
+                    let n_items = frame.init.line_inits[li].line_keys.len();
+                    for jx in 0..n_items {
+                        let k = frame.init.line_inits[li].line_keys[jx];
+                        let i = frame.init.item_idxs[k];
+                        let dx = offset
+                            + column_item_cross_shift(&frame.b.children[i], new_cross, &frame.init.s, viewport)
+                            - column_item_cross_shift(&frame.b.children[i], old_cross, &frame.init.s, viewport);
+                        if dx != 0.0 {
+                            shift_tree(&mut frame.b.children[i], dx, 0.0);
+                        }
+                    }
+                }
             }
 
             for (li, &offset) in line_offsets.iter().enumerate() {
