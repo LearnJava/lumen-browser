@@ -94,6 +94,11 @@ pub(super) struct MulticolInit {
     pub(super) consumed: Vec<bool>,
     pub(super) out: Vec<LayoutBox>,
     pub(super) cur_y: f32,
+    /// With [`ColRows`]: block extent already used in the current row (a balanced segment plus
+    /// the `column-span: all` elements after it) — the next segment's first row only has the rest
+    /// of `column-height` (Multicol L2 §4.4: a spanner splits the row, the columns after it fill
+    /// what is left, and a spanner that uses the whole row starts a new one).
+    pub(super) row_used: Option<f32>,
 }
 
 /// Which per-segment sub-loop a [`Frame`] is currently driving. `Frame::k`
@@ -439,15 +444,40 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     let content_x = frame.init.content_x;
     let balance = frame.init.balance;
     let container_h = frame.init.container_h;
+    let rows_cfg = frame.init.col_rows;
+    // The rest of a row cut by a spanner; a row that is used up opens the next one.
+    let mut row_rest = None;
+    if let (Some(r), Some(used)) = (rows_cfg, frame.init.row_used.take()) {
+        let rest = r.col_h - used;
+        if rest < 1.0 {
+            frame.init.cur_y += r.row_gap;
+        } else {
+            row_rest = Some(rest);
+        }
+    }
     let cur_y = frame.init.cur_y;
     let item_idxs = frame.init.segments[seg_i].item_idxs.clone();
     let outer_hs = frame.outer_hs.clone();
 
     let total_h: f32 = outer_hs.iter().sum();
-    let rows_cfg = frame.init.col_rows;
-    let col_h = match rows_cfg {
-        Some(r) => r.col_h.max(1.0),
-        None => column_height(balance, container_h, total_h, n_cols as usize),
+    let n = n_cols as usize;
+    let followed_by_span = frame.init.segments[seg_i].span_idx.is_some();
+    // Height of the first row of the segment and of the later ones. A segment that continues a
+    // row cut by a spanner starts with the rest of that row; a segment closed by a spanner whose
+    // content fits one row is balanced (Multicol L1 §7: columns before a spanner are balanced).
+    let (first_h, later_h) = match rows_cfg {
+        Some(r) => {
+            let avail = row_rest.map_or(r.col_h, |rest| rest.min(r.col_h)).max(1.0);
+            if followed_by_span && total_h <= n as f32 * avail + 0.01 {
+                (((total_h / n as f32).ceil()).clamp(1.0, avail), r.col_h.max(1.0))
+            } else {
+                (avail, r.col_h.max(1.0))
+            }
+        }
+        None => {
+            let h = column_height(balance, container_h, total_h, n);
+            (h, h)
+        }
     };
 
     // Virtual single-column stack: each box's border-box occupies
@@ -468,22 +498,32 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     // `f % n_cols` of row `f / n_cols`, and the last row is completed to `n_cols` columns.
     let (used_cols, rows_used) = match rows_cfg {
         Some(_) => {
-            let needed = ((total_h - 0.01) / col_h).ceil().max(1.0) as usize;
-            let rows = needed.div_ceil(n_cols as usize).max(1);
-            (rows * n_cols as usize, rows)
+            let extra = ((total_h - n as f32 * first_h - 0.01) / later_h).ceil().max(0.0) as usize;
+            let rows = 1 + extra.div_ceil(n);
+            (rows * n, rows)
         }
-        None => (overflow_columns(total_h, col_h, n_cols as usize), 1),
+        None => (overflow_columns(total_h, first_h, n), 1),
     };
     let mut seg_extent = 0.0f32;
     for c in 0..used_cols {
-        let col_lo = c as f32 * col_h;
-        let col_hi = col_lo + col_h;
+        // Virtual extent `[col_lo, col_hi)` of fragment `c`.
+        let (col_lo, col_h_c) = if c < n {
+            (c as f32 * first_h, first_h)
+        } else if rows_cfg.is_some() {
+            (n as f32 * first_h + (c - n) as f32 * later_h, later_h)
+        } else {
+            (c as f32 * first_h, first_h)
+        };
+        let col_hi = col_lo + col_h_c;
         let (col_in_row, row) = match rows_cfg {
-            Some(_) => (c % n_cols as usize, c / n_cols as usize),
+            Some(_) => (c % n, c / n),
             None => (c, 0),
         };
         let col_x = content_x + col_in_row as f32 * (col_w + col_gap);
-        let row_y = rows_cfg.map_or(0.0, |r| row as f32 * r.pitch());
+        let row_y = match rows_cfg {
+            Some(r) if row > 0 => first_h + r.row_gap + (row - 1) as f32 * r.pitch(),
+            _ => 0.0,
+        };
         for &(i, bt, bh) in &stack {
             let bb = bt + bh;
             let ov_lo = bt.max(col_lo);
@@ -503,7 +543,12 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
         frame.init.consumed[i] = true;
     }
     if let Some(r) = rows_cfg {
-        seg_extent = r.extent(rows_used);
+        seg_extent = first_h + (rows_used - 1) as f32 * (r.row_gap + later_h);
+        // A balanced row followed by a spanner leaves the rest of its `column-height` to the
+        // columns after the spanner.
+        if rows_used == 1 && followed_by_span {
+            frame.init.row_used = Some(r.col_h - row_rest.unwrap_or(r.col_h) + first_h);
+        }
     }
     frame.init.cur_y += seg_extent.max(0.0);
 }
@@ -597,6 +642,10 @@ fn post_span_item(frame: &mut Frame, span_i: usize, viewport: Size) {
     let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, content_width, viewport);
     let new_cur_y = c.rect.y + c.rect.height + mb;
     let placed = c.clone();
+    // A spanner after a row of columns eats into that row's `column-height`.
+    if let Some(used) = frame.init.row_used {
+        frame.init.row_used = Some(used + (new_cur_y - frame.init.cur_y));
+    }
     frame.init.cur_y = new_cur_y;
     frame.init.out.push(placed);
     frame.init.consumed[span_i] = true;

@@ -17,8 +17,13 @@
 //!   plus half the crossing rule width — the same rules as `flex_gap_decorations`);
 //! * `rule-overlap` decides which axis is painted on top.
 //!
-//! Limits: `direction: rtl`/`writing-mode` do not mirror the axes; a `column-span: all` child is not
-//! understood (the caller falls back to the one-row painter when it sees a full-width fragment).
+//! A `column-span: all` child splits a row: the columns before it form a band of their own (balanced,
+//! shorter than `column-height`), the spanner sits between two bands with no row gap and no rule,
+//! and the band after it takes the rest of the row (Multicol L2 §4.4). Bands are read back from the
+//! fragment geometry (`read_bands`).
+//!
+//! Limits: `direction: rtl`/`writing-mode` do not mirror the axes; a spanner with `row-gap: 0`
+//! cannot be told from a row boundary, so the caller falls back to the one-row painter.
 
 use lumen_core::geom::{Rect, Size};
 use lumen_layout::{BoxKind, ComputedStyle, LayoutBox, Position, RuleBreak, RuleInset, RuleOverlap, RuleVisibilityItems};
@@ -67,31 +72,114 @@ pub(crate) fn multicol_column_count(s: &ComputedStyle, em: f32, content_w: f32, 
     .max(1)
 }
 
-/// Which `(row, column)` cells of the container hold a fragment, read back from the laid-out
-/// children. `None` when a full-width fragment (a `column-span: all` box) is present.
-fn occupied_cells(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Vec<bool>>> {
+/// One row of column boxes (or the part of a row between spanners), in px.
+struct Band {
+    top: f32,
+    bottom: f32,
+    /// Which columns hold a fragment.
+    cells: Vec<bool>,
+    /// A row gap (not a spanner) separates this band from the next one.
+    gap_after: bool,
+}
+
+/// A laid-out fragment: `(top, bottom, column)`; `column == None` marks a full-width spanner.
+type Frag = (f32, f32, Option<usize>);
+
+/// Reads the bands back from the laid-out children. `None` when they cannot be told apart
+/// (a spanner with `row-gap: 0`).
+fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
     let step = g.col_w + g.col_gap;
     let pitch = g.col_h + g.row_gap;
-    let mut cells: Vec<Vec<bool>> = Vec::new();
+    let n = g.n_cols as usize;
+    let mut frags: Vec<Frag> = Vec::new();
     for c in b
         .children
         .iter()
         .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
     {
-        if c.rect.width > g.col_w + 1.0 && g.n_cols > 1 {
-            return None;
-        }
         if c.rect.width <= 0.0 && c.rect.height <= 0.0 {
             continue;
         }
-        let col = (((c.rect.x - g.content_x) / step).round().max(0.0) as usize).min(g.n_cols as usize - 1);
-        let row = ((c.rect.y - g.content_y + 0.01) / pitch).floor().max(0.0) as usize;
-        while cells.len() <= row {
-            cells.push(vec![false; g.n_cols as usize]);
-        }
-        cells[row][col] = true;
+        let col = if c.rect.width > g.col_w + 1.0 && n > 1 {
+            None
+        } else {
+            Some((((c.rect.x - g.content_x) / step).round().max(0.0) as usize).min(n - 1))
+        };
+        frags.push((c.rect.y, c.rect.y + c.rect.height, col));
     }
-    Some(cells)
+    if !frags.iter().any(|f| f.2.is_none()) {
+        // No spanner: rows sit on the fixed `column-height + row-gap` pitch.
+        let mut bands: Vec<Band> = Vec::new();
+        for &(top, _, col) in &frags {
+            let row = ((top - g.content_y + 0.01) / pitch).floor().max(0.0) as usize;
+            while bands.len() <= row {
+                let t = g.content_y + bands.len() as f32 * pitch;
+                bands.push(Band { top: t, bottom: t + g.col_h, cells: vec![false; n], gap_after: true });
+            }
+            bands[row].cells[col?] = true;
+        }
+        if let Some(last) = bands.last_mut() {
+            last.gap_after = false;
+        }
+        return Some(bands);
+    }
+    if g.row_gap <= 0.0 {
+        return None;
+    }
+    frags.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Raw bands of column fragments between spanners.
+    struct Raw {
+        top: f32,
+        bottom: f32,
+        cells: Vec<bool>,
+        preceded: bool,
+        followed: bool,
+        row_start: f32,
+    }
+    let mut raw: Vec<Raw> = Vec::new();
+    let mut open = false; // the last raw band can still take fragments
+    let mut after_span = true;
+    let mut row_start = g.content_y;
+    for &(top, bottom, col) in &frags {
+        match col {
+            None => {
+                if open && let Some(last) = raw.last_mut() {
+                    last.followed = true;
+                }
+                open = false;
+                after_span = true;
+            }
+            Some(c) => {
+                // A fragment at or past the end of the current row opens the next row.
+                if open && top < row_start + g.col_h - 0.5 && let Some(l) = raw.last_mut() {
+                    l.bottom = l.bottom.max(bottom);
+                    l.cells[c] = true;
+                } else {
+                    // After a spanner the columns continue the row while `column-height` is left.
+                    let same_row = after_span && !raw.is_empty() && top - row_start < g.col_h - 0.5;
+                    if !same_row {
+                        row_start = top;
+                    }
+                    let mut cells = vec![false; n];
+                    cells[c] = true;
+                    raw.push(Raw { top, bottom, cells, preceded: same_row, followed: false, row_start });
+                    open = true;
+                    after_span = false;
+                }
+            }
+        }
+    }
+    let mut bands: Vec<Band> = Vec::with_capacity(raw.len());
+    for r in raw {
+        // A band closed by a spanner is balanced; a band that ends a row keeps `column-height`.
+        let bottom = if r.followed { r.bottom } else { r.row_start + g.col_h };
+        // The spanner between a band and the continuation of its row takes no row gap.
+        if let Some(prev) = bands.last_mut() {
+            prev.gap_after = !r.preceded;
+        }
+        bands.push(Band { top: r.top, bottom, cells: r.cells, gap_after: false });
+    }
+    Some(bands)
 }
 
 /// Whether a rule piece between two cells is painted under `column-rule-visibility-items` /
@@ -132,18 +220,29 @@ fn line_insets(insets: &lumen_layout::RuleInsets, lo: Cross, hi: Cross, em: f32,
 /// the single-row rules instead.
 pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h: f32, out: &mut Vec<DisplayCommand>) -> bool {
     let s = &b.style;
-    let Some(cells) = occupied_cells(b, g) else {
+    let Some(bands) = read_bands(b, g) else {
         return false;
     };
-    let rows = cells.len();
+    let rows = bands.len();
     if rows == 0 {
         return true;
     }
     let em = s.font_size;
     let vp = Size::new(g.content_w, content_h);
     let n = g.n_cols as usize;
-    let (col_total, row_total) = (n.saturating_sub(1), rows - 1);
-    let row_top = |r: usize| g.content_y + r as f32 * (g.col_h + g.row_gap);
+    let col_total = n.saturating_sub(1);
+    // Row gaps are numbered in order, a spanner between two bands is not one (§4.6).
+    let gap_ix: Vec<usize> = bands
+        .iter()
+        .scan(0usize, |k, band| {
+            let ix = *k;
+            *k += usize::from(band.gap_after);
+            Some(ix)
+        })
+        .collect();
+    let row_last = bands.iter().filter(|band| band.gap_after).count().saturating_sub(1);
+    let cells = |r: usize, c: usize| bands[r].cells[c];
+    let gap_below = |r: usize| r + 1 < rows && bands[r].gap_after;
 
     let col_style = |i: usize| {
         (
@@ -153,10 +252,11 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
         )
     };
     let row_style = |r: usize| {
+        let ix = gap_ix[r];
         (
-            *s.row_rule_width.value_for_gap(r, row_total),
-            *s.row_rule_style.value_for_gap(r, row_total),
-            s.row_rule_color.value_for_gap(r, row_total).resolve(s.color),
+            *s.row_rule_width.value_for_gap(ix, row_last),
+            *s.row_rule_style.value_for_gap(ix, row_last),
+            s.row_rule_color.value_for_gap(ix, row_last).resolve(s.color),
         )
     };
     let col_visible = |i: usize| {
@@ -170,12 +270,13 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
 
     // Is the column-gap-`i` piece of row `r` / the row-gap-`r` piece of column `c` painted?
     let col_piece = |i: usize, r: usize| {
-        col_visible(i) && piece_shown(s.column_rule_visibility_items, true, cells[r][i], cells[r][i + 1])
+        col_visible(i) && piece_shown(s.column_rule_visibility_items, true, cells(r, i), cells(r, i + 1))
     };
     let row_piece = |r: usize, c: usize| {
-        row_visible(r)
-            && piece_shown(s.row_rule_visibility_items, false, cells[r][c], cells[r + 1][c])
-            && (cells[r][c] || cells[r + 1][c] || s.row_rule_visibility_items == RuleVisibilityItems::All)
+        gap_below(r)
+            && row_visible(r)
+            && piece_shown(s.row_rule_visibility_items, false, cells(r, c), cells(r + 1, c))
+            && (cells(r, c) || cells(r + 1, c) || s.row_rule_visibility_items == RuleVisibilityItems::All)
     };
 
     let vis = s.row_rule_visibility_items;
@@ -196,26 +297,31 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
         let sep_x = gap_left + (g.col_gap - w) * 0.5;
         let both = |r: usize| col_piece(i, r);
         if col_joined {
-            let (Some(first), Some(last)) = ((0..rows).find(|&r| both(r)), (0..rows).rfind(|&r| both(r))) else {
-                continue;
-            };
-            let (a, bm) = line_insets(&s.column_rule_inset, None, None, em, vp);
-            if let Some((y, h)) = inset_span(row_top(first), row_top(last) + g.col_h - row_top(first), a, bm, false) {
-                col_cmds.extend(rule_line_commands(Rect::new(sep_x, y, w, h), false, st, color));
+            // One line through the row gaps and under the spanners.
+            if let (Some(first), Some(last)) = ((0..rows).find(|&r| both(r)), (0..rows).rfind(|&r| both(r))) {
+                let (a, bm) = line_insets(&s.column_rule_inset, None, None, em, vp);
+                let (top, bottom) = (bands[first].top, bands[last].bottom);
+                if let Some((y, h)) = inset_span(top, bottom - top, a, bm, false) {
+                    col_cmds.extend(rule_line_commands(Rect::new(sep_x, y, w, h), false, st, color));
+                }
             }
             continue;
         }
         for r in (0..rows).filter(|&r| both(r)) {
             // A row gap above/below is a junction only while a visible row rule runs through it.
             // The row rule meets the column rule only where one of its pieces touches this gap.
-            let cross = |gap_idx: usize| {
-                let touches = if !row_cut { row_visible(gap_idx) } else { row_piece(gap_idx, i) || row_piece(gap_idx, i + 1) };
-                touches.then(|| (g.row_gap, row_style(gap_idx).0))
+            let cross = |gap_row: usize| {
+                let touches = if !row_cut {
+                    gap_below(gap_row) && row_visible(gap_row)
+                } else {
+                    row_piece(gap_row, i) || row_piece(gap_row, i + 1)
+                };
+                touches.then(|| (g.row_gap, row_style(gap_row).0))
             };
             let lo = if r > 0 { cross(r - 1) } else { None };
             let hi = if r + 1 < rows { cross(r) } else { None };
             let (a, bm) = line_insets(&s.column_rule_inset, lo, hi, em, vp);
-            if let Some((y, h)) = inset_span(row_top(r), g.col_h, a, bm, false) {
+            if let Some((y, h)) = inset_span(bands[r].top, bands[r].bottom - bands[r].top, a, bm, false) {
                 col_cmds.extend(rule_line_commands(Rect::new(sep_x, y, w, h), false, st, color));
             }
         }
@@ -223,12 +329,12 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
 
     // ── row rules (horizontal lines in the row gaps) ─────────────────────────────────────────
     let mut row_cmds: Vec<DisplayCommand> = Vec::new();
-    for r in 0..row_total {
+    for r in (0..rows).filter(|&r| gap_below(r)) {
         if !row_visible(r) {
             continue;
         }
         let (w, st, color) = row_style(r);
-        let gap_top = row_top(r) + g.col_h;
+        let gap_top = bands[r].bottom;
         let sep_y = gap_top + (g.row_gap - w) * 0.5;
         if !row_cut {
             let (a, bm) = line_insets(&s.row_rule_inset, None, None, em, vp);
