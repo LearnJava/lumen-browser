@@ -242,6 +242,24 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   shard, a mixed one is cut into subdirectories, and the files lying directly in
   it become one explicit-id `(bare)` shard. `--selftest` checks this on a
   hand-made manifest.
+  `--parallel-shards K` / `--batch-small N` (WPT-RUN-9, both off by default)
+  speed a run up without touching the verdicts. `--batch-small` runs
+  consecutive shards of at most N automatable ids as one wptrunner process
+  (capped by `--batch-max-ids`) and splits its report back into the per-shard
+  `<name>.json` files a solo run would have written (`split_batch`), so
+  `state.json`, `--resume` and every audit see the same shards as before; the
+  batch's own report lives under `<out-dir>/batches/`, out of `load_results`'
+  reach. `--parallel-shards` runs K units at once, longest budget first; lane
+  k > 0 serves on every `config.json` port + 1000·k through
+  `$LUMEN_WPT_SERVER_CONFIG`, which `run_smoke.py` merges over `config.json`
+  (the vendored wptrunner is not patched on disk). A lane waits to start while
+  less than `--min-free-gb` (6) of RAM is free and another lane is busy —
+  paging stretches the very timeouts the verdicts depend on. Lane-specific
+  rules: orphaned `lumen` processes are reaped once before the lanes start (not
+  between units, where the reaper would count a running lane's browsers as
+  stale), each lane guards only its own ports, and `heavy_lock` is held while
+  any lane runs. Measured A/B — `docs/tasks/p2-wpt-runner-throughput.md`
+  §WPT-RUN-9.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
