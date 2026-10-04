@@ -387,3 +387,27 @@ fn flex_overlap_join_pieces_of_cross_rule_do_not_overlap() {
     let reach = rows.iter().map(|r| r.0 + r.2).fold(0.0_f32, f32::max);
     assert!((reach - 600.0).abs() < 0.6, "{rows:?}");
 }
+
+/// flex-gap-decorations-writing-mode: в вертикальном `writing-mode` `flex-direction: row` идёт
+/// по физической вертикали, `column-rule` (инлайновая ось) рисуется горизонтальными линиями
+/// между элементами строки (по отрезку на строку), а `row-rule` (блоковая ось) — вертикальной линией между строками.
+#[test]
+fn flex_vertical_writing_mode_swaps_rule_axes() {
+    for wm in ["vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"] {
+        let html = format!(
+            r#"<div style="display:flex;flex-wrap:wrap;column-gap:10px;row-gap:10px;
+            column-rule:10px solid blue;row-rule:10px solid red;width:110px;height:170px;
+            writing-mode:{wm}">
+            <div style="width:50px;height:50px"></div><div style="width:50px;height:50px"></div>
+            <div style="width:50px;height:50px"></div><div style="width:50px;height:50px"></div>
+            <div style="width:50px;height:50px"></div><div style="width:50px;height:50px"></div></div>"#
+        );
+        let dl = build(&html, "");
+        // Главные щели — по одной на строку (вертикальный столбец шириной 50px), строки не сливаются.
+        assert_rules(
+            &rules(&dl, false),
+            &[(0.0, 50.0, 50.0, 10.0), (60.0, 50.0, 50.0, 10.0), (0.0, 110.0, 50.0, 10.0), (60.0, 110.0, 50.0, 10.0)],
+        );
+        assert_rules(&rules(&dl, true), &[(50.0, 0.0, 10.0, 170.0)]);
+    }
+}
