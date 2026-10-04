@@ -214,8 +214,11 @@ fn end_inset(inset: &RuleInset, cross: Cross, em: f32, vp: Size) -> f32 {
 /// Paints each point of one *row* rule line once. Pieces of a line are extended past their cut
 /// points (`overlap-join`, a negative inset), so neighbouring pieces overlap at a column gap, and
 /// a translucent colour would be blended twice there (Chromium blends it once).
-/// `spans` are `(start, len)` along the line in ascending order; each span loses the part already covered by the spans before it.
-fn without_overlap(spans: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+/// `spans` are `(start, len)` along the line; they are taken in ascending order of their start
+/// (a negative inset moves the start of a later piece before the start of an earlier one), and
+/// each span loses the part already covered by the spans before it.
+fn without_overlap(mut spans: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut end = f32::NEG_INFINITY;
     let mut out = Vec::with_capacity(spans.len());
     for (start, len) in spans {
