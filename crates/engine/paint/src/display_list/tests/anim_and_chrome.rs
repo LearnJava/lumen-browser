@@ -942,6 +942,26 @@ use lumen_dom::NodeId;
     }
 
     #[test]
+    fn multicol_rows_negative_junction_inset_pieces_are_merged_in_order() {
+        // multicol-gap-decorations-039: a junction inset far below zero moves the start of a later
+        // piece of a cut row rule before the start of an earlier one (piece 2 starts at -140, piece 1
+        // at -50). The pieces are still merged so each point is painted once, and the union is
+        // [-140, 340] (the first column piece alone would leave [-140, -50] out).
+        let css = format!("{ROWS_CSS}row-rule-break:intersection;row-rule-inset-junction-start:-210px;row-rule-inset-junction-end:-210px;row-rule-inset-cap-start:-50px;row-rule-inset-cap-end:-50px;");
+        let dl = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let mut xs: Vec<(f32, f32)> = row_rule_cmds(&dl).iter().map(|r| (r.0, r.2)).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(!xs.is_empty());
+        assert!((xs[0].0 + 140.0).abs() < 0.01, "union starts at -140: {xs:?}");
+        let mut end = xs[0].0;
+        for (x, w) in &xs {
+            assert!(*x >= end - 0.01, "pieces overlap: {xs:?}");
+            end = x + w;
+        }
+        assert!((end - 340.0).abs() < 0.01, "union ends at 340: {xs:?}");
+    }
+
+    #[test]
     fn multicol_rows_split_by_a_spanner_get_a_rule_band_each() {
         // multicol-gap-decorations-002: `p p <spanner 18px> p×6`, 60px columns → band 1 (balanced,
         // 40px), the spanner (no rule, no row gap), band 2 (the 2px rest of the row), then the
