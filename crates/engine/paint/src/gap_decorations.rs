@@ -506,7 +506,15 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
                 }
             })
             .collect();
-        let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_lo + a_len, brk, vis);
+        // Дорожки, вылезшие за content box (`width: 120px` при трёх 100px-колонках), тянут
+        // линию до своего края: Chromium рисует щель на всю протяжённость сетки.
+        let (a_lo, a_hi) = {
+            let along: &[(f32, f32)] = if horizontal { &xs } else { &ys };
+            let lo = along.iter().map(|e| e.0).fold(a_lo, f32::min);
+            let hi = along.iter().map(|e| e.1).fold(a_lo + a_len, f32::max);
+            (lo, hi)
+        };
+        let pieces = grid_gap_pieces(n_t, n_a, &items, tops_a, gap_a, a_lo, a_hi, brk, vis);
         let (cross_w, cross_s, cross_total) = if horizontal {
             (&s.column_rule_width, &s.column_rule_style, col_tops.len())
         } else {
