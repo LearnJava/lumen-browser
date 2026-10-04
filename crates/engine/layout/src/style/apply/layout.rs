@@ -788,76 +788,25 @@ pub(in crate::style) fn apply_decl_layout(
         // CSS Box Alignment L3 — alignment свойства. Парсятся как одно
         // значение (полная грамматика с baseline-fallback и safe/unsafe —
         // отложена).
-        "align-items" => {
-            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
-                style.align_items = v;
-                style.content_align_extra.items_safe = safe;
-                style.content_align_extra.items_wm = wm;
-            }
-        }
-        "align-self" => {
-            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
-                style.align_self = v;
-                style.content_align_extra.self_safe = safe;
-                style.content_align_extra.self_wm = wm;
-            }
-        }
-        "align-content" => {
-            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
-                style.align_content = v;
-                style.content_align_extra.align_safe = safe;
-                style.content_align_extra.align_wm = wm;
-            }
-        }
-        "justify-items" => {
-            if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
-                style.justify_items = v;
-                style.content_align_extra.justify_items_safe = safe;
-            }
-        }
-        "justify-self" => {
-            if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
-                style.justify_self = v;
-                style.content_align_extra.justify_self_safe = safe;
-            }
-        }
-        "justify-content" => {
-            if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
-                style.justify_content = v;
-                style.content_align_extra.justify_safe = safe;
-                style.content_align_extra.justify_wm = wm;
-                style.content_align_extra.justify_side = None;
-            } else if let Some(side) = AlignValue::parse_content_side(val) {
-                // `left`/`right`: the flex container resolves the side against
-                // its axes; until then it reads as `start`/`end`.
-                style.justify_content = match side {
-                    ContentSide::Left => AlignValue::Start,
-                    ContentSide::Right => AlignValue::End,
-                };
-                style.content_align_extra.justify_safe = false;
-                style.content_align_extra.justify_wm = false;
-                style.content_align_extra.justify_side = Some(side);
-            }
-        }
+        "align-items" => set_align_items(style, val),
+        "align-self" => set_align_self(style, val),
+        "align-content" => set_align_content(style, val),
+        "justify-items" => set_justify_items(style, val),
+        "justify-self" => set_justify_self(style, val),
+        "justify-content" => set_justify_content(style, val),
         // Shorthand: `place-items: <align-items> [<justify-items>]?`
         "place-items" => {
             let parts = place_tokens(val);
-            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
-                style.align_items = a;
-                style.justify_items = parts
-                    .get(1)
-                    .and_then(|s| AlignValue::parse(s))
-                    .unwrap_or(a);
+            if let Some(a) = parts.first() {
+                set_align_items(style, a);
+                set_justify_items(style, parts.get(1).unwrap_or(a));
             }
         }
         "place-self" => {
             let parts = place_tokens(val);
-            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
-                style.align_self = a;
-                style.justify_self = parts
-                    .get(1)
-                    .and_then(|s| AlignValue::parse(s))
-                    .unwrap_or(a);
+            if let Some(a) = parts.first() {
+                set_align_self(style, a);
+                set_justify_self(style, parts.get(1).unwrap_or(a));
             }
         }
         "position" => {
@@ -1094,13 +1043,10 @@ pub(in crate::style) fn apply_decl_layout(
             };
         }
         "place-content" => {
-            let parts: Vec<&str> = val.split_whitespace().collect();
-            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
-                style.align_content = a;
-                style.justify_content = parts
-                    .get(1)
-                    .and_then(|s| AlignValue::parse(s))
-                    .unwrap_or(a);
+            let parts = place_tokens(val);
+            if let Some(a) = parts.first() {
+                set_align_content(style, a);
+                set_justify_content(style, parts.get(1).unwrap_or(a));
             }
         }
         "margin" => {
@@ -1224,14 +1170,77 @@ struct RuleTriplet {
 
 /// Токены значения `place-items`/`place-self`: слова через пробел, но
 /// `first baseline` / `last baseline` — один токен (CSS Box Alignment L3 §6.1).
+/// `align-items` and its siblings: the keyword goes to the `AlignValue`, the
+/// `safe` overflow position and the writing-mode relativity of `start`/`end`/
+/// `self-start`/`self-end` to [`ContentAlignExtra`] (shared by the longhands
+/// and the `place-*` shorthands).
+fn set_align_items(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.align_items = v;
+        let e = &mut style.content_align_extra;
+        (e.items_safe, e.items_wm, e.items_own) = (safe, wm, AlignValue::is_self_relative(val));
+    }
+}
+
+fn set_align_self(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.align_self = v;
+        let e = &mut style.content_align_extra;
+        (e.self_safe, e.self_wm, e.self_own) = (safe, wm, AlignValue::is_self_relative(val));
+    }
+}
+
+fn set_align_content(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.align_content = v;
+        style.content_align_extra.align_safe = safe;
+        style.content_align_extra.align_wm = wm;
+    }
+}
+
+fn set_justify_items(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
+        style.justify_items = v;
+        style.content_align_extra.justify_items_safe = safe;
+    }
+}
+
+fn set_justify_self(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
+        style.justify_self = v;
+        style.content_align_extra.justify_self_safe = safe;
+    }
+}
+
+fn set_justify_content(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.justify_content = v;
+        let e = &mut style.content_align_extra;
+        (e.justify_safe, e.justify_wm, e.justify_side) = (safe, wm, None);
+    } else if let Some(side) = AlignValue::parse_content_side(val) {
+        // `left`/`right`: the flex container resolves the side against its
+        // axes; until then it reads as `start`/`end`.
+        style.justify_content = match side {
+            ContentSide::Left => AlignValue::Start,
+            ContentSide::Right => AlignValue::End,
+        };
+        let e = &mut style.content_align_extra;
+        (e.justify_safe, e.justify_wm, e.justify_side) = (false, false, Some(side));
+    }
+}
+
 fn place_tokens(val: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut it = val.split_whitespace().peekable();
     while let Some(t) = it.next() {
         let is_baseline_prefix = t.eq_ignore_ascii_case("first") || t.eq_ignore_ascii_case("last");
+        let is_overflow_prefix = t.eq_ignore_ascii_case("safe") || t.eq_ignore_ascii_case("unsafe");
         if is_baseline_prefix && it.peek().is_some_and(|n| n.eq_ignore_ascii_case("baseline")) {
             it.next();
             out.push(format!("{t} baseline"));
+        } else if is_overflow_prefix && it.peek().is_some() {
+            let next = it.next().unwrap_or_default();
+            out.push(format!("{t} {next}"));
         } else {
             out.push(t.to_string());
         }

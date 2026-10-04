@@ -31,6 +31,6 @@ FLEX-VWM (2026-10-04). Раскладка flex-контейнера идёт в 
 
 ## Остаток
 
-- [BUG-1263](BUG-1263-OPEN.md) — `inline-block`/`<br>` не текут вертикально внутри вертикального блока (`css-flexbox-row*.html`, `flex-item-vertical-align`).
+- [BUG-1263](BUG-1263-FIXED.md) — `inline-block`/`<br>` не текут вертикально внутри вертикального блока (`css-flexbox-row*.html`, `flex-item-vertical-align`).
 - [BUG-1264](BUG-1264-OPEN.md) — ортогональные flex-элементы (`flexbox-writing-mode-010…016`, `stretching-orthogonal-flows`, `percentage-size-subitems-001`).
-- [BUG-1265](BUG-1265-OPEN.md) — `self-start`/`self-end` и `safe` у выравнивания самих items.
+- [BUG-1265](BUG-1265-FIXED.md) — `self-start`/`self-end` и `safe` у выравнивания самих items.

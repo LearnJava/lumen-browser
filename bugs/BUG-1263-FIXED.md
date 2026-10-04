@@ -1,6 +1,6 @@
 # BUG-1263 — `inline-block` и `<br>` не текут вертикально внутри блока с вертикальным `writing-mode`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-04 (P1, FLEX-VWM-2)
 **Заведён:** 2026-10-04 (P1, FLEX-VWM)
 **Область:** layout (`crates/engine/layout/src/vertical.rs`, `box_tree/layout_dispatch.rs` — ветка `InlineBlockRow` в вертикальном контексте)
 

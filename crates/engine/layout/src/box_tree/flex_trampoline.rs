@@ -479,16 +479,72 @@ fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) 
 /// in the start-based frame: `start`/`end` follow the writing mode, so
 /// `wrap-reverse` — which makes the frame's start the physical end — swaps them
 /// (`flex-start`/`flex-end` are the frame already).
-fn frame_align(item: &ComputedStyle, container: &ComputedStyle, wrap_reverse: bool) -> AlignValue {
-    let (value, wm) = if matches!(item.align_self, AlignValue::Auto) {
-        (container.align_items, container.content_align_extra.items_wm)
+///
+/// `self-start`/`self-end` are relative to the item's *own* writing mode and
+/// direction (BUG-1265): they name a physical side of `cross_horizontal`'s axis,
+/// which is then expressed in the frame (its start is the low edge unless
+/// `cross_rev`).
+fn frame_align(
+    item: &ComputedStyle,
+    container: &ComputedStyle,
+    wrap_reverse: bool,
+    cross_horizontal: bool,
+    cross_rev: bool,
+) -> AlignValue {
+    let (value, wm, own) = if matches!(item.align_self, AlignValue::Auto) {
+        let e = &container.content_align_extra;
+        (container.align_items, e.items_wm, e.items_own)
     } else {
-        (item.align_self, item.content_align_extra.self_wm)
+        let e = &item.content_align_extra;
+        (item.align_self, e.self_wm, e.self_own)
     };
+    if own && matches!(value, AlignValue::Start | AlignValue::End) {
+        let low = own_start_is_low(item, cross_horizontal) == matches!(value, AlignValue::Start);
+        return if low == !cross_rev { AlignValue::Start } else { AlignValue::End };
+    }
     match value {
         AlignValue::Start if wm && wrap_reverse => AlignValue::End,
         AlignValue::End if wm && wrap_reverse => AlignValue::Start,
         other => other,
+    }
+}
+
+/// `safe` (CSS Box Alignment L3 §4.4) on the item's resolved `align-self`: when
+/// the item overflows its line, `center`/`end` fall back to the start edge.
+fn safe_overflow_fallback(
+    item: &ComputedStyle,
+    container: &ComputedStyle,
+    align: AlignValue,
+    overflows: bool,
+) -> AlignValue {
+    let safe = if matches!(item.align_self, AlignValue::Auto) {
+        container.content_align_extra.items_safe
+    } else {
+        item.content_align_extra.self_safe
+    };
+    if safe && overflows && matches!(align, AlignValue::Center | AlignValue::End) {
+        AlignValue::Start
+    } else {
+        align
+    }
+}
+
+/// Does the item's own start edge along a physical axis lie at the low side
+/// (left / top)? Used by `self-start`/`self-end` (CSS Box Alignment L3 §4.2),
+/// which follow the item's own `writing-mode` and `direction` — for the
+/// horizontal axis the block start of a vertical box or the inline start of a
+/// horizontal one, for the vertical axis the other way round.
+pub(super) fn own_start_is_low(s: &ComputedStyle, horizontal_axis: bool) -> bool {
+    use crate::style::{Direction, WritingMode as W};
+    let rtl = s.direction == Direction::Rtl;
+    match (s.writing_mode, horizontal_axis) {
+        (W::HorizontalTb, true) => !rtl,
+        (W::HorizontalTb, false) => true,
+        (W::VerticalRl | W::SidewaysRl, true) => false,
+        (W::VerticalLr | W::SidewaysLr, true) => true,
+        // `sideways-lr` runs its inline axis bottom-to-top.
+        (W::SidewaysLr, false) => rtl,
+        (_, false) => !rtl,
     }
 }
 
@@ -542,7 +598,8 @@ fn column_item_cross_shift(
         let (l, r) = (matches!(is.margin_left, LengthOrAuto::Auto), matches!(is.margin_right, LengthOrAuto::Auto));
         if cross_rev { (r, l) } else { (l, r) }
     };
-    let cross_align = frame_align(is, container, wrap_reverse);
+    let cross_align = frame_align(is, container, wrap_reverse, true, cross_rev);
+    let cross_align = safe_overflow_fallback(is, container, cross_align, avail_cross < item.rect.width);
     let free_cross = (avail_cross - item.rect.width).max(0.0);
     if auto_cross_l && auto_cross_r {
         free_cross / 2.0
@@ -551,9 +608,12 @@ fn column_item_cross_shift(
     } else if auto_cross_r {
         0.0
     } else {
+        // Unsafe alignment (the default) lets an overflowing item hang out of
+        // the start side too, so the signed free space is used here.
+        let signed_free = avail_cross - item.rect.width;
         match cross_align {
-            AlignValue::Center => free_cross / 2.0,
-            AlignValue::End | AlignValue::LastBaseline => free_cross,
+            AlignValue::Center => signed_free / 2.0,
+            AlignValue::End | AlignValue::LastBaseline => signed_free,
             _ => 0.0,
         }
     }
@@ -665,7 +725,7 @@ fn finish_line(
             let iem = is.font_size;
             let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
-            let align = frame_align(&is, &s, frame.init.wrap_reverse);
+            let align = frame_align(&is, &s, frame.init.wrap_reverse, false, frame.init.cross_rev);
             // In the start-based frame (mirrored afterwards for `cross_rev`) the
             // cross-start margin is the physical bottom one.
             let (auto_cross_start, auto_cross_end) = {
@@ -677,6 +737,7 @@ fn finish_line(
             };
             let item_rect_height = frame.b.children[i].rect.height;
             let outer_cross = item_rect_height + m_t + m_b;
+            let align = safe_overflow_fallback(&is, &s, align, outer_cross > effective_cross);
             if auto_cross_start || auto_cross_end {
                 let free = (effective_cross - outer_cross).max(0.0);
                 let shift = if auto_cross_start && auto_cross_end {
@@ -1200,6 +1261,19 @@ fn align_abs_static_positions(frame: &mut Frame, abs: &[(usize, f32, f32)], view
             } else {
                 (main(overflow_x), cross(overflow_y))
             }
+        };
+        // `self-start`/`self-end` name a side of the item's own box: a physical one.
+        let own_cross = if matches!(cs.align_self, AlignValue::Auto) {
+            extra.items_own
+        } else {
+            cs.content_align_extra.self_own
+        };
+        let (fx, fy) = if own_cross && matches!(cross_value, AlignValue::Start | AlignValue::End) {
+            let low = own_start_is_low(cs, main_vertical) == matches!(cross_value, AlignValue::Start);
+            let f = if low { 0.0 } else { 1.0 };
+            if main_vertical { (f, fy) } else { (fx, f) }
+        } else {
+            (fx, fy)
         };
         let auto_x = matches!(cs.left, LengthOrAuto::Auto) && matches!(cs.right, LengthOrAuto::Auto);
         let auto_y = matches!(cs.top, LengthOrAuto::Auto) && matches!(cs.bottom, LengthOrAuto::Auto);

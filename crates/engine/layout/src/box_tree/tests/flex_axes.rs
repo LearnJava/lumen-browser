@@ -358,3 +358,66 @@ fn grid_safe_alignment_falls_back_to_start_only_on_overflow() {
     assert_eq!(r[0].x, 0.0, "переполнение: к start-кромке, {:?}", r[0]);
     assert_eq!(r[1].x, 15.0, "влезает: центр, {:?}", r[1]);
 }
+
+// ── BUG-1265: self-start/self-end, safe у items, place-* ──
+
+fn lone_item(container_css: &str, item_css: &str) -> Rect {
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    rects(html, &format!("#k{{display:flex;{container_css}}}#a{{{item_css}}}"), &["a"])[0]
+}
+
+#[test]
+fn start_follows_the_container_but_self_start_follows_the_item() {
+    // rtl-колонка: cross-start — правая кромка. Элемент с direction:ltr
+    // свою сторону start видит слева.
+    let c = "flex-direction:column;direction:rtl;width:100px;height:50px";
+    let i = "width:20px;height:10px;direction:ltr;";
+    assert_eq!(lone_item(c, &format!("{i}align-self:start")).x, 80.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:self-start")).x, 0.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:self-end")).x, 80.0);
+}
+
+#[test]
+fn self_start_of_a_vertical_item_in_a_row_looks_at_its_own_block_axis() {
+    // У vertical-rl элемента block-start по горизонтали — правая кромка; по
+    // вертикали его inline-start — верх.
+    let c = "flex-direction:column;width:100px;height:50px";
+    let i = "width:20px;height:10px;writing-mode:vertical-rl;";
+    assert_eq!(lone_item(c, &format!("{i}align-self:self-start")).x, 80.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:self-end")).x, 0.0);
+}
+
+#[test]
+fn safe_center_does_not_push_an_overflowing_row_item_past_the_start() {
+    let c = "width:100px;height:20px";
+    let i = "width:20px;height:40px;";
+    assert_eq!(lone_item(c, &format!("{i}align-self:center")).y, -10.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:safe center")).y, 0.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:safe end")).y, 0.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:unsafe end")).y, -20.0);
+}
+
+#[test]
+fn safe_center_does_not_push_an_overflowing_column_item_past_the_start() {
+    let c = "flex-direction:column;width:20px;height:100px";
+    let i = "width:40px;height:10px;";
+    assert_eq!(lone_item(c, &format!("{i}align-self:center")).x, -10.0);
+    assert_eq!(lone_item(c, &format!("{i}align-self:safe center")).x, 0.0);
+}
+
+#[test]
+fn place_shorthands_carry_safe() {
+    let c = "width:100px;height:20px";
+    let i = "width:20px;height:40px;";
+    assert_eq!(lone_item(c, &format!("{i}place-self:safe center")).y, 0.0);
+    assert_eq!(lone_item(c, &format!("{i}place-self:center")).y, -10.0);
+    let c2 = "width:100px;height:20px;place-items:safe center";
+    assert_eq!(lone_item(c2, i).y, 0.0);
+}
+
+#[test]
+fn place_content_takes_left_and_right_for_the_inline_axis() {
+    // place-content: <align-content> <justify-content>; `right` — физическая сторона.
+    let c = "width:100px;height:50px;place-content:start right";
+    assert_eq!(lone_item(c, "width:20px;height:10px").x, 80.0);
+}

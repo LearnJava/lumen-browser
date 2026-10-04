@@ -167,6 +167,20 @@ pub(crate) fn build_vertical_init(
     )
     .unwrap_or(inline_size_avail);
 
+    // CSS Sizing L3 §5 — `min-height`/`max-height` are the bounds of the
+    // *inline* size in a vertical writing mode, however the size was reached
+    // (an explicit `height` or the room offered, e.g. a flex stretch).
+    let inline_limit = |len: Option<&Length>| -> Option<f32> {
+        let raw = len.filter(|l| !l.is_intrinsic())?.resolve(em, Some(inline_size_avail), viewport)?;
+        Some(match s.box_sizing {
+            BoxSizing::ContentBox => raw + frame_vert,
+            BoxSizing::BorderBox => raw.max(frame_vert),
+        })
+    };
+    let inline_size = inline_size
+        .min(inline_limit(s.max_height.as_ref()).unwrap_or(f32::INFINITY))
+        .max(inline_limit(s.min_height.as_ref()).unwrap_or(0.0));
+
     b.rect.height = inline_size.max(frame_vert);
 
     // Block-size (physical width) — from CSS `width`. If absent, the container
@@ -316,12 +330,11 @@ pub(crate) fn shift_subtree_x(b: &mut LayoutBox, dx: f32) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(node) = stack.pop() {
         node.rect.x += dx;
-        if let BoxKind::InlineRun { lines, .. } = &mut node.kind {
-            for line in lines.iter_mut() {
-                for frag in line.iter_mut() {
-                    frag.x += dx;
-                }
-            }
+        // `InlineFrag::x` is an offset from the run's own origin (along y for a
+        // vertical run), so it must NOT follow the box: shifting it by `dx`
+        // threw vertical text off the bottom of its container.
+        if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut node.kind {
+            svg_paint_matrix.matrix[4] += dx;
         }
         stack.extend(node.children.iter_mut());
     }
@@ -375,14 +388,24 @@ pub(crate) fn lay_out_vertical_inline_run(
         s.text_orientation,
     );
 
-    let total_advance: f32 = lines.iter().flat_map(|l| l.iter()).map(|f| f.width).sum();
+    // The run's inline extent is its longest column, not the sum over all of
+    // them, and each wrapped line is a column of its own: the box is
+    // `lines × line-height` wide (BUG-1264 — text wrapped by the box's
+    // inline-size). `emit_inline_run_vertical` places column N at the same
+    // `N * used_line_height` step inside this rect.
+    let longest_column = lines
+        .iter()
+        // The empty spacer frag a soft wrap leaves at a column's end is
+        // trailing whitespace: it hangs, it doesn't lengthen the column.
+        .map(|l| l.iter().filter(|f| !f.text.is_empty()).map(|f| f.x + f.width).fold(0.0_f32, f32::max))
+        .fold(0.0_f32, f32::max);
     let min_height = b.used_line_height;
-    let total_vertical_extent = total_advance.max(min_height);
+    let total_vertical_extent = longest_column.max(min_height);
 
     b.rect.x = start_x;
     b.rect.y = start_y;
     let col_width = b.used_line_height;
-    b.rect.width = col_width;
+    b.rect.width = col_width * lines.len().max(1) as f32;
     b.rect.height = total_vertical_extent;
 }
 
@@ -566,6 +589,12 @@ pub(crate) fn wrap_inline_run_vertical(
             }
 
             let _entry_pre = if is_seg_first { pre } else { 0.0 };
+            // The word gap decided `needs_wrap` above; when the word stays on
+            // this column it also has to advance the cursor, or words run
+            // together ("helloworld").
+            if !needs_wrap && !current_line.is_empty() {
+                current_y += gap + pre;
+            }
             current_line.push(InlineFrag {
                 x: current_y,
                 y_offset: 0.0,

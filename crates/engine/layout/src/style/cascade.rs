@@ -1300,6 +1300,19 @@ pub(crate) fn compute_style_shareable(
         style.display = Display::Block;
     }
 
+    // CSS Align L3 §vertical-align / Flexbox §4, Grid §6 — an in-flow child of a
+    // flex or grid container is blockified, and `vertical-align` only applies
+    // to inline-level boxes and table cells: the computed value has no effect
+    // on a flex/grid item, so its text must not be shifted by it (WPT
+    // `flex-item-vertical-align.html`).
+    if matches!(
+        inherited.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    ) && style.display != Display::TableCell
+    {
+        style.vertical_align = crate::style::VerticalAlign::Baseline;
+    }
+
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
     // CssColor-typed fields (border-color, background-color, etc.) now that
     // style.color_scheme is final. The `color` field (Color, not CssColor) was

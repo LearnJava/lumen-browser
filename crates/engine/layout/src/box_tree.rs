@@ -194,7 +194,7 @@ pub(crate) use intrinsic::{
     max_content_outer_height, max_content_outer_width, min_content_outer_width_of_contents,
 };
 use intrinsic::{
-    flex_auto_base_main_width, flex_item_max_main_outer, flex_item_min_main_width,
+    flex_auto_base_main_width, flex_auto_base_main_width_from, flex_item_max_main_outer, flex_item_min_main_width,
     form_control_fit_content_width, min_content_outer_width,
     preferred_inline_block_width,
 };
@@ -228,6 +228,7 @@ mod grid_trampoline;
 mod table_trampoline;
 mod multicol_trampoline;
 mod vertical_trampoline;
+mod vertical_row;
 
 use bfc::{
     collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc,
