@@ -281,6 +281,17 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   (`batch_rss_cap_kills` on batch members), the snapshot `max_browser_gb` and
   the kill count. Needs `psutil` (in the documented venv); without it the cap
   is off and the run says so.
+  Not a flag but the executor itself (`executorlumen.py`, on for every run): a
+  test whose top-level document was replaced by a page that is not a test
+  (no `__wptrunner_is_test_context`, which `resources/testharnessreport.js`
+  sets) ends as TIMEOUT once that page has been live for 15 s
+  (`LUMEN_WPT_FOREIGN_GRACE_S`, `off` restores the old full-timeout wait),
+  instead of polling a page whose harness is gone until the 60-65 s
+  `timeout: long` runs out. The TIMEOUT message names the foreign URL. A test
+  that leaves and comes back on its own (bfcache helpers, ≤ 8.2 s away) is
+  unaffected. Measured on the `legacy-mb-japanese` shard that set the corpus
+  wall (BUG-1269) — `docs/tasks/p2-wpt-runner-throughput.md` §уход со
+  страницы теста; pinned by `verify_navaway_early_timeout.py`.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
