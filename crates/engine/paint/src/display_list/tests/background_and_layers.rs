@@ -10,7 +10,8 @@
 
 use super::*;
 // build/images уехали в display_list/tests/text_and_images.rs (батч DL-6).
-use super::text_and_images::{build, images};
+use super::images_media::images;
+use super::text_and_images::build;
 
     // ── Тесты <iframe> / DrawImage placeholder ──────────────────────────────
 
