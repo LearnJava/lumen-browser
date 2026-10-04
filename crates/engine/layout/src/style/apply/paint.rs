@@ -253,7 +253,7 @@ pub(in crate::style) fn apply_decl_paint(
             let mut width_set = false;
             let mut style_set = false;
             let mut color_set = false;
-            for tok in val.split_whitespace() {
+            for tok in crate::style::values::length::split_top_level_ws(val) {
                 if !style_set
                     && let Some(s) = parse_outline_style_opt(tok)
                 {

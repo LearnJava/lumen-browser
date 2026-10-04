@@ -79,6 +79,29 @@ use super::*;
     }
 
     #[test]
+    fn border_shorthands_keep_functional_colour_with_spaces_as_one_token() {
+        // `rgba(0, 0, 255, 0.5)` has spaces inside the parentheses: a plain
+        // whitespace split cut it into `rgba(0,` / `0,` / ... and dropped the colour.
+        let half_blue = Color { r: 0, g: 0, b: 255, a: 128 };
+        let s = style_for("border: 10px solid rgba(0, 0, 255, 0.5)");
+        assert!((s.border_left_width - 10.0).abs() < 0.01);
+        assert_eq!(s.border_left_style, BorderStyle::Solid);
+        assert_eq!(s.border_left_color, CssColor::Rgba(half_blue));
+        let s = style_for("border-right: 10px rgba(0, 0, 255, 0.5) solid");
+        assert!((s.border_right_width - 10.0).abs() < 0.01);
+        assert_eq!(s.border_right_style, BorderStyle::Solid);
+        assert_eq!(s.border_right_color, CssColor::Rgba(half_blue));
+    }
+
+    #[test]
+    fn outline_shorthand_keeps_functional_colour_with_spaces_as_one_token() {
+        let s = style_for("outline: 4px solid rgba(255, 0, 0, 0.5)");
+        assert!((s.outline_width - 4.0).abs() < 0.01);
+        assert_eq!(s.outline_style, OutlineStyle::Solid);
+        assert_eq!(s.outline_color, OutlineColor::Color(Color { r: 255, g: 0, b: 0, a: 128 }));
+    }
+
+    #[test]
     fn border_per_side_width_properties() {
         let s = style_for("border-left-width: 4px; border-right-width: 6px");
         assert!((s.border_left_width - 4.0).abs() < 0.01);
