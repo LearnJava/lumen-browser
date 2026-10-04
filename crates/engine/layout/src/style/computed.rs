@@ -32,7 +32,7 @@ use lumen_core::ColorSpace;
 // путь `crate::style::<Имя>` работает и для тех имён, которые донор сам
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
-    AlignValue, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
+    AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
@@ -599,6 +599,8 @@ pub struct ComputedStyle {
     pub justify_items: AlignValue,
     pub justify_self: AlignValue,
     pub justify_content: AlignValue,
+    /// `safe`/`left`/`right` of `justify-content`/`align-content` — see [`ContentAlignExtra`].
+    pub content_align_extra: ContentAlignExtra,
     /// CSS Backgrounds L3 §3 — стек фоновых слоёв. Первый элемент = верхний (рендерится поверх).
     /// Пустой Vec соответствует `background-image: none` без слоёв. `background-color` отдельно.
     pub background_layers: Vec<BackgroundLayer>,
@@ -1350,6 +1352,7 @@ impl ComputedStyle {
             justify_items: AlignValue::Auto,
             justify_self: AlignValue::Auto,
             justify_content: AlignValue::Auto,
+            content_align_extra: ContentAlignExtra::default(),
             background_layers: Vec::new(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
@@ -1726,6 +1729,7 @@ impl ComputedStyle {
             justify_items: AlignValue::Auto,
             justify_self: AlignValue::Auto,
             justify_content: AlignValue::Auto,
+            content_align_extra: ContentAlignExtra::default(),
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
             // Will Change — не наследуется; Pointer Events — наследуется.

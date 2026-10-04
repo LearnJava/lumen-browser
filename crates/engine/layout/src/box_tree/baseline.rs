@@ -179,16 +179,17 @@ pub(crate) fn align_baseline_side(align: AlignValue) -> Option<BaselineSide> {
 /// Линии восстанавливаются по раскладке: внутри линии позиция по главной оси
 /// монотонна, и новая линия начинается там, где она перестаёт расти (у
 /// `*-reverse` — убывать). «Первая» линия — визуально верхняя (при
-/// `wrap-reverse` движок кладёт линии в обратном порядке, так что это последняя
-/// в порядке обхода).
+/// `wrap-reverse` это последняя в порядке обхода).
 pub(crate) fn flex_container_baseline(
     b: &LayoutBox,
     side: BaselineSide,
     measurer: Option<&dyn TextMeasurer>,
 ) -> Option<f32> {
     let s = &b.style;
-    let is_column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
-    let is_reverse = matches!(s.flex_direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse);
+    // Физические оси (FLEX-VWM): `direction: rtl` разворачивает ряд так же, как
+    // `row-reverse` — позиции по главной оси убывают.
+    let axes = super::flex::flex_axes(s);
+    let (is_column, is_reverse) = (axes.main_vertical, axes.main_rev);
     let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     let mut items: Vec<&LayoutBox> = b
@@ -224,7 +225,9 @@ pub(crate) fn flex_container_baseline(
         prev = Some(it);
     }
 
-    // Визуально первая линия — первая в обходе, кроме `wrap-reverse` строки.
+    // Визуально первая линия — первая в обходе, кроме `wrap-reverse` строки, где
+    // линии идут снизу вверх: «первая» базовая линия — у верхней (так её считают
+    // WPT `flex-align-baseline-flex-003`, `flexbox-baseline-multi-line-horiz-004`).
     let visual_first_is_first_visited = is_column || !is_wrap_reverse;
     let line = match (side, visual_first_is_first_visited) {
         (BaselineSide::First, true) | (BaselineSide::Last, false) => lines.first()?,

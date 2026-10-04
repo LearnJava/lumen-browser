@@ -688,6 +688,18 @@ fn post_final_item(
     // its final value from the justify-items block further down.
     let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
     let item_outer_h = item.rect.height + m_t + m_b;
+    // CSS Box Alignment L3 §4.4: `safe` falls back to `start` once the item
+    // overflows its grid area, instead of overflowing past the start edge.
+    let align_safe = if matches!(is.align_self, AlignValue::Auto) {
+        s.content_align_extra.items_safe
+    } else {
+        is.content_align_extra.self_safe
+    };
+    let align = if align_safe && item_outer_h > cell_h && matches!(align, AlignValue::End | AlignValue::Center) {
+        AlignValue::Start
+    } else {
+        align
+    };
     let mut stretch_h: Option<f32> = None;
     match align {
         AlignValue::End => {
@@ -715,6 +727,16 @@ fn post_final_item(
     // justify-items (inline axis within cell).
     let justify = if matches!(is.justify_self, AlignValue::Auto) { s.justify_items } else { is.justify_self };
     let item_outer_w = item.rect.width + m_l + m_r;
+    let justify_safe = if matches!(is.justify_self, AlignValue::Auto) {
+        s.content_align_extra.justify_items_safe
+    } else {
+        is.content_align_extra.justify_self_safe
+    };
+    let justify = if justify_safe && item_outer_w > cell_w && matches!(justify, AlignValue::End | AlignValue::Center) {
+        AlignValue::Start
+    } else {
+        justify
+    };
     match justify {
         AlignValue::End => {
             item.rect.x = cell_x + cell_w - item.rect.width - m_r;
