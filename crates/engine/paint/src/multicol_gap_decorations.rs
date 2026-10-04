@@ -22,11 +22,14 @@
 //! and the band after it takes the rest of the row (Multicol L2 §4.4). Bands are read back from the
 //! fragment geometry (`read_bands`).
 //!
-//! Limits: `direction: rtl`/`writing-mode` do not mirror the axes; a spanner with `row-gap: 0`
+//! `direction: rtl` mirrors the inline axis: the first column gap and the first value of a rule list
+//! are the rightmost ones, `row-rule-inset-start` insets the right end of a row rule.
+//!
+//! Limits: `writing-mode` does not map the axes; a spanner with `row-gap: 0`
 //! cannot be told from a row boundary, so the caller falls back to the one-row painter.
 
 use lumen_core::geom::{Rect, Size};
-use lumen_layout::{BoxKind, ComputedStyle, LayoutBox, Position, RuleBreak, RuleInset, RuleOverlap, RuleVisibilityItems};
+use lumen_layout::{BoxKind, ComputedStyle, Direction, LayoutBox, Position, RuleBreak, RuleInset, RuleOverlap, RuleVisibilityItems};
 
 use crate::display_list::DisplayCommand;
 use crate::gap_decorations::{inset_span, rule_line_commands};
@@ -244,11 +247,15 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
     let cells = |r: usize, c: usize| bands[r].cells[c];
     let gap_below = |r: usize| r + 1 < rows && bands[r].gap_after;
 
+    // `direction: rtl` runs the columns right to left: the first column gap (and the first value of
+    // a rule list) is the rightmost one, `i` below counts gaps from the left edge.
+    let rtl = s.direction == Direction::Rtl;
     let col_style = |i: usize| {
+        let k = if rtl { col_total - 1 - i } else { i };
         (
-            *s.column_rule_width.value_for_gap(i, col_total),
-            *s.column_rule_style.value_for_gap(i, col_total),
-            s.column_rule_color.value_for_gap(i, col_total).resolve(s.color),
+            *s.column_rule_width.value_for_gap(k, col_total),
+            *s.column_rule_style.value_for_gap(k, col_total),
+            s.column_rule_color.value_for_gap(k, col_total).resolve(s.color),
         )
     };
     let row_style = |r: usize| {
@@ -338,7 +345,7 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
         let sep_y = gap_top + (g.row_gap - w) * 0.5;
         if !row_cut {
             let (a, bm) = line_insets(&s.row_rule_inset, None, None, em, vp);
-            if let Some((x, len)) = inset_span(g.content_x, g.content_w, a, bm, false) {
+            if let Some((x, len)) = inset_span(g.content_x, g.content_w, a, bm, rtl) {
                 row_cmds.extend(rule_line_commands(Rect::new(x, sep_y, len, w), true, st, color));
             }
             continue;
@@ -351,9 +358,10 @@ pub(crate) fn emit_multicol_row_rules(b: &LayoutBox, g: &MulticolGeom, content_h
             };
             let lo = if c > 0 { cross(c - 1) } else { None };
             let hi = if c + 1 < n { cross(c) } else { None };
-            let (a, bm) = line_insets(&s.row_rule_inset, lo, hi, em, vp);
+            // `inset-start` is the inline-start end of the line: the right one under `rtl`.
+            let (a, bm) = if rtl { line_insets(&s.row_rule_inset, hi, lo, em, vp) } else { line_insets(&s.row_rule_inset, lo, hi, em, vp) };
             let col_left = g.content_x + c as f32 * (g.col_w + g.col_gap);
-            if let Some((x, len)) = inset_span(col_left, g.col_w, a, bm, false) {
+            if let Some((x, len)) = inset_span(col_left, g.col_w, a, bm, rtl) {
                 row_cmds.extend(rule_line_commands(Rect::new(x, sep_y, len, w), true, st, color));
             }
         }
