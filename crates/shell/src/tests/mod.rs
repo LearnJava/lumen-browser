@@ -11,14 +11,17 @@ mod automation_eval;
 mod automation_hit;
 mod bfcache_salvage;
 mod bug341_census;
+mod bug341_census_b;
 mod chrome_float;
 mod chrome_incremental;
+mod chrome_incremental_dl;
 mod cli;
 mod css_url_rebase;
 mod form_post_nav;
 mod page_pipeline;
 mod page_resources;
 mod scripts_and_frames;
+mod subdocument_frames;
 
 // ── BUG-436: typed characters reach the JS dispatch intact ───────────────
 
