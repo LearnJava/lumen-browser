@@ -150,7 +150,30 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 
     let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+    // CSS Multicol L1 §7.1: content that does not fit `n_cols` columns of the limited height
+    // flows into overflow columns past the inline end — a rule separates those too, so the
+    // column count is the one the laid-out fragments actually occupy.
+    let step = col_w + col_gap;
+    let n_cols = b
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .filter(|c| c.rect.width <= col_w + 1.0 && c.rect.width > 0.0)
+        .map(|c| ((c.rect.x - content_x) / step).round().max(0.0) as u32 + 1)
+        .max()
+        .unwrap_or(0)
+        .max(n_cols);
     let total = (n_cols - 1) as usize;
+    // CSS Gap Decorations L1 §3.3: `column-rule-inset-cap-*` shorten (or, if negative, extend)
+    // a rule at the container's block edges, where the crossing gap is 0 wide.
+    let cap = |inset: &lumen_layout::RuleInset| match inset {
+        lumen_layout::RuleInset::Length(l) => l.resolve_or_zero(em, 0.0, vp),
+        lumen_layout::RuleInset::OverlapJoin => 0.0,
+    };
+    let (cap_start, cap_end) = (cap(&s.column_rule_inset.cap_start), cap(&s.column_rule_inset.cap_end));
+    let Some((rule_y, rule_h)) = crate::gap_decorations::inset_span(content_y, content_h, cap_start, cap_end, false) else {
+        return;
+    };
 
     for i in 0..(n_cols - 1) {
         // CSS Gap Decorations L1 §4.6: значения списков — по номеру щели
@@ -168,7 +191,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         let sep_x = gap_left + (col_gap - rule_w) * 0.5;
 
         out.extend(crate::gap_decorations::rule_line_commands(
-            Rect::new(sep_x, content_y, rule_w, content_h),
+            Rect::new(sep_x, rule_y, rule_w, rule_h),
             false,
             rule_style,
             rule_color,

@@ -26,8 +26,10 @@ use super::*;
 /// border whose cut edge would show. Anything else keeps the atomic
 /// one-box-per-column placement.
 fn box_is_column_sliceable(b: &LayoutBox) -> bool {
+    // A whitespace-only text node leaves a `Skip` placeholder child (`<div style=…>\n</div>`) —
+    // it has no paint, so it does not make the box unsliceable.
     matches!(b.kind, BoxKind::Block)
-        && b.children.is_empty()
+        && b.children.iter().all(|c| matches!(c.kind, BoxKind::Skip))
         && b.style.border_top_width == 0.0
         && b.style.border_bottom_width == 0.0
         && b.style.border_left_width == 0.0
