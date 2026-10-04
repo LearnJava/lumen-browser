@@ -78,3 +78,18 @@ fn a_single_column_is_sliced_into_rows_by_its_column_height() {
     let (doc, root) = lay(html, css);
     assert_eq!(rect(&root, &doc, "c").height, 110.0);
 }
+
+#[test]
+fn a_height_limit_below_a_spanner_is_what_the_spanner_left() {
+    // multicol-gap-decorations-027: the container is 205px tall, the first 100px item and the
+    // 5px spanner use 105 of it, so the columns below have 100px and the six items below the
+    // spanner fill six columns (overflow columns past the inline end), not three columns of two.
+    let html = r#"<div id="c"><p id="a"></p><i id="s"></i><p id="b"></p><p id="d"></p><p id="e"></p><p id="f"></p><p id="g"></p><p id="h"></p></div>"#;
+    let css = "body{margin:0} p{height:100px;margin:0} i{display:block;height:5px;column-span:all} #c{width:200px;height:205px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto}";
+    let (doc, root) = lay(html, css);
+    assert_eq!(rect(&root, &doc, "b").y, 105.0);
+    assert_eq!((rect(&root, &doc, "d").x, rect(&root, &doc, "d").y), (70.0, 105.0));
+    assert_eq!((rect(&root, &doc, "g").x, rect(&root, &doc, "g").y), (280.0, 105.0));
+    assert_eq!((rect(&root, &doc, "h").x, rect(&root, &doc, "h").y), (350.0, 105.0));
+    assert_eq!(rect(&root, &doc, "c").height, 205.0);
+}

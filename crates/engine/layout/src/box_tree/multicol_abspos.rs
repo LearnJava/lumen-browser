@@ -160,6 +160,9 @@ pub(crate) fn build_multicol_init(
     // `column-fill: auto` keeps everything in the first column.
     // CSS Multicol L2 §4.2: a definite `column-height` is the column height whatever the
     // container's own height is (`column-wrap: nowrap` then spills into inline overflow columns).
+    // A `column-height` is the height of every column; any other limit is the container's own
+    // block size, which the segments between `column-span: all` elements share (Multicol L1 §7.1).
+    let limit_shared = !s.column_height_px(em, viewport).is_some_and(|h| h > 0.0);
     let container_h = s.column_height_px(em, viewport).filter(|h| *h > 0.0).or(container_h).or_else(|| {
         let max_len = s.max_height.as_ref()?;
         let max_h = resolve_block_size(max_len, em, available_height, viewport)?;
@@ -238,6 +241,7 @@ pub(crate) fn build_multicol_init(
         col_w,
         balance,
         container_h,
+        limit_shared,
         col_rows,
         segments,
         children_pcb,
