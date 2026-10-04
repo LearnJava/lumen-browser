@@ -302,6 +302,14 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   the query, mostly `xhr/xmlhttprequest-timeout-*`) is accepted instead of
   becoming INTERNAL-ERROR + browser restart. §URL результата и потолок теста;
   pinned by `verify_hard_cap.py`.
+  And in `run_smoke.py` itself: nothing from wptrunner is imported at module
+  level (`_load_wptrunner()` inside `run()`). wptrunner starts its wptserve
+  daemons and test runners with `spawn`, which on Windows re-executes
+  `run_smoke.py` in every child; with the import at the top that was ~0.9 s
+  per child, the seven servers booting one after another (~7 s) and every
+  runner (re)start ~2 s. Shard startup 16.7 → 8.5 s, runner start 2.0 → 0.33 s
+  median, verdicts unchanged — §старт шарда; pinned by
+  `verify_lazy_startup.py`. Keep new imports in `run_smoke.py` lazy.
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
