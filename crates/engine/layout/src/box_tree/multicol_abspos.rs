@@ -27,6 +27,13 @@ use crate::resolved_geometry::contains_fixed_descendants;
 /// border whose cut edge would show. Anything else keeps the atomic
 /// one-box-per-column placement.
 fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
+    !super::multicol_fragmentation::has_forced_break(&b.style) && box_is_leaf_block(b, container)
+}
+
+/// [`box_is_column_sliceable`] without the forced-break condition: a leaf block that a column
+/// window can cut. The items of a grid cut by `emit_grid_fragments` may carry a forced break —
+/// the grid is cut at their track.
+fn box_is_leaf_block(b: &LayoutBox, container: &ComputedStyle) -> bool {
     // A whitespace-only text node leaves a `Skip` placeholder child (`<div style=…>\n</div>`) —
     // it has no paint, so it does not make the box unsliceable.
     // CSS Writing Modes L3 §7.3 / Multicol L1 §8: a box in an orthogonal flow (its block axis is
@@ -38,7 +45,6 @@ fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
     // atomic path's per-item column assignment.
     matches!(b.kind, BoxKind::Block)
         && b.style.break_inside != crate::style::BreakValue::Avoid
-        && !super::multicol_fragmentation::has_forced_break(&b.style)
         && vertical(b.style.writing_mode) == vertical(container.writing_mode)
         && b.children.iter().all(|c| matches!(c.kind, BoxKind::Skip))
         && b.style.border_top_width == 0.0
@@ -52,8 +58,9 @@ fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
 /// the row gaps at a break are dropped), rather than kept as one atomic box. Only the simple
 /// case: a plain horizontal `display: grid` box without border/padding, whose in-flow children
 /// are leaf blocks (`box_is_column_sliceable`), so cutting a child by a column window repeats
-/// nothing and hides no border. `subgrid` axes, `break-inside: avoid` and forced breaks (of the
-/// grid or of an item) keep the atomic path.
+/// nothing and hides no border. `subgrid` axes, `break-inside: avoid` and a forced break of the
+/// grid itself keep the atomic path; a forced break of an item is cut at by `emit_grid_fragments`
+/// (`column-fill: auto` only, a balanced container falls back to the atomic path there).
 fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
     let s = &b.style;
     let is_subgrid = |t: &[crate::style::GridTrackSize]| t.first() == Some(&crate::style::GridTrackSize::Subgrid);
@@ -82,11 +89,8 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && b.children.iter().all(|c| {
             matches!(c.kind, BoxKind::Skip)
                 || matches!(c.style.position, Position::Absolute | Position::Fixed)
-                || box_is_column_sliceable(c, &b.style)
+                || box_is_leaf_block(c, &b.style)
         })
-        // A forced column break inside the grid (`break-before: column` on an item) is not
-        // modelled by the window cut: those grids keep the atomic placement.
-        && b.children.iter().all(|c| !super::multicol_fragmentation::has_forced_break(&c.style))
 }
 
 /// LAYOUT-2 срез 7: pure precompute for the multicol dispatch arm — column

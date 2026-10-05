@@ -585,21 +585,68 @@ fn gap_is_bridged(grid: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
     })
 }
 
+/// Block offsets (from the grid's top edge) of the row tracks that a forced column break
+/// (`break-before`/`break-after: column|always` of an in-flow item) makes the first of a column:
+/// the start of the track an item begins in for `break-before`, of the track after the one it ends
+/// in for `break-after`. Sorted, without the very top.
+fn forced_row_starts(grid: &LayoutBox, gy: f32, rows: &[(f32, f32)]) -> Vec<f32> {
+    use crate::style::BreakValue;
+    let forced = |v: BreakValue| matches!(v, BreakValue::Column | BreakValue::Always);
+    let mut starts: Vec<f32> = Vec::new();
+    for c in &grid.children {
+        if matches!(c.kind, BoxKind::Skip) || matches!(c.style.position, Position::Absolute | Position::Fixed) {
+            continue;
+        }
+        let (top, bot) = (c.rect.y - gy, c.rect.y - gy + c.rect.height);
+        if forced(c.style.break_before)
+            && let Some(k) = rows.iter().rposition(|r| r.0 <= top + 0.01)
+        {
+            starts.push(rows[k].0);
+        }
+        if forced(c.style.break_after)
+            && let Some(k) = rows.iter().rposition(|r| r.0 < bot - 0.01)
+            && let Some(next) = rows.get(k + 1)
+        {
+            starts.push(next.0);
+        }
+    }
+    starts.retain(|&y| y > 0.01);
+    starts.sort_by(f32::total_cmp);
+    starts.dedup_by(|a, b| (*a - *b).abs() <= 0.01);
+    starts
+}
+
 /// The windows `[start, end)` (in the grid's own unfragmented block coordinates) a grid of height
-/// `total_h` with row tracks `rows` is cut into by columns `limit` tall. A break inside a row gap
-/// drops the rest of the gap (Fragmentation L3 §5.1: a gap adjoining a break is truncated); so does
-/// one at the very start edge of the gap, unless an item runs through it (Chrome keeps such a gap:
-/// `grid-gap-decorations-fragmentation-029`). Inside a track the track continues.
-fn grid_windows(grid: &LayoutBox, gy: f32, rows: &[(f32, f32)], total_h: f32, limit: f32) -> Vec<(f32, f32)> {
-    let mut windows: Vec<(f32, f32)> = Vec::new();
+/// `total_h` with row tracks `rows` is cut into by columns `limit` tall, each with a flag that it
+/// ends in a forced break (the column keeps its full height). A break inside a row gap drops the
+/// rest of the gap (Fragmentation L3 §5.1: a gap adjoining a break is truncated); so does one at
+/// the very start edge of the gap, unless an item runs through it (Chrome keeps such a gap:
+/// `grid-gap-decorations-fragmentation-029`). Inside a track the track continues. A forced break
+/// (`forced`, see [`forced_row_starts`]) that falls inside the column ends the window at the track
+/// before it and starts the next one at the forced track.
+fn grid_windows(
+    grid: &LayoutBox,
+    gy: f32,
+    rows: &[(f32, f32)],
+    forced: &[f32],
+    total_h: f32,
+    limit: f32,
+) -> Vec<(f32, f32, bool)> {
+    let mut windows: Vec<(f32, f32, bool)> = Vec::new();
     let mut start = 0.0f32;
     loop {
         let end = start + limit;
+        if let Some(&fs) = forced.iter().find(|&&y| y > start + 0.01 && y <= end + 0.01) {
+            let prev_end = rows.iter().rev().find(|r| r.0 < fs - 0.01).map_or(fs, |r| r.1.min(fs));
+            windows.push((start, prev_end.max(start), true));
+            start = fs;
+            continue;
+        }
         if end >= total_h - 0.01 {
-            windows.push((start, total_h));
+            windows.push((start, total_h, false));
             break;
         }
-        windows.push((start, end));
+        windows.push((start, end, false));
         let in_gap = rows.windows(2).find(|w| {
             let inside = end > w[0].1 + 0.01 && end < w[1].0 - 0.01;
             let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
@@ -636,13 +683,19 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     let total_h = grid.rect.height;
     let n_cols = frame.init.n_cols as usize;
     let gy0 = grid.rect.y;
+    let forced = forced_row_starts(grid, gy0, &rows);
+    // A forced break is placed only in a `column-fill: auto` container; a balanced one keeps the
+    // atomic path (the balanced height would have to account for the forced columns).
+    if !forced.is_empty() && frame.init.balance {
+        return false;
+    }
     // `column-fill: balance` shrinks the columns below the height limit when the content is
     // shorter than `limit x columns` (Multicol L1 §7.1: the smallest height that still fits every
     // fragment into `column-count` columns); only a container that fills them all is cut at the
     // limit. The balanced height starts at `total / columns` and grows until the cut (which drops
     // the row gaps at the breaks) needs no more than `column-count` columns.
     let cut_at = if frame.init.balance && total_h < limit * n_cols as f32 - 0.01 {
-        let fits = |h: f32| grid_windows(grid, gy0, &rows, total_h, h).len() <= n_cols;
+        let fits = |h: f32| grid_windows(grid, gy0, &rows, &forced, total_h, h).len() <= n_cols;
         if !fits(limit) {
             return false;
         }
@@ -665,19 +718,22 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     } else {
         limit
     };
-    let windows = grid_windows(grid, gy0, &rows, total_h, cut_at);
+    let windows = grid_windows(grid, gy0, &rows, &forced, total_h, cut_at);
     let (col_w, col_gap, content_x, cur_y) =
         (frame.init.col_w, frame.init.col_gap, frame.init.content_x, frame.init.cur_y);
     let (gx, gy) = (grid.rect.x, grid.rect.y);
     let mut seg_extent = 0.0f32;
     let mut out = Vec::with_capacity(windows.len());
-    for (f, &(ws, we)) in windows.iter().enumerate() {
+    for (f, &(ws, we, forced_end)) in windows.iter().enumerate() {
         let col_x = content_x + f as f32 * (col_w + col_gap);
         let mut frag = grid.clone();
         frag.rect.x = col_x;
         frag.rect.y = cur_y;
         frag.rect.width = col_w;
-        frag.rect.height = we - ws;
+        // A column that ends in a forced break keeps the full column height (the column gaps run
+        // through it); every other fragment is as tall as its window.
+        let frag_h = if forced_end { (we - ws).max(cut_at) } else { we - ws };
+        frag.rect.height = frag_h;
         frag.children = grid
             .children
             .iter()
@@ -714,7 +770,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
         frag.subgrid_tracks =
             Some(Box::new(crate::subgrid::SubgridTracks { cols, rows: Some(clipped), fragment: true }));
-        seg_extent = seg_extent.max(we - ws);
+        seg_extent = seg_extent.max(frag_h);
         out.push(frag);
     }
     frame.init.out.extend(out);
