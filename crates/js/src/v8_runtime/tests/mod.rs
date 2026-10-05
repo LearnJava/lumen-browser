@@ -1384,22 +1384,38 @@ fn take_dom_touched_reports_set_attribute() {
     assert!(!t.unattributed);
 }
 
-/// BUG-935 S80: сброс, который UI-поток держит у себя (`js_ctx` под движковым
-/// потоком пуст), видит те же мутации и очищает тот же набор, что `take_dom_touched`.
+/// BUG-935 S80 / срез 81: читатель, которого UI-поток держит у себя (`js_ctx` под
+/// движковым потоком пуст), видит изменения после своей прошлой отметки, называет запись
+/// `class` со старым значением и **не** сбрасывает трекер — флашу движкового потока тот
+/// нужен целым.
 #[test]
-fn dom_touched_drain_shares_the_set_with_take_dom_touched() {
+fn dom_changes_reader_reports_changes_since_its_own_mark() {
+    use lumen_layout::style::OwnedNodeChange;
     let doc = make_doc();
     let main = doc.lock().unwrap().find_by_id("main").unwrap();
     let rt = runtime_with_dom(doc, "");
-    let drain = rt.dom_touched_drain();
-    rt.eval("document.getElementById('main').setAttribute('data-x', '1')")
-        .unwrap();
-    let t = drain();
-    assert!(t.nodes.contains(&main));
-    assert!(rt.take_dom_touched().nodes.is_empty(), "сброс очистил общий набор");
-    rt.eval("document.getElementById('main').setAttribute('data-x', '2')")
-        .unwrap();
-    assert!(drain().nodes.contains(&main), "следующий цикл снова виден");
+    let read = rt.dom_changes_reader();
+    assert!(read().unattributed, "первое чтение не знает базиса — полный каскад");
+    rt.eval("document.getElementById('main').className = 'a'").unwrap();
+    let t = read();
+    assert!(!t.unattributed);
+    assert_eq!(t.changes, vec![(main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "".into() })]);
+    assert!(read().changes.is_empty(), "второе чтение без мутаций пусто");
+    rt.eval("document.getElementById('main').className = 'b'").unwrap();
+    let t = read();
+    assert_eq!(t.changes, vec![(main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "a".into() })]);
+    // Запись туда и обратно: базис читателя может лежать между записями (раскладка берёт
+    // документ позже отметки), поэтому названы оба значения, а не только первое.
+    rt.eval("var m = document.getElementById('main'); m.className = 'c'; m.className = 'b'").unwrap();
+    let t = read();
+    assert_eq!(
+        t.changes,
+        vec![
+            (main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "b".into() }),
+            (main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "c".into() }),
+        ]
+    );
+    assert!(rt.take_dom_touched().nodes.contains(&main), "читатель не сбросил общий трекер");
 }
 
 #[test]

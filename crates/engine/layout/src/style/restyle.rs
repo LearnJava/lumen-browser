@@ -1371,6 +1371,37 @@ pub enum NodeChange<'a> {
     Unattributed,
 }
 
+/// BUG-935 срез 81: what happened to one node since a consumer's watermark — the owned
+/// form of [`NodeChange`], so it can leave the tracker's lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedNodeChange {
+    /// A change the root-set cannot narrow (structural, or a touch with no name on record).
+    Unattributed,
+    /// Only the node's child list changed.
+    ChildList,
+    /// The attribute was written; its earlier value is not on record.
+    Attr(Box<str>),
+    /// The attribute was written, and this is the value it had at the watermark.
+    AttrFrom {
+        /// The attribute written.
+        name: Box<str>,
+        /// Its value at the watermark (`""` — absent).
+        old: Box<str>,
+    },
+}
+
+impl OwnedNodeChange {
+    /// The borrowed form the root-set takes.
+    pub fn as_node_change(&self) -> NodeChange<'_> {
+        match self {
+            Self::Unattributed => NodeChange::Unattributed,
+            Self::ChildList => NodeChange::ChildList,
+            Self::Attr(name) => NodeChange::Attr(name),
+            Self::AttrFrom { name, old } => NodeChange::AttrFrom { name, old },
+        }
+    }
+}
+
 /// BUG-341 S3/S17 — restyle root-set (brief §4) for DOM attribute/class/
 /// structural changes (chrome `bind_model` diff or a JS DOM mutation).
 ///

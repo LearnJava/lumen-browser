@@ -8,6 +8,10 @@
 `take_dom_touched` давал «ничего не тронуто», и инкрементальный рестайл брал
 стили прошлого прохода целиком.
 
+Срез 81: вторая страница переключает класс у `<html>`, а размер блока задают
+селекторы предка (`.a div`, `.b div`) — так проверяется сужение по токенам
+(неглубокий корень + точечные потомки), которое UI-путь получил в этом срезе.
+
     python scripts/bug935_swap_stale_probe.py [режим ...]     (по умолчанию 0 1 2)
 
 Нужен собранный `target/dev-release/lumen.exe`. Код возврата 1 — устаревшая геометрия.
@@ -30,6 +34,14 @@ PAGE = """<!doctype html><html><head><style>
 div{height:50px;width:100px;background:red}.w{width:300px}.h{height:120px}p{margin:0}
 </style></head><body><div id="b"></div><p id="t">x</p><script>
 var n=0;function f(){n++;document.getElementById('b').className=(n%2?'w':'h');
+document.getElementById('t').textContent='n'+n;if(n<60){requestAnimationFrame(f)}else{window.done=n}}
+setTimeout(function(){requestAnimationFrame(f)},1500);</script></body></html>
+"""
+
+PAGE_ROOT = """<!doctype html><html><head><style>
+div{height:50px;width:100px;background:red}.a div{width:300px}.b div{height:120px}p{margin:0}
+</style></head><body><section><div id="b"></div></section><p id="t">x</p><script>
+var n=0;function f(){n++;document.documentElement.className=(n%2?'a':'b');
 document.getElementById('t').textContent='n'+n;if(n<60){requestAnimationFrame(f)}else{window.done=n}}
 setTimeout(function(){requestAnimationFrame(f)},1500);</script></body></html>
 """
@@ -69,14 +81,15 @@ def main() -> int:
     modes = sys.argv[1:] or ['0', '1', '2']
     census = load_census()
     with tempfile.TemporaryDirectory() as tmp:
-        page = Path(tmp) / 'stale.html'
-        page.write_text(PAGE, encoding='utf-8')
         bad = 0
-        for mode in modes:
-            size = run(census, mode, page)
-            ok = size == (100.0, 120.0)
-            bad += not ok
-            print(f'swap={mode}: div {size} — {"ok" if ok else "УСТАРЕЛО (ожидалось (100.0, 120.0))"}')
+        for name, html in (('stale', PAGE), ('root-class', PAGE_ROOT)):
+            page = Path(tmp) / f'{name}.html'
+            page.write_text(html, encoding='utf-8')
+            for mode in modes:
+                size = run(census, mode, page)
+                ok = size == (100.0, 120.0)
+                bad += not ok
+                print(f'{name} swap={mode}: div {size} — {"ok" if ok else "УСТАРЕЛО (ожидалось (100.0, 120.0))"}')
     return 1 if bad else 0
 
 

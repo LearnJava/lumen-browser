@@ -473,3 +473,50 @@ fn resource_attributes_narrow_unless_an_ancestor_selector_reads_them() {
     let r = drive(&linked(20), "[src] + p { color: green } p { color: blue }", vec![step("pic", "src", "b.png")]);
     assert_deep(&r[0], "`[src] + p`");
 }
+
+/// BUG-935 срез 81: the UI thread reads the tracker before the layout takes the document, so
+/// the styles it updates may have been computed after its mark — here with `open`, which a
+/// write then took back. The value at the mark alone (`wrap lazy`) has an empty difference
+/// with the current one and leaves the `.open p` paragraphs red; every value held since the
+/// mark names `open`, and the result is a full rebuild's.
+#[test]
+fn a_write_toggled_back_after_the_mark_is_covered_by_every_value_since_it() {
+    use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+    use crate::style::{restyle_node_index, restyle_roots_for_node_changes, NodeChange};
+
+    let css = "p { color: blue } .open p { color: red; margin: 3px }";
+    let matches_full = |olds: &[&str]| -> bool {
+        let mut doc = lumen_html_parser::parse(&wrapped(5));
+        let sheet = lumen_css_parser::parse(css);
+        let (vp, m, hp) = (Size::new(800.0, 600.0), Measurer, lumen_core::ext::NullHyphenationProvider);
+        let w = by_id(&doc, "w");
+        // The mark: `wrap lazy`. A write after it, and the basis is computed from that.
+        set(&mut doc, w, "class", "wrap lazy open");
+        let (prev, prev_counters) = super::super::layout_measured_hyp_with_counters(&doc, &sheet, vp, &m, &hp, false);
+        let _ = doc.take_content_journal();
+        // Taken back before the next read.
+        set(&mut doc, w, "class", "wrap lazy");
+        let journal = doc.take_content_journal().expect("recording was started");
+        let changes: Vec<(NodeId, NodeChange<'_>)> =
+            olds.iter().map(|&old| (w, NodeChange::AttrFrom { name: "class", old })).collect();
+        let node_index = restyle_node_index(&doc, &sheet);
+        let roots = restyle_roots_for_node_changes(&doc, changes, &node_index);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots: roots.deep,
+            shallow_roots: roots.shallow,
+            point_roots: roots.point,
+            content_dirty: ContentDirty::Nodes(&journal),
+        };
+        set_incremental_restyle(true);
+        super::super::set_incremental_box_build(true);
+        let (_, incr_counters) =
+            super::super::layout_mutation_incremental_restyle(&doc, &sheet, vp, &m, &hp, false, prev, delta);
+        super::super::set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        let (_, full_counters) = super::super::layout_measured_hyp_with_counters(&doc, &sheet, vp, &m, &hp, false);
+        incr_counters.styles() == full_counters.styles()
+    };
+    assert!(!matches_full(&["wrap lazy"]), "the value at the mark alone must leave a stale style, or this test proves nothing");
+    assert!(matches_full(&["wrap lazy", "wrap lazy open"]), "every value since the mark must cover the toggled write");
+}

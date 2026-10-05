@@ -399,7 +399,7 @@ impl Lumen {
     /// `Lumen::relayout_chrome_host`'s BUG-341 S6 wiring. `dirty_roots` unions
     /// the interactive-state delta (hover/focus/active, vs.
     /// `self.page_prev_interactive`) with the DOM-mutation delta
-    /// (`touched.nodes`); `content_dirty` is `Nothing` only when `touched.nodes`
+    /// (`touched.changes`); `content_dirty` is `Nothing` only when `touched.changes`
     /// is empty (a pure interactive-state cycle) and `Untracked` otherwise, the
     /// same precondition `RestyleDelta::content_dirty` documents. An `unattributed` summary
     /// (untracked mutation primitive — Shadow DOM attach, `execCommand`, …) or a
@@ -446,10 +446,13 @@ impl Lumen {
         // 300×50 вместо 100×120). Набор сбрасываем через `dom_touched_drain` —
         // общий мьютекс, без запроса в очередь движкового потока (тот может
         // секундами исполнять JS страницы); нет сброса — «неатрибутировано»,
-        // то есть полный каскад.
+        // то есть полный каскад. Срез 81: «сброс» — читатель с отметкой эпохи
+        // (`V8JsRuntime::dom_changes_reader`), трекер для флаша остаётся целым.
+        // Читается до блокировки документа — базис раскладки позже отметки, поэтому
+        // запись `class`/`id` приходит со всеми значениями после отметки.
         let touched = if self.engine_thread.is_some() {
             self.dom_touched_drain.as_ref().map(|drain| drain()).unwrap_or_else(|| {
-                crate::persistent_js::DomTouchedSummary { nodes: Default::default(), unattributed: true }
+                crate::persistent_js::DomTouchedSummary { changes: Vec::new(), unattributed: true }
             })
         } else {
             self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default()
@@ -477,6 +480,13 @@ impl Lumen {
         // specifically instead of guessing from the aggregate.
         let mut lock_wait_ms: Option<f32> = None;
         let mut dirty_roots_ms: Option<f32> = None;
+        // BUG-935 срез 81: why a tick took the full cascade, and what widened a narrowed one —
+        // a live census otherwise sees only `restyle=0` or a large `cascade_recomputed`.
+        let mut roots_log = match (touched.unattributed, self.page_prev_cascade_styles.is_some()) {
+            (true, _) => "full=unattributed".to_string(),
+            (false, false) => "full=no-basis".to_string(),
+            (false, true) => String::new(),
+        };
         let (new_dl, new_lb, fresh_cascade_styles, used_restyle) = if !touched.unattributed
             && let Some(prev_styles) = self.page_prev_cascade_styles.take()
         {
@@ -497,15 +507,38 @@ impl Lumen {
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                 &doc, prev_active, new_interactive.2, &state_index,
             ));
-            // BUG-341 S17: `DomTouched` records node ids without attribute
-            // names, so every page-side mutation stays `Unattributed` — the
-            // pre-S17 widen-to-parent behaviour, unchanged.
-            let node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+            // BUG-935 срез 81: the tracker names what changed (attribute with its old
+            // value, child list) — the same classification the engine thread's flush
+            // uses (`DomTouched::changes_since`). Every node used to go in as
+            // `Unattributed`, so a `class` write on `<html>` restyled the whole document
+            // here while the flush restyled a handful of nodes.
+            let mut node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
+            node_index.set_attr_narrowing(crate::persistent_js::attr_narrowing_enabled());
+            let roots = lumen_layout::style::restyle_roots_for_node_changes(
                 &doc,
-                touched.nodes.iter().map(|&n| (n, lumen_layout::style::NodeChange::Unattributed)),
+                touched.changes.iter().map(|(n, c)| (*n, c.as_node_change())),
                 &node_index,
-            ));
+            );
+            if incr_t0.is_some() {
+                let changes: Vec<String> = touched
+                    .changes
+                    .iter()
+                    .take(6)
+                    .map(|(n, c)| {
+                        let tag = doc.try_get(*n).and_then(|d| d.element_name()).map_or("#node", |q| &*q.local);
+                        format!("{tag}:{c:?}")
+                    })
+                    .collect();
+                roots_log = format!(
+                    "roots deep={} shallow={} point={} changes={} {changes:?}",
+                    roots.deep.len(),
+                    roots.shallow.len(),
+                    roots.point.len(),
+                    touched.changes.len(),
+                );
+            }
+            dirty_roots.extend(roots.deep);
+            let (shallow_roots, point_roots) = (roots.shallow, roots.point);
             drop(doc);
             dirty_roots_ms = dirty_roots_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
             // BUG-341 S16: the page-side tracker reports *selector-relevant*
@@ -516,12 +549,12 @@ impl Lumen {
             // must therefore stay `Untracked` — this is exactly S4's
             // `dom_content_stable` semantics, unchanged. Giving the page path a
             // real content set means completing `DomTouched` for content first.
-            let content_dirty = if touched.nodes.is_empty() {
+            let content_dirty = if touched.changes.is_empty() {
                 lumen_layout::counters::ContentDirty::Nothing
             } else {
                 lumen_layout::counters::ContentDirty::Untracked
             };
-            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty, shallow_roots: Default::default(), point_roots: Default::default() };
+            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty, shallow_roots, point_roots };
             lumen_layout::counters::set_incremental_restyle(true);
             // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
             // box-build reuse rides on the same content precondition computed
@@ -578,7 +611,7 @@ impl Lumen {
             let (cascade_reused, cascade_recomputed) =
                 cascade_stats.map(|s| (s.reused, s.recomputed)).unwrap_or_default();
             eprintln!(
-                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed}",
+                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed} {roots_log}",
                 self.display_list.len(),
                 self.prev_styles.len(),
                 used_restyle as u8,
