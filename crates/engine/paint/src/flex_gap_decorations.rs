@@ -193,7 +193,21 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
 
     let mut lines = collect_lines(children, hmain, wrap, main_gap, cw, vp);
     let n = lines.len();
-    stretch_lines(&mut lines, s.align_content, wrap, cc, cross_gap);
+    // A fragment of a wrapped row flex container cut by a multicol break: layout left the lines
+    // (after `align-content`, clipped to the fragment) as the row tracks, and the items are
+    // clipped too, so the lines come from there instead of from the items' rects.
+    let fragment_lines = p
+        .fragment
+        .then_some(p.subgrid_row_tracks.as_ref())
+        .flatten()
+        .filter(|t| hmain && t.len() == n);
+    if let Some(t) = fragment_lines {
+        for (l, &(lo, hi)) in lines.iter_mut().zip(t) {
+            (l.lo, l.hi) = (lo, hi);
+        }
+    } else {
+        stretch_lines(&mut lines, s.align_content, wrap, cc, cross_gap);
+    }
 
     // §4.6: значения раздаются в порядке размещения, сквозь все строки.
     // Откуда стартует инлайновая / блоковая ось: справа или снизу (Writing Modes L4 §3.2).

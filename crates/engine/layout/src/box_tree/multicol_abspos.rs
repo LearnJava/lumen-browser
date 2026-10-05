@@ -47,7 +47,7 @@ fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && b.style.border_right_width == 0.0
 }
 
-/// CSS Fragmentation L3 §5.1 / CSS Gap Decorations L1 §6.2 — a grid container that is cut across
+/// CSS Fragmentation L3 §5.1 / CSS Gap Decorations L1 §6.2 — a grid (or wrapped row flex) container that is cut across
 /// the columns of a multicol container as a *grid* (its rows are split between the columns and
 /// the row gaps at a break are dropped), rather than kept as one atomic box. Only the simple
 /// case: a plain horizontal `display: grid` box without border/padding, whose in-flow children
@@ -58,7 +58,13 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
     let s = &b.style;
     let is_subgrid = |t: &[crate::style::GridTrackSize]| t.first() == Some(&crate::style::GridTrackSize::Subgrid);
     matches!(b.kind, BoxKind::Block)
-        && matches!(s.display, Display::Grid)
+        && (matches!(s.display, Display::Grid)
+            // A wrapped row flex container is cut by its flex lines the same way (the lines are
+            // the row tracks, `flex_trampoline::finish_frame`); one without ≥ 2 lines has no
+            // tracks and `emit_grid_fragments` falls back to the atomic path.
+            || (matches!(s.display, Display::Flex)
+                && matches!(s.flex_direction, crate::style::FlexDirection::Row)
+                && matches!(s.flex_wrap, crate::style::FlexWrap::Wrap)))
         && matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(container.writing_mode, crate::style::WritingMode::HorizontalTb)
         && !matches!(s.position, Position::Absolute | Position::Fixed)
@@ -211,7 +217,7 @@ pub(crate) fn build_multicol_init(
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
         if super::multicol_span::is_column_spanner(&work[i]) {
-            let grid_frag = n_cols > 1 && !balance && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
+            let grid_frag = n_cols > 1 && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
             let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
@@ -223,7 +229,7 @@ pub(crate) fn build_multicol_init(
             seg.push(i);
         }
     }
-    let grid_frag = n_cols > 1 && !balance && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
+    let grid_frag = n_cols > 1 && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
     let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
     segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable, grid_frag });
 

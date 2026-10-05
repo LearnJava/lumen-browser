@@ -720,8 +720,11 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
             subgrid_cols: false,
             subgrid_rows: false,
             subgrid_col_tracks: None,
-            subgrid_row_tracks: None,
-            fragment: false,
+            subgrid_row_tracks: fragment
+                .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.rows.as_ref()))
+                .flatten()
+                .map(|t| t.iter().map(|&(a, z)| (cy + a, cy + z)).collect()),
+            fragment,
             style: s,
         },
     )
