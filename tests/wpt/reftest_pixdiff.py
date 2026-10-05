@@ -8,18 +8,33 @@ pixel snapping, not geometry (BUG-1249); `thick` is a real difference;
 
     python tests/wpt/reftest_pixdiff.py --out-dir .tmp/wpt-run14/flexbox         --prefix /css/css-flexbox/ [--binary target/dev-release/lumen.exe]
 
-Run from the repository root. Writes `<out-dir>/pixdiff.json`. No third-party
+Run from the repository root. Writes `<out-dir>/pixdiff.json` (`--output`). No third-party
 dependencies (the PNGs are decoded with `zlib`). Only `rel=match`: `mismatch`
 and multi-reference reftests are classified `no-match-ref` or by their first
 reference.
+
+`--screenshot` captures the whole page, not the viewport, so two pages of
+different height used to come out `size-differs` regardless of what is
+visible (359 of 1009 in `css-writing-modes`, WPT-RUN-14 S2). A reftest
+compares the viewport only, so both captures are cropped to `--viewport`
+first; `size-differs` now means a capture *smaller* than the viewport.
+
+`--viewport 800x600` is what wptrunner renders reftests at; the 300×250
+default is kept so numbers stay comparable with earlier slices.
+`--ahem` applies the `docs/probe-method.md` recipe: `assets/fonts/Ahem.ttf`
+is copied into `.tmp/fontsroot/Microsoft/Windows/Fonts/` and every capture
+runs with `LOCALAPPDATA` pointing there and `LUMEN_CPU_SYSTEM_FONTS=1`, so
+`font-family: Ahem` resolves even though `/fonts/ahem.css` does not load
+over `file://`.
 """
-import json, os, re, struct, subprocess, sys, zlib, collections, tempfile
+import json, os, re, shutil, struct, subprocess, sys, zlib, collections, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.getcwd().replace(chr(92), '/')
 BIN = 'target/dev-release/lumen.exe'  # overridden by --binary
 OUT = tempfile.mkdtemp(prefix='fx-')
-W, H = 300, 250
+W, H = 300, 250  # overridden by --viewport
+ENV = None  # overridden by --ahem
 
 
 def unfilter(p):
@@ -71,7 +86,7 @@ def unfilter(p):
 def shot(rel, tag):
     out = os.path.join(OUT, tag + '.png')
     subprocess.run([BIN, '--viewport', f'{W}x{H}', '--screenshot', out, 'file:///' + ROOT + '/tests/wpt' + rel],
-                   capture_output=True, timeout=60)
+                   capture_output=True, timeout=60, env=ENV)
     return out if os.path.isfile(out) else None
 
 
@@ -92,9 +107,13 @@ def classify(t):
     if not a or not b:
         return t, 'shot-failed', 0
     wa, ha, bpp, ra = unfilter(a)
-    wb, hb, _, rb = unfilter(b)
-    if (wa, ha) != (wb, hb):
+    wb, hb, bppb, rb = unfilter(b)
+    if min(wa, wb) < W or min(ha, hb) < H or bpp != bppb:
         return t, 'size-differs', 0
+    # Only the viewport is compared, as wptrunner does (module docstring).
+    ra = [row[:W * bpp] for row in ra[:H]]
+    rb = [row[:W * bpp] for row in rb[:H]]
+    wa, ha = W, H
     diff = set()
     for y in range(ha):
         if ra[y] == rb[y]:
@@ -114,14 +133,23 @@ def classify(t):
 
 def main():
     import argparse
-    global BIN
+    global BIN, W, H, ENV
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out-dir', required=True)
     ap.add_argument('--prefix', default='/')
     ap.add_argument('--binary', default=BIN)
     ap.add_argument('--jobs', type=int, default=6)
+    ap.add_argument('--viewport', default=f'{W}x{H}', help='WxH, default %(default)s; wptrunner uses 800x600')
+    ap.add_argument('--ahem', action='store_true', help='resolve font-family: Ahem (docs/probe-method.md recipe)')
+    ap.add_argument('--output', default='pixdiff.json', help='file name inside --out-dir')
     args = ap.parse_args()
     BIN = args.binary
+    W, H = (int(v) for v in args.viewport.lower().split('x'))
+    if args.ahem:
+        fonts = os.path.join(ROOT, '.tmp', 'fontsroot', 'Microsoft', 'Windows', 'Fonts')
+        os.makedirs(fonts, exist_ok=True)
+        shutil.copyfile(os.path.join(ROOT, 'assets', 'fonts', 'Ahem.ttf'), os.path.join(fonts, 'Ahem.ttf'))
+        ENV = dict(os.environ, LOCALAPPDATA=os.path.join(ROOT, '.tmp', 'fontsroot'), LUMEN_CPU_SYSTEM_FONTS='1')
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import run_corpus as rc
     res, _, _ = rc.load_results(args.out_dir)
@@ -130,7 +158,7 @@ def main():
     print(len(ids), 'failing reftests', flush=True)
     with ThreadPoolExecutor(args.jobs) as ex:
         rows = list(ex.map(classify, ids))
-    out = os.path.join(args.out_dir, 'pixdiff.json')
+    out = os.path.join(args.out_dir, args.output)
     with open(out, 'w', encoding='utf-8') as fh:
         json.dump(rows, fh, indent=0)
     print(dict(collections.Counter(r[1] for r in rows)), '->', out)

@@ -51,3 +51,50 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - 75 пар reftest дают снимки разного размера — причина не исследована (возможно, высота страницы при `--screenshot` зависит от содержимого, а не от viewport).
 - `wptrunner` пишет `Unexpected viewport size ..., (1024, 720), expected (800, 600)` на каждый reftest (1534 раза за прогон): `LumenRefTestExecutor.screenshot` не умеет менять viewport (`executorlumen.py:773`). Тесты, зависящие от размера окна 800×600, сравниваются в 1024×720 — не изучено, влияет ли это на вердикты.
 - Разбивка по имени — эвристика: числа в таблице не гарантируют, что первопричина одна на весь кластер.
+
+## css-writing-modes — вердикт и кластеры (WPT-RUN-14 срез 2, 2026-10-05)
+
+Прогон: `run_corpus.py --prefixes css/css-writing-modes --out-dir .tmp/wpt-run14/writing-modes`, сборка `dev-release` от `main` 04d4efa36 (движок не менялся), `--processes 7`, 83 с. `score_audit.py`: «no leak», вердикт есть у всех 1233 automatable id.
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 1141 | 130.00 | 11.4 % |
+| testharness | 80 | 31.94 (152 из 386 сабтестов) | 40 % |
+| crashtest | 12 | 12.00 | 100 % |
+| **итого** | **1233** | **173.94 = 14.11 %** | |
+
+1063 id не зелёные: 1009 reftest FAIL и 54 testharness с упавшими сабтестами.
+
+### Кластеры
+
+Кластер — **первое совпавшее** правило (порядок — как в таблице) по имени файла и тексту теста (`.tmp/wm14_clusters.py`); один id — один кластер. Колонка «пиксели» — класс `reftest_pixdiff.py --viewport 800x600 --ahem` (см. ниже). Причина у каждого кластера подтверждена пробой (`--dump-layout`/`--dump-display-list`/`--screenshot` на минимальном примере или на самом тесте), кроме помеченных «не разобрано».
+
+| Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|---|
+| позиционированные боксы в вертикальном CB | 259 | — | 259 thick | `abs-pos-non-replaced-vlr-003.xht`, `box-offsets-rel-pos-vlr-005.xht` | инсеты `absolute` и сдвиг `relative` в CB `vertical-*` не применяются — вертикальная ветка не зовёт `finish_after_match` | P3 | [BUG-1276](../../bugs/BUG-1276-OPEN.md) |
+| ортогональные потоки | 173 | 14 | 159 thick | `sizing-orthog-vlr-in-htb-001.xht`, `orthogonal-parent-shrink-to-fit-001a.html`, `available-size-*` | inline-размер ортогонального бокса при неопределённом CB берётся из вьюпорта не так, как в §7.3 (`sizing-orthog-*`: колонка 600px вместо высоты ICB), shrink-to-fit родителя не знает числа колонок (тот же механизм, что FLEX-VWM-6); у части эталонов те же блоки стоят `position: absolute` в вертикальном корне и сдвинутся после BUG-1276 | P1 | [BUG-1264](../../bugs/BUG-1264-OPEN.md), `FLEX-VWM-6`; **отдельной записи нет** — сначала перепрогон после BUG-1276 |
+| таблицы | 117 | 28 | 106 thick | `table-progression-vlr-003.html`, `row-progression-vlr-003.xht`, `table-column-order-*` | `table*.rs` не читает `writing_mode`: строки стекаются по `y` и в `vertical-lr` | P1 | `TABLE-VWM` (`ROADMAP.md`, `STATUS-P1.md`) |
+| bidi | 94 | — | 94 thick | `bidi-override-001.html`, `bidi-isolate-*`, `block-plaintext-*` | RTL-фрагмент с ивритом и латиницей CPU-растр разворачивает обратно (`rustybuzz` угадывает скрипт Hebrew) | P3 | [BUG-1272](../../bugs/BUG-1272-OPEN.md) |
+| блочный/строчный поток (Ahem) | 71 | — | 70 thick | `block-flow-direction-vlr-003.xht`, `line-box-direction-*` | раскладка верна (`--dump-layout`: блоки по `x`, колонки нужной ширины), рисунок букв из Ahem-квадратов расходится — без Ahem они не складываются; с Ahem через `LUMEN_CPU_SYSTEM_FONTS` часть остаётся thick — не разобрано | P3 | [BUG-1273](../../bugs/BUG-1273-OPEN.md) (первым), остаток — не разобрано |
+| инлайн/baseline в вертикальной строке | 64 | — | 58 thick | `vertical-alignment-vlr-023.xht`, `line-box-height-vlr-003.xht`, `inline-block-alignment-*` | `line-box-height`: бордер инлайн-элемента не входит в колонку (`12<span border-left>` переносит «34» в новую колонку); `vertical-alignment`: выравнивание в колонке — не разобрано | P1 | **не разобрано** — без записи |
+| `forms/` | 64 | 125 | 42 no-match-ref, 5 thick | `forms/text-input-block-size.optional.html`, `forms/select-multiple-*` | вертикальные контролы форм (размер `<input>`/`<select>`/`<textarea>` по block-оси, скролл `<select multiple>`); 42 — `mismatch`-reftest, pixdiff их не классифицирует | P1 | **не разобрано** — без записи |
+| `text-combine-upright` | 39 | 59 | 6 identical, 25 thick | `text-combine-upright-value-all-001.html`, `parsing/text-combine-upright-computed.html` | свойства нет вовсе | P4 | `CSS-SPECS.md` (`text-combine-upright`, `STATUS-P4.md`) |
+| `text-indent` / `text-align` | 34 | — | 28 thick, 3 identical | `text-indent-vlr-003.xht`, `text-align-vlr-003.xht` | `text-indent` в вертикальном переносе не читается (16 id); `text-align` — 3 identical с Ahem, остаток не разобран | P3 | [BUG-1275](../../bugs/BUG-1275-OPEN.md) |
+| floats / clearance | 31 | — | 14 identical, 6 thin, 11 thick | `float-vlr-003.xht` | раскладка исправлена LAYOUT-VFLOAT и `b08924bf5`; в WPT падают из-за Ahem — с ним 14 identical | P3 | [BUG-1273](../../bugs/BUG-1273-OPEN.md) |
+| распространение `writing-mode` с `<body>` | 29 | 2 | 27 thick | `wm-propagation-body-032.html` | главный режим документа не берётся с `<body>` (§8) | P3 | [BUG-1274](../../bugs/BUG-1274-OPEN.md) |
+| `clip: rect()` | 16 | — | 16 thick | `clip-rect-vlr-003.xht` | свойства `clip` нет вовсе | P4 | `CSS-SPECS.md` (`clip`, `STATUS-P4.md`) |
+| `*-invalid` парсинг | 3 | 6 | — | `parsing/writing-mode-invalid.html` | `element.style` принимает `"auto"`/`"horizontal-tb vertical-rl"` для `writing-mode`/`text-orientation`/`unicode-bidi` — их нет в `_LUMEN_KEYWORD_PROPERTIES` | P4 | **без записи** (< 20 id) |
+| прочее | 69 | — | 50 thick, 11 thin | `percent-margin-*`, `background-position-vrl-*`, `direction-v*`, `text-orientation-*` | не разобрано | — | — |
+
+### Инструмент: что изменилось в `reftest_pixdiff.py`
+
+Первый проход (как в S1: 300×250, без Ahem, `file://`) дал 590 thick / **359 size-differs** / 10 thin / 5 identical. `size-differs` — артефакт: `--screenshot` снимает страницу целиком, а не вьюпорт, поэтому тест и эталон разной высоты не сравнивались вовсе. Теперь обе картинки обрезаются до `--viewport` (так сравнивает и wptrunner), добавлены `--viewport 800x600` и `--ahem` (рецепт `docs/probe-method.md` §Reftest-A/B). Повторный проход: 908 thick / 31 identical / 25 thin / 45 no-match-ref. 31 identical — это тесты, которые в WPT падают **только** из-за шрифта (BUG-1273), их раскладка совпадает с эталоном.
+
+Попутно: `run_corpus.load_results` падал на `pixdiff.json` в каталоге прогона (список, а не `wptreport`) — теперь пропускает не-словари.
+
+### Что остаётся неизвестным
+
+- Ортогональные потоки (173 id) и `forms/` (64) без отдельной записи: у ортогональных часть эталонов зависит от BUG-1276, разбор до его правки дал бы ложные кластеры; `forms/` — разные контролы с разными симптомами, общий механизм не найден.
+- `block-flow-direction`/`line-box-direction` с Ahem через системный индекс всё равно thick: колонки и блоки стоят верно, расходятся глифы внутри колонок — возможно, упорядочение глифов повёрнутого текста или BUG-1270; не проверено.
+- [BUG-1270](../../bugs/BUG-1270-OPEN.md) (повёрнутый текст на колонку левее), похоже, исправлен `b08924bf5` (BUG-553 срез 62, `rect.x + rect.width` в `cpu_raster.rs:2981`): все `float-vlr-003…013`/`float-vrl-002…012` из его «Как проверить» стали identical. Запись не закрывал — это решение P3.
+- wptrunner снимает reftest-ы в 1024×720, а не 800×600 (`Unexpected viewport size` на каждом тесте, см. срез 1) — на вердикты влияет у тестов, привязанных к размеру окна (`wm-propagation-*`, `sizing-orthog-*`).

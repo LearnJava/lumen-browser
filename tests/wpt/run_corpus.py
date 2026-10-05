@@ -1188,6 +1188,10 @@ def load_results(out_dir: str) -> tuple:
         try:
             with open(path, encoding="utf-8") as fh:
                 report = json.load(fh)
+            if not isinstance(report, dict):
+                # Not a wptreport: a tool's own output kept next to the shards
+                # (`reftest_pixdiff.py` writes a list to `pixdiff.json`).
+                continue
             for result in report.get("results", []):
                 results[result["test"]] = result
             continue
