@@ -139,3 +139,52 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - `appearance-cssom-001.html` (341 упавший сабтест из 1935 всех) — один дефект CSSOM `-webkit-appearance`, но запись не заведена: сначала BUG-1278 (computed value), иначе тест проверит пустую карту.
 - После BUG-1278 зелёные сейчас `animation/{outline-offset,caret-color,accent-color}-*` (588 сабтестов) начнут сравнивать реальные значения и, вероятно, покраснеют на интерполяции — см. запись бага.
 - wptrunner снимает reftest-ы в 1024×720, а не 800×600 (срез 1) — в этом модуле не проверялось, влияет ли.
+
+## css-break — вердикт и кластеры (WPT-RUN-14 срез 4, 2026-10-05)
+
+Прогон: `run_corpus.py --prefixes css/css-break --out-dir .tmp/wpt-run14/break`, сборка `dev-release` от `main` f6860a7de (движок не менялся), `--processes 7`, 74 с. `score_audit.py`: «no leak», вердикт есть у всех 1113 исполненных id; 64 print-reftest без исполнителя (WPT-RUN-8) стоят в знаменателе нулём.
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 949 | 108.00 | 11.4 % |
+| testharness | 47 | 14.67 (500 из 712 сабтестов) | 31 % |
+| crashtest | 117 | 114.00 | 97 % |
+| print-reftest | 64 | 0 (нет исполнителя) | — |
+| **итого** | **1177** | **236.67 = 20.11 %** | |
+
+878 id не зелёные: 841 reftest FAIL, 34 testharness с упавшими сабтестами, 3 crashtest TIMEOUT.
+
+### Главное
+
+Почти весь модуль (860 из 878 не зелёных id) — тесты внутри multicol, и упираются они в одно: **multicol режет по колонкам только лист** — `Block` без детей и рамок (`box_is_column_sliceable`, `crates/engine/layout/src/box_tree/multicol_abspos.rs:29`) — и простую сетку (`is_fragmentable_grid`). Всё остальное ставится в одну колонку целиком и вылезает за низ. Пробы (`column-fill: auto`, высота 100px, `--dump-layout` и `--screenshot`):
+
+- блок с двумя детьми 150+50px — внешний бокс 50×200 в первой колонке, вторая пуста (красный фон контейнера виден);
+- текст из 6 строк в multicol высотой 40px, прямым ребёнком или внутри `<p>`, — одна колонка 120px; при `column-fill: balance` тоже: **две колонки текста Lumen не строит вообще**;
+- flex `column` 400px в 4 колонках — 25×400 в первой; таблица из двух строк по 100px — 50×200; сетка с рамкой у элемента — 50×200;
+- abspos `top: 150px` в multicol `position: relative` — на y = 150 первой колонки, а не на y = 50 второй.
+
+Поэтому кластеры ниже — по виду содержимого, а не по причине: причина у пяти крупных одна, но каждому виду содержимого нужна своя работа (параллельные потоки flex/grid, повтор заголовков таблиц, CB для abspos). База — `MULTICOL-FRAG`, остальные от неё зависят. Это доработка, а не дефект (`docs/probe-method.md` §8): фрагментация блоков и строк не была реализована, `CSS-SPECS.md` числил «CSS Fragmentation L3» ✅ по `pagination.rs` (печать) — понижен до 🟡.
+
+### Кластеры
+
+Первое совпавшее правило (порядок — как в таблице) по имени файла и тексту теста (`.tmp/br14_clusters.py`), один id — один кластер. «Пиксели» — `reftest_pixdiff.py --viewport 800x600 --ahem` (`.tmp/wpt-run14/break/pixdiff-800-ahem.json`): 831 thick, 9 thin-only, 1 identical.
+
+| Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|---|
+| flex во фрагментации | 268 | — | 268 thick | `flexbox/single-line-column-flex-fragmentation-001.html`, `flexbox/multi-line-row-flex-fragmentation-013.html` | flex-контейнер в multicol атомарен | P1 | `FLEX-FRAG` (`ROADMAP.md`) |
+| блоки и строки не режутся | 176 | 3 | 168 thick, 4 thin, 1 identical | `widows-orphans-001.html`, `float-001.html`, `overflow-clip-001.html`, `borders-006.html` | режется только лист без детей и рамок; текст — никогда | P1 | `MULTICOL-FRAG` |
+| abspos во фрагментированном потоке | 156 | 4 | 152 thick, 2 thin | `out-of-flow-in-multicolumn-001.html`, `abspos-in-opacity-001.html`, `transform-013.html` | CB и `top` abspos считаются по нефрагментированному потоку, abspos не режется | P1 | `MULTICOL-FRAG-OOF` |
+| таблицы | 123 | 59 | 118 thick | `table/break-before-second-row.html`, `table/table-parts-offsets.tentative.html` | таблица атомарна; `offsetTop` частей таблицы в multicol неверен | P1 | `TABLE-FRAG` |
+| grid | 89 | — | 88 thick, 1 thin | `grid/grid-item-fragmentation-039.html`, `grid/grid-container-fragmentation-004.html` | `is_fragmentable_grid` только для сетки без рамок с элементами-листьями при `column-fill: auto` | P1 | `GRID-FRAG` |
+| `box-decoration-break: clone` | 39 | — | 37 thick, 2 thin | `box-decoration-break-clone-001.html`, `box-decoration-break-clone-inline-001.html` | свойство не разобрано (`CSS.supports` — `false`); у инлайна, разорванного строкой, тоже | P4 | `CSS-SPECS.md` (`box-decoration-break`) |
+| hit-test во фрагментах | 9 | 71 | — | `hit-test-transformed.html`, `relpos-inline-hit-testing.html` | `elementFromPoint` по нефрагментированной геометрии — следствие кластеров выше; `hit-test-inline-fragmentation-with-border-radius.html` (28 сабтестов) без multicol — не разобрано | P1 | **без записи** (< 20 id; ждёт `MULTICOL-FRAG`) |
+| парсинг: `*-invalid`, `page-break-*` | 8 | 26 | — | `parsing/break-after-invalid.html`, `page-break-legacy-shorthands.html` | `element.style` принимает `none`/`avoid region`/`1 234`; legacy `page-break-*` не отображаются на `break-*`, `!important` попадает в значение | P4 | **без записи** (< 20 id) |
+| `getComputedStyle` `break-*`/`orphans`/`widows` | 7 | 49 | — | `parsing/break-before-computed.html`, `inheritance.html` | в `computed_style_to_map` нет строк — механизм [BUG-1278](../../bugs/BUG-1278-OPEN.md)/[BUG-472](../../bugs/BUG-472-OPEN.md) | P3 | **без записи** (< 20 id) |
+| crashtest TIMEOUT | 3 | — | — | `nested-float-in-multicol-crash.html`, `grid/grid-large-end-border-crash.html` | оконный shell зависает на содержимом высотой ~10¹⁰ px; CLI-снимок того же файла — 0,4 с | P3 | [BUG-1283](../../bugs/BUG-1283-OPEN.md) |
+
+### Что остаётся неизвестным
+
+- Насколько каждый кластер «грязный»: пробы подтверждают атомарность для каждого вида содержимого, но тесты, проходящие после `MULTICOL-FRAG`, могут упасть на следующем слое (повтор `thead`, `orphans`/`widows`, усечение margin). Пересчитать после неё.
+- 30 flex, 10 grid, 16 abspos и 4 table reftest уже зелёные — содержимое помещается в одну колонку или тест проверяет только отсутствие красного.
+- `text-indent-and-wide-float.html` — identical в `--screenshot` 800×600, но FAIL в wptrunner; reftest-ы снимаются в 1024×720 (`Unexpected viewport size`, как в срезе 1).
+- BUG-1283: шаг оконного конвейера, который растёт с высотой содержимого, не найден — исключены только растр и layout.
