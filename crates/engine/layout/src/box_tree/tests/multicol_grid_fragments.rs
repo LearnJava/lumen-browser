@@ -286,3 +286,21 @@ fn a_balanced_column_reaches_the_bottom_of_a_monolithic_item_the_next_column_sta
     let line0 = v[0].subgrid_tracks.as_ref().unwrap().rows.as_ref().unwrap()[0];
     assert!(line0.1 - line0.0 >= 54.9, "the first line reaches the monolithic item's bottom: {line0:?}");
 }
+
+#[test]
+fn a_wrapped_column_flex_is_cut_by_its_items_and_keeps_a_gap_the_break_falls_in_front_of() {
+    // flex/fragmentation/014: 110px column flex (two lines of 50px items, `row-gap: 10px`) in
+    // 47px columns; the first item is `contain: size`, so column 0 reaches its bottom (50px), the
+    // break falls at the leading edge of the 10px gap that follows, and column 1 starts at that
+    // gap (rule heights 50/47/13 in the reference).
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div id=\"mono\">One</div><div>Two</div><div>Three</div><div>Four</div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:10px;width:350px;height:47px} \
+         #f{display:flex;flex-direction:column;flex-wrap:wrap;width:110px;height:110px;row-gap:10px;column-gap:10px} \
+         #f>div{width:50px;height:50px} #mono{contain:size}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let heights: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
+    assert_eq!(heights, vec![50.0, 47.0, 13.0], "{heights:?}");
+}

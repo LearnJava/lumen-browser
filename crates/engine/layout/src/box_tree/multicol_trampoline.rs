@@ -627,6 +627,9 @@ fn forced_row_starts(grid: &LayoutBox, gy: f32, rows: &[(f32, f32)]) -> Vec<f32>
 /// the monolithic items, only in a balanced container: a column that holds the top edge of one
 /// reaches to its bottom edge (the next column starts there, `flex-gap-decorations-fragmentation-021`);
 /// with `column-fill: auto` the overflow does not move the next column (`012`) and `mono` is empty.
+/// In a wrapped column flex container a break at the leading edge of a gap between
+/// items does not drop the gap, the next column starts at the break (`flex/fragmentation/014`:
+/// the gap is drawn at the top of the column).
 fn grid_windows(
     grid: &LayoutBox,
     gy: f32,
@@ -636,6 +639,7 @@ fn grid_windows(
     total_h: f32,
     limit: f32,
 ) -> Vec<(f32, f32, bool)> {
+    let keep_gaps = is_column_flex(grid);
     let mut windows: Vec<(f32, f32, bool)> = Vec::new();
     let mut start = 0.0f32;
     loop {
@@ -659,7 +663,10 @@ fn grid_windows(
             let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
             inside || (at_start && !gap_is_bridged(grid, gy, w[0].1, w[1].0))
         });
-        start = in_gap.map_or(end, |w| w[1].0);
+        // A wrapped column flex container keeps a gap whose leading edge the break falls on
+        // (`flex/fragmentation/014`); a break inside the gap still drops the rest of it (`006`).
+        let at_gap_start = keep_gaps && rows.windows(2).any(|w| (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01);
+        start = if at_gap_start { end } else { in_gap.map_or(end, |w| w[1].0) };
         if start >= total_h - 0.01 {
             break;
         }
@@ -684,13 +691,50 @@ fn is_monolithic(b: &LayoutBox) -> bool {
     b.style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
 }
 
+/// A wrapped `flex-direction: column` container (its lines are columns of the multicol's column).
+fn is_column_flex(b: &LayoutBox) -> bool {
+    matches!(b.style.display, Display::Flex)
+        && matches!(b.style.flex_direction, crate::style::FlexDirection::Column)
+}
+
+/// The block-axis tracks of a wrapped column flex container, `(top, bottom)` from its border-box
+/// top: the margin-box extents of the in-flow items merged across the lines. Two extents closer
+/// than the `row-gap` belong to one track, so what stays between two tracks is a row gap that a
+/// column break can drop (Fragmentation L3 §5.1).
+fn column_flex_tracks(flex: &LayoutBox, gy0: f32) -> Vec<(f32, f32)> {
+    let s = &flex.style;
+    let cw = flex.rect.width;
+    let vp = Size::new(cw, flex.rect.height);
+    let gap = s.row_gap.resolve_or_zero(s.font_size, cw, vp);
+    let mut spans: Vec<(f32, f32)> = flex
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|c| {
+            let cs = &c.style;
+            let mt = cs.margin_top.resolve_or_zero(cs.font_size, cw, vp);
+            let mb = cs.margin_bottom.resolve_or_zero(cs.font_size, cw, vp);
+            (c.rect.y - gy0 - mt, c.rect.y - gy0 + c.rect.height + mb)
+        })
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut tracks: Vec<(f32, f32)> = Vec::new();
+    for sp in spans {
+        match tracks.last_mut() {
+            Some(t) if sp.0 < t.1 + (gap - 0.5).max(0.01) => t.1 = t.1.max(sp.1),
+            _ => tracks.push(sp),
+        }
+    }
+    tracks
+}
+
 /// The main-axis gaps of every flex line of a wrapped row flex container, in the container's own
 /// coordinates (`rows` — the lines as `(top, bottom)` from the border-box top, `gy0` — its top).
 /// A gap is the free space between two neighbouring items of one line that is at least the
 /// `column-gap` wide (`gap: 0` — any seam); the margin boxes are used. `None` for a grid, whose
 /// tracks the painter reads itself.
 fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec<Vec<LineGap>>> {
-    if !matches!(flex.style.display, Display::Flex) {
+    if !matches!(flex.style.display, Display::Flex) || is_column_flex(flex) {
         return None;
     }
     let s = &flex.style;
@@ -752,12 +796,18 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     // The tracks are measured from the content box's top; the windows below are in border-box
     // coordinates (the border is cut with the box: `box-decoration-break: slice`).
     let border_top = grid.style.border_top_width;
-    let Some(rows) = grid
-        .subgrid_tracks
-        .as_ref()
-        .and_then(|t| t.rows.as_ref())
-        .map(|r| r.iter().map(|&(a, b)| (a + border_top, b + border_top)).collect::<Vec<_>>())
-    else {
+    let gy0 = grid.rect.y;
+    // A wrapped column flex container has no row tracks: its block axis is the main axis of every
+    // line, so the tracks are the block extents of its items merged across the lines.
+    let col_flex = is_column_flex(grid);
+    let Some(rows) = (if col_flex {
+        Some(column_flex_tracks(grid, gy0))
+    } else {
+        grid.subgrid_tracks
+            .as_ref()
+            .and_then(|t| t.rows.as_ref())
+            .map(|r| r.iter().map(|&(a, b)| (a + border_top, b + border_top)).collect::<Vec<_>>())
+    }) else {
         return false;
     };
     if rows.len() < 2 || (frame.outer_hs[0] - grid.rect.height).abs() > 0.01 || limit < 1.0 {
@@ -767,7 +817,6 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     // still belong to the last fragment: the cut runs to the end of the last track.
     let total_h = grid.rect.height.max(rows.last().map_or(0.0, |r| r.1));
     let n_cols = frame.init.n_cols as usize;
-    let gy0 = grid.rect.y;
     let forced = forced_row_starts(grid, gy0, &rows);
     // A forced break is placed only in a `column-fill: auto` container; a balanced one keeps the
     // atomic path (the balanced height would have to account for the forced columns).
@@ -781,7 +830,9 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     // the row gaps at the breaks) needs no more than `column-count` columns.
     // A balanced column is never shorter than the tallest monolithic item (Chrome stretches the
     // columns to it, capped by the height limit).
-    let mono: Vec<(f32, f32)> = if frame.init.balance {
+    // In a column flex container the monolithic item pushes the next column in `column-fill: auto`
+    // too (`flex/fragmentation/014`: the next column starts at its bottom edge).
+    let mono: Vec<(f32, f32)> = if frame.init.balance || col_flex {
         grid.children
             .iter()
             .filter(|c| is_monolithic(c) && !matches!(c.kind, BoxKind::Skip))
@@ -795,7 +846,18 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         if !fits(limit) {
             return false;
         }
-        let tallest = mono.iter().map(|m| m.1 - m.0).fold(0.0f32, f32::max);
+        let mut tallest = mono.iter().map(|m| m.1 - m.0).fold(0.0f32, f32::max);
+        // Items of a column flex line are not cut by the balancing: a column is never shorter than
+        // the tallest of them (capped by the height limit, `flex/fragmentation/005`).
+        if col_flex {
+            let item_h = grid
+                .children
+                .iter()
+                .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+                .map(|c| c.rect.height)
+                .fold(0.0f32, f32::max);
+            tallest = tallest.max(item_h);
+        }
         let mut lo = (total_h / n_cols as f32).max(tallest).max(1.0).min(limit);
         if fits(lo) {
             lo
@@ -938,7 +1000,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             })
             .collect();
         // The gap numbers of this fragment continue those of the fragments before it.
-        let row_gap_base = visible.first().map(|v| (v.0, rows.len() - 1));
+        let row_gap_base = if col_flex { None } else { visible.first().map(|v| (v.0, rows.len() - 1)) };
         let visible_idx: Vec<usize> = visible.iter().map(|v| v.0).collect();
         let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
         let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
