@@ -19,6 +19,9 @@ pub(super) struct SegmentInit {
     /// Whether every item in `item_idxs` can be geometrically sliced across
     /// columns (CSS Multicol §3.4) instead of placed atomically.
     pub(super) sliceable: bool,
+    /// The segment is one plain grid container that is cut across the columns as a grid
+    /// (`multicol_abspos::is_fragmentable_grid`), see [`emit_grid_fragments`].
+    pub(super) grid_frag: bool,
 }
 
 /// CSS Multicol L2 §4.2 / §4.4 — rows of column boxes: a non-`auto` `column-height` with
@@ -401,7 +404,9 @@ fn post_measure_item(frame: &mut Frame, i: usize, viewport: Size) {
 /// and enters the real-placement `Phase::Place`. Copied from the removed
 /// code's `if all_sliceable { .. } else { .. }` split.
 fn finish_measure_phase(frame: &mut Frame, viewport: Size) {
-    if frame.init.segments[frame.seg_i].sliceable {
+    if frame.init.segments[frame.seg_i].grid_frag && emit_grid_fragments(frame) {
+        enter_span_phase(frame);
+    } else if frame.init.segments[frame.seg_i].sliceable {
         emit_sliced_fragments(frame, viewport);
         enter_span_phase(frame);
     } else {
@@ -567,6 +572,101 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
         }
     }
     frame.init.cur_y += seg_extent.max(0.0);
+}
+
+/// CSS Fragmentation L3 §5 / CSS Gap Decorations L1 §6.2 — a grid container laid out in full
+/// (the Measure pass) is cut into one fragment per column of the multicol container
+/// (`column-fill: auto`, a definite column height). A break that falls inside a row gap drops
+/// the rest of that gap: the next fragment starts at the following track; a break inside a track
+/// splits it (the track continues at the top of the next fragment). Each fragment keeps the parts
+/// of the children that fall in its window (`box_tree` leaves — cutting one repeats nothing) and
+/// the row tracks clipped to the window (`SubgridTracks::fragment`), so the painter draws a row
+/// gap only between two tracks of the same fragment (a gap split by the break, or the last
+/// content before it, is suppressed) and runs the column gaps over the fragment's height.
+/// Returns `false` (nothing changed) when the box has no row tracks to cut by, and the segment
+/// falls back to the atomic path.
+fn emit_grid_fragments(frame: &mut Frame) -> bool {
+    let seg_i = frame.seg_i;
+    let i = frame.init.segments[seg_i].item_idxs[0];
+    let Some(limit) = segment_limit(&frame.init) else { return false };
+    let grid = &frame.init.work[i];
+    let Some(rows) = grid.subgrid_tracks.as_ref().and_then(|t| t.rows.clone()) else { return false };
+    if rows.len() < 2 || (frame.outer_hs[0] - grid.rect.height).abs() > 0.01 || limit < 1.0 {
+        return false;
+    }
+    let total_h = grid.rect.height;
+    // Windows `[start, end)` in the grid's own (unfragmented) block coordinates.
+    let mut windows: Vec<(f32, f32)> = Vec::new();
+    let mut start = 0.0f32;
+    loop {
+        let end = start + limit;
+        if end >= total_h - 0.01 {
+            windows.push((start, total_h));
+            break;
+        }
+        windows.push((start, end));
+        // Inside a row gap the rest of the gap is dropped; inside a track the track continues.
+        let in_gap = rows.windows(2).find(|w| end > w[0].1 + 0.01 && end < w[1].0 - 0.01);
+        start = in_gap.map_or(end, |w| w[1].0);
+        if start >= total_h - 0.01 {
+            break;
+        }
+    }
+    let (col_w, col_gap, content_x, cur_y) =
+        (frame.init.col_w, frame.init.col_gap, frame.init.content_x, frame.init.cur_y);
+    let (gx, gy) = (grid.rect.x, grid.rect.y);
+    let mut seg_extent = 0.0f32;
+    let mut out = Vec::with_capacity(windows.len());
+    for (f, &(ws, we)) in windows.iter().enumerate() {
+        let col_x = content_x + f as f32 * (col_w + col_gap);
+        let mut frag = grid.clone();
+        frag.rect.x = col_x;
+        frag.rect.y = cur_y;
+        frag.rect.width = col_w;
+        frag.rect.height = we - ws;
+        frag.children = grid
+            .children
+            .iter()
+            .filter_map(|c| {
+                let flow = !matches!(c.kind, BoxKind::Skip)
+                    && !matches!(c.style.position, Position::Absolute | Position::Fixed);
+                if !flow {
+                    return (f == 0).then(|| {
+                        let mut k = c.clone();
+                        super::shift_tree(&mut k, col_x - gx, cur_y - gy);
+                        k
+                    });
+                }
+                let (top, bot) = (c.rect.y - gy, c.rect.y - gy + c.rect.height);
+                let (lo, hi) = (top.max(ws), bot.min(we));
+                // A zero-height item at the very start of a window belongs to it too.
+                let inside = hi > lo || (c.rect.height == 0.0 && top >= ws && top < we);
+                inside.then(|| {
+                    let mut k = c.clone();
+                    k.rect.x = col_x + (c.rect.x - gx);
+                    k.rect.y = cur_y + (lo - ws);
+                    k.rect.height = (hi - lo).max(0.0);
+                    k
+                })
+            })
+            .collect();
+        let clipped: Vec<(f32, f32)> = rows
+            .iter()
+            .filter_map(|&(a, b)| {
+                let (lo, hi) = (a.max(ws), b.min(we));
+                (hi > lo).then_some((lo - ws, hi - ws))
+            })
+            .collect();
+        let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
+        frag.subgrid_tracks =
+            Some(Box::new(crate::subgrid::SubgridTracks { cols, rows: Some(clipped), fragment: true }));
+        seg_extent = seg_extent.max(we - ws);
+        out.push(frag);
+    }
+    frame.init.out.extend(out);
+    frame.init.consumed[i] = true;
+    frame.init.cur_y += seg_extent;
+    true
 }
 
 /// CSS Multicol §3.4 atomic fallback — greedy column assignment by height,

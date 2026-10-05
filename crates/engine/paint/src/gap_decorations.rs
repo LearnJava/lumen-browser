@@ -442,6 +442,9 @@ pub struct GridGapParams<'a> {
     /// у пустого subgrid'а. `None` — раскладка дорожек не отдала.
     pub subgrid_col_tracks: Option<Vec<(f32, f32)>>,
     pub subgrid_row_tracks: Option<Vec<(f32, f32)>>,
+    /// Бокс — фрагмент grid-контейнера, разрезанного по колонкам multicol'а: дорожки строк
+    /// обрезаны по фрагменту, а колоночные щели идут по всей его высоте.
+    pub fragment: bool,
     pub style: &'a lumen_layout::ComputedStyle,
 }
 
@@ -633,6 +636,7 @@ fn grid_gap_segments_logical(
     flip: Option<Flip>,
 ) -> GridGapGeometry {
     let s = p.style;
+    let fragment = p.fragment;
     let (cx, cy, cw, ch) = content;
     let em = s.font_size;
     let vp = lumen_core::geom::Size::new(cw, ch);
@@ -696,7 +700,7 @@ fn grid_gap_segments_logical(
     });
     let tops_of = |tracks: &Option<Vec<(f32, f32)>>, edges: &[(f32, f32)], gap: f32, sub: Option<(f32, f32)>| {
         match (tracks, sub) {
-            (Some(t), _) => t[..t.len() - 1].iter().map(|x| x.1).collect(),
+            (Some(t), _) => t[..t.len().saturating_sub(1)].iter().map(|x| x.1).collect(),
             (None, Some((lo, hi))) => subgrid_gap_starts(edges, gap, lo, hi),
             (None, None) => gap_starts(edges, gap),
         }
@@ -797,7 +801,8 @@ fn grid_gap_segments_logical(
             let along_tracks = if horizontal { &col_tracks } else { &row_tracks };
             match along_tracks {
                 // Дорожки из шаблона: линия идёт от первой до последней, как рисует Chromium.
-                Some(t) => (t[0].0, t[t.len() - 1].1),
+                Some(t) if !t.is_empty() && !(fragment && !horizontal) => (t[0].0, t[t.len() - 1].1),
+                Some(_) => (a_lo, a_lo + a_len),
                 None => {
                     let lead = if horizontal { lead_lo.0 } else { lead_lo.1 };
                     let lo = along.iter().map(|e| e.0).fold(lead.unwrap_or(a_lo), f32::min);
