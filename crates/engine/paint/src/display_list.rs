@@ -24,7 +24,7 @@ use std::ops::Range;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
-    box_can_own_stacking_context, forward_box_transform, is_positioned_layer_auto,
+    box_can_own_stacking_context, contains_fixed_descendants, forward_box_transform, is_positioned_layer_auto,
     owns_paint_layer, perspective_matrix,
     transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
@@ -351,6 +351,10 @@ mod background_and_layers;
 #[cfg(test)]
 #[path = "display_list/tests/ordered_build_scroll.rs"]
 mod ordered_build_scroll;
+
+#[cfg(test)]
+#[path = "display_list/tests/fixed_cb_scroll.rs"]
+mod fixed_cb_scroll;
 
 #[cfg(test)]
 #[path = "display_list/tests/form_controls_caret.rs"]

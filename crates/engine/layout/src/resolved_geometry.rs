@@ -123,7 +123,7 @@ fn reports_used_geometry(b: &LayoutBox) -> bool {
 /// `contain: layout|paint` or a `will-change` naming one of those
 /// (css-transforms-1 §2, filter-effects-1 §2, css-contain-2 §3.2/§3.3,
 /// css-will-change-1 §3).
-pub(crate) fn contains_fixed_descendants(s: &ComputedStyle) -> bool {
+pub fn contains_fixed_descendants(s: &ComputedStyle) -> bool {
     !s.transform.is_empty()
         || s.translate.is_some()
         || s.rotate.is_some()

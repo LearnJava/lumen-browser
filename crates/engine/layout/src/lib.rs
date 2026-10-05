@@ -145,7 +145,7 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
-pub use resolved_geometry::{BOXLESS_KEY, COMPUTED_VALUE_KEY_PREFIX};
+pub use resolved_geometry::{contains_fixed_descendants, BOXLESS_KEY, COMPUTED_VALUE_KEY_PREFIX};
 pub use inert::{collect_inert_regions, is_inert, InertRegion};
 pub use starting_style::{resolve_starting_style, StartingStyleTracker};
 pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};

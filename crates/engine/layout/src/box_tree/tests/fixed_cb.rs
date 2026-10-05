@@ -136,3 +136,92 @@ fn fixed_under_transform_is_not_scroll_pinned() {
     assert!(shifts.contains_key(&id("c")), "fixed под transform должен учитываться");
     assert!(!shifts.contains_key(&id("f")), "fixed под вьюпортом исключается");
 }
+
+// ── LAYOUT-FIXED-CB-2: anchor-позиционирование у fixed под предком-CB ──
+
+/// `inset-area` ограничивает бокс полосой containing block — padding box
+/// transform-предка, а не вьюпортом.
+#[test]
+fn fixed_inset_area_uses_ancestor_padding_box() {
+    let r = rects(
+        r#"<div id="p"><div id="a"></div><div id="c"></div></div>"#,
+        "#p{transform:scale(1);margin-top:50px;height:200px;width:300px}\
+         #a{anchor-name:--a;width:40px;height:20px}\
+         #c{position:fixed;position-anchor:--a;inset-area:bottom}",
+        &["c"],
+    );
+    assert_eq!((r[0].y, r[0].height), (70.0, 180.0), "{:?}", r[0]);
+}
+
+/// Без предка-CB полоса тянется до низа вьюпорта.
+#[test]
+fn fixed_inset_area_without_cb_uses_viewport() {
+    let r = rects(
+        r#"<div id="p"><div id="a"></div><div id="c"></div></div>"#,
+        "#p{margin-top:50px;height:200px;width:300px}\
+         #a{anchor-name:--a;width:40px;height:20px}\
+         #c{position:fixed;position-anchor:--a;inset-area:bottom}",
+        &["c"],
+    );
+    assert_eq!((r[0].y, r[0].height), (70.0, 530.0), "{:?}", r[0]);
+}
+
+// ── LAYOUT-FIXED-CB-2: абсолютный бокс через статическую обёртку ──
+
+/// `height: 50%` считается от высоты CB, которая известна только после его раскладки.
+#[test]
+fn abs_percent_height_through_wrapper() {
+    let r = rects(
+        r#"<div id="p"><div id="m"><div id="c"></div></div></div>"#,
+        "#p{position:relative;height:200px;width:300px}#c{position:absolute;top:0;left:0;width:10px;height:50%}",
+        &["c"],
+    );
+    assert_eq!(r[0].height, 100.0, "{:?}", r[0]);
+}
+
+/// Содержимое растянутого `top` + `bottom` бокса видит его итоговую высоту, а не 0.
+#[test]
+fn abs_stretched_content_percent_height_through_wrapper() {
+    let r = rects(
+        r#"<div id="p"><div id="m"><div id="c"><div id="i"></div></div></div></div>"#,
+        "#p{position:relative;height:200px;width:300px}\
+         #c{position:absolute;top:20px;bottom:30px;left:0;width:50px}#i{height:50%}",
+        &["c", "i"],
+    );
+    assert_eq!(r[0].height, 150.0, "{:?}", r[0]);
+    assert_eq!(r[1].height, 75.0, "{:?}", r[1]);
+}
+
+/// Бокс с высотой в px обёртку не перекладывает — только сдвигается.
+#[test]
+fn abs_fixed_height_through_wrapper_only_moves() {
+    let r = rects(
+        r#"<div id="p"><div id="m"><div id="c"></div></div></div>"#,
+        "#p{position:relative;height:200px;width:300px}#c{position:absolute;bottom:10px;right:0;width:10px;height:20px}",
+        &["c"],
+    );
+    assert_eq!((r[0].y, r[0].height), (170.0, 20.0), "{:?}", r[0]);
+}
+
+/// `fixed` под transform: процентная высота и содержимое — от padding box предка.
+#[test]
+fn fixed_percent_height_uses_ancestor_padding_box() {
+    let r = rects(
+        r#"<div id="p"><div id="m"><div id="c"><div id="i"></div></div></div></div>"#,
+        "#p{transform:scale(1);height:200px;width:300px}\
+         #c{position:fixed;top:0;left:0;width:50px;height:50%}#i{height:50%}",
+        &["c", "i"],
+    );
+    assert_eq!((r[0].height, r[1].height), (100.0, 50.0), "{:?} {:?}", r[0], r[1]);
+}
+
+/// Прямой потомок: `height: 50%` — от padding box позиционированного предка (CSS 2.1 §10.5).
+#[test]
+fn abs_direct_child_percent_height() {
+    let r = rects(
+        r#"<div id="p"><div id="c"><div id="i"></div></div></div>"#,
+        "#p{position:relative;height:200px;width:300px}#c{position:absolute;top:0;left:0;width:10px;height:50%}#i{height:50%}",
+        &["c", "i"],
+    );
+    assert_eq!((r[0].height, r[1].height), (100.0, 50.0), "{:?} {:?}", r[0], r[1]);
+}
