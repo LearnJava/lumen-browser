@@ -668,6 +668,18 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
     // Grid: дорожки и стыки известны, так что щели режутся по `*-rule-break` и скрываются
     // по `*-rule-visibility-items` (CSS Gap Decorations L1 §3.2, §3.4).
     if matches!(s.display, Display::Grid | Display::InlineGrid) {
+        // Ось `subgrid` живёт на дорожках и щелях родителя (Grid L2 §9): своё `*-gap` в раскладке
+        // не участвует, так что щель берётся из положения элементов.
+        let (mut col_gap_px, mut row_gap_px) = (col_gap_px, row_gap_px);
+        let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
+        if is_subgrid(&s.grid_template_columns) {
+            let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
+            col_gap_px = subgrid_axis_gap(&xs).unwrap_or(col_gap_px);
+        }
+        if is_subgrid(&s.grid_template_rows) {
+            let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
+            row_gap_px = subgrid_axis_gap(&ys).unwrap_or(row_gap_px);
+        }
         return grid_gap_segments(
             &children,
             &GridGapParams {
