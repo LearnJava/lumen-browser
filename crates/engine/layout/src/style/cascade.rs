@@ -37,7 +37,7 @@ use crate::style::{
     strip_ua_appearance_box_styling, ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
-    ComputedStyle, CssWideKeyword, Display,
+    ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, WebkitBoxOrient,
     FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
     SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
@@ -1307,6 +1307,27 @@ pub(crate) fn compute_style_shareable(
     // instead. Runs after the cascade loop so it sees the final `display`.
     if style.display == Display::Contents && doc.document_element() == Some(node) {
         style.display = Display::Block;
+    }
+
+    // WHATWG Compat §2.1 — legacy `display: -webkit-box`/`-webkit-inline-box` is laid out as a
+    // flex container whose axis is `-webkit-box-orient` (Gap Decorations L1 applies to it, WPT
+    // `css-gaps/flex/webkit-box.tentative`). The original keyword is kept in `legacy_box_display`
+    // for `getComputedStyle`. A box that clamps its lines (`-webkit-line-clamp`/`continue: discard`)
+    // stays a block — that is the ellipsis idiom and its children are inline text, not items.
+    // A `<fieldset>` also keeps the block path: its content lives in an anonymous box the flex
+    // arm does not build (`compat/webkit-box-fieldset`: the child must span the width).
+    if matches!(style.display, Display::WebkitBox | Display::WebkitInlineBox)
+        && style.line_clamp.is_none()
+        && style.continue_value != CssContinue::Discard
+        && !matches!(&doc.get(node).data, NodeData::Element { name, .. } if name.local.as_str() == "fieldset")
+    {
+        style.legacy_box_display = Some(style.display);
+        style.display = if style.display == Display::WebkitBox { Display::Flex } else { Display::InlineFlex };
+        style.flex_direction = if style.box_orient == WebkitBoxOrient::Vertical {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
     }
 
     // CSS Align L3 §vertical-align / Flexbox §4, Grid §6 — an in-flow child of a

@@ -889,6 +889,12 @@ pub struct ComputedStyle {
     /// `display: -webkit-box`/`-webkit-inline-box` (см. `webkit_box_computed_
     /// display`, `selector_query.rs`) — реального legacy-flexbox layout нет.
     pub box_orient: WebkitBoxOrient,
+    /// WHATWG Compat §2.1 — исходное значение `display: -webkit-box`/`-webkit-inline-box`,
+    /// когда пост-проход каскада заменил его на `Flex`/`InlineFlex`, чтобы бокс раскладывался
+    /// flex-алгоритмом (ось — из `-webkit-box-orient`), а `getComputedStyle` по-прежнему
+    /// отдавал `-webkit-box` (`webkit_box_computed_display`). `None` — обычный `display`
+    /// (в том числе зажатый `-webkit-line-clamp` бокс, он остаётся блоком). Не наследуется.
+    pub legacy_box_display: Option<Display>,
     /// CSS Overflow L4 §continue — `continue`. Не наследуется. Initial
     /// `Normal`. Phase 0: parsing + storage, участвует в том же computed-
     /// value quirk что и `box_orient`; фрагментационное поведение
@@ -1475,6 +1481,7 @@ impl ComputedStyle {
             text_wrap_style: TextWrapStyle::Auto,
             line_clamp: None,
             box_orient: WebkitBoxOrient::Horizontal,
+            legacy_box_display: None,
             continue_value: CssContinue::Normal,
             orphans: 2,
             widows: 2,
@@ -1882,6 +1889,7 @@ impl ComputedStyle {
             line_clamp: None,
             // WHATWG Compat / CSS Overflow L4 §continue — оба не наследуются.
             box_orient: WebkitBoxOrient::Horizontal,
+            legacy_box_display: None,
             continue_value: CssContinue::Normal,
             // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
             orphans: inherited.orphans,

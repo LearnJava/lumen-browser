@@ -144,6 +144,46 @@ fn subgrid_own_gap_replaces_the_parent_gutter() {
     assert_eq!(t.cols.as_deref(), Some(&[(0.0, 20.0), (20.0, 40.0), (40.0, 60.0)][..]));
 }
 
+/// WHATWG Compat §2.1: `display: -webkit-box` is laid out as a flex container whose axis is
+/// `-webkit-box-orient` (so `gap` and the gap rules apply, `css-gaps/flex/webkit-box.tentative`),
+/// while `getComputedStyle` still reports `-webkit-box`; a clamping box stays a block.
+#[test]
+fn webkit_box_lays_out_as_a_flex_container() {
+    let page = |extra: &str| {
+        lay(
+            "<body><div id='b'><i></i><i></i></div></body>",
+            &format!(
+                "body {{ margin: 0; }}
+                 #b {{ display: -webkit-box; width: 100px; height: 50px; gap: 10px; {extra} }}
+                 i {{ display: block; width: 45px; height: 20px; }}"
+            ),
+        )
+    };
+    let items = |root: &LayoutBox| -> Vec<lumen_core::geom::Rect> {
+        first_element_child(root)
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .map(|c| c.rect)
+            .collect()
+    };
+    // Horizontal: two 45px items side by side, `gap: 10px` between them.
+    let root = page("");
+    let boxes = items(&root);
+    assert_eq!(boxes.len(), 2);
+    assert!((boxes[1].x - boxes[0].x - 55.0).abs() < 0.01, "{boxes:?}");
+    // Vertical: stacked, `gap: 10px` between them.
+    let root = page("-webkit-box-orient: vertical;");
+    let boxes = items(&root);
+    assert!((boxes[1].y - boxes[0].y - (boxes[0].height + 10.0)).abs() < 0.01, "{boxes:?}");
+    // The computed value keeps its own identity.
+    assert_eq!(first_element_child(&root).style.legacy_box_display, Some(crate::style::Display::WebkitBox));
+    // A line-clamping box is not turned into a flex container.
+    let root = page("-webkit-box-orient: vertical; -webkit-line-clamp: 2;");
+    assert_eq!(first_element_child(&root).style.display, crate::style::Display::WebkitBox);
+    assert_eq!(first_element_child(&root).style.legacy_box_display, None);
+}
+
 /// `collect_subgrid_items` finds both column-subgrid and row-subgrid containers.
 #[test]
 fn grid_collect_subgrid_items() {
