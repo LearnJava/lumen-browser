@@ -55,6 +55,21 @@ fn a_row_gap_at_a_column_break_is_dropped_and_each_fragment_keeps_one_track() {
     assert!(v.iter().all(|f| f.3 == 1 && f.4 == 1), "one track and one item per fragment: {v:?}");
 }
 
+#[test]
+fn a_fragment_knows_which_row_gaps_of_the_container_it_starts_at() {
+    // Three tracks, two gaps; each fragment holds one track, so it starts at gap 0, 1, 2 (the
+    // last one past the end) out of the container's two (`row-rule-color` lists are dealt over
+    // the gaps of the whole container, not of the fragment).
+    let root = lay(
+        HTML,
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:0;width:300px;height:100px}          #g{display:grid;grid-template-rows:repeat(3,80px);row-gap:30px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let bases: Vec<_> = v.iter().map(|b| b.subgrid_tracks.as_ref().unwrap().row_gap_base).collect();
+    assert_eq!(bases, vec![Some((0, 2)), Some((1, 2)), Some((2, 2))], "{bases:?}");
+}
+
 fn forced_break_frags(fill: &str, item: &str) -> Vec<(f32, f32, usize)> {
     let root = lay(
         &format!("<div id=\"m\"><div id=\"g\"><div></div><div></div><div {item}></div></div></div>"),

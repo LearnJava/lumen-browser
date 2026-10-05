@@ -90,6 +90,10 @@ pub struct SubgridTracks {
     /// одной из сторон, не рисуется (CSS Gap Decorations L1 §6.2: щель, разорванная границей
     /// фрагмента или последняя перед ней, подавляется).
     pub fragment: bool,
+    /// Только у фрагмента: `(номер первой щели фрагмента среди щелей всего контейнера, число щелей
+    /// контейнера)`. Значения `row-rule-*` раздаются щелям всего контейнера (§4.6), а в фрагменте
+    /// видна лишь часть дорожек, так что нумерация щелей фрагмента начинается не с нуля.
+    pub row_gap_base: Option<(usize, usize)>,
 }
 
 // ── Thread-local subgrid context ─────────────────────────────────────────────
@@ -111,7 +115,7 @@ pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
     };
     let cols = SUBGRID_COL_CTX.with(spans);
     let rows = SUBGRID_ROW_CTX.with(spans);
-    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false }))
+    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false, row_gap_base: None }))
 }
 
 /// Replaces the parent's gutters in the pending subgrid contexts with the subgrid's own explicit

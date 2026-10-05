@@ -774,11 +774,13 @@ pub(crate) fn gap_decoration_commands(
                      styles: &lumen_layout::RuleList<BorderStyle>,
                      colors: &lumen_layout::RuleList<lumen_layout::CssColor>,
                      total: usize,
-                     reversed: bool| {
+                     reversed: bool,
+                     first: usize| {
         let mut out = Vec::new();
         for seg in segs {
             // `reversed` — ось идёт справа налево (колонки при `direction: rtl`): первая щель правая.
-            let idx = if reversed { total - 1 - seg.gap } else { seg.gap };
+            // `first` — номер первой щели фрагмента среди щелей всего контейнера.
+            let idx = if reversed { total - 1 - seg.gap } else { first + seg.gap };
             let ctx = GapDecorationContext {
                 rule_width: *widths.value_for_gap(idx, total),
                 rule_style: *styles.value_for_gap(idx, total),
@@ -788,8 +790,16 @@ pub(crate) fn gap_decoration_commands(
         }
         out
     };
-    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, col_total, column_reversed);
-    let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, row_total, false);
+    // A fragment of a grid / wrapped flex cut by a multicol break paints only some of the row
+    // gaps; the row values are dealt over the gaps of the whole container (§4.6).
+    let (row_first, row_total) = b
+        .subgrid_tracks
+        .as_ref()
+        .filter(|t| t.fragment)
+        .and_then(|t| t.row_gap_base)
+        .unwrap_or((0, row_total));
+    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, col_total, column_reversed, 0);
+    let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, row_total, false, row_first);
     // CSS Gap Decorations L1 §3.5 `rule-overlap`: the axis painted last lies on top.
     let (mut out, top) = match s.rule_overlap {
         lumen_layout::RuleOverlap::RowOverColumn => (col_cmds, row_cmds),
