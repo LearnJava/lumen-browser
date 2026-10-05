@@ -332,6 +332,12 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
   geometry, `size-differs`). Separates "layout wrong" from "1-px seam" ([BUG-1249](../../bugs/BUG-1249-OPEN.md)).
+  Both captures are cropped to the viewport before comparing (a whole-page
+  `--screenshot` of a taller test used to come out `size-differs` regardless
+  of what is on screen); `--viewport 800x600` matches wptrunner, `--ahem`
+  makes `font-family: Ahem` resolve over `file://` ([BUG-1273](../../bugs/BUG-1273-OPEN.md)
+  — the reftest executor itself never waits for `@font-face url()`), and
+  `--output` names the result file. WPT-RUN-14 S2.
   Scoring — including "an id that never ran scores 0" — is written down in
   `docs/wpt/pass-rate.md`. Two flags exist because a corpus run must never
   quietly misreport its own coverage:
