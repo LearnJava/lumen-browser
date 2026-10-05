@@ -1476,6 +1476,29 @@ use lumen_dom::NodeId;
         assert_eq!(xs, vec![103, 213], "{xs:?}");
     }
 
+    /// Grid L2 §9: subgrid с пустой дорожкой посередине — ни одна пара элементов не отстоит на
+    /// `gap`, но щели родителя по обе стороны пустой дорожки всё равно получают правила
+    /// (subgrid-gap-decorations-023/024).
+    #[test]
+    fn subgrid_rules_run_through_gaps_beside_an_empty_track() {
+        // Четыре колонки по 100px, щель 10px; элементы в колонках 1, 2 и 4. Щель 100..110 даёт
+        // пара элементов, а щели 210..220 и 320..330 к паре не примыкают (колонка 3 пуста).
+        let html = "<div style=\"display:grid;grid-template-columns:repeat(4,100px);gap:10px\">             <div style=\"display:grid;grid-template-columns:subgrid;grid-column:1/-1;column-rule:4px solid red\">             <div style=\"grid-column:1;grid-row:1;height:20px\"></div>             <div style=\"grid-column:2;grid-row:2;height:20px\"></div>             <div style=\"grid-column:4;grid-row:1;height:20px\"></div>             </div></div>";
+        let dl = build(html, "");
+        let xs: Vec<i32> = column_pieces(&dl).iter().map(|c| c.0).collect();
+        assert_eq!(xs, vec![103, 213, 323], "{xs:?}");
+    }
+
+    /// Элементы subgrid'а вплотную (gap родителя 0) при ненулевом собственном `column-gap`:
+    /// щель нулевая, правило по центру шва (subgrid-gap-decorations-014/018).
+    #[test]
+    fn subgrid_rules_sit_on_the_seam_when_the_parent_gap_is_zero() {
+        let html = "<div style=\"display:grid;grid-template-columns:repeat(2,100px)\">             <div style=\"display:grid;grid-template-columns:subgrid;grid-column:1/-1;column-gap:10px;column-rule:4px solid red\">             <div style=\"height:20px\"></div><div style=\"height:20px\"></div></div></div>";
+        let dl = build(html, "");
+        let xs: Vec<i32> = column_pieces(&dl).iter().map(|c| c.0).collect();
+        assert_eq!(xs, vec![98], "{xs:?}");
+    }
+
     /// flex-gap-decorations-033: `gap: 0` в wrap-flex — линия по центру шва соседних
     /// элементов, а не потерянная щель.
     const FLEX_WRAP_0GAP: &str = r#"<div style="display:flex;flex-wrap:wrap;width:150px;{}">
