@@ -66,3 +66,19 @@ fn a_grid_with_a_forced_break_inside_stays_atomic() {
     fragments(&root, &mut v);
     assert!(v.is_empty(), "no fragments expected");
 }
+
+#[test]
+fn a_break_at_the_end_of_a_track_drops_the_whole_row_gap() {
+    // Two 100px rows with a 10px gap in 100px columns: the first window ends exactly where the
+    // gap begins, so the gap is dropped and the second fragment starts at the next track
+    // (without the fix a third fragment holding the tail of the gap appeared).
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div></div><div></div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:0;width:300px;height:100px} \
+         #g{display:grid;grid-template-rows:repeat(2,100px);row-gap:10px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let h: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
+    assert_eq!(h, vec![100.0, 100.0], "{h:?}");
+}
