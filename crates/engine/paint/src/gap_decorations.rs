@@ -404,19 +404,24 @@ pub struct GridGapGeometry {
 /// `column-gap`/`row-gap` subgrid'а, поэтому в стиле контейнера она нулевая или другая:
 /// настоящая щель — наименьший положительный зазор «правое ребро одного элемента → левое
 /// ребро другого» (элементы, не заполняющие дорожку, дают зазор не меньше щели).
-/// `None`, если зазоров нет (один элемент или все вплотную).
+/// Элементы вплотную (правое ребро одного = левое другого, дорожки смыкаются) — щель родителя
+/// нулевая, как бы далеко ни стояли другие элементы:
+/// `Some(0.0)`, а не собственный `gap` subgrid'а (`subgrid-gap-decorations-014/018`).
+/// `None`, если об щели ничего не известно (один элемент).
 pub fn subgrid_axis_gap(edges: &[(f32, f32)]) -> Option<f32> {
     const MIN_GAP: f32 = 0.5;
     let mut best: Option<f32> = None;
-    for &(_, hi) in edges {
+    let mut touching = false;
+    for &(lo0, hi) in edges {
         for &(lo, _) in edges {
             let d = lo - hi;
             if d > MIN_GAP && best.is_none_or(|b| d < b) {
                 best = Some(d);
             }
+            touching |= d.abs() <= MIN_GAP && hi > lo0 + MIN_GAP;
         }
     }
-    best
+    if touching { Some(0.0) } else { best }
 }
 
 /// Параметры [`grid_gap_segments`].
@@ -427,6 +432,10 @@ pub struct GridGapParams<'a> {
     pub row_gap: f32,
     pub column_visible: bool,
     pub row_visible: bool,
+    /// Ось колонок/строк — `subgrid`: дорожки родительские, у контейнера их нет в шаблоне, и
+    /// щели ищутся по рёбрам элементов, включая щели рядом с пустыми дорожками.
+    pub subgrid_cols: bool,
+    pub subgrid_rows: bool,
     pub style: &'a lumen_layout::ComputedStyle,
 }
 
@@ -438,6 +447,30 @@ fn gap_starts(edges: &[(f32, f32)], gap: f32) -> Vec<f32> {
     ends.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     ends.dedup_by(|a, b| (*a - *b).abs() < EPS);
     ends.into_iter().filter(|e| edges.iter().any(|&(lo, _)| (lo - (e + gap)).abs() < EPS)).collect()
+}
+
+/// Начала щелей оси `subgrid`, у которой нет своего шаблона дорожек. Помимо пар «ребро → элемент
+/// через `gap`» (`gap_starts`) щель выдают и одиночные рёбра: правое ребро элемента левее конца
+/// контейнера — конец дорожки, за ним идёт щель; левое ребро правее начала — начало дорожки,
+/// перед ним щель. Так находятся щели у пустых клеток, к которым не примыкает ни один элемент,
+/// и щели, которые перекрывает элемент-«мост» (`subgrid-gap-decorations-023/024`).
+/// `lo`/`hi` — протяжённость оси (content box). По возрастанию, без дублей.
+fn subgrid_gap_starts(edges: &[(f32, f32)], gap: f32, lo: f32, hi: f32) -> Vec<f32> {
+    const EPS: f32 = 1.5;
+    let mut tops = gap_starts(edges, gap);
+    if gap > TRACK_TOL {
+        for &(a, b) in edges {
+            if b + gap <= hi + EPS && b < hi - EPS {
+                tops.push(b);
+            }
+            if a - gap >= lo - EPS && a > lo + EPS {
+                tops.push(a - gap);
+            }
+        }
+    }
+    tops.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    tops.dedup_by(|a, b| (*a - *b).abs() < EPS);
+    tops
 }
 
 /// Дорожки оси как `(начало, конец)` по возрастанию, если их можно взять из шаблона:
@@ -558,12 +591,15 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
         vp,
         &ys,
     );
-    let tops_of = |tracks: &Option<Vec<(f32, f32)>>, edges: &[(f32, f32)], gap: f32| match tracks {
-        Some(t) => t[..t.len() - 1].iter().map(|x| x.1).collect(),
-        None => gap_starts(edges, gap),
+    let tops_of = |tracks: &Option<Vec<(f32, f32)>>, edges: &[(f32, f32)], gap: f32, sub: Option<(f32, f32)>| {
+        match (tracks, sub) {
+            (Some(t), _) => t[..t.len() - 1].iter().map(|x| x.1).collect(),
+            (None, Some((lo, hi))) => subgrid_gap_starts(edges, gap, lo, hi),
+            (None, None) => gap_starts(edges, gap),
+        }
     };
-    let mut col_tops = tops_of(&col_tracks, &xs, p.col_gap);
-    let mut row_tops = tops_of(&row_tracks, &ys, p.row_gap);
+    let mut col_tops = tops_of(&col_tracks, &xs, p.col_gap, p.subgrid_cols.then_some((cx, cx + cw)));
+    let mut row_tops = tops_of(&row_tracks, &ys, p.row_gap, p.subgrid_rows.then_some((cy, cy + ch)));
     // `grid-template-*` с `repeat(auto-*)`: ведущие фиксированные дорожки до повтора.
     let min_lo = |edges: &[(f32, f32)]| edges.iter().map(|e| e.0).fold(f32::INFINITY, f32::min);
     let mut lead_lo = (None, None);
@@ -958,9 +994,10 @@ mod tests {
         // Три дорожки по 30 через щель 10; элемент уже дорожки даёт больший зазор, а не щель.
         assert_eq!(subgrid_axis_gap(&[(0.0, 30.0), (40.0, 70.0), (80.0, 110.0)]), Some(10.0));
         assert_eq!(subgrid_axis_gap(&[(0.0, 20.0), (40.0, 70.0)]), Some(20.0));
-        // Один элемент или всё вплотную — щели нет.
+        // Один элемент — о щели ничего не известно; вплотную — щель родителя нулевая.
         assert_eq!(subgrid_axis_gap(&[(0.0, 30.0)]), None);
-        assert_eq!(subgrid_axis_gap(&[(0.0, 30.0), (30.0, 60.0)]), None);
+        assert_eq!(subgrid_axis_gap(&[(0.0, 30.0), (30.0, 60.0)]), Some(0.0));
+        assert_eq!(subgrid_axis_gap(&[(0.0, 30.0), (30.0, 60.0), (80.0, 110.0)]), Some(0.0));
     }
 
     #[test]

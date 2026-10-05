@@ -672,11 +672,12 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
         // не участвует, так что щель берётся из положения элементов.
         let (mut col_gap_px, mut row_gap_px) = (col_gap_px, row_gap_px);
         let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
-        if is_subgrid(&s.grid_template_columns) {
+        let (subgrid_cols, subgrid_rows) = (is_subgrid(&s.grid_template_columns), is_subgrid(&s.grid_template_rows));
+        if subgrid_cols {
             let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
             col_gap_px = subgrid_axis_gap(&xs).unwrap_or(col_gap_px);
         }
-        if is_subgrid(&s.grid_template_rows) {
+        if subgrid_rows {
             let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
             row_gap_px = subgrid_axis_gap(&ys).unwrap_or(row_gap_px);
         }
@@ -688,6 +689,8 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
                 row_gap: row_gap_px,
                 column_visible: column_rule_visible,
                 row_visible: row_rule_visible,
+                subgrid_cols,
+                subgrid_rows,
                 style: s,
             },
         );
@@ -703,6 +706,8 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
             row_gap: row_gap_px,
             column_visible: column_rule_visible,
             row_visible: row_rule_visible,
+            subgrid_cols: false,
+            subgrid_rows: false,
             style: s,
         },
     )
