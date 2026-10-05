@@ -1152,6 +1152,9 @@ pub(super) fn dispatch_box(
                 // right here) are deferred to `grid_trampoline::run` so a
                 // chain of nested grid containers drives on an explicit heap
                 // stack instead of recursing.
+                // Дорожки subgrid'а берёт `build_grid_init` из thread-local'ов (и очищает их), а
+                // paint'у они нужны для щелей `column-rule`/`row-rule` — подсмотреть заранее.
+                b.subgrid_tracks = crate::subgrid::peek_tracks();
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
@@ -1522,6 +1525,7 @@ pub(super) fn dispatch_box(
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_line_height,
                             grid_baselines: None,
+                            subgrid_tracks: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {
                                 segments: Vec::new(),

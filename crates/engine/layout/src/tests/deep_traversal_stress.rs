@@ -48,6 +48,7 @@ fn block_with_id(node: lumen_dom::NodeId, children: Vec<LayoutBox>) -> LayoutBox
         rect: Rect::new(0.0, 0.0, 10.0, 10.0),
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        subgrid_tracks: None,
         style: std::sync::Arc::new(style),
         kind: BoxKind::Block,
         children,

@@ -379,6 +379,7 @@ mod tests {
             rect: Rect { x, y, width: w, height: h },
             used_line_height: 16.0 * 1.2,
             grid_baselines: None,
+            subgrid_tracks: None,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: Vec::new(),

@@ -617,6 +617,7 @@ mod tests {
             rect: lumen_core::geom::Rect::ZERO,
             used_line_height: 16.0 * 1.2,
             grid_baselines: None,
+            subgrid_tracks: None,
             style: std::sync::Arc::new(crate::style::ComputedStyle::root()),
             kind,
             children: Vec::new(),

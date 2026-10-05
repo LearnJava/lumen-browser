@@ -52,6 +52,17 @@ impl SubgridContext {
     }
 }
 
+/// Дорожки `subgrid`-контейнера, унаследованные от родительской сетки, как `(начало, конец)` по
+/// каждой оси от начала content box контейнера (сдвиг subtree не сбивает их). `None` — ось не
+/// subgrid. Пишет раскладка сетки (`layout_dispatch`, grid-ветка), читает paint: щели subgrid'а — щели родителя
+/// (Grid L2 §9), и по элементам их не восстановить, если рядом нет элементов
+/// (`subgrid-gap-decorations-012…017`: пустой subgrid).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SubgridTracks {
+    pub cols: Option<Vec<(f32, f32)>>,
+    pub rows: Option<Vec<(f32, f32)>>,
+}
+
 // ── Thread-local subgrid context ─────────────────────────────────────────────
 
 thread_local! {
@@ -61,6 +72,17 @@ thread_local! {
 
     /// Row-axis subgrid context (same lifecycle as `SUBGRID_COL_CTX`).
     pub(crate) static SUBGRID_ROW_CTX: RefCell<Option<SubgridContext>> = const { RefCell::new(None) };
+}
+
+/// Дорожки, которые родитель оставил в thread-local'ах для раскладываемого сейчас subgrid'а, без
+/// их изъятия. `None` — ни одна ось не subgrid.
+pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
+    let spans = |ctx: &RefCell<Option<SubgridContext>>| {
+        ctx.borrow().as_ref().map(|c| c.offsets.iter().zip(&c.sizes).map(|(&o, &s)| (o, o + s)).collect::<Vec<_>>())
+    };
+    let cols = SUBGRID_COL_CTX.with(spans);
+    let rows = SUBGRID_ROW_CTX.with(spans);
+    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows }))
 }
 
 /// RAII guard: sets the thread-local subgrid contexts and clears them on drop.

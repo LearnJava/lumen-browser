@@ -82,6 +82,27 @@ fn grid_subgrid_column_layout() {
     assert!((b.rect.width - 200.0).abs() < 2.0, "b.w={}", b.rect.width);
 }
 
+/// Пустой subgrid всё равно несёт дорожки родителя (`LayoutBox::subgrid_tracks`): по ним paint
+/// находит щели `column-rule`/`row-rule`, когда рёбер элементов нет.
+#[test]
+fn subgrid_box_keeps_inherited_tracks() {
+    let root = lay(
+        "<body><div id='g'><div id='sg'></div></div></body>",
+        r#"
+        body { margin: 0; }
+        #g { display: grid; grid-template-columns: 20px 30px 40px 50px; grid-template-rows: 10px 20px 30px;
+             column-gap: 5px; row-gap: 7px; width: 200px; }
+        #sg { display: grid; grid-template-columns: subgrid; grid-template-rows: subgrid;
+              grid-column: 2 / 4; grid-row: 2 / 4; }
+        "#,
+    );
+    let sg = first_element_child(first_element_child(&root));
+    let t = sg.subgrid_tracks.as_deref().expect("subgrid keeps the inherited tracks");
+    assert_eq!(t.cols.as_deref(), Some(&[(0.0, 30.0), (35.0, 75.0)][..]));
+    assert_eq!(t.rows.as_deref(), Some(&[(0.0, 20.0), (27.0, 57.0)][..]));
+    assert!(first_element_child(&root).subgrid_tracks.is_none(), "an ordinary grid has none");
+}
+
 /// `collect_subgrid_items` finds both column-subgrid and row-subgrid containers.
 #[test]
 fn grid_collect_subgrid_items() {
