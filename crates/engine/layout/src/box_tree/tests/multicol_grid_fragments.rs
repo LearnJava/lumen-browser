@@ -70,6 +70,24 @@ fn a_fragment_knows_which_row_gaps_of_the_container_it_starts_at() {
     assert_eq!(bases, vec![Some((0, 2)), Some((1, 2)), Some((2, 2))], "{bases:?}");
 }
 
+#[test]
+fn a_gap_kept_at_a_break_by_a_bridging_item_is_taken_over_by_the_next_track() {
+    // Two 100px rows with a 10px gap; the second column of the grid is one item spanning both
+    // rows, so the break at 100px (the leading edge of the gap) keeps the gap. The next
+    // fragment has no gap to draw at its top: its first track grows upwards over the gap and
+    // starts at the fragment's own top (WPT `grid-gap-decorations-fragmentation-028`).
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div></div><div style=\"grid-row:1/3;grid-column:2\"></div><div style=\"grid-row:2;grid-column:1\"></div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:0;width:300px;height:100px}          #g{display:grid;grid-template-columns:50px 50px;grid-template-rows:repeat(2,100px);row-gap:10px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let rows: Vec<_> = v.iter().map(|b| b.subgrid_tracks.as_ref().unwrap().rows.clone().unwrap()).collect();
+    assert_eq!(rows[1][0], (0.0, 100.0), "{rows:?}");
+    let second_item = v[1].children.iter().find(|c| c.rect.x < 100.0 + 50.0 && c.rect.height > 0.0).unwrap();
+    assert_eq!(second_item.rect.y, v[1].rect.y, "{rows:?}");
+}
+
 fn forced_break_frags(fill: &str, item: &str) -> Vec<(f32, f32, usize)> {
     let root = lay(
         &format!("<div id=\"m\"><div id=\"g\"><div></div><div></div><div {item}></div></div></div>"),
