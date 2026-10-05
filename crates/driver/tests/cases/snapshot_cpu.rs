@@ -259,6 +259,9 @@ const PAGES: &[&str] = &[
     // CSS Fragmentation L3 §3.1 — `break-before/after: column` открывают новую колонку multicol;
     // без текста, Edge совпадает на 0,00 %.
     "162-multicol-forced-breaks",
+    // TABLE-HEIGHT: `height`/`min-height` таблицы делится по строкам (CSS 2.1 §17.5.3); без текста,
+    // Edge совпадает на 0,00 %.
+    "163-table-height",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
