@@ -1499,6 +1499,52 @@ use lumen_dom::NodeId;
         assert_eq!(xs, vec![98], "{xs:?}");
     }
 
+    /// Gap Decorations L1 §2 + Writing Modes: в вертикальном `writing-mode` `column-rule` идёт по
+    /// инлайновой оси (физическая вертикаль) и рисуется горизонтальной линией, `row-rule` — по
+    /// блоковой и рисуется вертикальной (grid-gap-decorations-writing-mode).
+    #[test]
+    fn grid_rules_swap_axes_in_a_vertical_writing_mode() {
+        for mode in ["vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"] {
+            let html = format!(
+                "<div style=\"display:grid;grid-template:repeat(2,50px)/repeat(3,50px);gap:10px;                 width:110px;height:170px;writing-mode:{mode};column-rule:10px solid blue;                 row-rule:10px solid red\">{}</div>",
+                "<div></div>".repeat(6)
+            );
+            let dl = build(&html, "");
+            // Три колонки вдоль y (щели 50..60 и 110..120) → две горизонтальные синие линии.
+            let horizontal: Vec<(i32, i32, i32)> = horizontal_rule_cmds(&dl)
+                .iter()
+                .filter_map(|c| match c {
+                    DisplayCommand::DrawBorder { rect, .. } => {
+                        Some((rect.x.round() as i32, rect.y.round() as i32, rect.width.round() as i32))
+                    }
+                    _ => None,
+                })
+                .collect();
+            // Цвет решает, какое правило нарисовано: горизонтали — синее `column-rule`.
+            assert!(
+                horizontal_rule_cmds(&dl).iter().all(
+                    |c| matches!(c, DisplayCommand::DrawBorder { colors, .. } if colors[2].b == 255 && colors[2].r == 0)
+                ),
+                "{mode}: горизонтальные линии должны быть синими"
+            );
+            assert!(
+                column_rule_cmds(&dl).iter().all(
+                    |c| matches!(c, DisplayCommand::DrawBorder { colors, .. } if colors[1].r == 255 && colors[1].b == 0)
+                ),
+                "{mode}: вертикальная линия должна быть красной"
+            );
+            assert_eq!(horizontal.len(), 2, "{mode}: {horizontal:?}");
+            assert!(horizontal.iter().all(|h| h.2 == 110), "{mode}: линия на всю ширину {horizontal:?}");
+            let mut ys: Vec<i32> = horizontal.iter().map(|h| h.1).collect();
+            ys.sort();
+            assert_eq!(ys, vec![50, 110], "{mode}");
+            // Две строки вдоль x (щель 50..60) → одна вертикальная красная линия на всю высоту.
+            let vertical = column_pieces(&dl);
+            assert_eq!(vertical.len(), 1, "{mode}: {vertical:?}");
+            assert_eq!((vertical[0].0, vertical[0].1, vertical[0].2), (50, 0, 170), "{mode}");
+        }
+    }
+
     /// flex-gap-decorations-033: `gap: 0` в wrap-flex — линия по центру шва соседних
     /// элементов, а не потерянная щель.
     const FLEX_WRAP_0GAP: &str = r#"<div style="display:flex;flex-wrap:wrap;width:150px;{}">

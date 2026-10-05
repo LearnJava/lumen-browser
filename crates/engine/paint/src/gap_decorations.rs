@@ -6,6 +6,7 @@
 //! per axis and call `emit_gap_rules()` for each.
 
 use lumen_core::geom::Rect;
+use lumen_layout::style::WritingMode;
 use lumen_layout::{BorderStyle, Color, LayoutBox};
 
 use crate::display_list::{CornerRadii, DisplayCommand};
@@ -567,14 +568,107 @@ fn leading_tops(
 /// таких элементов (целиком пустая дорожка, нестретчнутые элементы), не находится — тот
 /// же предел, что у flex-ветки.
 pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> GridGapGeometry {
+    if p.style.writing_mode != WritingMode::HorizontalTb {
+        return vertical_grid_gap_segments(children, p);
+    }
+    grid_gap_segments_logical(children, p, p.content, None)
+}
+
+/// Grid в вертикальном `writing-mode` (CSS Gap Decorations L1 §2: `column-*` идёт по инлайновой
+/// оси, `row-*` — по блоковой). Колонки лежат вдоль физической `y`, строки — вдоль `x`. Чтобы не
+/// плодить вторую копию разбора дорожек и кусков, рамки детей отражаются в логическое
+/// пространство «колонки слева направо, строки сверху вниз» (`x'` — инлайн от начала оси,
+/// `y'` — блок от начала), щели считаются обычным путём, а готовые отрезки отражаются назад.
+/// Поэтому номера щелей идут от начала оси (снизу для `sideways-lr`/`direction: rtl`, справа для
+/// `vertical-rl`), как того требуют списки значений §4.6. `horizontal` у отрезков физический:
+/// щель колонок рисуется горизонтальной линией. Subgrid в этом режиме не разбирается.
+fn vertical_grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> GridGapGeometry {
     let s = p.style;
     let (cx, cy, cw, ch) = p.content;
+    let rtl = s.direction == lumen_layout::Direction::Rtl;
+    let inline_rev = (s.writing_mode == WritingMode::SidewaysLr) != rtl;
+    let block_rl = matches!(s.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
+    let flip = Flip { cx, cy, cw, ch, inline_rev, block_rl };
+    let mut out = grid_gap_segments_logical(children, p, (0.0, 0.0, ch, cw), Some(flip));
+    for seg in &mut out.segments {
+        let r = seg.rect;
+        let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.width, r.y + r.height);
+        let (py0, py1) = if inline_rev { (cy + ch - x1, cy + ch - x0) } else { (cy + x0, cy + x1) };
+        let (px0, px1) = if block_rl { (cx + cw - y1, cx + cw - y0) } else { (cx + y0, cx + y1) };
+        seg.rect = Rect::new(px0, py0, px1 - px0, py1 - py0);
+        seg.horizontal = !seg.horizontal;
+    }
+    out
+}
+
+/// Отражение физических рамок в логическое пространство вертикального grid-контейнера.
+#[derive(Clone, Copy)]
+struct Flip {
+    cx: f32,
+    cy: f32,
+    cw: f32,
+    ch: f32,
+    inline_rev: bool,
+    block_rl: bool,
+}
+
+impl Flip {
+    /// Инлайновая протяжённость (логический `x'`) физического отрезка по `y`.
+    fn inline(&self, lo: f32, hi: f32) -> (f32, f32) {
+        if self.inline_rev { (self.cy + self.ch - hi, self.cy + self.ch - lo) } else { (lo - self.cy, hi - self.cy) }
+    }
+
+    /// Блоковая протяжённость (логический `y'`) физического отрезка по `x`.
+    fn block(&self, lo: f32, hi: f32) -> (f32, f32) {
+        if self.block_rl { (self.cx + self.cw - hi, self.cx + self.cw - lo) } else { (lo - self.cx, hi - self.cx) }
+    }
+}
+
+/// Тело [`grid_gap_segments`] в логических координатах: `content` — content box в них, `flip` —
+/// как получить логические рамки детей из физических (`None` — координаты уже логические).
+fn grid_gap_segments_logical(
+    children: &[&LayoutBox],
+    p: &GridGapParams<'_>,
+    content: (f32, f32, f32, f32),
+    flip: Option<Flip>,
+) -> GridGapGeometry {
+    let s = p.style;
+    let (cx, cy, cw, ch) = content;
     let em = s.font_size;
     let vp = lumen_core::geom::Size::new(cw, ch);
-    let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
-    let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
-    let rtl = s.direction == lumen_layout::Direction::Rtl;
-    let col_tracks = p.subgrid_col_tracks.clone().or_else(|| {
+    let span = |c: &&LayoutBox, along_x: bool| {
+        let (lo, hi) = if along_x { (c.rect.x, c.rect.x + c.rect.width) } else { (c.rect.y, c.rect.y + c.rect.height) };
+        (lo, hi)
+    };
+    // Колонки (логический `x'`): физическая `x` в горизонтальном режиме, `y` — в вертикальном.
+    let xs: Vec<(f32, f32)> = children
+        .iter()
+        .map(|c| match flip {
+            None => span(c, true),
+            Some(f) => {
+                let (lo, hi) = span(c, false);
+                f.inline(lo, hi)
+            }
+        })
+        .collect();
+    let ys: Vec<(f32, f32)> = children
+        .iter()
+        .map(|c| match flip {
+            None => span(c, false),
+            Some(f) => {
+                let (lo, hi) = span(c, true);
+                f.block(lo, hi)
+            }
+        })
+        .collect();
+    // Отражение уже учло `direction: rtl` вертикального режима.
+    let vertical = flip.is_some();
+    let rtl = !vertical && s.direction == lumen_layout::Direction::Rtl;
+    // Subgrid в вертикальном режиме не разбирается: его дорожки лежат в физических координатах.
+    let (subgrid_cols, subgrid_rows) = (p.subgrid_cols && !vertical, p.subgrid_rows && !vertical);
+    let sub_col_tracks = p.subgrid_col_tracks.clone().filter(|_| !vertical);
+    let sub_row_tracks = p.subgrid_row_tracks.clone().filter(|_| !vertical);
+    let col_tracks = sub_col_tracks.or_else(|| {
         template_tracks(
             &s.grid_template_columns,
             s.grid_template_col_auto_repeat.is_some(),
@@ -587,7 +681,7 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             &xs,
         )
     });
-    let row_tracks = p.subgrid_row_tracks.clone().or_else(|| {
+    let row_tracks = sub_row_tracks.or_else(|| {
         template_tracks(
             &s.grid_template_rows,
             s.grid_template_row_auto_repeat.is_some(),
@@ -607,8 +701,8 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
             (None, None) => gap_starts(edges, gap),
         }
     };
-    let mut col_tops = tops_of(&col_tracks, &xs, p.col_gap, p.subgrid_cols.then_some((cx, cx + cw)));
-    let mut row_tops = tops_of(&row_tracks, &ys, p.row_gap, p.subgrid_rows.then_some((cy, cy + ch)));
+    let mut col_tops = tops_of(&col_tracks, &xs, p.col_gap, subgrid_cols.then_some((cx, cx + cw)));
+    let mut row_tops = tops_of(&row_tracks, &ys, p.row_gap, subgrid_rows.then_some((cy, cy + ch)));
     // `grid-template-*` с `repeat(auto-*)`: ведущие фиксированные дорожки до повтора.
     let min_lo = |edges: &[(f32, f32)]| edges.iter().map(|e| e.0).fold(f32::INFINITY, f32::min);
     let mut lead_lo = (None, None);
