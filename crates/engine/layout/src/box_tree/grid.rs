@@ -542,11 +542,9 @@ pub(crate) fn build_grid_init(
     let n_cols = placements.iter().map(|&(_, ce, _, _)| ce.saturating_sub(1)).max().unwrap_or(1)
         .max(n_explicit_cols as u32);
     let mut n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
-    // An item-less container keeps all its explicit rows (§7.1); with items the
-    // row count still follows the placements (trailing empty rows are dropped).
-    if item_idxs.is_empty() {
-        n_rows = n_rows.max(eff_row_template.len() as u32);
-    }
+    // Every explicit row is a track even when no item reaches it (§7.1, like the
+    // columns above): trailing empty rows keep their size and the gaps before them.
+    n_rows = n_rows.max(eff_row_template.len() as u32);
 
     // CSS Grid L1 §7.2.3.2: `repeat(auto-fit, …)` tracks that hold no item collapse to zero
     // (the gutters on both sides merge into one). Placement above used the full expanded list.

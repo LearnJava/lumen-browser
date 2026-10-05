@@ -48,3 +48,14 @@ fn empty_grid_without_a_template_stays_zero_height() {
     let g = grid("<div class='g'></div>", ".g { display: grid; gap: 10px; }");
     assert_eq!(g.rect.height, 0.0);
 }
+
+#[test]
+fn trailing_empty_explicit_rows_keep_their_size_and_gaps() {
+    // Rows 3..5 hold no item, but they are explicit tracks: 5 × 10px + 4 × 10px gaps.
+    let g = grid(
+        "<div class='g'><div class='i'></div></div>",
+        ".g { display: grid; grid-template-columns: 20px; grid-template-rows: repeat(5, 10px); \
+              gap: 10px; } .i { grid-row: 1 / 3; }",
+    );
+    assert_eq!(g.rect.height, 90.0);
+}
