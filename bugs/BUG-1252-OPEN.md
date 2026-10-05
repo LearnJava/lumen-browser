@@ -23,3 +23,5 @@ WPT-RUN-14 срез 1: `align-content-horiz-001a.html` (`offsetLeft expected 8 b
 ## Как проверить
 
 `run_corpus.py --prefixes css/css-flexbox --out-dir .tmp/wpt-run14/flexbox` до и после; плюс регрессия в `crates/js/src/dom/tests/v8_elem_geometry_scroll.rs`.
+
+После починки перемерить `align-items-baseline-*` (css-flexbox): красны ровно на эти 8 px; остаток FLEX-VWM-5 п. 4 ([ROADMAP.md](../ROADMAP.md)).

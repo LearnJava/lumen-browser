@@ -499,20 +499,8 @@ fn step_child(
     // inline axis (physical height) instead of filling the initial containing
     // block. The root element is not one: its containing block is the ICB itself.
     // A vertical flex container sizes itself from its items (`flex_trampoline`).
-    let children_available_height = if children_available_height.is_none()
-        && !child_is_root_element
-        && is_block
-        && !matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
-        && child.style.height.is_none()
-        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
-        && !matches!(child.style.display, Display::Flex | Display::InlineFlex)
-    {
-        // `max_content_outer_height` leaves out the box's own inline-axis margins,
-        // which `build_vertical_init` takes off the room it is given.
-        let cem = child.style.font_size;
-        let m_v = child.style.margin_top.resolve_or_zero(cem, eff_w, viewport)
-            + child.style.margin_bottom.resolve_or_zero(cem, eff_w, viewport);
-        Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport) + m_v))
+    let children_available_height = if children_available_height.is_none() && !child_is_root_element && is_block {
+        super::intrinsic::orthogonal_fit_content_height(child, eff_w, measurer, viewport)
     } else {
         children_available_height
     };

@@ -23,6 +23,33 @@ fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasur
     })
 }
 
+/// Writing Modes L3 §7.3.1 (FLEX-VWM-4/5): the inline-axis room (physical height)
+/// of an orthogonal block `child` in a parent that gives it no definite height —
+/// it shrinks to its content (bounded by the viewport) instead of filling the
+/// initial containing block. `None` — `child` is not such a box (horizontal,
+/// authored `height`, not a plain block, or a flex container, which sizes
+/// itself from its items). `eff_w` is the base of the child's percentage margins.
+pub(crate) fn orthogonal_fit_content_height(
+    child: &LayoutBox,
+    eff_w: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
+    if matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || child.style.height.is_some()
+        || !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || matches!(child.style.display, Display::Flex | Display::InlineFlex)
+    {
+        return None;
+    }
+    // `max_content_outer_height` leaves out the box's own inline-axis margins,
+    // which `build_vertical_init` takes off the room it is given.
+    let cem = child.style.font_size;
+    let m_v = child.style.margin_top.resolve_or_zero(cem, eff_w, viewport)
+        + child.style.margin_bottom.resolve_or_zero(cem, eff_w, viewport);
+    Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport) + m_v))
+}
+
 /// max-content border-box **height** of a box in a vertical writing mode — its
 /// inline size (CSS Writing Modes L3 §3), the extent text advances along. The
 /// mirror of [`max_content_outer_width`]: an explicit `height` wins, a text run
@@ -81,6 +108,26 @@ pub(crate) fn max_content_outer_height(
                 _ => child_outer_height(c),
             })
             .sum(),
+        // FLEX-VWM-5: a flex row in a vertical mode runs along y — its inline size is the
+        // **sum** of the items' contributions plus the gaps (CSS Flexbox L1 §9.9.1).
+        _ if is_vertical_mode(b)
+            && matches!(b.style.display, Display::Flex | Display::InlineFlex)
+            && super::flex::flex_axes(&b.style).main_vertical =>
+        {
+            let items: Vec<f32> = b
+                .children
+                .iter()
+                .filter(|c| contributes_to_intrinsic_width(c))
+                .map(child_outer_height)
+                .collect();
+            let gap = match s.flex_direction {
+                FlexDirection::Column | FlexDirection::ColumnReverse => s.row_gap.resolve(em, None, viewport),
+                _ => s.column_gap.resolve(em, None, viewport),
+            }
+            .unwrap_or(0.0)
+            .max(0.0);
+            items.iter().sum::<f32>() + gap * items.len().saturating_sub(1) as f32
+        }
         _ => {
             let longest = || {
                 b.children
@@ -99,7 +146,17 @@ pub(crate) fn max_content_outer_height(
             }
         }
     };
-    (content + frame).max(0.0)
+    let outer = content + frame;
+    // `max-height`/`min-height` of a vertical box bound its inline size.
+    let bound = |len: &Option<Length>| {
+        len.as_ref().filter(|l| !l.is_intrinsic()).and_then(|l| l.resolve(em, None, viewport)).map(|h| match s.box_sizing {
+            BoxSizing::ContentBox => h + frame,
+            BoxSizing::BorderBox => h.max(frame),
+        })
+    };
+    let outer = if is_vertical_mode(b) { outer.min(bound(&s.max_height).unwrap_or(f32::INFINITY)) } else { outer };
+    let outer = if is_vertical_mode(b) { outer.max(bound(&s.min_height).unwrap_or(0.0)) } else { outer };
+    outer.max(0.0)
 }
 
 /// A block container in a vertical `writing-mode` stacks its children along the
