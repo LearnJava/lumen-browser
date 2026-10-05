@@ -3035,3 +3035,38 @@ TIMEOUT), после убитого браузера в логе нет ни о�
 Четыре повтора `preload-referrer-policy-subresource-header` и `url/failure.html`
 при 14 — TIMEOUT вместо OK с нулевым баллом: в сравнении с прошлой цифрой
 читать как режим, не как движок.
+
+## WPT-RUN-9, полный прогон запущен (2026-10-05 12:25): протокол возобновления
+
+Бинарь — `dev-release` на `d913a39b9`, скопирован в `.tmp/wpt-run9-bin/lumen.exe`
+(пересборка слота не должна подменить бинарь посреди прогона — цифра привязана
+к сборке). Запуск — задачей Планировщика `LumenWptRun9` (срез 23: `nohup` не
+переживает конец сессии), обёртка `.tmp/wpt-run9.bat` в слоте `p2-work`:
+
+    run_corpus.py --binary <слот>\.tmp\wpt-run9-bin\lumen.exe --all
+        --parallel-shards 3 --batch-small 150 --shared-queue --processes 14
+        --out-dir .tmp\wpt-run9 --run-json .tmp\wpt-run9\snapshot.json
+
+Лог — `.tmp/wpt-run9.log`, в конце пишется `exit=N`. План: 465 шардов
+(14 только manual/visual), 68 116 автоматизируемых id, 211 единиц (55 батчей).
+Дым на `console,compression` перед стартом — 93/93 исполнено, 54.09 %.
+
+**Проверка живости** (не запускать второй экземпляр):
+`Get-CimInstance Win32_Process | ? { $_.CommandLine -match 'run_corpus' }` —
+настоящие процессы стартовали 12:25:00 (свежие PID с моментом запроса —
+это сам запрос, его командная строка тоже содержит `run_corpus`).
+**Если процесс мёртв, а `exit=` в логе нет** — `.tmp\wpt-run9.bat --resume`
+(через новую задачу Планировщика; `%*` пробрасывается в `run_corpus.py`).
+**После завершения:** `--aggregate-only` тем же кодом в
+`docs/wpt/runs/<дата>.json`, `score_audit.py --out-dir .tmp/wpt-run9`
+(строка `LEAK` — стоп), `cdata_audit.py`, затем журнал в `docs/wpt/pass-rate.md`.
+
+**Ход.** 13:18 — 15 из 211 единиц (крупные идут первыми), отчётов 14,
+сумма вердиктов 13 777. Память — узкое место трёх полос и при стороже
+`--max-browser-gb 4`: в 12:36–12:39 свободно 0.1–0.8 ГБ, коммит 75 из
+82.6 ГБ (подкачка 32 ГБ на F: растёт), один опрос сторожа упал WinError 1455
+(«файл подкачки слишком мал») — прогон это пережил, гейт `--min-free-gb`
+держал третью полосу. Сторож убил один `lumen` (4.71 ГБ, `html/canvas/element`).
+Попутно в логе `referrer-policy`: `https://www1.localhost:18443` —
+`TLS handshake: certificate not valid for this hostname`, то есть после
+BUG-1069 поддомен в https всё ещё не принимается — проверить на снимке.
