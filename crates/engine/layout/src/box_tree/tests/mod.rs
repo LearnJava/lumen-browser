@@ -484,4 +484,5 @@ mod vertical_float;
 mod vertical_margins;
 mod flex_vwm3;
 mod flex_vwm4;
+mod fixed_cb;
 mod ruby_pipeline;

@@ -11,6 +11,7 @@
 //! `multicol_trampoline.rs`.
 
 use super::*;
+use crate::resolved_geometry::contains_fixed_descendants;
 
 /// CSS Multi-column Layout L1 — lays out `children` into N columns.
 /// Returns content height (max column height, without padding/border).
@@ -322,170 +323,326 @@ pub(crate) fn lay_out_abs_children(
     // This registry is used to resolve `position-anchor` and `anchor()` function calls below.
     // CSS: anchor-name, position-anchor, anchor()
     let anchors = crate::anchor::collect_anchors(parent);
+    // css-transforms-1 §2: `parent` itself captures its `position: fixed` children when it
+    // carries a transform/filter/…; otherwise they resolve against the viewport.
+    let fixed_cb = fixed_cb_rect(parent);
 
     for &(idx, static_x, static_y) in deferred {
-        let cs = parent.children[idx].style.clone();
-        let c_em = cs.font_size;
-
-        let cb = if matches!(cs.position, Position::Fixed) {
-            Rect::new(0.0, 0.0, viewport.width, viewport.height)
+        let cb = if matches!(parent.children[idx].style.position, Position::Fixed) {
+            fixed_cb.unwrap_or_else(|| Rect::new(0.0, 0.0, viewport.width, viewport.height))
         } else {
             my_pcb
         };
-
-        // CSS Anchor Positioning L1 §3.1 — intercept `anchor()` in top/right/bottom/left
-        // before falling back to the plain length/auto value.
-        // CSS: anchor(), position-anchor
-        let default_anchor = cs.position_anchor.as_deref();
-        let left = crate::anchor::resolve_inset(
-            &anchors, &cs.left, cs.anchor_left.as_ref(), default_anchor, true, false, cb.x, cb.x + cb.width,
-            c_em, cb.width, viewport,
-        );
-        let right = crate::anchor::resolve_inset(
-            &anchors, &cs.right, cs.anchor_right.as_ref(), default_anchor, true, true, cb.x, cb.x + cb.width,
-            c_em, cb.width, viewport,
-        );
-        let top = crate::anchor::resolve_inset(
-            &anchors, &cs.top, cs.anchor_top.as_ref(), default_anchor, false, false, cb.y, cb.y + cb.height,
-            c_em, cb.height, viewport,
-        );
-        let bottom = crate::anchor::resolve_inset(
-            &anchors, &cs.bottom, cs.anchor_bottom.as_ref(), default_anchor, false, true, cb.y, cb.y + cb.height,
-            c_em, cb.height, viewport,
-        );
-
-        let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
-        let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
-        let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
-        let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
-
-        // Доступная ширина для layout абсолютного child.
-        let avail_w = if left.is_some() && right.is_some() && cs.width.is_none() {
-            // Обе инсеты заданы, ширина `auto` → ширина выводится из зазора
-            // между ними (CSS Position L3 §6), shrink-to-fit не применяется.
-            (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
-        } else if cs.width.is_none() && abs_box_shrinks_to_fit(&parent.children[idx]) {
-            // CSS 2.1 §10.3.7 (BUG-745): у абсолютного не-replaced бокса с
-            // `width: auto` и хотя бы одной `auto`-инсетой используемая ширина —
-            // shrink-to-fit = min(max(min-content, available), max-content), а не
-            // ширина содержащего блока. Разница видна не только в самой ширине:
-            // ветка `right` ниже отсчитывает x от правого края содержащего блока
-            // назад на `child.rect.width`, поэтому растянутый бокс с
-            // `right: 16px` уезжал за левый край (`x = -16, w = 1024` вместо
-            // карточки в углу) — форма «тост/тултип/cookie-баннер, приклеенный
-            // к углу», пункт 4 BUG-733 на `tbank.ru`.
-            //
-            // `available` — свободное место содержащего блока за вычетом
-            // заданных инсет и margin'ов; max/min-content уже включают
-            // padding+border самого бокса (border-box), поэтому margin'ы
-            // возвращаются обратно: `lay_out` трактует свой `available_width`
-            // как margin-box.
-            let child = &parent.children[idx];
-            let free =
-                (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0) - c_ml - c_mr).max(0.0);
-            // A form control's content (button label/icon) does not wrap, so its
-            // max-content and min-content coincide — same shortcut `intrinsic.rs`
-            // uses at the call sites of `form_control_fit_content_width`.
-            let (max_c, min_c) = match form_control_fit_content_width(child, measurer, viewport) {
-                Some(fc) => (fc, fc),
-                None => (
-                    max_content_outer_width(child, measurer, viewport),
-                    min_content_outer_width(child, measurer, viewport),
-                ),
-            };
-            max_c.min(min_c.max(free)) + c_ml + c_mr
-        } else {
-            cb.width
-        };
-
-        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp, false);
-
-        // CSS Position L3 §6: an abs-pos box with both `top` and `bottom` non-auto
-        // and `height: auto` resolves its used height to fill the inset gap. Mirror of
-        // the `avail_w` width-from-insets path above. Applied post-layout because the
-        // gap height is a containing-block used value, not a content-driven size.
-        if top.is_some() && bottom.is_some() && cs.height.is_none() {
-            let resolved_h =
-                (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
-            parent.children[idx].rect.height = resolved_h;
-        }
-
-        let child = &mut parent.children[idx];
-
-        // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
-        // Done before resolving `inset-area` so the element's used size (used to
-        // align it within its position-area band) reflects the anchor-size result.
-        let mut w_fixed = cs.width.is_some();
-        let mut h_fixed = cs.height.is_some();
-        if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size_or_fallback(
-                &anchors, f, cs.position_anchor.as_deref(), c_em, cb.width, viewport,
-            )
-        }) {
-            child.rect.width = w;
-            w_fixed = true;
-        }
-        if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size_or_fallback(
-                &anchors, f, cs.position_anchor.as_deref(), c_em, cb.height, viewport,
-            )
-        }) {
-            child.rect.height = h;
-            h_fixed = true;
-        }
-
-        // CSS Anchor Positioning L1 §5 — resolve `position-area` / `inset-area`.
-        // A definite-size axis keeps its size and is aligned toward the anchor;
-        // an `auto` axis stretches to fill its position-area band.
-        // CSS: position-anchor, inset-area, position-area
-        let elem_w = if w_fixed {
-            crate::anchor::AxisSize::Fixed(child.rect.width)
-        } else {
-            crate::anchor::AxisSize::Auto
-        };
-        let elem_h = if h_fixed {
-            crate::anchor::AxisSize::Fixed(child.rect.height)
-        } else {
-            crate::anchor::AxisSize::Auto
-        };
-        let anchored_pos = cs.position_anchor.as_deref().and_then(|anchor_name| {
-            crate::anchor::resolve_inset_area(
-                &anchors,
-                anchor_name,
-                cs.inset_area_row,
-                cs.inset_area_col,
-                cb,
-                elem_w,
-                elem_h,
-            )
-        });
-
-        let (new_x, new_y) = if let Some(ref pos) = anchored_pos {
-            // Anchor-positioned: override width/height only for auto (stretched) axes.
-            if let Some(w) = pos.width {
-                child.rect.width = w;
-            }
-            if let Some(h) = pos.height {
-                child.rect.height = h;
-            }
-            (cb.x + pos.left, cb.y + pos.top)
-        } else {
-            // Normal abs-pos: resolve from left/right/top/bottom insets.
-            let nx = match (left, right) {
-                (Some(l), _)    => cb.x + l + c_ml,
-                (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
-                (None, None)    => static_x + c_ml,
-            };
-            let ny = match (top, bottom) {
-                (Some(t), _)     => cb.y + t + c_mt,
-                (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
-                (None, None)     => static_y + c_mt,
-            };
-            (nx, ny)
-        };
-
-        let dx = new_x - child.rect.x;
-        let dy = new_y - child.rect.y;
-        shift_tree(child, dx, dy);
+        place_abs_child(&mut parent.children[idx], static_x, static_y, cb, &anchors, measurer, viewport, my_pcb, hp);
     }
+}
+
+/// Lays out one absolutely/fixed-positioned `child` against its containing
+/// block `cb` and moves it to its final position (CSS Position L3 §6).
+/// `static_x`/`static_y` is the static position used for an axis whose insets
+/// are both `auto`; `my_pcb` is the positioned containing block handed down to
+/// the child's own layout.
+#[allow(clippy::too_many_arguments)]
+fn place_abs_child(
+    child: &mut LayoutBox,
+    static_x: f32,
+    static_y: f32,
+    cb: Rect,
+    anchors: &crate::anchor::AnchorRegistry,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    my_pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
+    let cs = child.style.clone();
+    let c_em = cs.font_size;
+
+    // CSS Anchor Positioning L1 §3.1 — intercept `anchor()` in top/right/bottom/left
+    // before falling back to the plain length/auto value.
+    // CSS: anchor(), position-anchor
+    let default_anchor = cs.position_anchor.as_deref();
+    let left = crate::anchor::resolve_inset(
+        anchors, &cs.left, cs.anchor_left.as_ref(), default_anchor, true, false, cb.x, cb.x + cb.width,
+        c_em, cb.width, viewport,
+    );
+    let right = crate::anchor::resolve_inset(
+        anchors, &cs.right, cs.anchor_right.as_ref(), default_anchor, true, true, cb.x, cb.x + cb.width,
+        c_em, cb.width, viewport,
+    );
+    let top = crate::anchor::resolve_inset(
+        anchors, &cs.top, cs.anchor_top.as_ref(), default_anchor, false, false, cb.y, cb.y + cb.height,
+        c_em, cb.height, viewport,
+    );
+    let bottom = crate::anchor::resolve_inset(
+        anchors, &cs.bottom, cs.anchor_bottom.as_ref(), default_anchor, false, true, cb.y, cb.y + cb.height,
+        c_em, cb.height, viewport,
+    );
+
+    let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
+    let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
+    let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
+    let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
+
+    // Доступная ширина для layout абсолютного child.
+    let avail_w = if left.is_some() && right.is_some() && cs.width.is_none() {
+        // Обе инсеты заданы, ширина `auto` → ширина выводится из зазора
+        // между ними (CSS Position L3 §6), shrink-to-fit не применяется.
+        (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
+    } else if cs.width.is_none() && abs_box_shrinks_to_fit(child) {
+        // CSS 2.1 §10.3.7 (BUG-745): у абсолютного не-replaced бокса с
+        // `width: auto` и хотя бы одной `auto`-инсетой используемая ширина —
+        // shrink-to-fit = min(max(min-content, available), max-content), а не
+        // ширина содержащего блока. Разница видна не только в самой ширине:
+        // ветка `right` ниже отсчитывает x от правого края содержащего блока
+        // назад на `child.rect.width`, поэтому растянутый бокс с
+        // `right: 16px` уезжал за левый край (`x = -16, w = 1024` вместо
+        // карточки в углу) — форма «тост/тултип/cookie-баннер, приклеенный
+        // к углу», пункт 4 BUG-733 на `tbank.ru`.
+        //
+        // `available` — свободное место содержащего блока за вычетом
+        // заданных инсет и margin'ов; max/min-content уже включают
+        // padding+border самого бокса (border-box), поэтому margin'ы
+        // возвращаются обратно: `lay_out` трактует свой `available_width`
+        // как margin-box.
+        let free =
+            (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0) - c_ml - c_mr).max(0.0);
+        // A form control's content (button label/icon) does not wrap, so its
+        // max-content and min-content coincide — same shortcut `intrinsic.rs`
+        // uses at the call sites of `form_control_fit_content_width`.
+        let (max_c, min_c) = match form_control_fit_content_width(child, measurer, viewport) {
+            Some(fc) => (fc, fc),
+            None => (
+                max_content_outer_width(child, measurer, viewport),
+                min_content_outer_width(child, measurer, viewport),
+            ),
+        };
+        max_c.min(min_c.max(free)) + c_ml + c_mr
+    } else {
+        cb.width
+    };
+
+    lay_out(child, 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp, false);
+
+    // CSS Position L3 §6: an abs-pos box with both `top` and `bottom` non-auto
+    // and `height: auto` resolves its used height to fill the inset gap. Mirror of
+    // the `avail_w` width-from-insets path above. Applied post-layout because the
+    // gap height is a containing-block used value, not a content-driven size.
+    if top.is_some() && bottom.is_some() && cs.height.is_none() {
+        let resolved_h =
+            (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
+        child.rect.height = resolved_h;
+    }
+
+    // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
+    // Done before resolving `inset-area` so the element's used size (used to
+    // align it within its position-area band) reflects the anchor-size result.
+    let mut w_fixed = cs.width.is_some();
+    let mut h_fixed = cs.height.is_some();
+    if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
+        crate::anchor::resolve_anchor_size_or_fallback(
+            anchors, f, cs.position_anchor.as_deref(), c_em, cb.width, viewport,
+        )
+    }) {
+        child.rect.width = w;
+        w_fixed = true;
+    }
+    if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
+        crate::anchor::resolve_anchor_size_or_fallback(
+            anchors, f, cs.position_anchor.as_deref(), c_em, cb.height, viewport,
+        )
+    }) {
+        child.rect.height = h;
+        h_fixed = true;
+    }
+
+    // CSS Anchor Positioning L1 §5 — resolve `position-area` / `inset-area`.
+    // A definite-size axis keeps its size and is aligned toward the anchor;
+    // an `auto` axis stretches to fill its position-area band.
+    // CSS: position-anchor, inset-area, position-area
+    let elem_w = if w_fixed {
+        crate::anchor::AxisSize::Fixed(child.rect.width)
+    } else {
+        crate::anchor::AxisSize::Auto
+    };
+    let elem_h = if h_fixed {
+        crate::anchor::AxisSize::Fixed(child.rect.height)
+    } else {
+        crate::anchor::AxisSize::Auto
+    };
+    let anchored_pos = cs.position_anchor.as_deref().and_then(|anchor_name| {
+        crate::anchor::resolve_inset_area(
+            anchors,
+            anchor_name,
+            cs.inset_area_row,
+            cs.inset_area_col,
+            cb,
+            elem_w,
+            elem_h,
+        )
+    });
+
+    let (new_x, new_y) = if let Some(ref pos) = anchored_pos {
+        // Anchor-positioned: override width/height only for auto (stretched) axes.
+        if let Some(w) = pos.width {
+            child.rect.width = w;
+        }
+        if let Some(h) = pos.height {
+            child.rect.height = h;
+        }
+        (cb.x + pos.left, cb.y + pos.top)
+    } else {
+        // Normal abs-pos: resolve from left/right/top/bottom insets.
+        let nx = match (left, right) {
+            (Some(l), _)    => cb.x + l + c_ml,
+            (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
+            (None, None)    => static_x + c_ml,
+        };
+        let ny = match (top, bottom) {
+            (Some(t), _)     => cb.y + t + c_mt,
+            (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
+            (None, None)     => static_y + c_mt,
+        };
+        (nx, ny)
+    };
+
+    let dx = new_x - child.rect.x;
+    let dy = new_y - child.rect.y;
+    shift_tree(child, dx, dy);
+}
+
+/// Padding box of `b` — the containing block it provides to positioned descendants.
+fn padding_box_rect(b: &LayoutBox) -> Rect {
+    let s = &b.style;
+    Rect::new(
+        b.rect.x + s.border_left_width,
+        b.rect.y + s.border_top_width,
+        (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+        (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+    )
+}
+
+/// Whether a box with style `s` is the containing block of absolutely
+/// positioned descendants: positioned itself, or one of the properties that
+/// also capture `position: fixed` (css-transforms-1 §2, css-contain-2 §3.2).
+pub(crate) fn establishes_abs_cb(s: &ComputedStyle) -> bool {
+    !matches!(s.position, Position::Static) || contains_fixed_descendants(s)
+}
+
+/// `Some(padding box)` when `b` is the containing block of `position: fixed`
+/// descendants instead of the viewport (css-transforms-1 §2).
+fn fixed_cb_rect(b: &LayoutBox) -> Option<Rect> {
+    contains_fixed_descendants(&b.style).then(|| padding_box_rect(b))
+}
+
+/// An anchor-positioned box is placed by `container_anchor`'s post-pass, which
+/// reads the final anchor rects — nothing to correct here.
+fn uses_anchor_positioning(s: &ComputedStyle) -> bool {
+    s.position_anchor.is_some()
+        || s.anchor_left.is_some()
+        || s.anchor_right.is_some()
+        || s.anchor_top.is_some()
+        || s.anchor_bottom.is_some()
+        || s.anchor_size_w.is_some()
+        || s.anchor_size_h.is_some()
+}
+
+/// Second placement of out-of-flow descendants once `b`, their containing
+/// block, has its final size (CSS Position L3 §2.2).
+///
+/// A box laid out under a non-positioned wrapper is placed when the *wrapper*
+/// finishes, against the `pcb` handed down at that point — the width of the
+/// real containing block is known by then, but its height still reads 0
+/// (`children_pcb` is built before the children). `bottom`, `top: <percent>`
+/// and `top` + `bottom` with `height: auto` therefore landed against a
+/// zero-high block. `position: fixed` under a transformed/filtered ancestor
+/// additionally used the viewport for both axes. Direct children are placed
+/// by [`lay_out_abs_children`] with the final rect already, so only deeper
+/// descendants are visited; the walk stops where another box takes over as the
+/// containing block (an absolute box's CB is the nearest [`establishes_abs_cb`]
+/// ancestor, a fixed box's the nearest `contains_fixed_descendants` one).
+pub(crate) fn fix_out_of_flow_descendants(
+    b: &mut LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    if !establishes_abs_cb(&b.style) {
+        return;
+    }
+    let abs_cb = padding_box_rect(b);
+    let fixed_cb = fixed_cb_rect(b);
+    // (box, abs CB still `b`, fixed CB still `b`, direct child of `b`)
+    let mut stack: Vec<(&mut LayoutBox, bool, bool, bool)> = Vec::new();
+    for c in b.children.iter_mut() {
+        stack.push((c, true, fixed_cb.is_some(), true));
+    }
+    while let Some((x, abs_open, fixed_open, direct)) = stack.pop() {
+        if !direct && !uses_anchor_positioning(&x.style) {
+            match x.style.position {
+                Position::Absolute if abs_open => reposition_abs_child(x, abs_cb, viewport),
+                Position::Fixed if fixed_open => {
+                    if let Some(cb) = fixed_cb {
+                        refit_fixed_child(x, cb, measurer, viewport, hp);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let abs_open = abs_open && !establishes_abs_cb(&x.style);
+        let fixed_open = fixed_open && !contains_fixed_descendants(&x.style);
+        if abs_open || fixed_open {
+            for c in x.children.iter_mut() {
+                stack.push((c, abs_open, fixed_open, false));
+            }
+        }
+    }
+}
+
+/// Moves an already laid-out absolute `child` to where its insets put it in
+/// the final containing block `cb`. An axis with both insets `auto` keeps the
+/// static position the first pass gave it. The child's own layout is not
+/// redone: `cb` differs from the first-pass one in height only.
+fn reposition_abs_child(child: &mut LayoutBox, cb: Rect, viewport: Size) {
+    let cs = &child.style;
+    let em = cs.font_size;
+    let left = cs.left.resolve(em, cb.width, viewport);
+    let right = cs.right.resolve(em, cb.width, viewport);
+    let top = cs.top.resolve(em, cb.height, viewport);
+    let bottom = cs.bottom.resolve(em, cb.height, viewport);
+    let (ml, mr) = (cs.margin_left.resolve_or_zero(em, cb.width, viewport), cs.margin_right.resolve_or_zero(em, cb.width, viewport));
+    let (mt, mb) = (cs.margin_top.resolve_or_zero(em, cb.height, viewport), cs.margin_bottom.resolve_or_zero(em, cb.height, viewport));
+    // Mirrors the `top` + `bottom` + `height: auto` rule of `place_abs_child`.
+    if top.is_some() && bottom.is_some() && cs.height.is_none() {
+        child.rect.height = (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - mt - mb).max(0.0);
+    }
+    let x = match (left, right) {
+        (Some(l), _) => cb.x + l + ml,
+        (None, Some(r)) => cb.x + cb.width - r - mr - child.rect.width,
+        (None, None) => child.rect.x,
+    };
+    let y = match (top, bottom) {
+        (Some(t), _) => cb.y + t + mt,
+        (None, Some(bv)) => cb.y + cb.height - bv - mb - child.rect.height,
+        (None, None) => child.rect.y,
+    };
+    let (dx, dy) = (x - child.rect.x, y - child.rect.y);
+    shift_tree(child, dx, dy);
+}
+
+/// Re-lays out a `position: fixed` `child` against the containing block `cb`
+/// of its transformed/filtered ancestor. The first pass sized it against the
+/// viewport, which changes `width: auto`, percentages and everything below.
+/// An axis with both insets `auto` keeps its first-pass (static) position.
+fn refit_fixed_child(
+    child: &mut LayoutBox,
+    cb: Rect,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    let em = child.style.font_size;
+    let ml = child.style.margin_left.resolve_or_zero(em, cb.width, viewport);
+    let mt = child.style.margin_top.resolve_or_zero(em, cb.height, viewport);
+    let (static_x, static_y) = (child.rect.x - ml, child.rect.y - mt);
+    place_abs_child(child, static_x, static_y, cb, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
 }

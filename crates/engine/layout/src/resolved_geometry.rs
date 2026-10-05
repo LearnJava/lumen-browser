@@ -123,7 +123,7 @@ fn reports_used_geometry(b: &LayoutBox) -> bool {
 /// `contain: layout|paint` or a `will-change` naming one of those
 /// (css-transforms-1 §2, filter-effects-1 §2, css-contain-2 §3.2/§3.3,
 /// css-will-change-1 §3).
-fn contains_fixed_descendants(s: &ComputedStyle) -> bool {
+pub(crate) fn contains_fixed_descendants(s: &ComputedStyle) -> bool {
     !s.transform.is_empty()
         || s.translate.is_some()
         || s.rotate.is_some()
@@ -212,7 +212,9 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
         (padding_box.width - pl - pr).max(0.0),
         (padding_box.height - pt - pb).max(0.0),
     );
-    let positioned = s.position != Position::Static;
+    // css-transforms-1 §2: the same properties that capture `position: fixed`
+    // descendants also make the box a containing block for absolute ones.
+    let positioned = s.position != Position::Static || contains_fixed_descendants(s);
     let scrolls = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden);
     GeomCtx {
         flow_cb: content_box,

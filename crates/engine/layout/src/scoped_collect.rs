@@ -369,14 +369,20 @@ impl<'a> ScopedCollection<'a> {
             };
             if untouched {
                 let unmoved = published == Some(&[r.x, r.y, r.width, r.height]);
-                let safe = !in_root
-                    || prune_changed.is_some_and(|c| {
+                let safe = if in_root {
+                    prune_changed.is_some_and(|c| {
                         // Nothing outside the subtree that its entries are made of moved: the
                         // ancestors are where they were (`chain`), no float changed that could
                         // re-wrap its lines, and a positioned box in it resolves against
                         // ancestors whose whole border box is where it was (`full`).
                         chain && !c.floats && (full || !has_positioned_box(b))
-                    });
+                    })
+                } else {
+                    // Outside a dirty root only an out-of-flow box can move on its own: layout
+                    // places it against the final size of its containing block (LAYOUT-FIXED-CB),
+                    // an ancestor that grew or shrank carries it along even if its subtree is clean.
+                    full || !has_out_of_flow_box(b)
+                };
                 if unmoved && safe {
                     skipped.push(b);
                     if in_root {
@@ -837,6 +843,17 @@ fn translation_keeps_styles(
         && p[2] == now.width
         && p[3] == now.height
         && !has_positioned_box(b)
+}
+
+fn has_out_of_flow_box(root: &LayoutBox) -> bool {
+    let mut stack = vec![root];
+    while let Some(b) = stack.pop() {
+        if matches!(b.style.position, Position::Absolute | Position::Fixed) {
+            return true;
+        }
+        stack.extend(b.children.iter());
+    }
+    false
 }
 
 fn has_positioned_box(root: &LayoutBox) -> bool {

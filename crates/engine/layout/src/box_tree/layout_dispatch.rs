@@ -792,10 +792,11 @@ pub(super) fn dispatch_box(
     // pcb для потомков: если текущий элемент positioned — он сам CB для абсолютных детей.
     // CSS Containment L3: contain:layout и contain:paint тоже устанавливают containing block.
     // Высота ещё неизвестна, используем 0 — корректируем after layout.
-    let is_positioned = !matches!(s.position, Position::Static);
-    let contain_establishes_cb = s.contain.0
-        & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0 | ContainFlags::STRICT.0) != 0;
-    let children_pcb = if is_positioned || contain_establishes_cb {
+    // `is_positioned` here means "containing block of absolute descendants": a transform,
+    // filter, `contain: layout|paint`, … capture them just like `position` does
+    // (css-transforms-1 §2, css-contain-2 §3.2).
+    let is_positioned = super::multicol_abspos::establishes_abs_cb(&s);
+    let children_pcb = if is_positioned {
         // CSS Position L3 §2.2: CB for absolute descendants = padding edge of the element.
         Rect::new(
             b.rect.x + s.border_left_width,
@@ -1817,6 +1818,9 @@ pub(super) fn finish_after_match(
             pcb
         };
         lay_out_abs_children(b, abs_deferred, measurer, viewport, my_pcb, hp);
+    }
+    if is_positioned {
+        super::multicol_abspos::fix_out_of_flow_descendants(b, measurer, viewport, hp);
     }
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
