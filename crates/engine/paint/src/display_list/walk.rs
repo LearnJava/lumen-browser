@@ -39,13 +39,17 @@ pub(crate) fn emit_box_self(
             if is_hidden_empty_cell(b) {
                 return;
             }
-            emit_box_shadows(b, out);
+            // HTML Rendering §15.3.13: у fieldset с rendered legend фон, тени и рамка начинаются
+            // с границы блока-начала, опущенной под legend, а не с верха border box.
+            let shifted = fieldset_decoration_box(b);
+            let db = shifted.as_ref().unwrap_or(b);
+            emit_box_shadows(db, out);
             let s = &b.style;
-            let radii = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
+            let radii = CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height);
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b, background_color_clip(b));
+                let clip = background_clip_rect(db, background_color_clip(db));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     if radii.all_zero() {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
@@ -54,36 +58,14 @@ pub(crate) fn emit_box_self(
                     }
                 }
             }
-            emit_background_image(out, b, dpr);
-            emit_inset_box_shadows(b, out);
+            emit_background_image(out, db, dpr);
+            emit_inset_box_shadows(db, out);
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
             if has_border {
-                let cur = s.color;
-                out.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
-                    widths: [
-                        s.border_top_width,
-                        s.border_right_width,
-                        s.border_bottom_width,
-                        s.border_left_width,
-                    ],
-                    colors: [
-                        s.border_top_color.resolve(cur),
-                        s.border_right_color.resolve(cur),
-                        s.border_bottom_color.resolve(cur),
-                        s.border_left_color.resolve(cur),
-                    ],
-                    styles: [
-                        s.border_top_style,
-                        s.border_right_style,
-                        s.border_bottom_style,
-                        s.border_left_style,
-                    ],
-                    radii,
-                });
+                emit_box_border(b, radii, out);
             }
             emit_column_rules(b, out);
             emit_outline(b, out);
@@ -1155,42 +1137,30 @@ fn dispatch<'a>(
             // cell's background and borders the same way (children still walked).
             let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
-                emit_box_shadows(b, out);
+                // HTML Rendering §15.3.13: фон, тени и рамка fieldset'а с rendered legend
+                // начинаются с границы блока-начала, опущенной под legend.
+                let shifted = fieldset_decoration_box(b);
+                let db = shifted.as_ref().unwrap_or(b);
+                emit_box_shadows(db, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
                 {
-                    let clip = background_clip_rect(b, background_color_clip(b));
+                    let clip = background_clip_rect(db, background_color_clip(db));
                     if clip.width > 0.0 && clip.height > 0.0 {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }
                 }
-                emit_background_image(out, b, dpr);
-                emit_inset_box_shadows(b, out);
+                emit_background_image(out, db, dpr);
+                emit_inset_box_shadows(db, out);
                 let s = &b.style;
                 let has_border = s.border_top_style.is_visible()
                     || s.border_right_style.is_visible()
                     || s.border_bottom_style.is_visible()
                     || s.border_left_style.is_visible();
                 if has_border {
-                    let cur = s.color;
-                    out.push(DisplayCommand::DrawBorder {
-                        rect: b.rect,
-                        widths: [
-                            s.border_top_width, s.border_right_width,
-                            s.border_bottom_width, s.border_left_width,
-                        ],
-                        colors: [
-                            s.border_top_color.resolve(cur),
-                            s.border_right_color.resolve(cur),
-                            s.border_bottom_color.resolve(cur),
-                            s.border_left_color.resolve(cur),
-                        ],
-                        styles: [
-                            s.border_top_style, s.border_right_style,
-                            s.border_bottom_style, s.border_left_style,
-                        ],
-                        radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
-                    });
+                    emit_box_border(
+                        b, CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height), out,
+                    );
                 }
                 emit_column_rules(b, out);
             }

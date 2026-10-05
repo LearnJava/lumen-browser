@@ -125,6 +125,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         style: Arc::clone(&slot.style),
         used_line_height: 0.0,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         kind: BoxKind::Skip,
         children: Vec::new(),
@@ -241,6 +242,11 @@ fn step_child(
     let container_right = frame.init.container_right;
     let children_available_height = frame.init.children_available_height;
     let children_pcb = frame.init.children_pcb;
+
+    // Rendered legend уже стоит на границе fieldset (`place_rendered_legend`).
+    if frame.b.fieldset_legend.is_some_and(|l| l.placed && l.idx == i) {
+        return StepOutcome::Advance;
+    }
 
     if matches!(frame.b.children[i].style.position, Position::Absolute | Position::Fixed) {
         let child_y = frame.init.child_y;

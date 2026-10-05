@@ -109,9 +109,9 @@ mod predicates;
 pub(crate) use predicates::{
     embedded_document_url, embedded_image, embedded_resource_url, is_audio_element, is_canvas_element,
     is_iframe_element, is_image_element,
-    is_inline_replaced_media_element, is_picture_element, is_ruby_element,
+    blockified_legend_display, is_fieldset_element, is_fieldset_legend, is_inline_replaced_media_element, is_picture_element, is_ruby_element,
     is_ruby_base_element, is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
-    is_video_element, scrollbar_gutter_block,
+    is_video_element, rendered_legend_index, scrollbar_gutter_block,
     scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 
@@ -155,7 +155,7 @@ pub use image_requests::{
 use image_requests::resolve_image_source;
 
 mod types;
-pub use types::{BoxKind, BoxOrigin, BoxRole, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, SvgMaskContent};
+pub use types::{BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, SvgMaskContent};
 
 mod pseudo_text;
 use pseudo_text::{
@@ -226,6 +226,7 @@ mod bfc;
 mod layout_cache;
 mod layout_dispatch;
 mod block_flow_trampoline;
+mod fieldset;
 mod flex_trampoline;
 mod grid_trampoline;
 mod table_trampoline;

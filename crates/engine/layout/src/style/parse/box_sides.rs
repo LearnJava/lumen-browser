@@ -548,6 +548,7 @@ pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {
 pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
     // Top-level split: a colour like `rgba(0, 0, 255, 0.5)` is one token.
     let tokens = split_top_level_ws(val);
+    let mut invisible = false;
     for tok in &tokens {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             style.border_top_width = v;
@@ -556,6 +557,7 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
             style.border_left_width = v;
         } else if is_border_style_kw(tok) {
             let bs = parse_border_style_kw(tok);
+            invisible = !bs.is_visible();
             style.border_top_style = bs;
             style.border_right_style = bs;
             style.border_bottom_style = bs;
@@ -566,6 +568,15 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
             style.border_bottom_color = c;
             style.border_left_color = c;
         }
+    }
+    // CSS Backgrounds L3 §4.1: `border-*-width` computes to 0 when the style is `none`/`hidden`.
+    // `border: none` must therefore also drop a width set earlier (a UA `fieldset` border, an
+    // author `border: 1px solid` the rule overrides) instead of leaving it to layout.
+    if invisible {
+        style.border_top_width = 0.0;
+        style.border_right_width = 0.0;
+        style.border_bottom_width = 0.0;
+        style.border_left_width = 0.0;
     }
 }
 
@@ -579,14 +590,20 @@ pub(in crate::style) fn apply_border_side_shorthand(
     viewport: Size,
     is_quirks: bool,
 ) {
+    let mut invisible = false;
     for tok in split_top_level_ws(val) {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
+            invisible = !bstyle.is_visible();
         } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
             *color = c;
         }
+    }
+    // Same as `apply_border_shorthand`: a `none`/`hidden` side has a computed width of 0.
+    if invisible {
+        *width = 0.0;
     }
 }
 

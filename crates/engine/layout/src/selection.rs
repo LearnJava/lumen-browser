@@ -399,6 +399,7 @@ mod tests {
             rect,
             used_line_height: style.font_size * style.line_height,
             grid_baselines: None,
+            fieldset_legend: None,
             subgrid_tracks: None,
             style,
             kind: BoxKind::InlineRun {

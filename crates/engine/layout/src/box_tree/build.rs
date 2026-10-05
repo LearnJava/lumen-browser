@@ -159,6 +159,7 @@ fn build_ruby_box(
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::clone(style),
         kind: BoxKind::Ruby { shape: Box::new(shape) },
@@ -244,6 +245,7 @@ fn build_ruby_group_box(
         rect: Rect::ZERO,
         used_line_height: bstyle.font_size * bstyle.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::new(bstyle),
         kind: BoxKind::Block,
@@ -321,6 +323,7 @@ fn build_base_select_box(
         rect: Rect::ZERO,
         used_line_height: trigger_style.font_size * trigger_style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::new(trigger_style),
         kind: BoxKind::Block,
@@ -341,6 +344,7 @@ fn build_base_select_box(
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::new(style.clone()),
         // FlowRoot: establishes a BFC and lays out the trigger as a block child,
@@ -570,6 +574,22 @@ fn build_box_inner(
             Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
         })
     });
+
+    // HTML Rendering §15.3.13: a legend of a fieldset is blockified (`inline`, `inline-block`, the
+    // table-internal values), and its children are built as the content of a block. The box
+    // itself gets the author's `display` back below — `getComputedStyle` reads the box's style and
+    // reports the computed value, not the used one (the layout of the legend blockifies it again
+    // for the duration of `place_rendered_legend`).
+    let legend_author_display = if is_fieldset_legend(doc, id)
+        && let Some(block) = blockified_legend_display(style.display)
+        && block == Display::Block
+    {
+        let author = style.display;
+        Arc::make_mut(&mut style).display = block;
+        Some(author)
+    } else {
+        None
+    };
 
     // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
     // as an author-styleable widget tree instead of the opaque native control.
@@ -889,6 +909,10 @@ fn build_box_inner(
                     doc, sheet, id, &style, viewport, flat, counters, registry, dark_mode,
                     prev_index,
                 );
+            } else if style.display == Display::Block && is_fieldset_element(doc, id) {
+                // HTML Rendering §15.3.13: fieldset образует BFC (рамка с legend не
+                // схлопывает поля с содержимым).
+                BoxKind::FlowRoot
             } else {
                 BoxKind::Block
             }
@@ -899,11 +923,15 @@ fn build_box_inner(
     // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
     // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
     if style.content_visibility == crate::style::ContentVisibility::Hidden {
+        if let Some(author) = legend_author_display {
+            Arc::make_mut(&mut style).display = author;
+        }
         return LayoutBox {
             node: id,
             rect: Rect::ZERO,
             used_line_height: style.font_size * style.line_height,
             grid_baselines: None,
+            fieldset_legend: None,
             subgrid_tracks: None,
             style,
             kind,
@@ -1270,6 +1298,7 @@ fn build_box_inner(
                                 rect: Rect::ZERO,
                                 used_line_height: gap_style.font_size * gap_style.line_height,
                                 grid_baselines: None,
+                                fieldset_legend: None,
                                 subgrid_tracks: None,
                                 style: Arc::new(gap_style),
                                 kind: BoxKind::InlineSpace,
@@ -1434,11 +1463,25 @@ fn build_box_inner(
         (1, 1)
     };
 
+    if let Some(author) = legend_author_display {
+        Arc::make_mut(&mut style).display = author;
+    }
+    let fieldset_legend = if is_fieldset_element(doc, id) {
+        rendered_legend_index(doc, &children).map(|idx| FieldsetLegend {
+            idx,
+            node: children[idx].node,
+            placed: false,
+            border_inset: 0.0,
+        })
+    } else {
+        None
+    };
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        fieldset_legend,
         subgrid_tracks: None,
         style,
         kind,

@@ -60,9 +60,13 @@ fn probe_display_and_flow(
         v.display_probes += 1;
         s.set(v);
     });
+    let legend = is_fieldset_legend(doc, id);
     let read = |s: &ComputedStyle| {
+        // HTML Rendering §15.3.13: a legend of a fieldset is blockified (`build_box` applies the
+        // same mapping to the box's own style), so it never flattens into the text around it.
+        let display = if legend { blockified_legend_display(s.display).unwrap_or(s.display) } else { s.display };
         (
-            s.display,
+            display,
             s.float_side != FloatSide::None
                 || matches!(s.position, Position::Absolute | Position::Fixed),
         )
@@ -281,6 +285,7 @@ pub(crate) fn anon_inline_run(
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::new(style),
         kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
@@ -339,6 +344,7 @@ pub(crate) fn build_anon_text_item(
         rect: Rect::ZERO,
         used_line_height: item_style.font_size * item_style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::new(item_style),
         kind: BoxKind::Block,
@@ -728,6 +734,7 @@ pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items:
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: Arc::new(style),
         kind: BoxKind::InlineBlockRow,
@@ -1140,6 +1147,7 @@ pub(crate) fn inject_pseudo(
                 rect: Rect::ZERO,
                 used_line_height: ps.font_size * ps.line_height,
                 grid_baselines: None,
+                fieldset_legend: None,
                 subgrid_tracks: None,
                 style: Arc::new(ps),
                 kind: BoxKind::Block,
@@ -1412,6 +1420,7 @@ pub(crate) fn inject_marker(
         rect:     Rect::ZERO,
         used_line_height: ms.font_size * ms.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style:    Arc::new(ms),
         kind:     BoxKind::Marker {

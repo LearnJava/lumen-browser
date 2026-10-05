@@ -27,7 +27,7 @@ use crate::style::{
     apply_image_presentational_hints, apply_property_initial_values, apply_quirks_html_height,
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
-    apply_ua_dialog_display, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
+    apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
     apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
@@ -384,6 +384,8 @@ pub(crate) fn compute_style_shareable(
     // Set font-size here (before the author font-size pre-pass) so author CSS overrides it.
     apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
+    // UA stylesheet: <fieldset> / <legend>. HTML Rendering §15.3.13. Author CSS перекроет.
+    apply_ua_fieldset_style(doc, node, &mut style);
     // UA stylesheet: <body> → margin: 8px. HTML Rendering §14.3.3. Author CSS перекроет.
     apply_ua_body_margin(doc, node, &mut style);
     // UA stylesheet: form controls — display, intrinsic dimensions, border,
