@@ -223,3 +223,23 @@ fn an_item_whose_child_straddles_a_break_keeps_the_container_atomic() {
     );
     assert!(v.is_empty(), "{} fragments", v.len());
 }
+
+#[test]
+fn a_flex_fragment_keeps_the_line_gaps_of_items_that_stayed_in_an_earlier_column() {
+    // flex/fragmentation/011: a 25px first item and a 50px second one share a line; the cut at
+    // 47px leaves the first one whole in column 0, but the gap next to it (x 52..62 from the box)
+    // still runs through the part of the line that continues in column 1.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div id=\"one\"></div><div></div><div></div><div></div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:10px;width:350px;height:47px} \
+         #f{display:flex;flex-wrap:wrap;width:110px;height:110px;border:2px solid;row-gap:10px;column-gap:10px} \
+         #f>div{width:50px;height:50px} #one{height:25px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    assert!(v.len() >= 2, "{} fragments", v.len());
+    let second = v[1].subgrid_tracks.as_ref().unwrap().line_gaps.as_ref().expect("line gaps");
+    let first_line = &second[0];
+    assert_eq!(first_line.len(), 1, "{second:?}");
+    assert!((first_line[0].0 - 52.0).abs() < 0.01 && (first_line[0].1 - 62.0).abs() < 0.01, "{first_line:?}");
+}

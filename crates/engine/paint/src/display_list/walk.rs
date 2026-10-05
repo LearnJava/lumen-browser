@@ -702,6 +702,7 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
                 subgrid_col_tracks,
                 subgrid_row_tracks,
                 fragment,
+                fragment_line_gaps: None,
                 style: s,
             },
         );
@@ -725,6 +726,10 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
                 .flatten()
                 .map(|t| t.iter().map(|&(a, z)| (cy + a, cy + z)).collect()),
             fragment,
+            fragment_line_gaps: fragment
+                .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.line_gaps.as_ref()))
+                .flatten()
+                .map(|g| g.iter().map(|l| l.iter().map(|&(a, z)| (b.rect.x + a, b.rect.x + z)).collect()).collect()),
             style: s,
         },
     )
