@@ -2978,7 +2978,7 @@ fn rasterize_text_rotated(
         return Ok(None);
     };
 
-    let transform = tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y);
+    let transform = tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x + rect.width, rect.y);
     let clip_mask = build_clip_mask(width, height, clip.copied());
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
@@ -2987,7 +2987,7 @@ fn rasterize_text_rotated(
     };
     pixmap.draw_pixmap(0, 0, local.as_ref(), &paint, transform, clip_mask.as_ref());
 
-    let rotate = |x: f32, y: f32| (-y + rect.x, x + rect.y);
+    let rotate = |x: f32, y: f32| (-y + rect.x + rect.width, x + rect.y);
     let corners = [rotate(l, t), rotate(r, t), rotate(r, b), rotate(l, b)];
     let (mut dl, mut dt, mut dr, mut db) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
     for (x, y) in corners {
@@ -3130,9 +3130,9 @@ fn rasterize_text_mixed(
                 font_style, font_features, font_family, font_provider, None,
             )? {
                 let transform =
-                    tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y + y_cursor);
+                    tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x + rect.width, rect.y + y_cursor);
                 pixmap.draw_pixmap(0, 0, local.as_ref(), &paint, transform, clip_mask.as_ref());
-                let rotate = |x: f32, y: f32| (-y + rect.x, x + rect.y + y_cursor);
+                let rotate = |x: f32, y: f32| (-y + rect.x + rect.width, x + rect.y + y_cursor);
                 let corners = [rotate(l, t), rotate(r, t), rotate(r, b), rotate(l, b)];
                 let (mut dl, mut dt, mut dr, mut db) =
                     (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -3942,6 +3942,36 @@ mod tests {
         let (s_w, s_h) = (sr - sl, sb - st);
         assert!(h_w > h_h, "horizontal run should be wider than tall (w={h_w} h={h_h})");
         assert!(s_h > s_w, "sideways run should be taller than wide (w={s_w} h={s_h})");
+    }
+
+    /// BUG-553, срез 62: a rotated run lives inside its column box. The rotation
+    /// maps the glyph top onto the column's RIGHT edge (`rect.x + rect.width`) and
+    /// the body grows leftwards; anchored at `rect.x` the whole run fell one
+    /// line-height to the left of the box (`vertical-lr` text outside its block).
+    #[test]
+    fn draw_text_sideways_ink_stays_inside_the_column_box() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: rect(60.0, 10.0, 40.0, 100.0),
+            text: "Hi".to_string(),
+            font_size: 32.0,
+            color: blue,
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: Some(TextOrientation::Sideways),
+        }];
+        let img = rasterize_cpu(160, 160, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let (l, t, r, b) = ink_bbox_blue(&img);
+        assert!(r > l && b > t, "sideways run produced no ink");
+        assert!(l >= 60 && r <= 100, "ink x-range {l}..{r} must lie inside the column 60..100");
+        assert!(t >= 10, "run must start at the column top, got y={t}");
     }
 
     fn ink_bbox_blue(img: &Image) -> (u32, u32, u32, u32) {

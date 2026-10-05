@@ -1720,16 +1720,16 @@ fn crop_region_rgba(
 /// out horizontally at the local origin onto its vertical column at `dest`.
 ///
 /// Mirrors the CPU rasterizer's transform
-/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x, dest.y)`) and the wgpu
+/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x + dest.width, dest.y)`) and the wgpu
 /// renderer's `rotate_text_vertices_cw`: a point `(x, y)` maps to
-/// `(-y + dest.x, x + dest.y)`. Fed to `Canvas::set_transform`, which
+/// `(-y + dest.x + dest.width, x + dest.y)`. Fed to `Canvas::set_transform`, which
 /// *premultiplies* — so the rotation composes under whatever scale/translate
 /// the enclosing clip or transform layer already installed, instead of
 /// replacing it.
 fn rotate_cw_transform(dest: Rect) -> femtovg::Transform2D {
     // Transform2D is [a, b, c, d, e, f] with x' = a·x + c·y + e,
     // y' = b·x + d·y + f.
-    femtovg::Transform2D([0.0, 1.0, -1.0, 0.0, dest.x, dest.y])
+    femtovg::Transform2D([0.0, 1.0, -1.0, 0.0, dest.x + dest.width, dest.y])
 }
 
 impl FemtovgBackend {
@@ -5665,13 +5665,13 @@ mod tests {
 
     #[test]
     fn rotate_cw_transform_matches_cpu_and_wgpu_mapping() {
-        // Both other backends implement `(x, y) -> (-y + dest.x, x + dest.y)`
-        // (tiny-skia `from_row(0, 1, -1, 0, dest.x, dest.y)` /
+        // Both other backends implement `(x, y) -> (-y + dest.x + dest.width, x + dest.y)`
+        // (tiny-skia `from_row(0, 1, -1, 0, dest.x + dest.width, dest.y)` /
         // `rotate_text_vertices_cw`). Any divergence here would place femtovg's
         // vertical runs somewhere the reference backends do not.
         let t = rotate_cw_transform(Rect::new(100.0, 40.0, 30.0, 260.0));
         for (x, y) in [(0.0, 0.0), (12.0, 5.0), (200.0, -8.0), (-3.0, 17.0)] {
-            let expected = (-y + 100.0, x + 40.0);
+            let expected = (-y + 130.0, x + 40.0);
             let got = map(&t, x, y);
             assert!(
                 (got.0 - expected.0).abs() < 1e-4 && (got.1 - expected.1).abs() < 1e-4,
@@ -5683,19 +5683,19 @@ mod tests {
     #[test]
     fn rotate_cw_transform_makes_the_run_flow_downwards_from_the_column_origin() {
         // The `Sideways` branch lays the run out at local `(0, 0)` and relies on
-        // the rotation to start it at the column's top-left and advance
+        // the rotation to start it at the column's top-right and advance
         // top→bottom, matching `wrap_inline_run_vertical`'s column placement.
         let dest = Rect::new(64.0, 12.0, 30.0, 260.0);
         let t = rotate_cw_transform(dest);
-        assert_eq!(map(&t, 0.0, 0.0), (dest.x, dest.y));
+        assert_eq!(map(&t, 0.0, 0.0), (dest.x + dest.width, dest.y));
         // Pen advance along local +X becomes downward movement in the column…
         let advanced = map(&t, 50.0, 0.0);
-        assert_eq!(advanced, (dest.x, dest.y + 50.0));
+        assert_eq!(advanced, (dest.x + dest.width, dest.y + 50.0));
         // …and the local baseline drop (+Y, glyph height) becomes leftward
-        // movement — the glyph body sits to the left of the column origin,
+        // movement — the glyph body sits to the left of the column's right edge,
         // which is why the `Sideways` branch feeds the swapped local rect
         // (width = rect.height, height = rect.width).
-        assert_eq!(map(&t, 0.0, 18.0), (dest.x - 18.0, dest.y));
+        assert_eq!(map(&t, 0.0, 18.0), (dest.x + dest.width - 18.0, dest.y));
     }
 
     // ─── ADR-016 M3.2.1b band geometry ──────────────────────────────────────

@@ -87,14 +87,16 @@ fn rotate_text_vertices_cw_maps_horizontal_run_into_vertical_column() {
         TextVertex { pos: [0.0, 10.0], z: 0.0, uv: [0.0, 1.0], color: [0.0; 4] },
     ];
     rotate_text_vertices_cw(&mut verts, dest);
-    // (0,0) -> (-0 + 100, 0 + 50) = (100, 50): local origin lands on dest origin.
-    assert_eq!(verts[0].pos, [100.0, 50.0]);
-    // (40,0) -> (0 + 100, 40 + 50) = (100, 90): local width becomes vertical extent.
-    assert_eq!(verts[1].pos, [100.0, 90.0]);
-    // (40,10) -> (-10 + 100, 40 + 50) = (90, 90).
-    assert_eq!(verts[2].pos, [90.0, 90.0]);
-    // (0,10) -> (-10 + 100, 0 + 50) = (90, 50): local height becomes horizontal extent.
-    assert_eq!(verts[3].pos, [90.0, 50.0]);
+    // The local origin lands on dest's top-RIGHT corner (110, 50): the glyph body
+    // grows leftwards into the column, so the quad stays inside `dest`.
+    // (0,0) -> (-0 + 110, 0 + 50) = (110, 50).
+    assert_eq!(verts[0].pos, [110.0, 50.0]);
+    // (40,0) -> (0 + 110, 40 + 50) = (110, 90): local width becomes vertical extent.
+    assert_eq!(verts[1].pos, [110.0, 90.0]);
+    // (40,10) -> (-10 + 110, 40 + 50) = (100, 90).
+    assert_eq!(verts[2].pos, [100.0, 90.0]);
+    // (0,10) -> (-10 + 110, 0 + 50) = (100, 50): local height becomes horizontal extent.
+    assert_eq!(verts[3].pos, [100.0, 50.0]);
     // UV/color untouched — only screen position rotates.
     assert_eq!(verts[0].uv, [0.0, 0.0]);
 }
