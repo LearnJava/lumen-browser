@@ -1179,14 +1179,26 @@ fn set_align_content(style: &mut ComputedStyle, val: &str) {
 fn set_justify_items(style: &mut ComputedStyle, val: &str) {
     if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
         style.justify_items = v;
-        style.content_align_extra.justify_items_safe = safe;
+        let e = &mut style.content_align_extra;
+        (e.justify_items_safe, e.justify_items_own, e.justify_items_side) =
+            (safe, AlignValue::is_self_relative(val), None);
+    } else if let Some((side, safe)) = AlignValue::parse_self_side(val) {
+        style.justify_items = if side == ContentSide::Left { AlignValue::Start } else { AlignValue::End };
+        let e = &mut style.content_align_extra;
+        (e.justify_items_safe, e.justify_items_own, e.justify_items_side) = (safe, false, Some(side));
     }
 }
 
 fn set_justify_self(style: &mut ComputedStyle, val: &str) {
     if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
         style.justify_self = v;
-        style.content_align_extra.justify_self_safe = safe;
+        let e = &mut style.content_align_extra;
+        (e.justify_self_safe, e.justify_self_own, e.justify_self_side) =
+            (safe, AlignValue::is_self_relative(val), None);
+    } else if let Some((side, safe)) = AlignValue::parse_self_side(val) {
+        style.justify_self = if side == ContentSide::Left { AlignValue::Start } else { AlignValue::End };
+        let e = &mut style.content_align_extra;
+        (e.justify_self_safe, e.justify_self_own, e.justify_self_side) = (safe, false, Some(side));
     }
 }
 
