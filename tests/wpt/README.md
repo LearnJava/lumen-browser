@@ -318,6 +318,16 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   out the full timeout — 6.1 s (12.1 s two-deep) on ~1 restart in 5.
   `LUMEN_WPT_SPAWN_LOCK=off` — old behaviour. §одновременный запуск
   браузеров; pinned by `verify_spawn_lock.py`.
+  And in the reftest executor: a render that overruns its timeout drops the
+  `--ipc-server` socket (`LumenIpcProtocol.drop`) and reports
+  EXTERNAL-TIMEOUT (shown as TIMEOUT) so the browser is restarted. The IPC
+  protocol has no request id; the late reply used to be read by the next
+  test's `NavigateTab` ("expected Navigated, got variant 9"), and every later
+  reftest on that browser was a FAIL that never compared a pixel. A `TabError`
+  reply stays a plain FAIL on the same connection. §процессы на шард; pinned
+  by `verify_ipc_desync.py` (fake server, no browser).
+  `--processes`: 7 is the default; on a 16-thread/32 GB machine with
+  `--parallel-shards 3` use 14 (wall −16…−35 %, score inside the noise).
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =

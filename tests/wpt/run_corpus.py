@@ -1798,7 +1798,10 @@ def main() -> int:
                         help="wptrunner --processes per shard (default: 7; six concurrent "
                              "`lumen` instances plus a shard's orphans pushed a 7.6 GB "
                              "Linux box into OOM — see kill_tree — pass a lower value "
-                             "on a machine that small)")
+                             "on a machine that small). With --parallel-shards 3 on a "
+                             "16-thread/32 GB box, 14 measured -16..-35%% wall with the "
+                             "score inside the noise (p2-wpt-runner-throughput.md "
+                             "§процессы на шард)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--parallel-shards", type=int, default=1,
                         help="run this many shards at once, each on its own copy of the wptserve "

@@ -764,6 +764,12 @@ class IpcError(Exception):
     `TabError` reply)."""
 
 
+class IpcTabError(IpcError):
+    """`TabError` reply: the server answered this very request, so the
+    request/response stream is still in step and the connection stays usable
+    — the page itself failed, which is the test's verdict."""
+
+
 def _u32(v):
     return struct.pack("<I", v)
 
@@ -840,6 +846,21 @@ class LumenIpcProtocol(Protocol):
     def is_alive(self):
         return self.sock is not None
 
+    def drop(self):
+        """Close the connection after a request whose reply was not read in
+        full (`socket.timeout`, an unexpected variant, a truncated body).
+
+        The protocol is strict request/response with no request id, so a
+        reply that arrives after its reader gave up is read by the *next*
+        request as its own: `NavigateTab` gets the late `Screenshot` (variant
+        9) and fails, its own `Navigated` is then read by the following
+        `Screenshot`, and so on — every later test on this browser was a FAIL
+        that never looked at a pixel (37 of them after six render timeouts on
+        a 1 970-id set, 2026-10-05). Dropping the socket makes `is_alive`
+        false, so the browser is restarted instead of being reused out of
+        step."""
+        self.teardown()
+
     def _send(self, payload):
         self.sock.sendall(_u32(len(payload)) + payload)
 
@@ -864,7 +885,7 @@ class LumenIpcProtocol(Protocol):
             return
         if tag == _RESP_TAB_ERROR:
             c.u32()
-            raise IpcError(f"NavigateTab: {c.string()}")
+            raise IpcTabError(f"NavigateTab: {c.string()}")
         raise IpcError(f"expected Navigated, got variant {tag}")
 
     def screenshot_png(self):
@@ -876,7 +897,7 @@ class LumenIpcProtocol(Protocol):
             return c.vec()
         if tag == _RESP_TAB_ERROR:
             c.u32()
-            raise IpcError(f"Screenshot: {c.string()}")
+            raise IpcTabError(f"Screenshot: {c.string()}")
         raise IpcError(f"expected Screenshot, got variant {tag}")
 
 
@@ -923,14 +944,25 @@ class LumenRefTestExecutor(RefTestExecutor):
         assert dpi is None
         url = self.test_url(test)
         timeout = test.timeout * self.timeout_multiplier + self.extra_timeout
+        if self.protocol.sock is None:
+            return False, ("CRASH", f"lumen --ipc-server connection already dropped before {url}")
         self.protocol.sock.settimeout(timeout)
         try:
             self.protocol.navigate(url)
             png = self.protocol.screenshot_png()
         except socket.timeout:
-            return False, ("TIMEOUT", f"Timed out rendering {url}")
-        except IpcError as e:
+            # The reply is still coming; reading the next request's answer
+            # from this socket would be reading this one (`LumenIpcProtocol.
+            # drop`). EXTERNAL-TIMEOUT is reported as TIMEOUT — the verdict
+            # this always gave — and makes `testrunner.py` restart the browser.
+            self.protocol.drop()
+            return False, ("EXTERNAL-TIMEOUT", f"Timed out rendering {url}")
+        except IpcTabError as e:
             return False, ("FAIL", str(e))
+        except (IpcError, OSError) as e:
+            # Out of step or gone: a CRASH, so the browser is restarted.
+            self.protocol.drop()
+            return False, ("CRASH", f"lumen --ipc-server connection lost rendering {url}: {e}")
         return True, [base64.b64encode(png).decode("ascii")]
 
 
