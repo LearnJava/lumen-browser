@@ -598,7 +598,7 @@
      "title": "FLEX-FRAG: фрагментация flex-контейнера",
      "status": "planned",
      "size": "L",
-     "note": "Фрагментация flex-контейнера (CSS Flexbox L1 «Fragmenting Flex Layout», CSS Fragmentation L3 — параллельные потоки). Flex-контейнер в multicol ставится в колонку атомарно. Проба: `column-count: 4; column-fill: auto; height: 100px`, внутри `display: flex; flex-direction: column; height: 400px` с элементами 50+350px — бокс 25×400 в первой колонке, остальные три пусты. Нужно: single-line column — разрыв между элементами и внутри элемента; row — разрыв между flex-линиями и внутри элементов одной линии (каждый — свой параллельный поток), `break-*` на элементах, высота контейнера по фрагментам. WPT `css/css-break/flexbox/*` и flex в корне: 268 id — крупнейший кластер, кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+     "note": "Фрагментация flex-контейнера (CSS Flexbox L1 «Fragmenting Flex Layout», CSS Fragmentation L3 — параллельные потоки). Flex-контейнер в multicol ставится в колонку атомарно, кроме `row wrap` с элементами-листьями при definite height — его с BUG-553 среза 69 режет по flex-строкам путь `is_fragmentable_grid` (после прогона S4). Проба: `column-count: 4; column-fill: auto; height: 100px`, внутри `display: flex; flex-direction: column; height: 400px` с элементами 50+350px — бокс 25×400 в первой колонке, остальные три пусты. Нужно: single-line column — разрыв между элементами и внутри элемента; row — разрыв между flex-линиями и внутри элементов одной линии (каждый — свой параллельный поток), `break-*` на элементах, высота контейнера по фрагментам. WPT `css/css-break/flexbox/*` и flex в корне: 268 id — крупнейший кластер, кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
     },
     {
      "id": "MULTICOL-FRAG-OOF",
@@ -619,7 +619,7 @@
      "title": "GRID-FRAG: фрагментация grid в общем случае",
      "status": "planned",
      "size": "M",
-     "note": "Остаток фрагментации grid: `is_fragmentable_grid` (`box_tree/multicol_abspos.rs:57`) режет только сетку без рамок, с элементами-листьями, при `column-fill: auto`; иначе сетка ставится атомарно. Проба: ряды 100px + 100px, один элемент с `border` или с ребёнком — сетка 50×200 в первой колонке. Нужно: разрыв между рядами в общем случае (рамки/padding сетки, элементы с содержимым, `balance`), разрыв внутри элемента (параллельные потоки), abspos-элементы сетки, subgrid. WPT `css/css-break/grid/*`: 89 id — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+     "note": "Остаток фрагментации grid: `is_fragmentable_grid` (`box_tree/multicol_abspos.rs:57`) режет только сетку без рамок, с элементами-листьями, в multicol с definite height (`balance` допускается с BUG-553 среза 69, после прогона S4); иначе сетка ставится атомарно. Проба: ряды 100px + 100px, один элемент с `border` или с ребёнком — сетка 50×200 в первой колонке. Нужно: разрыв между рядами в общем случае (рамки/padding сетки, элементы с содержимым, `balance`), разрыв внутри элемента (параллельные потоки), abspos-элементы сетки, subgrid. WPT `css/css-break/grid/*`: 89 id — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
     }
    ],
    "date": "2026-06"
