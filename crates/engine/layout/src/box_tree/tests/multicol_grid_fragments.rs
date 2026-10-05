@@ -266,3 +266,23 @@ fn a_monolithic_flex_item_stays_whole_in_its_column_and_keeps_its_line_gap_there
     let second = v[1].subgrid_tracks.as_ref().unwrap().line_gaps.as_ref().expect("line gaps");
     assert!(second[0].is_empty(), "the line remnant in column 1 has no gap: {second:?}");
 }
+
+#[test]
+fn a_balanced_column_reaches_the_bottom_of_a_monolithic_item_the_next_column_starts_there() {
+    // flex/fragmentation/021: a balanced 47px container, a 110px wrapped flex whose second item is
+    // `contain: size`. Column 0 grows to the item's bottom (55px) instead of being cut at the balanced
+    // 37px; with `column-fill: auto` (012) the overflow does not move the next column.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div>1</div><div id=\"mono\">2</div><div>3</div><div>4</div></div></div>",
+        "body{margin:0} #m{columns:3;column-gap:10px;width:350px;height:47px} \
+         #f{display:flex;flex-wrap:wrap;width:110px;height:110px;column-gap:10px} \
+         #f>div{width:50px} #mono{contain:size}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    assert!(v.len() >= 2, "{} fragments", v.len());
+    let first = v[0].rect.height;
+    assert!((first - 55.0).abs() < 0.01, "column 0 reaches the item's bottom (past the 47px limit): {first}");
+    let line0 = v[0].subgrid_tracks.as_ref().unwrap().rows.as_ref().unwrap()[0];
+    assert!(line0.1 - line0.0 >= 54.9, "the first line reaches the monolithic item's bottom: {line0:?}");
+}

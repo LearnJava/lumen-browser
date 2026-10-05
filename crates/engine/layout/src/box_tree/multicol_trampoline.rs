@@ -623,19 +623,26 @@ fn forced_row_starts(grid: &LayoutBox, gy: f32, rows: &[(f32, f32)]) -> Vec<f32>
 /// the very start edge of the gap, unless an item runs through it (Chrome keeps such a gap:
 /// `grid-gap-decorations-fragmentation-029`). Inside a track the track continues. A forced break
 /// (`forced`, see [`forced_row_starts`]) that falls inside the column ends the window at the track
-/// before it and starts the next one at the forced track.
+/// before it and starts the next one at the forced track. `mono` — the `(top, bottom)` extents of
+/// the monolithic items, only in a balanced container: a column that holds the top edge of one
+/// reaches to its bottom edge (the next column starts there, `flex-gap-decorations-fragmentation-021`);
+/// with `column-fill: auto` the overflow does not move the next column (`012`) and `mono` is empty.
 fn grid_windows(
     grid: &LayoutBox,
     gy: f32,
     rows: &[(f32, f32)],
     forced: &[f32],
+    mono: &[(f32, f32)],
     total_h: f32,
     limit: f32,
 ) -> Vec<(f32, f32, bool)> {
     let mut windows: Vec<(f32, f32, bool)> = Vec::new();
     let mut start = 0.0f32;
     loop {
-        let end = start + limit;
+        let mut end = start + limit;
+        if let Some(&(_, bot)) = mono.iter().find(|m| m.0 >= start - 0.01 && m.0 < end - 0.01 && m.1 > end + 0.01) {
+            end = bot;
+        }
         if let Some(&fs) = forced.iter().find(|&&y| y > start + 0.01 && y <= end + 0.01) {
             let prev_end = rows.iter().rev().find(|r| r.0 < fs - 0.01).map_or(fs, |r| r.1.min(fs));
             windows.push((start, prev_end.max(start), true));
@@ -772,12 +779,24 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     // fragment into `column-count` columns); only a container that fills them all is cut at the
     // limit. The balanced height starts at `total / columns` and grows until the cut (which drops
     // the row gaps at the breaks) needs no more than `column-count` columns.
+    // A balanced column is never shorter than the tallest monolithic item (Chrome stretches the
+    // columns to it, capped by the height limit).
+    let mono: Vec<(f32, f32)> = if frame.init.balance {
+        grid.children
+            .iter()
+            .filter(|c| is_monolithic(c) && !matches!(c.kind, BoxKind::Skip))
+            .map(|c| (c.rect.y - gy0, c.rect.y - gy0 + c.rect.height))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let cut_at = if frame.init.balance && total_h < limit * n_cols as f32 - 0.01 {
-        let fits = |h: f32| grid_windows(grid, gy0, &rows, &forced, total_h, h).len() <= n_cols;
+        let fits = |h: f32| grid_windows(grid, gy0, &rows, &forced, &mono, total_h, h).len() <= n_cols;
         if !fits(limit) {
             return false;
         }
-        let mut lo = (total_h / n_cols as f32).max(1.0);
+        let tallest = mono.iter().map(|m| m.1 - m.0).fold(0.0f32, f32::max);
+        let mut lo = (total_h / n_cols as f32).max(tallest).max(1.0).min(limit);
         if fits(lo) {
             lo
         } else {
@@ -796,7 +815,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     } else {
         limit
     };
-    let windows = grid_windows(grid, gy0, &rows, &forced, total_h, cut_at);
+    let windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
     let all_line_gaps = flex_line_gaps(grid, gy0, &rows);
     // An item with children is cut between them, never through one: a break inside a line box or
     // a nested block would need real fragmentation of the item, so such a grid stays atomic.
