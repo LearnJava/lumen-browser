@@ -53,12 +53,26 @@ fn box_is_leaf_block(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && b.style.border_right_width == 0.0
 }
 
+/// An in-flow item of a grid cut by `emit_grid_fragments`: a border-less block that may hold
+/// children (blocks, text runs). A leaf is cut by its box alone; an item with children is cut
+/// only where no child straddles the window edge (otherwise `emit_grid_fragments` keeps the
+/// whole grid atomic), so a break never splits a line box or a nested block.
+fn box_is_cuttable_item(b: &LayoutBox, container: &ComputedStyle) -> bool {
+    let vertical = |m: crate::style::WritingMode| !matches!(m, crate::style::WritingMode::HorizontalTb);
+    matches!(b.kind, BoxKind::Block)
+        && b.style.break_inside != crate::style::BreakValue::Avoid
+        && vertical(b.style.writing_mode) == vertical(container.writing_mode)
+        && [b.style.border_top_width, b.style.border_bottom_width, b.style.border_left_width, b.style.border_right_width]
+            .iter()
+            .all(|w| *w == 0.0)
+}
+
 /// CSS Fragmentation L3 §5.1 / CSS Gap Decorations L1 §6.2 — a grid (or wrapped row flex) container that is cut across
 /// the columns of a multicol container as a *grid* (its rows are split between the columns and
 /// the row gaps at a break are dropped), rather than kept as one atomic box. Only the simple
-/// case: a plain horizontal `display: grid` box without border/padding, whose in-flow children
-/// are leaf blocks (`box_is_column_sliceable`), so cutting a child by a column window repeats
-/// nothing and hides no border. `subgrid` axes, `break-inside: avoid` and a forced break of the
+/// case: a plain horizontal `display: grid` box without padding (a border is cut with the box), whose
+/// in-flow children are border-less blocks (`box_is_cuttable_item`), so cutting a child by a column
+/// window repeats nothing and hides no border. `subgrid` axes, `break-inside: avoid` and a forced break of the
 /// grid itself keep the atomic path; a forced break of an item is cut at by `emit_grid_fragments`
 /// (`column-fill: auto` only, a balanced container falls back to the atomic path there).
 fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
@@ -79,9 +93,6 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && !super::multicol_fragmentation::has_forced_break(s)
         && !is_subgrid(&s.grid_template_columns)
         && !is_subgrid(&s.grid_template_rows)
-        && [s.border_top_width, s.border_bottom_width, s.border_left_width, s.border_right_width]
-            .iter()
-            .all(|w| *w == 0.0)
         && [&s.padding_top, &s.padding_bottom, &s.padding_left, &s.padding_right]
             .iter()
             .all(|p| matches!(p, Length::Px(v) if *v == 0.0))
@@ -89,7 +100,7 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && b.children.iter().all(|c| {
             matches!(c.kind, BoxKind::Skip)
                 || matches!(c.style.position, Position::Absolute | Position::Fixed)
-                || box_is_leaf_block(c, &b.style)
+                || box_is_cuttable_item(c, &b.style)
         })
 }
 

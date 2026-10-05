@@ -676,11 +676,23 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     let i = frame.init.segments[seg_i].item_idxs[0];
     let Some(limit) = segment_limit(&frame.init) else { return false };
     let grid = &frame.init.work[i];
-    let Some(rows) = grid.subgrid_tracks.as_ref().and_then(|t| t.rows.clone()) else { return false };
+    // The tracks are measured from the content box's top; the windows below are in border-box
+    // coordinates (the border is cut with the box: `box-decoration-break: slice`).
+    let border_top = grid.style.border_top_width;
+    let Some(rows) = grid
+        .subgrid_tracks
+        .as_ref()
+        .and_then(|t| t.rows.as_ref())
+        .map(|r| r.iter().map(|&(a, b)| (a + border_top, b + border_top)).collect::<Vec<_>>())
+    else {
+        return false;
+    };
     if rows.len() < 2 || (frame.outer_hs[0] - grid.rect.height).abs() > 0.01 || limit < 1.0 {
         return false;
     }
-    let total_h = grid.rect.height;
+    // Items that overflow a definite container height (`height: 140px` under 154px of lines)
+    // still belong to the last fragment: the cut runs to the end of the last track.
+    let total_h = grid.rect.height.max(rows.last().map_or(0.0, |r| r.1));
     let n_cols = frame.init.n_cols as usize;
     let gy0 = grid.rect.y;
     let forced = forced_row_starts(grid, gy0, &rows);
@@ -719,6 +731,21 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         limit
     };
     let windows = grid_windows(grid, gy0, &rows, &forced, total_h, cut_at);
+    // An item with children is cut between them, never through one: a break inside a line box or
+    // a nested block would need real fragmentation of the item, so such a grid stays atomic.
+    let edges: Vec<f32> = windows.iter().flat_map(|w| [w.0, w.1]).collect();
+    let straddles = grid.children.iter().any(|c| {
+        !matches!(c.kind, BoxKind::Skip)
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+            && c.children.iter().any(|k| {
+                let (top, bot) = (k.rect.y - gy0, k.rect.y - gy0 + k.rect.height);
+                !matches!(k.kind, BoxKind::Skip)
+                    && edges.iter().any(|&e| top < e - 0.01 && bot > e + 0.01)
+            })
+    });
+    if straddles {
+        return false;
+    }
     let (col_w, col_gap, content_x, cur_y) =
         (frame.init.col_w, frame.init.col_gap, frame.init.content_x, frame.init.cur_y);
     let (gx, gy) = (grid.rect.x, grid.rect.y);
@@ -729,11 +756,22 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         let mut frag = grid.clone();
         frag.rect.x = col_x;
         frag.rect.y = cur_y;
-        frag.rect.width = col_w;
         // A column that ends in a forced break keeps the full column height (the column gaps run
         // through it); every other fragment is as tall as its window.
         let frag_h = if forced_end { (we - ws).max(cut_at) } else { we - ws };
         frag.rect.height = frag_h;
+        // A fragment keeps the border edge it owns: the top one the first, the bottom one the last.
+        let (first, last) = (f == 0, f + 1 == windows.len());
+        if (!first && frag.style.border_top_width > 0.0) || (!last && frag.style.border_bottom_width > 0.0) {
+            let st = std::sync::Arc::make_mut(&mut frag.style);
+            if !first {
+                st.border_top_width = 0.0;
+            }
+            if !last {
+                st.border_bottom_width = 0.0;
+            }
+        }
+        let content_top = if first { border_top } else { 0.0 };
         frag.children = grid
             .children
             .iter()
@@ -756,6 +794,21 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     k.rect.x = col_x + (c.rect.x - gx);
                     k.rect.y = cur_y + (lo - ws);
                     k.rect.height = (hi - lo).max(0.0);
+                    // The children of the item that fall in this window, moved with it.
+                    let (dx, dy) = (col_x - gx, cur_y - gy - ws);
+                    k.children = c
+                        .children
+                        .iter()
+                        .filter(|g| {
+                            let t = g.rect.y - gy;
+                            matches!(g.kind, BoxKind::Skip) || (t >= ws - 0.01 && t < we - 0.01)
+                        })
+                        .map(|g| {
+                            let mut g = g.clone();
+                            super::shift_tree(&mut g, dx, dy);
+                            g
+                        })
+                        .collect();
                     k
                 })
             })
@@ -764,7 +817,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             .iter()
             .filter_map(|&(a, b)| {
                 let (lo, hi) = (a.max(ws), b.min(we));
-                (hi > lo).then_some((lo - ws, hi - ws))
+                (hi > lo).then_some((lo - ws - content_top, hi - ws - content_top))
             })
             .collect();
         let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
