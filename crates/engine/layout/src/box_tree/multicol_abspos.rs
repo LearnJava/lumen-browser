@@ -83,8 +83,10 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
             // A wrapped row flex container is cut by its flex lines the same way (the lines are
             // the row tracks, `flex_trampoline::finish_frame`); one without ≥ 2 lines has no
             // tracks and `emit_grid_fragments` falls back to the atomic path.
+            // A wrapped column flex container is cut by its items' block extents; the flex lines
+            // (columns) are the tracks the gap painter reads (`flex_trampoline::finish_frame`).
             || (matches!(s.display, Display::Flex)
-                && matches!(s.flex_direction, crate::style::FlexDirection::Row)
+                && matches!(s.flex_direction, crate::style::FlexDirection::Row | crate::style::FlexDirection::Column)
                 && matches!(s.flex_wrap, crate::style::FlexWrap::Wrap)))
         && matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(container.writing_mode, crate::style::WritingMode::HorizontalTb)
