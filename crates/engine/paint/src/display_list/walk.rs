@@ -755,8 +755,10 @@ pub(crate) fn gap_decoration_commands(
     let gap_segs = geom.segments;
     // Flex в вертикальном `writing-mode`: `column-rule` идёт по инлайновой оси, то есть физической
     // вертикали, так что его щели — горизонтальные отрезки, а `row-rule` — вертикальные.
-    let swapped = matches!(s.display, Display::Flex | Display::InlineFlex)
-        && s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb;
+    let swapped = matches!(
+        s.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    ) && s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb;
     let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
         gap_segs.into_iter().partition(|g| g.horizontal == swapped);
     // CSS Gap Decorations L1 §4.6: значения списков раздаются щелям оси по порядку
