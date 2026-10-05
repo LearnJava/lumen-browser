@@ -786,6 +786,11 @@ function _lumen_apply_ready_state(state) {
             }
         }
     } else if (state === 'complete') {
+        // HTML LS §8.1.7.2.1: `<body onload="…">` is the window's `load` handler. The
+        // content attribute is compiled when the element's wrapper is first built
+        // (`_lumen_make_element`), and a page that never touches `document.body`
+        // never builds it — touch it here so the handler reaches `window.onload`.
+        try { void document.body; } catch(e) {}
         // load fires on window (does not bubble)
         var loadEv = new Event('load', { bubbles: false, cancelable: false });
         var loadArr = _load_listeners.slice();

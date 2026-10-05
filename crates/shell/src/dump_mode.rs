@@ -212,6 +212,8 @@ pub(crate) fn render_source_to_png(
         None,
     )?;
 
+    settle_after_load(&mut parsed, vp);
+
     // Программные скроллы контейнеров, запрошенные скриптами страницы
     // (`el.scrollBy()`/`scrollTo()`/`scrollTop = …`): живой цикл применяет их
     // в `about_to_wait` через `set_scroll_position`, headless-путь их никогда
@@ -280,6 +282,48 @@ pub(crate) fn render_source_to_png(
     lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
 }
+
+/// Максимум кадров `requestAnimationFrame`, которые снимок прокручивает после `load`.
+/// Двойной rAF (`rAF(() => rAF(() => …))`) — обычный приём «дождаться отрисовки» в
+/// reftest-ах; цепочка длиннее пары кадров снимку не нужна.
+const SCREENSHOT_RAF_TURNS: usize = 4;
+
+/// Довести страницу до состояния «после `load` и первых кадров» перед снимком.
+///
+/// `parse_and_layout` отдаёт документ сразу после inline-скриптов и
+/// `DOMContentLoaded`: обработчики `window.onload`/`<body onload>` и колбэки
+/// `requestAnimationFrame` (живой цикл крутит их сам) в headless-пути не
+/// исполнялись, поэтому страницы, меняющие DOM в `load`/двойном rAF
+/// (`css-gaps/*repaint-on-*`, `gap-decorations-003/004`), снимались «до» правки.
+/// Здесь один раз шлётся `load`, затем до [`SCREENSHOT_RAF_TURNS`] кадров rAF, пока
+/// очередь не опустеет; если скрипты тронули DOM — layout пересчитывается тем же
+/// измерителем (страницы без изменений остаются побайтово прежними).
+#[cfg(feature = "v8")]
+pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, vp: Size) {
+    let Some(js) = parsed.js_ctx.clone() else { return };
+    js.notify_window_loaded();
+    let mut ts = 0.0_f64;
+    for _ in 0..SCREENSHOT_RAF_TURNS {
+        if !js.has_raf_pending() {
+            break;
+        }
+        ts += 16.0;
+        js.run_animation_frame(ts);
+    }
+    if !js.take_dom_dirty() {
+        return;
+    }
+    let layout = {
+        let Ok(doc) = parsed.document.lock() else { return };
+        lumen_layout::layout_measured_hyp(
+            &doc, &parsed.stylesheet, vp, &parsed.measurer, &NullHyphenationProvider, false,
+        )
+    };
+    parsed.layout = layout;
+}
+
+#[cfg(not(feature = "v8"))]
+pub(crate) fn settle_after_load(_parsed: &mut crate::page_pipeline::ParsedPage, _vp: Size) {}
 
 /// Convert a `PersistentJs::flush_canvas_updates` drain into renderer image
 /// entries keyed exactly the way the display list refers to them.
