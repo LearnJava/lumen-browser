@@ -160,6 +160,31 @@ fn is_grid_container(b: &LayoutBox) -> bool {
     matches!(b.style.display, Display::Grid | Display::InlineGrid)
 }
 
+/// Does an item's column placement stay inside the `n_cols` explicit columns
+/// (so it cannot create an implicit column)? Conservative: named lines and
+/// anything unusual answer `false`.
+fn column_placement_in_explicit_grid(s: &ComputedStyle, n_cols: usize) -> bool {
+    let n = n_cols as i64;
+    // Line number → 1-based position from the start (`-1` is the last line, `n + 1`).
+    let pos = |i: i32| {
+        let i = i64::from(i);
+        if i > 0 { i } else { n + 2 + i }
+    };
+    let line = |i: i32| (1..=n + 1).contains(&pos(i));
+    match (&s.grid_column_start, &s.grid_column_end) {
+        (GridLine::Auto, GridLine::Auto) => true,
+        (GridLine::Line(a), GridLine::Auto) => (1..=n).contains(&pos(*a)),
+        (GridLine::Auto, GridLine::Line(e)) => (2..=n + 1).contains(&pos(*e)),
+        (GridLine::Span(k), GridLine::Auto) | (GridLine::Auto, GridLine::Span(k)) => i64::from(*k) <= n,
+        (GridLine::Line(a), GridLine::Line(e)) => line(*a) && line(*e),
+        (GridLine::Line(a), GridLine::Span(k)) => {
+            (1..=n).contains(&pos(*a)) && pos(*a) - 1 + i64::from(*k) <= n
+        }
+        (GridLine::Span(k), GridLine::Line(e)) => (2..=n + 1).contains(&pos(*e)) && i64::from(*k) < pos(*e),
+        _ => false,
+    }
+}
+
 /// CSS Grid L1 §11.5 — intrinsic width contribution of a grid container:
 /// the sum of its columns' intrinsic widths plus `column-gap`, not the widest
 /// child (BUG-740).
@@ -190,7 +215,16 @@ fn grid_col_intrinsic_sum(
     // wide as its fixed-length columns plus the gaps between them (Grid L1
     // §7.1); any other track type has nothing to size it, so the caller's
     // fallback applies.
-    if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
+    let all_fixed = template.iter().all(|t| matches!(t, GridTrackSize::Length(_)));
+    let items_in_grid = b
+        .children
+        .iter()
+        .filter(|c| contributes_to_intrinsic_width(c))
+        .all(|c| column_placement_in_explicit_grid(&c.style, n_cols));
+    // Fixed-length columns do not depend on their items at all, so the same sum
+    // holds for a container whose items are placed explicitly, as long as no
+    // item reaches past the explicit grid (that would add an implicit column).
+    if n_cols >= 1 && all_fixed && items_in_grid {
         let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
         let mut sum = gap * (n_cols - 1) as f32;
         for t in template {
@@ -198,6 +232,9 @@ fn grid_col_intrinsic_sum(
             sum += l.resolve(s.font_size, None, viewport)?.max(0.0);
         }
         return Some(sum);
+    }
+    if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
+        return None;
     }
     if n_cols <= 1 || matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
         return None;

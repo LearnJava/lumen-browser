@@ -1587,3 +1587,41 @@ fn bug926_widget_controls_keep_their_ua_width() {
     let text = form_control_width(r#"<div><input type="text"></div>"#, "", 0);
     assert!((text - 176.0).abs() < 0.5, "text input width={text}, expected 176");
 }
+
+/// Фиксированные колонки не зависят от элементов: контейнер с явно размещёнными
+/// элементами (`grid-area`) так же широк, как сумма колонок и щелей (Grid L1 §11.5).
+#[test]
+fn grid_fixed_columns_with_explicit_placement_sum_to_container_width() {
+    let css = "#outer { display: flex; width: 600px; }         .inner { display: grid; grid-template-columns: repeat(2, 100px); gap: 20px; }         .tail { width: 30px; height: 10px; }";
+    let html = r#"<div id="outer"><div class="inner">
+        <div style="grid-area: 1/2/2/3"></div><div style="grid-area: 1/1/2/2"></div></div>
+        <div class="tail"></div></div>"#;
+    assert_eq!(child_widths(html, css), vec![220.0, 30.0]);
+}
+
+/// Элемент, уходящий за явную сетку, создаёт неявную колонку — суммой фиксированных
+/// колонок это не посчитать, остаётся прежнее правило.
+#[test]
+fn grid_item_beyond_explicit_columns_skips_fixed_sum() {
+    let css = "#outer { display: flex; width: 600px; }         .inner { display: grid; grid-template-columns: repeat(2, 100px); }         .tail { width: 30px; height: 10px; }";
+    let html = r#"<div id="outer"><div class="inner">
+        <div style="grid-column: 3; width: 40px"></div></div>
+        <div class="tail"></div></div>"#;
+    assert_ne!(child_widths(html, css)[0], 200.0);
+}
+
+/// `max-content` колонка берёт ширину содержимого, а не делит свободное место
+/// поровну, как `auto` (Grid L1 §11.5).
+#[test]
+fn grid_max_content_column_sizes_to_its_item() {
+    let doc = lumen_html_parser::parse(
+        r#"<div id="g"><div style="width: 50px; height: 10px"></div><div style="width: 20px; height: 10px"></div></div>"#,
+    );
+    let sheet = lumen_css_parser::parse(
+        "#g { display: grid; grid-template-columns: max-content max-content; width: 400px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let g = super::find_by_id_all(&root, &doc, "g").expect("#g box not found");
+    let items: Vec<_> = g.children.iter().filter(|c| !matches!(c.kind, super::super::BoxKind::Skip)).collect();
+    assert_eq!(items[1].rect.x - items[0].rect.x, 50.0);
+}

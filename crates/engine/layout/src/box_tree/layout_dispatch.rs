@@ -1158,7 +1158,7 @@ pub(super) fn dispatch_box(
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
-                    size_contained, is_positioned, pcb,
+                    size_contained, is_positioned, pcb, measurer,
                 ) {
                     Some(init) => return DispatchOutcome::NeedsGridLoop(init),
                     None => {
