@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-04",
+ "generated": "2026-10-05",
  "counts": {
-  "open": 145,
-  "fixed": 1062,
+  "open": 159,
+  "fixed": 1063,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1209,
+ "total_bugs": 1224,
  "phases": [
   {
    "id": "P0",
@@ -361,6 +361,247 @@
      "bugs": [
       "BUG-987"
      ]
+    },
+    {
+     "id": "FLEX-BASELINE",
+     "title": "FLEX-BASELINE: baseline-выравнивание во flex",
+     "status": "done",
+     "size": "L",
+     "note": "Выравнивание по базовой линии во flex (`align-items`/`align-self` со значениями `baseline`, `first baseline`, `last baseline`, CSS Flexbox L1 §8.5 и CSS Align L3 §9): модель baseline бокса любого вида (строка текста, вложенный flex/grid/multicol, replaced и пустой бокс — синтез), выравнивание линии flex-контейнера по общей базовой, `last baseline`. Сейчас `flex.rs` не знает baseline вовсе. WPT-RUN-14-S1: 82 id `css/css-flexbox`, 336 упавших сабтестов (`flex-align-baseline*`, `align-items-baseline*`, `alignment/*`). Критерий готовности: id `flex-align-baseline-*` и `alignment/*` зелёные, остаток отнесён в баги Сделано 2026-10-04: модель базовой линии (`box_tree/baseline.rs`), baseline-группы в ряду, `last baseline`, fallback в колонке, `inline-flex` в строке; WPT baseline-набор 85 → 130 из 421 сабтестов, `css/css-flexbox` testharness +56, `css/css-align` +17. Остаток — `FLEX-BASELINE-2`.",
+     "bugs": [
+      "BUG-1257"
+     ]
+    },
+    {
+     "id": "FLEX-BASELINE-2",
+     "title": "FLEX-BASELINE-2: baseline через grid/table/multicol/fieldset/vertical",
+     "status": "done",
+     "size": "L",
+     "note": "Остаток FLEX-BASELINE (WPT `css/css-flexbox/alignment/flex-align-baseline-*`, `align-items-baseline-*`): базовая линия через не-flex боксы и оси. (1) grid: экспорт первой/последней базовой линии контейнера (CSS Grid L1 §6.1) и `align-items: baseline` внутри самого grid (`flex-align-baseline-grid-001..003`); (2) table: первая строка, `<caption>` не участвует (`...table-001..003`); (3) multicol: первая/последняя колонка (`...multicol-001..003`; сейчас последняя линия уезжает на сотни px); (4) fieldset/`<legend>` (`...fieldset-001..003`); (5) `-webkit-line-clamp` (`...line-clamp-001..003`); (6) вертикальные и ортогональные `writing-mode` — центральная базовая линия и синтез (`align-items-baseline-*-vert*`, `flex-align-baseline-001..005`, `-flex-002`, `-flex-004`) — после FLEX-VWM; (7) `wrap-reverse` у колонки и `column-reverse` с переносом (`flex-align-baseline-flex-001` №31, 41–47). Критерий готовности: перечисленные id зелёные, остаток отнесён в баги Сделано 2026-10-04: `vertical-align` ячеек таблицы и базовая линия таблицы (`box_tree/table_valign.rs`), baseline-группы items grid и экспорт линий контейнера (`LayoutBox::grid_baselines`), multicol (спаннеры/колонки), `line-clamp` (последняя видимая строка), центральная базовая линия вертикальных `writing-mode` и выравнивание по горизонтальной поперечной оси flex, ортогональные items с синтезированной линией, первая/последняя линия flex по режиму письма; WPT-набор baseline (129 id, `css/css-flexbox`, `css/css-align`, `css/css-grid`, `css/css-tables`) 414 → 573 из 1015 сабтестов, регрессий 0; `flex-align-baseline-flex-001`, `-003`, `-004`, `-grid-001`, `-line-clamp-001` зелёные. Остаток — `FIELDSET-LEGEND`, `GRID-VWM`, `MULTICOL-BREAKS`, `TABLE-HEIGHT`, `FLEX-VWM-5`, `GRID-BASELINE-2`, `LINE-CLAMP-BOX`."
+    },
+    {
+     "id": "FLEX-VWM",
+     "title": "FLEX-VWM: flex в вертикальных writing-mode",
+     "status": "done",
+     "size": "L",
+     "note": "Flex-контейнер и flex-элементы в вертикальных `writing-mode` (`vertical-rl`/`vertical-lr`/`sideways-*`) и при `direction: rtl`: физические оси из `writing-mode`/`direction`/`flex-direction`, `flex-wrap: wrap-reverse`, auto-margins, `justify-content`/`align-*`, статическая позиция abspos-детей (оставляет BUG-1251 только горизонтальный случай). Сейчас `flex.rs` не упоминает `writing_mode`, контейнер раскладывается как горизонтальный. WPT-RUN-14-S1: 116 id и 963 упавших сабтеста — крупнейший кластер `css-flexbox` (`flexbox-writing-mode-*`, `*-vert*`, `*-vlr`, `*-vrl`, `*-wmvert`). Критерий готовности: `flexbox-writing-mode-*` зелёные, остаток разобран в баги",
+     "bugs": [
+      "BUG-1258"
+     ]
+    },
+    {
+     "id": "FLEX-VWM-2",
+     "title": "FLEX-VWM-2: остаток flex в вертикальных writing-mode (сделаны (1) и (3), у (2) — перенос текста по колонкам, flex-основа пробной раскладкой, кламп по `min-`/`max-height`; остаток — FLEX-VWM-3)",
+     "status": "done",
+     "size": "M",
+     "note": "Остаток FLEX-VWM (оси контейнера, `rtl`, `wrap-reverse`, статическая позиция abspos и `safe`/`left`/`right` сделаны): (1) вертикальный поток `inline-block`/`<br>` в блоке с вертикальным `writing-mode` (BUG-1263: `css-flexbox-row.html`, `css-flexbox-row-reverse.html`, `flex-item-vertical-align.html`); (2) ортогональные flex-элементы — `inline-size`/`block-size` по режиму самого элемента, перенос вертикального текста по inline-size, min-/max-content по обеим осям, `stretch` с пересчётом размера (BUG-1264: `flexbox-writing-mode-010…016`, `stretching-orthogonal-flows`, `percentage-size-subitems-001`, `ortho-table-item-001`); (3) `self-start`/`self-end` относительно режима item, `safe` у выравнивания items, `place-*` с `safe`/`left`/`right` (BUG-1265). Критерий готовности: перечисленные reftest совпадают с эталоном, `flexbox-writing-mode-*` зелёные",
+     "bugs": [
+      "BUG-1263",
+      "BUG-1265"
+     ]
+    },
+    {
+     "id": "FLEX-VWM-3",
+     "title": "FLEX-VWM-3: остаток ортогональных flex-элементов",
+     "status": "done",
+     "size": "M",
+     "note": "Остаток ортогональных flex-элементов (BUG-1264): stretch block-размера вертикального элемента в колонке горизонтального контейнера (`flex::column_item_stretches_block_axis`), content-box `width` колоночного элемента при повторной раскладке, потомки float-а едут за боксом (`float:right` оставлял текст у левого края) и ширина float-а «по содержимому» отдаётся вместе с margin, `inline-size` вертикального float-а по содержимому, физические margin по block-оси вертикального потока и их схлопывание между соседями, `direction: rtl` у блока (CSS 2.1 §10.3.3, в горизонтальном и вертикальном потоке), процентные padding/margin вертикального бокса от inline-size. Совпали с эталоном `flexbox-writing-mode-010/013/014/015/016`, `flexbox_align-items-stretch-3`; остаток — FLEX-VWM-4 и LAYOUT-VFLOAT",
+     "bugs": [
+      "BUG-1264"
+     ]
+    },
+    {
+     "id": "FLEX-VWM-4",
+     "title": "FLEX-VWM-4: остаток ортогональных flex-элементов",
+     "status": "done",
+     "size": "M",
+     "note": "Остаток BUG-1264: высота `100%` у потомков растянутого по поперечной оси flex-элемента (`flex_trampoline::relayout_stretched_row_item` — элемент с `height:%`/`calc()` в поддереве раскладывается заново с растянутым размером линии, в т.ч. меньшим первого прохода, §9.4 шаг 11: `percentage-size-subitems-001`, `percentage-heights-021`, `flex-wrap-006`); таблица-элемент не уже своего min-content при любом `min-width` (`flex_item_min_main_width`, CSS Tables L3: `ortho-table-item-001`, `table-as-item-fixed-min-width-3`); ортогональный блок и вертикальный flex-контейнер в родителе с неопределённой высотой обтягивают содержимое по inline-оси, а не заполняют вьюпорт (Writing Modes L3 §7.3.1: `flex-aspect-ratio-img-vert-lr`, `flex-direction-row-vertical`; корневой элемент по-прежнему заполняет ICB). Остаток вынесен: `dynamic-orthogonal-flex-item` → FLEX-VWM-6, `grid-flex-item-001` → GRID-VWM",
+     "bugs": [
+      "BUG-1264"
+     ]
+    },
+    {
+     "id": "LAYOUT-VFLOAT",
+     "title": "LAYOUT-VFLOAT: float в вертикальном потоке",
+     "status": "done",
+     "size": "L",
+     "note": "Float и `clear` в вертикальном потоке и схлопывание margin по block-оси. Сделано: `box_tree/vertical_float.rs` — `FloatContext` в логическом кадре бокса (block = физический `x`, inline = `y`; `float: left/right` — верхний/нижний край, у `sideways-lr` наоборот), shrink-to-fit по inline-оси, правило 8 (не поместившийся float падает в следующую колонку), `clear`, float после текста встаёт в последнюю колонку его прогона (левый сдвигает текст под себя), колонки `InlineRun` укорачиваются float-ами (`wrap_inline_run_vertical` с полосой на колонку; колонка, где не помещается слово, остаётся пустой), block-размер охватывает float-ы только у BFC/независимого потока (CSS 2.1 §10.6.7); `box_tree/vertical_margins.rs` — предок ↔ первый/последний ребёнок, соседи, сквозь пустой блок, float и abspos не схлопываются; auto inline-size in-flow вертикального блока вычитает его margin-top/bottom (`build_vertical_init`, только при `in_block_flow`). Результат (`css-writing-modes`, Ahem + `LUMEN_CPU_SYSTEM_FONTS`, 800×600, с локальной правкой BUG-1270): identical 118→148, ни одного identical→не-identical; `float-vlr/vrl-003…013`, `float-clear-*-007/-006`, `margin-collapse-vlr/vrl-009…037` совпали. Критерий `flexbox-writing-mode-011/012` не выполнен: float-стороны эталона теперь верны, но тест ждёт FLEX-VWM-5 (stretch items параллельного режима); `shape-outside` в вертикальных режимах — в LAYOUT-VFLOAT-2",
+     "bugs": [
+      "BUG-1264"
+     ]
+    },
+    {
+     "id": "LAYOUT-FIXED-CB",
+     "title": "LAYOUT-FIXED-CB: fixed под transform в раскладке",
+     "status": "done",
+     "size": "M",
+     "note": "`position: fixed` внутри предка, создающего containing block для fixed-потомков (`transform`/`translate`/`rotate`/`scale`, `perspective`, `filter`, `backdrop-filter`, `contain: layout\\|paint`, `will-change` с ними) раскладывается относительно padding box этого предка, а не вьюпорта (css-transforms-1 §2). Сделано: `box_tree/multicol_abspos.rs` — `lay_out_abs_children` берёт CB прямого fixed-ребёнка у родителя (`fixed_cb_rect`), новый `fix_out_of_flow_descendants` вызывается из `finish_after_match`/flex/grid, когда бокс стал своим CB: обходит потомков глубже первого уровня до границы следующего CB и либо перекладывает fixed против настоящего CB (`refit_fixed_child`), либо сдвигает absolute (`reposition_abs_child`). Побочно закрыт старый дефект: absolute через статическую обёртку считался от CB с высотой 0 (`bottom`, `top: N%`, `top`+`bottom` при `height: auto`). `establishes_abs_cb` — transform/filter/`contain: layout\\|paint` теперь CB и для absolute (также в `resolved_geometry`, `container_anchor`); `collect_layout_shift_rects` не считает fixed под таким предком `scroll_pinned`. Тесты `box_tree/tests/fixed_cb.rs` (11). A/B `--dump-display-list` по 182 страницам корпуса — байт-в-байт. Остаток — LAYOUT-FIXED-CB-2",
+     "bugs": [
+      "BUG-472"
+     ]
+    },
+    {
+     "id": "LAYOUT-FIXED-CB-2",
+     "title": "LAYOUT-FIXED-CB-2: paint/anchor остаток",
+     "status": "done",
+     "size": "M",
+     "note": "Остаток LAYOUT-FIXED-CB: (1) paint — fixed под transform/filter-предком по-прежнему прижат к вьюпорту (`BeginFixedLayer` в `display_list/walk.rs`, `inherited` в `box_layer.rs`: не наследует scroll-translate предка), хотя по спеке скроллится вместе с ним; нужен флаг «внутри fixed-CB» вдоль обхода; (2) anchor-позиционирование: `container_anchor.rs` и `inset-area` у fixed под transform берут `Rect(0,0,viewport)`; (3) абсолютный бокс через статическую обёртку не перекладывается заново — `height: N%` и содержимое, зависящее от высоты CB, считаются по высоте 0 (двигается и растягивается только сам бокс). Двигает пиксели — полный graphic-прогон. Сделано (2026-10-05): (1) `box_layer.rs` — `ContinueFrame::fixed_cb_clips` (сколько первых клипов цепочки принадлежат CB-предку и выше): fixed-ребёнок наследует их scroll-слои, отбрасывая только слои боксов между CB и собой; `walk.rs` — `Frame::in_fixed_cb`, `BeginFixedLayer` не эмитится для fixed под CB (контекст теряется на повторном входе через `walk()` из таблиц/SVG); `lumen_layout::contains_fixed_descendants` стала `pub`; (2) `container_anchor.rs` — `fixed_cb` вдоль обхода вместо `Rect(0,0,viewport)`; (3) `place_abs_child` отдаёт `Some(cb.height)` как базу процентов (раньше `height: N%` у absolute не резолвился даже у прямого ребёнка) и раскладывает растянутый `top`+`bottom` бокс с определённой высотой; `fix_out_of_flow_descendants` перекладывает absolute под статической обёрткой целиком (`refit_out_of_flow_child`), если его высота следует за CB (`height_follows_cb`). Готово, когда тест на scroll-translate fixed под transform и перечисленные случаи зелёные",
+     "bugs": [
+      "BUG-472"
+     ]
+    },
+    {
+     "id": "FIELDSET-LEGEND",
+     "title": "FIELDSET-LEGEND: legend на границе fieldset",
+     "status": "done",
+     "size": "M",
+     "note": "Отрисованный `<legend>` у `<fieldset>` (HTML Rendering §15.3.13): первый `<legend>` встаёт на верхнюю границу — его середина на середине `border-top`, содержимое fieldset начинается ниже `max(border-top, высота legend)`, в верхней границе остаётся разрыв под legend (paint). Сделано: `box_tree/fieldset.rs` — `place_rendered_legend` (горизонтальный режим, из `dispatch_box` перед циклом детей) и `place_rendered_legend_vertical` (из `vertical_trampoline::run` и спуска во вложенный кадр: legend на границе блока-начала — `border-right` у `*-rl`, `border-left` у `*-lr`); `LayoutBox::fieldset_legend` (`FieldsetLegend { idx, placed, border_inset }`) ставит `build_box`, раскладка отмечает `placed`; сжатие legend по содержимому как у float, по inline-оси — `justify-self` (атрибут `legend[align]` → `justify-self`, `text-align` не влияет — WPT `legend-align`) и auto-поля (формула сверена с Edge пробами: центр = `free/2 + margin-start`, конец = `free + margin-start − margin-end`); блокификация legend с `display: inline`/`inline-block`/табличными значениями при сохранении автор-значения для `getComputedStyle`; шорткаты `border`/`border-<side>` с `none`/`hidden` обнуляют ширину (`border: none` не снимал UA-рамку fieldset и ранее заданную ширину; longhand-ы не тронуты); rendered legend не участвует в потоке (`step_child` пропускает его) и в базовой линии (`baseline.rs`); fieldset — BFC (`BoxKind::FlowRoot` при `display: block`). UA-стиль `apply_ua_fieldset_style`: margin-inline 2px, padding-block .35em/.625em, padding-inline .75em, border 2px groove #f0f0f0, min-inline-size min-content; у legend padding-inline 2px (логические значения — по унаследованному `writing-mode`). Paint (`display_list/fieldset.rs`): фон, тени и рамка начинаются с границы блока-начала, опущенной на `border_inset`, рамка клиппится тремя `PushClipRect` вокруг legend. Графтест 160 расходится с Edge headless на 0,00 % (CPU-снимок), WPT `flex-align-baseline-fieldset-001..003` и `grid-align-baseline-fieldset-001` зелёные, каталог `html/rendering/non-replaced-elements/the-fieldset-and-legend-elements` 181→222/300 подтестов; `grid-align-baseline-fieldset-002/003` — GRID-VWM (items ряда в вертикальном режиме ложатся в разные ряды). Остаток — FIELDSET-LEGEND-2"
+    },
+    {
+     "id": "GRID-VWM",
+     "title": "GRID-VWM: grid в вертикальном writing-mode",
+     "status": "done",
+     "size": "L",
+     "note": "Grid-раскладка в вертикальном `writing-mode`: до задачи такой контейнер раскладывался как вертикальный блок (items стопкой, `grid-template-*` игнорировались). Сделано: столбцы по inline-оси (физическая y; снизу вверх при `direction: rtl` и в `sideways-lr`), строки по block-оси (x: справа налево у `*-rl`), дорожки/`fr`/span/gap/`justify-/align-content`, `*-self`/`*-items` (start/end/center/stretch, `self-start`/`self-end`, `left`/`right`, `safe`), авто-поля, baseline-группы строк по x и экспорт `grid_baselines` по x, `inline-grid`/`fit-content` по столбцам, ортогональный блочный grid обтягивает столбцы, вложенные grid и subgrid (у ортогонального subgrid столбцы берутся из строк родителя и наоборот). Заодно исправлен горизонтальный grid: выровненный item переносится вместе с поддеревом, `justify-self`≠`stretch` и авто-поля обтягивают item по содержимому, растянутый item с полями не сдвигается на поле дважды, `position: relative` не теряется. Критерий выполнен: WPT `flex-align-baseline-grid-002/003` 6→12/12, `css-flexbox/grid-flex-item-001` reftest identical, css-grid с `writing-mode` (183 файла) 159→517 из 1601 сабтеста, Edge 0,00 % на графтесте 161"
+    },
+    {
+     "id": "MULTICOL-BREAKS",
+     "title": "MULTICOL-BREAKS: forced column breaks",
+     "status": "done",
+     "size": "M",
+     "note": "ЗАКРЫТ 2026-10-05 (ветка `p1-multicol-breaks`): принудительные разрывы колонок multicol — `break-before/after: column|always` между соседними блоками контейнера открывают новую колонку (`multicol_fragmentation::forced_breaks`, флаг `forced` в `pack`/`balanced_height`; бокс со своим разрывом не режется по колонкам — `has_forced_break` в `box_is_column_sliceable`). WPT `flex-align-baseline-multicol-001` и `grid-align-baseline-multicol-001` 12/12 (были TIMEOUT), `css/css-multicol` reftest: `multicol-fill-auto-005`, `column-height-016`, `multicol-fill-balance-040` стали identical; графтест 162 = Edge 0,00 %. Остаток — MULTICOL-BREAKS-2"
+    },
+    {
+     "id": "TABLE-HEIGHT",
+     "title": "TABLE-HEIGHT: высота таблицы по строкам",
+     "status": "done",
+     "size": "S",
+     "note": "ЗАКРЫТ 2026-10-05 (ветка `p1-table-height`): `height`/`min-height` таблицы — минимум над высотой строк, излишек делится между строками пропорционально их высоте (только `height: auto`-строки, иначе все; поровну при нулевых весах), строки/группы/нижний `<caption>` сдвигаются, ячейки обычной строки и `rowspan` вырастают, содержимое `middle`/`bottom` выравнивается заново (`box_tree/table_height.rs`); таблица без столбцов берёт `height` как есть (§3.1 шаг 3B). Графтест 163 = Edge 0,00 %, WPT css-tables +23 подтеста без новых регрессий. Было: `height` таблицы (и `<table height=100%>`) не распределяется по строкам: таблица становится выше, строки и ячейки остаются естественной высоты, `vertical-align: middle` нечего центрировать (классический `table height=100%` + `td valign=middle`). CSS 2.1 §17.5.3: лишняя высота делится между строками пропорционально; `min-height` ячейки. Критерий готовности: WPT `css-tables/tentative/baseline-td`, `css/CSS2/tables` `height-*`, графтест таблицы с `height`"
+    },
+    {
+     "id": "FLEX-VWM-5",
+     "title": "FLEX-VWM-5: вертикальные потоки во flex",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток FLEX-BASELINE-2 в вертикальных потоках: (1) items параллельного режима в вертикальном row-flex не растягиваются по физической ширине (`align-items: stretch` блочной оси) — `flex-align-baseline-flex-002` в wrap-reverse; (2) ортогональный item в горизонтальном row-flex заполняет высоту вместо fit-content inline-size — `flex-align-baseline-005..007`, `align-items-baseline-row-horz`; (3) таблица в вертикальном режиме — `vertical-align` по блочной оси (`flex-align-baseline-table-002/003`); (4) после BUG-1252 перемерить `align-items-baseline-*` (красны на 8 px). Критерий готовности: перечисленные id зелёные"
+    },
+    {
+     "id": "GRID-BASELINE-2",
+     "title": "GRID-BASELINE-2: baseline в grid, остаток",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток baseline в grid: (1) baseline-sharing через subgrid — items subgrid'а входят в группу строки родителя (`subgrid-baseline-*`, `align-self-baseline-with-subgrid-mbp`); (2) `justify-self`/`justify-items: baseline` — выравнивание по базовой линии колонки (`grid-justify-baseline-*`, `grid-column-axis-self-baseline-synthesized-*`, `grid-self-baseline-two-dimensional`); (3) baseline-shim минимального вклада (`*-minimum-contribution-baseline-shim*`); (4) `grid-baseline-004`, `grid-container-baseline-001` — разобрать, почему высота `inline-grid` 140 вместо 100. Критерий готовности: перечисленные id зелёные"
+    },
+    {
+     "id": "LINE-CLAMP-BOX",
+     "title": "LINE-CLAMP-BOX: усечение рядов atomic inline",
+     "status": "planned",
+     "size": "S",
+     "note": "`-webkit-line-clamp`/`line-clamp` усекает только строки текста внутри одного прогона: ряды atomic inline и вложенные блоки не усекаются, высота контейнера остаётся по всем строкам (`flex-align-baseline-line-clamp-*` проходит лишь по базовой линии, FLEX-BASELINE-2). Нужно: счёт line box по потоку контейнера (прогоны, ряды, вложенные блоки), высота контента до нижней кромки n-й строки. Критерий готовности: контейнер с `-webkit-line-clamp: 3` и пятью рядами atomic inline имеет высоту трёх рядов"
+    },
+    {
+     "id": "FLEX-VWM-6",
+     "title": "FLEX-VWM-6: ширина контейнера вокруг ортогонального элемента",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток BUG-1264: ширина shrink-to-fit `inline-flex`/`inline-block` вокруг ортогонального элемента считается до раскладки из intrinsic-функций, которые не знают числа колонок вертикального текста при высоте контейнера (`vertical_block_extent` берёт ряд `InlineBlockRow` за одну колонку), а flex-пробой элемента (`block_axis_width`) число колонок знает — контейнер выходит уже элемента, и `flex-shrink` ужимает элемент до min-content одной колонки (`dynamic-orthogonal-flex-item`: 50 вместо 100). Нужны: ширина контейнера по результату пробы элементов (или предел по inline-оси в intrinsic-обходе) и авто-минимум ортогонального элемента по пробе, а не по одной колонке; `aspect-ratio-intrinsic-size-001/002` (`canvas` с `height:100%` в растянутом элементе: ширина элемента из растянутой высоты). Критерий готовности: перечисленные тесты совпадают с эталоном",
+     "bugs": [
+      "BUG-1264"
+     ]
+    },
+    {
+     "id": "LAYOUT-VFLOAT-2",
+     "title": "LAYOUT-VFLOAT-2: shape-outside и вложенные float-ы в вертикальном потоке",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток LAYOUT-VFLOAT: (1) `shape-outside` в вертикальных `writing-mode` — `FloatContext` хранит формы в горизонтальных координатах, для вертикального кадра нужен поворот геометрии (`css-shapes/shape-outside/shape-box/*border-radius-005…012`, `shape-image/gradients/*-005…016`, `shape-image-029`, `circle-048`…: ~100 тестов с `writing-mode: vertical-*`); (2) float-ы non-BFC вертикального родителя достаются только его собственным детям — `FloatContext::inheriting` для вертикальных блоков (иначе in-flow блок рядом с float не укорачивается, а соседи родителя float-а не видят; `float-contiguous-vlr/vrl-007…013`, `contiguous-floated-table-*`); (3) `float: inline-start/inline-end` и `clear: inline-*` игнорируют `direction: rtl` (`FloatSide::parse` всегда даёт Left/Right; `css-logical/logical-values-float-clear-*`); (4) float посреди абзаца в горизонтальном потоке уходит под абзац, а не в строку, где стоит (вертикальный поток это уже делает через `RunTail`); (5) колонки `InlineRun` `sideways-lr` у float-а не зеркалятся (текст идёт сверху вниз, а `float: left` — снизу). Критерий готовности: перечисленные тесты совпадают с эталоном",
+     "bugs": [
+      "BUG-1264"
+     ]
+    },
+    {
+     "id": "FIELDSET-LEGEND-2",
+     "title": "FIELDSET-LEGEND-2: flex/grid fieldset и остаток",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток FIELDSET-LEGEND: (1) `<fieldset>` с `display: flex`/`grid`/multicol — rendered legend остаётся обычным ребёнком контейнера (анонимный контейнер содержимого из §15.3.13 не строится: `build_flex_init`/`build_grid_init` берут весь `b.children`), рамка рисуется целой; в Edge legend стоит на границе, а flex/grid-раскладка идёт ниже него; (2) UA-значения fieldset (`padding-block`, `min-inline-size`) раскладываются по `writing-mode`, унаследованному к UA-фазе, — собственный `writing-mode` fieldset из автор-CSS приходит позже, и UA ставит горизонтальные стороны (после раскладки у вертикального fieldset min-content считает legend как обычный блок: на `legend − border` шире, чем в Edge); (3) `float` у legend и legend внутри `display: inline-block` fieldset не проверены против Edge; (4) переполнение: legend шире content box при `text-align: right` в Edge встаёт на `margin-start + margin-end` от края (проба `margin: 0 10px; width: 300px` → x=28), у нас на `margin-start`; (5) `dir`-атрибут не маппится в `direction` во всём движке (WPT `legend-align` `fieldset[dir=rtl] legend` ×2) и `display: table` на обычных элементах раскладывается как блок высотой 0 шириной в контейнер (поэтому legend с `display: table` блокифицируется — `legend-display` ждёт `table`-раскладку); (6) `border-radius` у groove-рамки не скругляется вовсе (CPU-растеризатор рисует groove как прямоугольные полосы — и у обычного `div`), у fieldset с legend это заметно сильнее. Критерий готовности: проба `display: flex` fieldset с legend совпадает с Edge, графтест с flex-fieldset"
+    },
+    {
+     "id": "GRID-VWM-2",
+     "title": "GRID-VWM-2: остаток вертикальной сетки",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток GRID-VWM: (1) `min-content` столбцы вертикальной сетки считаются по max-content (нет `min_content_outer_height`); (2) автоматический минимальный размер items (`grid-items-minimum-width-vertical-*`, `grid-minimum-size-grid-items-022..025`); (3) items ортогонального режима (`grid-intrinsic-size-with-orthogonal-items`, `grid-items-minimum-*-orthogonal-*`, `grid-align-justify-stretch-with-orthogonal-flows`, `grid-item-alignment-with-orthogonal-flows`) — сейчас им предлагается вся область и `inline_offer` не считает их содержимое; (4) `column-rule`/`row-rule` в вертикальной сетке (`record_own_tracks` там не вызывается); (5) baseline вертикального текста при `text-orientation: sideways` — алфавитная линия строки (`grid-align-baseline-vertical`, `grid-minimum-contribution-baseline-shim-vertical-*`); (6) `%`-поля и padding items (`grid-items-percentage-*-vertical-*`), `margin: auto` в авто-колонках (`grid-item-margin-auto-columns-rows-vertical-*`), `aspect-ratio` + `justify-self` (`grid-item-aspect-ratio-justify-self-*`). Критерий готовности: перечисленные WPT в css-grid (`alignment`, `grid-items`, `layout-algorithm`)"
+    },
+    {
+     "id": "GRID-RTL",
+     "title": "GRID-RTL: direction rtl в grid",
+     "status": "planned",
+     "size": "M",
+     "note": "`direction: rtl` в горизонтальной сетке не зеркалит столбцы: первый столбец остаётся слева, `justify-self: start/end/left/right` и `justify-content` не переворачиваются (проба против Edge: 8 % расхождения). Нужны: зеркало ячейки по inline-оси в `GridInit::cell_origin` (механизм `inline_rev` вертикальной сетки уже есть), разворот start/end в `place_item`/`post_final_item`, `column-rule`/`record_own_tracks`, смещения subgrid, статическая позиция abspos. Критерий готовности: WPT `css-grid/alignment/*rtl*`, `grid-items-relative-offsets-001/002`, `grid-align.html`, `grid-align-justify-stretch.html`"
+    },
+    {
+     "id": "GRID-ABSPOS",
+     "title": "GRID-ABSPOS: abspos в grid-области",
+     "status": "planned",
+     "size": "M",
+     "note": "Абсолютно позиционированные дети grid: containing block — область по `grid-area`/`grid-row`/`grid-column` (автолинии — padding box контейнера), статическая позиция — начало padding box (сейчас — начало content box, и у горизонтальной сетки расхождение с Edge), выравнивание `align-self`/`justify-self` внутри неё, вертикальные режимы. Критерий готовности: WPT `css-grid/abspos` (39 файлов с `writing-mode`, `grid-abspos-staticpos-*`, `positioned-grid-items-*`)"
+    },
+    {
+     "id": "GRID-FR-ROWS",
+     "title": "GRID-FR-ROWS: fr-строки при неопределённой высоте",
+     "status": "planned",
+     "size": "S",
+     "note": "Строка `minmax(0, <flex>)` (и `fr` вообще) при неопределённой высоте контейнера не растёт по содержимому items: в `finish_probe_pass` рост ограничен треками `auto`/`min-content`/`max-content`/`Fr`, а `Minmax` пропускается; нужен поиск размера `fr` в два прохода (CSS Grid L1 §11.7: гипотетический fr-размер от max-content items, затем от высоты контейнера). Критерий готовности: WPT `css-grid/layout-algorithm/flex-sizing-rows-indefinite-height-*` (до GRID-VWM `-002` совпадал случайно: `top: -32px` терялся при выравнивании)"
+    },
+    {
+     "id": "MULTICOL-BREAKS-2",
+     "title": "MULTICOL-BREAKS-2: nested breaks, vertical multicol",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток MULTICOL-BREAKS: (1) разрыв внутри вложенного блока (`break-before` на потомке дочернего блока multicol, WPT `column-height-024`, `spanner-fragmentation-*`) — должен подниматься к multicol и резать блок; (2) сегмент из режущегося листа и блока с разрывом — Edge режет лист по сбалансированным колонкам, Lumen кладёт целиком; (3) `column-wrap: wrap` без `column-height` — строки по принудительным разрывам (`column-wrap-no-constraints-002`); (4) multicol в вертикальном `writing-mode`: колонки идут по inline-оси (вниз), сейчас стопкой по block-оси (`flex-align-baseline-multicol-002/003`, `grid-align-baseline-multicol-002/003`: offsetLeft 105 против 195); (5) `margin-top` первого ребёнка схлопывается сквозь multicol-контейнер, хотя он BFC (рамка и фон контейнера съезжают вниз). Критерий готовности: перечисленные WPT, графтест"
+    },
+    {
+     "id": "TABLE-VWM",
+     "title": "TABLE-VWM: таблицы в вертикальном writing-mode",
+     "status": "planned",
+     "size": "L",
+     "note": "Таблицы в вертикальном `writing-mode` раскладываются горизонтально: `table*.rs` не читает `writing_mode` вовсе (`grep` пуст), строки `<table style=\"writing-mode:vertical-lr\">` стекаются по физической `y`, ячейки — по `x`, как в `horizontal-tb`. Нужно по CSS Writing Modes L3 §7 и CSS Tables L3: строки идут по блочной оси (физическая `x`, справа налево у `vertical-rl`), столбцы — по inline-оси, `border-spacing`/`caption-side`/`vertical-align` ячеек — в логических осях, `direction: rtl` разворачивает порядок столбцов. Найдено WPT-RUN-14 S2 (2026-10-05): в `css/css-writing-modes` таблицы использует 117 провалившихся id (`table-progression-*`, `row-progression-*`, `table-column-order-*`, `table-cell-*`, `border-conflict-element-*`, `contiguous-floated-table-*`, часть `block-flow-direction-*`) — кластер в `docs/wpt-vendor-notes/css.md` §css-writing-modes."
+    },
+    {
+     "id": "MULTICOL-FRAG",
+     "title": "MULTICOL-FRAG: фрагментация блоков и строк по колонкам",
+     "status": "planned",
+     "size": "L",
+     "note": "Фрагментация блочного и строчного содержимого по колонкам multicol (CSS Fragmentation L3, CSS Multicol L1). Сейчас режется только лист — `Block` без детей и рамок (`box_is_column_sliceable`, `box_tree/multicol_abspos.rs:29`) — и простая сетка (`is_fragmentable_grid`); всё прочее ставится в одну колонку целиком и вылезает за её низ. Пробы (`column-fill: auto`, высота 100px, `--dump-layout` + `--screenshot`): блок с двумя детьми 150+50px — внешний бокс 50×200 в первой колонке; текст из 6 строк при высоте 40px (прямой ребёнок `InlineRun` или внутри `<p>`) — одна колонка 120px, и при `column-fill: balance` тоже (две колонки текста не получаются вообще); лист с `border-top/bottom` — целиком. Нужно: разрыв между строками и между детьми на любой глубине; `box-decoration-break: slice` для рамок/padding/фона у разрыва (уже есть у `multicol_span`); усечение margin у разрыва; monolithic-содержимое (замещаемые, `overflow` ≠ `visible`, `contain: size`) — целиком с переполнением; floats; `break-inside: avoid` и `break-before/after: avoid` на вложенных; `orphans`/`widows` внутри блока. Пересекается с MULTICOL-BREAKS-2 (1) — разрыв из вложенного блока. WPT `css/css-break`: 176 id (`widows-orphans-*`, `float-*`, `overflow-clip-*`, `break-between-avoid-*`, `borders-*`, `fieldset-*`, `margin-at-break-*`, `monolithic-overflow-*` …) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). От неё зависят FLEX-FRAG, GRID-FRAG, TABLE-FRAG, MULTICOL-FRAG-OOF."
+    },
+    {
+     "id": "FLEX-FRAG",
+     "title": "FLEX-FRAG: фрагментация flex-контейнера",
+     "status": "planned",
+     "size": "L",
+     "note": "Фрагментация flex-контейнера (CSS Flexbox L1 «Fragmenting Flex Layout», CSS Fragmentation L3 — параллельные потоки). Flex-контейнер в multicol ставится в колонку атомарно. Проба: `column-count: 4; column-fill: auto; height: 100px`, внутри `display: flex; flex-direction: column; height: 400px` с элементами 50+350px — бокс 25×400 в первой колонке, остальные три пусты. Нужно: single-line column — разрыв между элементами и внутри элемента; row — разрыв между flex-линиями и внутри элементов одной линии (каждый — свой параллельный поток), `break-*` на элементах, высота контейнера по фрагментам. WPT `css/css-break/flexbox/*` и flex в корне: 268 id — крупнейший кластер, кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+    },
+    {
+     "id": "MULTICOL-FRAG-OOF",
+     "title": "MULTICOL-FRAG-OOF: abspos в multicol по фрагментам",
+     "status": "planned",
+     "size": "M",
+     "note": "Позиционированные боксы во фрагментированном потоке (CSS Fragmentation L3, CSS Position L3): containing block из фрагментов, abspos режется по колонкам, `top` отсчитывается по фрагментированному потоку. Проба: multicol `position: relative; column-fill: auto; height: 100px`, abspos `top: 150px` — стоит на y = 150 первой колонки (ниже контейнера), а должен во второй на y = 50; `out-of-flow-in-multicolumn-001`: abspos `width: 100%` в relpos-обёртке на стыке колонок не делится. WPT `css/css-break`: 156 id (`out-of-flow-in-multicolumn-*` 113, `transform-*`, `abspos-in-opacity-*`, `overflow-clip-*`) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+    },
+    {
+     "id": "TABLE-FRAG",
+     "title": "TABLE-FRAG: фрагментация таблиц",
+     "status": "planned",
+     "size": "M",
+     "note": "Фрагментация таблиц (CSS Fragmentation L3, CSS Tables L3). Таблица в multicol ставится атомарно: две строки по 100px в колонке высотой 100px — `Table` 50×200 в первой колонке. Нужно: разрыв между строками, `break-*` на строках, повтор `thead`/`tfoot` в каждом фрагменте, ячейка, растянутая разрывом, `border-spacing`/`border-collapse` у разрыва, `caption`; `offsetTop`/`offsetHeight` частей таблицы (`table-parts-offsets*.tentative`: `colgroup` offsetTop −8 вместо 18). WPT `css/css-break/table/*` и таблицы в корне: 123 id (5 testharness, 59 сабтестов) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+    },
+    {
+     "id": "GRID-FRAG",
+     "title": "GRID-FRAG: фрагментация grid в общем случае",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток фрагментации grid: `is_fragmentable_grid` (`box_tree/multicol_abspos.rs:57`) режет только сетку без рамок, с элементами-листьями, при `column-fill: auto`; иначе сетка ставится атомарно. Проба: ряды 100px + 100px, один элемент с `border` или с ребёнком — сетка 50×200 в первой колонке. Нужно: разрыв между рядами в общем случае (рамки/padding сетки, элементы с содержимым, `balance`), разрыв внутри элемента (параллельные потоки), abspos-элементы сетки, subgrid. WPT `css/css-break/grid/*`: 89 id — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
     }
    ],
    "date": "2026-06"
@@ -2077,7 +2318,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "8✅ 16🟡 0⬜ 0🚫 из 24 модулей CSS-SPECS.md (Tier 4)"
+       "note": "7✅ 17🟡 0⬜ 0🚫 из 24 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     },
@@ -2220,7 +2461,7 @@
     {
      "id": "PERF",
      "title": "PERF: перф-наблюдаемость глазами пользователя",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка перф-наблюдаемости (тулинг/бенчи — P2, движковые правки по находкам — P1): метрики, которые чувствует пользователь, поверх уже существующих поверхностей (`docs/automation.md`: LUMEN_FRAME_LOG, LUMEN_PROFILE_TREE, LUMEN_MEM_REPORT, MCP resources, crates/bench, scripts/scroll_perf.py, scripts/bench_chromium.py). Контекст: аудит 14 реальных сайтов 2026-07 нашёл два главных тормоза (CPU-растеризация; последовательный fetch подресурсов в UI-потоке) вручную — цель дорожки находить такое автоматически и ловить перф-регрессии так же, как graphic_tests ловят пиксельные. Рекомендуемый порядок: PERF-1 (самый большой рычаг) → PERF-2/3/4 (метрики) → PERF-5/6 → PERF-7 (гейт поверх всего)",
      "tasks": [
       {
@@ -2289,9 +2530,9 @@
       {
        "id": "PERF-10",
        "title": "PERF-10: прогон тестов без растеризации и живого окна",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Режим прогона без растеризации для тестов. Сейчас ВСЕ автоматизационные поверхности гонят полный конвейер: `--screenshot`/`--dump-layout`/`--dump-display-list` считают layout+paint, `--mcp-live-port`/`--bidi-port` вдобавок держат живое окно и wgpu. Для категорий WPT, не проверяющих пиксели (`dom/*`, `html/*`, `fetch`, `xhr`, `webstorage`, `url*`, `websockets` — подавляющее большинство из 289), растеризация — чистые накладные, а живое окно приносит свой класс флейков (увод фокуса у gdigrab, token race, зомби `--ipc-server` — см. CLAUDE.md Known gotchas). Заимствовано у lightpanda-io/browser, но в ослабленном виде: они layout выбросили совсем, мы его сохраняем (нужен для `getBoundingClientRect` и геометрии в тех же тестах) и отключаем только paint/окно. Задача: флаг/режим «DOM+JS+layout, без paint и без окна» на существующих поверхностях + перевод на него тех категорий WPT, которым пиксели не нужны. Владелец тулинга — P2 (дорожка TEST, `docs/tasks/p2-test-track.md`); движковая часть при необходимости — P1. Зависимость: после PERF-9, чтобы не мерить два изменения разом. СРЕЗ 1 СДЕЛАН 2026-10-03 (ветка `p2-perf-10-nopaint`): флаг `--no-paint`/`LUMEN_NO_PAINT=1` + проброс в wptrunner; A/B на 4 каталогах (115 id) даёт те же результаты, выигрыша по времени нет. ОСТАЛОСЬ: замер CPU/RSS/флейков и решение, какие категории переводить по умолчанию (`run_corpus.py`)"
+       "note": "Режим прогона без растеризации для тестов. Сейчас ВСЕ автоматизационные поверхности гонят полный конвейер: `--screenshot`/`--dump-layout`/`--dump-display-list` считают layout+paint, `--mcp-live-port`/`--bidi-port` вдобавок держат живое окно и wgpu. Для категорий WPT, не проверяющих пиксели (`dom/*`, `html/*`, `fetch`, `xhr`, `webstorage`, `url*`, `websockets` — подавляющее большинство из 289), растеризация — чистые накладные, а живое окно приносит свой класс флейков (увод фокуса у gdigrab, token race, зомби `--ipc-server` — см. CLAUDE.md Known gotchas). Заимствовано у lightpanda-io/browser, но в ослабленном виде: они layout выбросили совсем, мы его сохраняем (нужен для `getBoundingClientRect` и геометрии в тех же тестах) и отключаем только paint/окно. Задача: флаг/режим «DOM+JS+layout, без paint и без окна» на существующих поверхностях + перевод на него тех категорий WPT, которым пиксели не нужны. Владелец тулинга — P2 (дорожка TEST, `docs/tasks/p2-test-track.md`); движковая часть при необходимости — P1. Зависимость: после PERF-9, чтобы не мерить два изменения разом. СРЕЗ 1 СДЕЛАН 2026-10-03 (ветка `p2-perf-10-nopaint`): флаг `--no-paint`/`LUMEN_NO_PAINT=1` + проброс в wptrunner; A/B на 4 каталогах (115 id) даёт те же результаты, выигрыша по времени нет. СРЕЗ 2 СДЕЛАН 2026-10-04 (ветка `p2-perf-10-s2`): `run_corpus.py` гонит testharness в `--no-paint` по умолчанию (`--paint` — прежний режим), флаг доходит только до testharness-браузеров (reftest/crashtest — полный конвейер, поэтому отдельного списка категорий не нужно); окно в режиме видимое, но не активируется (скрытое не получало `RedrawRequested` — висли `load` картинок). Замер `measure_nopaint.py` в режиме WPT-RUN-9 на 1 803 + 726 id: CPU `lumen` −14 %, средний RSS браузеров −40 %, стена −6 % (`--processes 7`) / −12 % (`--processes 10`), балл в шуме повторов, на пиксельно-зависимом наборе совпадает до сотых; все устойчивые расхождения — BUG-1268 и известные `*touch*`-флейки (`docs/tasks/p2-wpt-runner-throughput.md` §PERF-10 срез 2)"
       },
       {
        "id": "PERF-11",
@@ -5389,6 +5630,20 @@
         "BUG-1061",
         "BUG-1062"
        ]
+      },
+      {
+       "id": "TEST-9-S1",
+       "title": "TEST-9-S1: GPU-подмножество и self-test графтестов",
+       "status": "planned",
+       "size": "S",
+       "note": "graphic_tests/run.py: константа GPU_CAPTURE с id из строки TEST-9, функция capture_mode_for и флаг --self-test, исправлены устаревшие докстринги. Поведение захвата не меняется. Бриф [docs/tasks/TEST-9-S1.md](docs/tasks/TEST-9-S1.md)"
+      },
+      {
+       "id": "TEST-9-S2",
+       "title": "TEST-9-S2: гибридный захват по умолчанию",
+       "status": "planned",
+       "size": "M",
+       "note": "--ipc становится захватом по умолчанию, gdigrab остаётся только для GPU_CAPTURE. Отдельная таблица должников для ipc, разжалованы 135 и 136. Готово после полного прогона в foreground и сверки с results/20260919-131021.json и -133745.json. Зависит от S1. Бриф [docs/tasks/TEST-9-S2.md](docs/tasks/TEST-9-S2.md)"
       }
      ]
     },
@@ -5534,9 +5789,9 @@
       {
        "id": "WPT-RUN-9",
        "title": "WPT-RUN-9: третья полная цифра pass-rate, с работающим https",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-FIXED.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно Разблокирован 2026-10-01 решением пользователя: BUG-792 закрыт 2026-08-24, статус `blocked` был устаревшим; ссылка на баг снята из колонки `bugs`, чтобы генератор не вывел из закрытого бага `done` для непрогнанной задачи. Приоритет P2 №1 — последняя полная цифра снята 2026-08-21 на сборке с BUG-792/BUG-786, движок с тех пор не измерен. Подготовка 2026-10-04: `run_corpus.py --parallel-shards 2 --batch-small 150` даёт ×2.5–×4.7 по настенному времени при вердиктах в пределах шума повторов (замер — `docs/tasks/p2-wpt-runner-throughput.md` §WPT-RUN-9, подготовка), гонять в этом режиме; больше двух полос на 32 ГБ — только после [BUG-1267](bugs/BUG-1267-OPEN.md) (acid3 раздувает один `lumen` до 25 ГБ). Снято 2026-10-04 (ветка `p2-run9-memguard`): `run_corpus.py --max-browser-gb` (по умолчанию 4, `tests/wpt/browser_rss_cap.py`) убивает браузер своего прогона сверх порога — раздувают только тесты, которые и так TIMEOUT с 0 сабтестов (acid3, квотные `webstorage` — BUG-870, `Range-mutations-*`), их тест становится CRASH с пометкой `rss_cap_kills`, балл не меняется; 3 полосы на `dom`+8 держат ≥8 ГБ свободной памяти при балле внутри шума — гонять `--parallel-shards 3 --batch-small 150` (замер — там же, §ограничитель памяти). Снято 2026-10-04 (ветка `p2-wpt-fullpar`): `run_corpus.py --shared-queue` — тесты шарда из одной очереди (wptrunner `--fully-parallel --no-restart-on-new-group` + чередование по каталогам) вместо фиксированной хеш-раскладки по процессам: стена `dom`+8 −26 % (497 → 368 с), балл в шуме повторов; попутно найден [BUG-1268](bugs/BUG-1268-OPEN.md) — 2–4 id, чей вердикт зависит от предыдущего теста в процессе, «переезжают» при любом изменении порядка. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue` (замер — там же, §общая очередь)."
+       "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-FIXED.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно Разблокирован 2026-10-01 решением пользователя: BUG-792 закрыт 2026-08-24, статус `blocked` был устаревшим; ссылка на баг снята из колонки `bugs`, чтобы генератор не вывел из закрытого бага `done` для непрогнанной задачи. Приоритет P2 №1 — последняя полная цифра снята 2026-08-21 на сборке с BUG-792/BUG-786, движок с тех пор не измерен. Подготовка 2026-10-04: `run_corpus.py --parallel-shards 2 --batch-small 150` даёт ×2.5–×4.7 по настенному времени при вердиктах в пределах шума повторов (замер — `docs/tasks/p2-wpt-runner-throughput.md` §WPT-RUN-9, подготовка), гонять в этом режиме; больше двух полос на 32 ГБ — только после [BUG-1267](bugs/BUG-1267-OPEN.md) (acid3 раздувает один `lumen` до 25 ГБ). Снято 2026-10-04 (ветка `p2-run9-memguard`): `run_corpus.py --max-browser-gb` (по умолчанию 4, `tests/wpt/browser_rss_cap.py`) убивает браузер своего прогона сверх порога — раздувают только тесты, которые и так TIMEOUT с 0 сабтестов (acid3, квотные `webstorage` — BUG-870, `Range-mutations-*`), их тест становится CRASH с пометкой `rss_cap_kills`, балл не меняется; 3 полосы на `dom`+8 держат ≥8 ГБ свободной памяти при балле внутри шума — гонять `--parallel-shards 3 --batch-small 150` (замер — там же, §ограничитель памяти). Снято 2026-10-04 (ветка `p2-wpt-fullpar`): `run_corpus.py --shared-queue` — тесты шарда из одной очереди (wptrunner `--fully-parallel --no-restart-on-new-group` + чередование по каталогам) вместо фиксированной хеш-раскладки по процессам: стена `dom`+8 −26 % (497 → 368 с), балл в шуме повторов; попутно найден [BUG-1268](bugs/BUG-1268-OPEN.md) — 2–4 id, чей вердикт зависит от предыдущего теста в процессе, «переезжают» при любом изменении порядка. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue` (замер — там же, §общая очередь). Снято 2026-10-04 (ветка `p2-wpt-navaway`): хвост `encoding` был не движковой медленностью, а 65-секундным ожиданием результата у страницы, которая уже не тест — `form.submit()` с `target` на `<iframe>` уводит верхний документ ([BUG-1269](bugs/BUG-1269-OPEN.md)); `executorlumen.py` теперь кончает такой тест TIMEOUT через 15 с после ухода (`LUMEN_WPT_FOREIGN_GRACE_S`), шард `legacy-mb-japanese/euc-jp` 735 → 296 с, все 62 досрочно кончённых id и раньше были TIMEOUT 0/0 (замер — там же, §уход со страницы теста). Снято 2026-10-04 (ветка `p2-perf-10-s2`, PERF-10): `run_corpus.py` по умолчанию гонит testharness без растеризации (`--paint` — старый режим), CPU −14 %, память браузеров −40 %, балл в шуме; флаги прогона прежние (замер — там же, §PERF-10 срез 2). Снято 2026-10-04 (ветка `p2-wpt-urlquote`): `executorlumen.py` принимает результат, чей URL отличается от id только процент-кодированием (54 id с пробелами в query, `xhr/xmlhttprequest-timeout-*` — были ERROR + рестарт браузера, стали OK, балл `xhr` +22.0 — поправка раннера, не движка), и ограничивает весь тест потолком `timeout + 2·extra_timeout` вместо ожидания внешнего таймера wptrunner + `join(10)` (`LUMEN_WPT_HARD_CAP=off` — прежнее): стена −5 % на 1 299 id, балл совпадает до сотых (замер — там же, §URL результата и потолок теста). Снято 2026-10-04 (ветка `p2-wpt-startup`): `run_smoke.py` больше не импортирует wptrunner на уровне модуля — `spawn` на Windows исполнял этот импорт (~1 с) в каждом ребёнке, поэтому 7 серверов wptserve вставали по очереди: старт единицы прогона 16.7 → 8.5 с, перезапуск раннера 2.0 → 0.33 с, балл в шуме (замер — там же, §старт шарда); флаги прогона прежние. Снято 2026-10-04 (ветка `p2-wpt-spawnlock`): запуски браузеров одного wptrunner идут под блокировкой (`browsers/lumen.py`, `_SPAWN_LOCK`) — mozprocess на Windows создаёт ребёнка с `bInheritHandles=1`, браузер соседнего менеджера наследовал stdout-канал чужого запуска, и убийство браузера на перезапуске ждало EOF полный `kill(timeout=5)`: 6.1 с на каждом пятом перезапуске; простой на перезапусках −30 %, медленных остановок 0, балл в шуме (замер — там же, §одновременный запуск браузеров); флаги прогона прежние. Снято 2026-10-05 (ветка `p2-wpt-procs`): `--processes 14` вместо 7 при трёх полосах — стена −35 % на 1 970 id и −17 % на тяжёлом `dom`+6 (1 749 id), устойчиво разных вердиктов 6 на балл +0.08 (замер — там же, §процессы на шард); попутно найден и починен рассинхрон IPC рефтестов: после таймаута рендера исполнитель оставлял сокет, и опоздавший ответ получал следующий тест — все последующие рефтесты браузера были FAIL `expected Navigated, got variant 9` без сравнения пикселей (37 id на 1 970), теперь сокет сбрасывается и браузер перезапускается (`tests/wpt/verify_ipc_desync.py`), сдвиг цифры ~+9 баллов на наборе — поправка раннера. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue --processes 14`. **ЗАКРЫТ 2026-10-05 (P2, ветки `p2-wpt-run9-full` + `p2-wpt-run9-sub`):** весь корпус на `d913a39b9`, Windows, флаги выше — **33.55 %** (22 854.54 / 68 116), исполнено 66 978 (98.3 %), не исполнено только 1 138 id без исполнителя, убитых шардов 0, `score_audit.py` — no leak, стена 2 ч 44 мин. https на поддоменах в прогоне не работал ([BUG-1271](bugs/BUG-1271-FIXED.md)), поэтому 189 затронутых шардов перепрогнаны тем же бинарём с новым сертификатом и подставлены: **33.71 %** с поддоменами (+0.16 п.п.; `mixed-content` при этом падает 265→232 — прежние PASS «blocked» на swap-scheme редиректе были ложными, движок отдаёт `upgraded`). Like-for-like со скорингом 08-18 — 18.16 %. Снимки `docs/wpt/runs/2026-10-05{,-subdomains}.json`, журнал — [docs/wpt/pass-rate.md](docs/wpt/pass-rate.md) §Третья полная цифра."
       },
       {
        "id": "WPT-RUN-10",
@@ -5585,6 +5840,125 @@
        "status": "ready",
        "size": "L",
        "note": "Полный прогон категории `css` и разбор провалов на кластеры для P1 (layout/paint) и P4 (CSS-свойства). Заведено 2026-10-01 решением пользователя по плану развития: `css` — 34 607 id, около половины автоматизируемого корпуса, а рефтесты дают 64 % балла цифры (`docs/wpt/pass-rate.md` срез 33), но категория прогнана выборочно — 382 id (`docs/wpt-status.md` §Охват), поэтому очереди P1/P4 сейчас не знают, какие layout/CSS-дефекты стоят больше всего тестов. Объём: (1) прогнать `css` целиком на текущей сборке (`run_corpus.py`/`run_report.py --root css --recursive`, чанками с `--resume`, после или вместе с WPT-RUN-9); (2) `score_audit.py`/`type_audit.py` — разложить FAIL/TIMEOUT по подкаталогам `css/<модуль>/` и по первопричине; (3) на каждый кластер с наибольшим числом id — один BUG-NNN (дефект) либо строка ROADMAP (нереализованная функциональность), с указателем в `STATUS-P1.md` (layout/paint) или `STATUS-P4.md` (свойство разобрано, но не подключено); (4) итог — таблица «кластер → id → владелец» в `docs/wpt-vendor-notes/css.md`. Критерий готовности: весь `css` имеет вердикт, топ-10 кластеров по числу id разнесены по очередям."
+      },
+      {
+       "id": "WPT-RUN-8-S1",
+       "title": "WPT-RUN-8-S1: исполнитель crashtest",
+       "status": "done",
+       "size": "S",
+       "note": "Исполнитель crashtest для wptrunner поверх BiDi: navigate, ожидание снятия test-wait, проверка, что процесс жив. Плюс crashtest в RUNNABLE_ITEM_TYPES и исправленный self-test run_corpus. Снимает вечный MISSING с 1892 id. Бриф [docs/tasks/WPT-RUN-8-S1.md](docs/tasks/WPT-RUN-8-S1.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S1",
+       "title": "WPT-RUN-14-S1: css-flexbox и фильтр префиксов",
+       "status": "done",
+       "size": "M",
+       "note": "Флаги --prefixes и --exclude-prefixes в run_corpus.py с self-test, затем прогон css/css-flexbox (около 1432 id) и таблица кластеров в docs/wpt-vendor-notes/css.md. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-03 (ветка `p2-wpt-run14-s1`): `--prefixes`/`--exclude-prefixes` в `run_corpus.py` (точное покрытие выбранных id: shard = префикс каталога, смешанный каталог режется до подкаталогов, файлы смешанного каталога — один `(bare)`-шард; фильтр записывается в `state.json`, `--resume` с другим фильтром отказывает; `score_audit.py`/`type_audit.py` читают фильтр из `state.json`; 8 проверок в `--selftest`). Прогон `css/css-flexbox`: 1395 automatable id, 30.28 % (422.47), 95 с на сборке `dev-release`; reftest 287 из 997, testharness 108.47 из 368, crashtest 27 из 27, 3 print-reftest без исполнителя. 1012 id упали; разнесены в 12 записей (BUG-1249…BUG-1260, `FLEX-BASELINE`, `FLEX-VWM`), таблица — `docs/wpt-vendor-notes/css.md` §css-flexbox. 487 id (671 сабтест) остались в «прочем» без первопричины — не разобраны, см. там же."
+      },
+      {
+       "id": "WPT-RUN-14-S2",
+       "title": "WPT-RUN-14-S2: css-writing-modes",
+       "status": "done",
+       "size": "S",
+       "note": "Прогон css/css-writing-modes (около 1383 id) через run_corpus --prefixes, кластеры провалов и записи в очереди P1, P3 и P4. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-05 (ветка `p2-wpt-run14-s2`): 1233 automatable id, 14.11 % (reftest 130/1141, testharness 152/386 сабтестов, crashtest 12/12), 83 с, «no leak». 1063 не зелёных id разнесены на 14 кластеров (`docs/wpt-vendor-notes/css.md` §css-writing-modes): BUG-1276 — инсеты abspos/relative в вертикальном CB (259 id), BUG-1272 — RTL-фрагмент с ивритом развёрнут обратно CPU-растром (94), BUG-1273 — снимок reftest-а не ждёт `@font-face url()`, Ahem не работает ни в одном reftest WPT (все `css`), BUG-1274 — `writing-mode` с `<body>` (29), BUG-1275 — `text-indent` в вертикали (16), `TABLE-VWM` (117, P1), `text-combine-upright` и `clip` в CSS-SPECS (P4). Не разобраны: ортогональные потоки (173, ждут BUG-1276), `forms/` (64), inline/baseline в вертикальной строке (64), прочее (69). `reftest_pixdiff.py`: сравнение по вьюпорту, а не по всей странице (359 ложных `size-differs`), флаги `--viewport`/`--ahem`/`--output`; `run_corpus.load_results` пропускает не-`wptreport` JSON в каталоге прогона. Движок не менялся."
+      },
+      {
+       "id": "WPT-RUN-14-S3",
+       "title": "WPT-RUN-14-S3: css-ui",
+       "status": "done",
+       "size": "S",
+       "note": "Прогон css/css-ui (около 1356 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-05 (ветка `p2-wpt-run14-s3`): 1121 automatable id, 35.49 % (reftest 338/999, testharness 1003/1935 сабтестов, crashtest 7/7), 46 с, «no leak». 739 не зелёных id разнесены на 14 кластеров (`docs/wpt-vendor-notes/css.md` §css-ui): BUG-1277 — авторские border/background/padding не снимают нативный вид виджета (539 id, P4), BUG-1279 — CPU-растр рисует `outline` наполовину внутри бокса (33), BUG-1278 — `getComputedStyle` CSS UI-свойств (27 id, 152 сабтеста), BUG-1280 — `<img>` с размером из CSS теряет пропорции (19), BUG-1281 — крупный инлайн-текст не раздвигает строку (5), BUG-1282 — abspos `inset:0; margin:auto` не центрирует (2), BUG-1234 дописан (анимация `outline-*`); в CSS-SPECS для P4 — `caret-shape` (16), `text-overflow: <string>` (8), `interactivity`, `input-security`. Не разобраны: `text-overflow-*` разных форм (22), прочие testharness (33, из них 345 сабтестов — CSSOM `-webkit-appearance`), прочее reftest (11). Движок не менялся."
+      },
+      {
+       "id": "WPT-RUN-14-S4",
+       "title": "WPT-RUN-14-S4: css-break",
+       "status": "done",
+       "size": "S",
+       "note": "Прогон css/css-break (около 1178 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-05 (ветка `p2-wpt-run14-s4`): 1177 automatable id, 20.11 % (reftest 108/949, testharness 500/712 сабтестов, crashtest 114/117, print-reftest 64 без исполнителя — WPT-RUN-8), 74 с, «no leak». 878 не зелёных id разнесены на 10 кластеров (`docs/wpt-vendor-notes/css.md` §css-break). Почти весь модуль упирается в одно: multicol режет по колонкам только лист-блок без детей и рамок и простую сетку, всё прочее ставится в колонку целиком — текст, вложенные блоки, flex, grid, таблицы, abspos. Заведено для P1: `MULTICOL-FRAG` (блоки и строки, 176 id, база для остальных), `FLEX-FRAG` (268), `MULTICOL-FRAG-OOF` (156), `TABLE-FRAG` (123), `GRID-FRAG` (89); для P4 — `box-decoration-break` в CSS-SPECS (39 reftest; свойства нет вовсе); BUG-1283 — оконный shell зависает на документе высотой ~10¹⁰ px (3 crashtest TIMEOUT; CLI-снимок того же — 0,4 с). CSS-SPECS «CSS Fragmentation L3» ✅ → 🟡. Не разобраны: hit-test во фрагментах (9 testharness-id, 71 сабтест); `getComputedStyle` `break-*`/`orphans`/`widows` (7 id, механизм BUG-1278) и `*-invalid`/`page-break-*` (8 id) — без записи, < 20 id."
+      },
+      {
+       "id": "WPT-RUN-14-S5",
+       "title": "WPT-RUN-14-S5: css-transforms",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон css/css-transforms (около 940 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S6",
+       "title": "WPT-RUN-14-S6: css-backgrounds",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон css/css-backgrounds (около 955 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S7",
+       "title": "WPT-RUN-14-S7: css-grid часть 1",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон первой половины css/css-grid (abspos, alignment, animation, grid-definition, grid-items и файлы в корне, около 1000 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S8",
+       "title": "WPT-RUN-14-S8: css-grid часть 2",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон второй половины css/css-grid (grid-lanes, grid-model, layout-algorithm, parsing, placement, subgrid и др., около 1220 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S9",
+       "title": "WPT-RUN-14-S9: css-text часть 1",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон первой половины css/css-text (подкаталоги от animations до text-align и файлы в корне, около 1040 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S10",
+       "title": "WPT-RUN-14-S10: css-text часть 2",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон второй половины css/css-text (подкаталоги от text-autospace до writing-system, около 870 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-7-S1",
+       "title": "WPT-RUN-7-S1: baseline fenced-frame",
+       "status": "planned",
+       "size": "S",
+       "note": "Baseline expectations для категории fenced-frame: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-7-S2",
+       "title": "WPT-RUN-7-S2: baseline webrtc",
+       "status": "planned",
+       "size": "S",
+       "note": "Baseline expectations для категории webrtc: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-7-S3",
+       "title": "WPT-RUN-7-S3: baseline upgrade-insecure-requests и html-ruby-extensions",
+       "status": "planned",
+       "size": "S",
+       "note": "Baseline expectations для категорий upgrade-insecure-requests и html-ruby-extensions: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-7-S4",
+       "title": "WPT-RUN-7-S4: baseline WebCryptoAPI",
+       "status": "planned",
+       "size": "S",
+       "note": "Baseline expectations для категории WebCryptoAPI; если прогон дольше часа, делится по подкаталогам. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-7-S5",
+       "title": "WPT-RUN-7-S5: baseline permissions-policy и encrypted-media",
+       "status": "planned",
+       "size": "S",
+       "note": "Baseline expectations для категорий permissions-policy и encrypted-media: --update-expected и два --check подряд с exit 0. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-7-S6",
+       "title": "WPT-RUN-7-S6: baseline пяти подкатегорий html",
+       "status": "planned",
+       "size": "S",
+       "note": "Baseline expectations для html/anonymous-iframe, html/capability-delegation, html/user-activation, html/cross-origin-embedder-policy и html/cross-origin-opener-policy. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
       }
      ]
     },
@@ -6531,6 +6905,16 @@
        "status": "done",
        "size": "S",
        "note": "ЗАКРЫТ 2026-10-04 (ветка `p1-split-pt1`): три файла paint под потолок 2000 — `paint/src/lib.rs` 2202 -> 1362 (`mod multi_font_tests` -> `multi_font_tests.rs`, 841), `display_list/tests/text_and_images.rs` 2008 -> 1665 (`<img>`/lazy/`<video>`/`user-select` -> `tests/images_media.rs`, 350), `tests/anim_and_chrome.rs` 2236 -> 1391 (BoxModelOverlay/MaskMode/scroll/print/CrossFade -> `tests/chrome_overlays_print.rs`, 850). Числа брифа устарели. Тела байт в байт; число `#[test]` 284 -> 284, `lumen-paint --lib` 1325 ok. Видимость: `BODY_RESET` -> `pub(super)`.",
+       "bugs": [
+        "BUG-1100"
+       ]
+      },
+      {
+       "id": "SPLIT-ST19",
+       "title": "SPLIT-ST19: тесты shell под потолок",
+       "status": "done",
+       "size": "S",
+       "note": "ЗАКРЫТ 2026-10-04 (ветка `p1-split-st19`): scripts_and_frames.rs 2220 -> 760 (хвост с `pointer_target` -> `tests/subdocument_frames.rs`), chrome_incremental.rs 2160 -> 1220 (BUG-405 срез 49 и BUG-625 -> `chrome_incremental_dl.rs`), bug341_census.rs 2104 -> 1107 (S27 и позже -> `bug341_census_b.rs`); общие хелперы `pub(super)`. Механический разрез тестов shell сверх 2000 строк: tests/scripts_and_frames.rs (2220), tests/chrome_incremental.rs (2122), tests/bug341_census.rs (2104). Продакшн shell не трогается до закрытия BUG-935. Бриф [docs/tasks/SPLIT-ST19.md](docs/tasks/SPLIT-ST19.md)",
        "bugs": [
         "BUG-1100"
        ]
@@ -8399,6 +8783,104 @@
    "status": "open",
    "title": "Тест, открывающий `blob:`-навигацию (`FileAPI/url/url-in-tags-revoke.window.html`, `FileAPI/BlobURL/cross-partition.https.html`), роняет навигацию СЛЕДУЮЩЕГО те…",
    "component": "shell / bidi-server (навигация верхнего контекста после `blob:`/`window.open`, не локализовано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1269": {
+   "status": "open",
+   "title": "`form.submit()` страницы игнорирует `target`: форма с `target=\"<имя iframe>\"` навигирует верхний документ вместо фрейма (HTML LS §4.10.21.3, выбор navigable по…",
+   "component": "shell (`crates/shell/src/lumen/form_submit.rs::run_form_submission` — путь `NavigateRequest::SubmitForm`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1270": {
+   "status": "open",
+   "title": "Повёрнутый текст вертикального `writing-mode` (`text-orientation: mixed`/`sideways`, латиница) рисуется на ширину колонки левее своей колонки: `emit_inline_run_…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_text_rotated`/`rasterize_text_mixed`, `renderer/glyph_raster.rs::rotate_text_vertices_cw`, `backends/femtovg_backend.rs::rotate_cw_transform`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1272": {
+   "status": "open",
+   "title": "RTL-фрагмент, где первым буквенным символом идёт иврит/арабский, а рядом есть латиница, рисуется в логическом порядке: display list уже визуальный (`bidi::visua…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_text` — `rustybuzz` без скрипта)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1273": {
+   "status": "open",
+   "title": "`--screenshot`, IPC `Screenshot` (reftest-исполнитель WPT) и BiDi `Screenshot` рисуют первый layout и выбрасывают `@font-face url()`: Ahem не применяется ни в о…",
+   "component": "shell (`crates/shell/src/dump_mode.rs::render_source_to_png` — `pending_web_fonts` не ждутся)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1274": {
+   "status": "open",
+   "title": "`writing-mode` с `<body>` не становится главным режимом документа (CSS Writing Modes L3 §8): `<body style=\"writing-mode:vertical-rl\">` раскладывается как ортого…",
+   "component": "layout (корень дерева боксов / ICB, не локализовано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1275": {
+   "status": "open",
+   "title": "`text-indent` в вертикальном `writing-mode` игнорируется: вертикальный перенос строк его не читает (`InlineRun … text-indent=80` → `frag[0] x=0`). WPT `css/css-…",
+   "component": "layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1276": {
+   "status": "open",
+   "title": "В containing block с вертикальным `writing-mode` инсеты `position: absolute` и сдвиг `position: relative` не применяются: ребёнок остаётся в статической позиции…",
+   "component": "layout (`crates/engine/layout/src/box_tree/vertical_trampoline.rs` — нет хвоста `layout_dispatch::finish_after_match`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1277": {
+   "status": "open",
+   "title": "Авторские `background-*`/`border-*`/`padding-*` у виджета с `appearance: auto` не отключают нативный вид (CSS UI L4 §appearance-disabling-properties, HTML LS §1…",
+   "component": "layout (`crates/engine/layout/src/style/ua.rs::strip_ua_appearance_box_styling` — только при `appearance: none`), paint (`display_list/form_controls.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1278": {
+   "status": "open",
+   "title": "`getComputedStyle()` возвращает `\"\"` для `caret-color`, `accent-color`, `outline-offset`, шорткода `outline`, `resize`, `user-select`, `appearance`/`-webkit-app…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1279": {
+   "status": "open",
+   "title": "CPU-растр обводит `outline` штрихом, центрированным по краю `rect ± offset`: половина ширины ложится поверх бокса, снаружи только половина (`outline: 10px` у бо…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_draw_outline`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1280": {
+   "status": "open",
+   "title": "`<img>` без атрибутов `width`/`height` получает оба атрибута из декодированного размера, поэтому сторона из CSS не масштабирует вторую: `<img style=\"height:50px…",
+   "component": "layout (`crates/engine/layout/src/box_tree/image_requests.rs::apply_intrinsic_size`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1281": {
+   "status": "open",
+   "title": "Высота строки текстового рана берётся из `line-height` блока: `<span style=\"font-size:40px\">` в обычном `<div>` не раздвигает строку (17.72 px), текст налезает…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — ветка `InlineRun`, высота = `line_count × used_line_height`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1282": {
+   "status": "open",
+   "title": "`position: absolute` с обеими инсетами и заданным размером не распределяет свободное место в `auto`-поля (CSS 2.1 §10.3.7/§10.6.4): `inset:0; margin:auto; width…",
+   "component": "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — `auto`-поля через `resolve_or_zero`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1283": {
+   "status": "open",
+   "title": "Оконный shell зависает на документе с содержимым высотой ~10¹⁰ px: `<div style=\"height:1e10px;background:green\">` под wptrunner не отвечает на BiDi 20 с (2.2e9…",
+   "component": "shell (оконный конвейер после layout — не локализовано; не растр: с `--no-paint` то же)",
    "date": null,
    "debtor": false
   },
@@ -15842,6 +16324,13 @@
    "component": "layout (`crates/engine/layout/src/style/values/flexgrid.rs`, `box_tree/flex_trampoline.rs`)",
    "date": "2026-10-04",
    "debtor": false
+  },
+  "BUG-1271": {
+   "status": "fixed",
+   "title": "https на поддоменах wptserve (`www1.localhost:18443` и др.) падал `TLS handshake: certificate not valid for this hostname`: rustls-webpki, как NSS, требует ≥2 м…",
+   "component": "тулинг WPT (`tests/wpt/certs/host-cert.pem` — SAN `*.localhost`)",
+   "date": "2026-10-05",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -17083,9 +17572,6 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738"
   ],
-  "layout (`crates/engine/layout/src/box_tree/baseline.rs`, `flex_trampoline.rs`)": [
-   "BUG-1257"
-  ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`, `collapsed_bottom_margin`; `block_flow_trampoline.rs`; `box_tree/types.rs` — `BoxRole`/`PseudoKind`)": [
    "BUG-1026"
   ],
@@ -17110,17 +17596,14 @@
   "layout (`crates/engine/layout/src/box_tree/flex.rs` — распределение свободного места при сумме `flex-grow`/`flex-shrink` < 1)": [
    "BUG-1260"
   ],
-  "layout (`crates/engine/layout/src/box_tree/flex.rs`, `flex_trampoline.rs`, `layout_dispatch.rs`, `style/logical.rs`)": [
-   "BUG-1258"
-  ],
-  "layout (`crates/engine/layout/src/box_tree/flex.rs`, `intrinsic.rs`)": [
-   "BUG-1264"
-  ],
   "layout (`crates/engine/layout/src/box_tree/flex_trampoline.rs` — `align_abs_static_positions`)": [
    "BUG-1251"
   ],
   "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)": [
    "BUG-644"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/image_requests.rs::apply_intrinsic_size`)": [
+   "BUG-1280"
   ],
   "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — `is_inline_content`/`is_atomic_inline_level`)": [
    "BUG-928"
@@ -17137,6 +17620,9 @@
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — быстрый путь `lay_out` для чистого поддерева, `translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y)`; same-tick флаш `crates/js/src/v8_runtime/style_flush.rs`)": [
    "BUG-1242"
   ],
+  "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — ветка `InlineRun`, высота = `line_count × used_line_height`)": [
+   "BUG-1281"
+  ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — разрешение процентных `height` у `position:absolute`)": [
    "BUG-1250"
   ],
@@ -17149,8 +17635,14 @@
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::abs_box_shrinks_to_fit`)": [
    "BUG-1047"
   ],
+  "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — `auto`-поля через `resolve_or_zero`)": [
+   "BUG-1282"
+  ],
   "layout (`crates/engine/layout/src/box_tree/tests/grid_trampoline.rs`, `box_tree/grid_trampoline.rs`)": [
    "BUG-1266"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/vertical_trampoline.rs` — нет хвоста `layout_dispatch::finish_after_match`)": [
+   "BUG-1276"
   ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
@@ -17191,6 +17683,7 @@
   "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-1050",
    "BUG-1254",
+   "BUG-1278",
    "BUG-506",
    "BUG-532",
    "BUG-537"
@@ -17231,11 +17724,11 @@
   "layout (`crates/engine/layout/src/style/substitute.rs::expand_custom_functions_scoped`, `style/cascade.rs::shadow_function_chain`)": [
    "BUG-519"
   ],
-  "layout (`crates/engine/layout/src/style/values/flexgrid.rs`, `box_tree/flex_trampoline.rs`)": [
-   "BUG-1265"
+  "layout (`crates/engine/layout/src/style/ua.rs::strip_ua_appearance_box_styling` — только при `appearance: none`), paint (`display_list/form_controls.rs`)": [
+   "BUG-1277"
   ],
-  "layout (`crates/engine/layout/src/vertical.rs`, `box_tree/layout_dispatch.rs` — `InlineBlockRow` в вертикальном режиме)": [
-   "BUG-1263"
+  "layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)": [
+   "BUG-1275"
   ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
@@ -17257,6 +17750,9 @@
   ],
   "layout (каскад `precompute_counters`), shell (relayout), js (гидратация)": [
    "BUG-1223"
+  ],
+  "layout (корень дерева боксов / ICB, не локализовано)": [
+   "BUG-1274"
   ],
   "layout (разобран на подбаги)": [
    "BUG-725"
@@ -17493,6 +17989,15 @@
   "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_cpu_with_fonts` — CPU-очистка канвы) + эталоны `graphic_tests/dump-golden/`": [
    "BUG-1106"
   ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_draw_outline`)": [
+   "BUG-1279"
+  ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_text_rotated`/`rasterize_text_mixed`, `renderer/glyph_raster.rs::rotate_text_vertices_cw`, `backends/femtovg_backend.rs::rotate_cw_transform`)": [
+   "BUG-1270"
+  ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_text` — `rustybuzz` без скрипта)": [
+   "BUG-1272"
+  ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — растеризация прямоугольников с дробными координатами)": [
    "BUG-1249"
   ],
@@ -17630,6 +18135,9 @@
   "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)": [
    "BUG-1201"
   ],
+  "shell (`crates/shell/src/dump_mode.rs::render_source_to_png` — `pending_web_fonts` не ждутся)": [
+   "BUG-1273"
+  ],
   "shell (`crates/shell/src/engine_thread.rs:64` `QUERY_TIMEOUT = 5s`, `:293` `recv_timeout → None`; `crates/shell/src/app/about_to_wait.rs:928-943` — `None` → «JS context not available»)": [
    "BUG-1145"
   ],
@@ -17650,6 +18158,9 @@
   ],
   "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
    "BUG-927"
+  ],
+  "shell (`crates/shell/src/lumen/form_submit.rs::run_form_submission` — путь `NavigateRequest::SubmitForm`)": [
+   "BUG-1269"
   ],
   "shell (`crates/shell/src/lumen/form_submit.rs`, кодировка тела формы; `crates/shell/src/forms.rs` — нет кодировщика)": [
    "BUG-1042"
@@ -17786,6 +18297,9 @@
   "shell (навигация)": [
    "BUG-308"
   ],
+  "shell (оконный конвейер после layout — не локализовано; не растр: с `--no-paint` то же)": [
+   "BUG-1283"
+  ],
   "shell / bidi-server (навигация верхнего контекста после `blob:`/`window.open`, не локализовано)": [
    "BUG-1268"
   ],
@@ -17896,6 +18410,9 @@
   ],
   "тулинг (`tests/wpt/shutdown_guard.py`, `tests/wpt/run_smoke.py`), диагностика `crates/bidi-server/src/transport.rs`": [
    "BUG-1006"
+  ],
+  "тулинг WPT (`tests/wpt/certs/host-cert.pem` — SAN `*.localhost`)": [
+   "BUG-1271"
   ],
   "тулинг WPT (`tests/wpt/certs/host-cert.pem` — SAN `web-platform.test`/`127.0.0.1` против `browser_host = \"localhost\"`, `browsers/lumen.py::env_options`)": [
    "BUG-1069"
