@@ -1449,6 +1449,36 @@ fn parse_time_script_overflow_clip_zeroes_scroll_request() {
     assert_eq!(probe_attr(&page, "data-direct"), "0,0");
 }
 
+/// BUG-553 срез 61: снимок `--screenshot` перед растеризацией шлёт `load` и гонит
+/// двойной `requestAnimationFrame`, поэтому страница, меняющая DOM из
+/// `<body onload>`, `window.onload` или rAF, снимается уже после правки (reftest-ы
+/// `css-gaps/*repaint-on-*`). Страница без скриптов layout не пересчитывает.
+#[cfg(feature = "v8")]
+#[test]
+fn screenshot_settle_runs_load_and_raf_then_relayouts() {
+    let height = |html: &str| {
+        let mut page = parse_and_layout_for_test(html);
+        let before = page.layout.rect.height;
+        crate::dump_mode::settle_after_load(&mut page, Size::new(1024.0, 20.0));
+        (before, page.layout.rect.height)
+    };
+    let grow = "document.getElementById('a').style.height='1000px';";
+    let (before, after) = height(&format!(
+        "<!DOCTYPE html><body style='margin:0' onload=\"{grow}\"><div id=a style='height:10px'></div></body>"
+    ));
+    assert!(after >= 1000.0, "<body onload>: {before} -> {after}");
+    let (before, after) = height(&format!(
+        "<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div>         <script>window.addEventListener('load',()=>{{{grow}}})</script></body>"
+    ));
+    assert!(after >= 1000.0, "window load: {before} -> {after}");
+    let (before, after) = height(&format!(
+        "<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div>         <script>requestAnimationFrame(()=>requestAnimationFrame(()=>{{{grow}}}))</script></body>"
+    ));
+    assert!(after >= 1000.0, "double rAF: {before} -> {after}");
+    let (before, after) = height("<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div></body>");
+    assert_eq!(before, after);
+}
+
 /// BUG-1120: внешний `<script defer src>` исполняется после конца разбора —
 /// после инлайнового скрипта из конца `<body>` и до `DOMContentLoaded`, в
 /// порядке документа вместе с модулями (HTML LS §4.12.1.1 шаг 31, §13.2.7

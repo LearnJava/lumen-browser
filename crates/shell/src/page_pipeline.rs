@@ -461,6 +461,9 @@ pub(crate) struct ParsedPage {
     /// See [`LoadedPage::prescript_layout_rects`] — same snapshot, carried
     /// through this intermediate shape on its way there.
     pub(crate) prescript_layout_rects: Option<std::collections::HashMap<u32, [f32; 4]>>,
+    /// Измеритель текста, которым собран `layout`: headless-снимок досчитывает им
+    /// layout после `load`/rAF-обработчиков страницы (`dump_mode::settle_after_load`).
+    pub(crate) measurer: lumen_paint::MultiFontMeasurer,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -1874,6 +1877,7 @@ pub(crate) fn parse_and_layout(
         frames,
         frame_env,
         prescript_layout_rects,
+        measurer,
     })
 }
 
