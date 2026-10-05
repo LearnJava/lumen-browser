@@ -980,20 +980,22 @@ pub(super) fn lay_out_abs(
         .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
         .map(|(i, _)| (i, content_x, content_y))
         .collect();
-    if abs.is_empty() {
-        return;
+    if !abs.is_empty() {
+        let my_pcb = if is_positioned {
+            Rect::new(
+                b.rect.x + s.border_left_width,
+                b.rect.y + s.border_top_width,
+                (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            )
+        } else {
+            own_pcb
+        };
+        lay_out_abs_children(b, &abs, measurer, viewport, my_pcb, hp);
     }
-    let my_pcb = if is_positioned {
-        Rect::new(
-            b.rect.x + s.border_left_width,
-            b.rect.y + s.border_top_width,
-            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
-            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
-        )
-    } else {
-        own_pcb
-    };
-    lay_out_abs_children(b, &abs, measurer, viewport, my_pcb, hp);
+    if is_positioned {
+        super::multicol_abspos::fix_out_of_flow_descendants(b, measurer, viewport, hp);
+    }
 }
 
 /// CSS 2.1 §10.6.3/§10.6.7, CSS Box Sizing L4 §5 — resolve a grid container's

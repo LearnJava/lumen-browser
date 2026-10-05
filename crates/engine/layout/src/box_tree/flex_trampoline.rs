@@ -1292,6 +1292,9 @@ fn finish_frame(
         lay_out_abs_children(&mut frame.b, &flex_abs, measurer, viewport, my_pcb, hp);
         align_abs_static_positions(frame, &flex_abs, viewport);
     }
+    if frame.init.is_positioned {
+        super::multicol_abspos::fix_out_of_flow_descendants(&mut frame.b, measurer, viewport, hp);
+    }
 }
 
 /// Physical position of a lone item inside `free` space along one axis, as a

@@ -107,7 +107,7 @@ fn apply_container_inner(
             let content_x = b.rect.x + pad_l + b.style.border_left_width;
             let content_y = b.rect.y + pad_t + b.style.border_top_width;
             let avail_h: Option<f32> = content_h;
-            let child_pcb = if !matches!(b.style.position, Position::Static) {
+            let child_pcb = if super::multicol_abspos::establishes_abs_cb(&b.style) {
                 Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
             } else {
                 pcb
@@ -321,7 +321,7 @@ fn apply_anchor_positions_rec(
     }
 
     // Compute the containing block for absolute-positioned children of this element.
-    let is_positioned = !matches!(lb.style.position, Position::Static);
+    let is_positioned = super::multicol_abspos::establishes_abs_cb(&lb.style);
     let my_pcb = if is_positioned {
         Rect::new(
             lb.rect.x + lb.style.border_left_width,

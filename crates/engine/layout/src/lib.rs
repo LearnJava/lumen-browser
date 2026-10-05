@@ -2081,19 +2081,27 @@ fn collect_layout_shift_rects_rec(
     ancestor_opacity_zero: bool,
     out: &mut std::collections::HashMap<u32, [f32; 4]>,
 ) {
-    let mut stack: Vec<(&LayoutBox, bool)> = vec![(root, ancestor_opacity_zero)];
-    while let Some((b, opacity_zero)) = stack.pop() {
+    // (box, an ancestor has opacity 0, an ancestor is the containing block of `fixed` boxes)
+    let mut stack: Vec<(&LayoutBox, bool, bool)> = vec![(root, ancestor_opacity_zero, false)];
+    while let Some((b, opacity_zero, in_fixed_cb)) = stack.pop() {
         let opacity_zero = opacity_zero || b.style.opacity <= 0.0;
         let not_rendered = !matches!(b.style.visibility, Visibility::Visible) || opacity_zero;
-        let scroll_pinned = matches!(b.style.position, Position::Fixed | Position::Sticky);
+        // A `fixed` box under a transformed/filtered ancestor scrolls with it
+        // (css-transforms-1 §2), so only a viewport-pinned one is skipped.
+        let scroll_pinned = match b.style.position {
+            Position::Fixed => !in_fixed_cb,
+            Position::Sticky => true,
+            _ => false,
+        };
+        let in_fixed_cb = in_fixed_cb || resolved_geometry::contains_fixed_descendants(&b.style);
         if not_rendered || scroll_pinned {
-            stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
+            stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero, in_fixed_cb)));
             continue;
         }
         let r = b.rect;
         out.entry(b.node.index() as u32)
             .or_insert([r.x, r.y, r.width, r.height]);
-        stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
+        stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero, in_fixed_cb)));
     }
 }
 
