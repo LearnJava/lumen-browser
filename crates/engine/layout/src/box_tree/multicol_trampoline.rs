@@ -660,6 +660,53 @@ fn grid_windows(
     windows
 }
 
+/// The main-axis gaps of every flex line of a wrapped row flex container, `(start, end)` in the
+/// container's own coordinates (`rows` — the lines as `(top, bottom)` from the border-box top,
+/// `gy0` — its top). A gap is the free space between two neighbouring items of one line that is
+/// at least the `column-gap` wide (`gap: 0` — any seam); the margin boxes are used. `None` for a
+/// grid, whose tracks the painter reads itself.
+fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec<Vec<(f32, f32)>>> {
+    if !matches!(flex.style.display, Display::Flex) {
+        return None;
+    }
+    let s = &flex.style;
+    let em = s.font_size;
+    let cw = flex.rect.width;
+    let vp = Size::new(cw, flex.rect.height);
+    let main_gap = s.column_gap.resolve_or_zero(em, cw, vp);
+    let mut lines: Vec<Vec<(f32, f32)>> = vec![Vec::new(); rows.len()];
+    for c in &flex.children {
+        if matches!(c.kind, BoxKind::Skip) || matches!(c.style.position, Position::Absolute | Position::Fixed) {
+            continue;
+        }
+        let cs = &c.style;
+        let top = c.rect.y - gy0 - cs.margin_top.resolve_or_zero(cs.font_size, cw, vp);
+        let k = rows.iter().rposition(|r| r.0 <= top + 0.5).unwrap_or(0);
+        let l = c.rect.x - cs.margin_left.resolve_or_zero(cs.font_size, cw, vp);
+        let r = c.rect.x + c.rect.width + cs.margin_right.resolve_or_zero(cs.font_size, cw, vp);
+        lines[k].push((l.min(r), r));
+    }
+    Some(
+        lines
+            .into_iter()
+            .map(|mut items| {
+                items.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut gaps = Vec::new();
+                let Some(mut reach) = items.first().map(|i| i.1) else { return gaps };
+                for it in &items[1..] {
+                    let dist = it.0 - reach;
+                    let is_gap = if main_gap > 0.5 { dist > 0.5 && dist >= main_gap - 0.5 } else { dist >= -0.5 };
+                    if is_gap {
+                        gaps.push((reach, it.0));
+                    }
+                    reach = reach.max(it.1);
+                }
+                gaps
+            })
+            .collect(),
+    )
+}
+
 /// CSS Fragmentation L3 §5 / CSS Gap Decorations L1 §6.2 — a grid container laid out in full
 /// (the Measure pass) is cut into one fragment per column of the multicol container
 /// (`column-fill: auto`, a definite column height). A break that falls inside a row gap drops
@@ -731,6 +778,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         limit
     };
     let windows = grid_windows(grid, gy0, &rows, &forced, total_h, cut_at);
+    let all_line_gaps = flex_line_gaps(grid, gy0, &rows);
     // An item with children is cut between them, never through one: a break inside a line box or
     // a nested block would need real fragmentation of the item, so such a grid stays atomic.
     let edges: Vec<f32> = windows.iter().flat_map(|w| [w.0, w.1]).collect();
@@ -831,10 +879,19 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             .collect();
         // The gap numbers of this fragment continue those of the fragments before it.
         let row_gap_base = visible.first().map(|v| (v.0, rows.len() - 1));
+        let visible_idx: Vec<usize> = visible.iter().map(|v| v.0).collect();
         let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
         let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
-        frag.subgrid_tracks =
-            Some(Box::new(crate::subgrid::SubgridTracks { cols, rows: Some(clipped), fragment: true, row_gap_base }));
+        let line_gaps = all_line_gaps
+            .as_ref()
+            .map(|g| visible_idx.iter().map(|&k| g[k].iter().map(|&(a, b)| (a - gx, b - gx)).collect()).collect());
+        frag.subgrid_tracks = Some(Box::new(crate::subgrid::SubgridTracks {
+            cols,
+            rows: Some(clipped),
+            fragment: true,
+            row_gap_base,
+            line_gaps,
+        }));
         seg_extent = seg_extent.max(frag_h);
         out.push(frag);
     }

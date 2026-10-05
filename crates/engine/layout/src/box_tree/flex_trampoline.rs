@@ -1279,7 +1279,7 @@ fn finish_frame(
                 top += natural_sizes[li] + cross_gap;
             }
             frame.b.subgrid_tracks =
-                Some(Box::new(crate::subgrid::SubgridTracks { cols: None, rows: Some(tracks), fragment: false, row_gap_base: None }));
+                Some(Box::new(crate::subgrid::SubgridTracks { cols: None, rows: Some(tracks), fragment: false, row_gap_base: None, line_gaps: None }));
         }
     }
 

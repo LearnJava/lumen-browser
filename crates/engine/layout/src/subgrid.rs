@@ -94,6 +94,11 @@ pub struct SubgridTracks {
     /// контейнера)`. Значения `row-rule-*` раздаются щелям всего контейнера (§4.6), а в фрагменте
     /// видна лишь часть дорожек, так что нумерация щелей фрагмента начинается не с нуля.
     pub row_gap_base: Option<(usize, usize)>,
+    /// Только у фрагмента wrapped row flex: щели главной оси каждой видимой строки (`rows`) как
+    /// `(начало, конец)` по X от левого края бокса. Элемент, целиком оставшийся в предыдущем
+    /// фрагменте (`flex-gap-decorations-fragmentation-011`: первый элемент ниже других), не даёт
+    /// painter'у границу щели, так что щели считает раскладка по всему контейнеру.
+    pub line_gaps: Option<Vec<Vec<(f32, f32)>>>,
 }
 
 // ── Thread-local subgrid context ─────────────────────────────────────────────
@@ -115,7 +120,7 @@ pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
     };
     let cols = SUBGRID_COL_CTX.with(spans);
     let rows = SUBGRID_ROW_CTX.with(spans);
-    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false, row_gap_base: None }))
+    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false, row_gap_base: None, line_gaps: None }))
 }
 
 /// Replaces the parent's gutters in the pending subgrid contexts with the subgrid's own explicit

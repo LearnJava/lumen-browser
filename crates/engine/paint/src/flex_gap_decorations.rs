@@ -205,6 +205,13 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
         for (l, &(lo, hi)) in lines.iter_mut().zip(t) {
             (l.lo, l.hi) = (lo, hi);
         }
+        // The gaps of a line come from layout too: an item that stayed whole in an earlier column
+        // is missing here, and the gap next to it would be lost.
+        if let Some(g) = p.fragment_line_gaps.as_ref().filter(|g| g.len() == n) {
+            for (l, gaps) in lines.iter_mut().zip(g) {
+                l.gaps.clone_from(gaps);
+            }
+        }
     } else {
         stretch_lines(&mut lines, s.align_content, wrap, cc, cross_gap);
     }
