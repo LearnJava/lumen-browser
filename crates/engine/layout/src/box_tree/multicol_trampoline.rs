@@ -606,6 +606,11 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         return false;
     }
     let total_h = grid.rect.height;
+    // `column-fill: balance` shrinks the columns below the height limit when the content is
+    // shorter than `limit × columns`; only a container that fills them all is cut at the limit.
+    if frame.init.balance && total_h < limit * frame.init.n_cols as f32 - 0.01 {
+        return false;
+    }
     // Windows `[start, end)` in the grid's own (unfragmented) block coordinates.
     let mut windows: Vec<(f32, f32)> = Vec::new();
     let mut start = 0.0f32;

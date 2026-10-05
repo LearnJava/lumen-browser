@@ -1088,8 +1088,10 @@ fn finish_frame(
             }
         }
 
+        // Natural cross sizes of the lines, for the line tracks recorded below.
+        let natural_sizes = frame.init.line_cross_sizes.clone();
+        let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
         if free_cross > 0.0 {
-            let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
             let effective = match frame.init.s.align_content {
                 AlignValue::Auto | AlignValue::Normal => AlignValue::Stretch,
                 // `start`/`end` follow the writing mode: `wrap-reverse` swaps them
@@ -1196,6 +1198,22 @@ fn finish_frame(
             }
 
             total_cross = frame.init.line_cross_sizes.iter().sum::<f32>() + line_gap_total;
+        }
+
+        // The lines of a wrapped row container for gap rules cut by a multicol break
+        // (`multicol_trampoline::emit_grid_fragments`): `(top, bottom)` of every line from the
+        // content box's top, after `align-content`. `wrap-reverse` and vertical writing modes
+        // mirror the cross axis, so they keep the paint-side search by the items' rects.
+        if !is_column && n_lines >= 2 && !frame.init.wrap_reverse && frame.init.vertical.is_none() {
+            let mut top = 0.0f32;
+            let mut tracks = Vec::with_capacity(n_lines);
+            for li in 0..n_lines {
+                let lo = top + line_offsets[li];
+                tracks.push((lo, lo + frame.init.line_cross_sizes[li]));
+                top += natural_sizes[li] + cross_gap;
+            }
+            frame.b.subgrid_tracks =
+                Some(Box::new(crate::subgrid::SubgridTracks { cols: None, rows: Some(tracks), fragment: false }));
         }
     }
 

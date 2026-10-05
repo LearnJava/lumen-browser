@@ -82,3 +82,39 @@ fn a_break_at_the_end_of_a_track_drops_the_whole_row_gap() {
     let h: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
     assert_eq!(h, vec![100.0, 100.0], "{h:?}");
 }
+
+const FLEX_HTML: &str =
+    "<div id=\"m\"><div id=\"f\"><div></div><div></div><div></div><div></div><div></div><div></div></div></div>";
+
+fn flex_frags(extra: &str, fill: &str) -> Vec<(f32, f32, usize)> {
+    let root = lay(
+        FLEX_HTML,
+        &format!(
+            "body{{margin:0}} #m{{columns:2;{fill}column-gap:10px;width:290px;height:87px}}              #f{{display:flex;flex-wrap:wrap;width:140px;height:180px;{extra}}} #f>div{{width:70px;height:50px}}"
+        ),
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    v.iter().map(|b| (b.rect.x, b.rect.height, b.subgrid_tracks.as_ref().unwrap().rows.as_ref().unwrap().len())).collect()
+}
+
+#[test]
+fn a_wrapped_flex_row_container_is_cut_by_its_lines() {
+    // Three 50px lines spread by `align-content: space-between` over 180px: lines at 0..50,
+    // 65..115, 130..180; the 87px window ends inside the second one, the next starts at 87.
+    let v = flex_frags("align-content:space-between;", "");
+    assert_eq!(v.len(), 3, "{v:?}");
+    assert_eq!(v.iter().map(|f| f.0).collect::<Vec<_>>(), vec![0.0, 150.0, 300.0], "{v:?}");
+    assert_eq!(v[0].2, 2, "two lines in the first fragment: {v:?}");
+}
+
+#[test]
+fn a_flex_container_without_two_lines_stays_atomic() {
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;width:290px;height:30px}          #f{display:flex;flex-wrap:wrap;height:80px} #f>div{width:70px;height:50px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    assert!(v.is_empty(), "{} fragments", v.len());
+}
