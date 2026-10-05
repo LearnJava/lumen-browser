@@ -184,6 +184,13 @@ pub(super) fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usi
 ///   distributing the container's free space between tracks — CSS Box Alignment
 ///   L3 §5 / CSS Grid L1 §12.3.
 ///
+/// `vertical` (GRID-VWM): `Some` for a container in a vertical `writing-mode`. Everything here
+/// then stays logical — `content_width` is the inline extent (the physical content height),
+/// `definite_content_height` the definite block extent (the physical content width), the
+/// `col_*` vectors run along physical y and the `row_*` ones along x; the physical mapping is
+/// done by `grid_vertical` at the item boundary. Only the `min-/max-content` column sizing
+/// reads it here (inline-axis margins and intrinsic height instead of width).
+///
 /// `definite_content_height` is the container's content-box block size when it is
 /// definite (explicit `height`, box-sizing already applied), `None` when the height
 /// is derived from the content. Only a definite height leaves block-axis free space
@@ -219,6 +226,7 @@ pub(crate) fn build_grid_init(
     is_positioned: bool,
     own_pcb: Rect,
     measurer: Option<&dyn TextMeasurer>,
+    vertical: Option<super::grid_vertical::VGridGeom>,
 ) -> Option<Box<super::grid_trampoline::GridInit>> {
     use super::grid_trampoline::GridInit;
 
@@ -614,12 +622,23 @@ pub(crate) fn build_grid_init(
                 }
                 let item = &children[i];
                 let cem = item.style.font_size;
-                let ml = item.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-                let mr = item.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
-                let outer = if is_max {
-                    max_content_outer_width(item, measurer, viewport)
+                // Вертикальный режим: колонка — inline-ось, то есть физическая высота.
+                let (ml, mr, outer) = if vertical.is_some() {
+                    (
+                        item.style.margin_top.resolve_or_zero(cem, 0.0, viewport),
+                        item.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport),
+                        max_content_outer_height(item, measurer, viewport),
+                    )
                 } else {
-                    min_content_outer_width(item, measurer, viewport)
+                    (
+                        item.style.margin_left.resolve_or_zero(cem, 0.0, viewport),
+                        item.style.margin_right.resolve_or_zero(cem, 0.0, viewport),
+                        if is_max {
+                            max_content_outer_width(item, measurer, viewport)
+                        } else {
+                            min_content_outer_width(item, measurer, viewport)
+                        },
+                    )
                 };
                 w = w.max(outer + ml + mr);
             }
@@ -749,6 +768,7 @@ pub(crate) fn build_grid_init(
         item_baselines,
         row_first_group: row_groups.clone(),
         row_last_group: row_groups,
+        vertical,
     }))
 }
 

@@ -253,6 +253,9 @@ const PAGES: &[&str] = &[
     // HTML Rendering §15.3.13 — `<fieldset>` + rendered `<legend>`: legend на границе, рамка
     // разорвана клиппингом вокруг него; без текста, поэтому и Edge совпадает на 0,00 %.
     "160-fieldset-legend",
+    // GRID-VWM: grid в вертикальном `writing-mode` (столбцы по y, строки по x); без текста, Edge
+    // совпадает на 0,00 %.
+    "161-grid-vertical-writing-mode",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

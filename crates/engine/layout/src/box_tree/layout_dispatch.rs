@@ -434,6 +434,20 @@ pub(super) fn dispatch_box(
         return DispatchOutcome::Done;
     }
 
+    // A vertical-writing-mode grid container is not stacked as a block either: it goes to its
+    // own arm (GRID-VWM) — columns run along the physical y axis, rows along x.
+    if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && matches!(b.style.display, Display::Grid | Display::InlineGrid)
+    {
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        let vs = style_with_used_size(&b.style, used_size_override);
+        return super::grid_vertical::dispatch(
+            b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+            cv_auto_skipped,
+        );
+    }
+
     // CSS Writing Modes L3 §3: vertical writing modes swap the block/inline axes.
     // Vertical block stacking and InlineRun flow (below, `lay_out_vertical_inline_run`)
     // are both implemented in the `vertical` module. FormControl and other box
@@ -1169,7 +1183,7 @@ pub(super) fn dispatch_box(
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
-                    size_contained, is_positioned, pcb, measurer,
+                    size_contained, is_positioned, pcb, measurer, None,
                 ) {
                     Some(init) => return DispatchOutcome::NeedsGridLoop(init),
                     None => {

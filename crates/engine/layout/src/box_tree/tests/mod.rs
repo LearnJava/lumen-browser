@@ -486,5 +486,6 @@ mod vertical_margins;
 mod flex_vwm3;
 mod flex_vwm4;
 mod fixed_cb;
+mod grid_vwm;
 mod fieldset_legend;
 mod ruby_pipeline;
