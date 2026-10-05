@@ -106,6 +106,44 @@ fn subgrid_box_keeps_inherited_tracks() {
     assert_eq!(g.cols.as_deref().map(<[_]>::len), Some(4));
 }
 
+/// Grid L2 §9: an explicit `column-gap`/`row-gap` of a subgrid replaces the parent's gutter between
+/// its tracks (each inner edge moves by half the difference); `normal` keeps the parent's. The
+/// tracks the painter reads and the items' rects agree (`subgrid-gap-decorations-014`).
+#[test]
+fn subgrid_own_gap_replaces_the_parent_gutter() {
+    let page = |sub_gaps: &str| {
+        lay(
+            "<body><div id='g'><div id='sg'><i></i><i></i><i></i></div></div></body>",
+            &format!(
+                "body {{ margin: 0; }}
+                 #g {{ display: grid; grid-template-columns: repeat(3, 20px); gap: 0; width: 60px; }}
+                 #sg {{ display: grid; grid-template-columns: subgrid; grid-column: 1 / 4; {sub_gaps} }}
+                 i {{ display: block; }}"
+            ),
+        )
+    };
+    let sg_of = |root| first_element_child(first_element_child(root)).clone();
+    let root = page("column-gap: 10px;");
+    let sg = sg_of(&root);
+    let t = sg.subgrid_tracks.as_deref().expect("tracks");
+    // 60px over three tracks, two 10px gutters: 5 + 15 + 5 px of track around them.
+    assert_eq!(t.cols.as_deref(), Some(&[(0.0, 15.0), (25.0, 35.0), (45.0, 60.0)][..]));
+    let xs: Vec<(f32, f32)> = sg
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip))
+        .map(|c| (c.rect.x - sg.rect.x, c.rect.x - sg.rect.x + c.rect.width))
+        .collect();
+    assert_eq!(xs.len(), 3);
+    for (got, want) in xs.iter().zip([(0.0, 15.0), (25.0, 35.0), (45.0, 60.0)]) {
+        assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{xs:?}");
+    }
+    // `normal` keeps the parent's (here zero) gutter.
+    let root = page("");
+    let t = sg_of(&root).subgrid_tracks.clone().expect("tracks");
+    assert_eq!(t.cols.as_deref(), Some(&[(0.0, 20.0), (20.0, 40.0), (40.0, 60.0)][..]));
+}
+
 /// `collect_subgrid_items` finds both column-subgrid and row-subgrid containers.
 #[test]
 fn grid_collect_subgrid_items() {
