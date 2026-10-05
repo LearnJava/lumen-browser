@@ -52,11 +52,13 @@ impl SubgridContext {
     }
 }
 
-/// Дорожки `subgrid`-контейнера, унаследованные от родительской сетки, как `(начало, конец)` по
-/// каждой оси от начала content box контейнера (сдвиг subtree не сбивает их). `None` — ось не
-/// subgrid. Пишет раскладка сетки (`layout_dispatch`, grid-ветка), читает paint: щели subgrid'а — щели родителя
-/// (Grid L2 §9), и по элементам их не восстановить, если рядом нет элементов
-/// (`subgrid-gap-decorations-012…017`: пустой subgrid).
+/// Дорожки grid-контейнера для щелей `column-rule`/`row-rule`, как `(начало, конец)` по каждой оси
+/// от начала content box (сдвиг subtree не сбивает их). У оси `subgrid` — унаследованные от
+/// родителя (Grid L2 §9: щели subgrid'а — щели родителя; `layout_dispatch`, grid-ветка), у прочих
+/// осей без `repeat(auto-*)` — собственные (`record_own_tracks` в `grid_trampoline.rs`): по
+/// элементам щели не восстановить, если рядом нет элементов (пустой subgrid
+/// `subgrid-gap-decorations-012…017`) или ни один не примыкает к соседу. `None` — дорожки не
+/// записаны. Читает paint.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SubgridTracks {
     pub cols: Option<Vec<(f32, f32)>>,

@@ -872,13 +872,20 @@ fn finish_line(
                         item_rect_height
                     };
                     // BUG-104/BUG-209 — see the removed code's comment.
-                    let relayout_column_flex = is.height.is_none()
-                        && frame.init.explicit_cross.is_some()
-                        && stretch_h > 0.0
-                        && matches!(is.display, Display::Flex | Display::InlineFlex)
-                        && matches!(is.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
                     let old_h = frame.b.children[i].rect.height;
                     let grew = old_h < stretch_h;
+                    // Вложенный flex-контейнер: растянутая высота определённая, и дети
+                    // растягиваются уже по ней (Flexbox §9.4 step 11) — row-flex с пустыми
+                    // `align-self: stretch` детьми иначе оставляет их высотой 0
+                    // (`subgrid-gap-decorations-013`: полосы эталона `.row-gap-a`).
+                    let relayout_column_flex = is.height.is_none()
+                        && stretch_h > 0.0
+                        && matches!(is.display, Display::Flex | Display::InlineFlex)
+                        && if matches!(is.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse) {
+                            frame.init.explicit_cross.is_some()
+                        } else {
+                            grew
+                        };
                     if grew {
                         frame.b.children[i].rect.height = stretch_h;
                     }

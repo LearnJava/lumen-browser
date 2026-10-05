@@ -99,3 +99,19 @@ fn vertical_flex_container_in_auto_height_parent_is_content_tall() {
     );
     assert_eq!(r[0].height, 100.0, "{:?}", r[0]);
 }
+
+// ── вложенный row-flex в растянутом flex-item'е ──────────────────────────────
+
+#[test]
+fn nested_row_flex_children_stretch_to_the_stretched_item() {
+    // Внешний row-flex высотой 10px; внутренний flex-item растягивается до неё, и его
+    // пустой ребёнок (`align-self: stretch`) тоже — Flexbox §9.4 step 11: растянутый
+    // размер определённый (`css-gaps/grid/subgrid/subgrid-gap-decorations-013-ref`).
+    let r = rects(
+        r#"<div id="o"><div id="m"><div id="i"></div></div><div id="c"></div></div>"#,
+        "#o{display:flex;height:10px;width:140px} #m{display:flex;width:80px} #i{width:20px} #c{width:20px}",
+        &["m", "i"],
+    );
+    assert_eq!(r[0].height, 10.0);
+    assert_eq!(r[1].height, 10.0);
+}
