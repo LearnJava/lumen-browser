@@ -772,6 +772,14 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             }
         }
         let content_top = if first { border_top } else { 0.0 };
+        // A window that starts at the leading edge of a row gap kept by a bridging item has no
+        // gap to draw at its top: the track after it grows upwards over the gap
+        // (`grid-gap-decorations-fragmentation-028`), and so do the items that start in it.
+        let pulled_track = (!first)
+            .then(|| rows.windows(2).find(|w| (ws - w[0].1).abs() <= 0.01 && ws < w[1].0 - 0.01))
+            .flatten()
+            .map(|w| w[1].0);
+        let pull = |y: f32| if pulled_track.is_some_and(|t| (y - t).abs() <= 0.01) { ws } else { y };
         frag.children = grid
             .children
             .iter()
@@ -785,7 +793,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                         k
                     });
                 }
-                let (top, bot) = (c.rect.y - gy, c.rect.y - gy + c.rect.height);
+                let (top, bot) = (pull(c.rect.y - gy), c.rect.y - gy + c.rect.height);
                 let (lo, hi) = (top.max(ws), bot.min(we));
                 // A zero-height item at the very start of a window belongs to it too.
                 let inside = hi > lo || (c.rect.height == 0.0 && top >= ws && top < we);
@@ -817,7 +825,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             .iter()
             .enumerate()
             .filter_map(|(k, &(a, b))| {
-                let (lo, hi) = (a.max(ws), b.min(we));
+                let (lo, hi) = (pull(a).max(ws), b.min(we));
                 (hi > lo).then_some((k, (lo - ws - content_top, hi - ws - content_top)))
             })
             .collect();
