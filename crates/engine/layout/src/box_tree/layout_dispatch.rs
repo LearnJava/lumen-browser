@@ -455,6 +455,7 @@ pub(super) fn dispatch_box(
         let vs = style_with_used_size(&b.style, used_size_override);
         let init = crate::vertical::build_vertical_init(
             b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb,
+            in_block_flow,
         );
         return DispatchOutcome::NeedsVerticalLoop(Box::new(init));
     }
@@ -824,6 +825,8 @@ pub(super) fn dispatch_box(
             viewport,
             pcb,
             hp,
+            // The enclosing vertical block's floats, already rebased to this run.
+            outer_floats,
         );
         return DispatchOutcome::Done;
     }

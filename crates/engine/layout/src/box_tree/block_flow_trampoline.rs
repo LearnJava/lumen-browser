@@ -500,7 +500,12 @@ fn step_child(
         && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
         && !matches!(child.style.display, Display::Flex | Display::InlineFlex)
     {
-        Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport)))
+        // `max_content_outer_height` leaves out the box's own inline-axis margins,
+        // which `build_vertical_init` takes off the room it is given.
+        let cem = child.style.font_size;
+        let m_v = child.style.margin_top.resolve_or_zero(cem, eff_w, viewport)
+            + child.style.margin_bottom.resolve_or_zero(cem, eff_w, viewport);
+        Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport) + m_v))
     } else {
         children_available_height
     };
@@ -550,7 +555,12 @@ fn step_child(
         // LAYOUT-2 срез 8: a block-flow normal-flow child that is itself a
         // vertical-writing-mode container — same shape as the flex/grid/
         // table/multicol arms above.
-        DispatchOutcome::NeedsVerticalLoop(child_init) => {
+        DispatchOutcome::NeedsVerticalLoop(mut child_init) => {
+            // An orthogonal flow is an independent formatting context: its margins do
+            // not collapse with its own children's, and it encloses its floats.
+            child_init.collapses_start = false;
+            child_init.collapses_end = false;
+            child_init.encloses_floats = true;
             super::vertical_trampoline::run(child, child_init, measurer, viewport, hp);
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance

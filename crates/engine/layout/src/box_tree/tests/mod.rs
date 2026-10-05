@@ -480,6 +480,8 @@ mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;
 mod vertical_row;
+mod vertical_float;
+mod vertical_margins;
 mod flex_vwm3;
 mod flex_vwm4;
 mod ruby_pipeline;
