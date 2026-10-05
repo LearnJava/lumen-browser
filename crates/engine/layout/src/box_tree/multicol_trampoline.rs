@@ -813,16 +813,20 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                 })
             })
             .collect();
-        let clipped: Vec<(f32, f32)> = rows
+        let visible: Vec<(usize, (f32, f32))> = rows
             .iter()
-            .filter_map(|&(a, b)| {
+            .enumerate()
+            .filter_map(|(k, &(a, b))| {
                 let (lo, hi) = (a.max(ws), b.min(we));
-                (hi > lo).then_some((lo - ws - content_top, hi - ws - content_top))
+                (hi > lo).then_some((k, (lo - ws - content_top, hi - ws - content_top)))
             })
             .collect();
+        // The gap numbers of this fragment continue those of the fragments before it.
+        let row_gap_base = visible.first().map(|v| (v.0, rows.len() - 1));
+        let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
         let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
         frag.subgrid_tracks =
-            Some(Box::new(crate::subgrid::SubgridTracks { cols, rows: Some(clipped), fragment: true }));
+            Some(Box::new(crate::subgrid::SubgridTracks { cols, rows: Some(clipped), fragment: true, row_gap_base }));
         seg_extent = seg_extent.max(frag_h);
         out.push(frag);
     }
