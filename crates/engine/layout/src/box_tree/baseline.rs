@@ -248,6 +248,17 @@ pub(crate) fn box_baseline_in_axis(
     if is_vertical(&b.style) == vertical {
         return box_baseline_or_synth(b, side, measurer);
     }
+    // Тип синтезируемой линии задаёт контекст выравнивания, то есть режим
+    // контейнера: в вертикальном — центральная (середина), в горизонтальном —
+    // алфавитная (Edge: `flex-align-baseline-005` против `-006/-007`). Алфавитная
+    // горизонтальная линия — нижний край border box и для `first`, и для `last`
+    // (CSS Align L3 §9.1, WPT `align-items-baseline-row-horz`).
+    if is_vertical(container) {
+        return if vertical { b.rect.width / 2.0 } else { b.rect.height / 2.0 };
+    }
+    if !vertical {
+        return b.rect.height;
+    }
     match baseline_phys_side_in_axis(b, container, vertical, side) {
         PhysSide::Min => 0.0,
         PhysSide::Max => {

@@ -399,7 +399,23 @@ fn step_item(
             }
         };
         let cross_cursor = frame.init.cross_cursor;
-        let explicit_cross = frame.init.explicit_cross;
+        // FLEX-VWM-5: an item whose inline size is the physical height (a vertical one in
+        // a row) shrinks to its content instead of filling the viewport or the container
+        // (Writing Modes L3 §7.3.1); `align-self: stretch` grows it afterwards.
+        // With a definite cross size the item fills it only when it is stretched.
+        let explicit_cross = {
+            let item = &frame.b.children[pos.i];
+            let fit = super::intrinsic::orthogonal_fit_content_height(item, content_width, measurer, viewport);
+            let stretched = matches!(
+                frame_align(&item.style, &frame.init.s, frame.init.wrap_reverse, false, frame.init.cross_rev),
+                AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal
+            ) && !matches!(item.style.margin_top, LengthOrAuto::Auto)
+                && !matches!(item.style.margin_bottom, LengthOrAuto::Auto);
+            match (frame.init.explicit_cross, fit) {
+                (Some(room), Some(fit)) if !stretched => Some(room.min(fit)),
+                (room, fit) => room.or(fit),
+            }
+        };
         // BUG-736: a replaced element's intrinsic-hint `height` (see
         // `ComputedStyle::height_is_intrinsic_hint`) is definite by itself —
         // it would otherwise win over the `aspect_ratio`-from-`width`
@@ -687,6 +703,48 @@ fn column_line_cross_size(frame: &Frame, li: usize, viewport: Size) -> f32 {
         .fold(0.0_f32, f32::max)
 }
 
+/// FLEX-VWM-5: `align-self: stretch` of a vertical item in a vertical container's
+/// physical column (the container's row): the item's block size (physical width)
+/// is `auto`, so the flexbox algorithm widens it to the line's cross size
+/// `cross` (CSS Flexbox L1 §9.4 step 11). Its content stays at the block-start
+/// edge — the right one in `vertical-rl` — so the subtree moves by the growth
+/// there; that edge is what an item's first/last baseline is read from.
+fn stretch_vertical_column_item(frame: &mut Frame, i: usize, cross: f32, viewport: Size) {
+    use crate::style::WritingMode;
+    let cw = frame.init.content_width;
+    let item = &frame.b.children[i];
+    let is = &item.style;
+    if frame.init.vertical.is_none()
+        || is.writing_mode == WritingMode::HorizontalTb
+        || is.width.is_some()
+        || !matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || matches!(is.margin_left, LengthOrAuto::Auto)
+        || matches!(is.margin_right, LengthOrAuto::Auto)
+        || !matches!(frame_align(is, &frame.init.s, frame.init.wrap_reverse, true, frame.init.cross_rev), AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
+    {
+        return;
+    }
+    let iem = is.font_size;
+    let m_l = is.margin_left.resolve_or_zero(iem, cw, viewport);
+    let m_r = is.margin_right.resolve_or_zero(iem, cw, viewport);
+    let mut target = (cross - m_l - m_r).max(0.0);
+    if let Some(max_w) = is.max_width.as_ref().and_then(|l| l.resolve(iem, Some(cw), viewport)) {
+        target = target.min(max_w);
+    }
+    let grow = target - item.rect.width;
+    if grow <= 0.0 {
+        return;
+    }
+    let block_start_right = matches!(is.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
+    let item = &mut frame.b.children[i];
+    item.rect.width = target;
+    if block_start_right {
+        for c in item.children.iter_mut() {
+            shift_tree(c, grow, 0.0);
+        }
+    }
+}
+
 /// Runs once all items of line `li` are placed — CSS Flexbox §9.5 cross-axis
 /// alignment for a ROW line (column direction skips this entirely, matching
 /// the removed code's `if !is_column` guard) plus the cross-cursor advance.
@@ -764,6 +822,14 @@ fn finish_line(
             if shift != 0.0 {
                 shift_tree(&mut frame.b.children[i], shift, 0.0);
             }
+        }
+    }
+
+    if is_column && frame.init.vertical.is_some() {
+        let cross = if !frame.init.is_wrap && !frame.init.cross_indefinite { frame.init.content_width } else { line_cross };
+        for jx in 0..n_items {
+            let i = frame.init.item_idxs[frame.init.line_inits[li].line_keys[jx]];
+            stretch_vertical_column_item(frame, i, cross, viewport);
         }
     }
 
