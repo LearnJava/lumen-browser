@@ -40,55 +40,6 @@ fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && b.style.border_right_width == 0.0
 }
 
-/// CSS Multicol §7.1 — balanced column height for atomic (unsliceable) boxes.
-///
-/// Returns the smallest column height `H` such that greedily packing `outer_hs`
-/// (each box's margin-box height, in source order, opening a new column whenever
-/// the running height would exceed `H`) fits within `n_cols` columns. This is the
-/// target browsers minimise when `column-fill: balance` and items cannot be split
-/// across columns — e.g. 9 cards of varying height fill 3 columns as 3/3/3 rather
-/// than packing the first column to the container height.
-pub(super) fn balanced_column_height(outer_hs: &[f32], n_cols: usize) -> f32 {
-    let total: f32 = outer_hs.iter().sum();
-    if n_cols <= 1 || outer_hs.is_empty() {
-        return total.max(1.0);
-    }
-    let max_item = outer_hs.iter().cloned().fold(0.0_f32, f32::max);
-    // Any feasible height is at least the tallest single item and at least the
-    // perfectly even split; the sum is always feasible (one column holds all).
-    let mut lo = max_item.max(total / n_cols as f32);
-    let mut hi = total.max(lo);
-    let fits = |h: f32| -> bool {
-        let mut cols = 1usize;
-        let mut cur = 0.0f32;
-        for &x in outer_hs {
-            if cur > 0.0 && cur + x > h {
-                cols += 1;
-                if cols > n_cols {
-                    return false;
-                }
-                cur = x;
-            } else {
-                cur += x;
-            }
-        }
-        true
-    };
-    // Binary search for the minimal feasible height (~0.25 px precision).
-    for _ in 0..40 {
-        if hi - lo <= 0.25 {
-            break;
-        }
-        let mid = (lo + hi) * 0.5;
-        if fits(mid) {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    hi.ceil().max(1.0)
-}
-
 /// LAYOUT-2 срез 7: pure precompute for the multicol dispatch arm — column
 /// count/width, `column-fill` mode, and the split of flow children into
 /// segments (by `column-span: all` boundaries) with each segment's
