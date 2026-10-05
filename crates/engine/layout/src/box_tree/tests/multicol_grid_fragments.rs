@@ -243,3 +243,26 @@ fn a_flex_fragment_keeps_the_line_gaps_of_items_that_stayed_in_an_earlier_column
     assert_eq!(first_line.len(), 1, "{second:?}");
     assert!((first_line[0].0 - 52.0).abs() < 0.01 && (first_line[0].1 - 62.0).abs() < 0.01, "{first_line:?}");
 }
+
+#[test]
+fn a_monolithic_flex_item_stays_whole_in_its_column_and_keeps_its_line_gap_there() {
+    // flex/fragmentation/012: two 55px lines, columns 47px tall; the second item of line 1 is
+    // `contain: size` (monolithic). It is not cut: it stays whole in column 0 (overflowing it),
+    // so the gap in front of it belongs to column 0 and the line remnant in column 1 has none.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div></div><div id=\"mono\"></div><div></div><div></div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:10px;width:350px;height:47px} \
+         #f{display:flex;flex-wrap:wrap;width:110px;height:110px;row-gap:10px;column-gap:10px} \
+         #f>div{width:50px;height:55px} #mono{contain:size}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    assert!(v.len() >= 2, "{} fragments", v.len());
+    let heights: Vec<f32> = v[0].children.iter().map(|c| c.rect.height).collect();
+    assert!(heights.contains(&55.0), "the monolithic item keeps its height in column 0: {heights:?}");
+    assert!(v[1].children.iter().all(|c| c.rect.height < 55.0), "no whole item in column 1");
+    let first = v[0].subgrid_tracks.as_ref().unwrap().line_gaps.as_ref().expect("line gaps");
+    assert_eq!(first[0].len(), 1, "{first:?}");
+    let second = v[1].subgrid_tracks.as_ref().unwrap().line_gaps.as_ref().expect("line gaps");
+    assert!(second[0].is_empty(), "the line remnant in column 1 has no gap: {second:?}");
+}

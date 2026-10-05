@@ -660,12 +660,29 @@ fn grid_windows(
     windows
 }
 
-/// The main-axis gaps of every flex line of a wrapped row flex container, `(start, end)` in the
-/// container's own coordinates (`rows` — the lines as `(top, bottom)` from the border-box top,
-/// `gy0` — its top). A gap is the free space between two neighbouring items of one line that is
-/// at least the `column-gap` wide (`gap: 0` — any seam); the margin boxes are used. `None` for a
-/// grid, whose tracks the painter reads itself.
-fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec<Vec<(f32, f32)>>> {
+/// A main-axis gap of a flex line plus the block extent `(top, bottom)` (from the container's top
+/// edge) of the item that follows it and whether that item is monolithic: the gap belongs to the
+/// fragments that hold this item.
+struct LineGap {
+    start: f32,
+    end: f32,
+    next_top: f32,
+    next_bot: f32,
+    next_mono: bool,
+}
+
+/// A box a column break never cuts (`contain: size`, Fragmentation L3 §3: monolithic): it is placed
+/// whole in the fragment its top edge falls in and overflows that column.
+fn is_monolithic(b: &LayoutBox) -> bool {
+    b.style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+}
+
+/// The main-axis gaps of every flex line of a wrapped row flex container, in the container's own
+/// coordinates (`rows` — the lines as `(top, bottom)` from the border-box top, `gy0` — its top).
+/// A gap is the free space between two neighbouring items of one line that is at least the
+/// `column-gap` wide (`gap: 0` — any seam); the margin boxes are used. `None` for a grid, whose
+/// tracks the painter reads itself.
+fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec<Vec<LineGap>>> {
     if !matches!(flex.style.display, Display::Flex) {
         return None;
     }
@@ -674,7 +691,9 @@ fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec
     let cw = flex.rect.width;
     let vp = Size::new(cw, flex.rect.height);
     let main_gap = s.column_gap.resolve_or_zero(em, cw, vp);
-    let mut lines: Vec<Vec<(f32, f32)>> = vec![Vec::new(); rows.len()];
+    // Per line: the item's margin-box span along the main axis, its block extent, monolithic.
+    type Item = (f32, f32, f32, f32, bool);
+    let mut lines: Vec<Vec<Item>> = vec![Vec::new(); rows.len()];
     for c in &flex.children {
         if matches!(c.kind, BoxKind::Skip) || matches!(c.style.position, Position::Absolute | Position::Fixed) {
             continue;
@@ -684,7 +703,7 @@ fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec
         let k = rows.iter().rposition(|r| r.0 <= top + 0.5).unwrap_or(0);
         let l = c.rect.x - cs.margin_left.resolve_or_zero(cs.font_size, cw, vp);
         let r = c.rect.x + c.rect.width + cs.margin_right.resolve_or_zero(cs.font_size, cw, vp);
-        lines[k].push((l.min(r), r));
+        lines[k].push((l.min(r), r, c.rect.y - gy0, c.rect.y - gy0 + c.rect.height, is_monolithic(c)));
     }
     Some(
         lines
@@ -697,7 +716,7 @@ fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec
                     let dist = it.0 - reach;
                     let is_gap = if main_gap > 0.5 { dist > 0.5 && dist >= main_gap - 0.5 } else { dist >= -0.5 };
                     if is_gap {
-                        gaps.push((reach, it.0));
+                        gaps.push(LineGap { start: reach, end: it.0, next_top: it.2, next_bot: it.3, next_mono: it.4 });
                     }
                     reach = reach.max(it.1);
                 }
@@ -785,6 +804,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     let straddles = grid.children.iter().any(|c| {
         !matches!(c.kind, BoxKind::Skip)
             && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+            && !is_monolithic(c)
             && c.children.iter().any(|k| {
                 let (top, bot) = (k.rect.y - gy0, k.rect.y - gy0 + k.rect.height);
                 !matches!(k.kind, BoxKind::Skip)
@@ -842,6 +862,15 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     });
                 }
                 let (top, bot) = (pull(c.rect.y - gy), c.rect.y - gy + c.rect.height);
+                // A monolithic item is not cut: it stays whole in the fragment its top edge falls
+                // in and overflows that column (`contain: size`).
+                if is_monolithic(c) {
+                    return (top >= ws - 0.01 && top < we - 0.01).then(|| {
+                        let mut k = c.clone();
+                        super::shift_tree(&mut k, col_x - gx, cur_y - gy - ws);
+                        k
+                    });
+                }
                 let (lo, hi) = (top.max(ws), bot.min(we));
                 // A zero-height item at the very start of a window belongs to it too.
                 let inside = hi > lo || (c.rect.height == 0.0 && top >= ws && top < we);
@@ -869,11 +898,23 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                 })
             })
             .collect();
+        // A line that holds a monolithic item starting in this window reaches to the item's bottom
+        // edge, past the window's (the item overflows the column).
+        let mono_bottom = |a: f32, b: f32| {
+            grid.children
+                .iter()
+                .filter(|c| is_monolithic(c) && !matches!(c.kind, BoxKind::Skip))
+                .map(|c| (c.rect.y - gy, c.rect.y - gy + c.rect.height))
+                .filter(|&(t, _)| t >= ws - 0.01 && t < we - 0.01 && t >= a - 0.01 && t < b - 0.01)
+                .map(|(_, bt)| bt.min(b))
+                .fold(0.0f32, f32::max)
+        };
         let visible: Vec<(usize, (f32, f32))> = rows
             .iter()
             .enumerate()
             .filter_map(|(k, &(a, b))| {
                 let (lo, hi) = (pull(a).max(ws), b.min(we));
+                let hi = if hi > lo { hi.max(mono_bottom(a, b)) } else { hi };
                 (hi > lo).then_some((k, (lo - ws - content_top, hi - ws - content_top)))
             })
             .collect();
@@ -882,9 +923,21 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         let visible_idx: Vec<usize> = visible.iter().map(|v| v.0).collect();
         let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
         let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
-        let line_gaps = all_line_gaps
-            .as_ref()
-            .map(|g| visible_idx.iter().map(|&k| g[k].iter().map(|&(a, b)| (a - gx, b - gx)).collect()).collect());
+        // A gap is kept when the item after it has a part in this window.
+        let line_gaps = all_line_gaps.as_ref().map(|g| {
+            visible_idx
+                .iter()
+                .map(|&k| {
+                    g[k].iter()
+                        .filter(|lg| {
+                            let (t, b) = (pull(lg.next_top), lg.next_bot);
+                            if lg.next_mono { t >= ws - 0.01 && t < we - 0.01 } else { b.min(we) > t.max(ws) }
+                        })
+                        .map(|lg| (lg.start - gx, lg.end - gx))
+                        .collect()
+                })
+                .collect()
+        });
         frag.subgrid_tracks = Some(Box::new(crate::subgrid::SubgridTracks {
             cols,
             rows: Some(clipped),
