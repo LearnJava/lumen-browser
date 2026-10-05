@@ -343,6 +343,39 @@ fn a_sibling_combinator_keeps_the_fanout() {
     assert_deep(&r[0], "`.lazy + #tail`");
 }
 
+/// BUG-935 срез 82: a sibling combinator reaches *following elements* only. An element with
+/// none after it (alone among its parent's elements — text around it does not count — or the
+/// last of them) has no sibling to fan out to, so a write of a token the combinator names stays
+/// below it; one element after it brings the fanout back.
+#[test]
+fn an_element_with_no_element_after_it_has_no_sibling_to_fan_out_to() {
+    let page = |before: &str, after: &str| {
+        let ps: String = (0..20).map(|i| format!("<p>para {i} <b>bold</b></p>")).collect();
+        format!("<section id=\"s\">text {before}<div id=\"w\" class=\"wrap lazy\"><div id=\"inner\">{ps}</div></div> more{after}</section><div id=\"tail\"><p>tail</p></div>")
+    };
+    let css = ".lazy + .after { margin: 5px } p { color: blue }";
+    let step = || -> Vec<Mutation> {
+        vec![Box::new(|d| {
+            let w = by_id(d, "w");
+            set(d, w, "class", "wrap");
+        })]
+    };
+    let narrow = |html: String, what: &str| {
+        let r = drive(&html, css, step());
+        assert!(r[0].deep == 0, "{what}: widened, deep={}", r[0].deep);
+        assert!(
+            (r[0].recomputed as usize) * 4 < r[0].elements,
+            "{what}: recascaded {} of {} elements — the element still took its parent's subtree",
+            r[0].recomputed,
+            r[0].elements
+        );
+    };
+    narrow(page("", ""), "the only element of its parent");
+    narrow(page("<div class=\"before\">earlier</div>", ""), "the last element of its parent");
+    let beside = drive(&page("", "<div class=\"after\">sibling</div>"), css, step());
+    assert_deep(&beside[0], "an element after it is what `.lazy + .after` reaches");
+}
+
 /// A sibling combinator that mentions other tokens is silent about this write: the element is
 /// narrowed instead of widened to its parent — and a token it does mention still widens.
 #[test]

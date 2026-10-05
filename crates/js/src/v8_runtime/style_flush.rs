@@ -400,6 +400,20 @@ fn attr_local_roots_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_ATTR_LOCAL_ROOTS").is_some_and(|v| v != "0"))
 }
 
+/// BUG-935 срез 82: `LUMEN_NO_FRESH_NODE_ROOTS=1` gives a write on an element the cascade has no
+/// style for a restyle root again, as before — A/B switch for a live measurement and the way
+/// back if a page shows a stale style.
+fn fresh_node_roots_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_FRESH_NODE_ROOTS").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 82: whether a root-set may take a write on a style-less element as covered by
+/// its parent's child-list change — shared by the flush and the UI thread's on-thread restyle.
+pub fn fresh_node_roots_enabled() -> bool {
+    !fresh_node_roots_disabled()
+}
+
 /// BUG-935 срез 81: whether a restyle root-set may narrow attribute writes
 /// ([`lumen_layout::style::NodeRestyleIndex::set_attr_narrowing`]) — the flush's own switch,
 /// shared with the UI thread's on-thread restyle so both obey the same A/B levers.
@@ -1196,7 +1210,14 @@ impl FlushHandles {
         } else {
             Vec::new()
         };
-        let roots = lumen_layout::style::restyle_roots_for_node_changes(doc, changes, &*node_index);
+        // BUG-935 срез 82: a node the basis cascade has no style for is recascaded whole when its
+        // parent's child-list change reaches it — its own writes widen nothing.
+        let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
+            doc,
+            changes,
+            &*node_index,
+            &|n| !fresh_node_roots_enabled() || basis.cascade.contains_key(&n),
+        );
         dirty_roots.extend(roots.deep);
         let point_roots = roots.point;
         let sheet_delta_count = sheet_delta_roots.len();

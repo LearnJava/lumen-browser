@@ -514,10 +514,11 @@ impl Lumen {
             // here while the flush restyled a handful of nodes.
             let mut node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
             node_index.set_attr_narrowing(crate::persistent_js::attr_narrowing_enabled());
-            let roots = lumen_layout::style::restyle_roots_for_node_changes(
+            let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
                 &doc,
                 touched.changes.iter().map(|(n, c)| (*n, c.as_node_change())),
                 &node_index,
+                &|n| !crate::persistent_js::fresh_node_roots_enabled() || prev_styles.contains_key(&n),
             );
             if incr_t0.is_some() {
                 let changes: Vec<String> = touched
@@ -529,8 +530,28 @@ impl Lumen {
                         format!("{tag}:{c:?}")
                     })
                     .collect();
+                // The biggest deep roots by subtree size: what a wide tick is made of.
+                let subtree_size = |root: lumen_dom::NodeId| {
+                    let (mut n, mut stack) = (0usize, vec![root]);
+                    while let Some(id) = stack.pop() {
+                        n += 1;
+                        stack.extend(doc.get(id).children.iter().copied());
+                    }
+                    n
+                };
+                let mut deep: Vec<(usize, String)> = roots
+                    .deep
+                    .iter()
+                    .map(|&r| {
+                        let name = doc.get(r).element_name().map_or("#node", |q| &*q.local);
+                        let size = subtree_size(r);
+                        (size, format!("{name}({size})"))
+                    })
+                    .collect();
+                deep.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
+                let widest: Vec<&str> = deep.iter().take(4).map(|(_, d)| d.as_str()).collect();
                 roots_log = format!(
-                    "roots deep={} shallow={} point={} changes={} {changes:?}",
+                    "roots deep={} shallow={} point={} changes={} widest={widest:?} {changes:?}",
                     roots.deep.len(),
                     roots.shallow.len(),
                     roots.point.len(),

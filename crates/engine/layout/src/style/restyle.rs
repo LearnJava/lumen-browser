@@ -1239,10 +1239,25 @@ impl<'a> NodeRestyleIndex<'a> {
         if self.conservative {
             return true;
         }
-        self.sibling_sources
-            .iter()
-            .any(|c| compound_could_match_after_attr_change(c, doc, node, attr))
+        self.sibling_sources.iter().any(|c| compound_could_match_after_attr_change(c, doc, node, attr))
+            && !(self.attr_narrowing && has_no_following_element_sibling(doc, node))
     }
+}
+
+/// BUG-935 срез 82 — a sibling combinator (`+`, `~`) reaches *following elements* only, so a
+/// node with none has nothing to fan out to: `<html>` beside its doctype and comments,
+/// `<body>` after `<head>`, the last item of a list, a wrapper holding one child and some text.
+/// What reads a later sibling from an earlier one (`:has(+ x)`) is
+/// [`NodeRestyleIndex::has_reach_roots`]'s business, not the fanout's.
+fn has_no_following_element_sibling(doc: &Document, node: NodeId) -> bool {
+    let Some(parent) = doc.get(node).parent else { return true };
+    !doc
+        .get(parent)
+        .children
+        .iter()
+        .skip_while(|&&c| c != node)
+        .skip(1)
+        .any(|&c| matches!(doc.get(c).data, NodeData::Element { .. }))
 }
 
 /// BUG-341 S17 — builds the [`NodeRestyleIndex`] for one layout pass.
@@ -1448,7 +1463,7 @@ pub fn restyle_root_set_for_node_change<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
-    root_set_impl(doc, changes, index, false).deep
+    root_set_impl(doc, changes, index, false, None).deep
 }
 
 /// BUG-935 срез 60 — the restyle roots of a batch of DOM changes, split by how much of
@@ -1484,7 +1499,49 @@ pub fn restyle_roots_for_node_changes<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> RestyleRoots {
-    root_set_impl(doc, changes, index, true)
+    root_set_impl(doc, changes, index, true, None)
+}
+
+/// BUG-935 срез 82 — [`restyle_roots_for_node_changes`] for a caller that knows which
+/// elements the cascade it updates already has a style for (`has_style`).
+///
+/// An element without one — created after that cascade ran — is recascaded in full the
+/// moment the walk reaches it, together with its subtree, and the walk reaches it because
+/// its parent's child list changed (the attach is a [`NodeChange::ChildList`] on the
+/// parent, whose shallow root also covers the siblings' positional and sibling-combinator
+/// reach). Its own attribute writes (`class` set while a framework builds the node) add
+/// nothing to that, yet used to widen to the parent's whole subtree because a sibling
+/// combinator mentions the token: a page that builds its DOM from script recascaded the
+/// container once per node it inserted. Such a write is dropped here, apart from what no
+/// recascade of the node covers — what a `:has()` reads
+/// ([`NodeRestyleIndex::has_reach_roots`]) and the elements that act outside their own
+/// subtree ([`fresh_node_change_is_covered`]).
+pub fn restyle_roots_for_node_changes_with_basis<'a>(
+    doc: &Document,
+    changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
+    index: &NodeRestyleIndex<'_>,
+    has_style: &dyn Fn(NodeId) -> bool,
+) -> RestyleRoots {
+    root_set_impl(doc, changes, index, true, Some(has_style))
+}
+
+/// BUG-935 срез 82 — whether `change` on `n` is subsumed by the recascade `n` gets anyway
+/// because the cascade holds no style for it ([`restyle_roots_for_node_changes_with_basis`]).
+///
+/// Only a change that names its kind (an unnamed one may be anything) on an element that
+/// stays inside its own subtree: the document-level metadata elements change what *other*
+/// nodes resolve to (`<base href>`, `<link>`/`<style>` sheets, `<meta name=color-scheme>`),
+/// `<slot>` and the `slot` attribute move nodes between composed parents without a
+/// child-list change.
+fn fresh_node_change_is_covered(doc: &Document, n: NodeId, change: &NodeChange<'_>) -> bool {
+    let attr = match change {
+        NodeChange::Unattributed => return false,
+        NodeChange::ChildList => "",
+        NodeChange::Attr(name) | NodeChange::AttrFrom { name, .. } => name,
+    };
+    attr != "slot"
+        && matches!(doc.get(n).data, NodeData::Element { .. })
+        && !tag_is(doc, n, &["html", "head", "body", "base", "link", "meta", "style", "slot", "template"])
 }
 
 fn root_set_impl<'a>(
@@ -1492,6 +1549,7 @@ fn root_set_impl<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
     allow_shallow: bool,
+    has_style: Option<&dyn Fn(NodeId) -> bool>,
 ) -> RestyleRoots {
     if index.has_dependent && index.has_in_shadow_doc {
         return RestyleRoots { deep: changes.into_iter().map(|_| doc.root()).collect(), ..RestyleRoots::default() };
@@ -1499,6 +1557,18 @@ fn root_set_impl<'a>(
     let mut roots = RestyleRoots::default();
     let shallow_ok = allow_shallow && !index.conservative;
     for (n, change) in changes {
+        // BUG-935 срез 82: a node the cascade has no style for is recascaded in full when
+        // its parent's child list change reaches it.
+        if shallow_ok
+            && index.attr_narrowing
+            && has_style.is_some_and(|has| !has(n))
+            && fresh_node_change_is_covered(doc, n, &change)
+        {
+            if index.has_dependent {
+                index.has_reach_roots(doc, n, &mut roots.deep);
+            }
+            continue;
+        }
         match change {
             NodeChange::ChildList if shallow_ok => {
                 // A text/comment node reported for a data change: its parent's child
