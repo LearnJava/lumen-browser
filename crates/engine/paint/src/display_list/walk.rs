@@ -661,7 +661,13 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
     // не рисуются: `*-rule-visibility-items: around` для одиночного элемента ещё не разобран
     // (collapsed-leading-auto-fit, repaint-on-item-position-change ухудшались).
     let empty_grid = children.is_empty() && matches!(s.display, Display::Grid | Display::InlineGrid);
-    if children.len() < 2 && !empty_grid {
+    // Дорожки, унаследованные subgrid'ом, дают щели и при одном элементе (элемент-«мост»
+    // `subgrid-gap-decorations-013`); у обычного grid один элемент по-прежнему не рисует щели.
+    let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
+    let known_tracks = matches!(s.display, Display::Grid | Display::InlineGrid)
+        && b.subgrid_tracks.is_some()
+        && (is_subgrid(&s.grid_template_columns) || is_subgrid(&s.grid_template_rows));
+    if children.len() < 2 && !empty_grid && !known_tracks {
         return none();
     }
 
@@ -671,7 +677,6 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
         // Ось `subgrid` живёт на дорожках и щелях родителя (Grid L2 §9): своё `*-gap` в раскладке
         // не участвует, так что щель берётся из положения элементов.
         let (mut col_gap_px, mut row_gap_px) = (col_gap_px, row_gap_px);
-        let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
         let (subgrid_cols, subgrid_rows) = (is_subgrid(&s.grid_template_columns), is_subgrid(&s.grid_template_rows));
         // Дорожки родителя, которые раскладка оставила на боксе: по ним щели находятся и у пустого
         // subgrid'а; иначе — восстановление по рёбрам элементов.
@@ -679,8 +684,11 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
             tracks.map(|t| t.iter().map(|&(a, b)| (origin + a, origin + b)).collect::<Vec<_>>())
         };
         let sub = b.subgrid_tracks.as_deref();
-        let subgrid_col_tracks = if subgrid_cols { inherited(sub.and_then(|t| t.cols.as_ref()), cx) } else { None };
-        let subgrid_row_tracks = if subgrid_rows { inherited(sub.and_then(|t| t.rows.as_ref()), cy) } else { None };
+        // Оси без `subgrid` несут собственные дорожки контейнера (`record_own_tracks`); при
+        // `direction: rtl` колонки зеркалятся, и они остаются на восстановлении по шаблону.
+        let rtl = s.direction == lumen_layout::Direction::Rtl;
+        let subgrid_col_tracks = if rtl && !subgrid_cols { None } else { inherited(sub.and_then(|t| t.cols.as_ref()), cx) };
+        let subgrid_row_tracks = inherited(sub.and_then(|t| t.rows.as_ref()), cy);
         let seam = |t: &[(f32, f32)]| t.windows(2).map(|w| (w[1].0 - w[0].1).max(0.0)).next();
         if subgrid_cols {
             let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();

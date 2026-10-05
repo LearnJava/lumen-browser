@@ -59,3 +59,25 @@ fn trailing_empty_explicit_rows_keep_their_size_and_gaps() {
     );
     assert_eq!(g.rect.height, 90.0);
 }
+
+#[test]
+fn grid_keeps_its_own_tracks_for_gap_rules() {
+    // Один элемент в колонке 2: по элементам щели не найти, а дорожки контейнера известны.
+    let g = grid(
+        "<div class='g'><div class='i'></div></div>",
+        ".g { display: grid; grid-template-columns: 20px 30px 40px; grid-template-rows: 10px 10px; \
+              gap: 5px; } .i { grid-column: 2; }",
+    );
+    let t = g.subgrid_tracks.as_deref().expect("own tracks");
+    assert_eq!(t.cols.as_deref(), Some(&[(0.0, 20.0), (25.0, 55.0), (60.0, 100.0)][..]));
+    assert_eq!(t.rows.as_deref(), Some(&[(0.0, 10.0), (15.0, 25.0)][..]));
+}
+
+#[test]
+fn auto_repeat_axis_has_no_recorded_tracks() {
+    let g = grid(
+        "<div class='g'><div class='i'></div></div>",
+        ".g { display: grid; grid-template-columns: repeat(auto-fit, 20px); width: 100px; gap: 5px; }",
+    );
+    assert!(g.subgrid_tracks.is_none());
+}

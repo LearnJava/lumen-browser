@@ -892,10 +892,34 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
         content_height,
     );
     frame.b.grid_baselines = container_baselines(frame, measurer);
+    record_own_tracks(frame);
     lay_out_abs(
         &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
         frame.init.content_x, frame.init.content_y, measurer, viewport, hp,
     );
+}
+
+/// Дорожки самого контейнера для щелей `column-rule`/`row-rule` (CSS Gap Decorations L1): по
+/// элементам их не восстановить, когда ни один не примыкает к соседу (`fr`-строки с одним
+/// элементом, пустые дорожки, элемент-«мост»). Пишутся только для осей, которые контейнер
+/// раскладывает сам и у которых нет `repeat(auto-*)` (у того пустые дорожки схлопываются, и
+/// paint находит щели по элементам); ось `subgrid` уже несёт дорожки родителя
+/// (`layout_dispatch`, `peek_tracks`). Координаты — от начала content box.
+fn record_own_tracks(frame: &mut Frame) {
+    let init = &frame.init;
+    let spans = |offsets: &[f32], sizes: &[f32], n: u32| -> Option<Vec<(f32, f32)>> {
+        let n = n as usize;
+        (n >= 2 && offsets.len() >= n && sizes.len() >= n)
+            .then(|| (0..n).map(|t| (offsets[t], offsets[t] + sizes[t])).collect())
+    };
+    let mut tracks = frame.b.subgrid_tracks.take().map(|t| *t).unwrap_or_default();
+    if tracks.cols.is_none() && init.s.grid_template_col_auto_repeat.is_none() {
+        tracks.cols = spans(&init.col_offsets, &init.col_widths, init.n_cols);
+    }
+    if tracks.rows.is_none() && init.s.grid_template_row_auto_repeat.is_none() {
+        tracks.rows = spans(&init.row_offsets, &init.row_heights, init.n_rows);
+    }
+    frame.b.subgrid_tracks = (tracks.cols.is_some() || tracks.rows.is_some()).then(|| Box::new(tracks));
 }
 
 /// CSS Grid L1 §6.1 — первая и последняя базовая линия контейнера, от верхней
