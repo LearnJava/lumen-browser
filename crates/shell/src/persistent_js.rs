@@ -184,6 +184,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// BUG-935 S80: сброс набора затронутых узлов ([`Self::take_dom_touched`]),
+    /// который UI-поток может звать сам, не ставя запрос в очередь движкового
+    /// потока. `None` — не поддерживается (по умолчанию).
+    fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
+        None
+    }
     /// BUG-935 S43: shared, lock-free handle to a flag set `true` once the
     /// page has read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path — lets the embedder skip
@@ -1083,6 +1089,13 @@ impl PersistentJs for V8PersistentJs {
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.dom_dirty_flag())
     }
+    fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
+        let drain = self.rt.dom_touched_drain();
+        Some(Arc::new(move || {
+            let t = drain();
+            DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
+        }))
+    }
     fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.pseudo_styles_needed_flag())
     }
@@ -1520,6 +1533,10 @@ impl PersistentJs for V8PersistentJs {
 /// Consumed by [`Lumen::try_relayout_raf_incremental`] (BUG-341 S7 part 2) to
 /// derive the DOM-mutation half of `RestyleDelta::dirty_roots` for the
 /// incremental-cascade path (`layout_mutation_incremental_restyle`).
+/// BUG-935 S80: UI-сторонний сброс набора затронутых узлов — см.
+/// [`PersistentJs::dom_touched_drain`].
+pub(crate) type DomTouchedDrain = Arc<dyn Fn() -> DomTouchedSummary + Send + Sync>;
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct DomTouchedSummary {
     /// Nodes whose selector-relevant state actually changed via a tracked
