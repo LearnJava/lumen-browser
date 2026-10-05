@@ -33,9 +33,12 @@ fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
     // the container's inline axis) is monolithic — it is never cut across columns.
     let vertical = |m: crate::style::WritingMode| !matches!(m, crate::style::WritingMode::HorizontalTb);
     // CSS Fragmentation L3 §3.1: `break-inside: avoid` keeps the box whole in one column. The
-    // value does not tell `avoid-page` from `avoid-column` (`BreakValue::Avoid` covers both).
+    // value does not tell `avoid-page` from `avoid-column` (`BreakValue::Avoid` covers both). A
+    // box with a forced column break of its own is placed as a unit too: the break needs the
+    // atomic path's per-item column assignment.
     matches!(b.kind, BoxKind::Block)
         && b.style.break_inside != crate::style::BreakValue::Avoid
+        && !super::multicol_fragmentation::has_forced_break(&b.style)
         && vertical(b.style.writing_mode) == vertical(container.writing_mode)
         && b.children.iter().all(|c| matches!(c.kind, BoxKind::Skip))
         && b.style.border_top_width == 0.0

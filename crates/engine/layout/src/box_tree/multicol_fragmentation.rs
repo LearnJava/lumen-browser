@@ -15,8 +15,13 @@
 //! Layout works on whole boxes here, so a «line» is one `InlineRun` item (its `lines.len()`
 //! lines) and the zero-height `<br>` blocks between runs are glue that never forms a break
 //! of its own.
+//!
+//! Forced breaks (Fragmentation L3 §3.1, `break-before`/`break-after`: `column`/`always`) are
+//! per-item flags: [`forced_breaks`] marks the items that must open a new column, and
+//! [`pack`] honours them before it looks at the height.
 
 use super::*;
+use crate::style::BreakValue;
 
 /// What a flow child of a multicol segment is, for the purposes of `orphans`/`widows`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,14 +89,35 @@ fn line_count(kinds: &[ItemLines]) -> u32 {
         .sum()
 }
 
+/// CSS Fragmentation L3 §3.1 — a forced break lands between two sibling boxes when the first
+/// has `break-after` or the second `break-before` of `column`/`always`. (`page`/`region` belong
+/// to other fragmentation contexts; a multicol container does not force them.) `forced[j]` is
+/// set when item `j` must start a new column; the first item never does.
+pub(super) fn forced_breaks(items: &[&LayoutBox]) -> Vec<bool> {
+    let forces = |v: BreakValue| matches!(v, BreakValue::Column | BreakValue::Always);
+    (0..items.len())
+        .map(|j| {
+            j > 0 && (forces(items[j - 1].style.break_after) || forces(items[j].style.break_before))
+        })
+        .collect()
+}
+
+/// Whether `style` carries a forced column break of its own (see [`forced_breaks`]).
+pub(super) fn has_forced_break(style: &ComputedStyle) -> bool {
+    matches!(style.break_before, BreakValue::Column | BreakValue::Always)
+        || matches!(style.break_after, BreakValue::Column | BreakValue::Always)
+}
+
 /// Greedy column assignment: an item that does not fit the column opens the next one — a
-/// column always takes at least one item — and a break inside a run of lines honours
+/// column always takes at least one item — a `forced` item opens one regardless of the
+/// height (unless it already starts a column), and a break inside a run of lines honours
 /// `orphans`/`widows`. With `strict` a break that cannot honour them (the run already
 /// starts at the top of the column) makes the whole packing fail; without it the rule is
 /// ignored there. Returns the column of every item.
 pub(super) fn pack(
     outer_hs: &[f32],
     kinds: &[ItemLines],
+    forced: &[bool],
     target_h: f32,
     orphans: u32,
     widows: u32,
@@ -105,7 +131,11 @@ pub(super) fn pack(
     let mut cur = 0usize;
     let mut col_start = 0usize;
     for (j, &oh) in outer_hs.iter().enumerate() {
-        if fills[cur] > 0.0 && fills[cur] + oh > target_h && oh > 0.0 {
+        if forced[j] && j > col_start {
+            cur += 1;
+            fills.push(0.0);
+            col_start = j;
+        } else if fills[cur] > 0.0 && fills[cur] + oh > target_h && oh > 0.0 {
             let mut brk = j;
             if let Some((rs, re)) = run_of[j].filter(|(rs, _)| *rs < j) {
                 let before = line_count(&kinds[rs.max(col_start)..j]);
@@ -149,6 +179,7 @@ pub(super) fn pack(
 pub(super) fn balanced_height(
     outer_hs: &[f32],
     kinds: &[ItemLines],
+    forced: &[bool],
     n_cols: usize,
     orphans: u32,
     widows: u32,
@@ -161,7 +192,7 @@ pub(super) fn balanced_height(
     let mut lo = max_item.max(total / n_cols as f32);
     let mut hi = total.max(lo);
     let fits = |h: f32| -> bool {
-        pack(outer_hs, kinds, h, orphans, widows, true)
+        pack(outer_hs, kinds, forced, h, orphans, widows, true)
             .is_some_and(|asg| asg.iter().copied().max().unwrap_or(0) < n_cols)
     };
     for _ in 0..40 {
@@ -182,6 +213,10 @@ pub(super) fn balanced_height(
 mod tests {
     use super::*;
     use ItemLines::{Glue, Lines, Other};
+
+    fn none(n: usize) -> Vec<bool> {
+        vec![false; n]
+    }
 
     /// `n` single-line runs separated by `<br>` glue, each line 20px.
     fn lines(n: usize) -> (Vec<f32>, Vec<ItemLines>) {
@@ -212,14 +247,14 @@ mod tests {
         // Six lines, columns of 100px would take five: the sixth would be a lone widow, so
         // the fifth moves with it.
         let (hs, ks) = lines(6);
-        let asg = pack(&hs, &ks, 100.0, 2, 2, false).unwrap();
+        let asg = pack(&hs, &ks, &none(hs.len()), 100.0, 2, 2, false).unwrap();
         assert_eq!(cols_of(&asg, &ks), vec![0, 0, 0, 0, 1, 1]);
     }
 
     #[test]
     fn a_break_that_leaves_enough_lines_is_untouched() {
         let (hs, ks) = lines(8);
-        let asg = pack(&hs, &ks, 100.0, 2, 2, false).unwrap();
+        let asg = pack(&hs, &ks, &none(hs.len()), 100.0, 2, 2, false).unwrap();
         assert_eq!(cols_of(&asg, &ks), vec![0, 0, 0, 0, 0, 1, 1, 1]);
     }
 
@@ -228,7 +263,7 @@ mod tests {
         // A box, then three lines of which only one would stay: orphans moves the run.
         let hs = [60.0, 20.0, 0.0, 20.0, 0.0, 20.0];
         let ks = [Other, Lines(1), Glue, Lines(1), Glue, Lines(1)];
-        let asg = pack(&hs, &ks, 80.0, 2, 2, false).unwrap();
+        let asg = pack(&hs, &ks, &none(hs.len()), 80.0, 2, 2, false).unwrap();
         assert_eq!(asg, vec![0, 1, 1, 1, 1, 1]);
     }
 
@@ -236,15 +271,15 @@ mod tests {
     fn at_the_top_of_a_column_the_rule_is_ignored_unless_strict() {
         let (hs, ks) = lines(4);
         // Columns of one line: every break violates orphans, and no run start is in reach.
-        let asg = pack(&hs, &ks, 20.0, 2, 2, false).unwrap();
+        let asg = pack(&hs, &ks, &none(hs.len()), 20.0, 2, 2, false).unwrap();
         assert_eq!(cols_of(&asg, &ks), vec![0, 1, 2, 3]);
-        assert!(pack(&hs, &ks, 20.0, 2, 2, true).is_none());
+        assert!(pack(&hs, &ks, &none(hs.len()), 20.0, 2, 2, true).is_none());
     }
 
     #[test]
     fn rules_of_one_line_change_nothing() {
         let (hs, ks) = lines(6);
-        let asg = pack(&hs, &ks, 100.0, 1, 1, true).unwrap();
+        let asg = pack(&hs, &ks, &none(hs.len()), 100.0, 1, 1, true).unwrap();
         assert_eq!(cols_of(&asg, &ks), vec![0, 0, 0, 0, 0, 1]);
     }
 
@@ -252,20 +287,46 @@ mod tests {
     fn balancing_two_lines_keeps_them_in_one_column() {
         let (hs, ks) = lines(2);
         // The search stops within 0.25px of the minimum and rounds up (as before the split).
-        assert_eq!(balanced_height(&hs, &ks, 14, 2, 2), 40.0);
-        assert_eq!(balanced_height(&hs, &ks, 14, 1, 1), 21.0);
+        assert_eq!(balanced_height(&hs, &ks, &none(hs.len()), 14, 2, 2), 40.0);
+        assert_eq!(balanced_height(&hs, &ks, &none(hs.len()), 14, 1, 1), 21.0);
     }
 
     #[test]
     fn balancing_six_lines_makes_three_columns_of_two() {
         let (hs, ks) = lines(6);
-        assert_eq!(balanced_height(&hs, &ks, 14, 2, 2), 41.0);
+        assert_eq!(balanced_height(&hs, &ks, &none(hs.len()), 14, 2, 2), 41.0);
     }
 
     #[test]
     fn balancing_without_runs_is_the_plain_minimum() {
         let hs = [30.0, 30.0, 30.0, 30.0, 30.0, 30.0];
         let ks = [Other; 6];
-        assert_eq!(balanced_height(&hs, &ks, 3, 2, 2), 61.0);
+        assert_eq!(balanced_height(&hs, &ks, &none(hs.len()), 3, 2, 2), 61.0);
+    }
+
+    #[test]
+    fn a_forced_break_opens_a_column_that_would_still_have_room() {
+        let hs = [10.0, 10.0, 10.0];
+        let ks = [Other; 3];
+        let asg = pack(&hs, &ks, &[false, true, true], 100.0, 1, 1, false).unwrap();
+        assert_eq!(asg, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn a_forced_break_on_the_first_item_adds_no_empty_column() {
+        let hs = [60.0, 10.0, 10.0];
+        let ks = [Other; 3];
+        let asg = pack(&hs, &ks, &[true, true, false], 50.0, 1, 1, false).unwrap();
+        assert_eq!(asg, vec![0, 1, 1]);
+    }
+
+    #[test]
+    fn balancing_with_forced_breaks_fits_the_forced_columns() {
+        // Three items, a forced break before each: three columns of one item whatever the
+        // column count would give an even split.
+        let hs = [30.0, 50.0, 20.0];
+        let ks = [Other; 3];
+        let h = balanced_height(&hs, &ks, &[false, true, true], 3, 1, 1);
+        assert_eq!(h, 51.0);
     }
 }
