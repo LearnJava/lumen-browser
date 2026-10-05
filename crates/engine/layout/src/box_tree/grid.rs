@@ -218,6 +218,7 @@ pub(crate) fn build_grid_init(
     size_contained: bool,
     is_positioned: bool,
     own_pcb: Rect,
+    measurer: Option<&dyn TextMeasurer>,
 ) -> Option<Box<super::grid_trampoline::GridInit>> {
     use super::grid_trampoline::GridInit;
 
@@ -595,6 +596,36 @@ pub(crate) fn build_grid_init(
             })
             .collect();
 
+        // CSS Grid L1 §11.5 — a `min-content` / `max-content` track is as wide as the
+        // largest contribution of the items that sit in it alone (spanning items
+        // contribute to several tracks and are left to the free-space pass).
+        for (c, col_w) in col_widths.iter_mut().enumerate() {
+            let kind = grid_track(c as u32, eff_col_template, &s.grid_auto_columns);
+            let is_max = match kind {
+                GridTrackSize::MaxContent => true,
+                GridTrackSize::MinContent => false,
+                _ => continue,
+            };
+            let mut w = 0.0_f32;
+            for (k, &i) in item_idxs.iter().enumerate() {
+                let (cs, ce, _, _) = placements[k];
+                if cs as usize != c + 1 || ce.saturating_sub(cs) > 1 {
+                    continue;
+                }
+                let item = &children[i];
+                let cem = item.style.font_size;
+                let ml = item.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = item.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                let outer = if is_max {
+                    max_content_outer_width(item, measurer, viewport)
+                } else {
+                    min_content_outer_width(item, measurer, viewport)
+                };
+                w = w.max(outer + ml + mr);
+            }
+            *col_w = w;
+        }
+
         // Total gap between columns.
         let total_col_gap = col_gap * col_gutters as f32;
         let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
@@ -605,10 +636,7 @@ pub(crate) fn build_grid_init(
             .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).fr().unwrap_or(0.0))
             .sum();
         let auto_col_count = (0..n_cols)
-            .filter(|&c| matches!(
-                grid_track(c, eff_col_template, &s.grid_auto_columns),
-                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
-            ))
+            .filter(|&c| matches!(grid_track(c, eff_col_template, &s.grid_auto_columns), GridTrackSize::Auto))
             .count();
 
         // For auto columns, divide remaining free space equally (after fr).
@@ -622,7 +650,7 @@ pub(crate) fn build_grid_init(
         for c in 0..n_cols {
             match grid_track(c, eff_col_template, &s.grid_auto_columns) {
                 GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
-                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
+                GridTrackSize::Auto => {
                     col_widths[c as usize] = auto_col_width;
                 }
                 _ => {}

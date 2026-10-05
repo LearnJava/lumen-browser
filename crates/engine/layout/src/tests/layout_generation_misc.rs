@@ -100,7 +100,10 @@ fn subgrid_box_keeps_inherited_tracks() {
     let t = sg.subgrid_tracks.as_deref().expect("subgrid keeps the inherited tracks");
     assert_eq!(t.cols.as_deref(), Some(&[(0.0, 30.0), (35.0, 75.0)][..]));
     assert_eq!(t.rows.as_deref(), Some(&[(0.0, 20.0), (27.0, 57.0)][..]));
-    assert!(first_element_child(&root).subgrid_tracks.is_none(), "an ordinary grid has none");
+    // Обычный grid с шаблоном хранит собственные дорожки (срез 59), а не унаследованные: у него
+    // нет `subgrid`-оси, но они те же `(start, end)` от начала content box.
+    let g = first_element_child(&root).subgrid_tracks.as_deref().expect("a templated grid keeps its own tracks");
+    assert_eq!(g.cols.as_deref().map(<[_]>::len), Some(4));
 }
 
 /// `collect_subgrid_items` finds both column-subgrid and row-subgrid containers.
