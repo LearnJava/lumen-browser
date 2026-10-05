@@ -1169,7 +1169,7 @@ pub fn inline_segment_style_map(style: &ComputedStyle) -> HashMap<String, String
 fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
     let is_clamping = style.box_orient == WebkitBoxOrient::Vertical
         && (style.line_clamp.is_some() || style.continue_value == CssContinue::Discard);
-    match style.display {
+    match style.legacy_box_display.unwrap_or(style.display) {
         Display::Block => "block",
         Display::Inline => "inline",
         Display::InlineBlock => "inline-block",

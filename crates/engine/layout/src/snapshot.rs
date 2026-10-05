@@ -186,7 +186,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Position::Fixed => out.push_str(" position=fixed"),
         Position::Sticky => out.push_str(" position=sticky"),
     }
-    match s.display {
+    match s.legacy_box_display.unwrap_or(s.display) {
         Display::Block => {}
         Display::Inline => out.push_str(" display=inline"),
         Display::None => out.push_str(" display=none"),
