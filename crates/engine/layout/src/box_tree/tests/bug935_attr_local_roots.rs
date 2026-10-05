@@ -376,6 +376,44 @@ fn an_element_with_no_element_after_it_has_no_sibling_to_fan_out_to() {
     assert_deep(&beside[0], "an element after it is what `.lazy + .after` reaches");
 }
 
+/// BUG-935 срез 83: the fanout of a sibling combinator is the node and the elements *after* it,
+/// not the parent with the siblings before. 20 heavy blocks sit before the written one and
+/// stay untouched; the one after it is restyled with its subtree, and the tree still equals a
+/// full rebuild (`drive` checks both).
+#[test]
+fn a_sibling_combinator_fans_out_to_the_following_elements_only() {
+    let block = |id: &str, class: &str| {
+        let ps: String = (0..20).map(|i| format!("<p>{id} para {i} <b>bold</b> <i>it</i></p>")).collect();
+        format!("<div id=\"{id}\" class=\"{class}\">{ps}</div>")
+    };
+    let page = format!(
+        "<section id=\"s\">{}{}{}{}</section>",
+        block("early1", "item"),
+        block("early2", "item"),
+        block("w", "item lazy"),
+        block("late", "item after"),
+    );
+    let css = ".lazy + .after { margin: 5px } .lazy ~ .after p { color: red } p { color: blue }";
+    let r = drive(
+        &page,
+        css,
+        vec![Box::new(|d| {
+            let w = by_id(d, "w");
+            set(d, w, "class", "item");
+        })],
+    );
+    let r = &r[0];
+    assert_eq!(r.deep, 2, "the written node and the one element after it");
+    assert!(r.shallow == 0, "shallow={}", r.shallow);
+    // `w` and `late` with their 20 paragraphs each, out of four such blocks.
+    assert!(
+        (r.recomputed as usize) * 10 < r.elements * 7,
+        "recascaded {} of {} elements — the siblings before the node were taken too",
+        r.recomputed,
+        r.elements
+    );
+}
+
 /// A sibling combinator that mentions other tokens is silent about this write: the element is
 /// narrowed instead of widened to its parent — and a token it does mention still widens.
 #[test]
