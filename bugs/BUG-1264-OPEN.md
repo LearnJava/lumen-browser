@@ -50,6 +50,6 @@ FLEX-VWM, остаток `flexbox-writing-mode-*`: 010–016 не совпада
 
 - `dynamic-orthogonal-flex-item` (→ FLEX-VWM-6): ширина shrink-to-fit `inline-flex` считается до раскладки из intrinsic-функций, `vertical_block_extent` берёт ряд `InlineBlockRow` за одну колонку, а flex-проба элемента (`block_axis_width`) число колонок знает — контейнер 50 вместо 100, `flex-shrink` ужимает элемент до min-content одной колонки.
 - `aspect-ratio-intrinsic-size-001/002` (→ FLEX-VWM-6): `canvas` с `height:100%` в растянутом элементе — ширина элемента должна браться из растянутой высоты.
-- `grid-flex-item-001` (→ GRID-VWM): grid в вертикальном `writing-mode` не меняет оси.
+- `grid-flex-item-001`: закрыт GRID-VWM (2026-10-05) — grid в вертикальном `writing-mode` раскладывается по осям режима; reftest identical.
 - `flexbox-writing-mode-011/012`: эталон держится на `float: left` в вертикальном потоке (линейный «левый» край — верх). Float в вертикальном потоке сделан (LAYOUT-VFLOAT, 2026-10-05) и строки эталона совпадают с тестом по геометрии первых четырёх элементов, но тест остаётся красным: элементы параллельного режима (`vl`/`vr` в `vl`/`vr`-контейнере) должны растянуться по физической ширине (`align-items: stretch`, 126px у эталона), а flex оставляет им `40px` — это FLEX-VWM-5 (ROADMAP:1017). `shape-outside` в вертикальных режимах (`css-shapes`, ~100 тестов) — LAYOUT-VFLOAT-2.
 - Схлопывание margin предка с первым/последним ребёнком по block-оси вертикального потока (`css-writing-modes/margin-collapse-vlr-*`, `-vrl-*`).

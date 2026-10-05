@@ -352,7 +352,7 @@ pub(crate) fn build_vertical_init(
 /// Returns the border-box size in CSS px when the length is resolvable;
 /// returns `None` for `auto`, intrinsic keywords (Phase 0), or percentage
 /// without a basis. Applies `box-sizing` (`content-box` adds padding+border).
-fn resolve_axis_size(
+pub(crate) fn resolve_axis_size(
     len: Option<&Length>,
     em: f32,
     basis: Option<f32>,

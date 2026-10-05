@@ -73,6 +73,10 @@ pub(super) struct GridInit {
     /// То же для группы `last baseline` (items с концом в строке) — базовая линия
     /// отстоит от низа строки на спуск.
     pub(super) row_last_group: Vec<(f32, f32)>,
+    /// GRID-VWM: контейнер в вертикальном `writing-mode` — столбцы идут по физической
+    /// оси `y`, строки по `x`. Все размеры и смещения дорожек остаются логическими
+    /// (inline / block), в физические координаты их переводят `grid_vertical`-хелперы.
+    pub(super) vertical: Option<super::grid_vertical::VGridGeom>,
 }
 
 /// Базовая линия item'а, участвующего в baseline-группе строки.
@@ -240,7 +244,6 @@ fn step_probe_item(
     let c0 = (cs - 1).min(n_cols.saturating_sub(1)) as usize;
     let c1 = (ce - 1).min(n_cols) as usize;
     let cell_w = grid_track_span(&frame.init.col_offsets, &frame.init.col_widths, c0, c1);
-    let probe_x = frame.init.content_x + frame.init.col_offsets.get(c0).copied().unwrap_or(0.0);
     let pcb = frame.init.children_pcb;
 
     let child_col_subgrid = frame.b.children[i].style.grid_template_columns.first()
@@ -249,26 +252,13 @@ fn step_probe_item(
         == Some(&GridTrackSize::Subgrid);
 
     if child_col_subgrid || child_row_subgrid {
-        let child_col_ctx = if child_col_subgrid && c1 > c0 {
-            Some(SubgridContext::from_parent_tracks(&frame.init.col_widths[c0..c1], frame.init.col_gap))
-        } else {
-            None
-        };
-        let child_row_ctx = if child_row_subgrid {
-            let r0 = (rs - 1).min(n_rows.saturating_sub(1)) as usize;
-            let re_eff = re.max(rs + 1);
-            let r1 = (re_eff - 1).min(n_rows) as usize;
-            if r1 > r0 {
-                Some(SubgridContext::from_parent_tracks(&frame.init.row_heights[r0..r1], frame.init.row_gap))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let r0 = (rs - 1).min(n_rows.saturating_sub(1)) as usize;
+        let r1 = (re.max(rs + 1) - 1).min(n_rows) as usize;
+        let (child_col_ctx, child_row_ctx) = frame.init.subgrid_ctx(&frame.b.children[i], c0, c1, r0, r1);
         let _guard = SubgridContextGuard::set(child_col_ctx, child_row_ctx);
+        let (ax, ay, aw, ah) = frame.init.probe_args(c0, cell_w, &frame.b.children[i], viewport, measurer);
         let outcome = dispatch_box(
-            &mut frame.b.children[i], probe_x, 0.0, cell_w, None, measurer, viewport, pcb, hp,
+            &mut frame.b.children[i], ax, ay, aw, ah, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         );
         drop(_guard);
@@ -317,8 +307,9 @@ fn step_probe_item(
         // synchronous recursive call could get away with.
         frame.probe_outer_cv = CV_AUTO_TOUCHED.with(|c| c.replace(false));
         frame.probe_outer_ih = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.replace(false));
+        let (ax, ay, aw, ah) = frame.init.probe_args(c0, cell_w, &frame.b.children[i], viewport, measurer);
         match dispatch_box(
-            &mut frame.b.children[i], probe_x, 0.0, cell_w, None, measurer, viewport, pcb, hp,
+            &mut frame.b.children[i], ax, ay, aw, ah, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
             DispatchOutcome::Done => { post_probe_item(frame, i, measurer, viewport); StepOutcome::Advance }
@@ -377,11 +368,13 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         CV_AUTO_TOUCHED.with(|c| c.set(outer || touched_here));
         let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
         INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(frame.probe_outer_ih || ih_here));
-        if !touched_here && !ih_here {
+        // Вертикальная сетка пробу не переиспользует: ортогональный элемент в финале получает
+        // ширину области, а не доступную ширину контейнера, как в замере.
+        if !touched_here && !ih_here && frame.init.vertical.is_none() {
             let n_cols = frame.init.n_cols;
             let c0 = (frame.init.placements[k].0 - 1).min(n_cols.saturating_sub(1)) as usize;
-            let probe_x = frame.init.content_x + frame.init.col_offsets.get(c0).copied().unwrap_or(0.0);
-            frame.init.probe_reuse[k] = Some((probe_x, 0.0, frame.b.children[i].clone()));
+            let (probe_x, probe_y) = frame.init.probe_origin(c0);
+            frame.init.probe_reuse[k] = Some((probe_x, probe_y, frame.b.children[i].clone()));
         }
     }
 
@@ -393,7 +386,7 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
             GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
         )
     {
-        let item_h = frame.b.children[i].rect.height;
+        let item_h = frame.init.item_block_size(&frame.b.children[i], viewport);
         if item_h > frame.init.row_heights[r0] {
             frame.init.row_heights[r0] = item_h;
         }
@@ -424,8 +417,12 @@ fn record_item_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn TextM
     let em = st.font_size;
     let m_t = st.margin_top.resolve_or_zero(em, frame.init.content_width, viewport);
     let m_b = st.margin_bottom.resolve_or_zero(em, frame.init.content_width, viewport);
-    let ascent = m_t + super::baseline::box_baseline_or_synth(item, side, measurer);
-    let descent = (item.rect.height + m_t + m_b - ascent).max(0.0);
+    // Вертикальная сетка: линия вертикальна, подъём считается по block-оси (физический `x`).
+    let (ascent, outer) = match frame.init.vertical {
+        None => (m_t + super::baseline::box_baseline_or_synth(item, side, measurer), item.rect.height + m_t + m_b),
+        Some(g) => super::grid_vertical::block_ascent(&frame.init, g, item, side, viewport, measurer),
+    };
+    let descent = (outer - ascent).max(0.0);
     frame.init.item_baselines[k] = Some(ItemBaseline { side, ascent });
     let group = match side {
         BaselineSide::First => &mut frame.init.row_first_group[first_row],
@@ -548,16 +545,13 @@ fn step_final_item(
     let k = frame.k;
     let i = frame.init.item_idxs[k];
     let (cs, ce, rs, re) = frame.init.placements[k];
-    let content_x = frame.init.content_x;
-    let content_y = frame.init.content_y;
-    let content_width = frame.init.content_width;
     let pcb = frame.init.children_pcb;
 
     if cs == 0 || rs == 0 {
         // Unplaced — stack below grid content.
-        let y = content_y + frame.init.y_off;
+        let (ux, uy, uw, uh) = frame.init.unplaced_args();
         return match dispatch_box(
-            &mut frame.b.children[i], content_x, y, content_width, None, measurer, viewport, pcb, hp,
+            &mut frame.b.children[i], ux, uy, uw, uh, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
             DispatchOutcome::Done => { post_final_item(frame, i, viewport, measurer, hp); StepOutcome::Advance }
@@ -598,9 +592,9 @@ fn step_final_item(
     let c1 = (ce - 1).min(n_cols) as usize;
     let r0 = (rs - 1).min(n_rows.saturating_sub(1)) as usize;
     let r1 = (re - 1).min(n_rows) as usize;
-    let cell_x = content_x + frame.init.col_offsets.get(c0).copied().unwrap_or(0.0);
-    let cell_y = content_y + frame.init.row_offsets.get(r0).copied().unwrap_or(0.0);
     let cell_w = grid_track_span(&frame.init.col_offsets, &frame.init.col_widths, c0, c1);
+    let cell_h = grid_track_span(&frame.init.row_offsets, &frame.init.row_heights, r0, r1);
+    let (cell_x, cell_y) = frame.init.cell_origin(c0, r0, cell_h, cell_w);
 
     let child_col_subgrid = frame.b.children[i].style.grid_template_columns.first()
         == Some(&GridTrackSize::Subgrid);
@@ -608,19 +602,12 @@ fn step_final_item(
         == Some(&GridTrackSize::Subgrid);
 
     if child_col_subgrid || child_row_subgrid {
-        let final_col_ctx = if child_col_subgrid && c1 > c0 {
-            Some(SubgridContext::from_parent_tracks(&frame.init.col_widths[c0..c1], frame.init.col_gap))
-        } else {
-            None
-        };
-        let final_row_ctx = if child_row_subgrid && r1 > r0 {
-            Some(SubgridContext::from_parent_tracks(&frame.init.row_heights[r0..r1], frame.init.row_gap))
-        } else {
-            None
-        };
+        let (final_col_ctx, final_row_ctx) = frame.init.subgrid_ctx(&frame.b.children[i], c0, c1, r0, r1);
         let _guard = SubgridContextGuard::set(final_col_ctx, final_row_ctx);
+        let (ax, ay, aw, ah) =
+            frame.init.final_args(&frame.b.children[i], (cell_x, cell_y), cell_w, None, viewport, measurer);
         let outcome = dispatch_box(
-            &mut frame.b.children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp,
+            &mut frame.b.children[i], ax, ay, aw, ah, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         );
         drop(_guard);
@@ -670,9 +657,11 @@ fn step_final_item(
         // probe touched `content-visibility: auto` and was refused for reuse.
         // The grid area's block size is definite by now (rows are resolved), so a
         // `%` height/min-height/max-height of the item resolves against it.
-        let cell_h = grid_track_span(&frame.init.row_offsets, &frame.init.row_heights, r0, r1);
+        let (ax, ay, aw, ah) = frame.init.final_args(
+            &frame.b.children[i], (cell_x, cell_y), cell_w, Some(cell_h), viewport, measurer,
+        );
         match dispatch_box(
-            &mut frame.b.children[i], cell_x, cell_y, cell_w, Some(cell_h), measurer, viewport, pcb, hp,
+            &mut frame.b.children[i], ax, ay, aw, ah, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
             DispatchOutcome::Done => { post_final_item(frame, i, viewport, measurer, hp); StepOutcome::Advance }
@@ -725,7 +714,12 @@ fn post_final_item(
     let k = frame.k;
     let (cs, ce, rs, re) = frame.init.placements[k];
     if cs == 0 || rs == 0 {
-        frame.init.y_off += frame.b.children[i].rect.height;
+        frame.init.y_off += frame.init.item_block_size(&frame.b.children[i], viewport);
+        return;
+    }
+
+    if frame.init.vertical.is_some() {
+        super::grid_vertical::place_item(&frame.init, k, &mut frame.b.children[i], viewport, measurer, hp);
         return;
     }
 
@@ -744,6 +738,8 @@ fn post_final_item(
     let s = Arc::clone(&frame.init.s);
 
     let item = &mut frame.b.children[i];
+    // Позицию ниже выставляем в `item.rect` целиком, а поддерево переезжает вслед за ней в конце.
+    let (orig_x, orig_y) = (item.rect.x, item.rect.y);
     let is = &item.style;
     let iem = is.font_size;
     let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
@@ -755,6 +751,18 @@ fn post_final_item(
     // grown height for the relayout below — deferred until `item.rect.x` has
     // its final value from the justify-items block further down.
     let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
+    // `self-start`/`self-end` считаются по собственному режиму письма элемента (Box Alignment §4.2).
+    let align = super::grid_vertical::resolve_own(
+        align,
+        if matches!(is.align_self, AlignValue::Auto) {
+            s.content_align_extra.items_own
+        } else {
+            is.content_align_extra.self_own
+        },
+        is,
+        false,
+        true,
+    );
     let item_outer_h = item.rect.height + m_t + m_b;
     // CSS Box Alignment L3 §4.4: `safe` falls back to `start` once the item
     // overflows its grid area, instead of overflowing past the start edge.
@@ -769,7 +777,14 @@ fn post_final_item(
         align
     };
     let mut stretch_h: Option<f32> = None;
+    let (auto_t, auto_b) = (is.margin_top.is_auto(), is.margin_bottom.is_auto());
+    let (auto_l, auto_r) = (is.margin_left.is_auto(), is.margin_right.is_auto());
     match align {
+        // Авто-поле по block-оси забирает свободное место: ни растяжения, ни baseline.
+        _ if auto_t || auto_b => {
+            item.rect.y = cell_y
+                + super::grid_vertical::axis_offset(align, cell_h, item.rect.height, m_t, m_b, auto_t, auto_b);
+        }
         AlignValue::End => {
             item.rect.y = cell_y + cell_h - item.rect.height - m_b;
         }
@@ -808,6 +823,20 @@ fn post_final_item(
 
     // justify-items (inline axis within cell).
     let justify = if matches!(is.justify_self, AlignValue::Auto) { s.justify_items } else { is.justify_self };
+    let justify_auto = matches!(is.justify_self, AlignValue::Auto);
+    let justify = super::grid_vertical::resolve_own(
+        justify,
+        if justify_auto { s.content_align_extra.justify_items_own } else { is.content_align_extra.justify_self_own },
+        is,
+        true,
+        true,
+    );
+    let justify = super::grid_vertical::resolve_side(
+        justify,
+        if justify_auto { s.content_align_extra.justify_items_side } else { is.content_align_extra.justify_self_side },
+        s.writing_mode,
+        false,
+    );
     let item_outer_w = item.rect.width + m_l + m_r;
     let justify_safe = if matches!(is.justify_self, AlignValue::Auto) {
         s.content_align_extra.justify_items_safe
@@ -820,6 +849,10 @@ fn post_final_item(
         justify
     };
     match justify {
+        _ if auto_l || auto_r => {
+            item.rect.x = cell_x
+                + super::grid_vertical::axis_offset(justify, cell_w, item.rect.width, m_l, m_r, auto_l, auto_r);
+        }
         AlignValue::End => {
             item.rect.x = cell_x + cell_w - item.rect.width - m_r;
         }
@@ -833,6 +866,13 @@ fn post_final_item(
             item.rect.x = cell_x + m_l;
         }
     }
+
+    // Выравнивание сдвигало только сам бокс: потомки оставались там, где их раскладка поставила
+    // в начале области (`align-items: end` рисовал бокс внизу, а его содержимое — вверху).
+    let (rel_x, rel_y) = super::grid_vertical::relative_shift(item, cell_w, viewport);
+    let (new_x, new_y) = (item.rect.x + rel_x, item.rect.y + rel_y);
+    item.rect.x = orig_x;
+    item.rect.y = orig_y;
 
     // BUG-644: `align-items: stretch` above only widened the outer box by
     // reassigning `item.rect.height` — the subtree underneath was laid out
@@ -853,18 +893,16 @@ fn post_final_item(
         let child_col_subgrid = item.style.grid_template_columns.first() == Some(&GridTrackSize::Subgrid);
         let child_row_subgrid = item.style.grid_template_rows.first() == Some(&GridTrackSize::Subgrid);
         let _guard = (child_col_subgrid || child_row_subgrid).then(|| {
-            let col_ctx = (child_col_subgrid && c1 > c0)
-                .then(|| SubgridContext::from_parent_tracks(&frame.init.col_widths[c0..c1], frame.init.col_gap));
-            let row_ctx = (child_row_subgrid && r1 > r0)
-                .then(|| SubgridContext::from_parent_tracks(&frame.init.row_heights[r0..r1], frame.init.row_gap));
+            let (col_ctx, row_ctx) = frame.init.subgrid_ctx(&frame.b.children[i], c0, c1, r0, r1);
             SubgridContextGuard::set(col_ctx, row_ctx)
         });
 
+        // От начала области, как и первая раскладка: `lay_out` сам добавляет поля к `start_*`.
+        let (_, _, offer_w, _) =
+            frame.init.final_args(&frame.b.children[i], (cell_x, cell_y), cell_w, None, viewport, measurer);
         let item = &mut frame.b.children[i];
-        let rx = item.rect.x;
-        let ry = item.rect.y;
         lay_out_with_used_size(
-            item, rx, ry, cell_w, Some(h), measurer, viewport, pcb, hp, false,
+            item, cell_x, cell_y, offer_w, Some(h), measurer, viewport, pcb, hp, false,
             UsedSizeOverride {
                 height: Some(h),
                 box_sizing: Some(BoxSizing::BorderBox),
@@ -872,6 +910,8 @@ fn post_final_item(
             },
         );
     }
+    let item = &mut frame.b.children[i];
+    crate::incremental::translate_subtree(item, new_x - item.rect.x, new_y - item.rect.y);
 }
 
 /// Runs once every item is placed — (moved in from `layout_dispatch.rs`'s
@@ -879,6 +919,15 @@ fn post_final_item(
 /// Copied from the removed code's dispatch-arm tail, plus the deferred
 /// absolutely-positioned children pass (`lay_out_abs`).
 fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: Size, hp: &dyn HyphenationProvider) {
+    if let Some(geom) = frame.init.vertical {
+        super::grid_vertical::finish_container(&mut frame.b, &frame.init, geom);
+        frame.b.grid_baselines = super::grid_vertical::container_baselines(&frame.b, &frame.init, geom, measurer);
+        lay_out_abs(
+            &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
+            frame.init.content_x, frame.init.content_y, measurer, viewport, hp,
+        );
+        return;
+    }
     let content_height = frame.init.y_off;
     finish_container_height(
         &mut frame.b,

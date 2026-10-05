@@ -55,9 +55,21 @@ pub(crate) fn baseline_phys_side(s: &ComputedStyle, side: BaselineSide) -> PhysS
 }
 
 /// Синтезированная базовая линия (CSS Align L3 §9.1): у горизонтального бокса —
-/// нижняя кромка border box, у вертикального — центральная (середина border box).
+/// нижняя кромка border box, у вертикального — центральная (середина border box), а при
+/// `text-orientation: sideways` (и в `sideways-*`, где ориентация всегда такая) — алфавитная,
+/// то есть кромка line-under (слева у `vertical-rl`/`vertical-lr`/`sideways-rl`, справа у
+/// `sideways-lr`: его глифы повёрнуты против часовой).
 fn synth_baseline(b: &LayoutBox) -> f32 {
-    if is_vertical(&b.style) { b.rect.width / 2.0 } else { b.rect.height }
+    let s = &b.style;
+    let sideways = s.text_orientation == crate::style::TextOrientation::Sideways
+        || matches!(s.writing_mode, WritingMode::SidewaysLr | WritingMode::SidewaysRl);
+    if !is_vertical(s) {
+        b.rect.height
+    } else if sideways {
+        if s.writing_mode == WritingMode::SidewaysLr { b.rect.width } else { 0.0 }
+    } else {
+        b.rect.width / 2.0
+    }
 }
 
 /// Участвует ли бокс в нормальном потоке своего родителя — плавающие,

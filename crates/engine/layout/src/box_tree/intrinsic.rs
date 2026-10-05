@@ -81,12 +81,23 @@ pub(crate) fn max_content_outer_height(
                 _ => child_outer_height(c),
             })
             .sum(),
-        _ => b
-            .children
-            .iter()
-            .filter(|c| contributes_to_intrinsic_width(c))
-            .map(child_outer_height)
-            .fold(0.0_f32, f32::max),
+        _ => {
+            let longest = || {
+                b.children
+                    .iter()
+                    .filter(|c| contributes_to_intrinsic_width(c))
+                    .map(child_outer_height)
+                    .fold(0.0_f32, f32::max)
+            };
+            // GRID-VWM: столбцы вертикальной сетки идут по высоте — её inline-размер это
+            // сумма столбцов с промежутками, а не самый длинный элемент.
+            if is_vertical_mode(b) && is_grid_container(b) {
+                grid_col_intrinsic_sum(b, viewport, true, &|c| max_content_outer_height(c, measurer, viewport))
+                    .unwrap_or_else(longest)
+            } else {
+                longest()
+            }
+        }
     };
     (content + frame).max(0.0)
 }
@@ -197,9 +208,13 @@ fn column_placement_in_explicit_grid(s: &ComputedStyle, n_cols: usize) -> bool {
 /// column other than the round-robin one assumed here, or make columns
 /// overlap). `None` tells the caller to fall back to the pre-existing
 /// "widest child" rule instead of reporting a confidently wrong number.
-fn grid_col_intrinsic_sum(
+///
+/// `vertical` — сетка в вертикальном `writing-mode` (GRID-VWM): столбцы идут по
+/// физической высоте, поэтому поля элемента по inline-оси — верхнее и нижнее.
+pub(super) fn grid_col_intrinsic_sum(
     b: &LayoutBox,
     viewport: Size,
+    vertical: bool,
     per_item: &dyn Fn(&LayoutBox) -> f32,
 ) -> Option<f32> {
     let s = &b.style;
@@ -264,8 +279,11 @@ fn grid_col_intrinsic_sum(
     for (k, c) in items.iter().enumerate() {
         let col = k % n_cols;
         let cem = c.style.font_size;
-        let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-        let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+        let (ml, mr) = if vertical {
+            (c.style.margin_top.resolve_or_zero(cem, 0.0, viewport), c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport))
+        } else {
+            (c.style.margin_left.resolve_or_zero(cem, 0.0, viewport), c.style.margin_right.resolve_or_zero(cem, 0.0, viewport))
+        };
         col_widths[col] = col_widths[col].max(per_item(c) + ml + mr);
     }
 
@@ -440,7 +458,7 @@ pub(crate) fn preferred_inline_block_width(
         }).sum();
         sum
     } else if is_grid_container(b) {
-        grid_col_intrinsic_sum(b, viewport, &|c| {
+        grid_col_intrinsic_sum(b, viewport, false, &|c| {
             preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
         })
         .unwrap_or_else(block_flow)
@@ -540,7 +558,7 @@ pub(crate) fn max_content_outer_width(
         // Grid container: max-content is the sum of column max-content widths
         // + gaps (CSS Grid L1 §11.5), not the widest item — see BUG-740.
         _ if is_grid_container(b) => {
-            grid_col_intrinsic_sum(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
+            grid_col_intrinsic_sum(b, viewport, false, &|c| max_content_outer_width(c, measurer, viewport))
                 .unwrap_or_else(block_flow)
         }
         _ if is_vertical_block(b) => {
@@ -680,7 +698,7 @@ pub(crate) fn min_content_outer_width_of_contents(
         // Grid container: columns can't share space, so min-content is the sum
         // of column min-content widths + gaps, not the widest item (BUG-740).
         _ if is_grid_container(b) => {
-            grid_col_intrinsic_sum(b, viewport, &|c| min_content_outer_width(c, measurer, viewport))
+            grid_col_intrinsic_sum(b, viewport, false, &|c| min_content_outer_width(c, measurer, viewport))
                 .unwrap_or_else(|| {
                     b.children.iter()
                         .filter(|c| contributes_to_intrinsic_width(c))

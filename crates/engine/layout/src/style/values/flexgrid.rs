@@ -1023,6 +1023,14 @@ pub struct ContentAlignExtra {
     /// `justify-self: safe …` / `justify-items: safe …` (read by grid).
     pub justify_self_safe: bool,
     pub justify_items_safe: bool,
+    /// `justify-self: self-start | self-end` / `justify-items: …` — relative to the item's own
+    /// writing mode and direction (read by grid).
+    pub justify_self_own: bool,
+    pub justify_items_own: bool,
+    /// `justify-self: left | right` / `justify-items: left | right` (stored as `Start`/`End`;
+    /// grid resolves the physical side against its inline axis).
+    pub justify_self_side: Option<ContentSide>,
+    pub justify_items_side: Option<ContentSide>,
 }
 
 /// A physical side keyword of `justify-content` (CSS Box Alignment L3 §6.1).
@@ -1054,6 +1062,20 @@ impl AlignValue {
         let lc = s.trim().to_ascii_lowercase();
         let rest = lc.strip_prefix("safe ").or_else(|| lc.strip_prefix("unsafe ")).unwrap_or(&lc);
         matches!(rest.trim(), "self-start" | "self-end")
+    }
+
+    /// `[safe | unsafe]? left | right` as a `justify-self` / `justify-items` value: the side
+    /// and whether it was `safe`.
+    pub fn parse_self_side(s: &str) -> Option<(ContentSide, bool)> {
+        let lc = s.trim().to_ascii_lowercase();
+        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
+            (rest, true)
+        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
+            (rest, false)
+        } else {
+            (lc.as_str(), false)
+        };
+        Self::parse_content_side(rest).map(|side| (side, safe))
     }
 
     /// `left` / `right` as a `justify-content` value.
