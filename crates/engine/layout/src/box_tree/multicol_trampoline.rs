@@ -2,7 +2,7 @@ use super::*;
 use super::layout_cache::finalize_block_height;
 use super::layout_dispatch::{dispatch_box, finish_after_match};
 use super::block_flow_trampoline::{self, DispatchOutcome};
-use super::multicol_fragmentation::{balanced_height, item_lines, pack, ItemLines};
+use super::multicol_fragmentation::{balanced_height, forced_breaks, item_lines, pack, ItemLines};
 
 /// One segment of flow children between `column-span: all` boundaries — CSS
 /// Multicol §3.4. `sliceable` is decided up front by `multicol_abspos::
@@ -587,11 +587,18 @@ fn compute_col_assignment(frame: &mut Frame) {
         .iter()
         .map(|&i| item_lines(&frame.init.work[i]))
         .collect();
+    // CSS Fragmentation L3 §3.1: `break-before`/`break-after: column|always` open a new column.
+    let items: Vec<&LayoutBox> = frame.init.segments[frame.seg_i]
+        .item_idxs
+        .iter()
+        .map(|&i| &frame.init.work[i])
+        .collect();
+    let forced = forced_breaks(&items);
     let (orphans, widows) = (frame.init.s.orphans, frame.init.s.widows);
     let target_h = if let Some(r) = frame.init.col_rows {
         r.col_h.max(1.0)
     } else if balance {
-        let balanced = balanced_height(outer_hs, &kinds, n_cols, orphans, widows);
+        let balanced = balanced_height(outer_hs, &kinds, &forced, n_cols, orphans, widows);
         container_h.map_or(balanced, |limit| balanced.min(limit.max(1.0)))
     } else {
         column_height(false, container_h, total_h, n_cols)
@@ -600,7 +607,7 @@ fn compute_col_assignment(frame: &mut Frame) {
     // A column holds at least one item before it overflows to the next (CSS Multicol §3.4 —
     // every column box is filled in order, starting from the first); columns past
     // `column-count` are overflow columns (CSS Multicol L1 §7.1).
-    let col_assignment = pack(outer_hs, &kinds, target_h, orphans, widows, false)
+    let col_assignment = pack(outer_hs, &kinds, &forced, target_h, orphans, widows, false)
         .unwrap_or_else(|| vec![0; outer_hs.len()]);
     let col_count = col_assignment.iter().copied().max().map_or(0, |m| m + 1).max(n_cols);
     frame.col_y = match frame.init.col_rows {

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- CSS Fragmentation L3 §3.1 — принудительные разрывы колонок multicol.
+     `break-before/after: column` между соседними блоками открывают новую колонку даже
+     там, где в текущей ещё есть место; разрыв перед первым и после последнего блока колонок не
+     добавляет. A: column-fill:auto, break-before:column · B: balance, break-after:column,
+     блоки разной высоты · C: break-after:column только у первого — второй и третий делят
+     колонку · D: разрыв только перед третьим блоком — первые два остаются в одной колонке ·
+     E: два разрыва внутри контейнера с padding, border и column-gap · F: разрывы вместе с
+     column-rule между колонками. `always` здесь нет: Edge не считает его
+     разрывом колонки, спецификация (css-break §3.1) — считает. Только цветные боксы, без текста. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; }
+  .mc { columns: 3; column-gap: 10px; width: 280px; height: 200px; background: #e2e8f0; }
+  .mc > div { height: 60px; background: #2b6cb0; }
+  .mc > div:nth-child(2) { background: #ed8936; height: 90px; }
+  .mc > div:nth-child(3) { background: #38a169; height: 40px; }
+
+  .a .mc { column-fill: auto; }
+  .a .mc > div { break-before: column; }
+  .b .mc > div { break-after: column; }
+  .c .mc { column-fill: auto; }
+  .c .mc > div:nth-child(1) { break-after: column; }
+  .d .mc { column-fill: auto; }
+  .d .mc > div:nth-child(3) { break-before: column; }
+  .e .mc { padding: 8px 12px; border: solid 6px #805ad5; box-sizing: border-box; column-gap: 16px; }
+  .e .mc > div { break-after: column; }
+  .f .mc { column-fill: auto; column-rule: 4px solid #c53030; }
+  .f .mc > div { break-before: column; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell a"><div class="mc"><div></div><div></div><div></div></div></div>
+  <div class="cell b"><div class="mc"><div></div><div></div><div></div></div></div>
+  <div class="cell c"><div class="mc"><div></div><div></div><div></div></div></div>
+  <div class="cell d"><div class="mc"><div></div><div></div><div></div></div></div>
+  <div class="cell e"><div class="mc"><div></div><div></div><div></div></div></div>
+  <div class="cell f"><div class="mc"><div></div><div></div><div></div></div></div>
+</div>
+</body>
+</html>
