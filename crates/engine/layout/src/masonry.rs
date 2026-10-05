@@ -85,6 +85,7 @@ mod tests {
             rect: Rect::new(0.0, 0.0, 100.0, height),
             used_line_height: 16.0 * 1.2,
             grid_baselines: None,
+            fieldset_legend: None,
             subgrid_tracks: None,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,

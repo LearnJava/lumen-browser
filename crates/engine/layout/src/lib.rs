@@ -106,7 +106,7 @@ pub use box_tree::{
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_mutation_incremental_with_counters, layout_streaming_incremental,
     lay_out_incremental, select_widget_arrow_width, select_widget_font_size, BoxKind, BoxOrigin,
-    BoxRole, CrossOriginMode, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
+    BoxRole, CrossOriginMode, FieldsetLegend, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
 };

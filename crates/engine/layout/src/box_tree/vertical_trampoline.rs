@@ -31,7 +31,10 @@ pub(super) fn run(
     viewport: Size,
     hp: &dyn HyphenationProvider,
 ) {
-    let mut current = Frame { b: block_flow_trampoline::take_box(b), init, next_child_idx: 0 };
+    let mut init = init;
+    let mut first = block_flow_trampoline::take_box(b);
+    super::fieldset::place_rendered_legend_vertical(&mut first, &mut init, measurer, viewport, hp);
+    let mut current = Frame { b: first, init, next_child_idx: 0 };
     let mut stack: Vec<Frame> = Vec::new();
     let mut caches = MarginCaches::default();
 
@@ -59,8 +62,11 @@ pub(super) fn run(
             StepOutcome::Advance => {
                 current.next_child_idx += 1;
             }
-            StepOutcome::Descend(child_init) => {
-                let child_box = block_flow_trampoline::take_box(&mut current.b.children[i]);
+            StepOutcome::Descend(mut child_init) => {
+                let mut child_box = block_flow_trampoline::take_box(&mut current.b.children[i]);
+                super::fieldset::place_rendered_legend_vertical(
+                    &mut child_box, &mut child_init, measurer, viewport, hp,
+                );
                 let child_frame = Frame { b: child_box, init: child_init, next_child_idx: 0 };
                 stack.push(current);
                 current = child_frame;
@@ -96,6 +102,10 @@ fn step_child(
     let content_x_left = frame.init.content_x_left;
     let content_y = frame.init.content_y;
 
+    // Rendered legend уже стоит на границе fieldset (`place_rendered_legend_vertical`).
+    if frame.b.fieldset_legend.is_some_and(|l| l.placed && l.idx == i) {
+        return StepOutcome::Advance;
+    }
     if matches!(frame.b.children[i].kind, BoxKind::Skip) {
         frame.b.children[i].rect = Rect::new(content_x_left, content_y, 0.0, 0.0);
         return StepOutcome::Advance;

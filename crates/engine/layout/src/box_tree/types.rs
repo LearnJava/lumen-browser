@@ -45,6 +45,9 @@ pub struct LayoutBox {
     /// восстановить), читается моделью базовой линии [`super::baseline`] у
     /// flex/grid-родителя. `None` — не grid-контейнер или сетка без items.
     pub grid_baselines: Option<(f32, f32)>,
+    /// HTML Rendering §15.3.13 — у `<fieldset>` с «rendered legend»: какой из `children` им
+    /// является и как он лёг. `None` — не fieldset или legend нет.
+    pub fieldset_legend: Option<FieldsetLegend>,
     /// Унаследованные дорожки `subgrid`-контейнера (Grid L2 §9) — для щелей `column-rule`/`row-rule`
     /// (CSS Gap Decorations L1), которые идут по дорожкам родителя. `None` — не subgrid.
     pub subgrid_tracks: Option<Box<crate::subgrid::SubgridTracks>>,
@@ -100,6 +103,22 @@ impl Drop for LayoutBox {
             // exactly one level deep regardless of the original subtree depth.
         }
     }
+}
+
+/// Rendered legend у `<fieldset>` (HTML Rendering §15.3.13): первый `<legend>`-ребёнок, не
+/// плавающий и не абсолютный. Раскладывается не в потоке, а на верхней границе fieldset.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FieldsetLegend {
+    /// Индекс legend в `children` fieldset-бокса.
+    pub idx: usize,
+    /// DOM-узел legend: раскладка сверяет его с `children[idx]`, прежде чем ставить бокс на границу.
+    pub node: NodeId,
+    /// Раскладка нашла legend и поставила его на границу (обычный блочный путь). `false` —
+    /// fieldset с flex/grid/multicol: legend остался обычным ребёнком, рамка рисуется целиком.
+    pub placed: bool,
+    /// На сколько рамка опущена от верхней кромки border box: середина `border-top` лежит на
+    /// середине legend, и когда legend выше рамки, она уходит вниз на `(legend − border-top) / 2`.
+    pub border_inset: f32,
 }
 
 /// Where a layout box came from — the identity of a box for all

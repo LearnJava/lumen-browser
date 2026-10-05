@@ -385,6 +385,7 @@ impl LoadedPage {
                 rect: Rect::ZERO,
                 used_line_height: 16.0 * 1.2,
                 grid_baselines: None,
+                fieldset_legend: None,
                 subgrid_tracks: None,
                 style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,

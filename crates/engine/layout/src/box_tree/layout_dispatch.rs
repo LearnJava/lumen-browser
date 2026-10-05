@@ -340,6 +340,12 @@ pub(super) fn dispatch_box(
         b.node,
         pcb
     );
+    // Legend ставит только обычный блочный путь ниже; flex/grid/multicol-fieldset оставляют его
+    // обычным ребёнком, и рамка тогда рисуется целиком.
+    if let Some(fl) = &mut b.fieldset_legend {
+        fl.placed = false;
+        fl.border_inset = 0.0;
+    }
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
         return DispatchOutcome::Done;
@@ -656,6 +662,11 @@ pub(super) fn dispatch_box(
     if let Some(min_len) = &s.min_width {
         let min_bb = if matches!(min_len, Length::Stretch) {
             Some((available_width - margin_left - margin_right).max(0.0))
+        } else if matches!(min_len, Length::MinContent) {
+            // CSS Sizing L3 §4: `min-width: min-content` is the box's content-based minimum —
+            // its own `width` (even `0`, e.g. a fieldset's `min-inline-size`) must not stand in
+            // for it.
+            Some(min_content_outer_width_of_contents(b, measurer, viewport))
         } else if min_len.is_intrinsic() {
             Some(min_content_outer_width(b, measurer, viewport))
         } else {
@@ -1269,10 +1280,16 @@ pub(super) fn dispatch_box(
                 // the `finalize_block_height`/tail calls below this match, which
                 // `block_flow_trampoline::run` invokes itself once the frame (and
                 // every plain-block descendant it meets) is done.
+                // HTML Rendering §15.3.13: rendered legend встаёт на верхнюю границу, содержимое
+                // fieldset начинается ниже него.
+                let legend_extra = super::fieldset::place_rendered_legend(
+                    b, content_x, content_width, children_available_height, measurer, viewport,
+                    children_pcb, hp,
+                );
                 return DispatchOutcome::NeedsBlockFlowLoop(Box::new(block_flow_trampoline::BlockFlowInit {
                     fc,
                     container_right,
-                    child_y: content_y,
+                    child_y: content_y + legend_extra,
                     prev_block_mb: 0.0,
                     b_collapses_top,
                     b_collapses_bottom,
@@ -1525,6 +1542,7 @@ pub(super) fn dispatch_box(
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_line_height,
                             grid_baselines: None,
+                            fieldset_legend: None,
                             subgrid_tracks: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {

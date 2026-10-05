@@ -27,6 +27,7 @@ fn block_with_margins(margin_top_px: f32, margin_bottom_px: f32, children: Vec<L
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
+        fieldset_legend: None,
         subgrid_tracks: None,
         style: std::sync::Arc::new(style),
         kind: BoxKind::Block,

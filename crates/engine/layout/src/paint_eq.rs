@@ -66,6 +66,7 @@ fn box_self_paint_eq<'a>(
         scroll_y,
         dirty: _,
         grid_baselines: _,
+        fieldset_legend,
         subgrid_tracks,
         origin,
     } = a;
@@ -75,6 +76,7 @@ fn box_self_paint_eq<'a>(
         && styles_eq(style, &b.style)
         && used_line_height.to_bits() == b.used_line_height.to_bits()
         && subgrid_tracks == &b.subgrid_tracks
+        && fieldset_legend == &b.fieldset_legend
         && col_span == &b.col_span
         && row_span == &b.row_span
         && svg_group_transform == &b.svg_group_transform

@@ -282,6 +282,8 @@ pub use scrollbars::patch_scroll_layer;
 #[cfg(test)]
 use scrollbars::{SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR, SCROLLBAR_WIDTH_THIN};
 
+mod fieldset;
+use fieldset::{emit_box_border, fieldset_decoration_box};
 mod outline_misc;
 use outline_misc::{emit_column_rules, emit_outline, emit_resize_grip};
 pub use outline_misc::point_on_resize_grip;
@@ -339,6 +341,10 @@ mod chrome_overlays_print;
 #[cfg(test)]
 #[path = "display_list/tests/flex_gap_rules.rs"]
 mod flex_gap_rules;
+
+#[cfg(test)]
+#[path = "display_list/tests/fieldset_legend.rs"]
+mod fieldset_legend;
 
 #[cfg(test)]
 #[path = "display_list/tests/shadows_and_transforms.rs"]

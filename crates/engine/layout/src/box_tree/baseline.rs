@@ -173,16 +173,18 @@ fn content_baseline(
             if (b.style.column_count.is_some() || b.style.column_width.is_some()) && !b.children.is_empty() {
                 return multicol_baseline(b, side, measurer);
             }
-            // Дети с ортогональным (вертикальным) режимом линий этой оси не дают.
-            let scan = |c: &LayoutBox| -> Option<f32> {
-                if !is_in_flow_baseline_source(c) || is_vertical(&c.style) {
+            // Дети с ортогональным (вертикальным) режимом линий этой оси не дают. Rendered
+            // legend fieldset'а в базовой линии не участвует (HTML Rendering §15.3.13).
+            let legend = b.fieldset_legend.filter(|l| l.placed).map(|l| l.idx);
+            let scan = |(i, c): (usize, &LayoutBox)| -> Option<f32> {
+                if Some(i) == legend || !is_in_flow_baseline_source(c) || is_vertical(&c.style) {
                     return None;
                 }
                 box_baseline(c, side, measurer).map(|bl| c.rect.y - b.rect.y + bl)
             };
             match side {
-                BaselineSide::First => b.children.iter().find_map(scan),
-                BaselineSide::Last => b.children.iter().rev().find_map(scan),
+                BaselineSide::First => b.children.iter().enumerate().find_map(scan),
+                BaselineSide::Last => b.children.iter().enumerate().rev().find_map(scan),
             }
         }
     }
@@ -478,16 +480,18 @@ fn vertical_content_baseline(b: &LayoutBox, side: BaselineSide, measurer: Option
             if matches!(b.style.display, Display::Grid | Display::InlineGrid) {
                 return b.grid_baselines.map(|(first, last)| if side == BaselineSide::First { first } else { last });
             }
-            // Дети с ортогональным режимом линий этой оси не дают.
-            let scan = |c: &LayoutBox| -> Option<f32> {
-                if !is_in_flow_baseline_source(c) || !is_vertical(&c.style) {
+            // Дети с ортогональным режимом линий этой оси не дают; rendered legend fieldset'а
+            // в базовой линии не участвует (HTML Rendering §15.3.13).
+            let legend = b.fieldset_legend.filter(|l| l.placed).map(|l| l.idx);
+            let scan = |(i, c): (usize, &LayoutBox)| -> Option<f32> {
+                if Some(i) == legend || !is_in_flow_baseline_source(c) || !is_vertical(&c.style) {
                     return None;
                 }
                 box_baseline(c, side, measurer).map(|bl| c.rect.x - b.rect.x + bl)
             };
             match side {
-                BaselineSide::First => b.children.iter().find_map(scan),
-                BaselineSide::Last => b.children.iter().rev().find_map(scan),
+                BaselineSide::First => b.children.iter().enumerate().find_map(scan),
+                BaselineSide::Last => b.children.iter().enumerate().rev().find_map(scan),
             }
         }
     }
