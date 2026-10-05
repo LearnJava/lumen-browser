@@ -55,16 +55,31 @@ fn a_row_gap_at_a_column_break_is_dropped_and_each_fragment_keeps_one_track() {
     assert!(v.iter().all(|f| f.3 == 1 && f.4 == 1), "one track and one item per fragment: {v:?}");
 }
 
-#[test]
-fn a_grid_with_a_forced_break_inside_stays_atomic() {
+fn forced_break_frags(fill: &str, item: &str) -> Vec<(f32, f32, usize)> {
     let root = lay(
-        "<div id=\"m\"><div id=\"g\"><div></div><div style=\"break-before:column\"></div></div></div>",
-        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:0;width:300px;height:100px} \
-         #g{display:grid;grid-template-rows:repeat(2,80px);row-gap:30px}",
+        &format!("<div id=\"m\"><div id=\"g\"><div></div><div></div><div {item}></div></div></div>"),
+        &format!(
+            "body{{margin:0}} #m{{columns:3;{fill}column-gap:0;width:300px;height:100px}}              #g{{display:grid;grid-template-rows:repeat(3,20px);row-gap:10px}}"
+        ),
     );
     let mut v = Vec::new();
     fragments(&root, &mut v);
-    assert!(v.is_empty(), "no fragments expected");
+    v.iter().map(|b| (b.rect.x, b.rect.height, b.children.iter().filter(|c| c.rect.height > 0.0).count())).collect()
+}
+
+#[test]
+fn a_forced_column_break_inside_a_grid_cuts_at_the_item_and_keeps_the_column_height() {
+    // Rows 0..20, 30..50, 60..80; `break-before: column` on the third item starts the second
+    // fragment at its track. The first column is cut there and keeps its full 100px (the column
+    // gaps run through it), the second one is the 20px track.
+    let v = forced_break_frags("column-fill:auto;", "style=\"break-before:column\"");
+    assert_eq!(v, vec![(0.0, 100.0, 2), (100.0, 20.0, 1)], "{v:?}");
+}
+
+#[test]
+fn a_forced_break_in_a_balanced_multicol_keeps_the_grid_atomic() {
+    let v = forced_break_frags("", "style=\"break-before:column\"");
+    assert!(v.is_empty(), "{v:?}");
 }
 
 #[test]
