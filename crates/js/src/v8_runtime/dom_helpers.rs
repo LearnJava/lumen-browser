@@ -218,6 +218,7 @@ pub(super) fn record_dom_touch_unattributed(tracker: &Mutex<DomTouched>) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     t.unattributed = true;
     t.epoch = t.epoch.wrapping_add(1);
+    t.unattributed_gen = t.epoch;
 }
 
 /// Mirrors `dom::set_text_content`.

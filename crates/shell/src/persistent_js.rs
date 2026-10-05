@@ -146,7 +146,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// back to a full cascade — preserves those engines' existing behaviour
     /// exactly.
     fn take_dom_touched(&self) -> DomTouchedSummary {
-        DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
+        DomTouchedSummary { changes: Vec::new(), unattributed: true }
     }
     /// BUG-272/BUG-306 diagnostics: JS engine heap `(total_heap_size,
     /// used_heap_size)` in bytes; `(-1, -1)` when the runtime does not expose
@@ -187,6 +187,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// BUG-935 S80: сброс набора затронутых узлов ([`Self::take_dom_touched`]),
     /// который UI-поток может звать сам, не ставя запрос в очередь движкового
     /// потока. `None` — не поддерживается (по умолчанию).
+    ///
+    /// BUG-935 срез 81: трекер не сбрасывается — читатель держит свою отметку эпохи
+    /// (`V8JsRuntime::dom_changes_reader`), и флаш движкового потока видит всё.
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
         None
     }
@@ -1069,7 +1072,13 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_dom_touched(&self) -> DomTouchedSummary {
         let t = self.rt.take_dom_touched();
-        DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
+        // BUG-935 срез 81: `log_floor` у сброшенного трекера — эпоха прошлого сброса, то есть
+        // базис «всего, что накопилось с тех пор». Не точный: раскладка берёт документ после
+        // сброса, и запись между ними видна ей, но не этому набору.
+        DomTouchedSummary {
+            changes: t.changes_since(t.log_floor(), lumen_js::child_list_narrowing_enabled(), false),
+            unattributed: t.unattributed,
+        }
     }
     fn debug_js_heap(&self) -> (i64, i64) {
         self.rt.debug_heap_stats()
@@ -1090,10 +1099,10 @@ impl PersistentJs for V8PersistentJs {
         Some(self.rt.dom_dirty_flag())
     }
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
-        let drain = self.rt.dom_touched_drain();
+        let read = self.rt.dom_changes_reader();
         Some(Arc::new(move || {
-            let t = drain();
-            DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
+            let t = read();
+            DomTouchedSummary { changes: t.changes, unattributed: t.unattributed }
         }))
     }
     fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
@@ -1525,6 +1534,20 @@ impl PersistentJs for V8PersistentJs {
     }
 }
 
+/// BUG-935 срез 81: рычаги сужения корней рестайла (`LUMEN_NO_SHALLOW_ROOTS`,
+/// `LUMEN_NO_ATTR_LOCAL_ROOTS`) — те же, что у флаша движкового потока. Без JS-движка
+/// трекера нет, и спрашивать нечего: сужение по умолчанию включено.
+pub(crate) fn attr_narrowing_enabled() -> bool {
+    #[cfg(feature = "v8")]
+    {
+        lumen_js::attr_narrowing_enabled()
+    }
+    #[cfg(not(feature = "v8"))]
+    {
+        true
+    }
+}
+
 /// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
 /// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
 /// default (used by no-engine builds, which have no tracker) compiles
@@ -1540,8 +1563,10 @@ pub(crate) type DomTouchedDrain = Arc<dyn Fn() -> DomTouchedSummary + Send + Syn
 #[derive(Debug, Default, Clone)]
 pub(crate) struct DomTouchedSummary {
     /// Nodes whose selector-relevant state actually changed via a tracked
-    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
-    pub(crate) nodes: std::collections::HashSet<lumen_dom::NodeId>,
+    /// mutation primitive, each with what the restyle root-set may assume
+    /// about the change (BUG-935 срез 81 — was a bare node set, every entry
+    /// read as `NodeChange::Unattributed`). See `lumen_js::DomTouched::changes_since`.
+    pub(crate) changes: Vec<(lumen_dom::NodeId, lumen_layout::style::OwnedNodeChange)>,
     /// `true` when `nodes` alone is not a safe restyle root-set this cycle —
     /// the caller must fall back to a full cascade. See
     /// `lumen_js::DomTouched::unattributed`.

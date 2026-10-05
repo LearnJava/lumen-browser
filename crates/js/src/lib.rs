@@ -189,7 +189,7 @@ pub use dom::{
 /// `lumen_layout::style::restyle_root_set_for_node_change`. Only compiled
 /// under `v8-backend` — see `v8_runtime::DomTouched`'s doc comment.
 #[cfg(feature = "v8-backend")]
-pub use v8_runtime::DomTouched;
+pub use v8_runtime::{attr_narrowing_enabled, child_list_narrowing_enabled, DomChanges, DomTouched};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use surface_api::{global_privacy_control_enabled, set_global_privacy_control};

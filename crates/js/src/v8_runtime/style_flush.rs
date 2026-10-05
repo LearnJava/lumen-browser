@@ -387,7 +387,7 @@ fn verify_scope_prune() -> bool {
 /// BUG-935 срез 60: `LUMEN_NO_SHALLOW_ROOTS=1` reports a child-list change as an
 /// unattributed one again (the parent's whole subtree is restyled) — A/B switch for a live
 /// measurement and the way back if a page shows a stale style.
-fn shallow_roots_disabled() -> bool {
+pub(crate) fn shallow_roots_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SHALLOW_ROOTS").is_some_and(|v| v != "0"))
 }
@@ -398,6 +398,19 @@ fn shallow_roots_disabled() -> bool {
 fn attr_local_roots_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_ATTR_LOCAL_ROOTS").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 81: whether a restyle root-set may narrow attribute writes
+/// ([`lumen_layout::style::NodeRestyleIndex::set_attr_narrowing`]) — the flush's own switch,
+/// shared with the UI thread's on-thread restyle so both obey the same A/B levers.
+pub fn attr_narrowing_enabled() -> bool {
+    !shallow_roots_disabled() && !attr_local_roots_disabled()
+}
+
+/// BUG-935 срез 81: whether a child-list touch may be reported as `NodeChange::ChildList`
+/// rather than `Unattributed` — the `LUMEN_NO_SHALLOW_ROOTS` lever, shared with the UI thread.
+pub fn child_list_narrowing_enabled() -> bool {
+    !shallow_roots_disabled()
 }
 
 impl FlushHandles {
@@ -1067,7 +1080,7 @@ impl FlushHandles {
     ///   StylesheetRevision`] changed since the basis was taken — either can
     ///   affect any node's cascade, so nothing in the old tree is safely
     ///   reusable (mirrors BUG-743's rationale in `relayout.rs`);
-    /// * [`super::runtime::DomTouched::unattributed`] is set — an untracked
+    /// * [`super::runtime::DomTouched::unattributed_since`] the basis — an untracked
     ///   mutation primitive (`execCommand`, contenteditable, Shadow DOM
     ///   attach) whose reach `dirty_roots` cannot express.
     ///
@@ -1094,15 +1107,18 @@ impl FlushHandles {
                 eprintln!("[engine] incr declined: {why}");
             }
         };
-        if touched.unattributed {
-            declined("unattributed mutation");
-            return None;
-        }
         let mut basis_guard = self.incr_basis.lock().unwrap_or_else(|e| e.into_inner());
         let Some(basis) = basis_guard.take() else {
             declined("no basis");
             return None;
         };
+        // BUG-935 срез 81: only an untracked mutation *since the basis* counts — the bare flag
+        // is drained by nobody under the engine thread, and once set it sent every later flush
+        // of the page down the full path.
+        if touched.unattributed_since(basis.touch_epoch) {
+            declined("unattributed mutation");
+            return None;
+        }
         if basis.viewport != [viewport.width, viewport.height] {
             declined("viewport changed");
             return None;
@@ -1145,12 +1161,15 @@ impl FlushHandles {
         // mutation to an already-seen node silently dropped out of
         // `dirty_roots`.
         let new_touched_scope = lumen_core::profile::scope("incr.new_touched");
-        let new_touched: std::collections::HashSet<lumen_dom::NodeId> = touched
-            .nodes
-            .iter()
-            .copied()
-            .filter(|n| touched.touch_gen.get(n).copied().unwrap_or(0) > basis.touch_epoch)
-            .collect();
+        let shallow_off = shallow_roots_disabled() || self.shallow_roots_off.load(Ordering::Relaxed);
+        // BUG-1211: a node whose every touch since the basis was a plain attribute write is
+        // reported by name, so the root-set can ask which selectors could react to it
+        // (`el.style.width = …` rarely widens); anything else (child list, text, dirty value)
+        // stays `Unattributed` and widens to the parent as before. BUG-935 срез 81: the
+        // classification is `DomTouched::changes_since`, shared with the UI thread.
+        let owned_changes = touched.changes_since(basis.touch_epoch, !shallow_off, true);
+        let new_touched: std::collections::HashSet<lumen_dom::NodeId> =
+            owned_changes.iter().map(|&(n, _)| n).collect();
         drop(new_touched_scope);
         let tp0 = std::time::Instant::now();
         let index_scope = lumen_core::profile::scope("incr.node_index");
@@ -1159,46 +1178,13 @@ impl FlushHandles {
             declined("no restyle index");
             return None;
         };
-        let shallow_off = shallow_roots_disabled() || self.shallow_roots_off.load(Ordering::Relaxed);
         node_index.set_attr_narrowing(!shallow_off && !attr_local_roots_disabled());
         drop(index_scope);
         let tp_index = tp0.elapsed();
         let roots_scope = lumen_core::profile::scope("incr.root_set");
         let mut dirty_roots = std::collections::HashSet::new();
-        // BUG-1211: a node whose every touch since the basis was a plain
-        // attribute write is reported by name, so the root-set can ask which
-        // selectors could react to it (`el.style.width = …` rarely widens);
-        // anything else (child list, text, dirty value) stays `Unattributed`
-        // and widens to the parent as before. The `Attr(&str)` borrows live
-        // in `touched`, which outlives this call.
-        let mut changes: Vec<(lumen_dom::NodeId, lumen_layout::style::NodeChange<'_>)> = Vec::new();
-        for &n in &new_touched {
-            let structural = touched.structural_gen.get(&n).copied().unwrap_or(0) > basis.touch_epoch;
-            // BUG-935 срез 68: a `class`/`id` write whose value at the basis is on record is
-            // reported with it, so the root-set can name the tokens that changed.
-            let named: Vec<lumen_layout::style::NodeChange<'_>> = touched
-                .attr_gen
-                .get(&n)
-                .into_iter()
-                .flatten()
-                .filter(|&(_, &g)| g > basis.touch_epoch)
-                .map(|(name, _)| match touched.value_before(n, name, basis.touch_epoch) {
-                    Some(old) => lumen_layout::style::NodeChange::AttrFrom { name, old },
-                    None => lumen_layout::style::NodeChange::Attr(name),
-                })
-                .collect();
-            // BUG-935 срез 60: a touch that changed only the child list is its own kind of
-            // change — the node and its direct children are restyled, not the parent's subtree.
-            let child_list = touched.child_list_gen.get(&n).copied().unwrap_or(0) > basis.touch_epoch;
-            if structural || (child_list && shallow_off) || (named.is_empty() && !child_list) {
-                changes.push((n, lumen_layout::style::NodeChange::Unattributed));
-            } else {
-                if child_list {
-                    changes.push((n, lumen_layout::style::NodeChange::ChildList));
-                }
-                changes.extend(named.into_iter().map(|c| (n, c)));
-            }
-        }
+        let changes: Vec<(lumen_dom::NodeId, lumen_layout::style::NodeChange<'_>)> =
+            owned_changes.iter().map(|(n, c)| (*n, c.as_node_change())).collect();
         let change_log: Vec<String> = if lumen_paint::frame_log_enabled() {
             changes
                 .iter()

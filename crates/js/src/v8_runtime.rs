@@ -106,7 +106,8 @@ pub use overrides::{
     set_global_user_agent_override,
     timezone_override_script, user_agent_override_script,
 };
-pub use runtime::{CustomPropertySnapshot, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub use runtime::{CustomPropertySnapshot, DomChanges, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub use style_flush::{attr_narrowing_enabled, child_list_narrowing_enabled};
 pub use sheet_sync::CascadeSource;
 pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)

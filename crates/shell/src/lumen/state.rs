@@ -867,6 +867,7 @@ pub(crate) struct Lumen {
     pub(crate) dom_dirty_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// BUG-935 S80: UI-сторонний сброс набора затронутых узлов (`js_ctx` под
     /// движковым потоком пуст). `None` — нет JS или нет движкового потока.
+    /// Срез 81: читатель с собственной отметкой эпохи, трекер не сбрасывает.
     pub(crate) dom_touched_drain: Option<crate::persistent_js::DomTouchedDrain>,
     /// BUG-935 S43: UI-side lock-free clone of the JS runtime's "page has
     /// read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
