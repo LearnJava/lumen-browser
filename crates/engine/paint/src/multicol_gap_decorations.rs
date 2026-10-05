@@ -306,6 +306,13 @@ fn read_spanner_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
         band.top = band.top.min(limit);
         band.bottom = band.bottom.min(limit);
     }
+    // The columns of the last band span the rest of the container's block size, whatever they
+    // hold, so its rules run to the content box's end (multicol-gap-decorations-026: a 100px
+    // container whose balanced columns end at 93px). An auto-height container ends with its
+    // content, so there this changes nothing.
+    if let Some(last) = bands.last_mut() {
+        last.bottom = limit;
+    }
     Some(bands)
 }
 

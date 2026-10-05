@@ -2,7 +2,7 @@ use super::*;
 use super::layout_cache::finalize_block_height;
 use super::layout_dispatch::{dispatch_box, finish_after_match};
 use super::block_flow_trampoline::{self, DispatchOutcome};
-use super::multicol_abspos::balanced_column_height;
+use super::multicol_fragmentation::{balanced_height, item_lines, pack, ItemLines};
 
 /// One segment of flow children between `column-span: all` boundaries — CSS
 /// Multicol §3.4. `sliceable` is decided up front by `multicol_abspos::
@@ -581,39 +581,32 @@ fn compute_col_assignment(frame: &mut Frame) {
     let cur_y = frame.init.cur_y;
     let outer_hs = &frame.outer_hs;
     let total_h: f32 = outer_hs.iter().sum();
+    // CSS Fragmentation L3 §3.3: breaks between line boxes honour `orphans`/`widows`.
+    let kinds: Vec<ItemLines> = frame.init.segments[frame.seg_i]
+        .item_idxs
+        .iter()
+        .map(|&i| item_lines(&frame.init.work[i]))
+        .collect();
+    let (orphans, widows) = (frame.init.s.orphans, frame.init.s.widows);
     let target_h = if let Some(r) = frame.init.col_rows {
         r.col_h.max(1.0)
     } else if balance {
-        let balanced = balanced_column_height(outer_hs, n_cols);
+        let balanced = balanced_height(outer_hs, &kinds, n_cols, orphans, widows);
         container_h.map_or(balanced, |limit| balanced.min(limit.max(1.0)))
     } else {
         column_height(false, container_h, total_h, n_cols)
     };
 
-    let mut col_assignment = vec![0usize; outer_hs.len()];
-    let mut col_fill = vec![0.0f32; n_cols];
-    let mut cur_col = 0usize;
-    for (j, &oh) in outer_hs.iter().enumerate() {
-        let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
-        // Never advance past an empty column: a column must hold at least one item
-        // before overflowing to the next, otherwise an item taller than target_h
-        // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
-        // box is filled in order, starting from the first).
-        let col_nonempty = col_fill[cur_col] > 0.0;
-        if col_nonempty && height_overflow {
-            cur_col += 1;
-            // Overflow column beyond `column-count` (CSS Multicol L1 §7.1).
-            if cur_col >= col_fill.len() {
-                col_fill.push(0.0);
-            }
-        }
-        col_assignment[j] = cur_col;
-        col_fill[cur_col] += oh;
-    }
+    // A column holds at least one item before it overflows to the next (CSS Multicol §3.4 —
+    // every column box is filled in order, starting from the first); columns past
+    // `column-count` are overflow columns (CSS Multicol L1 §7.1).
+    let col_assignment = pack(outer_hs, &kinds, target_h, orphans, widows, false)
+        .unwrap_or_else(|| vec![0; outer_hs.len()]);
+    let col_count = col_assignment.iter().copied().max().map_or(0, |m| m + 1).max(n_cols);
     frame.col_y = match frame.init.col_rows {
         // A fragment of row `f / n_cols` starts that row's distance below the segment top.
-        Some(r) => (0..col_fill.len()).map(|f| cur_y + (f / n_cols) as f32 * r.pitch()).collect(),
-        None => vec![cur_y; col_fill.len()],
+        Some(r) => (0..col_count).map(|f| cur_y + (f / n_cols) as f32 * r.pitch()).collect(),
+        None => vec![cur_y; col_count],
     };
     frame.col_assignment = col_assignment;
 }
