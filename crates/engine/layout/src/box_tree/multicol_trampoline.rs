@@ -585,6 +585,34 @@ fn gap_is_bridged(grid: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
     })
 }
 
+/// The windows `[start, end)` (in the grid's own unfragmented block coordinates) a grid of height
+/// `total_h` with row tracks `rows` is cut into by columns `limit` tall. A break inside a row gap
+/// drops the rest of the gap (Fragmentation L3 §5.1: a gap adjoining a break is truncated); so does
+/// one at the very start edge of the gap, unless an item runs through it (Chrome keeps such a gap:
+/// `grid-gap-decorations-fragmentation-029`). Inside a track the track continues.
+fn grid_windows(grid: &LayoutBox, gy: f32, rows: &[(f32, f32)], total_h: f32, limit: f32) -> Vec<(f32, f32)> {
+    let mut windows: Vec<(f32, f32)> = Vec::new();
+    let mut start = 0.0f32;
+    loop {
+        let end = start + limit;
+        if end >= total_h - 0.01 {
+            windows.push((start, total_h));
+            break;
+        }
+        windows.push((start, end));
+        let in_gap = rows.windows(2).find(|w| {
+            let inside = end > w[0].1 + 0.01 && end < w[1].0 - 0.01;
+            let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
+            inside || (at_start && !gap_is_bridged(grid, gy, w[0].1, w[1].0))
+        });
+        start = in_gap.map_or(end, |w| w[1].0);
+        if start >= total_h - 0.01 {
+            break;
+        }
+    }
+    windows
+}
+
 /// CSS Fragmentation L3 §5 / CSS Gap Decorations L1 §6.2 — a grid container laid out in full
 /// (the Measure pass) is cut into one fragment per column of the multicol container
 /// (`column-fill: auto`, a definite column height). A break that falls inside a row gap drops
@@ -606,35 +634,38 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         return false;
     }
     let total_h = grid.rect.height;
+    let n_cols = frame.init.n_cols as usize;
+    let gy0 = grid.rect.y;
     // `column-fill: balance` shrinks the columns below the height limit when the content is
-    // shorter than `limit × columns`; only a container that fills them all is cut at the limit.
-    if frame.init.balance && total_h < limit * frame.init.n_cols as f32 - 0.01 {
-        return false;
-    }
-    // Windows `[start, end)` in the grid's own (unfragmented) block coordinates.
-    let mut windows: Vec<(f32, f32)> = Vec::new();
-    let mut start = 0.0f32;
-    loop {
-        let end = start + limit;
-        if end >= total_h - 0.01 {
-            windows.push((start, total_h));
-            break;
+    // shorter than `limit x columns` (Multicol L1 §7.1: the smallest height that still fits every
+    // fragment into `column-count` columns); only a container that fills them all is cut at the
+    // limit. The balanced height starts at `total / columns` and grows until the cut (which drops
+    // the row gaps at the breaks) needs no more than `column-count` columns.
+    let cut_at = if frame.init.balance && total_h < limit * n_cols as f32 - 0.01 {
+        let fits = |h: f32| grid_windows(grid, gy0, &rows, total_h, h).len() <= n_cols;
+        if !fits(limit) {
+            return false;
         }
-        windows.push((start, end));
-        // A break inside a row gap drops the rest of the gap (Fragmentation L3 §5.1: a gap adjoining
-        // a break is truncated); so does one at the very start edge of the gap, unless an item runs
-        // through it (Chrome keeps such a gap: `grid-gap-decorations-fragmentation-029`). Inside a
-        // track the track continues.
-        let in_gap = rows.windows(2).find(|w| {
-            let inside = end > w[0].1 + 0.01 && end < w[1].0 - 0.01;
-            let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
-            inside || (at_start && !gap_is_bridged(grid, grid.rect.y, w[0].1, w[1].0))
-        });
-        start = in_gap.map_or(end, |w| w[1].0);
-        if start >= total_h - 0.01 {
-            break;
+        let mut lo = (total_h / n_cols as f32).max(1.0);
+        if fits(lo) {
+            lo
+        } else {
+            // Bisect between a height that does not fit and the limit that does.
+            let mut hi = limit;
+            for _ in 0..16 {
+                let mid = (lo + hi) * 0.5;
+                if fits(mid) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            hi
         }
-    }
+    } else {
+        limit
+    };
+    let windows = grid_windows(grid, gy0, &rows, total_h, cut_at);
     let (col_w, col_gap, content_x, cur_y) =
         (frame.init.col_w, frame.init.col_gap, frame.init.content_x, frame.init.cur_y);
     let (gx, gy) = (grid.rect.x, grid.rect.y);

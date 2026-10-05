@@ -118,3 +118,22 @@ fn a_flex_container_without_two_lines_stays_atomic() {
     fragments(&root, &mut v);
     assert!(v.is_empty(), "{} fragments", v.len());
 }
+
+#[test]
+fn a_balanced_wrapped_flex_row_is_cut_in_three_columns_under_the_limit() {
+    // Five 50px lines with 10px gaps = 290px in three balanced columns under a 97px limit
+    // (flex/fragmentation/026: ten items, two per line). 290 < 3 x 97, so the container used to
+    // stay atomic in column 0; it is now cut into three fragments, none taller than the limit,
+    // and the cuts at ~97 and ~193 fall inside the lines (no row gap is dropped).
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div></div>",
+        "body{margin:0} #m{columns:3;column-gap:10px;width:350px;height:97px} \
+         #f{display:flex;flex-wrap:wrap;width:110px;row-gap:10px;column-gap:10px} #f>div{width:50px;height:50px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let h: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
+    assert_eq!(h.len(), 3, "{h:?}");
+    assert!(h.iter().all(|&x| x <= 97.0 + 0.01), "{h:?}");
+    assert!(h[0] > 96.0, "{h:?}");
+}
