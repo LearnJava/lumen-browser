@@ -646,9 +646,10 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
     // Дорожки, унаследованные subgrid'ом, дают щели и при одном элементе (элемент-«мост»
     // `subgrid-gap-decorations-013`); у обычного grid один элемент по-прежнему не рисует щели.
     let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
+    let fragment = b.subgrid_tracks.as_ref().is_some_and(|t| t.fragment);
     let known_tracks = matches!(s.display, Display::Grid | Display::InlineGrid)
         && b.subgrid_tracks.is_some()
-        && (is_subgrid(&s.grid_template_columns) || is_subgrid(&s.grid_template_rows));
+        && (is_subgrid(&s.grid_template_columns) || is_subgrid(&s.grid_template_rows) || fragment);
     if children.len() < 2 && !empty_grid && !known_tracks {
         return none();
     }
@@ -700,6 +701,7 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
                 subgrid_rows,
                 subgrid_col_tracks,
                 subgrid_row_tracks,
+                fragment,
                 style: s,
             },
         );
@@ -719,6 +721,7 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
             subgrid_rows: false,
             subgrid_col_tracks: None,
             subgrid_row_tracks: None,
+            fragment: false,
             style: s,
         },
     )

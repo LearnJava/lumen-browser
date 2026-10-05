@@ -84,6 +84,12 @@ impl SubgridContext {
 pub struct SubgridTracks {
     pub cols: Option<Vec<(f32, f32)>>,
     pub rows: Option<Vec<(f32, f32)>>,
+    /// Бокс — фрагмент grid-контейнера, разрезанного по колонкам multicol'а
+    /// (`multicol_grid_fragments`): `rows` — только видимые в этом фрагменте дорожки (края
+    /// обрезаны по фрагменту, координаты от его верха), так что щель, у которой нет дорожки с
+    /// одной из сторон, не рисуется (CSS Gap Decorations L1 §6.2: щель, разорванная границей
+    /// фрагмента или последняя перед ней, подавляется).
+    pub fragment: bool,
 }
 
 // ── Thread-local subgrid context ─────────────────────────────────────────────
@@ -105,7 +111,7 @@ pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
     };
     let cols = SUBGRID_COL_CTX.with(spans);
     let rows = SUBGRID_ROW_CTX.with(spans);
-    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows }))
+    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false }))
 }
 
 /// Replaces the parent's gutters in the pending subgrid contexts with the subgrid's own explicit

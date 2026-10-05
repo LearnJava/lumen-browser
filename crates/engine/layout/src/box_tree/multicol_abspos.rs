@@ -47,6 +47,42 @@ fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && b.style.border_right_width == 0.0
 }
 
+/// CSS Fragmentation L3 §5.1 / CSS Gap Decorations L1 §6.2 — a grid container that is cut across
+/// the columns of a multicol container as a *grid* (its rows are split between the columns and
+/// the row gaps at a break are dropped), rather than kept as one atomic box. Only the simple
+/// case: a plain horizontal `display: grid` box without border/padding, whose in-flow children
+/// are leaf blocks (`box_is_column_sliceable`), so cutting a child by a column window repeats
+/// nothing and hides no border. `subgrid` axes, `break-inside: avoid` and forced breaks (of the
+/// grid or of an item) keep the atomic path.
+fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
+    let s = &b.style;
+    let is_subgrid = |t: &[crate::style::GridTrackSize]| t.first() == Some(&crate::style::GridTrackSize::Subgrid);
+    matches!(b.kind, BoxKind::Block)
+        && matches!(s.display, Display::Grid)
+        && matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(container.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && !matches!(s.position, Position::Absolute | Position::Fixed)
+        && s.break_inside != crate::style::BreakValue::Avoid
+        && !super::multicol_fragmentation::has_forced_break(s)
+        && !is_subgrid(&s.grid_template_columns)
+        && !is_subgrid(&s.grid_template_rows)
+        && [s.border_top_width, s.border_bottom_width, s.border_left_width, s.border_right_width]
+            .iter()
+            .all(|w| *w == 0.0)
+        && [&s.padding_top, &s.padding_bottom, &s.padding_left, &s.padding_right]
+            .iter()
+            .all(|p| matches!(p, Length::Px(v) if *v == 0.0))
+        && b.children.iter().any(|c| !matches!(c.kind, BoxKind::Skip))
+        && b.children.iter().all(|c| {
+            matches!(c.kind, BoxKind::Skip)
+                || matches!(c.style.position, Position::Absolute | Position::Fixed)
+                || box_is_column_sliceable(c, &b.style)
+        })
+        // A forced column break inside the grid (`break-before: column` on an item) is not
+        // modelled by the window cut: those grids keep the atomic placement.
+        && b.children.iter().all(|c| !super::multicol_fragmentation::has_forced_break(&c.style))
+}
+
 /// LAYOUT-2 срез 7: pure precompute for the multicol dispatch arm — column
 /// count/width, `column-fill` mode, and the split of flow children into
 /// segments (by `column-span: all` boundaries) with each segment's
@@ -175,18 +211,21 @@ pub(crate) fn build_multicol_init(
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
         if super::multicol_span::is_column_spanner(&work[i]) {
+            let grid_frag = n_cols > 1 && !balance && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
             let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
                 span_idx: Some(i),
                 sliceable,
+                grid_frag,
             });
         } else {
             seg.push(i);
         }
     }
+    let grid_frag = n_cols > 1 && !balance && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
     let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
-    segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable });
+    segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable, grid_frag });
 
     let consumed = vec![false; work.len()];
 
