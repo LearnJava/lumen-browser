@@ -45,6 +45,9 @@ pub struct LayoutBox {
     /// восстановить), читается моделью базовой линии [`super::baseline`] у
     /// flex/grid-родителя. `None` — не grid-контейнер или сетка без items.
     pub grid_baselines: Option<(f32, f32)>,
+    /// Унаследованные дорожки `subgrid`-контейнера (Grid L2 §9) — для щелей `column-rule`/`row-rule`
+    /// (CSS Gap Decorations L1), которые идут по дорожкам родителя. `None` — не subgrid.
+    pub subgrid_tracks: Option<Box<crate::subgrid::SubgridTracks>>,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
     /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.

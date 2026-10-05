@@ -436,6 +436,11 @@ pub struct GridGapParams<'a> {
     /// щели ищутся по рёбрам элементов, включая щели рядом с пустыми дорожками.
     pub subgrid_cols: bool,
     pub subgrid_rows: bool,
+    /// Дорожки оси `subgrid`, унаследованные от родителя (`LayoutBox::subgrid_tracks`), в
+    /// абсолютных координатах: щели берутся из них, а не из рёбер элементов, поэтому находятся и
+    /// у пустого subgrid'а. `None` — раскладка дорожек не отдала.
+    pub subgrid_col_tracks: Option<Vec<(f32, f32)>>,
+    pub subgrid_row_tracks: Option<Vec<(f32, f32)>>,
     pub style: &'a lumen_layout::ComputedStyle,
 }
 
@@ -569,28 +574,32 @@ pub fn grid_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
     let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
     let rtl = s.direction == lumen_layout::Direction::Rtl;
-    let col_tracks = template_tracks(
-        &s.grid_template_columns,
-        s.grid_template_col_auto_repeat.is_some(),
-        cx,
-        cw,
-        p.col_gap,
-        rtl,
-        em,
-        vp,
-        &xs,
-    );
-    let row_tracks = template_tracks(
-        &s.grid_template_rows,
-        s.grid_template_row_auto_repeat.is_some(),
-        cy,
-        ch,
-        p.row_gap,
-        false,
-        em,
-        vp,
-        &ys,
-    );
+    let col_tracks = p.subgrid_col_tracks.clone().or_else(|| {
+        template_tracks(
+            &s.grid_template_columns,
+            s.grid_template_col_auto_repeat.is_some(),
+            cx,
+            cw,
+            p.col_gap,
+            rtl,
+            em,
+            vp,
+            &xs,
+        )
+    });
+    let row_tracks = p.subgrid_row_tracks.clone().or_else(|| {
+        template_tracks(
+            &s.grid_template_rows,
+            s.grid_template_row_auto_repeat.is_some(),
+            cy,
+            ch,
+            p.row_gap,
+            false,
+            em,
+            vp,
+            &ys,
+        )
+    });
     let tops_of = |tracks: &Option<Vec<(f32, f32)>>, edges: &[(f32, f32)], gap: f32, sub: Option<(f32, f32)>| {
         match (tracks, sub) {
             (Some(t), _) => t[..t.len() - 1].iter().map(|x| x.1).collect(),
