@@ -1244,6 +1244,18 @@ impl<'a> NodeRestyleIndex<'a> {
     }
 }
 
+/// BUG-935 срез 83 — the element siblings after `node`: what a sibling combinator (`+`, `~`)
+/// written on `node` can restyle ([`has_no_following_element_sibling`] is the empty case).
+fn following_elements(doc: &Document, node: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+    let siblings = doc.get(node).parent.map_or(&[][..], |p| doc.get(p).children.as_slice());
+    siblings
+        .iter()
+        .copied()
+        .skip_while(move |&c| c != node)
+        .skip(1)
+        .filter(|&c| matches!(doc.get(c).data, NodeData::Element { .. }))
+}
+
 /// BUG-935 срез 82 — a sibling combinator (`+`, `~`) reaches *following elements* only, so a
 /// node with none has nothing to fan out to: `<html>` beside its doctype and comments,
 /// `<body>` after `<head>`, the last item of a list, a wrapper holding one child and some text.
@@ -1628,6 +1640,11 @@ fn root_set_impl<'a>(
                 } else if let Some(points) = affected {
                     roots.shallow.insert(n);
                     roots.point.extend(points);
+                } else if needs_fanout && written.is_some() && shallow_ok && index.attr_narrowing && doc.get(n).parent.is_some() {
+                    // BUG-935 срез 83: a sibling combinator reaches the *following* elements, so
+                    // the root is the node and those, not the parent with the siblings before it.
+                    roots.deep.insert(n);
+                    roots.deep.extend(following_elements(doc, n));
                 } else {
                     roots.deep.insert(if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n });
                 }
