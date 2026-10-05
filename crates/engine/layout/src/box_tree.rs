@@ -230,6 +230,7 @@ mod fieldset;
 mod flex_trampoline;
 mod grid_trampoline;
 mod grid_vertical;
+mod table_height;
 mod table_trampoline;
 mod table_valign;
 mod multicol_trampoline;

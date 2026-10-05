@@ -73,6 +73,9 @@ pub(super) struct TableInit {
     /// Indices (into the table's `children`) of `caption-side: bottom` captions, placed by
     /// `finish_table` once the rows' extent is known.
     pub(super) bottom_captions: Vec<usize>,
+    /// Сдвиг содержимого ячеек `middle`/`bottom` по их `vertical-align` — ключ как у
+    /// `span_fixes`; `table_height::distribute` снимает его, когда ячейка вырастает.
+    pub(super) cell_dy: Vec<(Option<usize>, usize, usize, f32)>,
 }
 
 /// One level of the explicit stack `run` maintains in place of the native
@@ -422,6 +425,9 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
             _ => baselines.iter().find(|&&(j, _)| j == i).map_or(0.0, |&(_, bl)| above - bl),
         };
         super::table_valign::shift_cell_content(cell, dy);
+        if dy.abs() > 1e-4 && matches!(cell.style.vertical_align, VerticalAlign::Middle | VerticalAlign::Bottom) {
+            frame.init.cell_dy.push((group_opt, row_field, i, dy));
+        }
         cell.rect.height = row_h;
     }
     let row_style_h = row_style_h.max(row_h + row_pad);
@@ -496,6 +502,9 @@ fn finish_table(
         let dy = super::table_valign::free_space_shift(cell, grown, cell.style.vertical_align);
         super::table_valign::shift_cell_content(cell, dy);
         cell.rect.height = grown;
+        if dy.abs() > 1e-4 && matches!(cell.style.vertical_align, VerticalAlign::Middle | VerticalAlign::Bottom) {
+            frame.init.cell_dy.push((group, row, child_idx, dy));
+        }
     }
 
     let s = Arc::clone(&frame.init.s);
@@ -519,37 +528,27 @@ fn finish_table(
         }
     }
 
-    if frame.init.collapse {
-        if s.width.is_none() && frame.init.n_cols > 0 {
-            frame.b.rect.width = frame.init.collapse_width;
-        }
-        if s.height.is_none() {
-            frame.b.rect.height = frame
-                .init
-                .flat_row_rects
-                .last()
-                .map(|&(y, h)| (y + h - frame.b.rect.y).max(0.0))
-                .unwrap_or(frame.init.cur_y - frame.b.rect.y)
-                + bottom_caption_h;
-        }
+    if frame.init.collapse && s.width.is_none() && frame.init.n_cols > 0 {
+        frame.b.rect.width = frame.init.collapse_width;
     }
 
-    if let Some(h_len) = &s.height
-        && let Some(h) = resolve_block_size(h_len, frame.init.em, frame.init.available_height, viewport)
-    {
-        frame.b.rect.height = match s.box_sizing {
-            BoxSizing::ContentBox => (h + frame.init.padding_top + frame.init.padding_bottom
-                + s.border_top_width + s.border_bottom_width)
-                .max(0.0),
-            BoxSizing::BorderBox => h.max(
-                frame.init.padding_top + frame.init.padding_bottom
-                    + s.border_top_width + s.border_bottom_width,
-            ),
-        };
-    } else if !frame.init.collapse {
-        let content_height = (frame.init.cur_y - frame.init.content_y).max(0.0) + bottom_caption_h;
-        frame.b.rect.height = content_height
-            + frame.init.padding_top + frame.init.padding_bottom
-            + s.border_top_width + s.border_bottom_width;
+    // Естественная высота (border box) — по строкам и подписям; `height`/`min-height` её
+    // только поднимают (CSS 2.1 §17.5.3), а излишек делится между строками.
+    let chrome = frame.init.padding_top + frame.init.padding_bottom + s.border_top_width + s.border_bottom_width;
+    let natural = if frame.init.collapse {
+        frame
+            .init
+            .flat_row_rects
+            .last()
+            .map(|&(y, h)| (y + h - frame.b.rect.y).max(0.0))
+            .unwrap_or(frame.init.cur_y - frame.b.rect.y)
+            + bottom_caption_h
+    } else {
+        (frame.init.cur_y - frame.init.content_y).max(0.0) + bottom_caption_h + chrome
+    };
+    let target = super::table_height::target_height(&frame.init, natural, viewport);
+    frame.b.rect.height = target;
+    if target - natural > 0.01 {
+        super::table_height::distribute(&mut frame.b, &frame.init, target - natural);
     }
 }

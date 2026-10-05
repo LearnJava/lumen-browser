@@ -398,6 +398,7 @@ pub(crate) fn build_table_init(
         padding_top,
         padding_bottom,
         bottom_captions,
+        cell_dy: Vec::new(),
     })
 }
 
