@@ -729,9 +729,11 @@ redirection» проходили, пока https-поддомен не откр�
 до редиректа на `http://`, и тест получает `upgraded` вместо `blocked`
 (`assert_equals: … expected "blocked" but got "upgraded"`, 29 вариантов
 `fetch`, 29 `xhr`, по 9–11 у тегов и worklet). То есть прежние PASS были
-ложными, а нынешний FAIL — движковая находка про mixed-content на
-редирект-хопе; бага в этой сессии не заведено, разбирать по
-`docs/probe-method.md`.
+ложными. Нынешний FAIL — тоже не движок, а хост стенда
+([BUG-1285](../../bugs/BUG-1285-OPEN.md)): `http://*.localhost` для движка
+a priori authenticated (Secure Contexts §3.1), поэтому http-хоп уходит в сеть
+без блокировки, и категория `mixed-content` целиком не измеряет enforcement,
+пока `browser_host = "localhost"`.
 
 ### 15.25 % → 33.55 % — не прогресс движка в одну строку
 
