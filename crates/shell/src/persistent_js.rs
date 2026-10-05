@@ -1548,6 +1548,18 @@ pub(crate) fn attr_narrowing_enabled() -> bool {
     }
 }
 
+/// BUG-935 срез 82: рычаг `LUMEN_NO_FRESH_NODE_ROOTS` — тот же, что у флаша движкового потока.
+pub(crate) fn fresh_node_roots_enabled() -> bool {
+    #[cfg(feature = "v8")]
+    {
+        lumen_js::fresh_node_roots_enabled()
+    }
+    #[cfg(not(feature = "v8"))]
+    {
+        true
+    }
+}
+
 /// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
 /// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
 /// default (used by no-engine builds, which have no tracker) compiles

@@ -465,6 +465,7 @@ mod flex_axes;
 mod svg_transform_and_misc;
 mod bug341_differential;
 mod bug935_attr_local_roots;
+mod bug935_fresh_node_roots;
 mod bug935_shallow_roots;
 mod bug935_cascade_bench;
 mod bug935_svg_root_children;
