@@ -152,3 +152,41 @@ fn a_balanced_wrapped_flex_row_is_cut_in_three_columns_under_the_limit() {
     assert!(h.iter().all(|&x| x <= 97.0 + 0.01), "{h:?}");
     assert!(h[0] > 96.0, "{h:?}");
 }
+
+fn bordered_flex(items: &str) -> Vec<LayoutBox> {
+    // Two 44px lines + 10px gap in 60px-tall columns (`column-fill: auto`), a 2px border on the
+    // container (flex/fragmentation/010: the border is cut with the box).
+    let root = lay(
+        &format!("<div id=\"m\"><div id=\"f\">{items}</div></div>"),
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:10px;width:350px;height:60px} \
+         #f{display:flex;flex-wrap:wrap;width:110px;border:2px solid;row-gap:10px;column-gap:10px} \
+         #f>div{width:50px;height:44px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    v.into_iter().cloned().collect()
+}
+
+#[test]
+fn a_bordered_flex_container_is_cut_and_keeps_only_the_border_edges_it_owns() {
+    let v = bordered_flex("<div></div><div></div><div></div><div></div><div></div><div></div>");
+    assert_eq!(v.len(), 3, "{} fragments", v.len());
+    let (top, bottom): (Vec<f32>, Vec<f32>) =
+        v.iter().map(|b| (b.style.border_top_width, b.style.border_bottom_width)).unzip();
+    assert_eq!(top, vec![2.0, 0.0, 0.0], "only the first fragment keeps the top border");
+    assert_eq!(bottom, vec![0.0, 0.0, 2.0], "only the last fragment keeps the bottom border");
+    // Row tracks are measured from the content box; the first fragment's window starts at the
+    // border edge, so its first track sits 2px down, later ones at the top.
+    let first = v[0].subgrid_tracks.as_ref().unwrap().rows.as_ref().unwrap()[0];
+    assert!((first.0 - 0.0).abs() < 0.01, "{first:?}");
+}
+
+#[test]
+fn an_item_whose_child_straddles_a_break_keeps_the_container_atomic() {
+    // The window edge at 60px falls inside the first item's 44px child only when the cut is not
+    // at a track boundary; items with a child that is cut through must not be split.
+    let v = bordered_flex(
+        "<div><p style=\"margin:0;height:100px\"></p></div><div></div><div></div><div></div>",
+    );
+    assert!(v.is_empty(), "{} fragments", v.len());
+}
