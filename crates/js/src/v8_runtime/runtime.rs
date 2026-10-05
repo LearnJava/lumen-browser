@@ -944,10 +944,25 @@ impl V8JsRuntime {
     /// primitives since the last call, clearing it (and the `unattributed`
     /// flag) for the next cycle. See [`DomTouched`].
     pub fn take_dom_touched(&self) -> DomTouched {
-        let mut guard = self.dom_touched.lock().unwrap_or_else(|e| e.into_inner());
+        Self::drain_dom_touched(&self.dom_touched)
+    }
+
+    /// BUG-935 S80: общий для [`Self::take_dom_touched`] и [`Self::dom_touched_drain`]
+    /// сброс набора затронутых узлов.
+    fn drain_dom_touched(touched: &Mutex<DomTouched>) -> DomTouched {
+        let mut guard = touched.lock().unwrap_or_else(|e| e.into_inner());
         // `epoch` survives the drain — see the field's doc comment.
         let epoch = guard.epoch;
         std::mem::replace(&mut *guard, DomTouched { epoch, log_floor: epoch, ..DomTouched::default() })
+    }
+
+    /// BUG-935 S80: самостоятельный сброс набора затронутых узлов, который
+    /// можно держать на UI-потоке и звать без запроса к движковому потоку —
+    /// тот может быть занят JS страницы секундами, а блокирующий `query` ждал
+    /// бы его очередь. Держит только `Arc` на тот же мьютекс.
+    pub fn dom_touched_drain(&self) -> impl Fn() -> DomTouched + Send + Sync + 'static {
+        let touched = Arc::clone(&self.dom_touched);
+        move || Self::drain_dom_touched(&touched)
     }
 
     /// Returns `true` if `requestAnimationFrame` was called since the last call,

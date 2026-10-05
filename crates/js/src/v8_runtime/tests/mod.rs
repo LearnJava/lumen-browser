@@ -1384,6 +1384,24 @@ fn take_dom_touched_reports_set_attribute() {
     assert!(!t.unattributed);
 }
 
+/// BUG-935 S80: сброс, который UI-поток держит у себя (`js_ctx` под движковым
+/// потоком пуст), видит те же мутации и очищает тот же набор, что `take_dom_touched`.
+#[test]
+fn dom_touched_drain_shares_the_set_with_take_dom_touched() {
+    let doc = make_doc();
+    let main = doc.lock().unwrap().find_by_id("main").unwrap();
+    let rt = runtime_with_dom(doc, "");
+    let drain = rt.dom_touched_drain();
+    rt.eval("document.getElementById('main').setAttribute('data-x', '1')")
+        .unwrap();
+    let t = drain();
+    assert!(t.nodes.contains(&main));
+    assert!(rt.take_dom_touched().nodes.is_empty(), "сброс очистил общий набор");
+    rt.eval("document.getElementById('main').setAttribute('data-x', '2')")
+        .unwrap();
+    assert!(drain().nodes.contains(&main), "следующий цикл снова виден");
+}
+
 #[test]
 fn take_dom_touched_ignores_a_no_op_set_attribute() {
     let doc = make_doc();

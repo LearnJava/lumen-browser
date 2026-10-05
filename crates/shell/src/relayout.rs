@@ -39,8 +39,39 @@ fn defer_js_push_override() -> Option<bool> {
 /// flip it. `None` (unset, the default) leaves the shipped order (full
 /// off-thread first) unchanged for anyone who has not set the var.
 fn m4_swap_override() -> bool {
-    static OVERRIDE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OVERRIDE.get_or_init(|| std::env::var("LUMEN_BUG935_M4_SWAP").ok().as_deref() == Some("1"))
+    m4_swap_mode() != M4Swap::Off
+}
+
+/// BUG-935 S80: бюджет on-thread тика `LUMEN_BUG935_M4_SWAP=2`. Тик дороже —
+/// инкрементальный путь на этой странице не дешевле полного каскада (ria.ru:
+/// правка `class` у корня расширяет рестайл на весь документ, ~580 мс), и
+/// UI-поток платит их зря.
+const M4_TICK_BUDGET_MS: f32 = 150.0;
+
+/// Сколько следующих тиков после превышения бюджета идёт off-thread. Кэш
+/// каскада в это время держат живым коммиты движкового потока.
+const M4_BACKOFF_TICKS: u8 = 8;
+
+/// BUG-935 S80: режимы измерительного флага `LUMEN_BUG935_M4_SWAP`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum M4Swap {
+    /// Флаг не задан: полный off-thread первым (поставляемый порядок).
+    Off,
+    /// `=1`: инкрементальный путь на UI-потоке первым безусловно (срезы 46–52).
+    Plain,
+    /// `=2`: то же, но тик, рядом с которым движковый поток занят, уходит
+    /// off-thread — UI-поток не должен ждать `document.lock()`, который держит
+    /// JS страницы (срез 79: тики по ~2 с на ria.ru).
+    Guarded,
+}
+
+fn m4_swap_mode() -> M4Swap {
+    static MODE: std::sync::OnceLock<M4Swap> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("LUMEN_BUG935_M4_SWAP").ok().as_deref() {
+        Some("1") => M4Swap::Plain,
+        Some("2") => M4Swap::Guarded,
+        _ => M4Swap::Off,
+    })
 }
 
 impl Lumen {
@@ -408,7 +439,21 @@ impl Lumen {
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
-        let touched = self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default();
+        // BUG-935 S80: под движковым потоком `js_ctx` на UI-стороне пуст, и прежний
+        // `unwrap_or_default()` давал «ничего не тронуто, всё атрибутировано» —
+        // рестайл брал стили прошлого прохода целиком и показывал устаревшую
+        // страницу (живая проба: rAF переключает класс, итоговая геометрия
+        // 300×50 вместо 100×120). Набор сбрасываем через `dom_touched_drain` —
+        // общий мьютекс, без запроса в очередь движкового потока (тот может
+        // секундами исполнять JS страницы); нет сброса — «неатрибутировано»,
+        // то есть полный каскад.
+        let touched = if self.engine_thread.is_some() {
+            self.dom_touched_drain.as_ref().map(|drain| drain()).unwrap_or_else(|| {
+                crate::persistent_js::DomTouchedSummary { nodes: Default::default(), unattributed: true }
+            })
+        } else {
+            self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default()
+        };
         // BUG-341 S19: the two paths are one `if`/`else` rather than an
         // `Option` plus a `match` because the restyle path now *consumes*
         // `prev_lb` (it moves the reusable subtrees straight into the fresh
@@ -609,13 +654,39 @@ impl Lumen {
     /// fact.
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if m4_swap_override() {
-            let outer_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+            if m4_swap_mode() == M4Swap::Guarded {
+                let busy = self.engine_thread.as_ref().and_then(|e| e.busy());
+                let backoff = self.m4_swap_backoff > 0;
+                if (busy.is_some() || backoff) && self.submit_relayout_job() {
+                    self.m4_swap_backoff = self.m4_swap_backoff.saturating_sub(1);
+                    if lumen_paint::frame_log_enabled() {
+                        match busy {
+                            Some((work, since)) => eprintln!(
+                                "[engine] relayout_raf_dirty deferred off-thread: engine busy with {work} for {:.1}ms",
+                                since.as_secs_f32() * 1000.0,
+                            ),
+                            None => eprintln!(
+                                "[engine] relayout_raf_dirty deferred off-thread: backoff, {} ticks left",
+                                self.m4_swap_backoff,
+                            ),
+                        }
+                    }
+                    return;
+                }
+            }
+            let guarded = m4_swap_mode() == M4Swap::Guarded;
+            let outer_t0 = (guarded || lumen_paint::frame_log_enabled()).then(std::time::Instant::now);
             let handled = self.try_relayout_raf_incremental();
             if let Some(t0) = outer_t0 {
-                eprintln!(
-                    "[engine] relayout_raf_dirty outer_ms={:.2} (try_relayout_raf_incremental call, handled={handled})",
-                    t0.elapsed().as_secs_f32() * 1000.0,
-                );
+                let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                if guarded && handled && ms > M4_TICK_BUDGET_MS {
+                    self.m4_swap_backoff = M4_BACKOFF_TICKS;
+                }
+                if lumen_paint::frame_log_enabled() {
+                    eprintln!(
+                        "[engine] relayout_raf_dirty outer_ms={ms:.2} (try_relayout_raf_incremental call, handled={handled})",
+                    );
+                }
             }
             if !handled && !self.submit_relayout_job() {
                 self.relayout();
@@ -1483,6 +1554,9 @@ impl Lumen {
         let forced_colors = self.a11y_store.forced_colors();
         let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
         let cv_relevant = self.cv_relevant.clone();
+        // BUG-935 S80: стили каскада нужны только свопу — без него
+        // `page_prev_cascade_styles` всё равно обнулялся бы после коммита.
+        let want_cascade_styles = m4_swap_override();
         // GAP-CSSANIM срез 9: see `animated_heights_snapshot` doc comment —
         // same thread-local handoff as interactive state/forced-colors above,
         // captured on the UI thread and installed on the engine thread.
@@ -1529,8 +1603,9 @@ impl Lumen {
             lumen_layout::set_cv_scroll(cv_x, cv_y);
             lumen_layout::set_cv_relevant(cv_relevant);
             lumen_layout::set_animated_heights(animated_heights);
-            let (content, layout_box) =
-                compute_layout(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            let (content, layout_box, counters) =
+                compute_layout_with_counters(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            let cascade_styles = want_cascade_styles.then(|| counters.into_styles());
             lumen_layout::clear_interactive_state();
             lumen_layout::clear_animated_heights();
             lumen_layout::set_cv_scroll(0.0, 0.0);
@@ -1571,6 +1646,8 @@ impl Lumen {
                 viewport,
                 generation,
                 compute_ms,
+                cascade_styles,
+                interactive: (hovered, focused, active),
                 #[cfg(feature = "v8")]
                 precollected,
             }
@@ -1665,7 +1742,7 @@ impl Lumen {
         self.engine_applied_generation = commit.generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, .. } = commit;
         // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
         // (the `poll_engine_commit` off-thread commit path) as the dominant
         // contributor to the `QUERY_TIMEOUT` tax on the UI thread (S24's
@@ -1685,6 +1762,13 @@ impl Lumen {
             #[cfg(feature = "v8")]
             precollected,
         );
+        // BUG-935 S80: `apply_relayout_result` обнулил кэш каскада; коммит принёс
+        // стили того же прохода, по которому построено `layout_box` — возвращаем
+        // их, и следующий инкрементальный тик идёт по дешёвой ветке (restyle=1).
+        if let Some(styles) = cascade_styles {
+            self.page_prev_cascade_styles = Some(styles);
+            self.page_prev_interactive = interactive;
+        }
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off
@@ -1749,6 +1833,7 @@ impl Lumen {
                 // engine `query`. `None` clears them (blank/JS-less tab).
                 self.raf_pending_flag = handle.as_ref().and_then(|h| h.raf_pending_flag());
                 self.dom_dirty_flag = handle.as_ref().and_then(|h| h.dom_dirty_flag());
+                self.dom_touched_drain = handle.as_ref().and_then(|h| h.dom_touched_drain());
                 self.js_ctx = None;
                 engine.task(move |state| state.js = handle);
             }
@@ -1923,15 +2008,34 @@ pub(crate) fn compute_layout(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
+    let (dl, layout, _) = compute_layout_with_counters(document, stylesheet, viewport, hp, dark_mode, web_fonts);
+    (dl, layout)
+}
+
+/// [`compute_layout`], но с `CounterMap` полного каскада, который проход всё
+/// равно строит (BUG-935 S80): off-thread коммит отдаёт из него стили
+/// каскада, чтобы следующий тик инкрементального рестайла не начинался с
+/// холодного кэша.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn compute_layout_with_counters(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     // PH3-19: измеритель включает накопленные web-шрифты (FOUT relayout);
     // BUG-128: и системные face-ы.
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
-    let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
+    let (layout, counters) =
+        lumen_layout::layout_measured_hyp_with_counters(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
     let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
-    (dl, layout)
+    (dl, layout, counters)
 }
 
 /// ADR-016 M4: incremental variant of [`relayout_page`] — uses

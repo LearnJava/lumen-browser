@@ -708,6 +708,9 @@ pub(crate) struct Lumen {
     /// `relayout()` выставляет их равными (off-thread задание не ждётся);
     /// `poll_engine_commit` продвигает это поле применённым `commit.generation`.
     pub(crate) engine_applied_generation: u64,
+    /// BUG-935 S80: сколько следующих rAF-тиков `LUMEN_BUG935_M4_SWAP=2` отдаёт
+    /// off-thread после дорогого on-thread тика (см. `M4_TICK_BUDGET_MS`).
+    pub(crate) m4_swap_backoff: u8,
     /// ADR-016 M2.2: монотонный номер async-relayout задания. Растёт при каждой
     /// постановке off-thread задания (`submit_relayout_job`) **и** при каждом
     /// синхронном `relayout()` — так результат уже поставленного, но ещё не
@@ -862,6 +865,9 @@ pub(crate) struct Lumen {
     /// trigger an asynchronous relayout after an off-thread rAF turn mutated the
     /// DOM, instead of a synchronous read blocked behind that turn.
     pub(crate) dom_dirty_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-935 S80: UI-сторонний сброс набора затронутых узлов (`js_ctx` под
+    /// движковым потоком пуст). `None` — нет JS или нет движкового потока.
+    pub(crate) dom_touched_drain: Option<crate::persistent_js::DomTouchedDrain>,
     /// BUG-935 S43: UI-side lock-free clone of the JS runtime's "page has
     /// read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path" flag. `None` before the first push (or a
