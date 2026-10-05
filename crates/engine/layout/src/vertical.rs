@@ -81,6 +81,35 @@ pub(crate) struct VerticalInit {
     /// `cursor_block_consumed`: it collapses with the next sibling's block-start
     /// margin (CSS 2.1 §8.3.1, along the block axis), or closes the box.
     pub(crate) pending_end_margin: f32,
+    /// CSS 2.1 §9.5 — floats placed in this box, in its own logical frame:
+    /// block coordinates run from the content box's block-start edge, inline
+    /// ones from its top edge (`content_y`). `left` is the top side, `right`
+    /// the bottom one; `sideways-lr` swaps which `float` value maps to which
+    /// (`float_sides_swapped`).
+    pub(crate) fc: crate::box_tree::FloatContext,
+    /// `sideways-lr`: line-left is the *bottom* edge there, so `float: left` /
+    /// `clear: left` act on the `right` bucket of `fc`.
+    pub(crate) float_sides_swapped: bool,
+    /// Block position (from the content box's block-start edge) a child with
+    /// `clear` must start at, set by the trampoline just before the child is
+    /// dispatched and consumed when its block-axis position is fixed.
+    pub(crate) pending_clear: Option<f32>,
+    /// Index of the last in-flow child when it is an inline run (floats that
+    /// follow it may join its last column); `None` once any other in-flow
+    /// child has been placed.
+    pub(crate) last_run: Option<usize>,
+    /// CSS 2.1 §8.3.1 — this box's block-start / block-end margin collapses with
+    /// its first / last in-flow block child's: that child's margin is part of the
+    /// box's own, so the first one is placed flush (`collapses_start`) and the
+    /// last one's does not close the box (`collapses_end`).
+    pub(crate) collapses_start: bool,
+    pub(crate) collapses_end: bool,
+    /// An in-flow child has already been placed.
+    pub(crate) seen_inflow: bool,
+    /// CSS 2.1 §10.6.7 — the box's block-size reaches its floats only when it
+    /// establishes a block formatting context (or is an independent flow: the
+    /// root, an orthogonal child, a flex/grid item).
+    pub(crate) encloses_floats: bool,
 }
 
 /// Precomputes the loop-entry state for laying out a Block/FlowRoot box in
@@ -102,6 +131,8 @@ pub(crate) struct VerticalInit {
 ///   available *inline-size* (room for the inline axis = lines of text).
 /// - `measurer`: for the intrinsic `min-width`/`max-width` keywords.
 /// - `viewport`, `pcb`: forwarded to child layout via the returned init.
+/// - `in_block_flow`: `b` is a normal in-flow block of a parent of the same
+///   writing mode — the only case where its margins collapse with its children's.
 ///
 /// # Axis mapping
 /// - `vertical-rl` / `sideways-rl`: block direction is right→left (x decreases).
@@ -111,7 +142,9 @@ pub(crate) struct VerticalInit {
 /// # Limitations (Phase 0 stub)
 /// - InlineRun children fall back to horizontal text flow (sideways glyphs).
 /// - Margin collapsing along the block axis is not implemented.
-/// - Floats / `clear` are ignored inside vertical contexts.
+/// - Floats and `clear` are placed by `box_tree::vertical_float`; a block child
+///   is not shortened by them (only inline runs are), and `shape-outside` is
+///   ignored.
 /// - `min-/max-width` / `min-/max-height` are not clamped in vertical mode.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_vertical_init(
@@ -124,6 +157,7 @@ pub(crate) fn build_vertical_init(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
+    in_block_flow: bool,
 ) -> VerticalInit {
     // `style` is `b.style` with the flex item's `UsedSizeOverride` applied (the
     // caller's `style_with_used_size`) — `width`/`height` are what the used
@@ -141,6 +175,7 @@ pub(crate) fn build_vertical_init(
     let cb_for_percents = available_height.unwrap_or(viewport.height).max(0.0);
     let margin_left = s.margin_left.resolve_or_zero(em, cb_for_percents, viewport);
     let margin_top = s.margin_top.resolve_or_zero(em, cb_for_percents, viewport);
+    let margin_bottom = s.margin_bottom.resolve_or_zero(em, cb_for_percents, viewport);
     let padding_left = s.padding_left.resolve_or_zero(em, cb_for_percents, viewport);
     let padding_right = s.padding_right.resolve_or_zero(em, cb_for_percents, viewport);
     let padding_top = s.padding_top.resolve_or_zero(em, cb_for_percents, viewport);
@@ -172,7 +207,15 @@ pub(crate) fn build_vertical_init(
         s.box_sizing,
         frame_vert,
     )
-    .unwrap_or(inline_size_avail);
+    // CSS 2.1 §10.3.3 along the inline axis: an auto inline-size of an in-flow block
+    // fills what the containing block leaves after the box's own inline-start/end
+    // margins. Boxes laid out by a flex/grid/table algorithm get the whole room (the
+    // algorithm accounts for the margins itself).
+    .unwrap_or(if in_block_flow {
+        (inline_size_avail - margin_top - margin_bottom).max(0.0)
+    } else {
+        inline_size_avail
+    });
 
     // CSS Sizing L3 §5 — `min-height`/`max-height` are the bounds of the
     // *inline* size in a vertical writing mode, however the size was reached
@@ -291,6 +334,16 @@ pub(crate) fn build_vertical_init(
         pcb,
         cursor_block_consumed: 0.0,
         pending_end_margin: 0.0,
+        fc: crate::box_tree::FloatContext::new(),
+        float_sides_swapped: matches!(s.writing_mode, WritingMode::SidewaysLr),
+        pending_clear: None,
+        last_run: None,
+        collapses_start: in_block_flow
+            && crate::box_tree::escapes_start(b, is_rtl, cb_for_percents, viewport),
+        collapses_end: in_block_flow
+            && crate::box_tree::escapes_end(b, is_rtl, cb_for_percents, viewport),
+        seen_inflow: false,
+        encloses_floats: !in_block_flow || crate::box_tree::establishes_bfc(b),
     }
 }
 
@@ -359,6 +412,7 @@ pub(crate) fn lay_out_vertical_inline_run(
     viewport: Size,
     _pcb: Rect,
     hp: &dyn HyphenationProvider,
+    floats: Option<&crate::box_tree::FloatContext>,
 ) {
     let s = b.style.clone();
     let em = s.font_size;
@@ -382,6 +436,22 @@ pub(crate) fn lay_out_vertical_inline_run(
         content_inline
     };
 
+    // CSS 2.1 §9.5 — each column is a line box: beside a float it only gets the
+    // inline range the float leaves free. `floats` is in the run's own frame
+    // (block `0` = its first column), so column `k` is `[k·lh, (k+1)·lh)`.
+    let col_step = b.used_line_height.max(0.01);
+    let band_of = |k: usize| -> (f32, f32) {
+        let fc = floats.filter(|fc| !fc.is_empty());
+        let Some(fc) = fc else { return (0.0, wrap_budget) };
+        let top = k as f32 * col_step;
+        let (l, r) = fc.line_band(top, top + col_step, 0.0, content_inline);
+        let l = l.clamp(0.0, content_inline);
+        // An unwrapped run keeps its single line, only moved clear of the float.
+        let budget = if wrap_budget.is_finite() { (r.max(l) - l).max(0.0) } else { f32::INFINITY };
+        (l, budget)
+    };
+    let banded = floats.is_some_and(|fc| !fc.is_empty());
+
     *lines = wrap_inline_run_vertical(
         segments,
         wrap_budget,
@@ -394,6 +464,7 @@ pub(crate) fn lay_out_vertical_inline_run(
         s.overflow_wrap,
         s.writing_mode,
         s.text_orientation,
+        banded.then_some(&band_of as &dyn Fn(usize) -> (f32, f32)),
     );
 
     // The run's inline extent is its longest column, not the sum over all of
@@ -417,6 +488,13 @@ pub(crate) fn lay_out_vertical_inline_run(
     b.rect.height = total_vertical_extent;
 }
 
+/// `(start, end)` of column `k`'s inline range from the per-column
+/// `(start, budget)` provider of [`wrap_inline_run_vertical`].
+fn column_range(band_for: &dyn Fn(usize) -> (f32, f32), k: usize) -> (f32, f32) {
+    let (start, budget) = band_for(k);
+    (start, start + budget)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn wrap_inline_run_vertical(
@@ -431,12 +509,18 @@ pub(crate) fn wrap_inline_run_vertical(
     _overflow_wrap: crate::style::OverflowWrap,
     _writing_mode: WritingMode,
     _text_orientation: crate::style::TextOrientation,
+    band: Option<&dyn Fn(usize) -> (f32, f32)>,
 ) -> Vec<Vec<InlineFrag>> {
     let space_w = m.char_width(' ', container_font_size);
 
+    // Per-column inline range `(start, budget)`: the whole `max_height` from the
+    // run's top unless a float narrows the column (CSS 2.1 §9.5).
+    let band_for = |k: usize| band.map_or((0.0, max_height), |f| f(k));
+    let (mut line_start, first_budget) = band_for(0);
+    let mut line_end = line_start + first_budget;
     let mut result: Vec<Vec<InlineFrag>> = vec![Vec::new()];
     let mut current_line: &mut Vec<InlineFrag> = result.last_mut().unwrap();
-    let mut current_y: f32 = 0.0;
+    let mut current_y: f32 = line_start;
     let mut prev_trailing_ws: bool = false;
 
     for seg in segments {
@@ -460,7 +544,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     merged_sources: Vec::new(),
                 });
             }
-            current_y = 0.0;
+            current_y = line_start;
             prev_trailing_ws = false;
             continue;
         }
@@ -503,10 +587,12 @@ pub(crate) fn wrap_inline_run_vertical(
 
         if let Some(img_src) = &seg.img_src {
             let img_advance = m.char_width(' ', container_font_size) * 3.0;
-            if !current_line.is_empty() && current_y + img_advance > max_height {
+            if !current_line.is_empty() && current_y + img_advance > line_end {
+                let next_col = result.len();
                 result.push(Vec::new());
                 current_line = result.last_mut().unwrap();
-                current_y = 0.0;
+                (line_start, line_end) = column_range(&band_for, next_col);
+                current_y = line_start;
             }
             current_line.push(InlineFrag {
                 x: current_y,
@@ -568,10 +654,32 @@ pub(crate) fn wrap_inline_run_vertical(
 
             let word_h = measure_text_w_varied(&display_word, em_s, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
             let word_inter = if is_seg_first && !(prev_trailing_ws || seg_lead_ws) { 0.0 } else { inter_word };
-            let gap = if current_line.is_empty() { 0.0 } else { word_inter };
 
+            // CSS 2.1 §9.5: a column that cannot hold even its first word beside
+            // a float moves on past it; the column grid is uniform, so the skipped
+            // one stays in the run as a blank column.
+            macro_rules! skip_narrow_columns {
+                () => {
+                    let mut skipped = 0;
+                    while current_line.is_empty()
+                        && band.is_some()
+                        && (line_start > 0.0 || line_end < max_height)
+                        && line_start + word_h > line_end + 0.5
+                        && skipped < 4096
+                    {
+                        let next_col = result.len();
+                        result.push(Vec::new());
+                        current_line = result.last_mut().unwrap();
+                        (line_start, line_end) = column_range(&band_for, next_col);
+                        current_y = line_start;
+                        skipped += 1;
+                    }
+                };
+            }
+            skip_narrow_columns!();
+            let gap = if current_line.is_empty() { 0.0 } else { word_inter };
             let needs_wrap = !current_line.is_empty()
-                && current_y + gap + pre + word_h > max_height;
+                && current_y + gap + pre + word_h > line_end;
 
             if needs_wrap {
                 current_line.push(InlineFrag {
@@ -591,9 +699,12 @@ pub(crate) fn wrap_inline_run_vertical(
                     bidi_level: seg.bidi_level,
                     merged_sources: Vec::new(),
                 });
+                let next_col = result.len();
                 result.push(Vec::new());
                 current_line = result.last_mut().unwrap();
-                current_y = 0.0;
+                (line_start, line_end) = column_range(&band_for, next_col);
+                current_y = line_start;
+                skip_narrow_columns!();
             }
 
             let _entry_pre = if is_seg_first { pre } else { 0.0 };

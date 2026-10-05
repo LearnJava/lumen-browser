@@ -204,8 +204,10 @@ mod inline_shape_wrap;
 // `shift_tree` is also `incremental::translate_subtree`: one relocation, one implementation
 // (rect + `svg_paint_matrix` + `<mask>` content move together).
 pub(crate) use shapes_floats::shift_tree;
+// `FloatContext` is also the float state of a vertical block (`vertical::VerticalInit`).
+pub(crate) use shapes_floats::FloatContext;
 use shapes_floats::{
-    register_shape_outside, shift_y_box, FloatContext, FloatShapeGeom,
+    register_shape_outside, shift_y_box, FloatShapeGeom,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's
 // own non-test code.
@@ -230,11 +232,16 @@ mod table_valign;
 mod multicol_trampoline;
 mod vertical_trampoline;
 mod vertical_row;
+mod vertical_float;
+mod vertical_margins;
+pub(crate) use vertical_margins::{escapes_end, escapes_start};
 
 use bfc::{
-    collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc,
+    collapsed_bottom_margin, collapsed_top_margin, contained_content_height,
     has_in_flow_content, last_collapsible_child, MarginCollapseCache,
 };
+// Also read by `vertical::build_vertical_init` (which boxes enclose their floats).
+pub(crate) use bfc::establishes_bfc;
 use layout_dispatch::{lay_out, lay_out_with_used_size};
 
 #[cfg(test)]

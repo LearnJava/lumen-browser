@@ -546,6 +546,18 @@ impl FloatContext {
         }
     }
 
+    /// A copy of the rectangular floats with every block-axis coordinate moved
+    /// by `-db` (so a box starting at `db` in this context sees itself at `0`);
+    /// the inline-axis edges are kept. Used to hand a vertical `InlineRun` the
+    /// floats of its container in the run's own frame (CSS Writing Modes L3 §7.1).
+    /// `shape-outside` geometry is not carried over.
+    pub(crate) fn rebased_block(&self, db: f32) -> FloatContext {
+        let mut c = Self::new();
+        c.left = self.left.iter().map(|&(bot, e)| (bot - db, e)).collect();
+        c.right = self.right.iter().map(|&(bot, e)| (bot - db, e)).collect();
+        c
+    }
+
     /// True when there are no active floats at all (owned or inherited).
     pub(crate) fn is_empty(&self) -> bool {
         self.left.is_empty()
