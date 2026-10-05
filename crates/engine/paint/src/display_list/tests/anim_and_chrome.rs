@@ -1462,6 +1462,20 @@ use lumen_dom::NodeId;
         assert!(last_rule < first_fill, "gap rules must paint under the children");
     }
 
+    /// Grid L2 §9: дорожки и щели subgrid'а — родительские, его собственный `column-gap`
+    /// раскладка не берёт. Правило subgrid'а должно лечь в щель родителя (subgrid-gap-decorations-001).
+    #[test]
+    fn subgrid_rules_follow_the_parent_gap_not_its_own() {
+        let cells = "<div style=\"height:20px\"></div>".repeat(6);
+        let html = format!(
+            "<div style=\"display:grid;grid-template-columns:repeat(3,100px);gap:10px\">             <div style=\"display:grid;grid-template-columns:subgrid;grid-column:1/-1;             column-gap:3px;column-rule:4px solid red\">{cells}</div></div>"
+        );
+        let dl = build(&html, "");
+        // Две щели родителя (x = 100..110 и 210..220): линия 4px по центру, 103 и 213.
+        let xs: Vec<i32> = column_pieces(&dl).iter().map(|c| c.0).collect();
+        assert_eq!(xs, vec![103, 213], "{xs:?}");
+    }
+
     /// flex-gap-decorations-033: `gap: 0` в wrap-flex — линия по центру шва соседних
     /// элементов, а не потерянная щель.
     const FLEX_WRAP_0GAP: &str = r#"<div style="display:flex;flex-wrap:wrap;width:150px;{}">

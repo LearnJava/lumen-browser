@@ -399,6 +399,26 @@ pub struct GridGapGeometry {
     pub column_reversed: bool,
 }
 
+/// Щель оси `subgrid`, восстановленная по элементам (Grid L2 §9: дорожки и щели subgrid —
+/// часть родительских). Раскладка берёт щель родителя и игнорирует собственные
+/// `column-gap`/`row-gap` subgrid'а, поэтому в стиле контейнера она нулевая или другая:
+/// настоящая щель — наименьший положительный зазор «правое ребро одного элемента → левое
+/// ребро другого» (элементы, не заполняющие дорожку, дают зазор не меньше щели).
+/// `None`, если зазоров нет (один элемент или все вплотную).
+pub fn subgrid_axis_gap(edges: &[(f32, f32)]) -> Option<f32> {
+    const MIN_GAP: f32 = 0.5;
+    let mut best: Option<f32> = None;
+    for &(_, hi) in edges {
+        for &(lo, _) in edges {
+            let d = lo - hi;
+            if d > MIN_GAP && best.is_none_or(|b| d < b) {
+                best = Some(d);
+            }
+        }
+    }
+    best
+}
+
 /// Параметры [`grid_gap_segments`].
 pub struct GridGapParams<'a> {
     /// Content box контейнера: `(x, y, width, height)`.
@@ -931,6 +951,16 @@ mod tests {
 
     fn full_grid() -> Vec<GridItemSpan> {
         (0..3).flat_map(|a| (0..3).map(move |t| cell(t, a))).collect()
+    }
+
+    #[test]
+    fn subgrid_axis_gap_is_the_smallest_positive_seam() {
+        // Три дорожки по 30 через щель 10; элемент уже дорожки даёт больший зазор, а не щель.
+        assert_eq!(subgrid_axis_gap(&[(0.0, 30.0), (40.0, 70.0), (80.0, 110.0)]), Some(10.0));
+        assert_eq!(subgrid_axis_gap(&[(0.0, 20.0), (40.0, 70.0)]), Some(20.0));
+        // Один элемент или всё вплотную — щели нет.
+        assert_eq!(subgrid_axis_gap(&[(0.0, 30.0)]), None);
+        assert_eq!(subgrid_axis_gap(&[(0.0, 30.0), (30.0, 60.0)]), None);
     }
 
     #[test]

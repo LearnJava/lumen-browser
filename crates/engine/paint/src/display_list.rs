@@ -44,7 +44,8 @@ use lumen_layout::{
 };
 
 use crate::gap_decorations::{
-    emit_gap_rules, grid_gap_segments, GapDecorationContext, GapSegment, GridGapGeometry, GridGapParams,
+    emit_gap_rules, grid_gap_segments, subgrid_axis_gap, GapDecorationContext, GapSegment, GridGapGeometry,
+    GridGapParams,
 };
 use crate::flex_gap_decorations::flex_gap_segments;
 
