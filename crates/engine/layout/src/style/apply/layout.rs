@@ -490,6 +490,7 @@ pub(in crate::style) fn apply_decl_layout(
             // Отрицательные значения запрещены (CSS Multi-column §3.4).
             // `grid-row-gap` — устаревший алиас (CSS Grid L1 §7.3). `normal` = 0 для строк.
             if let Some(gap) = parse_gap_value(val, is_quirks) {
+                style.row_gap_normal = gap.is_none();
                 style.row_gap = gap.unwrap_or(Length::Px(0.0));
             }
         }
@@ -510,6 +511,7 @@ pub(in crate::style) fn apply_decl_layout(
             {
                 let col = if parts.len() >= 2 { parse_gap_value(parts[1], is_quirks) } else { Some(row.clone()) };
                 if let Some(c) = col {
+                    style.row_gap_normal = row.is_none();
                     style.row_gap = row.unwrap_or(Length::Px(0.0));
                     style.column_gap_normal = c.is_none();
                     style.column_gap = c.unwrap_or(Length::Px(0.0));

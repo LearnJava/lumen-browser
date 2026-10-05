@@ -499,6 +499,10 @@ pub struct ComputedStyle {
     /// but `1em` in a multicol container (Multicol L1 §3.3). `true` until a `<length-percentage>`
     /// is declared; read through [`ComputedStyle::multicol_column_gap`].
     pub column_gap_normal: bool,
+    /// `row-gap: normal` (the initial value, `0` for rows) was not overridden by a length. Only a
+    /// subgrid looks at it: an explicit `row-gap` replaces the parent's gutter inside the subgrid
+    /// (Grid L2 §9), `normal` keeps it.
+    pub row_gap_normal: bool,
     /// CSS Multi-column L1 §3.2 — `column-count: <integer> | auto`. `None`
     /// = `auto`. Phase 0: parsing only.
     pub column_count: Option<u32>,
@@ -1337,6 +1341,7 @@ impl ComputedStyle {
             row_gap: Length::Px(0.0),
             column_gap: Length::Px(0.0),
             column_gap_normal: true,
+            row_gap_normal: true,
             column_count: None,
             column_width: None,
             column_height: None,
@@ -1720,6 +1725,7 @@ impl ComputedStyle {
             row_gap: Length::Px(0.0),
             column_gap: Length::Px(0.0),
             column_gap_normal: true,
+            row_gap_normal: true,
             // CSS Multi-column — не наследуются.
             column_count: None,
             column_width: None,

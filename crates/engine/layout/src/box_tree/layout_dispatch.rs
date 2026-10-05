@@ -1165,6 +1165,15 @@ pub(super) fn dispatch_box(
                 // stack instead of recursing.
                 // Дорожки subgrid'а берёт `build_grid_init` из thread-local'ов (и очищает их), а
                 // paint'у они нужны для щелей `column-rule`/`row-rule` — подсмотреть заранее.
+                // Grid L2 §9: an explicit `row-gap`/`column-gap` of the subgrid replaces the parent's
+                // gutter between its tracks; the tracks its items (and the painter) see move by half
+                // of the difference.
+                crate::subgrid::apply_own_gaps(
+                    (!s.column_gap_normal)
+                        .then(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
+                    (!s.row_gap_normal)
+                        .then(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
+                );
                 b.subgrid_tracks = crate::subgrid::peek_tracks();
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,

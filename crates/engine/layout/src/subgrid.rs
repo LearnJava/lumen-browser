@@ -42,6 +42,27 @@ impl SubgridContext {
         Self { sizes: sizes.to_vec(), offsets, gap }
     }
 
+    /// Grid L2 §9: a subgrid with an explicit `column-gap`/`row-gap` replaces the parent's gutter
+    /// between its own tracks. The difference `own - parent` is split in half and added to the
+    /// margin of the items on both sides of every inner gutter, so each inner edge of a track moves
+    /// by half of it (negative when the subgrid's gap is smaller). The tracks the subgrid's items
+    /// (and the gap-rule painter) see are the shrunk/grown ones, `gap` becomes the subgrid's own;
+    /// the total span is unchanged. A single track has no inner gutter.
+    pub fn with_own_gap(mut self, own_gap: f32) -> Self {
+        let n = self.sizes.len();
+        let half = (own_gap - self.gap) / 2.0;
+        if n < 2 || half == 0.0 {
+            return self;
+        }
+        for i in 0..n {
+            let (lead, trail) = (if i > 0 { half } else { 0.0 }, if i + 1 < n { half } else { 0.0 });
+            self.offsets[i] += lead;
+            self.sizes[i] = (self.sizes[i] - lead - trail).max(0.0);
+        }
+        self.gap = own_gap;
+        self
+    }
+
     /// Total span width/height occupied by all inherited tracks (including inter-track gaps).
     pub fn total_size(&self) -> f32 {
         let n = self.sizes.len();
@@ -85,6 +106,20 @@ pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
     let cols = SUBGRID_COL_CTX.with(spans);
     let rows = SUBGRID_ROW_CTX.with(spans);
     (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows }))
+}
+
+/// Replaces the parent's gutters in the pending subgrid contexts with the subgrid's own explicit
+/// `column-gap`/`row-gap` (`None` — `normal`, keep the parent's); see [`SubgridContext::with_own_gap`].
+pub(crate) fn apply_own_gaps(col_gap: Option<f32>, row_gap: Option<f32>) {
+    for (cell, gap) in [(&SUBGRID_COL_CTX, col_gap), (&SUBGRID_ROW_CTX, row_gap)] {
+        let Some(gap) = gap else { continue };
+        cell.with(|c| {
+            let mut c = c.borrow_mut();
+            if let Some(ctx) = c.take() {
+                *c = Some(ctx.with_own_gap(gap));
+            }
+        });
+    }
 }
 
 /// RAII guard: sets the thread-local subgrid contexts and clears them on drop.
@@ -193,6 +228,22 @@ mod tests {
         let ctx = SubgridContext::from_parent_tracks(&[80.0], 10.0);
         assert_eq!(ctx.offsets, vec![0.0]);
         assert!((ctx.total_size() - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn own_gap_moves_inner_edges_by_half_the_difference() {
+        // Parent: 3 × 20 px, no gutter; the subgrid asks for 10 px between its tracks.
+        let ctx = SubgridContext::from_parent_tracks(&[20.0, 20.0, 20.0], 0.0).with_own_gap(10.0);
+        assert_eq!(ctx.sizes, vec![15.0, 10.0, 15.0]);
+        assert_eq!(ctx.offsets, vec![0.0, 25.0, 45.0]);
+        assert!((ctx.total_size() - 60.0).abs() < 0.01);
+        // A smaller gap than the parent's grows the tracks back.
+        let ctx = SubgridContext::from_parent_tracks(&[15.0, 10.0, 15.0], 10.0).with_own_gap(0.0);
+        assert_eq!(ctx.sizes, vec![20.0, 20.0, 20.0]);
+        assert_eq!(ctx.offsets, vec![0.0, 20.0, 40.0]);
+        // One track has no inner gutter.
+        let ctx = SubgridContext::from_parent_tracks(&[30.0], 0.0).with_own_gap(8.0);
+        assert_eq!((ctx.sizes, ctx.offsets), (vec![30.0], vec![0.0]));
     }
 
     #[test]
