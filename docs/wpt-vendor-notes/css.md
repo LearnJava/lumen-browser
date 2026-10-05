@@ -98,3 +98,44 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - `block-flow-direction`/`line-box-direction` с Ahem через системный индекс всё равно thick: колонки и блоки стоят верно, расходятся глифы внутри колонок — возможно, упорядочение глифов повёрнутого текста или BUG-1270; не проверено.
 - [BUG-1270](../../bugs/BUG-1270-OPEN.md) (повёрнутый текст на колонку левее), похоже, исправлен `b08924bf5` (BUG-553 срез 62, `rect.x + rect.width` в `cpu_raster.rs:2981`): все `float-vlr-003…013`/`float-vrl-002…012` из его «Как проверить» стали identical. Запись не закрывал — это решение P3.
 - wptrunner снимает reftest-ы в 1024×720, а не 800×600 (`Unexpected viewport size` на каждом тесте, см. срез 1) — на вердикты влияет у тестов, привязанных к размеру окна (`wm-propagation-*`, `sizing-orthog-*`).
+
+## css-ui — вердикт и кластеры (WPT-RUN-14 срез 3, 2026-10-05)
+
+Прогон: `run_corpus.py --prefixes css/css-ui --out-dir .tmp/wpt-run14/ui`, сборка `dev-release` от `main` 262c3ca9a (движок не менялся), `--processes 7`, 46 с. `score_audit.py`: «no leak», вердикт есть у всех 1121 automatable id (манифест — 1354, остальное manual/visual).
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 999 | 338.00 | 33.8 % |
+| testharness | 115 | 52.82 (1003 из 1935 сабтестов) | 46 % |
+| crashtest | 7 | 7.00 | 100 % |
+| **итого** | **1121** | **397.82 = 35.49 %** | |
+
+739 id не зелёные: 661 reftest FAIL, 76 testharness с упавшими сабтестами, 2 harness ERROR.
+
+### Кластеры
+
+Правило отнесения то же, что в срезе 2: первое совпавшее, один id — один кластер. Колонка «пиксели» — `reftest_pixdiff.py --viewport 800x600 --ahem` (`.tmp/wpt-run14/ui/pixdiff-800-ahem.json`): 647 thick, 11 no-match-ref, 3 identical. Причина подтверждена пробой (`--dump-layout`/`--dump-display-list`/`--screenshot` на минимальном примере), кроме помеченных «не разобрано».
+
+| Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|---|
+| авторские border/background/padding не снимают нативный вид виджета | 539 | — | 539 thick | `compute-kind-widget-generated/kind-of-widget-fallback-button-border-top-color-001.html` | нет правила CSS UI L4 §appearance-disabling-properties: UA-рамка/фон снимаются только при каскадном `appearance: none` | P4 | [BUG-1277](../../bugs/BUG-1277-OPEN.md) → `CSS-SPECS.md` (`appearance` — appearance-disabling properties) |
+| `outline` в CPU-растре | 33 | — | 33 thick | `outline-001.html`, `outline-color-001.html` | `rasterize_draw_outline` обводит путь по краю бокса центрированным штрихом: снаружи только половина ширины (display list верен, wgpu/femtovg верны) | P3 | [BUG-1279](../../bugs/BUG-1279-OPEN.md) |
+| `getComputedStyle` CSS UI-свойств | 27 | 152 | — | `inheritance.html`, `parsing/canonical-order-outline-sub-properties-001.html`, `accent-color-computed.html` | `caret-color`/`accent-color`/`outline-offset`/`outline`/`resize`/`user-select`/`appearance`/`field-sizing` нет в `computed_style_to_map` | P3 | [BUG-1278](../../bugs/BUG-1278-OPEN.md) |
+| `text-overflow`, прочее | 22 | — | 20 thick, 2 identical | `text-overflow-006.html`, `text-overflow-022.html`, `text-overflow-ellipsis-indent-001.html` | разные формы: ellipsis с float/inline-block/grapheme cluster/`text-indent`/многострочный/ruby; общий механизм не найден | — | **не разобрано** |
+| `<img>` + `box-sizing` + `min-/max-` | 19 | — | 19 thick | `box-sizing-010.html`, `box-sizing-025.html` | декодированный размер пишется в оба атрибута `width`/`height`, сторона из CSS не масштабирует вторую (`<img style="height:50px">` 100×100 → 100×50) | P3 | [BUG-1280](../../bugs/BUG-1280-OPEN.md) |
+| `caret-shape` | 16 | — | 10 thick, 6 no-match-ref | `caret-shape-block-color-001.html`, `caret-color-block-shape-text-color-001.html` | свойства нет (`CSS.supports` — `false`) | P4 | `CSS-SPECS.md` (`caret-shape` / `caret-animation` / `caret`) |
+| `*-invalid` / парсинг принимает недопустимое | 13 | 64 | — | `parsing/caret-color-invalid.html`, `parsing/cursor-invalid.html`, `parsing/field-sizing-invalid.html` | `element.style` принимает значения, которые должен отвергнуть (`auto` у `outline-width`, `50%`, `auto auto` у `accent-color`) — валидаторы CSSOM этих свойств не заведены | P4 | **без записи** (< 20 id; вместе с writing-modes срез 2 — один класс) |
+| `text-overflow: <string>` | 8 | — | 7 thick, 1 identical | `text-overflow-string-001.html` | `TextOverflow` знает только `clip`/`ellipsis` | P4 | `CSS-SPECS.md` (`text-overflow: <string>`) |
+| `outline-offset: inset` | 6 | — | 5 thick, 1 no-match-ref | `outline-offset-inset-001.html` | значение `inset` не реализовано (в `element.style` остаётся, computed — `""`) | P4 | **без записи** (< 20 id) |
+| `text-overflow` с Ahem 30px в блоке 10px | 5 | — | 5 thick | `text-overflow-001.html`, `text-overflow.html` | крупный инлайн-текст не раздвигает строку: высота `InlineRun` = `line-height` блока (11.07 вместо ≈34); плюс Ahem не грузится в reftest | P3 | [BUG-1281](../../bugs/BUG-1281-OPEN.md), [BUG-1273](../../bugs/BUG-1273-OPEN.md) |
+| анимация `outline-width`/`outline-color` | 5 | 268 | — | `animation/outline-width-interpolation.html` | значение есть, но не интерполируется | P3 | [BUG-1234](../../bugs/BUG-1234-OPEN.md) (дописан) |
+| abspos + `auto`-поля | 2 | — | 2 thick | `box-sizing-003.html` | `inset:0; margin:auto` не центрирует — `auto`-поля считаются нулём (CSS 2.1 §10.3.7/§10.6.4) | P3 | [BUG-1282](../../bugs/BUG-1282-OPEN.md) |
+| прочие testharness | 33 | 448 | — | `appearance-cssom-001.html?include=Invalid` (300), `parsing/interactivity-computed.html` (46), `outline-width-rounding.tentative.html` | `-webkit-appearance` принимает любое слово и не отражается в `style.webkitAppearance` (345 сабтестов на 4 файла); `interactivity` нет вовсе (10 id, → `CSS-SPECS.md`); `cursor` с `url()`/`calc()`, ресайз `<textarea>` в RTL, `user-modify` — не разобраны | P4 | `CSS-SPECS.md` (`interactivity`); остальное **не разобрано** |
+| прочее reftest | 11 | — | 7 thick, 4 no-match-ref | `transparent-accent-color-001.html`, `appearance-auto-non-html-namespace-001.html`, `resize-generated-content.html`, `input-security-none-sensitive-text-input.html` | `accent-color: transparent`/`currentcolor`, `appearance` у не-HTML-элемента, грип ресайза, `input-security` (→ `CSS-SPECS.md`) | — | **не разобрано** |
+
+### Что остаётся неизвестным
+
+- 22 `text-overflow-*` разных форм и 11 прочих reftest не разнесены; 9 из `text-overflow-*` не используют Ahem, то есть BUG-1273 их не объясняет.
+- `appearance-cssom-001.html` (341 упавший сабтест из 1935 всех) — один дефект CSSOM `-webkit-appearance`, но запись не заведена: сначала BUG-1278 (computed value), иначе тест проверит пустую карту.
+- После BUG-1278 зелёные сейчас `animation/{outline-offset,caret-color,accent-color}-*` (588 сабтестов) начнут сравнивать реальные значения и, вероятно, покраснеют на интерполяции — см. запись бага.
+- wptrunner снимает reftest-ы в 1024×720, а не 800×600 (срез 1) — в этом модуле не проверялось, влияет ли.

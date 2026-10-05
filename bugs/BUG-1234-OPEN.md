@@ -12,3 +12,10 @@
 ## Ожидание
 
 Общий механизм интерполяции и `composite: add/accumulate` для `<length-percentage>`, `<number>` и дискретных ключевых слов по списку свойств.
+
+## Ещё экземпляры (WPT-RUN-14 срез 3, 2026-10-05)
+
+`css/css-ui/animation/outline-width-interpolation.html` (120 из 148 сабтестов), `outline-color-interpolation.html`
+(99 из 120), `outline-width-composition.html` (35 из 52): во время перехода/анимации `getComputedStyle` отдаёт
+конечное (`20px`, `rgb(0, 128, 0)`) или базовое значение. Свойства в карте `computed_style_to_map` есть, не хватает
+только интерполяции — тот же механизм.
