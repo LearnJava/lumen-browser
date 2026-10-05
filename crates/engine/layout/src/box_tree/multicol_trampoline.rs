@@ -574,6 +574,17 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     frame.init.cur_y += seg_extent.max(0.0);
 }
 
+/// `true` when a flow item of the grid runs across the whole row gap `[gap_lo, gap_hi)` (its block
+/// extent starts before the gap and ends after it), measured from the grid's top edge `gy`.
+fn gap_is_bridged(grid: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
+    grid.children.iter().any(|c| {
+        !matches!(c.kind, BoxKind::Skip)
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+            && c.rect.y - gy < gap_lo - 0.01
+            && c.rect.y - gy + c.rect.height > gap_hi + 0.01
+    })
+}
+
 /// CSS Fragmentation L3 §5 / CSS Gap Decorations L1 §6.2 — a grid container laid out in full
 /// (the Measure pass) is cut into one fragment per column of the multicol container
 /// (`column-fill: auto`, a definite column height). A break that falls inside a row gap drops
@@ -605,8 +616,15 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             break;
         }
         windows.push((start, end));
-        // Inside a row gap the rest of the gap is dropped; inside a track the track continues.
-        let in_gap = rows.windows(2).find(|w| end > w[0].1 + 0.01 && end < w[1].0 - 0.01);
+        // A break inside a row gap drops the rest of the gap (Fragmentation L3 §5.1: a gap adjoining
+        // a break is truncated); so does one at the very start edge of the gap, unless an item runs
+        // through it (Chrome keeps such a gap: `grid-gap-decorations-fragmentation-029`). Inside a
+        // track the track continues.
+        let in_gap = rows.windows(2).find(|w| {
+            let inside = end > w[0].1 + 0.01 && end < w[1].0 - 0.01;
+            let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
+            inside || (at_start && !gap_is_bridged(grid, grid.rect.y, w[0].1, w[1].0))
+        });
         start = in_gap.map_or(end, |w| w[1].0);
         if start >= total_h - 0.01 {
             break;
