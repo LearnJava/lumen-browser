@@ -372,16 +372,24 @@ fn place_abs_child(
         cb.width
     };
 
-    lay_out(child, 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp, false);
-
     // CSS Position L3 §6: an abs-pos box with both `top` and `bottom` non-auto
     // and `height: auto` resolves its used height to fill the inset gap. Mirror of
-    // the `avail_w` width-from-insets path above. Applied post-layout because the
-    // gap height is a containing-block used value, not a content-driven size.
-    if top.is_some() && bottom.is_some() && cs.height.is_none() {
-        let resolved_h =
-            (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
-        child.rect.height = resolved_h;
+    // the `avail_w` width-from-insets path above. The gap is a containing-block
+    // used value, so the box is laid out with it as a definite height — a
+    // percentage height inside it must see that size, not the content-driven one.
+    let stretched_h = (top.is_some() && bottom.is_some() && cs.height.is_none())
+        .then(|| (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0));
+    // CSS 2.1 §10.5: a percentage `height` of an out-of-flow box resolves against
+    // the padding box of its containing block, whose height is always definite.
+    match stretched_h {
+        Some(h) => lay_out_with_used_size(
+            child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false,
+            UsedSizeOverride { height: Some(h), box_sizing: Some(BoxSizing::BorderBox), ..Default::default() },
+        ),
+        None => lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false),
+    }
+    if let Some(h) = stretched_h {
+        child.rect.height = h;
     }
 
     // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
@@ -530,10 +538,16 @@ pub(crate) fn fix_out_of_flow_descendants(
     while let Some((x, abs_open, fixed_open, direct)) = stack.pop() {
         if !direct && !uses_anchor_positioning(&x.style) {
             match x.style.position {
+                // The size of a box whose height follows the containing block
+                // (`height: 50%`, `top` + `bottom`) was derived from the zero-high
+                // first-pass block, and so was everything laid out inside it.
+                Position::Absolute if abs_open && height_follows_cb(&x.style, viewport) => {
+                    refit_out_of_flow_child(x, abs_cb, measurer, viewport, hp);
+                }
                 Position::Absolute if abs_open => reposition_abs_child(x, abs_cb, viewport),
                 Position::Fixed if fixed_open => {
                     if let Some(cb) = fixed_cb {
-                        refit_fixed_child(x, cb, measurer, viewport, hp);
+                        refit_out_of_flow_child(x, cb, measurer, viewport, hp);
                     }
                 }
                 _ => {}
@@ -580,11 +594,27 @@ fn reposition_abs_child(child: &mut LayoutBox, cb: Rect, viewport: Size) {
     shift_tree(child, dx, dy);
 }
 
-/// Re-lays out a `position: fixed` `child` against the containing block `cb`
-/// of its transformed/filtered ancestor. The first pass sized it against the
-/// viewport, which changes `width: auto`, percentages and everything below.
+/// Whether the used height of an out-of-flow box with style `s` is a function
+/// of its containing block's height: a percentage `height`/`min-height`/
+/// `max-height`, or `top` + `bottom` around `height: auto`. Probed by resolving
+/// against two different bases, which also covers `calc()` mixing `%`.
+fn height_follows_cb(s: &ComputedStyle, viewport: Size) -> bool {
+    let em = s.font_size;
+    let tracks = |l: &Option<Length>| {
+        l.as_ref().is_some_and(|l| l.resolve(em, Some(0.0), viewport) != l.resolve(em, Some(100.0), viewport))
+    };
+    let stretched = s.height.is_none() && !s.top.is_auto() && !s.bottom.is_auto();
+    stretched || tracks(&s.height) || tracks(&s.min_height) || tracks(&s.max_height)
+}
+
+/// Re-lays out an out-of-flow `child` against its final containing block `cb`:
+/// the padding box of the transformed/filtered ancestor for `position: fixed`
+/// (the first pass sized it against the viewport, which changes `width: auto`,
+/// percentages and everything below), or the positioned ancestor for an
+/// absolute box that was placed through a static wrapper (the first pass saw a
+/// zero-high block).
 /// An axis with both insets `auto` keeps its first-pass (static) position.
-fn refit_fixed_child(
+fn refit_out_of_flow_child(
     child: &mut LayoutBox,
     cb: Rect,
     measurer: Option<&dyn TextMeasurer>,

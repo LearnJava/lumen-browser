@@ -860,6 +860,9 @@ struct Frame<'a> {
     b: &'a LayoutBox,
     is_fixed: bool,
     is_sticky: bool,
+    /// Whether `b` or an ancestor is the containing block of `position: fixed`
+    /// descendants — a `fixed` child of this frame is not viewport-pinned.
+    in_fixed_cb: bool,
     epilogue: Epilogue,
     /// This frame's children in the order they must be walked — already
     /// depth-sorted for a `preserve-3d` container, plain DOM order otherwise.
@@ -907,7 +910,7 @@ fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&
         }
         let child = current.children[current.next_idx];
         current.next_idx += 1;
-        match dispatch(child, out, dpr, sel) {
+        match dispatch(child, current.in_fixed_cb, out, dpr, sel) {
             WalkOutcome::Done => {}
             WalkOutcome::NeedsLoop(child_frame) => {
                 stack.push(current);
@@ -1003,7 +1006,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
 /// then drives that (and every further non-tail-recursive container it
 /// meets) on an explicit heap stack instead.
 pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
-    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, out, dpr, sel) {
+    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr, sel) {
         run(frame, out, dpr, sel);
     }
 }
@@ -1016,6 +1019,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
 /// and `SvgRoot` — everywhere else falls through exactly as before.
 fn dispatch<'a>(
     b: &'a LayoutBox,
+    in_fixed_cb: bool,
     out: &mut DisplayList,
     dpr: f32,
     sel: Option<&SelectionHighlight>,
@@ -1052,7 +1056,10 @@ fn dispatch<'a>(
     // split it out of the scrollable band (ADR-016 M3.2.1c). No draw-time offset:
     // fixed content is already at viewport-fixed coords (BUG-159), so the markers
     // render as no-ops — they are partition metadata only.
-    let is_fixed = matches!(b.style.position, Position::Fixed);
+    // A `fixed` box under a transformed/filtered ancestor scrolls with it
+    // (css-transforms-1 §2) — it is page content, not a viewport overlay.
+    let is_fixed = matches!(b.style.position, Position::Fixed) && !in_fixed_cb;
+    let child_in_fixed_cb = in_fixed_cb || contains_fixed_descendants(&b.style);
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);
     }
@@ -1320,7 +1327,7 @@ fn dispatch<'a>(
                     b.children.iter().collect()
                 };
                 return WalkOutcome::NeedsLoop(Box::new(Frame {
-                    b, is_fixed, is_sticky,
+                    b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
                     epilogue: Epilogue::Full(epilogue),
                     children,
                     next_idx: 0,
@@ -1384,7 +1391,7 @@ fn dispatch<'a>(
             // Анонимный контейнер: нет фона/бордера собственного.
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
             return WalkOutcome::NeedsLoop(Box::new(Frame {
-                b, is_fixed, is_sticky,
+                b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
                 epilogue: Epilogue::None,
                 children: b.children.iter().collect(),
                 next_idx: 0,
@@ -1669,7 +1676,7 @@ fn dispatch<'a>(
             );
             out.push(DisplayCommand::PushClipRect { rect: clip });
             return WalkOutcome::NeedsLoop(Box::new(Frame {
-                b, is_fixed, is_sticky,
+                b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
                 epilogue: Epilogue::SvgViewportClip,
                 children: b.children.iter().collect(),
                 next_idx: 0,
