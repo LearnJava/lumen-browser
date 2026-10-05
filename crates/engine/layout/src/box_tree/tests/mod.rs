@@ -456,6 +456,7 @@ mod flex_align_content;
 mod flex_baseline;
 mod flex_column_wrap;
 mod multicol_rows;
+mod multicol_break_inside;
 mod multicol_orphans;
 mod flex_axes;
 
