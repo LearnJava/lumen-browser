@@ -1329,16 +1329,14 @@ pub(crate) fn install_tree_mutation(
                 }
                 // BUG-935 срез 60: moving a node out of another parent changes *that*
                 // parent's child list too (`:first-child`, `+` of its remaining children).
-                let old_parent = doc.get(child).parent.filter(|&o| o != parent);
+                // BUG-935 срез 89: each list gets the edit with the ends it touched.
+                let probe = probe_child_edit(&doc, child);
                 doc.append_child(parent, child);
-                if let Some(old) = old_parent {
-                    record_dom_touch_child_list(&touched, old);
-                }
                 // BUG-341 S7: record the container — covers `parent`'s own
                 // `:empty`/nth-child-of-its-parent state plus the reconciled
                 // children (all within `restyle_root_set_for_node_change`'s
                 // parent-subtree invalidation).
-                record_dom_touch_child_list(&touched, parent);
+                record_child_edit(&touched, &doc, &probe, child, Some(parent));
                 // BUG-1118 срез 2: `child` may already be a fully-built
                 // `<img src>` subtree (cloneNode(true), or a fragment from
                 // `_lumen_parse_html_fragment`) — see `queue_pending_img_loads`.
@@ -1365,11 +1363,9 @@ pub(crate) fn install_tree_mutation(
                 }
                 // Read the authoritative parent from the DOM (not the
                 // JS-supplied `_parent_id`) before detaching.
-                let parent = doc.get(child).parent;
+                let probe = probe_child_edit(&doc, child);
                 doc.detach(child);
-                if let Some(parent) = parent {
-                    record_dom_touch_child_list(&touched, parent);
-                }
+                record_child_edit(&touched, &doc, &probe, child, None);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -1571,14 +1567,9 @@ pub(crate) fn install_shadow_dom(
                 }
                 let parent = doc.get(reference).parent;
                 // BUG-935 срез 60: see `_lumen_append_child` — the old parent's list changed too.
-                let old_parent = doc.get(child).parent.filter(|&o| Some(o) != parent);
+                let probe = probe_child_edit(&doc, child);
                 doc.insert_before(child, reference);
-                if let Some(old) = old_parent {
-                    record_dom_touch_child_list(&touched, old);
-                }
-                if let Some(parent) = parent {
-                    record_dom_touch_child_list(&touched, parent);
-                }
+                record_child_edit(&touched, &doc, &probe, child, parent);
                 // BUG-1118 срез 2: same rationale as `_lumen_append_child`.
                 if let Some(hook) = &img_hook {
                     queue_pending_img_loads(&doc, child, hook.as_ref());

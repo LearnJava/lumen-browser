@@ -183,6 +183,92 @@ pub(super) fn record_dom_touch_child_list(tracker: &Mutex<DomTouched>, nid: Node
     let touch_gen = t.epoch;
     t.touch_gen.insert(nid, touch_gen);
     t.child_list_gen.insert(nid, touch_gen);
+    t.child_any_gen.insert(nid, touch_gen);
+}
+
+/// BUG-935 срез 89: what an insertion or a removal of one child did to its parent's element list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ChildEdit {
+    /// A text/comment node: no element changed place, no `:first-child` can flip.
+    NonElement,
+    /// An element; `front`/`back` — no element stands before/after it.
+    Element { front: bool, back: bool },
+}
+
+/// BUG-935 срез 89: [`record_dom_touch_child_list`] for an edit whose reach on the first/last
+/// element is known — `edit` is [`child_edit_kind`]'s answer, `None` when it cannot say.
+pub(super) fn record_dom_touch_child_edit(tracker: &Mutex<DomTouched>, nid: NodeId, edit: Option<ChildEdit>) {
+    let Some(edit) = edit else {
+        return record_dom_touch_child_list(tracker, nid);
+    };
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    t.child_list_gen.insert(nid, touch_gen);
+    // A text node cannot change a `:first-child`/`:last-child` answer: only the container's own
+    // `:empty` moved, which its shallow root covers. The touch stays, there is nothing to log.
+    let ChildEdit::Element { front, back } = edit else {
+        return;
+    };
+    let log = t.child_edits.entry(nid).or_default();
+    if log.len() >= super::runtime::CHILD_EDIT_CAP {
+        log.clear();
+        t.child_any_gen.insert(nid, touch_gen);
+        return;
+    }
+    log.push((touch_gen, front, back));
+}
+
+/// BUG-935 срез 89: what an insertion or a removal of `node` (attached to its parent at the time
+/// of the call) did to the parent's element list; `None` for a fragment, a detached node or
+/// anything else the log cannot describe.
+pub(super) fn child_edit_kind(doc: &lumen_dom::Document, node: NodeId) -> Option<ChildEdit> {
+    use lumen_dom::NodeData;
+    let parent = doc.try_get(node)?.parent?;
+    match &doc.get(node).data {
+        NodeData::Text(_) | NodeData::Comment(_) | NodeData::ProcessingInstruction { .. } => {
+            return Some(ChildEdit::NonElement);
+        }
+        NodeData::Element { .. } => {}
+        _ => return None,
+    }
+    let is_element = |c: &NodeId| matches!(doc.get(*c).data, NodeData::Element { .. });
+    let children = &doc.get(parent).children;
+    let front = children.iter().find(|c| is_element(c)) == Some(&node);
+    let back = children.iter().rev().find(|c| is_element(c)) == Some(&node);
+    Some(ChildEdit::Element { front, back })
+}
+
+/// BUG-935 срез 89: what [`record_child_edit`] needs from before the edit — where `child` stood.
+pub(super) struct ChildEditProbe {
+    old_parent: Option<NodeId>,
+    edit: Option<ChildEdit>,
+}
+
+/// BUG-935 срез 89: look at `child` before it is moved or removed.
+pub(super) fn probe_child_edit(doc: &lumen_dom::Document, child: NodeId) -> ChildEditProbe {
+    ChildEditProbe { old_parent: doc.get(child).parent, edit: child_edit_kind(doc, child) }
+}
+
+/// BUG-935 срез 89: record an edit of `child` made after `probe` — taken out of its old parent
+/// and, if `new_parent` is given, put into it. A move inside one parent is two edits there.
+pub(super) fn record_child_edit(
+    tracker: &Mutex<DomTouched>,
+    doc: &lumen_dom::Document,
+    probe: &ChildEditProbe,
+    child: NodeId,
+    new_parent: Option<NodeId>,
+) {
+    if let Some(old) = probe.old_parent {
+        record_dom_touch_child_edit(tracker, old, probe.edit);
+    }
+    if let Some(np) = new_parent {
+        // The attach may have been refused (the child is still where it was): then the edit is unknown.
+        let edit = if doc.get(child).parent == Some(np) { child_edit_kind(doc, child) } else { None };
+        record_dom_touch_child_edit(tracker, np, edit);
+    }
 }
 
 /// BUG-1211: like [`record_dom_touch`], for a plain write to (or removal of)
