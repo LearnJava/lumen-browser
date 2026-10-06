@@ -456,6 +456,48 @@ pub fn layout_mutation_incremental_restyle(
         let _prof = lumen_core::profile::scope("precompute_counters");
         crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
     };
+    if verify_incremental_cascade() {
+        // BUG-935 срез 92: `LUMEN_VERIFY_INCR_CASCADE=1` — самопроверка живого прогона. Каскад с нуля
+        // против того, что оставила инкрементальная дельта: расхождение = устаревший стиль на странице.
+        let full = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+        let stale: Vec<lumen_dom::NodeId> = full
+            .styles()
+            .iter()
+            // `!=` alone also fires on a style that holds a NaN (never equal to itself); the dump tells those apart.
+            .filter(|(id, style)| {
+                counters.styles().get(id).is_none_or(|got| got != *style && format!("{got:?}") != format!("{style:?}"))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let extra = counters.styles().keys().filter(|id| !full.styles().contains_key(id)).count();
+        if stale.is_empty() && extra == 0 {
+            eprintln!("[verify] incr cascade: {} styles, equal to a full cascade", full.styles().len());
+        } else {
+            let sample: Vec<String> = stale
+                .iter()
+                .take(8)
+                .map(|&id| format!("{}#{}", doc.get(id).element_name().map_or("?".to_string(), |q| q.local.to_string()), id.raw()))
+                .collect();
+            eprintln!(
+                "[verify] incr cascade: РАСХОЖДЕНИЕ — {} of {} styles differ, {extra} extra; first: {sample:?}",
+                stale.len(),
+                full.styles().len()
+            );
+            for &id in stale.iter().take(2) {
+                if let (Some(want), Some(got)) = (full.styles().get(&id), counters.styles().get(&id)) {
+                    let (want, got) = (format!("{want:#?}"), format!("{got:#?}"));
+                    let diff: Vec<String> = want
+                        .lines()
+                        .zip(got.lines())
+                        .filter(|(w, g)| w != g)
+                        .take(6)
+                        .map(|(w, g)| format!("full `{}` / incr `{}`", w.trim(), g.trim()))
+                        .collect();
+                    eprintln!("[verify]   #{} differs in: {diff:?}", id.raw());
+                }
+            }
+        }
+    }
     let registry = {
         // BUG-341 S26: likewise per-pass, sheet-wide and delta-independent.
         let _prof = lumen_core::profile::scope("counter_style_registry");
@@ -880,3 +922,11 @@ pub(crate) fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+
+/// BUG-935 срез 92: `LUMEN_VERIFY_INCR_CASCADE=1` — после каждого инкрементального каскада пересчитать
+/// его с нуля и напечатать (`[verify] incr cascade: …`), совпали ли стили. Стоит полного каскада на флаш:
+/// только для проверки живой страницы, не для замеров времени. Читается один раз на процесс.
+fn verify_incremental_cascade() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LUMEN_VERIFY_INCR_CASCADE").is_some_and(|v| v != "0"))
+}

@@ -591,3 +591,70 @@ fn a_write_toggled_back_after_the_mark_is_covered_by_every_value_since_it() {
     assert!(!matches_full(&["wrap lazy"]), "the value at the mark alone must leave a stale style, or this test proves nothing");
     assert!(matches_full(&["wrap lazy", "wrap lazy open"]), "every value since the mark must cover the toggled write");
 }
+
+// ── срез 92: изменившийся стиль shallow-узла спускается по детям, пока стиль меняется ─────────────
+
+/// The wrapper's own style moves (`width`, `margin`: nothing in the subtree inherits them): its
+/// direct child is recomputed, comes out the same, and the 20 paragraphs below are not recomputed.
+/// Before срез 92 the changed style forced the whole subtree (`forced_same` ≈ 100 % on ria.ru).
+#[test]
+fn a_changed_style_that_nothing_inherits_stops_at_the_direct_children() {
+    let r = drive(
+        &wrapped(20),
+        ".wide { width: 300px; margin: 3px } .lazy { padding: 1px } p { margin: 1px }",
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy wide");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy");
+            }),
+        ],
+    );
+    for (i, step) in r.iter().enumerate() {
+        assert_narrow(step, "a width/margin write");
+        assert!((step.recomputed as usize) <= 3, "step {i}: recomputed {} of {}", step.recomputed, step.elements);
+    }
+}
+
+/// A chain of `height: inherit` (a non-inherited property read from the parent): the wrapper's
+/// change has to travel level by level through the inner div, the paragraphs and their `<b>`.
+#[test]
+fn a_non_inherited_value_read_through_inherit_travels_level_by_level() {
+    drive(
+        &wrapped(6),
+        ".wide { height: 40px } #inner, #inner p, #inner b { height: inherit } .lazy { margin: 1px }",
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy wide");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy");
+            }),
+        ],
+    );
+}
+
+/// Inherited and non-inherited changes at once, with a grandchild that re-declares the inherited
+/// value (so the change stops there) and one that does not.
+#[test]
+fn an_inherited_change_stops_where_a_descendant_overrides_it() {
+    drive(
+        "<div id=\"w\" class=\"wrap\"><div id=\"a\"><p>a <b>x</b></p></div><div id=\"b\" class=\"own\"><p>b <b>y</b></p></div></div>",
+        ".wrap { color: red } .hot { color: green; width: 200px } .own { color: blue }",
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap hot");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap");
+            }),
+        ],
+    );
+}

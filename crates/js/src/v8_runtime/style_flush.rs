@@ -1279,6 +1279,33 @@ impl FlushHandles {
             .iter()
             .map(|&r| doc.get(r).element_name().map_or_else(|| "#node".to_string(), |n| n.local.to_string()))
             .collect();
+        // BUG-935 срез 92: кто именно глубокий корень — тег, class и размер поддерева (первые 12).
+        let deep_log: Vec<String> = if lumen_paint::frame_log_enabled() {
+            dirty_roots
+                .iter()
+                .take(12)
+                .map(|&r| {
+                    let n = doc.get(r);
+                    let tag = n.element_name().map_or_else(|| "#node".to_string(), |q| q.local.to_string());
+                    let class = match &n.data {
+                        lumen_dom::NodeData::Element { attrs, .. } => attrs
+                            .iter()
+                            .find(|a| a.name.local.eq_ignore_ascii_case("class"))
+                            .map_or(String::new(), |a| a.value.chars().take(40).collect()),
+                        _ => String::new(),
+                    };
+                    let mut size = 0usize;
+                    let mut stack = vec![r];
+                    while let Some(id) = stack.pop() {
+                        size += 1;
+                        stack.extend(doc.get(id).children.iter().copied());
+                    }
+                    format!("{tag}.{class}({size})")
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let content_tracked = matches!(content_dirty, lumen_layout::counters::ContentDirty::Nodes(_));
         let journal_len = content_journal.map(|j| j.len());
         let delta = lumen_layout::counters::RestyleDelta {
@@ -1304,6 +1331,7 @@ impl FlushHandles {
         if lumen_paint::frame_log_enabled() {
             // BUG-935 срез 66: сколько элементов каскад пересчитал, а сколько взял из кэша.
             eprintln!("[engine] incr cascade {:?}", lumen_layout::counters::take_cascade_stats());
+            eprintln!("[engine] incr deep roots: {deep_log:?}");
             eprintln!("[engine] incr stages: index={:.1} roots={:.1} prev={:.1} layout_done={:.1} content_tracked={content_tracked} journal={journal_len:?} has_dependency={has_dependency} sheet_roots={sheet_delta_count} deep={deep_count} shallow={shallow_count} roots={root_tags:?} changes={change_log:?}", tp_index.as_secs_f64()*1e3, tp_roots.as_secs_f64()*1e3, tp_prev.as_secs_f64()*1e3, tp0.elapsed().as_secs_f64()*1e3);
         }
         Some((result.0, result.1, scope_roots, prev_node_ids, prev_node_raw_ids, content_nodes, scroll_rollups))

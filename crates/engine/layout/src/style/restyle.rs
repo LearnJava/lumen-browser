@@ -623,21 +623,50 @@ fn compound_is_positional(compound: &CompoundSelector) -> bool {
 /// `:only-child` goes to `ends` instead — a child-list edit can flip those only on the first
 /// and the last element ([`compound_is_ends_only`]), which is what lets the edit name them
 /// ([`NodeChange::ChildListEnds`]).
+///
+/// BUG-935 срез 92: each compound is kept together with the selector's subject compound, which is
+/// all that bounds what the compound can reach below the element it matches ([`StructureReader`]).
 fn collect_structure_sensitive_compounds<'a>(
     complex: &'a ComplexSelector,
-    out: &mut Vec<&'a CompoundSelector>,
-    ends: &mut Vec<&'a CompoundSelector>,
+    out: &mut Vec<(&'a CompoundSelector, &'a CompoundSelector)>,
+    ends: &mut Vec<(&'a CompoundSelector, &'a CompoundSelector)>,
 ) {
     let subject = complex.tail.len();
+    let subject_compound = complex.tail.last().map_or(&complex.head, |(_, c)| c);
     for i in 0..subject {
         let compound = if i == 0 { &complex.head } else { &complex.tail[i - 1].1 };
         let after_sibling = i > 0 && is_sibling_combinator(complex.tail[i - 1].0);
         if after_sibling {
-            out.push(compound);
+            out.push((compound, subject_compound));
         } else if compound_is_positional(compound) {
-            if compound_is_ends_only(compound) { ends.push(compound) } else { out.push(compound) }
+            if compound_is_ends_only(compound) {
+                ends.push((compound, subject_compound));
+            } else {
+                out.push((compound, subject_compound));
+            }
         }
     }
+}
+
+/// BUG-935 срез 92: `LUMEN_NO_STRUCTURE_REACH=1` makes a child that a structure-sensitive compound
+/// matches a deep root again (the whole subtree) — A/B switch for a live measurement and the way
+/// back if a page shows a stale style. Read once per process.
+fn structure_reach_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_STRUCTURE_REACH").is_some_and(|v| v != "0"))
+}
+
+/// BUG-935 срез 92 — a non-subject compound that a child-list edit can flip
+/// ([`collect_structure_sensitive_compounds`]), with the subject of its selector.
+///
+/// The flip reaches the descendants of the element the compound matches only through that
+/// selector, and the selector styles only what its subject compound matches — so the elements
+/// below a child to be recascaded are those that could match `subject`, not the whole subtree
+/// (`div:first-child .x` on ria.ru recascaded the 1700-element page for a `.x` that exists in
+/// a handful of places).
+struct StructureReader<'a> {
+    compound: CompoundRef<'a>,
+    subject: CompoundRef<'a>,
 }
 
 /// BUG-935 срез 89 — every positional part of `compound` is `:first-child`, `:last-child` or
@@ -1015,10 +1044,10 @@ pub struct NodeRestyleIndex<'a> {
     has_in_shadow_doc: bool,
     /// BUG-935 срез 60 — the non-subject compounds a child-list change can flip
     /// ([`collect_structure_sensitive_compounds`]).
-    structure_sensitive: Vec<CompoundRef<'a>>,
+    structure_sensitive: Vec<StructureReader<'a>>,
     /// BUG-935 срез 89 — the part of [`Self::structure_sensitive`] that only the first and the
     /// last element sibling can flip ([`compound_is_ends_only`]); the rest stays in the field above.
-    structure_ends: Vec<CompoundRef<'a>>,
+    structure_ends: Vec<StructureReader<'a>>,
     /// BUG-935 срез 68 — what the selectors read from ancestors ([`AncestorDeps`]).
     ancestor_deps: AncestorDeps,
     /// BUG-935 срез 68 — what the selectors with a sibling combinator read from an element
@@ -1087,27 +1116,60 @@ impl<'a> NodeRestyleIndex<'a> {
         }
     }
 
-    /// BUG-935 срез 60 — can a change of the parent's child list alter the style of
-    /// something *below* `child`, through `child`'s own position or siblings
-    /// (`li:first-child a`, `h2 + div p`)? Decided structurally, over-approximating:
-    /// every pseudo-class is taken as possible ([`compound_could_match_after_attr_change`]).
-    fn child_needs_deep_restyle(&self, doc: &Document, child: NodeId) -> bool {
-        self.child_needs_deep_restyle_beyond_ends(doc, child)
-            || self.structure_ends.iter().any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
-    }
-
-    /// BUG-935 срез 89 — [`Self::child_needs_deep_restyle`] for the compounds a child-list edit
-    /// reaches whatever its place in the list (`:nth-child`, `:empty`, a sibling combinator).
-    fn child_needs_deep_restyle_beyond_ends(&self, doc: &Document, child: NodeId) -> bool {
-        self.structure_sensitive
-            .iter()
-            .any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
-    }
-
-    /// BUG-935 срез 89 — [`Self::child_needs_deep_restyle`] for the compounds only an end of
-    /// the list can flip, asked of a child that sits at one.
-    fn child_needs_deep_restyle_at_end(&self, doc: &Document, child: NodeId) -> bool {
-        self.structure_ends.iter().any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
+    /// BUG-935 срез 60 — a change of the parent's child list can alter the style of something
+    /// *below* `child`, through `child`'s own position or siblings (`li:first-child a`,
+    /// `h2 + div p`). Decided structurally, over-approximating: every pseudo-class is taken as
+    /// possible ([`compound_could_match_after_attr_change`]).
+    ///
+    /// BUG-935 срез 92: what lands in `roots` is no longer the child's whole subtree but the
+    /// descendants that could match the subject of a selector the child can feed
+    /// ([`StructureReader`]), as `point` roots — the child itself is recascaded by its shallow
+    /// parent either way, and the rest of its subtree keeps the rules it matched. `beyond_ends`:
+    /// the edit reaches the compounds that follow the position of any child (`:nth-child`, a
+    /// sibling combinator, [`Self::structure_sensitive`]); `at_end`: it reaches the ones only an
+    /// end of the list can flip ([`Self::structure_ends`]).
+    fn add_structure_reach(
+        &self,
+        doc: &Document,
+        child: NodeId,
+        beyond_ends: bool,
+        at_end: bool,
+        roots: &mut RestyleRoots,
+    ) {
+        /// More subjects than this and testing the subtree against each is no cheaper than recascading it.
+        const MAX_SUBJECTS: usize = 4096;
+        let mut subjects: Vec<&CompoundSelector> = Vec::new();
+        for (wanted, readers) in [(beyond_ends, &self.structure_sensitive), (at_end, &self.structure_ends)] {
+            if wanted {
+                subjects.extend(
+                    readers
+                        .iter()
+                        .filter(|r| compound_could_match_after_attr_change(&r.compound, doc, child, ""))
+                        .map(|r| &*r.subject),
+                );
+            }
+        }
+        if subjects.is_empty() {
+            return;
+        }
+        if !self.attr_narrowing || self.ancestor_deps.unmodelled || subjects.len() > MAX_SUBJECTS || structure_reach_disabled() {
+            roots.deep.insert(child);
+            return;
+        }
+        let mut index = SubjectIndex::default();
+        for subject in subjects {
+            index.insert(subject);
+        }
+        let mut stack: Vec<NodeId> = doc.get(child).children.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            let n = doc.get(id);
+            if let NodeData::Element { name, attrs } = &n.data {
+                if index.could_match(doc, id, &name.local, attrs) {
+                    roots.point.insert(id);
+                }
+                stack.extend(n.children.iter().rev().copied());
+            }
+        }
     }
 
     /// BUG-935 срез 68 — [`Self::attr_change_needs_fanout`] for a write whose old value may be
@@ -1370,8 +1432,8 @@ fn build_node_index<'a, 's>(
     let mut has_sibling_reach = false;
     let mut sibling_sources: Vec<&CompoundSelector> = Vec::new();
     let mut has_subjects: Vec<(&CompoundSelector, bool)> = Vec::new();
-    let mut structure_sensitive: Vec<&CompoundSelector> = Vec::new();
-    let mut structure_ends: Vec<&CompoundSelector> = Vec::new();
+    let mut structure_sensitive: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
+    let mut structure_ends: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
     let mut ancestor_deps = AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), ..AncestorDeps::default() };
     let mut sibling_deps = AncestorDeps::default();
     for rules in stylesheet_rule_groups(sheet) {
@@ -1402,8 +1464,14 @@ fn build_node_index<'a, 's>(
             .collect(),
         has_sibling_reach,
         has_in_shadow_doc,
-        structure_sensitive: structure_sensitive.into_iter().map(&wrap).collect(),
-        structure_ends: structure_ends.into_iter().map(&wrap).collect(),
+        structure_sensitive: structure_sensitive
+            .into_iter()
+            .map(|(compound, subject)| StructureReader { compound: wrap(compound), subject: wrap(subject) })
+            .collect(),
+        structure_ends: structure_ends
+            .into_iter()
+            .map(|(compound, subject)| StructureReader { compound: wrap(compound), subject: wrap(subject) })
+            .collect(),
         ancestor_deps,
         sibling_deps,
         attr_narrowing: true,
@@ -1570,7 +1638,7 @@ pub struct RestyleRoots {
 /// A child-list change on `C` reaches only: `C` itself (`:empty`, `:has()`), its direct
 /// children (positional pseudo-classes, sibling combinators), and the subtree of a child
 /// whose own position a selector reads on the way down (`li:first-child a` —
-/// [`NodeRestyleIndex::child_needs_deep_restyle`], which lands such a child in `deep`).
+/// [`NodeRestyleIndex::add_structure_reach`], which lands what such a child feeds in `point`).
 /// What goes beyond that is a sibling combinator on `C` (`C:empty + X`), answered by also
 /// making `C`'s parent a shallow root, and `:has()`, answered by the same
 /// [`NodeRestyleIndex::has_reach_roots`] as before. `:nth-child(… of S)` and shadow roots
@@ -1686,10 +1754,8 @@ fn root_set_impl<'a>(
                         None => {
                             scanned_all.insert(c);
                             for &child in &doc.get(c).children {
-                                if matches!(doc.get(child).data, NodeData::Element { .. })
-                                    && index.child_needs_deep_restyle(doc, child)
-                                {
-                                    roots.deep.insert(child);
+                                if matches!(doc.get(child).data, NodeData::Element { .. }) {
+                                    index.add_structure_reach(doc, child, true, true, &mut roots);
                                 }
                             }
                         }
@@ -1708,11 +1774,7 @@ fn root_set_impl<'a>(
                             let reach = edits as usize + 1;
                             for (i, &child) in elements.iter().enumerate() {
                                 let at_end = (front && i < reach) || (back && elements.len() - i <= reach);
-                                if index.child_needs_deep_restyle_beyond_ends(doc, child)
-                                    || (at_end && index.child_needs_deep_restyle_at_end(doc, child))
-                                {
-                                    roots.deep.insert(child);
-                                }
+                                index.add_structure_reach(doc, child, true, at_end, &mut roots);
                             }
                         }
                     }

@@ -753,7 +753,7 @@ pub fn precompute_counters(
     };
     let mut map = CounterMap::with_capacity(doc.node_count());
     let t = std::time::Instant::now();
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false);
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false);
     note_walk_ns(t.elapsed().as_nanos() as u64);
     map.record_generated_content(doc, flat);
     map
@@ -1005,7 +1005,7 @@ pub fn incremental_precompute_counters(
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
         let t = std::time::Instant::now();
-        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false, doc.root(), false);
+        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false, doc.root(), false, false);
         note_walk_ns(t.elapsed().as_nanos() as u64);
     }
     {
@@ -1419,6 +1419,14 @@ fn record_quote_depths(content: &Content, depth: &mut usize) -> Vec<usize> {
     out
 }
 
+/// BUG-935 срез 92: `LUMEN_NO_LEVEL_DESCENT=1` — a shallow node whose style changed takes its whole
+/// subtree again, as before the slice. A/B switch for a live measurement and the way back if a page
+/// shows a stale style. Read once per process.
+fn level_descent_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_LEVEL_DESCENT").is_some_and(|v| v != "0"))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &Document,
@@ -1445,6 +1453,11 @@ fn walk(
     // BUG-935 срез 60: `id` is a direct child of a [`RestyleDelta::shallow_roots`]
     // node — its own style is recomputed, its subtree only if that changes things.
     shallow_child: bool,
+    // BUG-935 срез 92: an ancestor's own style changed and this node's style was not recomputed
+    // because of it — the node keeps its cascade entry, but its box must be rebuilt (an ancestor
+    // with new geometry-affecting properties is not a licence to reuse the old box), so the
+    // subtree never reports itself clean.
+    unclean: bool,
     // BUG-341 S4: returns `true` when this node's own style AND its entire
     // descendant subtree are unchanged from `prev_styles` (vacuously `true`
     // for non-element nodes, which carry no style of their own). Aggregated
@@ -1476,7 +1489,7 @@ fn walk(
                 if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, force) {
                     continue;
                 }
-                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false);
+                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false, false);
             }
             return all_clean;
         }
@@ -1515,6 +1528,9 @@ fn walk(
     // Whether the subtree below has to be recascaded: for everything but a shallow node,
     // exactly "this node was recomputed".
     let mut subtree_changed = must_recompute;
+    // BUG-935 срез 92: of `subtree_changed`, the part that says the descendants' *matching* may
+    // differ — the node is new or was moved — rather than just the style they inherit.
+    let mut subtree_rematched = false;
     let style: Arc<ComputedStyle> = match reused {
         Some(style) => style,
         None => {
@@ -1527,9 +1543,8 @@ fn walk(
                 // Unchanged style under the same parent: the descendants' inherited
                 // chain and ancestor matching are what they were. A new node, a moved
                 // one or a changed style says nothing of the kind.
-                subtree_changed = displaced
-                    .as_ref()
-                    .is_none_or(|(prev, prev_parent)| *prev_parent != parent.raw() || **prev != *style);
+                subtree_rematched = displaced.as_ref().is_none_or(|(_, prev_parent)| *prev_parent != parent.raw());
+                subtree_changed = subtree_rematched || displaced.as_ref().is_some_and(|(prev, _)| **prev != *style);
             }
             if force {
                 note_forced(
@@ -1583,16 +1598,27 @@ fn walk(
         }
     }
 
-    let child_force = force || subtree_changed;
+    // BUG-935 срез 92: a *shallow* node (its own match is all the delta put in question) whose
+    // style came out different no longer takes its subtree with it. A child's style is a
+    // function of its own matched rules — unchanged — and of this node's style, so each direct
+    // child is recomputed and the walk goes below it only if that came out different (or it moved):
+    // the shallow-child rule, applied level by level. Forcing the whole subtree recomputed ~1100
+    // descendants to the identical style when ria.ru wrote `style` on a container (forced_same ≈ 100 %).
+    let changed_shallow = shallow && subtree_changed && !subtree_rematched && !level_descent_disabled();
+    let child_force = force || (subtree_changed && !changed_shallow);
+    let child_shallow = is_shallow_root || changed_shallow;
+    let child_unclean = unclean || changed_shallow;
     let mut children_clean = true;
     for &child_id in flat.children_of(doc, id) {
         // BUG-341 S27: nothing in the delta can reach this child's subtree, so
         // the walk's whole output for it is a restatement of its input.
-        if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, child_force) {
+        if !child_unclean && skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, child_force) {
             continue;
         }
-        let child_clean =
-            walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force, id, is_shallow_root);
+        let child_clean = walk(
+            doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force, id, child_shallow,
+            child_unclean,
+        );
         children_clean &= child_clean;
     }
 
@@ -1616,7 +1642,7 @@ fn walk(
     // recorded when the delta has a complete content record at all — see
     // `ContentDirty`.
     let content_dirty = incr.is_some_and(|d| d.content_dirty.contains(id));
-    let subtree_clean = !must_recompute && !content_dirty && children_clean;
+    let subtree_clean = !must_recompute && !content_dirty && children_clean && !unclean;
     if subtree_clean && incr.is_some_and(|d| d.content_dirty.tracked()) {
         map.clean_subtrees.insert(id);
         note_clean_insert();
