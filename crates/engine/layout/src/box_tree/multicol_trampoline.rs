@@ -640,7 +640,25 @@ fn grid_windows(
     limit: f32,
 ) -> Vec<(f32, f32, bool)> {
     let keep_gaps = is_column_flex(grid);
+    // The block extents of the children of the items (line boxes, nested blocks): a break never
+    // cuts one of them. Only a wrapped column flex container is snapped this way; a grid with a
+    // child straddling the break stays atomic (`emit_grid_fragments`).
+    let kid_edges: Vec<(f32, f32)> = grid
+        .children
+        .iter()
+        .filter(|c| {
+            !matches!(c.kind, BoxKind::Skip)
+                && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+                && !is_monolithic(c)
+        })
+        .flat_map(|c| c.children.iter())
+        .filter(|k| keep_gaps && !matches!(k.kind, BoxKind::Skip))
+        .map(|k| (k.rect.y - gy, k.rect.y - gy + k.rect.height))
+        .collect();
     let mut windows: Vec<(f32, f32, bool)> = Vec::new();
+    // The block size the container still has: a column that ends above its nominal bottom (a break
+    // moved up to the top of a child) consumed the whole column height of it.
+    let mut total_h = total_h;
     let mut start = 0.0f32;
     loop {
         let mut end = start + limit;
@@ -657,7 +675,25 @@ fn grid_windows(
             windows.push((start, total_h, false));
             break;
         }
-        windows.push((start, end, false));
+        // A break that falls inside a line box (or a nested block) of an item cannot cut it: the
+        // content that does not fit moves to the next column, so the break goes up to the top of
+        // the first child it would have cut (Fragmentation L3 §4.4) and the column keeps its full
+        // height (`flex/fragmentation/009`).
+        let nominal_end = end;
+        let mut snapped = false;
+        while let Some(top) = kid_edges
+            .iter()
+            .filter(|k| k.0 < end - 0.01 && k.1 > end + 0.01)
+            .map(|k| k.0)
+            .fold(None, |m: Option<f32>, t| Some(m.map_or(t, |m| m.min(t))))
+        {
+            if top <= start + 0.01 {
+                break;
+            }
+            end = top;
+            snapped = true;
+        }
+        windows.push((start, end, snapped));
         let in_gap = rows.windows(2).find(|w| {
             let inside = end > w[0].1 + 0.01 && end < w[1].0 - 0.01;
             let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
@@ -667,6 +703,9 @@ fn grid_windows(
         // (`flex/fragmentation/014`); a break inside the gap still drops the rest of it (`006`).
         let at_gap_start = keep_gaps && rows.windows(2).any(|w| (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01);
         start = if at_gap_start { end } else { in_gap.map_or(end, |w| w[1].0) };
+        if snapped {
+            total_h -= (nominal_end - start).max(0.0);
+        }
         if start >= total_h - 0.01 {
             break;
         }
