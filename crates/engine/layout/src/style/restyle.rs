@@ -618,15 +618,39 @@ fn compound_is_positional(compound: &CompoundSelector) -> bool {
 /// one of these has to take its whole subtree with it. The subject compound is
 /// left out: its element is a child of the changed container (recascaded anyway)
 /// or untouched (its own siblings did not change).
-fn collect_structure_sensitive_compounds<'a>(complex: &'a ComplexSelector, out: &mut Vec<&'a CompoundSelector>) {
+///
+/// BUG-935 срез 89: a compound whose only positional parts are `:first-child`/`:last-child`/
+/// `:only-child` goes to `ends` instead — a child-list edit can flip those only on the first
+/// and the last element ([`compound_is_ends_only`]), which is what lets the edit name them
+/// ([`NodeChange::ChildListEnds`]).
+fn collect_structure_sensitive_compounds<'a>(
+    complex: &'a ComplexSelector,
+    out: &mut Vec<&'a CompoundSelector>,
+    ends: &mut Vec<&'a CompoundSelector>,
+) {
     let subject = complex.tail.len();
     for i in 0..subject {
         let compound = if i == 0 { &complex.head } else { &complex.tail[i - 1].1 };
         let after_sibling = i > 0 && is_sibling_combinator(complex.tail[i - 1].0);
-        if after_sibling || compound_is_positional(compound) {
+        if after_sibling {
             out.push(compound);
+        } else if compound_is_positional(compound) {
+            if compound_is_ends_only(compound) { ends.push(compound) } else { out.push(compound) }
         }
     }
+}
+
+/// BUG-935 срез 89 — every positional part of `compound` is `:first-child`, `:last-child` or
+/// `:only-child` (a `:not()`/`:is()` wrapper, `:nth-*`, `-of-type`, `:empty`, `:has()` are not).
+/// Whether such a compound matches an element changes only when that element becomes, or stops
+/// being, the first or the last among its element siblings.
+fn compound_is_ends_only(compound: &CompoundSelector) -> bool {
+    compound.parts.iter().all(|p| match p {
+        SimpleSelector::PseudoClass(pc) if pseudo_class_is_positional(pc) => {
+            matches!(pc, PseudoClass::FirstChild | PseudoClass::LastChild | PseudoClass::OnlyChild)
+        }
+        _ => true,
+    })
 }
 
 /// Whether `node` is an element whose local name is one of `tags` (ASCII case-insensitive).
@@ -992,6 +1016,9 @@ pub struct NodeRestyleIndex<'a> {
     /// BUG-935 срез 60 — the non-subject compounds a child-list change can flip
     /// ([`collect_structure_sensitive_compounds`]).
     structure_sensitive: Vec<CompoundRef<'a>>,
+    /// BUG-935 срез 89 — the part of [`Self::structure_sensitive`] that only the first and the
+    /// last element sibling can flip ([`compound_is_ends_only`]); the rest stays in the field above.
+    structure_ends: Vec<CompoundRef<'a>>,
     /// BUG-935 срез 68 — what the selectors read from ancestors ([`AncestorDeps`]).
     ancestor_deps: AncestorDeps,
     /// BUG-935 срез 68 — what the selectors with a sibling combinator read from an element
@@ -1065,9 +1092,22 @@ impl<'a> NodeRestyleIndex<'a> {
     /// (`li:first-child a`, `h2 + div p`)? Decided structurally, over-approximating:
     /// every pseudo-class is taken as possible ([`compound_could_match_after_attr_change`]).
     fn child_needs_deep_restyle(&self, doc: &Document, child: NodeId) -> bool {
+        self.child_needs_deep_restyle_beyond_ends(doc, child)
+            || self.structure_ends.iter().any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
+    }
+
+    /// BUG-935 срез 89 — [`Self::child_needs_deep_restyle`] for the compounds a child-list edit
+    /// reaches whatever its place in the list (`:nth-child`, `:empty`, a sibling combinator).
+    fn child_needs_deep_restyle_beyond_ends(&self, doc: &Document, child: NodeId) -> bool {
         self.structure_sensitive
             .iter()
             .any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
+    }
+
+    /// BUG-935 срез 89 — [`Self::child_needs_deep_restyle`] for the compounds only an end of
+    /// the list can flip, asked of a child that sits at one.
+    fn child_needs_deep_restyle_at_end(&self, doc: &Document, child: NodeId) -> bool {
+        self.structure_ends.iter().any(|c| compound_could_match_after_attr_change(c, doc, child, ""))
     }
 
     /// BUG-935 срез 68 — [`Self::attr_change_needs_fanout`] for a write whose old value may be
@@ -1331,6 +1371,7 @@ fn build_node_index<'a, 's>(
     let mut sibling_sources: Vec<&CompoundSelector> = Vec::new();
     let mut has_subjects: Vec<(&CompoundSelector, bool)> = Vec::new();
     let mut structure_sensitive: Vec<&CompoundSelector> = Vec::new();
+    let mut structure_ends: Vec<&CompoundSelector> = Vec::new();
     let mut ancestor_deps = AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), ..AncestorDeps::default() };
     let mut sibling_deps = AncestorDeps::default();
     for rules in stylesheet_rule_groups(sheet) {
@@ -1345,7 +1386,7 @@ fn build_node_index<'a, 's>(
                 }
                 conservative |= complex_selector_has_nth_of(selector);
                 collect_sibling_source_compounds(selector, &mut sibling_sources);
-                collect_structure_sensitive_compounds(selector, &mut structure_sensitive);
+                collect_structure_sensitive_compounds(selector, &mut structure_sensitive, &mut structure_ends);
             }
         }
     }
@@ -1362,6 +1403,7 @@ fn build_node_index<'a, 's>(
         has_sibling_reach,
         has_in_shadow_doc,
         structure_sensitive: structure_sensitive.into_iter().map(&wrap).collect(),
+        structure_ends: structure_ends.into_iter().map(&wrap).collect(),
         ancestor_deps,
         sibling_deps,
         attr_narrowing: true,
@@ -1390,6 +1432,20 @@ pub enum NodeChange<'a> {
     /// children instead of the parent's whole subtree; the single-set
     /// [`restyle_root_set_for_node_change`] reads it as [`Self::Unattributed`].
     ChildList,
+    /// BUG-935 срез 89 — like [`Self::ChildList`], and the source knows every edit of the list was
+    /// an insertion or a removal of an *element* (text nodes do not count for `:first-child`).
+    /// `front`/`back`: some edit happened with no element before/after it, i.e. it can have
+    /// changed which element is first/last; `edits`: how many element edits there were. An
+    /// element then changed its first/last state only if it now sits within `edits + 1` of
+    /// that end — each edit moves the old first/last by at most one place.
+    ChildListEnds {
+        /// Some edit left no element before the edited node.
+        front: bool,
+        /// Some edit left no element after the edited node.
+        back: bool,
+        /// Number of element insertions/removals the change covers.
+        edits: u32,
+    },
     /// Something else changed, or the source cannot name what changed: a child
     /// list moved (`:nth-child`, `:empty` and sibling combinators all react to
     /// that, and no attribute name describes it), or the mutation came from a
@@ -1406,6 +1462,16 @@ pub enum OwnedNodeChange {
     Unattributed,
     /// Only the node's child list changed.
     ChildList,
+    /// Only the node's child list changed, by element edits that touched these ends
+    /// ([`NodeChange::ChildListEnds`]).
+    ChildListEnds {
+        /// Some edit left no element before the edited node.
+        front: bool,
+        /// Some edit left no element after the edited node.
+        back: bool,
+        /// Number of element insertions/removals.
+        edits: u32,
+    },
     /// The attribute was written; its earlier value is not on record.
     Attr(Box<str>),
     /// The attribute was written, and this is the value it had at the watermark.
@@ -1423,6 +1489,9 @@ impl OwnedNodeChange {
         match self {
             Self::Unattributed => NodeChange::Unattributed,
             Self::ChildList => NodeChange::ChildList,
+            Self::ChildListEnds { front, back, edits } => {
+                NodeChange::ChildListEnds { front: *front, back: *back, edits: *edits }
+            }
             Self::Attr(name) => NodeChange::Attr(name),
             Self::AttrFrom { name, old } => NodeChange::AttrFrom { name, old },
         }
@@ -1548,7 +1617,7 @@ pub fn restyle_roots_for_node_changes_with_basis<'a>(
 fn fresh_node_change_is_covered(doc: &Document, n: NodeId, change: &NodeChange<'_>) -> bool {
     let attr = match change {
         NodeChange::Unattributed => return false,
-        NodeChange::ChildList => "",
+        NodeChange::ChildList | NodeChange::ChildListEnds { .. } => "",
         NodeChange::Attr(name) | NodeChange::AttrFrom { name, .. } => name,
     };
     attr != "slot"
@@ -1568,6 +1637,8 @@ fn root_set_impl<'a>(
     }
     let mut roots = RestyleRoots::default();
     let shallow_ok = allow_shallow && !index.conservative;
+    // Containers whose every element child was asked `child_needs_deep_restyle`.
+    let mut scanned_all: HashSet<NodeId> = HashSet::new();
     for (n, change) in changes {
         // BUG-935 срез 82: a node the cascade has no style for is recascaded in full when
         // its parent's child list change reaches it.
@@ -1582,7 +1653,11 @@ fn root_set_impl<'a>(
             continue;
         }
         match change {
-            NodeChange::ChildList if shallow_ok => {
+            NodeChange::ChildList | NodeChange::ChildListEnds { .. } if shallow_ok => {
+                let ends = match change {
+                    NodeChange::ChildListEnds { front, back, edits } => Some((front, back, edits)),
+                    _ => None,
+                };
                 // A text/comment node reported for a data change: its parent's child
                 // list is what `:empty` and the siblings read.
                 let container = if matches!(doc.get(n).data, NodeData::Element { .. }) {
@@ -1594,19 +1669,50 @@ fn root_set_impl<'a>(
                     roots.deep.insert(n);
                     continue;
                 };
-                let mut containers = vec![n];
+                // The parent's list did not change: what reaches it is `n`'s own place among
+                // its siblings, which no edit position describes.
+                let mut containers = vec![(n, ends)];
                 if index.attr_change_needs_fanout(doc, n, "")
                     && let Some(parent) = doc.get(n).parent
                 {
-                    containers.push(parent);
+                    containers.push((parent, None));
                 }
-                for c in containers {
-                    if roots.shallow.insert(c) {
-                        for &child in &doc.get(c).children {
-                            if matches!(doc.get(child).data, NodeData::Element { .. })
-                                && index.child_needs_deep_restyle(doc, child)
-                            {
-                                roots.deep.insert(child);
+                for (c, ends) in containers {
+                    roots.shallow.insert(c);
+                    if scanned_all.contains(&c) {
+                        continue;
+                    }
+                    match ends {
+                        None => {
+                            scanned_all.insert(c);
+                            for &child in &doc.get(c).children {
+                                if matches!(doc.get(child).data, NodeData::Element { .. })
+                                    && index.child_needs_deep_restyle(doc, child)
+                                {
+                                    roots.deep.insert(child);
+                                }
+                            }
+                        }
+                        // BUG-935 срез 89: the edits left the first/last element where an edit
+                        // reached, so `:first-child`/`:last-child` flipped only within `edits + 1`
+                        // places of that end; the compounds an edit reaches wherever it was
+                        // (`:nth-child`, sibling combinators) are asked of every child, as before.
+                        Some((front, back, edits)) => {
+                            let elements: Vec<NodeId> = doc
+                                .get(c)
+                                .children
+                                .iter()
+                                .copied()
+                                .filter(|&ch| matches!(doc.get(ch).data, NodeData::Element { .. }))
+                                .collect();
+                            let reach = edits as usize + 1;
+                            for (i, &child) in elements.iter().enumerate() {
+                                let at_end = (front && i < reach) || (back && elements.len() - i <= reach);
+                                if index.child_needs_deep_restyle_beyond_ends(doc, child)
+                                    || (at_end && index.child_needs_deep_restyle_at_end(doc, child))
+                                {
+                                    roots.deep.insert(child);
+                                }
                             }
                         }
                     }
@@ -1618,7 +1724,7 @@ fn root_set_impl<'a>(
                     NodeChange::AttrFrom { name, old } => {
                         (index.attr_change_needs_fanout_from(doc, n, name, Some(old)), Some((name, Some(old))))
                     }
-                    NodeChange::Unattributed | NodeChange::ChildList => (true, None),
+                    NodeChange::Unattributed | NodeChange::ChildList | NodeChange::ChildListEnds { .. } => (true, None),
                 };
                 // BUG-935 срез 68: nothing below `n` reads what was written, so `n` and its
                 // direct children are restyled and the walk goes deeper only if `n`'s style

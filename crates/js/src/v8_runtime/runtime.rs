@@ -68,6 +68,17 @@ pub struct DomTouched {
     /// the node and its direct children instead of the parent's whole subtree
     /// (`NodeChange::ChildList`). Never cleared, like [`Self::touch_gen`].
     pub(crate) child_list_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 89: `node → epoch` of the node's latest child-list touch that no edit
+    /// record describes (`innerHTML`, `textContent`, a fragment, a log that outgrew
+    /// [`CHILD_EDIT_CAP`]). One after the basis reports the plain `ChildList`. Never cleared.
+    pub(crate) child_any_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 89: `node → [(epoch, front, back)]`, one entry per insertion or removal of
+    /// an *element* child through `appendChild`/`insertBefore`/`removeChild`; `front`/`back` —
+    /// no element sibling stood before/after the edited node, so the edit could change which
+    /// element is first/last. Text nodes are not recorded: no `:first-child` counts them.
+    /// Lets the flush say which children a child-list change can have given a different
+    /// `:first-child`/`:last-child` answer ([`lumen_layout::style::NodeChange::ChildListEnds`]).
+    pub(crate) child_edits: HashMap<NodeId, Vec<(u64, bool, bool)>>,
     /// BUG-1211: `node → attribute name → epoch` of the latest write to that
     /// attribute through `setAttribute`/`removeAttribute`/inline `style`.
     /// Lets the flush ask `restyle_root_set_for_node_change` which selectors
@@ -89,6 +100,10 @@ pub struct DomTouched {
     /// nobody drains under the engine thread, stayed set for the page's whole life.
     pub(crate) unattributed_gen: u64,
 }
+
+/// BUG-935 срез 89: child-list edits kept per node ([`DomTouched::child_edits`]); a node edited
+/// more often than this between two drains falls back to the plain `ChildList`.
+pub(crate) const CHILD_EDIT_CAP: usize = 32;
 
 /// BUG-935 срез 81: what [`V8JsRuntime::dom_changes_reader`] reports since its last call.
 #[derive(Debug, Default, Clone)]
@@ -220,11 +235,20 @@ impl DomTouched {
             // BUG-935 срез 60: a touch that changed only the child list is its own kind of
             // change — the node and its direct children are restyled, not the parent's subtree.
             let child_list = self.child_list_gen.get(&n).copied().unwrap_or(0) > basis_epoch;
+            let child_list_any = self.child_any_gen.get(&n).copied().unwrap_or(0) > basis_epoch;
             if structural || (child_list && !child_list_narrowing) || (named.is_empty() && !child_list) {
                 changes.push((n, lumen_layout::style::OwnedNodeChange::Unattributed));
             } else {
-                if child_list {
+                if child_list && child_list_any {
                     changes.push((n, lumen_layout::style::OwnedNodeChange::ChildList));
+                } else if child_list {
+                    let (mut front, mut back, mut edits) = (false, false, 0u32);
+                    for &(_, f, b) in self.child_edits.get(&n).into_iter().flatten().filter(|e| e.0 > basis_epoch) {
+                        front |= f;
+                        back |= b;
+                        edits += 1;
+                    }
+                    changes.push((n, lumen_layout::style::OwnedNodeChange::ChildListEnds { front, back, edits }));
                 }
                 changes.extend(named.into_iter().map(|c| (n, c)));
             }
