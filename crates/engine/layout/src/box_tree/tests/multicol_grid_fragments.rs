@@ -324,3 +324,21 @@ fn a_column_flex_fragment_after_a_dropped_gap_keeps_the_block_size_the_gap_took(
     let heights: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
     assert_eq!(heights, vec![102.0, 102.0], "{heights:?}");
 }
+
+#[test]
+fn a_column_flex_break_inside_a_line_box_moves_up_to_the_top_of_the_line() {
+    // flex/fragmentation/009: four 30px items with a text line each in a 170px column flex, cut
+    // by 90px columns. The first break falls inside the text line of item 3 (the items sit at
+    // y 2/42/82/122), so it moves up to the top of that line and the item goes whole into the
+    // second column: two items per fragment instead of item 3 being cut in two.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div>1</div><div>2</div><div>3</div><div>4</div></div></div>",
+        "body{margin:0} #m{columns:2;column-width:100px;height:90px;width:330px} \
+         #f{border:2px solid #688;display:flex;column-gap:10px;row-gap:10px;width:90px;flex-wrap:wrap;\
+         flex-direction:column;height:170px} #f>div{width:30px;height:30px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let items: Vec<usize> = v.iter().map(|b| b.children.len()).collect();
+    assert_eq!(items, vec![2, 2], "{items:?}");
+}
