@@ -14,7 +14,11 @@ use crate::*;
 /// Рекурсивно собирает `ComputedStyle` всех узлов layout-дерева.
 /// Результат используется `transition_scheduler.sync()` для сравнения
 /// предыдущего и нового стиля после каждого relayout-а.
-pub(crate) fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, Arc<ComputedStyle>>) {
+/// Per-node style snapshot; `IdMap` (identity-hash) because `NodeId` keys are dense
+/// indices and SipHash on ~1200 inserts+lookups per relayout tick cost ~1 ms on the UI thread.
+pub(crate) type StyleMap = lumen_core::id_hash::IdMap<NodeId, Arc<ComputedStyle>>;
+
+pub(crate) fn collect_box_styles(lb: &LayoutBox, map: &mut StyleMap) {
     // THREAD-7: `LayoutBox::style` is an `Arc` and layout boxes are immutable
     // after the build, so the snapshot shares the handle instead of deep-copying
     // every `ComputedStyle` on the UI thread (was ~20 ms per tick on ria.ru).

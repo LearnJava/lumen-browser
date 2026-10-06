@@ -1252,7 +1252,7 @@ impl Lumen {
         self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
-        let mut new_styles = HashMap::new();
+        let mut new_styles = crate::layout_walk::StyleMap::default();
         apply_step!("transitions_sync", {
             collect_box_styles(&lb, &mut new_styles);
             for (node, new_style) in &new_styles {
