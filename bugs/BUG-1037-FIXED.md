@@ -1,6 +1,6 @@
 # BUG-1037 — невидимый `position:fixed`/`sticky` replaced-элемент оставляет `Begin*Layer` без пары
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-06 (P6, THREAD-13 срез 1)
 **Заведён:** 2026-09-08 (P1), при работе над LAYOUT-2 срез 9 (явный стек для `display_list/walk.rs::walk`)
 **Область:** paint (`crates/engine/paint/src/display_list/walk.rs`)
 
@@ -51,3 +51,7 @@ ordered/anim-aware paint путь) не имеет этой формы — `emit
 отдельный `box_layer_ops`/`BoxLayerOps`, не завязанный на ранние `return` по видимости внутри
 `emit_box_self`), так что `Begin`/`End` там не может рассинхронизироваться тем же путём. Баг
 специфичен для легаси `walk`.
+
+## Исправление
+
+Все шесть ранних выходов `dispatch` идут через `close_position_layers` (`walk.rs`), которая закрывает `EndFixedLayer`/`EndStickyLayer`. Регрессия — `legacy_walk_invisible_replaced_keeps_layer_brackets_balanced` (`tests/fixed_cb_scroll.rs`): 6 видов элементов × fixed/sticky × hidden/нулевой размер.
