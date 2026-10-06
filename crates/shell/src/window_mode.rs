@@ -347,6 +347,7 @@ pub(crate) fn run_window_mode(
         engine_job_generation: 0,
         engine_applied_generation: 0,
         m4_swap_backoff: 0,
+        m4_swap_penalty: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
         frozen_styles: HashMap::new(),
