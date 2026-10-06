@@ -520,9 +520,14 @@ fn momentum_scroll_at(
 fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg>) {
     let clock = Instant::now();
     let mut state = RenderState::new();
+    // Начало прошлой порции работы (батч или self-tick). Таймаут тика
+    // отсчитывается от него, а не от конца: `render` блокируется на vsync
+    // (≈ период), и `recv_timeout(MOMENTUM_TICK)` после него давал бы шаг
+    // «период + период» = ~30 мс, то есть каждый второй vsync пропущен.
+    let mut last_work = Instant::now();
     loop {
         let first = if state.momentum.is_some() || state.scroll_anim.is_some() {
-            match rx.recv_timeout(MOMENTUM_TICK) {
+            match rx.recv_timeout(MOMENTUM_TICK.saturating_sub(last_work.elapsed())) {
                 Ok(m) => Some(m),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -535,6 +540,7 @@ fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg
             }
         };
 
+        last_work = Instant::now();
         match first {
             Some(first) => {
                 let mut batch = vec![first];
