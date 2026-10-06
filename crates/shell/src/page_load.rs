@@ -2431,8 +2431,11 @@ impl Lumen {
         // `Send + 'static`); гейт `self.js_present` держит сбор геометрии
         // JS-гейтнутым — байт-идентично флаг-офф (`route_query_js(…, Some(js), …)` =
         // синхронный вызов по UI-хэндлу).
+        // THREAD-9 срез 4: запросы lazy-картинок больше не ждут движок блокирующим
+        // `route_query_js` — задача кладёт их в `pending_lazy_image_reqs`, их забирает
+        // `drain_pending_lazy_image_reqs` в `about_to_wait` (и просит перерисовку).
         #[cfg(feature = "v8")]
-        let initial_lazy_reqs: Vec<(u32, String)> = if self.js_present {
+        if self.js_present {
             let owned_pairs: Vec<(u32, String)> =
                 page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
             type LazyImageGeom = (
@@ -2478,7 +2481,8 @@ impl Lumen {
             {
                 self.prev_layout_shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
             }
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            let reqs_slot = Arc::clone(&self.pending_lazy_image_reqs);
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 let pairs: Vec<(u32, &str)> =
                     owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
                 js.register_lazy_images(&pairs);
@@ -2489,22 +2493,14 @@ impl Lumen {
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();
                     js.deliver_lazy_images();
-                    return js.take_lazy_image_requests();
+                    let reqs = js.take_lazy_image_requests();
+                    if !reqs.is_empty()
+                        && let Ok(mut slot) = reqs_slot.lock()
+                    {
+                        slot.extend(reqs);
+                    }
                 }
-                Vec::new()
-            })
-            .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        #[cfg(feature = "v8")]
-        if !initial_lazy_reqs.is_empty() {
-            self.fetch_and_register_lazy_images(initial_lazy_reqs);
-            // Images were registered after the request_redraw above — request
-            // another so the first paint actually shows them.
-            if let Some(w) = self.window.as_ref() {
-                w.request_redraw();
-            }
+            });
         }
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;

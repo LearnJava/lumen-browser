@@ -1712,6 +1712,9 @@ impl Lumen {
         let reqs = take_pending_lazy_image_reqs(&self.pending_lazy_image_reqs);
         if !reqs.is_empty() {
             self.fetch_and_register_lazy_images(reqs);
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
         }
     }
 
