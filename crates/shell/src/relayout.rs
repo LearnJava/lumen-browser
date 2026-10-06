@@ -921,6 +921,29 @@ impl Lumen {
         raf_turn_inflight || job_generation != applied_generation
     }
 
+    /// THREAD-9: неблокирующее чтение `take_navigate_request` после диспатча
+    /// события. Читает сама движковая задача (она встаёт в FIFO после уже
+    /// отправленных `eval_js`, порядок read-after-eval сохранён) и кладёт
+    /// результат в [`Self::js_nav_inbox`]; UI-поток не ждёт движок. Без
+    /// движкового потока задача выполняется синхронно, поэтому ящик
+    /// переносится в `pending_js_navigate` сразу — байт-идентично прежнему.
+    pub(crate) fn queue_js_navigate_read(&mut self) {
+        let inbox = Arc::clone(&self.js_nav_inbox);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            crate::engine_bridge::deposit_js_navigate(&inbox, j.take_navigate_request());
+        });
+        if self.engine_thread.is_none() {
+            self.collect_js_nav_inbox();
+        }
+    }
+
+    /// THREAD-9: переносит запрос из [`Self::js_nav_inbox`] в `pending_js_navigate`.
+    pub(crate) fn collect_js_nav_inbox(&mut self) {
+        if let Some(nav) = self.js_nav_inbox.lock().ok().and_then(|mut g| g.take()) {
+            self.pending_js_navigate = Some(nav);
+        }
+    }
+
     /// ADR-016 M2.3 + THREAD-2: value-returning JS drain that is **deferred**
     /// (returns `None`) while a rAF turn or a submitted relayout job is in
     /// flight on the engine thread (see [`Self::should_defer_query`]). The

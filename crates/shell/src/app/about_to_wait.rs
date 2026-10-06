@@ -288,6 +288,10 @@ impl Lumen {
                 // BUG-480 срез 4: доставка кросс-фреймовых postMessage в страницу.
                 j.pump_frame_messages();
             });
+            // THREAD-9: nav-запрос, поставленный скриптом страницы в этом тике, читает
+            // сама движковая задача (после pump-батча — порядок прежний) и кладёт в
+            // `js_nav_inbox`; блокирующего `query` на тик больше нет.
+            self.queue_js_navigate_read();
             // ADR-016 M2.2c-2c/THREAD-2: value-returning nav/timer чтения через
             // `drain_query_js` (тот же non-blocking-when-busy паттерн, что канва/
             // scroll/история ниже). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются
@@ -295,9 +299,6 @@ impl Lumen {
             // ИЛИ ещё не применённым relayout-job'ом (иначе `query` FIFO-serialize
             // за его хвостом — то, что THREAD-2 убирает); без флага (по умолчанию)
             // — прежний прямой `js.<read>()`, байт-идентично.
-            if let Some(nav) = self.drain_query_js(|j| j.take_navigate_request()).flatten() {
-                self.pending_js_navigate = Some(nav);
-            }
             if let Some(wakeup_epoch_ms) =
                 self.drain_query_js(|j| j.take_timer_wakeup()).flatten()
             {
@@ -1975,6 +1976,7 @@ impl Lumen {
         // JS navigation: location.href=, assign(), replace(), reload().
         // Executed after the initial page render so the user sees something
         // before the redirect completes (matches browser behaviour).
+        self.collect_js_nav_inbox();
         if let Some(nav) = self.pending_js_navigate.take() {
             match nav {
                 JsNavigateRequest::Push(url) => {
