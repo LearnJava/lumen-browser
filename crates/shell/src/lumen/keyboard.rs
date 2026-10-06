@@ -15,7 +15,7 @@ use crate::*;
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
+    pub(crate) fn handle_key(&mut self, event_loop: &MainHandle<'_>, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
             return;
         }

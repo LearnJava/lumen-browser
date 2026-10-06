@@ -29,6 +29,7 @@ mod adblock;
 mod address_bar;
 mod assets;
 mod app;
+mod browser_thread;
 mod animation_scheduler;
 mod automation_server;
 mod click_log;
@@ -302,6 +303,7 @@ use lumen_driver::{
     ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NetworkEntry as DriverNetworkEntry,
     WaitCondition,
 };
+use browser_thread::MainHandle;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};

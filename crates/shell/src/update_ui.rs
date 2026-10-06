@@ -345,7 +345,7 @@ impl crate::Lumen {
     pub(crate) fn dispatch_update_action(
         &mut self,
         action: lumen_chrome::ChromeAction,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         use lumen_chrome::ChromeAction;
         match action {

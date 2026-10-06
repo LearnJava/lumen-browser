@@ -206,7 +206,7 @@ impl Lumen {
     }
 
     /// Close the tab at `idx`. If it was the last tab, exits the app instead.
-    pub(crate) fn close_tab(&mut self, idx: usize, event_loop: &winit::event_loop::ActiveEventLoop) {
+    pub(crate) fn close_tab(&mut self, idx: usize, event_loop: &crate::browser_thread::MainHandle<'_>) {
         if self.tab_strip.len() == 1 {
             // Last tab — exit.
             event_loop.exit();
@@ -252,7 +252,7 @@ impl Lumen {
     pub(crate) fn exec_tab_menu_action(
         &mut self,
         action: tabs::context_menu::MenuAction,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         use tabs::context_menu::MenuAction;
         let idx = self.tab_context_menu.target_idx;
@@ -381,7 +381,7 @@ impl Lumen {
     fn move_tab_to_new_window(
         &mut self,
         idx: usize,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         if idx != self.tab_strip.active {
             self.switch_tab(idx);

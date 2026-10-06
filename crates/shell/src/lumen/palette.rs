@@ -48,7 +48,7 @@ impl Lumen {
         &mut self,
         code: KeyCode,
         key_event: &KeyEvent,
-        event_loop: &ActiveEventLoop,
+        event_loop: &MainHandle<'_>,
     ) -> bool {
         match code {
             KeyCode::Escape if !key_event.repeat => {
@@ -98,7 +98,7 @@ impl Lumen {
     pub(crate) fn activate_palette(
         &mut self,
         item: &panels::command_palette::PaletteItem,
-        event_loop: &ActiveEventLoop,
+        event_loop: &MainHandle<'_>,
     ) {
         use panels::command_palette::{PaletteAction, PaletteKind};
         match &item.kind {

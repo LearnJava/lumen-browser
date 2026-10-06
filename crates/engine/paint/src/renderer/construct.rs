@@ -62,14 +62,14 @@ struct OpenedWindowBackend {
 }
 
 impl Renderer {
-    pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
+    pub fn new(window: Arc<crate::SurfaceWindow>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
         Font::parse(&font_bytes).map_err(|e| format!("парсинг шрифта: {e}"))?;
         block_on(Self::new_async(window, font_bytes, target_color_space))
     }
 
     async fn new_async(
-        window: Arc<Window>,
+        window: Arc<crate::SurfaceWindow>,
         font_bytes: Vec<u8>,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn Error>> {
@@ -225,7 +225,7 @@ impl Renderer {
     /// следующий бэкенд (BUG-1073: `configure` мог паниковать `Invalid
     /// surface` на адаптере, который `request_adapter` уже выдал).
     async fn open_window_backend(
-        window: &Arc<Window>,
+        window: &Arc<crate::SurfaceWindow>,
         backends: wgpu::Backends,
         width: u32,
         height: u32,

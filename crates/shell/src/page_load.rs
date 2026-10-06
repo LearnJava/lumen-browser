@@ -2818,6 +2818,11 @@ fn feed_preload_and_emit(
 /// `IncrementalTreeBuilder::feed_bytes`; (2) `LoadDone` — все байты доступны,
 /// запускаем полный pipeline (CSS + изображения); (3) `LoadError` — ошибка fetch.
 pub(crate) enum LoadEvent {
+    /// ADR-032: поток браузера просит главный поток завершить цикл winit.
+    /// Обслуживается в `MainForwarder`, до `Lumen` не доходит.
+    MainExit,
+    /// ADR-032: создать окно на главном потоке (`ActiveEventLoop` есть только там).
+    MainCreateWindow(Box<crate::browser_thread::CreateWindowRequest>),
     /// No-op wake-up (SDC-2). `winit`'s `ControlFlow::Wait` genuinely parks
     /// the event loop until an OS window event, a scheduled `WaitUntil`
     /// deadline, or a proxied user event arrives — an `AutomationCommand`

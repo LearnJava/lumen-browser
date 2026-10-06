@@ -22,7 +22,6 @@ use lumen_core::geom::Rect;
 use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, DisplayList, RenderBackend};
 use std::sync::Arc;
-use winit::window::Window;
 
 /// The live OS-level Document Picture-in-Picture window (slice 2): a separate
 /// always-on-top `winit::Window` with its own [`RenderBackend`] surface,
@@ -32,10 +31,10 @@ use winit::window::Window;
 /// Owned by `Lumen::doc_pip_os`; created from a
 /// `_lumen_docpip_request_window` request and dropped on close. The drop
 /// closes the OS window (winit destroys the window when the last
-/// `Arc<Window>` is released) and frees the GPU surface.
+/// `Arc<lumen_paint::SurfaceWindow>` is released) and frees the GPU surface.
 pub(crate) struct DocPipOsWindow {
     /// The floating OS window. Identified against `WindowEvent`s by its id.
-    pub(crate) window: Arc<Window>,
+    pub(crate) window: Arc<lumen_paint::SurfaceWindow>,
     /// Dedicated render backend drawing the content.
     pub(crate) renderer: Box<dyn RenderBackend>,
     /// Latest serialized markup of `pipWindow.document`'s hidden content

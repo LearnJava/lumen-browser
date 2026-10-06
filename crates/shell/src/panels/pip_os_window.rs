@@ -29,7 +29,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, ImageRendering, ObjectFit, ObjectPosition};
 use lumen_paint::{DisplayCommand, DisplayList, RenderBackend};
 use std::sync::Arc;
-use winit::window::{Window, WindowAttributes, WindowLevel};
+use winit::window::{WindowAttributes, WindowLevel};
 
 /// The live OS-level picture-in-picture window (CC-7): a separate always-on-top
 /// `winit::Window` with its own [`RenderBackend`] surface, floating above every
@@ -37,10 +37,10 @@ use winit::window::{Window, WindowAttributes, WindowLevel};
 ///
 /// Owned by `Lumen::pip_os`; created from a `_lumen_pip_enter` request and
 /// dropped on exit. The drop closes the OS window (winit destroys the window
-/// when the last `Arc<Window>` is released) and frees the GPU surface.
+/// when the last `Arc<lumen_paint::SurfaceWindow>` is released) and frees the GPU surface.
 pub(crate) struct PipOsWindow {
     /// The floating OS window. Identified against `WindowEvent`s by its id.
-    pub(crate) window: Arc<Window>,
+    pub(crate) window: Arc<lumen_paint::SurfaceWindow>,
     /// Dedicated render backend drawing the forwarded `<video>` content.
     pub(crate) renderer: Box<dyn RenderBackend>,
     /// Poster image URL drawn (object-fit: contain) into the window; empty → grey.

@@ -164,6 +164,19 @@ functions, none through `ActiveEventLoop`):
    off the main thread, and event ordering of `RedrawRequested` (must be
    forwarded, not dropped).
 
+### Slice 2 result (2026-10-06)
+
+Landed as planned (`browser_thread.rs`: `UiMsg`, `MainHandle`, `MainForwarder`),
+with one correction to the probe: **winit 0.30 on Windows returns
+`window_handle()` only on the thread that created the window**, so the GPU
+surface cannot be built on the browser thread from `Arc<Window>`. The main
+thread now snapshots the raw handles at window creation
+(`lumen_paint::SurfaceWindow`, also for PiP windows), and femtovg builds its
+surface attributes from them instead of `GlWindow`. Idle CPU on
+`01-sanity.html`: 109 ms/10 s with the browser thread vs 234 ms without.
+Graphic tests: identical results in both modes (11 failures, all pre-existing).
+macOS behaviour of off-main `Window` calls is still unmeasured.
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats

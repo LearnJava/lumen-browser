@@ -1083,6 +1083,8 @@ class LiveWindowClient:
              'about:blank'],
             cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
             encoding='utf-8', errors='replace',
+            # BUG-1077: dev-панель `#demoBar` закрывает нижний левый угол страницы.
+            env={**os.environ, 'LUMEN_NO_DEMO_PANEL': '1'},
         )
         token = self._read_token()
         self.sock = self._connect_with_retry(port)
