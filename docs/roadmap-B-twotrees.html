@@ -633,7 +633,7 @@
     },
     {
      "id": "BG-ATTACH-LOCAL",
-     "title": "BG-ATTACH-LOCAL: background-attachment: local",
+     "title": "BG-ATTACH-LOCAL: background-attachment: local **Связь:** THREAD-13-S4 меняет опознание скролл-слоёв (id вместо `clip_rect`) — кто второй, тот переносит.",
      "status": "planned",
      "size": "M",
      "note": "`background-attachment: local` (CSS Backgrounds 3 §3.6): режим разбирается (`BackgroundAttachment::Local`), но paint трактует его как `scroll` (`CSS-SPECS.md`: «local = scroll»). Нужно: слои фона `local` идут внутри `PushScrollLayer` своего прокручиваемого бокса и сдвигаются с содержимым; позиционирующая область — padding-box по размеру всего прокручиваемого содержимого, область рисования — padding-box «окна» (клип не под рамку); `rtl`/`*-reverse` — начало отсчёта с правого/нижнего края; ячейка таблицы (`table-cell-background-local*`). Проба: `<div id=s style=\"width:100px;height:100px;overflow:scroll;background:linear-gradient(red 0,red 100px,blue 100px,blue 300px) local\"><div style=\"height:400px\"></div></div>`, `s.scrollTop=100` — пиксель (20,20) красный, ожидается синий; `attachment-local-clipping-color-1.html` — промежутки штриховой рамки залиты зелёным. WPT `css/css-backgrounds`: 26 reftest (`background-attachment-local/*` 14, `local-attachment-*` 5, `table-cell-background-local*` 3, прочие 4). Обе ветки растра (CPU и wgpu). Кластер — `docs/wpt-vendor-notes/css.md` §css-backgrounds (WPT-RUN-14 S6, 2026-10-06).",
@@ -7555,7 +7555,7 @@
       },
       {
        "id": "TOUCH-1",
-       "title": "Сенсорный ввод (WindowEvent::Touch) и жесты с учётом touch-action",
+       "title": "Сенсорный ввод (WindowEvent::Touch) и жесты с учётом touch-action **Зависимость:** после THREAD-13-S3/S4 — pan-прокрутка идёт через `ScrollSnapshot`, которому понадобятся области `touch-action` ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md)).",
        "status": "ready",
        "size": "L",
        "note": "Сенсорный ввод в shell отсутствует: `WindowEvent::Touch` нигде не обрабатывается (в `crates/shell` есть только `TouchPhase` тачпад-скролла, `app/window_event/mouse_wheel.rs`), поэтому `touch-action` (CSS Pointer Events L3 / Touch Events) нечему применять. Что нужно: (1) принять `WindowEvent::Touch`, вести состояние касаний (id, фаза, координаты) и слать в страницу `touchstart/touchmove/touchend/touchcancel` + `pointerdown/move/up/cancel` с `pointerType=touch` (JS-интерфейсы `Touch`/`TouchEvent` уже есть, BUG-688); (2) жест-распознаватель: пан-скролл ближайшего скроллера, pinch-zoom; (3) перед стартом жеста читать `ComputedStyle::touch_action` по цепочке предков от цели касания и пересекать значения (Pointer Events L3 §7.1.1: `none`/`pan-*`/`pinch-zoom`/`manipulation`), запрещённый жест не стартует, а `pointercancel` шлётся по правилам спеки. Значение `touch_action` уже разобрано и лежит в `ComputedStyle` (P4, `style/apply/motion.rs`, `style/computed.rs`), его читателей нет. Заведено 2026-10-02 при попытке взять `CSS-SPECS.md:609` из `STATUS-P4.md`: CSS-часть готова, остаток целиком в shell. После закрытия — вернуть P4 строку-проверку: `touch-action` в CSS-SPECS.md 🟡 → ✅ и убрать «parse+store only» в `CAPABILITIES.md:102`."
@@ -7712,7 +7712,7 @@
        "title": "THREAD-12: build chrome на первом кадре",
        "status": "planned",
        "size": "S",
-       "note": "`build: chrome` — около 1,8 с на первом кадре ria.ru (BUG-935 S87, корень не найден): сборка overlay/chrome-интерфейса на winit-потоке внутри `RedrawRequested`. Найти, что именно стоит 1,8 с (проба по фазам), убрать с первого кадра или с UI-потока. Выделено из остатка BUG-935. Критерий — `build: chrome` ≤ 2 мс на ria/lenta/rbc."
+       "note": "`build: chrome` — около 1,8 с на первом кадре ria.ru (BUG-935 S87, корень не найден): сборка overlay/chrome-интерфейса на winit-потоке внутри `RedrawRequested`. Найти, что именно стоит 1,8 с (проба по фазам), убрать с первого кадра или с UI-потока. Выделено из остатка BUG-935. Критерий — `build: chrome` ≤ 2 мс на ria/lenta/rbc. После THREAD-13-S2 сборка идёт в потоке браузера: на прокрутку не влияет, критерий ≤ 2 мс остаётся ради первого кадра и кликов."
       },
       {
        "id": "THREAD-13",
@@ -7726,7 +7726,7 @@
          "title": "THREAD-13 срез 1: проба fixed и привязок к главному потоку",
          "status": "planned",
          "size": "S",
-         "note": "Проба перед кодом ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 1). Выяснить, как сейчас держится `position:fixed` при прокрутке: paint считает `BeginFixedLayer` no-op (`renderer.rs:3438`), весь контент сдвигается на `-scroll_y`, а `commands.rs:453` утверждает «уже в координатах вьюпорта» — найти, кто это делает (раскладка на каждый шаг прокрутки?). Опись всех применений `ActiveEventLoop` (8 файлов `crates/shell/src`) и прочих привязок к главному потоку: буфер обмена, IME, курсор, диалоги, смена DPI, pointer lock, автоматизация/BiDi. Итог — таблица в ADR-032 §Decision и план среза 2."
+         "note": "Проба перед кодом ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 1). Выяснить, как сейчас держится `position:fixed` при прокрутке: paint считает `BeginFixedLayer` no-op (`renderer.rs:3438`), весь контент сдвигается на `-scroll_y`, а `commands.rs:453` утверждает «уже в координатах вьюпорта» — найти, кто это делает (раскладка на каждый шаг прокрутки?). Опись всех применений `ActiveEventLoop` (8 файлов `crates/shell/src`) и прочих привязок к главному потоку: буфер обмена, IME, курсор, диалоги, смена DPI, pointer lock, автоматизация/BiDi. Итог — таблица в ADR-032 §Decision и план среза 2. Заодно — BUG-1037 (`walk` выходит рано и оставляет `BeginFixedLayer`/`BeginStickyLayer` без пары): правило 4 ADR-032 опирается на эти скобки; починить здесь или до S3."
         },
         {
          "id": "THREAD-13-S2",
@@ -7740,21 +7740,21 @@
          "title": "THREAD-13 срез 3: прокрутка страницы в рендер-потоке",
          "status": "planned",
          "size": "L",
-         "note": "Прокрутка страницы в рендер-потоке ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 3): `ScrollSnapshot` (`Arc`, latest-wins) после каждого relayout; главный поток маршрутизирует колесо/тачпад над областью страницы прямо в рендер-поток; рендер-поток владеет `scroll_y`/`scroll_x` страницы (кривая щелчка, инерция, clamp, snap) и возвращает смещение потоку браузера. Критерий — метрики THREAD-5 на lenta/ria при искусственно занятом потоке браузера."
+         "note": "Прокрутка страницы в рендер-потоке ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 3): `ScrollSnapshot` (`Arc`, latest-wins) после каждого relayout; главный поток маршрутизирует колесо/тачпад над областью страницы прямо в рендер-поток; рендер-поток владеет `scroll_y`/`scroll_x` страницы (кривая щелчка, инерция, clamp, snap) и возвращает смещение потоку браузера. Критерий — метрики THREAD-5 на lenta/ria при искусственно занятом потоке браузера. Автоматизация (`AutomationCommand::Scroll`, `InputCommand::Scroll`, `about_to_wait.rs:966`/`:1347`) переходит на команду рендер-потоку (правило 7 ADR-032); после среза RTT MCP `scroll` (BUG-935, `input_perf.py`/`scroll_perf.py`/`mt_stall_bench.py`) меряет путь команды, а не колесо — метрика колеса THREAD-5."
         },
         {
          "id": "THREAD-13-S4",
          "title": "THREAD-13 срез 4: overflow-контейнеры",
          "status": "planned",
          "size": "L",
-         "note": "Overflow-контейнеры ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 4): id у `PushScrollLayer` вместо поиска по `clip_rect` (`display_list/scrollbars.rs:277`), смещения контейнеров у рендер-потока, цепочка прокрутки и `overscroll-behavior` по снимку. Снимает возражение отклонённого среза 8 THREAD-6 (две копии дерева слоёв): владелец смещения один."
+         "note": "Overflow-контейнеры ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 4): id у `PushScrollLayer` вместо поиска по `clip_rect` (`display_list/scrollbars.rs:277`), смещения контейнеров у рендер-потока, цепочка прокрутки и `overscroll-behavior` по снимку. Снимает возражение отклонённого среза 8 THREAD-6 (две копии дерева слоёв): владелец смещения один. Связано: BUG-931 (ножницы `PushScrollLayer` в wgpu, тот же код), BUG-1215 (новое дерево раскладки сбрасывает смещения в 0 — смещения по id слоя обязаны пережить relayout), BG-ATTACH-LOCAL (фон `local` внутри `PushScrollLayer`)."
         },
         {
          "id": "THREAD-13-S5",
          "title": "THREAD-13 срез 5: асинхронные потребители смещения",
          "status": "planned",
          "size": "M",
-         "note": "Асинхронные потребители смещения ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 5): JS `scroll`/`scrollend`, scroll-timeline (`deliver_scroll_progress`), content-visibility, lazy-картинки, IntersectionObserver, всплывающие формы/подсказки берут последнее смещение от рендер-потока; программная прокрутка (`window.scrollTo`, якоря, find-in-page, клавиатура, перетаскивание полосы) отправляет цель в рендер-поток, а не пишет `scroll_y` сама."
+         "note": "Асинхронные потребители смещения ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 5): JS `scroll`/`scrollend`, scroll-timeline (`deliver_scroll_progress`), content-visibility, lazy-картинки, IntersectionObserver, всплывающие формы/подсказки берут последнее смещение от рендер-потока; программная прокрутка (`window.scrollTo`, якоря, find-in-page, клавиатура, перетаскивание полосы) отправляет цель в рендер-поток, а не пишет `scroll_y` сама. Писатели `scroll_y` переводятся на команды с эпохой (правило 7 ADR-032): клавиатура, полоса прокрутки, find-in-page, якоря/восстановление, bfcache/гибернация/сессия/вкладки, iframes, scroll anchoring (BUG-524), `scroll-initial-target` (BUG-944). Связанные баги: BUG-949 (`scrollY` отстаёт после `scrollTo` — оптимистичная копия), BUG-1166 (`getBoundingClientRect`/IO без учёта прокрутки), BUG-127 (scroll-driven animations читают `scroll_y` контейнера из дерева раскладки), BUG-286 (content-visibility от прокрутки)."
         },
         {
          "id": "THREAD-13-S6",

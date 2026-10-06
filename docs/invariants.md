@@ -59,6 +59,7 @@ that no ADR/policy file states — decide it there first.
 - The engine thread is on by default; `Lumen::js_ctx` is therefore `None` in a live window — reach the runtime through `route_task_js`/`route_query_js`/`clone_js_ctx`, never by reading the field. — [ADR-023](decisions/ADR-023-engine-thread-default.md)
 - The JS runtime lives on its own thread behind a handle + command channel. Install-time state must be captured **by value** into the native's closure — a `thread_local!` set by the installer reads back its default inside the native. — [ADR-014](decisions/ADR-014-js-runtime-thread.md), [subsystems/js.md](../subsystems/js.md) §Invariants
 - Snapshot message passing between UI/render threads, staged M0–M4. — [ADR-016](decisions/ADR-016-multithreaded-render-pipeline.md)
+- Target model, in progress (THREAD-13): the winit main thread stays thin, `Lumen` lives on a browser thread and never crosses threads, the render thread is the **only writer** of scroll offsets — every other source sends it a `scroll_to`/`scroll_by` command with an epoch, and `ActiveEventLoop` operations go through `EventLoopProxy`. — [ADR-032](decisions/ADR-032-thin-main-thread-scroll-off-ui.md)
 
 ## Automation surface
 
