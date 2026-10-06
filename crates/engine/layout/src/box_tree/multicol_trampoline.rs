@@ -1009,6 +1009,12 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     k.rect.x = col_x + (c.rect.x - gx);
                     k.rect.y = cur_y + (lo - ws);
                     k.rect.height = (hi - lo).max(0.0);
+                    // An item that is a grid itself (a subgrid spanning the container's rows) is cut
+                    // like the container: its row tracks are clipped to this window, so the gaps a
+                    // break splits are not painted (`subgrid-gap-decorations-fragmentation-001`).
+                    if top < ws - 0.01 || bot > we + 0.01 {
+                        k.subgrid_tracks = c.subgrid_tracks.as_ref().and_then(|t| item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi));
+                    }
                     // The children of the item that fall in this window, moved with it.
                     let (dx, dy) = (col_x - gx, cur_y - gy - ws);
                     k.children = c
@@ -1082,6 +1088,33 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     frame.init.consumed[i] = true;
     frame.init.cur_y += seg_extent;
     true
+}
+
+/// The row tracks of a grid item cut by a column window, as the fragment of that item: `t.rows`
+/// run from the item's content top (`content_top`, container coordinates), the item keeps the part
+/// `lo..hi` of itself. `None` when the item has no row tracks to clip (the item keeps its own).
+fn item_fragment_tracks(
+    t: &crate::subgrid::SubgridTracks,
+    content_top: f32,
+    lo: f32,
+    hi: f32,
+) -> Option<Box<crate::subgrid::SubgridTracks>> {
+    let rows = t.rows.as_ref()?;
+    let visible: Vec<(usize, (f32, f32))> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(k, &(a, b))| {
+            let (a, b) = ((a + content_top).max(lo), (b + content_top).min(hi));
+            (b > a).then_some((k, (a - lo, b - lo)))
+        })
+        .collect();
+    Some(Box::new(crate::subgrid::SubgridTracks {
+        cols: t.cols.clone(),
+        rows: Some(visible.iter().map(|v| v.1).collect()),
+        fragment: true,
+        row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
+        line_gaps: None,
+    }))
 }
 
 /// CSS Multicol §3.4 atomic fallback — greedy column assignment by height,
