@@ -47,6 +47,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 - **Reply in Russian**, technical tone, no emoji unless the user uses them, no marketing text. Files as clickable markdown links labelled `path:line`.
 - Banned word: "Wikipedia" / "Википедия" — say "reference article" / "external page".
+- **Ask the user only via an ```` ```ask-user ```` block**, confirmations included ("confirm and I start"). A turn ending in a plain-text question reads to the session manager as "stopped without declaring done" — it restarts the session and the answer is lost.
 
 ## Known gotchas — only traps that bite whatever the task is
 
