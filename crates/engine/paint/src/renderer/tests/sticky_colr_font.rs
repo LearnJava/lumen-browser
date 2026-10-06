@@ -1682,3 +1682,140 @@ fn bits_eq(a: &[TextVertex], b: &[TextVertex]) -> bool {
                 && x.color.iter().zip(&y.color).all(|(p, q)| p.to_bits() == q.to_bits())
         })
 }
+
+/// THREAD-11 S4: [`dirty_strips`] — грязные диапазоны полосы в строки
+/// текстуры. Обрезка полосой, склейка, отказ по числу/доле, разрез краем
+/// текстуры при ненулевой фазе кольца.
+#[test]
+fn dirty_strips_plan() {
+    use crate::band_diff::YRange;
+    let r = |top: f32, bottom: f32| YRange { top, bottom };
+    const H: u32 = 1000;
+    // Один диапазон внутри полосы, фаза нулевая: строка = Y − верх.
+    let s = dirty_strips(&[r(110.2, 150.1)], H, 100, 100, 1.0).unwrap();
+    assert_eq!(s, vec![RingStrip { row0: 10, rows: 41, doc_y0: 110 }]);
+    // Обрезка краем полосы: часть вне полосы не рисуется.
+    let s = dirty_strips(&[r(50.0, 130.0)], H, 100, 100, 1.0).unwrap();
+    assert_eq!(s, vec![RingStrip { row0: 0, rows: 30, doc_y0: 100 }]);
+    // Целиком вне полосы — пустой план.
+    assert_eq!(dirty_strips(&[r(5000.0, 5100.0)], H, 100, 100, 1.0).unwrap(), vec![]);
+    // Склейка перекрывающихся после округления.
+    let s = dirty_strips(&[r(200.0, 210.2), r(210.5, 220.0)], H, 0, 0, 1.0).unwrap();
+    assert_eq!(s.len(), 1);
+    assert_eq!((s[0].row0, s[0].rows), (200, 20));
+    // Фаза кольца: диапазон режется краем текстуры на два пасса.
+    let s = dirty_strips(&[r(990.0, 1010.0)], H, 0, 500, 1.0).unwrap();
+    assert_eq!(
+        s,
+        vec![
+            RingStrip { row0: 990, rows: 10, doc_y0: 990 },
+            RingStrip { row0: 0, rows: 10, doc_y0: 1000 },
+        ]
+    );
+    // Больше половины полосы или больше 4 диапазонов — полная перерисовка.
+    assert!(dirty_strips(&[r(0.0, 600.0)], H, 0, 0, 1.0).is_none());
+    let many: Vec<_> = (0..5).map(|i| r(i as f32 * 100.0, i as f32 * 100.0 + 10.0)).collect();
+    assert!(dirty_strips(&many, H, 0, 0, 1.0).is_none());
+    // dpr 2: границы в device px.
+    let s = dirty_strips(&[r(10.0, 20.0)], 2000, 0, 0, 2.0).unwrap();
+    assert_eq!((s[0].row0, s[0].rows), (20, 20));
+}
+
+/// THREAD-11 S4: строчные пассы по диффу дают те же пиксели, что полная
+/// перерисовка нового списка. Гейт корректности пути `LUMEN_BAND_PARTIAL`:
+/// меняется один блок внутри клипа, и полоса, обновлённая только его строками,
+/// обязана совпасть с полосой, нарисованной с нуля.
+///
+/// Требует GPU-адаптер: `cargo test -p lumen-paint --features backend-wgpu
+/// partial_band_strips_match_full_redraw -- --include-ignored`.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn partial_band_strips_match_full_redraw() {
+    use crate::band_diff::{diff_band, BandDiff};
+    const W: u32 = 64;
+    const H: u32 = 200;
+    let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf").expect("bundled font");
+    let mut r = Renderer::new_headless(bytes, W, 48, ColorSpace::Srgb).expect("headless renderer");
+    r.create_page_band(W, H, 0.0);
+    let fill = |y: f32, h: f32, g: u8| DisplayCommand::FillRect {
+        rect: Rect::new(0.0, y, W as f32, h),
+        color: Color { r: 200, g, b: 40, a: 255 },
+    };
+    let list = |mid: u8, tail: u8| {
+        vec![
+            fill(0.0, 200.0, 10),
+            DisplayCommand::PushClipRect { rect: Rect::new(4.0, 50.0, 40.0, 60.0) },
+            fill(40.0, 80.0, mid),
+            DisplayCommand::PopClip,
+            fill(150.0, 20.0, tail),
+        ]
+    };
+    let (a, b) = (list(90, 120), list(250, 120));
+    let da: Vec<u64> = a.iter().map(crate::display_list::hash_one_command).collect();
+    let db: Vec<u64> = b.iter().map(crate::display_list::hash_one_command).collect();
+    let BandDiff::Rows(rows) = diff_band(&a, &da, &b, &db) else { panic!("ожидались строки") };
+    let strips = dirty_strips(&rows, H, 0, 0, 1.0).expect("план строк");
+    assert!(strips.iter().map(|s| s.rows).sum::<u32>() < H / 2);
+
+    let make_tex = |r: &Renderer| {
+        r.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("t"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: r.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let (t1, t2) = (make_tex(&r), make_tex(&r));
+    let (v1, v2) = (
+        t1.create_view(&wgpu::TextureViewDescriptor::default()),
+        t2.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    r.render_band_passes(&a, vec![(0.0, None)], &v1, W, H).unwrap();
+    let passes = strips
+        .iter()
+        .map(|s| ((s.doc_y0 - i64::from(s.row0)) as f32, Some(BandStrip { row0: s.row0, rows: s.rows })))
+        .collect();
+    r.render_band_passes(&b, passes, &v1, W, H).unwrap();
+    r.render_band_passes(&b, vec![(0.0, None)], &v2, W, H).unwrap();
+
+    let read = |r: &Renderer, t: &wgpu::Texture| -> Vec<u8> {
+        let row = (W * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buf = r.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rb"),
+            size: u64::from(row) * u64::from(H),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = r.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_texture_to_buffer(
+            t.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        r.queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |x| {
+            let _ = tx.send(x);
+        });
+        r.device.poll(wgpu::PollType::Wait).unwrap();
+        rx.recv().unwrap().unwrap();
+        let m = slice.get_mapped_range();
+        (0..H as usize).flat_map(|y| m[y * row as usize..y * row as usize + (W * 4) as usize].to_vec()).collect()
+    };
+    let (p1, p2) = (read(&r, &t1), read(&r, &t2));
+    let diff = p1.iter().zip(&p2).filter(|(x, y)| x != y).count();
+    assert_eq!(diff, 0, "строчная перерисовка разошлась с полной в {diff} байтах");
+    // Контроль теста: без строчного обновления полосы A и B различаются.
+    let t3 = make_tex(&r);
+    let v3 = t3.create_view(&wgpu::TextureViewDescriptor::default());
+    r.render_band_passes(&a, vec![(0.0, None)], &v3, W, H).unwrap();
+    assert_ne!(read(&r, &t3), p2, "контроль: A и B обязаны различаться");
+}
