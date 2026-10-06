@@ -137,3 +137,17 @@ MISS next to `key`. Deviation from the text above: the digests are computed at
 the miss, not in the key pass — `diff_band` also needs the **old commands**
 (their `cull_rect` bounds), so the list is cloned too; the cost is paid only
 where a full re-raster already costs tens of ms. Nothing reads them yet (S3).
+
+### Slice 3 result (2026-10-06)
+
+`Renderer::try_adopt_band_key` (`band_compose.rs`) runs before the band
+hit/miss decision for stable-content frames: if the key changed but
+`band_diff::outside_band` says every dirty row lies outside the band (or the
+static list is identical), the band adopts the new key, list and digests and
+the frame is a HIT. Extra preconditions found while writing it: the viewport
+must lie inside the **old** band, size is unchanged, and
+`PageBandCache::generation` (new field) equals `content_generation` — the key
+also folds the generation (images, fonts, canvas bg), which per-command digests
+cannot see, so a generation bump always re-rasters. Behind
+`LUMEN_BAND_PARTIAL=1`, **off by default** until slice 6 measures it; frame
+log level 2 prints `band-partial: adopt|full (<diff>)`. Not yet measured live.

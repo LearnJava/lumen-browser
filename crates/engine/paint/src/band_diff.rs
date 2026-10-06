@@ -250,6 +250,18 @@ fn merge(mut v: Vec<YRange>) -> Vec<YRange> {
     out
 }
 
+/// Ни одна из изменённых строк не попадает в полосу `[top, bottom]` (документные
+/// CSS px): пиксели полосы остаются верными, ключ можно принять без рендера
+/// (ADR-033, срез 3). Полный откат — всегда `false`.
+#[must_use]
+pub fn outside_band(diff: &BandDiff, top: f32, bottom: f32) -> bool {
+    match diff {
+        BandDiff::Identical => true,
+        BandDiff::Rows(rows) => rows.iter().all(|r| r.bottom <= top || r.top >= bottom),
+        BandDiff::Full(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +391,18 @@ mod tests {
         let old = vec![clip(0.0, 900.0), clip(10.0, 100.0), fill(20.0, 5.0), DisplayCommand::PopClip, fill(800.0, 5.0), DisplayCommand::PopClip, fill(950.0, 5.0)];
         let new = vec![clip(0.0, 910.0), clip(10.0, 100.0), fill(20.0, 5.0), DisplayCommand::PopClip, fill(800.0, 5.0), DisplayCommand::PopClip, fill(950.0, 5.0)];
         assert_eq!(rows(&run(&old, &new)), vec![(20.0, 25.0), (800.0, 805.0)]);
+    }
+
+    #[test]
+    fn outside_band_verdicts() {
+        let old = vec![fill(0.0, 10.0), fill(5000.0, 10.0)];
+        let far = vec![fill(0.0, 10.0), fill(5100.0, 10.0)];
+        let d_far = run(&old, &far);
+        assert!(outside_band(&d_far, 0.0, 2500.0));
+        assert!(!outside_band(&d_far, 4000.0, 6500.0));
+        // Касание края с запасом PAD_CSS считается пересечением.
+        assert!(!outside_band(&d_far, 0.0, 5000.5));
+        assert!(outside_band(&run(&old, &old), 0.0, 100.0));
+        assert!(!outside_band(&BandDiff::Full(FullReason::Unbalanced), 0.0, 1.0));
     }
 }

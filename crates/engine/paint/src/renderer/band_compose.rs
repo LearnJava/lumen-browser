@@ -8,6 +8,14 @@
 
 use super::*;
 
+/// THREAD-11 (ADR-033): частичная инвалидация полосы. До замера среза 6
+/// включается `LUMEN_BAND_PARTIAL=1`; потом дефолт перевернётся.
+fn band_partial_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LUMEN_BAND_PARTIAL").is_ok_and(|v| v != "0"))
+}
+
 fn band_ring_enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -235,6 +243,7 @@ impl Renderer {
             key: 0, // невалиден, пока Band-рендер не пройдёт
             cmds: Vec::new(),
             digests: Vec::new(),
+            generation: 0,
             band_top_css,
             // Свежая полоса перерисовывается целиком, то есть фаза кольца
             // нулевая: строка 0 текстуры держит документную строку `band_top`.
@@ -685,6 +694,53 @@ impl Renderer {
         Ok(Some(prefix_len))
     }
 
+    /// THREAD-11 S3: принимает новый ключ полосы без перерисовки, если дифф
+    /// старого и нового статичного списка не задевает строки полосы.
+    /// Вьюпорт обязан лежать в старой полосе (иначе её всё равно сдвигать),
+    /// размер и `content_generation` — те же (ключ зависит и от них, а
+    /// дайджесты команд этого не видят).
+    fn try_adopt_band_key(
+        &mut self,
+        content: &[DisplayCommand],
+        ranges: &[std::ops::Range<usize>],
+        key: u64,
+        scroll_y: f32,
+        prep: &ComposePrep,
+    ) {
+        let ComposePrep { sw, band_h_px, band_h_css, vp_h_css, .. } = *prep;
+        let generation = self.content_generation;
+        let Some(b) = self.page_band.as_mut() else { return };
+        if b.key == 0
+            || b.key == key
+            || b.w_px != sw
+            || b.h_px != band_h_px
+            || b.generation != generation
+            || scroll_y < b.band_top_css
+            || scroll_y + vp_h_css > b.band_top_css + band_h_css
+        {
+            return;
+        }
+        let mut new_cmds = Vec::with_capacity(content.len());
+        let mut prev = 0usize;
+        for r in ranges {
+            new_cmds.extend_from_slice(&content[prev..r.start]);
+            prev = r.end;
+        }
+        new_cmds.extend_from_slice(&content[prev..]);
+        let new_digests: Vec<u64> = new_cmds.iter().map(crate::display_list::hash_one_command).collect();
+        let diff = crate::band_diff::diff_band(&b.cmds, &b.digests, &new_cmds, &new_digests);
+        let adopt = crate::band_diff::outside_band(&diff, b.band_top_css, b.band_top_css + band_h_css);
+        if crate::frame_log_level() >= 2 {
+            let verdict = if adopt { "adopt" } else { "full" };
+            eprintln!("[frame:wgpu] band-partial: {verdict} ({diff:?})");
+        }
+        if adopt {
+            b.key = key;
+            b.cmds = new_cmds;
+            b.digests = new_digests;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn compose_page(
         &mut self,
@@ -728,6 +784,13 @@ impl Renderer {
                 ranges.len(),
                 content.len(),
             );
+        }
+
+        // THREAD-11 S3: ключ сменился, а изменённые строки лежат вне полосы
+        // (или список тот же) — пиксели полосы верны, ключ принимается без
+        // рендера. Только для стабильного контента: нестабильный — срез 5.
+        if content_stable && band_partial_enabled() {
+            self.try_adopt_band_key(content, ranges, key, scroll_y, prep);
         }
 
         let fits = self.page_band.as_ref().is_some_and(|b| {
@@ -877,6 +940,7 @@ impl Renderer {
                 b.key = key;
                 // THREAD-11 S2: список и дайджесты, которыми нарисована полоса.
                 b.digests = static_content.iter().map(crate::display_list::hash_one_command).collect();
+                b.generation = self.content_generation;
                 b.cmds = static_content.into_owned();
                 b.band_top_css = band_top_css;
                 if ring.is_none() {
