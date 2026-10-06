@@ -67,6 +67,39 @@ fn m4_tick_verdict(elapsed_ms: f32, penalty: u8) -> (u8, u8) {
     (ticks, ticks.saturating_mul(2).min(M4_BACKOFF_MAX_TICKS))
 }
 
+/// BUG-935 S86: уходит ли предсказанный полный тик (нет базиса стилей или
+/// неатрибутированная правка) off-thread. Стоимость полного прохода на этой
+/// странице неизвестна или не укладывается в бюджет — UI-поток её не платит.
+fn m4_full_tick_off_thread(last_full_cost_ms: Option<f32>) -> bool {
+    last_full_cost_ms.is_none_or(|ms| ms > M4_TICK_BUDGET_MS)
+}
+
+/// BUG-935 S86: уходит ли off-thread рестайл, чьи глубокие корни покрывают
+/// `deep_elements` из `styled` элементов. Цена on-thread тика растёт с долей
+/// пересчитываемых узлов; ширина — по последнему полному проходу этой
+/// страницы (ria.ru: корень на 2151 узел при 1860 стилизованных — тик 666 мс
+/// на UI-потоке, срез 85). Цены полного прохода нет — не угадываем.
+fn m4_wide_restyle_off_thread(last_full_cost_ms: Option<f32>, deep_elements: usize, styled: usize) -> bool {
+    last_full_cost_ms.is_some_and(|full_ms| {
+        let share = (deep_elements as f32 / styled.max(1) as f32).min(1.0);
+        full_ms * share > M4_TICK_BUDGET_MS
+    })
+}
+
+/// BUG-935 S86: занятость движкового потока короче этого порога — не повод
+/// уводить тик off-thread. `redraw_requested` на каждом кадре ставит ему
+/// fire-and-forget задание доставки scroll-progress (~0,2–0,5 мс), и тик
+/// `about_to_wait` почти всегда заставал его на ходу: на lenta.ru 11–24
+/// off-thread тиков по ~210 мс вместо on-thread по ~60 мс (срез 86, замер на
+/// коде среза 85). Задание, которое держит `document.lock()` секунды (JS-ход
+/// rAF), к моменту следующего тика давно старше порога.
+const M4_BUSY_MIN: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// BUG-935 S86: держит ли движковый поток, занятый уже `since`, on-thread тик.
+fn m4_busy_blocks_tick(since: std::time::Duration) -> bool {
+    since >= M4_BUSY_MIN
+}
+
 /// BUG-935 S80/S85: режимы `LUMEN_BUG935_M4_SWAP` — порядок маршрутизации
 /// rAF-рестайла в [`Lumen::relayout_raf_dirty`].
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -446,18 +479,6 @@ impl Lumen {
             self.layout_box = Some(prev_lb);
             return false;
         };
-        // BUG-935 S12: time this UI-thread path the same way `relayout()` times
-        // the full sync path (`engine_t0` above) — before this section it ran
-        // silently, and a census comparing it against `submit_relayout_job`'s
-        // off-thread cost (S11) had nothing on this side to read.
-        let incr_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
-        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
-        self.engine_applied_generation = self.engine_job_generation;
-        lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
-        lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
-        lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
-        lumen_layout::set_cv_relevant(self.cv_relevant.clone());
-        let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
         // BUG-935 S80: под движковым потоком `js_ctx` на UI-стороне пуст, и прежний
         // `unwrap_or_default()` давал «ничего не тронуто, всё атрибутировано» —
         // рестайл брал стили прошлого прохода целиком и показывал устаревшую
@@ -469,6 +490,8 @@ impl Lumen {
         // (`V8JsRuntime::dom_changes_reader`), трекер для флаша остаётся целым.
         // Читается до блокировки документа — базис раскладки позже отметки, поэтому
         // запись `class`/`id` приходит со всеми значениями после отметки.
+        // Срез 86: читается до побочных эффектов функции — отказ ниже должен их
+        // не оставлять.
         let touched = if self.engine_thread.is_some() {
             self.dom_touched_drain.as_ref().map(|drain| drain()).unwrap_or_else(|| {
                 crate::persistent_js::DomTouchedSummary { changes: Vec::new(), unattributed: true }
@@ -476,6 +499,41 @@ impl Lumen {
         } else {
             self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default()
         };
+        // BUG-935 S86: тик без базиса стилей или с неатрибутированной правкой — это
+        // полный каскад, и on-thread он не дешевле off-thread (ria.ru: первый тик
+        // 970 мс на UI-потоке), зато off-thread не блокирует окно и возвращает
+        // стили, с которыми следующие тики идут по дешёвой ветке. Потерянный
+        // `touched` не нужен: полный проход видит документ целиком.
+        let predicted_full = touched.unattributed || self.page_prev_cascade_styles.is_none();
+        if predicted_full
+            && self.engine_thread.is_some()
+            && m4_swap_mode() == M4Swap::Guarded
+            && m4_full_tick_off_thread(self.m4_full_cost_ms)
+        {
+            if lumen_paint::frame_log_enabled() {
+                eprintln!(
+                    "[engine] relayout_raf_dirty full tick -> off-thread (unattributed={}, basis={}, last_full_ms={:?})",
+                    touched.unattributed,
+                    self.page_prev_cascade_styles.is_some(),
+                    self.m4_full_cost_ms,
+                );
+            }
+            self.layout_box = Some(prev_lb);
+            return false;
+        }
+        // BUG-935 S12: time this UI-thread path the same way `relayout()` times
+        // the full sync path (`engine_t0` above) — before this section it ran
+        // silently, and a census comparing it against `submit_relayout_job`'s
+        // off-thread cost (S11) had nothing on this side to read.
+        let full_t0 = std::time::Instant::now();
+        let incr_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
+        self.engine_applied_generation = self.engine_job_generation;
+        lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
+        lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
+        lumen_layout::set_cv_relevant(self.cv_relevant.clone());
+        let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
         // BUG-341 S19: the two paths are one `if`/`else` rather than an
         // `Option` plus a `match` because the restyle path now *consumes*
         // `prev_lb` (it moves the reusable subtrees straight into the fresh
@@ -539,6 +597,34 @@ impl Lumen {
                 &node_index,
                 &|n| !crate::persistent_js::fresh_node_roots_enabled() || prev_styles.contains_key(&n),
             );
+            if self.engine_thread.is_some() && m4_swap_mode() == M4Swap::Guarded {
+                // Элементы под глубокими корнями — остановка, как только их больше,
+                // чем стилизованных: дальше доля всё равно 1.
+                let styled = prev_styles.len();
+                let (mut deep_elements, mut stack) = (0usize, roots.deep.iter().copied().collect::<Vec<_>>());
+                while let Some(id) = stack.pop() {
+                    if deep_elements > styled {
+                        break;
+                    }
+                    let node = doc.get(id);
+                    deep_elements += usize::from(node.element_name().is_some());
+                    stack.extend(node.children.iter().copied());
+                }
+                if m4_wide_restyle_off_thread(self.m4_full_cost_ms, deep_elements, styled) {
+                    if incr_t0.is_some() {
+                        eprintln!(
+                            "[engine] relayout_raf_dirty wide restyle -> off-thread (deep_elements={deep_elements}, styled={styled}, last_full_ms={:?})",
+                            self.m4_full_cost_ms,
+                        );
+                    }
+                    drop(doc);
+                    lumen_layout::clear_interactive_state();
+                    lumen_layout::set_cv_scroll(0.0, 0.0);
+                    lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+                    self.layout_box = Some(prev_lb);
+                    return false;
+                }
+            }
             if incr_t0.is_some() {
                 let changes: Vec<String> = touched
                     .changes
@@ -645,6 +731,9 @@ impl Lumen {
         // longer conditional on which branch ran.
         self.page_prev_cascade_styles = Some(fresh_cascade_styles);
         self.page_prev_interactive = new_interactive;
+        if !used_restyle {
+            self.m4_full_cost_ms = Some(full_t0.elapsed().as_secs_f32() * 1000.0);
+        }
         if let Some(t0) = incr_t0 {
             let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
             let fmt_ms = |ms: Option<f32>| ms.map(|v| format!("{v:.2}")).unwrap_or_else(|| "n/a".to_string());
@@ -728,7 +817,11 @@ impl Lumen {
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if m4_swap_override() {
             if m4_swap_mode() == M4Swap::Guarded {
-                let busy = self.engine_thread.as_ref().and_then(|e| e.busy());
+                let busy = self
+                    .engine_thread
+                    .as_ref()
+                    .and_then(|e| e.busy())
+                    .filter(|(_, since)| m4_busy_blocks_tick(*since));
                 let backoff = self.m4_swap_backoff > 0;
                 if (busy.is_some() || backoff) && self.submit_relayout_job() {
                     self.m4_swap_backoff = self.m4_swap_backoff.saturating_sub(1);
@@ -1847,6 +1940,9 @@ impl Lumen {
         // and is tagged `(off-thread)` so the summary reflects the work moved off
         // the UI thread.
         self.engine_stats.record(compute_ms);
+        // BUG-935 S86: off-thread задание — всегда полный проход; его стоимость
+        // решает, можно ли следующий предсказанный полный тик взять on-thread.
+        self.m4_full_cost_ms = Some(compute_ms);
         if lumen_paint::frame_log_enabled() {
             eprintln!(
                 "[engine] relayout {compute_ms:.2}ms (off-thread) dl={} styled={}",
@@ -2819,7 +2915,7 @@ mod bug935_s26_pending_lazy_image_drain_tests {
 
 #[cfg(test)]
 mod bug935_s85_adaptive_m4_routing_tests {
-    use super::{m4_tick_verdict, M4_BACKOFF_MAX_TICKS, M4_BACKOFF_TICKS, M4_TICK_BUDGET_MS};
+    use super::{m4_busy_blocks_tick, m4_full_tick_off_thread, m4_tick_verdict, m4_wide_restyle_off_thread, M4_BACKOFF_MAX_TICKS, M4_BACKOFF_TICKS, M4_TICK_BUDGET_MS};
 
     #[test]
     fn tick_within_budget_clears_backoff_and_penalty() {
@@ -2852,5 +2948,33 @@ mod bug935_s85_adaptive_m4_routing_tests {
         let (ticks, penalty) = m4_tick_verdict(40.0, penalty);
         assert_eq!((ticks, penalty), (0, 0));
         assert_eq!(m4_tick_verdict(900.0, penalty).0, M4_BACKOFF_TICKS);
+    }
+
+    #[test]
+    fn predicted_full_tick_goes_off_thread_until_a_cheap_full_pass_is_measured() {
+        assert!(m4_full_tick_off_thread(None), "неизвестная цена — не блокируем UI");
+        assert!(m4_full_tick_off_thread(Some(970.0)), "ria.ru: полный проход дороже бюджета");
+        assert!(m4_full_tick_off_thread(Some(M4_TICK_BUDGET_MS + 0.1)));
+        assert!(!m4_full_tick_off_thread(Some(M4_TICK_BUDGET_MS)), "в бюджете — on-thread");
+        assert!(!m4_full_tick_off_thread(Some(12.0)));
+    }
+
+    #[test]
+    fn a_task_that_just_started_does_not_defer_the_tick() {
+        use std::time::Duration;
+        assert!(!m4_busy_blocks_tick(Duration::from_micros(200)), "scroll-progress из redraw");
+        assert!(m4_busy_blocks_tick(Duration::from_millis(1)));
+        assert!(m4_busy_blocks_tick(Duration::from_millis(3677)), "JS-ход rAF");
+    }
+
+    #[test]
+    fn wide_restyle_goes_off_thread_by_share_of_the_last_full_cost() {
+        assert!(m4_wide_restyle_off_thread(Some(600.0), 2151, 1860), "корень шире страницы — как полный проход");
+        assert!(m4_wide_restyle_off_thread(Some(600.0), 400, 1860), "600 мс × 21% = 129 мс > бюджета");
+        assert!(!m4_wide_restyle_off_thread(Some(600.0), 200, 1860), "600 мс × 11% = 65 мс");
+        assert!(m4_wide_restyle_off_thread(Some(180.0), 1860, 1860), "полный проход 180 мс не влезает");
+        assert!(!m4_wide_restyle_off_thread(Some(60.0), 1860, 1860), "страница целиком дешевле бюджета");
+        assert!(!m4_wide_restyle_off_thread(None, 5000, 10), "цены нет — on-thread, как раньше");
+        assert!(!m4_wide_restyle_off_thread(Some(600.0), 0, 0));
     }
 }
