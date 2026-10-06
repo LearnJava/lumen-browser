@@ -730,6 +730,16 @@ fn is_monolithic(b: &LayoutBox) -> bool {
     b.style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
 }
 
+/// A block with nothing inside it (only whitespace placeholders) and no border: a column break
+/// can cut it by its box alone, each fragment keeping its part.
+fn is_clippable_leaf(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Block)
+        && b.children.iter().all(|c| matches!(c.kind, BoxKind::Skip))
+        && [b.style.border_top_width, b.style.border_bottom_width, b.style.border_left_width, b.style.border_right_width]
+            .iter()
+            .all(|w| *w == 0.0)
+}
+
 /// A wrapped `flex-direction: column` container (its lines are columns of the multicol's column).
 fn is_column_flex(b: &LayoutBox) -> bool {
     matches!(b.style.display, Display::Flex)
@@ -931,6 +941,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             && c.children.iter().any(|k| {
                 let (top, bot) = (k.rect.y - gy0, k.rect.y - gy0 + k.rect.height);
                 !matches!(k.kind, BoxKind::Skip)
+                    && !is_clippable_leaf(k)
                     && edges.iter().any(|&e| top < e - 0.01 && bot > e + 0.01)
             })
     });
@@ -1027,15 +1038,27 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     k.children = c
                         .children
                         .iter()
-                        .filter(|g| {
-                            let t = g.rect.y - gy;
-                            matches!(g.kind, BoxKind::Skip) || (t >= ws - 0.01 && t < we - 0.01)
-                        })
-                        .map(|g| {
-                            let mut g = g.clone();
-                            let up = if dropped > 0.0 && g.rect.y - gy >= lo + dropped - 0.01 { dropped } else { 0.0 };
-                            super::shift_tree(&mut g, dx, dy - up);
-                            g
+                        .filter_map(|g| {
+                            let (t, b) = (g.rect.y - gy, g.rect.y - gy + g.rect.height);
+                            let up = if dropped > 0.0 && t >= lo + dropped - 0.01 { dropped } else { 0.0 };
+                            // A childless block (an empty subgrid cell) that a window edge runs
+                            // through is cut like the item: each window keeps its part
+                            // (`subgrid-gap-decorations-fragmentation-007`).
+                            if is_clippable_leaf(g) && (t < ws - 0.01 || b > we + 0.01) {
+                                let (glo, ghi) = (t.max(ws), b.min(we));
+                                return (ghi > glo).then(|| {
+                                    let mut g = g.clone();
+                                    super::shift_tree(&mut g, dx, dy - up);
+                                    g.rect.y += glo - t;
+                                    g.rect.height = ghi - glo;
+                                    g
+                                });
+                            }
+                            (matches!(g.kind, BoxKind::Skip) || (t >= ws - 0.01 && t < we - 0.01)).then(|| {
+                                let mut g = g.clone();
+                                super::shift_tree(&mut g, dx, dy - up);
+                                g
+                            })
                         })
                         .collect();
                     k

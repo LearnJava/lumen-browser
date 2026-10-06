@@ -217,9 +217,10 @@ fn a_bordered_flex_container_is_cut_and_keeps_only_the_border_edges_it_owns() {
 #[test]
 fn an_item_whose_child_straddles_a_break_keeps_the_container_atomic() {
     // The window edge at 60px falls inside the first item's 44px child only when the cut is not
-    // at a track boundary; items with a child that is cut through must not be split.
+    // at a track boundary; items with a child that is cut through must not be split (a child with content of its own;
+    // an empty one is clipped, see below).
     let v = bordered_flex(
-        "<div><p style=\"margin:0;height:100px\"></p></div><div></div><div></div><div></div>",
+        "<div><p style=\"margin:0\"><b style=\"display:block;height:100px\"></b></p></div><div></div><div></div><div></div>",
     );
     assert!(v.is_empty(), "{} fragments", v.len());
 }
@@ -426,4 +427,28 @@ fn a_subgrid_fragment_starting_in_its_own_row_gap_drops_the_gap_at_its_top() {
         .collect();
     assert!(!firsts.is_empty(), "no subgrid fragments");
     assert!(firsts.iter().all(|&y| y.abs() < 0.01), "{firsts:?}");
+}
+
+#[test]
+fn an_empty_child_of_an_item_that_a_break_runs_through_is_cut_with_the_item() {
+    // An item on all three 60px rows holds an empty 150px block (an empty subgrid cell in
+    // `subgrid-gap-decorations-fragmentation-007`). The break at 100px runs through the block:
+    // before, such a child kept the whole grid atomic; now each window keeps its part of it.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"i\"><div id=\"k\"></div></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;column-gap:0;width:200px;height:100px} \
+         #g{display:grid;grid-template-rows:repeat(3,60px);row-gap:10px} \
+         #i{grid-row:1/-1} #k{height:150px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    assert_eq!(v.len(), 2, "the grid is cut in two columns");
+    let parts: Vec<f32> = v
+        .iter()
+        .map(|g| {
+            let item = g.children.iter().find(|c| c.rect.height > 0.0).expect("item");
+            item.children.iter().map(|k| k.rect.height).sum::<f32>()
+        })
+        .collect();
+    assert!((parts[0] - 100.0).abs() < 0.01 && (parts[1] - 50.0).abs() < 0.01, "{parts:?}");
 }
