@@ -647,6 +647,11 @@ fn process_batch(
             RenderMsg::Frame(frame) => {
                 // Рисуем только последний кадр пачки; ранние отброшены (latest-wins).
                 if Some(i) == last_frame_idx {
+                    // THREAD-6 срез 6: пока идёт кривая щелчка, положение ведёт
+                    // рендер-поток — `scroll_y` кадра UI мог быть снят до того,
+                    // как UI-поток встал в долгий кадр, и тащил бы страницу назад.
+                    let mut frame = frame;
+                    frame.scroll_y = frame_scroll_y(state, frame.scroll_y, now_ms);
                     // ADR-016 M1: аннотируем кадр в LUMEN_FRAME_LOG (не self-tick).
                     backend.set_frame_commit_id(frame.commit_id, false);
                     if let Err(err) = backend.render(
@@ -722,6 +727,19 @@ fn process_batch(
         }
     }
     false
+}
+
+/// `scroll_y` для кадра UI: при активной кривой щелчка — её значение по часам
+/// рендер-потока (завершённая кривая сбрасывается), иначе — значение кадра.
+fn frame_scroll_y(state: &mut RenderState, frame_y: f32, now_ms: f64) -> f32 {
+    let Some(anim) = state.scroll_anim else {
+        return frame_y;
+    };
+    let (y, done) = anim.sample(now_ms);
+    if done {
+        state.scroll_anim = None;
+    }
+    y
 }
 
 /// Индекс последнего кадра в пачке (latest-wins): только он рисуется.
@@ -846,6 +864,20 @@ mod tests {
         assert!(state.scroll_anim.is_some(), "анимация ещё идёт");
         self_tick_scroll_anim(&mut backend, &mut state, 10.0 + crate::scroll_anim::DURATION_MS + 1.0);
         assert!(state.scroll_anim.is_none(), "по завершении сбрасывается");
+    }
+
+    #[test]
+    fn frame_scroll_y_follows_active_anim() {
+        let mut state = RenderState::new();
+        assert_eq!(frame_scroll_y(&mut state, 7.0, 0.0), 7.0, "без кривой — значение кадра");
+        state.scroll_anim =
+            Some(crate::scroll_anim::ScrollAnim { start_y: 0.0, target_y: 100.0, start_time_ms: 0.0 });
+        let mid = frame_scroll_y(&mut state, 0.0, 50.0);
+        assert!(mid > 0.0 && mid < 100.0, "mid={mid}");
+        assert!(state.scroll_anim.is_some());
+        let end = frame_scroll_y(&mut state, 0.0, crate::scroll_anim::DURATION_MS + 1.0);
+        assert_eq!(end, 100.0);
+        assert!(state.scroll_anim.is_none());
     }
 
     #[test]
