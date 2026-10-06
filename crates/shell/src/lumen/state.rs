@@ -549,6 +549,15 @@ pub(crate) struct Lumen {
     /// ненулевой скоростью от тачпада. Тикается через `advance_momentum`
     /// в `RedrawRequested`. `None` — нет активной инерции.
     pub(crate) momentum_anim: Option<momentum_anim::MomentumAnim>,
+    /// ADR-032, срез 3: общее с главным и рендер-потоком состояние прокрутки
+    /// страницы; `None` — без потока браузера.
+    pub(crate) scroll_shared: Option<Arc<crate::wheel_scroll::ScrollShared>>,
+    /// Ручка к рендер-потоку, через которую усыновляется его смещение.
+    pub(crate) scroll_link: Option<crate::render_thread::RenderLink>,
+    /// Последний опубликованный снимок прокрутки (публикуем только изменения).
+    pub(crate) scroll_snapshot_sent: Option<crate::wheel_scroll::ScrollSnapshot>,
+    /// Поколение смещения рендер-потока, которое поток браузера усыновил.
+    pub(crate) scroll_adopted_gen: u64,
     /// Мгновенная скорость тачпада от последних `PixelDelta`-событий
     /// (CSS px / ms). Обновляется EWMA-фильтром. Используется при
     /// `TouchPhase::Ended` для запуска `momentum_anim`.

@@ -45,6 +45,7 @@ mod pointer;
 mod printing;
 mod resize_grip;
 mod scrolling;
+mod scroll_route;
 mod select_dropdown_snapshot;
 mod session;
 mod smil;

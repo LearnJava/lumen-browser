@@ -157,6 +157,7 @@ mod site_memory;
 mod csp_enforce;
 mod scroll;
 mod scroll_anim;
+mod wheel_scroll;
 mod extensions;
 mod scrollbar;
 mod session_persist;

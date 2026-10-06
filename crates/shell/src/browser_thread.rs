@@ -26,6 +26,8 @@ pub(crate) enum UiMsg {
     Window(WindowId, WindowEvent),
     Device(DeviceEvent),
     User(LoadEvent),
+    /// Рендер-поток вернул смещение страницы (ADR-032, срез 3).
+    ScrollFeedback,
 }
 
 /// Запрос на создание окна, исполняемый главным потоком.
@@ -131,6 +133,9 @@ impl Lumen {
             UiMsg::Window(id, ev) => self.on_window_event(h, id, ev),
             UiMsg::Device(ev) => self.on_device_event(ev),
             UiMsg::User(ev) => self.on_user_event(ev),
+            UiMsg::ScrollFeedback => {
+                self.adopt_scroll_feedback();
+            }
         }
     }
 
@@ -165,6 +170,7 @@ impl Lumen {
                 break;
             }
             self.on_about_to_wait(h);
+            self.publish_scroll_snapshot();
             if h.exit_requested() {
                 break;
             }
@@ -176,6 +182,8 @@ impl Lumen {
 /// `ActiveEventLoop`, обслуживается здесь же.
 pub(crate) struct MainForwarder {
     pub(crate) tx: Sender<UiMsg>,
+    /// Колесо над страницей — мимо потока браузера (ADR-032, срез 3).
+    pub(crate) wheel: crate::wheel_scroll::WheelRouter,
 }
 
 impl MainForwarder {
@@ -204,6 +212,12 @@ impl ApplicationHandler<LoadEvent> for MainForwarder {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        self.wheel.observe(&event);
+        if let WindowEvent::MouseWheel { delta, phase, .. } = &event
+            && self.wheel.route(*delta, *phase)
+        {
+            return;
+        }
         self.send(el, UiMsg::Window(id, event));
     }
 

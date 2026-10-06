@@ -8,6 +8,9 @@ use crate::*;
 
 impl Lumen {
     pub(crate) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        // ADR-032, срез 3: колесо дошло сюда, значит рендер-поток его не взял;
+        // базой служит смещение, которое он уже успел набрать.
+        self.adopt_scroll_feedback();
         present_log::wheel(match delta {
             MouseScrollDelta::LineDelta(_, l) => l,
             MouseScrollDelta::PixelDelta(p) => p.y as f32,

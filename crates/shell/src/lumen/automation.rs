@@ -336,6 +336,10 @@ impl Lumen {
 
         /// Apply scroll delta with bounds clamping.
         pub(crate) fn scroll_by_delta(&mut self, dx: f32, dy: f32) {
+            // ADR-032, срез 3: база — смещение, которое уже набрал рендер-поток.
+            // Сам сдвиг уходит ему следующим кадром: смещение, заданное потоком
+            // браузера, помечено `ACK_BROWSER_SET` и главнее его собственного.
+            self.adopt_scroll_feedback();
             self.scroll_x = (self.scroll_x + dx).max(0.0);
             self.scroll_y = (self.scroll_y + dy).max(0.0);
             if let Some(w) = self.window.as_ref() {

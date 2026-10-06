@@ -124,6 +124,9 @@ impl Lumen {
                     window.scale_factor(),
                 )))
             } else {
+                // ADR-032, срез 3: ручка рендер-потока, оставшаяся от прежнего
+                // окна, не должна достаться этому.
+                let _ = render_thread::take_last_link();
                 backend_factory::create_backend(
                     window.clone(),
                     INTER_FONT.to_vec(),
@@ -156,6 +159,7 @@ impl Lumen {
         }
 
         self.renderer = Some(renderer);
+        self.attach_scroll_route();
         // CC-4: first chrome layout pass, now that the renderer knows the
         // window's initial size.
         self.relayout_chrome_host();
