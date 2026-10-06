@@ -162,7 +162,7 @@ pub(crate) struct Lumen {
     /// pass — needed by [`Self::chrome_transition_scheduler`]'s `sync()` to
     /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
     /// chrome tree.
-    pub(crate) chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
+    pub(crate) chrome_prev_styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S5/S22: what the previous pass's [`take_content_area`] removed
     /// from [`Self::chrome_layout`].
     ///
@@ -292,7 +292,7 @@ pub(crate) struct Lumen {
     pub(crate) starting_style_tracker: StartingStyleTracker,
     /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
     /// для определения изменившихся свойств. Обновляется после каждого layout.
-    pub(crate) prev_styles: HashMap<NodeId, ComputedStyle>,
+    pub(crate) prev_styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S7: `CounterMap::styles()` cascade cache from the last
     /// [`Self::try_relayout_raf_incremental`] call that took the restyle-aware
     /// path (`layout_mutation_incremental_restyle`) — the `RestyleDelta::prev_styles`

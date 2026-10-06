@@ -14,12 +14,11 @@ use crate::*;
 /// Рекурсивно собирает `ComputedStyle` всех узлов layout-дерева.
 /// Результат используется `transition_scheduler.sync()` для сравнения
 /// предыдущего и нового стиля после каждого relayout-а.
-pub(crate) fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) {
-    // BUG-341 S12: `LayoutBox::style` is now an `Arc`, but the transition
-    // scheduler owns its snapshot (it diffs it against the next frame), so this
-    // stays a deep copy. Sharing it here would need `prev_styles` to hold `Arc`s
-    // too — a page-pipeline follow-up, not part of this slice's measured path.
-    map.insert(lb.node, (*lb.style).clone());
+pub(crate) fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, Arc<ComputedStyle>>) {
+    // THREAD-7: `LayoutBox::style` is an `Arc` and layout boxes are immutable
+    // after the build, so the snapshot shares the handle instead of deep-copying
+    // every `ComputedStyle` on the UI thread (was ~20 ms per tick on ria.ru).
+    map.insert(lb.node, Arc::clone(&lb.style));
     for child in &lb.children {
         collect_box_styles(child, map);
     }
