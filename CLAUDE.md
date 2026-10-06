@@ -47,7 +47,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 - **Reply in Russian**, technical tone, no emoji unless the user uses them, no marketing text. Files as clickable markdown links labelled `path:line`.
 - Banned word: "Wikipedia" / "Википедия" — say "reference article" / "external page".
-- **Ask the user only via an ```` ```ask-user ```` block**, confirmations included ("confirm and I start"). A turn ending in a plain-text question reads to the session manager as "stopped without declaring done" — it restarts the session and the answer is lost.
+- **Every turn ends either with the task declared done or with an ```` ```ask-user ```` block** — never a plain-text question ("confirm and I start"), and never a bare explanation while a decision is pending: after answering "what's the difference?" re-ask the open question as `ask-user`. Otherwise the session manager reads the turn as "stopped without declaring done", restarts the session and the user's answer is lost.
 
 ## Known gotchas — only traps that bite whatever the task is
 
