@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-06",
  "counts": {
-  "open": 201,
+  "open": 208,
   "fixed": 1064,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1267,
+ "total_bugs": 1274,
  "phases": [
   {
    "id": "P0",
@@ -5958,9 +5958,9 @@
       {
        "id": "WPT-RUN-14-S10",
        "title": "WPT-RUN-14-S10: css-text часть 2",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон второй половины css/css-text (подкаталоги от text-autospace до writing-system, около 870 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон второй половины css/css-text (подкаталоги от text-autospace до writing-system, около 870 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-06 (ветка `p2-wpt-run14-s10`): 931 automatable id, 30.02 % (reftest 245/867, testharness 184/824 сабтестов, crashtest 12/12), 232 с, «no leak». 654 не зелёных id разнесены на 27 кластеров (`docs/wpt-vendor-notes/css.md` §css-text, часть 2). Главное: BUG-1322 (`pre-wrap`/`break-spaces` не переносят строку) — в тексте 276 из 654 не зелёных id, подтверждён пробой на новой выборке; BUG-1327 (пробельный узел между inline-элементами отбрасывается в `pre`/`pre-wrap`, U+3000 схлопывается) — A/B одним бинарём 218 → 223 зелёных id из 672 без новых провалов, правка в срез не вошла. Заведены BUG-1327…1333: 1328 (`text-transform: full-width|full-size-kana|math-auto`, 11 id / 170 сабтестов), 1329 (`innerText` при `capitalize`, `lang` не учитывается в `text-transform`), 1330 (сегментный разрыв между полноширинными символами, 10 id), 1331 (`word-break: normal` не режет тайский/кхмерский, 14 id), 1332 (`text-indent: each-line|hanging`, 18 id), 1333 (`word-spacing` в процентах, 4 id). Свойств нет вовсе: `text-spacing-trim` (81 id), `text-fit` (23), `text-autospace` (21), `word-space-transform` (20), `text-justify` (15 id / 211 сабтестов), `text-group-align` (5) — `CSS-SPECS.md:76` (P4). BUG-1273 (20 identical), BUG-1324 (37 id `break-all`), BUG-1326 (20 id `tab`) дополнены. Не разобрано ≈ 100 id (`text-wrap-balance` 18, `white-space/` прочее 27, `keep-all`/`auto-phrase` 15, `text-encoding` 7, `text-indent` 14). Движок не менялся"
       },
       {
        "id": "WPT-RUN-7-S1",
@@ -9326,6 +9326,55 @@
    "status": "open",
    "title": "`tab-size`: табуляция — фиксированные N × 8 px после предшествующего текста, а не расстояние до следующей позиции в ширинах пробела (`tab-size: 8` после `abcdef…",
    "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `measure_text_w_varied(…, tab_size, …)`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1327": {
+   "status": "open",
+   "title": "пробельный текстовый узел между inline-элементами пропадает в `white-space: pre",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs:148` `is_inline_content` и `box_tree/build.rs:1249` — текст, целиком состоящий из `char::is_whitespace()`, считается «пустым» и пропускается независимо от `white-space`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1328": {
+   "status": "open",
+   "title": "`text-transform: full-width`, `full-size-kana`, `math-auto` не разбираются (значение отвергается)",
+   "component": "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `text-transform`; enum `TextTransform` и `TextTransform::apply`, `style/values/typography.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1329": {
+   "status": "open",
+   "title": "`text-transform`: `innerText` при `capitalize` не совпадает с раскладкой; язык (`lang=tr",
+   "component": "js/layout (`crates/js/src/shim/*` — `innerText`; `TextTransform::apply` в `crates/engine/layout/src/style/values/typography.rs` не получает язык)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1330": {
+   "status": "open",
+   "title": "nowrap",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` / `inline_build.rs` — схлопывание сегментных разрывов в `normal",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1331": {
+   "status": "open",
+   "title": "`word-break: normal` не режет тайский, кхмерский и др. (класс SA UAX #14) по словарю",
+   "component": "layout (`crates/engine/layout/src/box_tree/line_break.rs`, `inline_wrap.rs` — для класса SA возможностей переноса нет; `lang` не используется)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1332": {
+   "status": "open",
+   "title": "`text-indent: <длина> each-line` и `hanging` разбираются, но не применяются",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — выбор отступа строки; `style/apply/text.rs` — ключевые слова `each-line`/`hanging` не доходят до `ComputedStyle`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1333": {
+   "status": "open",
+   "title": "`word-spacing` в процентах (и `calc()` с `%`) не применяется",
+   "component": "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `word-spacing`; `getComputedStyle` отдаёт `0px`)",
    "date": null,
    "debtor": false
   },
@@ -17874,6 +17923,9 @@
   "js/layout (`crates/engine/layout/src/style/syntax_string.rs`, `crates/js/src/css_properties_values_api.rs`)": [
    "BUG-531"
   ],
+  "js/layout (`crates/js/src/shim/*` — `innerText`; `TextTransform::apply` в `crates/engine/layout/src/style/values/typography.rs` не получает язык)": [
+   "BUG-1329"
+  ],
   "js/layout (`crates/js/src/svg.rs::_lumen_smil_overrides`, `getComputedStyle`)": [
    "BUG-1248"
   ],
@@ -18111,6 +18163,9 @@
   "layout (`crates/engine/layout/src/box_tree/image_requests.rs::apply_intrinsic_size`)": [
    "BUG-1280"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_build.rs:148` `is_inline_content` и `box_tree/build.rs:1249` — текст, целиком состоящий из `char::is_whitespace()`, считается «пустым» и пропускается независимо от `white-space`)": [
+   "BUG-1327"
+  ],
   "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — `is_inline_content`/`is_atomic_inline_level`)": [
    "BUG-928"
   ],
@@ -18120,8 +18175,14 @@
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:735,816,880` — `break-all`, мягкий и автоматический перенос стоят за условием `needs_wrap`, а оно требует непустой строки)": [
    "BUG-1324"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` / `inline_build.rs` — схлопывание сегментных разрывов в `normal": [
+   "BUG-1330"
+  ],
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `measure_text_w_varied(…, tab_size, …)`)": [
    "BUG-1326"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — выбор отступа строки; `style/apply/text.rs` — ключевые слова `each-line`/`hanging` не доходят до `ComputedStyle`)": [
+   "BUG-1332"
   ],
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — слияние слов в `InlineFrag`; критерий `ComputedStyle::text_rendering_eq`)": [
    "BUG-1190"
@@ -18146,6 +18207,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
    "BUG-466"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/line_break.rs`, `inline_wrap.rs` — для класса SA возможностей переноса нет; `lang` не используется)": [
+   "BUG-1331"
   ],
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::abs_box_shrinks_to_fit`)": [
    "BUG-1047"
@@ -18227,6 +18291,12 @@
   ],
   "layout (`crates/engine/layout/src/style/apply/css_wide.rs:1209` — один арм на все `background-*` longhand'ы)": [
    "BUG-1301"
+  ],
+  "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `text-transform`; enum `TextTransform` и `TextTransform::apply`, `style/values/typography.rs`)": [
+   "BUG-1328"
+  ],
+  "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `word-spacing`; `getComputedStyle` отдаёт `0px`)": [
+   "BUG-1333"
   ],
   "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)": [
    "BUG-1009"

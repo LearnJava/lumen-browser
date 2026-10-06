@@ -453,3 +453,66 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - Тест `text-align-last-015.html` и пара `bidi/` не разобраны.
 - `css-text` часть 2 (`text-autospace` … `writing-system`, около 870 id) — срез S10; свойство `white-space`, `word-break`, `text-transform`, `text-indent` проверяются там.
 - Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в wptrunner против 800×600 в пиксельном разборе.
+
+## css-text, часть 2 — вердикт и кластеры (WPT-RUN-14 срез 10, 2026-10-06)
+
+Прогон: `run_corpus.py --prefixes css/css-text/{text-autospace,text-encoding,text-fit,text-group-align,text-indent,text-justify,text-spacing-trim,text-transform,text-wrap-style,white-space,word-break,word-space-transform,word-spacing,writing-system} --out-dir .tmp/wpt-run14/text-2`, сборка `dev-release` от `main` (HEAD `b0cf95f7d`, движок не менялся), `--processes 7`, 14 шардов + 7 только из manual/visual (не планировались), 232 с суммарно. `score_audit.py`: «no leak», вердикт есть у всех 931 automatable id.
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 867 | 245.00 | 28.3 % |
+| testharness | 52 | 22.50 (184 из 824 сабтестов) | 43.3 % |
+| crashtest | 12 | 12.00 | 100 % |
+| **итого** | **931** | **279.50 = 30.02 %** | |
+
+654 id не зелёные: 622 reftest FAIL и 32 testharness (640 упавших сабтестов из 824; ERROR — 10 id `text-spacing-trim-combinations-001.html?…`, `assert_implements`; TIMEOUT/CRASH нет, все крэштесты проходят). Пиксельный разбор 622 reftest (`reftest_pixdiff.py --viewport 800x600 --ahem`, ≈ 20 мин): 519 thick, 20 identical (в wptrunner падают, с локальным Ahem совпадают с эталоном), 10 no-match-ref, 3 thin-only, 70 `nosrc` (все — варианты `text-spacing-trim-*.html?class=…`: инструмент открывает страницу без query-строки и не находит `rel=match`, это ограничение стенда, а не движка).
+
+### Главное: два дефекта, которые держат больше трети среза
+
+1. **`white-space: pre-wrap`/`break-spaces` не переносит строку** ([BUG-1322](../../bugs/BUG-1322-OPEN.md), найден в срезе 9) — проба здесь подтвердила его на другой выборке: `width: 100px; white-space: pre-wrap`, `aaaaaa bbbbbb cc` и `日本語…` — одна строка (высота 24,2). В тексте 276 из 654 не зелёных id есть `white-space: pre-wrap|break-spaces`, `white-space-collapse`, `text-wrap-mode` или `<textarea>` (подсчёт по тексту теста, не по причине провала). Закрытие BUG-1322 — самый дешёвый рычаг: верхняя граница — эти 276 id; реальную долю даст только A/B.
+2. **Пробельный текстовый узел между inline-элементами отбрасывается целиком** ([BUG-1327](../../bugs/BUG-1327-OPEN.md), новый): `<b>a</b>    <b>b</b>` в `white-space: pre` — пробелы потеряны (`x` = 11, ожидается 55); неколлапсируемый U+3000 между элементами схлопывается как пробел. A/B одним бинарём (временная ветка `LUMEN_AB_PRE`, не закоммичена): `white-space` + `word-break` + `text-transform` (672 id) 218 → 223 зелёных, провалов не прибавилось. Правка маленькая (`char::is_whitespace()` → `is_collapsible_whitespace` в двух местах), но в срез не вошла: задача среза — прогон и разбор.
+
+Остальное — отсутствующие свойства (`text-spacing-trim`, `text-autospace`, `text-fit`, `text-group-align`, `word-space-transform`, `text-justify` — см. таблицу) и пара локальных дефектов. CSSOM-проба (`CSS.supports`): отсутствуют `text-autospace`, `text-spacing-trim`, `text-fit`, `text-group-align`, `text-justify`, `word-space-transform`, `hanging-punctuation`, `text-box-trim`, а также `white-space-collapse` (при этом значения `white-space-collapse: preserve-spaces|discard|preserve-breaks` принимаются и читаются через `style`); `getComputedStyle` отдаёт `""` для `word-break`, `text-wrap-mode`, `text-wrap-style`, `tab-size` — [BUG-1325](../../bugs/BUG-1325-OPEN.md).
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** по подкаталогу и имени файла (`.tmp/wpt-run14/text-2-clusters.json`), один id — один кластер; для `white-space/` затем по именам (`ideographic`, `tab`, `balance`, `seg-break`, `intrinsic-size`, `pre-wrap|break-spaces|textarea`). Причина подтверждена пробой (`--dump-layout`, временный `promise_test` под `run_report.py --all --root css/css-text/zzprobe`, каталог удалён), если не помечено «не проба».
+
+| Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|---|
+| `pre-wrap`/`break-spaces`/`textarea` (`white-space/`) | 150 | — | 150 thick | `white-space/break-spaces-003.html`, `pre-wrap-009.html`, `textarea-pre-wrap-007.html` | проба: `pre-wrap`/`break-spaces` в 100 px — одна строка, `normal`/`pre-line` — переносятся | P3 | [BUG-1322](../../bugs/BUG-1322-OPEN.md) (дополнен), [BUG-1327](../../bugs/BUG-1327-OPEN.md) для `break-spaces-newline-*`/`pre-wrap-018` |
+| `trailing-ideographic-space-*`, `break-spaces-before-first-*`, `trailing-other-space-separators*`, `hanging-whitespace*`, `full-width-leading-spaces*` | 84 | — | 84 thick (4 identical в других кластерах) | `white-space/trailing-ideographic-space-002.html`, `break-spaces-before-first-ideographic-char-003.html` | 73 из 84 содержат `pre-wrap`/`break-spaces` — вероятно [BUG-1322](../../bugs/BUG-1322-OPEN.md) (не проба); остальные 11 — висящие U+3000 в `normal` (не разобрано) | P3 | BUG-1322 |
+| `text-spacing-trim/` | 81 | — | 70 nosrc, 1 thick, 10 ERROR | `text-spacing-trim/text-spacing-trim-001.html?class=halt,htb`, `-combinations-001.html?class=vrl&test=MO:FH` | свойства нет (`CSS.supports` = false); 10 ERROR — `assert_implements`; 70 `nosrc` — инструмент не читает query-варианты | P4 | `CSS-SPECS.md:76` (дополнен) |
+| `word-break: break-all` | 37 | — | 37 thick | `word-break/word-break-break-all-013.html`, `-inline-001.html` | проба: `break-all` на слове, начинающем строку, не режет (одна строка, 100 px); 10 из 37 с `pre-wrap` | P3 | [BUG-1324](../../bugs/BUG-1324-OPEN.md) (дополнен) |
+| `white-space/` прочее (`trailing-space-*`, `eol-spaces-bidi`, `pre-line-05x`, `white-space-collapse-*`, `line-edge-*`, `white-space-vs-joiners`, `zero-fontsize`, `wrap-after-nowrap`) | 27 | 25 | 25 thick | `white-space/trailing-space-before-br-001.html`, `eol-spaces-bidi-003.html`, `pre-line-052.html` | не разобрано; 14 из 27 с `pre-wrap`; `trailing-space-before-br-001` — ширина `inline-block` с `1111 <br>` против `1111` (5 из 8) | P3 | отдельной записи нет |
+| `text-fit/` | 23 | 7 | 19 thick | `text-fit/columns-consistent.html`, `grow-per-line.html`, `shrink-consistent.html` | свойства нет (`CSS.supports` = false) | P4 | `CSS-SPECS.md:76` |
+| `text-autospace/` | 21 | — | 21 thick | `text-autospace/text-autospace-003.html`, `-elements-001.html` | свойства нет | P4 | `CSS-SPECS.md:76` |
+| `text-transform`: `upperlower-*`, `tailoring-*`, `multiple`, `letter-spacing` | 20 | 1 | 16 thick, 2 thin-only, 1 no-match | `text-transform/text-transform-upperlower-107.html`, `-tailoring-001.html` | `lang=tr` не меняет `i`→`İ` (проба: `II`); `Selection.toString()` для `ß` — `ß`, не `SS`; остальные не разобраны | P3 | [BUG-1329](../../bugs/BUG-1329-OPEN.md) |
+| Ahem: снимок без `@font-face` | 20 | — | 20 identical | `text-transform/text-transform-fullwidth-006.html`, `white-space/pre-wrap-leading-spaces-004.html`, `word-break/word-break-break-all-030.html` | с локальным Ahem pixel-identical, в wptrunner падают | P3 | [BUG-1273](../../bugs/BUG-1273-OPEN.md) (дополнен) |
+| `tab`: `break-spaces-tab-*`, `pre-wrap-tab-*`, `tab-stop-threshold-*` | 20 | — | 20 thick | `white-space/break-spaces-tab-001.html`, `tab-stop-threshold-001.html` | табуляция — N × 8 px (BUG-1326); проба здесь: `<i>a</i>\t<i>b</i>` в `pre` — табуляция между элементами пропадает совсем (BUG-1327); 16 из 20 с `pre-wrap` | P3 | [BUG-1326](../../bugs/BUG-1326-OPEN.md), [BUG-1327](../../bugs/BUG-1327-OPEN.md) |
+| `word-space-transform/` | 20 | — | 20 thick | `word-space-transform/word-space-transform-003.html`, `-004.html` | свойства нет (CSS Text L4) | P4 | `CSS-SPECS.md:76` |
+| `text-indent/` | 18 | 1 | 17 thick | `text-indent/text-indent-each-line-hanging.html`, `below-float.html`, `text-indent-percentage-004.html` | проба: `each-line`/`hanging` разобраны, но не применяются; 4 id прямо про них, остальные 14 не разобраны | P3 | [BUG-1332](../../bugs/BUG-1332-OPEN.md) |
+| `white-space-intrinsic-size-*` | 18 | 168 | 17 thick | `white-space/white-space-intrinsic-size-021.html` (168 сабтестов, 24 PASS), `-013.html` | A/B по [BUG-1327](../../bugs/BUG-1327-OPEN.md): `-021` 24 → 26, остальное не разобрано; 9 из 18 с `pre-wrap` | P3 | BUG-1327, BUG-1322 |
+| `text-wrap-balance-*` | 18 | — | 17 thick, 1 no-match | `white-space/text-wrap-balance-float-001.html`, `-line-clamp-005.html`, `-before-after-002.html` | не разобрано (`balance_wrap` существует; поплавки, `line-clamp`, `text-indent`, `word-spacing`) | P1 | отдельной записи нет |
+| `text-justify/` | 15 | 211 | 12 thick, 1 thin-only | `text-justify/text-justify-001.html`, `text-justify-interpolation.html` (210 сабтестов `'from' value should be supported`) | `text-justify` не существует; сам `justify` — `TEXT-JUSTIFY` | P1 / P4 | `TEXT-JUSTIFY` (ROADMAP:1053), `CSS-SPECS.md:76` |
+| `word-break: normal` (SA и прочее) | 14 | — | 11 thick, 3 no-match | `word-break/word-break-normal-th-000.html`, `-km-000.html`, `-lo-000.html` | проба: тайский/кхмерский в 100 px — одна строка, словарной сегментации нет | P3 | [BUG-1331](../../bugs/BUG-1331-OPEN.md) |
+| `text-transform: full-width`, `full-size-kana`, `math-auto` | 11 | 170 | 9 thick | `text-transform/text-transform-full-size-kana-009.html` (58), `math/text-transform-math-auto-003.html` (112), `text-transform-fullwidth-004.xht` | проба: значения отвергаются (`style.textTransform = ''`) | P3 | [BUG-1328](../../bugs/BUG-1328-OPEN.md) |
+| `seg-break-transformation-*` | 10 | 54 | 2 no-match | `white-space/seg-break-transformation-002.tentative.html` | проба: `ＦＵＬＬ⏎ＷＩＤＴＨ` → пробел между полноширинными символами | P3 | [BUG-1330](../../bugs/BUG-1330-OPEN.md) |
+| `word-break: keep-all` | 8 | — | 8 thick | `word-break/word-break-keep-all-000.html`, `-063.html` | не разобрано (`getComputedStyle().wordBreak` = `""`, BUG-1325) | P3 | [BUG-1325](../../bugs/BUG-1325-OPEN.md) (предположительно) |
+| `text-encoding/` | 7 | — | 7 thick | `text-encoding/shaping-join-002.html`, `shaping-no-join-001.html` | не разобрано: ZWJ/ZWNJ на границе шрифтов (`@font-face` primary + fallback), арабская форма | P3 | [BUG-1272](../../bugs/BUG-1272-OPEN.md) (предположительно) |
+| `text-transform: capitalize` | 7 | 3 | 6 thick | `text-transform/text-transform-capitalize-036.html`, `-007.html` | проба: `innerText` — `John'S Apple Foo_Bar`, раскладка — `John's Apple Foo_bar`; reftest не разобраны | P3 | [BUG-1329](../../bugs/BUG-1329-OPEN.md) |
+| `word-break: auto-phrase` | 7 | — | 7 thick | `word-break/auto-phrase/word-break-auto-phrase-001.html` | не разобрано: значение требует сегментации фраз (как BUG-1331) | P3 | BUG-1331 (предположительно) |
+| `word-break`: `min-content`, `break-boundary` | 6 | — | 6 thick | `word-break/word-break-min-content-001.html`, `break-boundary-2-chars-001.html` | не разобрано | P3 | отдельной записи нет |
+| `text-group-align/` | 5 | — | 5 thick | `text-group-align/text-group-align-right.html` | свойства нет | P4 | `CSS-SPECS.md:76` |
+| `word-spacing/` | 4 | — | 4 thick | `word-spacing/word-spacing-001.html`, `word-spacing-percent-001.html` | проба: `word-spacing: 100%` ничего не добавляет, `calc(25% + 0px)` → `0px` | P3 | [BUG-1333](../../bugs/BUG-1333-OPEN.md) |
+| `writing-system/` | 3 | — | 3 no-match | `writing-system/writing-system-line-break-001.html`, `-segment-break-001.html` | не разобрано (по описанию — SA-перенос и сегментные разрывы: BUG-1331/1330) | P3 | BUG-1331/BUG-1330 (предположительно) |
+
+Сумма по таблице: 654 id. Ещё один побочный результат пробы: `getComputedStyle(el).tabSize` и `text-wrap-mode` — `""` (BUG-1325); у `style.textIndent = '10px each-line'` computed — `0px`.
+
+### Что остаётся неизвестным
+
+- Сколько из 276 id, в тексте которых есть `pre-wrap`/`break-spaces`, закроет один BUG-1322: проверена только проба на нескольких страницах, не A/B по корпусу.
+- `text-wrap-balance-*` (18), `word-break: keep-all|auto-phrase|min-content|break-boundary` (21), `text-encoding/` (7), `white-space/` «прочее» (27), 14 id `text-indent` — причины не установлены.
+- 70 `nosrc` в `text-spacing-trim` не имеют пиксельного вердикта (`reftest_pixdiff.py` не разбирает `?class=…`), у отсутствующего свойства вердикт и так ясен.
+- Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в wptrunner против 800×600 в пиксельном разборе.
+- Срез закрывает `css-text` целиком (S9 + S10 = 1 963 id); сводка «кластер → id → владелец» по `css` будет собрана после остальных модулей.

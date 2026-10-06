@@ -42,3 +42,7 @@ Ahem-reftest-ов не должна быть ниже, чем у остальн�
 ## Дополнение: WPT-RUN-14 срез 9 (2026-10-06, `css/css-text`, часть 1)
 
 59 reftest `css/css-text` падают в wptrunner, но с локальным Ahem (`reftest_pixdiff.py --viewport 800x600 --ahem`) pixel-identical с эталоном: `line-break/` 25, `text-align/` 20, `overflow-wrap/` 12, `hyphens/` 1, `letter-spacing/` 1. Шрифты `mplus-1p-regular.woff` (`i18n/css3-text-line-break-opclns-*`, 158 reftest) и Noto Naskh Arabic (`shaping/`, `boundary-shaping/`) подгружаются тем же `@font-face url()`; влияет ли BUG-1273 на них в wptrunner — не проверялось (проба `document.fonts.load` в testharness даёт `loaded`, но это не снимок).
+
+## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
+
+20 reftest второй половины `css-text` падают в wptrunner, но с локальным Ahem pixel-identical с эталоном: `white-space/` 13 (`pre-wrap-leading-spaces-004…010`, `pre-wrap-017`, `hanging-whitespace-003/004`, `white-space-intrinsic-size-003`, …), `word-break/` 4, `text-transform/` 2 (`fullwidth-006/008`), `word-spacing/` 1.
