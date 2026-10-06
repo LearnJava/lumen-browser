@@ -5001,3 +5001,19 @@ FIFO за любым заданием движкового потока (`maybe_
 **Что осталось.** RTT-пики 1,1–1,6 с у MCP `scroll` — это очередь движкового потока (`task 1001 мс` от `redraw_requested.rs:80` — `maybe_flush` 987 мс,
 `planned=2124`, после `scroll`-обработчика страницы); первый off-thread коммит 0,55–0,75 с и `apply_relayout_result` на UI; другие блокирующие
 `route_query_js` на UI-потоке не инвентаризированы (`clone_js_ctx` остаётся в `frame_links.rs:481` — клик по ссылке фрейма, не горячий путь).
+
+## Срез 88 (P1, 2026-10-06) — pointermove/pointerup читали pointer capture блокирующим `route_query_js` на UI-потоке
+
+**Инвентаризация (хвост среза 87).** `route_query_js` (блокирующий `engine.query`, UI стоит в FIFO за любым заданием движкового потока) остался в
+`about_to_wait` (автоматизация, разовые команды), `click`/`form_submit`/`navigation`/`text_input`/`hint_mode` (нужен результат JS-хода — навигация после
+обработчика), `page_load`/`relayout` (`js_push_blocking`, загрузка) — всё это редкие или неизбежные чтения. Горячими были два места с чтением **только ради
+выбора адресата события**: `flush_pointer_moves` (каждый `about_to_wait`-тик с буферизованным движением мыши) и ветка mouseup (`pointer_capture_nid` +
+`take_pointer_capture`). Пока движковый поток занят (`maybe_flush` ~1 с), каждое движение мыши держало UI-поток.
+
+**Что сделано.** Чтение захвата переехало **внутрь** задания движкового потока: `Lumen::js_pointer_move_captured` и `Lumen::js_pointer_release`
+(`lumen/pointer.rs`) шлют одно `route_task_js`, где `pointer_capture_nid()` → `pointermove`/`pointerup` → `mousemove`/`mouseup` →
+`take_pointer_capture()` → `lostpointercapture` идут в прежнем порядке, но UI не ждёт ответа. Без движкового потока (`LUMEN_NO_ENGINE_THREAD=1`) задание
+исполняется синхронно — поведение прежнее. `js_capture_event` удалён (больше не вызывается).
+
+**Не замерено вживую:** MCP не умеет двигать мышь, а winit-ввод из фона не подаётся, поэтому выигрыш по RTT/кадрам не измерен — вывод опирается на
+чтение кода. Остальные блокирующие чтения из списка выше не трогались.
