@@ -40,3 +40,8 @@ WPT-RUN-14 срез 5: `css/css-transforms/animation/*` — 15 файлов, 168
 
 `css/css-transforms/animation/transform-interpolation-00{1…7}.html`, `list-interpolation.html`; общий харнесс
 `css/support/interpolation-testcommon.js` подключают 337 файлов `css/` (`css-transitions`, `css-animations`, `css-values`…).
+
+## Дополнение (WPT-RUN-14 срез 6, `css/css-backgrounds/animations/*`)
+
+Тот же механизм виден на reftest'ах: `background-color-animation.html`, `background-color-transition.html` и ещё 27 (`animations/background-color-*`, `two-background-color-animation-diff-length*`) — `thick`. `animation: bgc 1000000s cubic-bezier(0,1,1,0) -500000s` на `<div>` с `background-color:green`: `--dump-display-list` отдаёт `FillRect … #008000ff` (значение не из ключевых кадров, а из стиля элемента), `document.getAnimations().length` = 0 в той же задаче; тест ждёт `getAnimations()[0].ready` и снимает экран. Режимы `CSS Animations`/`CSS Transitions`/`CSS Transitions with transition: all` у `background-*`/`border-*` в этом срезе — 1 280 упавших сабтестов; часть из них — [BUG-1305](BUG-1305-OPEN.md) (неявный кадр, шорткоды, `background-size`/`box-shadow`) и `animation-composition` (`CSS-SPECS.md`).
+

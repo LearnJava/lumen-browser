@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-06",
  "counts": {
-  "open": 170,
+  "open": 181,
   "fixed": 1063,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1235,
+ "total_bugs": 1246,
  "phases": [
   {
    "id": "P0",
@@ -611,6 +611,16 @@
      "note": "SVG `<pattern>` (SVG 1.1 §13.3, SVG 2 §13.8): элемента нет вовсе — `fill=\"url(#p)\"` на `rect`/`circle`/`path` ничего не рисует (`grep -i pattern crates/engine/layout/src/box_tree/svg*.rs` пуст), `SvgPaint` знает `Color`/`Gradient`/`Url`, не `Pattern`. Нужно: разбор `<pattern>` (`patternUnits`, `patternContentUnits`, `patternTransform`, `x`/`y`/`width`/`height`, `viewBox`/`preserveAspectRatio`, `href`-наследование), тип паттерна рядом с `SvgGradientDef` (LIB-5), заливка плиткой через клип и `PushTransform` (фигура + `stroke`), обе ветки растра (CPU и wgpu). Проба (`--screenshot`): прямоугольник с `fill=\"url(#p)\"` — белый, градиент в тех же условиях рисуется. WPT `css/css-transforms`: 71 reftest (`matrix/svg-matrix-*` 69, `patternTransform/*` 2) — красный «якорь» остаётся на снимке у 58 из 71; плюс `svg/painting`, `svg/pservers`. Кластер — `docs/wpt-vendor-notes/css.md` §css-transforms (WPT-RUN-14 S5, 2026-10-06).",
      "bugs": [
       "BUG-1294"
+     ]
+    },
+    {
+     "id": "BG-ATTACH-LOCAL",
+     "title": "BG-ATTACH-LOCAL: background-attachment: local",
+     "status": "planned",
+     "size": "M",
+     "note": "`background-attachment: local` (CSS Backgrounds 3 §3.6): режим разбирается (`BackgroundAttachment::Local`), но paint трактует его как `scroll` (`CSS-SPECS.md`: «local = scroll»). Нужно: слои фона `local` идут внутри `PushScrollLayer` своего прокручиваемого бокса и сдвигаются с содержимым; позиционирующая область — padding-box по размеру всего прокручиваемого содержимого, область рисования — padding-box «окна» (клип не под рамку); `rtl`/`*-reverse` — начало отсчёта с правого/нижнего края; ячейка таблицы (`table-cell-background-local*`). Проба: `<div id=s style=\"width:100px;height:100px;overflow:scroll;background:linear-gradient(red 0,red 100px,blue 100px,blue 300px) local\"><div style=\"height:400px\"></div></div>`, `s.scrollTop=100` — пиксель (20,20) красный, ожидается синий; `attachment-local-clipping-color-1.html` — промежутки штриховой рамки залиты зелёным. WPT `css/css-backgrounds`: 26 reftest (`background-attachment-local/*` 14, `local-attachment-*` 5, `table-cell-background-local*` 3, прочие 4). Обе ветки растра (CPU и wgpu). Кластер — `docs/wpt-vendor-notes/css.md` §css-backgrounds (WPT-RUN-14 S6, 2026-10-06).",
+     "bugs": [
+      "BUG-1304"
      ]
     }
    ],
@@ -5896,7 +5906,7 @@
       {
        "id": "WPT-RUN-14-S6",
        "title": "WPT-RUN-14-S6: css-backgrounds",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Прогон css/css-backgrounds (около 955 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
       },
@@ -9024,6 +9034,83 @@
    "status": "open",
    "title": "SVG `<pattern>` (`fill=\"url(#p)\"`, `patternTransform`) не реализован: заливка не рисуется. WPT `css/css-transforms`: 71 reftest (`matrix/svg-matrix-*`). OPEN (Д…",
    "component": "layout/paint (`box_tree/svg.rs`, `SvgPaint`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1295": {
+   "status": "open",
+   "title": "SVG как `background-image`: корень с `width`/`height` в `%`, с одним из двух или без обоих получает неверный внутренний размер (25×50 вместо «нет размера»), `ba…",
+   "component": "layout/shell (`crates/shell/src/subresources.rs`, `crates/engine/image/src/svg.rs` — внутренние размеры и пропорции SVG-картинки)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1296": {
+   "status": "open",
+   "title": "Растр SVG-фона растягивается билинейно, а не растеризуется в целевой размер: между `lime` и `aqua` 4 строки промежуточных цветов. WPT `css/css-backgrounds/backg…",
+   "component": "paint/image (`crates/engine/image/src/svg.rs` → `DrawBackgroundImage` в `cpu_raster.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1297": {
+   "status": "open",
+   "title": "CSSOM `background-*`/`border-*`/`box-shadow`/`border-radius`: `element.style` принимает невалидное (`-1px`, `left right`, `auto`), не канонизирует; `getComputed…",
+   "component": "js + layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1298": {
+   "status": "open",
+   "title": "`thin`/`medium`/`thick` в `border`, `border-<side>`, `border-width`, `border-*-width` не разбираются (`resolve_box_length` вместо `parse_line_width`) — ширина 0…",
+   "component": "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` `border-*-width`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1299": {
+   "status": "open",
+   "title": "`background-repeat` с двумя значениями (`repeat no-repeat`, `space no-repeat`, `round repeat`) не разбирается — слой остаётся `repeat`. WPT `css/css-backgrounds…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/values/background.rs:215` — `enum BackgroundRepeat`, один на обе оси)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1300": {
+   "status": "open",
+   "title": "Фон на холсте: явный `transparent`/`none` на `<html>` отключает распространение фона `<body>`; градиент/картинка `<html>` рисуются в боксе корня, а не на холсте…",
+   "component": "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`, paint корня)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1301": {
+   "status": "open",
+   "title": "`initial`/`inherit`/`unset`/`revert` на `background-size",
+   "component": "layout (`crates/engine/layout/src/style/apply/css_wide.rs:1209` — один арм на все `background-*` longhand'ы)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1302": {
+   "status": "open",
+   "title": "Внешняя `box-shadow` не вырезается по границе бокса: сквозь `rgba`-фон и между линиями `double`-рамки виден цвет тени, тень `<body>` заливает внутренность; на `…",
+   "component": "paint (`crates/engine/paint/src/display_list/box_shadow.rs::emit_box_shadows`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1303": {
+   "status": "open",
+   "title": "Плитки `background-image` не выходят за позиционирующую область: при `background-origin: padding-box",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, сетка плиток; wgpu не проверялось)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1304": {
+   "status": "open",
+   "title": "`background-attachment: local` ≡ `scroll`: фон не едет вместе с содержимым прокручиваемого бокса и не режется по padding-box. WPT `css/css-backgrounds/backgroun…",
+   "component": "layout/paint (`crates/engine/layout/src/style/values/background.rs` разбирает `local`, paint = `scroll`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1305": {
+   "status": "open",
+   "title": "Web Animations: неявный («neutral») ключевой кадр, шорткод `border-width`, `background-size` и `box-shadow` не интерполируются (на 30 % — начальное/конечное зна…",
+   "component": "layout (`crates/engine/layout/src/animation.rs` — сборка ключевых кадров и интерполятор)",
    "date": null,
    "debtor": false
   },
@@ -16604,6 +16691,9 @@
   "css-parser/layout (`crates/engine/layout/src/style/apply/paint.rs::apply_declaration`, `selector_query.rs::computed_style_to_map`)": [
    "BUG-495"
   ],
+  "css-parser/layout (`crates/engine/layout/src/style/values/background.rs:215` — `enum BackgroundRepeat`, один на обе оси)": [
+   "BUG-1299"
+  ],
   "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — `FlexWrap`)": [
    "BUG-1259"
   ],
@@ -17514,6 +17604,9 @@
   "js (шим), layout (`zoom`)": [
    "BUG-943"
   ],
+  "js + layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
+   "BUG-1297"
+  ],
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
   ],
@@ -17685,6 +17778,9 @@
   "layout (`crates/engine/layout/src/animation.rs` — `AnimatedStyle`/`KeyframeStyle` знают только opacity/transform/color/background-color/height)": [
    "BUG-1234"
   ],
+  "layout (`crates/engine/layout/src/animation.rs` — сборка ключевых кадров и интерполятор)": [
+   "BUG-1305"
+  ],
   "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_link_hint_kind`/`_lumen_link_hint_prepare`)": [
    "BUG-848"
   ],
@@ -17726,6 +17822,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`)": [
    "BUG-1103"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`, paint корня)": [
+   "BUG-1300"
   ],
   "layout (`crates/engine/layout/src/box_tree/flex.rs` — `<img>` как flex-элемент, перенос пропорций)": [
    "BUG-1256"
@@ -17855,6 +17954,9 @@
   "layout (`crates/engine/layout/src/style/apply.rs::apply_declaration`, `style/substitute.rs::env_calls_well_formed`) + js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_pending_substitution_value`)": [
    "BUG-514"
   ],
+  "layout (`crates/engine/layout/src/style/apply/css_wide.rs:1209` — один арм на все `background-*` longhand'ы)": [
+   "BUG-1301"
+  ],
   "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)": [
    "BUG-1009"
   ],
@@ -17872,6 +17974,9 @@
   ],
   "layout (`crates/engine/layout/src/style/matching/forms.rs:1240`), shell (`crates/shell/src/frame_dynamic_load.rs:49`)": [
    "BUG-1218"
+  ],
+  "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` `border-*-width`)": [
+   "BUG-1298"
   ],
   "layout (`crates/engine/layout/src/style/parse/transform.rs::parse_transform_fn`)": [
    "BUG-1292"
@@ -17960,6 +18065,9 @@
   ],
   "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)": [
    "BUG-1293"
+  ],
+  "layout/shell (`crates/shell/src/subresources.rs`, `crates/engine/image/src/svg.rs` — внутренние размеры и пропорции SVG-картинки)": [
+   "BUG-1295"
   ],
   "layout/shell (замещаемые элементы, aspect-ratio)": [
    "BUG-269"
@@ -18162,6 +18270,9 @@
   "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_text` — `rustybuzz` без скрипта)": [
    "BUG-1272"
   ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, сетка плиток; wgpu не проверялось)": [
+   "BUG-1303"
+  ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — растеризация прямоугольников с дробными координатами)": [
    "BUG-1249"
   ],
@@ -18170,6 +18281,9 @@
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs`, ветка `PushTransform`)": [
    "BUG-1288"
+  ],
+  "paint (`crates/engine/paint/src/display_list/box_shadow.rs::emit_box_shadows`)": [
+   "BUG-1302"
   ],
   "paint (`crates/engine/paint/src/display_list/walk.rs`)": [
    "BUG-1037"
@@ -18239,6 +18353,9 @@
   ],
   "paint/image": [
    "BUG-032"
+  ],
+  "paint/image (`crates/engine/image/src/svg.rs` → `DrawBackgroundImage` в `cpu_raster.rs`)": [
+   "BUG-1296"
   ],
   "paint/layout": [
    "BUG-096",
