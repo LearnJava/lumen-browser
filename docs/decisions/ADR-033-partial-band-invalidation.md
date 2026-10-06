@@ -167,5 +167,13 @@ S3: opaque canvas background and integer device rows for `band_top`/
 prints `band-partial: strips <rows>`. Gate: GPU test
 `partial_band_strips_match_full_redraw` (`--include-ignored`) — a band updated
 by strips is byte-identical to a band drawn from scratch. Not measured live;
-the flag is still off by default (S6 flips it). Unstable-key frames (S5) still
-go monolithic.
+the flag is still off by default (S6 flips it).
+
+### S5 (landed)
+
+`compose_page` no longer gates `try_partial_band` on a stable key: a frame
+whose key differs from the previous frame's goes through the same diff. A
+partial verdict (adopt / strips) updates the band in that frame and the key
+matches, so the frame is composed from the band instead of drawn monolithically;
+a `full` verdict leaves the old behaviour (monolith, band untouched). No new
+code path, only the removed condition; correctness rests on the S4 gate.
