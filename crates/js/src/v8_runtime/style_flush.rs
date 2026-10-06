@@ -1138,19 +1138,30 @@ impl FlushHandles {
             return None;
         }
         // BUG-935 срез 64: a different sheet no longer forces the full path by itself — the
-        // plain rules that were added, removed or moved name the elements to restyle. A
-        // difference in anything but plain rules (`@media`, `@layer`, `@font-face`, …) still does.
+        // style rules that were added, removed or moved name the elements to restyle (срез 93:
+        // `@media`/`@supports` blocks count too). A difference in anything else (`@layer`,
+        // `@property`, …) still does.
         let sheet_roots_scope = lumen_core::profile::scope("incr.sheet_delta");
         let sheet_delta_roots: std::collections::HashSet<lumen_dom::NodeId> =
             if basis.sheet_revision == sheet.revision() {
                 std::collections::HashSet::new()
             } else {
-                let Some(roots) = (!sheet_delta_disabled() && !self.sheet_delta_off.load(Ordering::Relaxed))
-                    .then(|| basis.sheet.changed_plain_rules(sheet))
-                    .flatten()
-                    .and_then(|changed| lumen_layout::style::restyle_roots_for_rule_changes(doc, &changed))
-                else {
-                    declined("stylesheet revision changed");
+                let delta_off = sheet_delta_disabled() || self.sheet_delta_off.load(Ordering::Relaxed);
+                let changed = (!delta_off).then(|| basis.sheet.changed_style_rules(sheet)).flatten();
+                let roots = changed
+                    .as_ref()
+                    .and_then(|changed| lumen_layout::style::restyle_roots_for_rule_changes(doc, changed));
+                let Some(roots) = roots else {
+                    if lumen_paint::frame_log_enabled() {
+                        let why = if delta_off {
+                            "sheet delta switched off".to_owned()
+                        } else if let Some(changed) = &changed {
+                            format!("{} changed rules not expressible as restyle roots", changed.len())
+                        } else {
+                            format!("non-style-rule fields differ: {:?}", basis.sheet.fields_differing_from_style_rules(sheet))
+                        };
+                        eprintln!("[engine] incr declined: stylesheet revision changed ({why})");
+                    }
                     return None;
                 };
                 roots

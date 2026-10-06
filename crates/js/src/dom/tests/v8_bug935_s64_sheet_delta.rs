@@ -1,5 +1,5 @@
 //! BUG-935 срез 64 — a stylesheet that changed since the previous flush (a `<style>` the page
-//! inserted, edited or removed) is absorbed by the incremental flush: the plain rules that
+//! inserted, edited or removed) is absorbed by the incremental flush: the style rules that
 //! were added, removed or moved name the elements to restyle, instead of a recascade of the
 //! whole document (`incr declined: stylesheet revision changed`).
 //!
@@ -153,12 +153,29 @@ const SCENARIOS: &[(&str, &str)] = &[
           function() { els[1].className = 'c n'; addStyle('.c.n u { color: olive; }'); },
           function() { root.removeChild(root.lastChild); addStyle('.c.n p { margin: 1px; }'); }]",
     ),
+    // Срез 93: `@media`/`@supports` blocks are absorbed too — a block that matches the viewport,
+    // one that does not, one that overrides a plain rule, one rewritten in place and one dropped.
+    (
+        "media_and_supports_blocks",
+        "[function() { window.m1 = addStyle('@media (min-width: 100px) { .c i { color: red; } .c b { margin-left: 5px; } }'); },
+          function() { addStyle('@media (max-width: 10px) { .c u { color: teal; } } .c i { color: green; }'); },
+          function() { window.m3 = addStyle('@supports (display: grid) { .c span { font-weight: bold; } } @media screen { .box { height: 40px; } }'); },
+          function() { window.m1.textContent = '@media (min-width: 100px) { .c i { color: navy; } }'; },
+          function() { window.m3.parentNode.removeChild(window.m3); }]",
+    ),
+    // `@font-face` and `@keyframes` are read by nothing in the cascade: a sheet that only adds them
+    // along with ordinary rules is absorbed.
+    (
+        "font_face_and_keyframes_ride_along",
+        "[function() { addStyle('@keyframes k { from { opacity: 0 } to { opacity: 1 } } .c b { color: green; }'); },
+          function() { addStyle('@font-face { font-family: F; src: url(f.woff2) } .c i { font-family: F; }'); }]",
+    ),
     // Something the delta cannot express goes the full way and must still be right.
     (
         "non_plain_rules_fall_back",
         "[function() { addStyle('.c b { color: green; }'); },
-          function() { addStyle('@media (min-width: 100px) { .c i { color: red; } } @keyframes k { from { opacity: 0 } to { opacity: 1 } }'); },
-          function() { addStyle('@layer base { .c u { color: red; } } .c u { color: blue; }'); }]",
+          function() { addStyle('@layer base { .c u { color: red; } } .c u { color: blue; }'); },
+          function() { addStyle('@media (min-width: 100px) { .c i::before { content: \"x\"; } }'); }]",
     ),
 ];
 
@@ -172,6 +189,9 @@ fn a_changed_stylesheet_publishes_what_the_full_cascade_publishes() {
         assert_eq!(none_used, 0, "{name}: the switch did not turn the stylesheet delta off");
         let stale = diff(&off, &delta);
         assert!(stale.is_empty(), "{name}: the stylesheet delta published something else\n{}", stale.join("\n"));
+        if matches!(*name, "media_and_supports_blocks" | "font_face_and_keyframes_ride_along") {
+            assert!(used > 0, "{name}: the sheet change was not absorbed by the incremental flush (срез 93)");
+        }
         engaged += used;
         let gap = diff(&full, &delta);
         if !gap.is_empty() {
