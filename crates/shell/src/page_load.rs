@@ -1226,6 +1226,7 @@ impl Lumen {
                 let (rx, ry) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
                 self.scroll_x = rx;
                 self.scroll_y = ry;
+                self.issue_scroll_command();
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
@@ -2252,6 +2253,7 @@ impl Lumen {
         let (restore_x, restore_y) = self.pending_restore_scroll.take().unwrap_or(initial_page_scroll.unwrap_or((0.0, 0.0)));
         self.scroll_x = restore_x;
         self.scroll_y = restore_y;
+        self.issue_scroll_command();
         self.scroll_drag = None;
         self.frame_scroll_drag = None;
         self.scroll_anim = None;

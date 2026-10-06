@@ -342,6 +342,7 @@ impl Lumen {
             self.adopt_scroll_feedback();
             self.scroll_x = (self.scroll_x + dx).max(0.0);
             self.scroll_y = (self.scroll_y + dy).max(0.0);
+            self.issue_scroll_command();
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();
             }

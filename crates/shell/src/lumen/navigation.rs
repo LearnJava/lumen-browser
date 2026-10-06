@@ -773,6 +773,7 @@ impl Lumen {
             self.source = cur.source;
             self.scroll_x = cur.scroll_x;
             self.scroll_y = cur.scroll_y;
+            self.issue_scroll_command();
             self.display_url = cur.display_url;
             self.current_history_state_json =
                 cur.same_doc_state_json.unwrap_or_else(|| "null".to_string());

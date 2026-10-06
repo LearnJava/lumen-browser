@@ -162,6 +162,7 @@ impl Lumen {
         self.hint = snap.hint;
         self.scroll_y = snap.scroll_y;
         self.scroll_x = snap.scroll_x;
+        self.issue_scroll_command();
         self.content_height = snap.content_height;
         self.content_width = snap.content_width;
         self.layout_source = snap.layout_source;

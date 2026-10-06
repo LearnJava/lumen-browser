@@ -160,6 +160,7 @@ impl Lumen {
         self.relayout();
         self.scroll_x = entry.scroll_x;
         self.scroll_y = entry.scroll_y;
+        self.issue_scroll_command();
         self.title = entry.title.clone();
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));
@@ -259,6 +260,7 @@ impl Lumen {
         self.relayout();
         self.scroll_x = parked.scroll_x;
         self.scroll_y = parked.scroll_y;
+        self.issue_scroll_command();
         self.title = parked.title.clone();
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));

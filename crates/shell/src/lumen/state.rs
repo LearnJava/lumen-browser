@@ -558,6 +558,8 @@ pub(crate) struct Lumen {
     pub(crate) scroll_snapshot_sent: Option<crate::wheel_scroll::ScrollSnapshot>,
     /// Поколение смещения рендер-потока, которое поток браузера усыновил.
     pub(crate) scroll_adopted_gen: u64,
+    /// Эпоха программных прокруток потока браузера (ADR-032, правило 7).
+    pub(crate) scroll_cmd_epoch: u64,
     /// Мгновенная скорость тачпада от последних `PixelDelta`-событий
     /// (CSS px / ms). Обновляется EWMA-фильтром. Используется при
     /// `TouchPhase::Ended` для запуска `momentum_anim`.

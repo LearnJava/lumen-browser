@@ -1347,6 +1347,7 @@ impl Lumen {
                 input::InputCommand::Scroll { x, y } => {
                     self.scroll_x = clamp_scroll(x, self.max_scroll_x());
                     self.scroll_y = clamp_scroll(y, (self.content_height - self.viewport_height_css()).max(0.0));
+                    self.issue_scroll_command();
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }

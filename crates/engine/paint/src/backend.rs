@@ -378,6 +378,13 @@ pub trait RenderBackend: Send {
     /// [`stop_render_momentum`]: RenderBackend::stop_render_momentum
     fn start_render_scroll_anim(&mut self, _start_y: f32, _target_y: f32) {}
 
+    /// Программная прокрутка потока браузера (ADR-032, правило 7): страница
+    /// теперь в `(y, x)`, `epoch` монотонно растёт. Рендер-поток сбрасывает
+    /// кривую, инерцию и владение смещением и помечает ею всю обратную связь;
+    /// связь со старой эпохой поток браузера отбрасывает. No-op на
+    /// однопоточном бэкенде.
+    fn scroll_command(&mut self, _epoch: u64, _y: f32, _x: f32) {}
+
     /// Аннотирует следующий кадр в `LUMEN_FRAME_LOG` (ADR-016 M1).
     ///
     /// Рендер-поток вызывает это перед каждым [`render`](RenderBackend::render):
