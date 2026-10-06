@@ -92,7 +92,9 @@ use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, RenderBackend, RenderError};
 
 use crate::momentum_anim;
-use crate::wheel_scroll::{ScrollFeedback, ScrollShared, WheelInput};
+use crate::wheel_scroll::{
+    ContainerOffset, ScrollFeedback, ScrollShared, ScrollSnapshot, WheelInput, resolve_container_wheel,
+};
 
 /// Бюджет кадра для self-tick momentum (~60 fps). При активном render-side
 /// momentum поток ждёт сообщения не дольше этого; таймаут = UI-поток ничего не
@@ -132,6 +134,10 @@ struct FrameCommit {
     /// сам сдвинул страницу (навигация, клавиатура, `scrollTo`) и его смещение
     /// главнее.
     ack_gen: u64,
+    /// Поколение, которое поток браузера усыновил к моменту кадра, как есть:
+    /// в отличие от `ack_gen` не подменяется [`ACK_BROWSER_SET`]. Смещения
+    /// контейнеров с поколением не старше этого уже в списке кадра (срез 4).
+    adopted_gen: u64,
 }
 
 /// `FrameCommit::ack_gen` кадра, чьё смещение задал сам поток браузера.
@@ -151,8 +157,19 @@ pub(crate) struct RenderLink {
 
 impl RenderLink {
     /// Колесо прямо рендер-потоку (с главного потока, мимо потока браузера).
-    pub(crate) fn send_wheel(&self, input: WheelInput, max_y: f32, max_x: f32) {
-        let _ = self.tx.send(RenderMsg::Wheel { input, max_y, max_x });
+    pub(crate) fn send_wheel(
+        &self,
+        input: WheelInput,
+        max_y: f32,
+        max_x: f32,
+        at: Option<(f32, f32)>,
+    ) {
+        let _ = self.tx.send(RenderMsg::Wheel { input, max_y, max_x, at });
+    }
+
+    /// Свежий снимок прокрутки: по его контейнерам рендер-поток выбирает цель колеса.
+    pub(crate) fn send_snapshot(&self, snap: Arc<ScrollSnapshot>) {
+        let _ = self.tx.send(RenderMsg::Snapshot(snap));
     }
 
     /// Подключить обратную связь: рендер-поток начнёт возвращать смещение.
@@ -233,7 +250,10 @@ enum RenderMsg {
     StartRenderScrollAnim { start_y: f32, target_y: f32 },
     /// Колесо/тачпад с главного потока (ADR-032, срез 3): смещение страницы
     /// ведёт рендер-поток. `max_*` — пределы из снимка прокрутки.
-    Wheel { input: WheelInput, max_y: f32, max_x: f32 },
+    /// `at` — курсор в CSS px от начала области страницы (хит-тест контейнеров).
+    Wheel { input: WheelInput, max_y: f32, max_x: f32, at: Option<(f32, f32)> },
+    /// Снимок прокрутки потока браузера (ADR-032, срез 4).
+    Snapshot(Arc<ScrollSnapshot>),
     /// Подключение обратной связи со смещением (ADR-032, срез 3).
     AttachScrollLink(Arc<ScrollShared>),
     /// Завершение потока (шлётся из `Drop`).
@@ -345,7 +365,7 @@ impl ThreadedRenderBackend {
 
     /// `ack_gen` для кадра со смещением `(y, x)`: поколение, усыновленное
     /// потоком браузера, либо [`ACK_BROWSER_SET`], если он сдвинул страницу сам.
-    fn ack_for_frame(&mut self, y: f32, x: f32) -> u64 {
+    fn ack_for_frame(&mut self, y: f32, x: f32) -> (u64, u64) {
         let (gen_id, ay, ax) = self.adopted.lock().map(|g| *g).unwrap_or((0, 0.0, 0.0));
         if gen_id != self.seen_adopted_gen {
             self.seen_adopted_gen = gen_id;
@@ -353,7 +373,7 @@ impl ThreadedRenderBackend {
         }
         let baseline = self.browser_scroll.unwrap_or((y, x));
         self.browser_scroll = Some((y, x));
-        if baseline == (y, x) { gen_id } else { ACK_BROWSER_SET }
+        (if baseline == (y, x) { gen_id } else { ACK_BROWSER_SET }, gen_id)
     }
 
     /// Отправляет управляющее сообщение; молча игнорирует, если поток уже мёртв
@@ -389,7 +409,7 @@ impl RenderBackend for ThreadedRenderBackend {
                 arc
             }
         };
-        let ack_gen = self.ack_for_frame(scroll_y, scroll_x);
+        let (ack_gen, adopted_gen) = self.ack_for_frame(scroll_y, scroll_x);
         let frame = FrameCommit {
             content,
             overlay: overlay.to_vec(),
@@ -397,6 +417,7 @@ impl RenderBackend for ThreadedRenderBackend {
             scroll_x,
             commit_id: self.commit_counter,
             ack_gen,
+            adopted_gen,
         };
         self.send(RenderMsg::Frame(frame));
         // Fire-and-forget latest-wins: main не ждёт present (ADR-016 инвариант 4).
@@ -576,6 +597,9 @@ struct RenderMomentum {
     max_x: f32,
 }
 
+/// Список страницы со смещениями контейнеров: (исходный список, версия смещений, результат).
+type DrawnContent = (Arc<Vec<DisplayCommand>>, u64, Arc<Vec<DisplayCommand>>);
+
 /// Удержанное между пачками состояние рендер-потока (ADR-016 M1.3). Позволяет
 /// продолжать momentum-презентацию из последнего закоммиченного кадра, когда
 /// UI-поток застопорился и новых кадров нет.
@@ -621,6 +645,17 @@ struct RenderState {
     presented: bool,
     /// Дедлайн следующего тика колеса (ms от старта рендер-потока).
     next_tick_ms: f64,
+    /// Последний снимок прокрутки потока браузера (контейнеры и их геометрия).
+    snap: Arc<ScrollSnapshot>,
+    /// Смещения overflow-контейнеров, которыми владеет рендер-поток, пока поток
+    /// браузера не усыновил их и не вернул в списке кадра (ADR-032, срез 4).
+    owned_containers: Vec<ContainerOffset>,
+    /// Растёт при каждом изменении `owned_containers`.
+    containers_version: u64,
+    /// Усыновленное потоком браузера поколение по последнему кадру.
+    frame_adopted: u64,
+    /// Кэш списка с подставленными смещениями: (исходный список, версия, результат).
+    drawn: Option<DrawnContent>,
 }
 
 impl RenderState {
@@ -646,6 +681,11 @@ impl RenderState {
             touch_t_ms: 0.0,
             presented: false,
             next_tick_ms: 0.0,
+            snap: Arc::new(ScrollSnapshot::default()),
+            owned_containers: Vec::new(),
+            containers_version: 0,
+            frame_adopted: 0,
+            drawn: None,
         }
     }
 
@@ -688,7 +728,13 @@ impl RenderState {
     fn publish(&mut self) {
         self.gen_id += 1;
         if let Some(sh) = self.shared.as_ref() {
-            sh.post_feedback(ScrollFeedback { gen_id: self.gen_id, y: self.cur_y, x: self.cur_x });
+            let containers = self.owned_containers.iter().map(|o| (o.id, o.x, o.y)).collect();
+            sh.post_feedback(ScrollFeedback {
+                gen_id: self.gen_id,
+                y: self.cur_y,
+                x: self.cur_x,
+                containers,
+            });
         }
     }
 
@@ -724,7 +770,21 @@ impl RenderState {
     }
 
     /// Применяет ввод колеса. `true` — смещение изменилось сразу (не кривой).
+    #[cfg(test)]
     fn apply_wheel(&mut self, input: WheelInput, max_y: f32, max_x: f32, now_ms: f64) -> bool {
+        self.apply_wheel_at(input, max_y, max_x, None, now_ms)
+    }
+
+    /// `at` — курсор в CSS px от начала области страницы; с ним дельту может
+    /// забрать overflow-контейнер под курсором (срез 4), а не страница.
+    fn apply_wheel_at(
+        &mut self,
+        input: WheelInput,
+        max_y: f32,
+        max_x: f32,
+        at: Option<(f32, f32)>,
+        now_ms: f64,
+    ) -> bool {
         let was_driving = self.owned && self.driving();
         if self.advance(now_ms) {
             self.publish();
@@ -732,6 +792,9 @@ impl RenderState {
         self.owned = true;
         self.max_y = max_y;
         self.max_x = max_x;
+        if let Some(consumed) = self.try_container(input, at) {
+            return consumed;
+        }
         let moved = self.apply_input(input, max_y, max_x, now_ms);
         if !was_driving && self.driving() {
             if let Some(a) = self.scroll_anim.as_mut() {
@@ -740,6 +803,81 @@ impl RenderState {
             self.next_tick_ms = now_ms;
         }
         moved
+    }
+
+    /// Колесо над overflow-контейнером: `Some(true)` — контейнер сдвинут,
+    /// `Some(false)` — жест погашен на границе (`overscroll-behavior`), `None` —
+    /// контейнера нет, дельта идёт странице. Контейнер сдвигается сразу, без
+    /// кривой, как у потока браузера (BUG-822).
+    fn try_container(&mut self, input: WheelInput, at: Option<(f32, f32)>) -> Option<bool> {
+        let at = at?;
+        let (dx, dy) = match input {
+            WheelInput::Notch { dx, dy }
+            | WheelInput::TouchStart { dx, dy }
+            | WheelInput::TouchMove { dx, dy } => (dx, dy),
+            WheelInput::TouchEnd | WheelInput::TouchCancel => return None,
+        };
+        let doc = (at.0 + self.cur_x, at.1 + self.cur_y);
+        let chain = resolve_container_wheel(&self.snap, &self.owned_containers, doc, dx, dy)?;
+        if !chain.moved {
+            return Some(false);
+        }
+        let id = chain.node.index() as u32;
+        // Поколение, под которым это смещение уйдёт обратной связью: `publish`
+        // сразу следует за возвратом `true`.
+        let gen_id = self.gen_id + 1;
+        let off = ContainerOffset { id, x: chain.new_x, y: chain.new_y, gen_id };
+        match self.owned_containers.iter_mut().find(|o| o.id == id) {
+            Some(o) => *o = off,
+            None => self.owned_containers.push(off),
+        }
+        self.containers_version += 1;
+        Some(true)
+    }
+
+    /// Забывает смещения контейнеров, которые поток браузера уже усыновил и
+    /// которые поэтому есть и в списке кадра, и в снимке.
+    fn prune_containers(&mut self) {
+        let limit = self.frame_adopted.min(self.snap.adopted_gen);
+        let before = self.owned_containers.len();
+        self.owned_containers.retain(|o| o.gen_id > limit);
+        if self.owned_containers.len() != before {
+            self.containers_version += 1;
+        }
+    }
+
+    /// Список для рисования: `raw` со смещениями контейнеров, которыми владеет
+    /// рендер-поток. Без них — тот же `Arc`; иначе копия с подставленными
+    /// смещениями (кэшируется до смены списка или смещений).
+    fn drawable(&mut self, raw: &Arc<Vec<DisplayCommand>>) -> Arc<Vec<DisplayCommand>> {
+        if self.owned_containers.is_empty() {
+            return Arc::clone(raw);
+        }
+        if let Some((r, v, out)) = &self.drawn
+            && Arc::ptr_eq(r, raw)
+            && *v == self.containers_version
+        {
+            return Arc::clone(out);
+        }
+        let overrides: Vec<lumen_paint::ScrollLayerOverride> = self
+            .owned_containers
+            .iter()
+            .filter_map(|o| {
+                let c = self.snap.containers.iter().find(|c| c.node.index() as u32 == o.id)?;
+                Some(lumen_paint::ScrollLayerOverride {
+                    id: o.id,
+                    scroll_x: o.x,
+                    scroll_y: o.y,
+                    max_x: (c.scroll_width - c.clip_rect.width).max(0.0),
+                    max_y: (c.scroll_height - c.clip_rect.height).max(0.0),
+                })
+            })
+            .collect();
+        let mut list: Vec<DisplayCommand> = raw.as_ref().clone();
+        lumen_paint::apply_scroll_overrides(&mut list, &overrides);
+        let out = Arc::new(list);
+        self.drawn = Some((Arc::clone(raw), self.containers_version, Arc::clone(&out)));
+        out
     }
 
     fn apply_input(&mut self, input: WheelInput, max_y: f32, max_x: f32, now_ms: f64) -> bool {
@@ -934,9 +1072,8 @@ fn present_owned(backend: &mut Box<dyn RenderBackend>, state: &mut RenderState) 
         return; // кадров ещё не было — нечего презентовать
     }
     backend.set_frame_commit_id(state.anchor_commit_id, true);
-    if let Err(err) =
-        backend.render(&state.last_content, &state.last_overlay, state.cur_y, state.cur_x)
-    {
+    let content = state.drawable(&Arc::clone(&state.last_content));
+    if let Err(err) = backend.render(&content, &state.last_overlay, state.cur_y, state.cur_x) {
         eprintln!("[render-thread] ошибка презентации колеса: {err:?}");
     }
     crate::present_log::present(state.anchor_commit_id, true);
@@ -977,7 +1114,8 @@ fn self_tick_momentum(
     // ADR-016 M1: помечаем кадр как self-tick — презентация продолжается, пока
     // UI-поток стоит; в LUMEN_FRAME_LOG это видно как `commit N self-tick`.
     backend.set_frame_commit_id(state.anchor_commit_id, true);
-    if let Err(err) = backend.render(&state.last_content, &state.last_overlay, scroll_y, scroll_x) {
+    let content = state.drawable(&Arc::clone(&state.last_content));
+    if let Err(err) = backend.render(&content, &state.last_overlay, scroll_y, scroll_x) {
         eprintln!("[render-thread] ошибка self-tick momentum: {err:?}");
     }
     crate::present_log::present(state.anchor_commit_id, true);
@@ -1002,8 +1140,9 @@ fn self_tick_scroll_anim(
     }
     let (scroll_y, done) = anim.sample(now_ms);
     backend.set_frame_commit_id(state.anchor_commit_id, true);
+    let content = state.drawable(&Arc::clone(&state.last_content));
     if let Err(err) =
-        backend.render(&state.last_content, &state.last_overlay, scroll_y, state.anchor_scroll_x)
+        backend.render(&content, &state.last_overlay, scroll_y, state.anchor_scroll_x)
     {
         eprintln!("[render-thread] ошибка self-tick scroll-anim: {err:?}");
     }
@@ -1038,6 +1177,8 @@ fn process_batch(
                     // как UI-поток встал в долгий кадр, и тащил бы страницу назад.
                     let mut frame = frame;
                     state.resolve_frame_scroll(&mut frame, now_ms);
+                    state.frame_adopted = frame.adopted_gen;
+                    state.prune_containers();
                     // Пока кривая или инерция колеса идёт, презентует тик
                     // рендер-потока: кадр потока браузера со прежним списком
                     // лишь обновляет overlay. Вторая презентация на тик
@@ -1050,8 +1191,9 @@ fn process_batch(
                         state.presented = true;
                         // ADR-016 M1: аннотируем кадр в LUMEN_FRAME_LOG (не self-tick).
                         backend.set_frame_commit_id(frame.commit_id, false);
+                        let content = state.drawable(&frame.content);
                         if let Err(err) = backend.render(
-                            &frame.content,
+                            &content,
                             &frame.overlay,
                             frame.scroll_y,
                             frame.scroll_x,
@@ -1089,8 +1231,12 @@ fn process_batch(
                 state.scroll_anim = None;
                 state.owned = false;
             }
-            RenderMsg::Wheel { input, max_y, max_x } => {
-                if state.apply_wheel(input, max_y, max_x, now_ms) {
+            RenderMsg::Snapshot(snap) => {
+                state.snap = snap;
+                state.prune_containers();
+            }
+            RenderMsg::Wheel { input, max_y, max_x, at } => {
+                if state.apply_wheel_at(input, max_y, max_x, at, now_ms) {
                     state.publish();
                     present_owned(backend, state);
                 }
@@ -1168,6 +1314,7 @@ mod tests {
             scroll_x: 0.0,
             commit_id,
             ack_gen: 0,
+            adopted_gen: 0,
         })
     }
 
@@ -1345,6 +1492,7 @@ mod tests {
             scroll_x: 0.0,
             commit_id: 1,
             ack_gen,
+            adopted_gen: ack_gen,
         }
     }
 
@@ -1461,12 +1609,12 @@ mod tests {
         })
         .expect("spawn");
         let link = take_last_link().expect("ручка");
-        assert_eq!(b.ack_for_frame(0.0, 0.0), 0);
-        assert_eq!(b.ack_for_frame(0.0, 0.0), 0, "перерисовка без сдвига");
-        assert_eq!(b.ack_for_frame(300.0, 0.0), ACK_BROWSER_SET, "браузер сдвинул сам");
+        assert_eq!(b.ack_for_frame(0.0, 0.0).0, 0);
+        assert_eq!(b.ack_for_frame(0.0, 0.0).0, 0, "перерисовка без сдвига");
+        assert_eq!(b.ack_for_frame(300.0, 0.0).0, ACK_BROWSER_SET, "браузер сдвинул сам");
         link.adopt(7, 500.0, 0.0);
-        assert_eq!(b.ack_for_frame(500.0, 0.0), 7, "усыновление не считается сдвигом браузера");
-        assert_eq!(b.ack_for_frame(500.0, 0.0), 7);
+        assert_eq!(b.ack_for_frame(500.0, 0.0).0, 7, "усыновление не считается сдвигом браузера");
+        assert_eq!(b.ack_for_frame(500.0, 0.0).0, 7);
     }
 
     #[test]
@@ -1481,5 +1629,125 @@ mod tests {
         st.resolve_frame_scroll(&mut f, crate::scroll_anim::DURATION_MS + 50.0);
         assert_eq!(f.scroll_y, 120.0, "финальная точка, а не усыновлённая раньше");
         assert!(st.gen_id > adopted, "и она ушла обратной связью");
+    }
+
+    // --- ADR-032, срез 4: overflow-контейнеры ---
+
+    fn container(id: usize, rect: [f32; 4], content_h: f32) -> lumen_layout::ScrollContainer {
+        lumen_layout::ScrollContainer {
+            node: lumen_dom::NodeId::from_index(id),
+            clip_rect: lumen_core::geom::Rect::new(rect[0], rect[1], rect[2], rect[3]),
+            scroll_width: rect[2],
+            scroll_height: content_h,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            overscroll_behavior_x: lumen_layout::style::OverscrollBehavior::Auto,
+            overscroll_behavior_y: lumen_layout::style::OverscrollBehavior::Auto,
+        }
+    }
+
+    fn container_state(containers: Vec<lumen_layout::ScrollContainer>) -> RenderState {
+        let mut st = wheel_state();
+        st.snap = Arc::new(ScrollSnapshot { enabled: true, containers, ..ScrollSnapshot::default() });
+        st
+    }
+
+    fn scroll_layer(id: u32, y: f32) -> DisplayCommand {
+        DisplayCommand::PushScrollLayer {
+            id,
+            clip_rect: lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 100.0),
+            scroll_x: 0.0,
+            scroll_y: y,
+        }
+    }
+
+    #[test]
+    fn notch_over_container_moves_it_and_not_the_page() {
+        let mut st = container_state(vec![container(5, [0.0, 0.0, 100.0, 100.0], 400.0)]);
+        let moved = st.apply_wheel_at(
+            WheelInput::Notch { dx: 0.0, dy: 40.0 },
+            10_000.0,
+            0.0,
+            Some((50.0, 50.0)),
+            0.0,
+        );
+        assert!(moved, "контейнер сдвигается сразу");
+        assert_eq!(st.cur_y, 0.0, "страница на месте");
+        assert!(!st.driving(), "кривой страницы нет");
+        assert_eq!(st.owned_containers.len(), 1);
+        assert_eq!((st.owned_containers[0].id, st.owned_containers[0].y), (5, 40.0));
+    }
+
+    #[test]
+    fn notch_outside_container_scrolls_the_page() {
+        let mut st = container_state(vec![container(5, [0.0, 0.0, 100.0, 100.0], 400.0)]);
+        st.apply_wheel_at(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, Some((500.0, 500.0)), 0.0);
+        assert!(st.owned_containers.is_empty());
+        assert!(st.driving(), "кривая страницы пошла");
+    }
+
+    #[test]
+    fn container_at_boundary_hands_the_wheel_to_the_page_and_contain_swallows_it() {
+        let mut c = container(5, [0.0, 0.0, 100.0, 100.0], 400.0);
+        c.scroll_y = 300.0;
+        let mut st = container_state(vec![c.clone()]);
+        // Предел достигнут, `auto` — дельта уходит странице.
+        st.apply_wheel_at(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, Some((50.0, 50.0)), 0.0);
+        assert!(st.owned_containers.is_empty());
+        assert!(st.driving());
+        // `contain` — жест гасится на месте.
+        c.overscroll_behavior_y = lumen_layout::style::OverscrollBehavior::Contain;
+        let mut st = container_state(vec![c]);
+        let moved = st.apply_wheel_at(
+            WheelInput::Notch { dx: 0.0, dy: 40.0 },
+            10_000.0,
+            0.0,
+            Some((50.0, 50.0)),
+            0.0,
+        );
+        assert!(!moved);
+        assert!(!st.driving());
+    }
+
+    #[test]
+    fn owned_offset_beats_snapshot_offset_for_the_next_notch() {
+        let mut st = container_state(vec![container(5, [0.0, 0.0, 100.0, 100.0], 400.0)]);
+        for _ in 0..2 {
+            st.apply_wheel_at(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, Some((50.0, 50.0)), 0.0);
+            st.publish();
+        }
+        assert_eq!(st.owned_containers[0].y, 80.0, "второй щелчок идёт от первого, а не от снимка");
+    }
+
+    #[test]
+    fn drawable_patches_scroll_layers_until_adopted() {
+        let mut st = container_state(vec![container(5, [0.0, 0.0, 100.0, 100.0], 400.0)]);
+        let raw = Arc::new(vec![scroll_layer(5, 0.0), DisplayCommand::PopScrollLayer]);
+        assert!(Arc::ptr_eq(&st.drawable(&raw), &raw), "без смещений список не копируется");
+        st.apply_wheel_at(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, Some((50.0, 50.0)), 0.0);
+        st.publish();
+        let drawn = st.drawable(&raw);
+        assert!(matches!(drawn[0], DisplayCommand::PushScrollLayer { scroll_y, .. } if scroll_y == 40.0));
+        assert!(Arc::ptr_eq(&st.drawable(&raw), &drawn), "кэш пока смещения не менялись");
+        // Кадр потока браузера, снятый до усыновления, не откатывает контейнер.
+        st.frame_adopted = 0;
+        st.prune_containers();
+        assert_eq!(st.owned_containers.len(), 1);
+        // Усыновил и кадр, и снимок — смещение отдано списку.
+        st.frame_adopted = st.gen_id;
+        st.snap = Arc::new(ScrollSnapshot { adopted_gen: st.gen_id, ..(*st.snap).clone() });
+        st.prune_containers();
+        assert!(st.owned_containers.is_empty());
+        assert!(Arc::ptr_eq(&st.drawable(&raw), &raw));
+    }
+
+    #[test]
+    fn snapshot_alone_does_not_release_an_offset_the_frame_lacks() {
+        let mut st = container_state(vec![container(5, [0.0, 0.0, 100.0, 100.0], 400.0)]);
+        st.apply_wheel_at(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, Some((50.0, 50.0)), 0.0);
+        st.publish();
+        st.snap = Arc::new(ScrollSnapshot { adopted_gen: st.gen_id, ..(*st.snap).clone() });
+        st.prune_containers();
+        assert_eq!(st.owned_containers.len(), 1, "кадр с усыновленным списком ещё не пришёл");
     }
 }

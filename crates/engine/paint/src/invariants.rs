@@ -405,6 +405,7 @@ mod tests {
         let out = vec![
             DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
             DisplayCommand::PushScrollLayer {
+                id: 0,
                 clip_rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 scroll_x: 0.0,
                 scroll_y: 0.0,

@@ -71,14 +71,27 @@ impl Lumen {
         ) else {
             return false;
         };
-        let (target, new_x, new_y) = (chain.node, chain.new_x, chain.new_y);
-        let target_nid = target.index() as u32;
         if !chain.moved {
             // Граница достигнута, но распространение запрещено (contain/none) —
             // гасим жест без relayout/redraw.
             return true;
         }
+        self.apply_container_scroll(chain.node, chain.new_x, chain.new_y)
+    }
 
+    /// Ставит контейнеру `target` смещение `(new_x, new_y)`: правит раскладку и
+    /// готовый display list на месте и сообщает странице (`scroll`/`scrollend`).
+    /// Общий хвост колеса потока браузера и усыновления смещения, которое вело
+    /// колесо на рендер-потоке (ADR-032, срез 4). `false` — смещение не
+    /// изменилось или контейнера в раскладке нет.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn apply_container_scroll(
+        &mut self,
+        target: lumen_dom::NodeId,
+        new_x: f32,
+        new_y: f32,
+    ) -> bool {
+        let target_nid = target.index() as u32;
         // Borrow layout_box mutably after releasing the immutable scroll_containers borrow.
         let scrolled = if let Some(lb) = self.layout_box.as_mut() {
             set_scroll_position(lb, target, new_x, new_y)

@@ -359,7 +359,7 @@ pub use display_list::{
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_ordered_with_anim_split,
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
-    cull_display_list, hash_content, hash_display_list, is_image_set, patch_scroll_layer,
+    cull_display_list, hash_content, hash_display_list, is_image_set, patch_scroll_layer, ScrollLayerOverride, apply_scroll_overrides,
     point_on_resize_grip, select_image_set_url, split_at_page_breaks, serialize_display_list,
     apply_print_color_adjust, with_fixed_background_viewport,
     BlendMode, CornerRadii,

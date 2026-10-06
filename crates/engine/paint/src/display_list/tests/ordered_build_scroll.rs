@@ -110,6 +110,69 @@ use super::text_and_images::Fixed8;
         );
     }
 
+    /// ADR-032, срез 4: смещение, подставленное по `id` без `LayoutBox`
+    /// (`apply_scroll_overrides`), даёт тот же список, что и полная пересборка.
+    fn check_override_equals_rebuild(html: &str, css: &str, x: f32, y: f32) {
+        let mut tree = layout_for(html, css);
+        let containers = lumen_layout::collect_scroll_containers(&tree);
+        assert_eq!(containers.len(), 1, "тест ожидает ровно один scroll-контейнер");
+        let c = containers[0].clone();
+        let mut dl = ordered_of(&tree);
+        assert!(lumen_layout::set_scroll_position(&mut tree, c.node, x, y));
+        let truth = ordered_of(&tree);
+        let o = ScrollLayerOverride {
+            id: c.node.index() as u32,
+            scroll_x: x,
+            scroll_y: y,
+            max_x: (c.scroll_width - c.clip_rect.width).max(0.0),
+            max_y: (c.scroll_height - c.clip_rect.height).max(0.0),
+        };
+        assert_eq!(apply_scroll_overrides(&mut dl, &[o]), 1);
+        assert_dl_eq(&dl, &truth);
+    }
+
+    #[test]
+    fn override_matches_rebuild_vertical() {
+        check_override_equals_rebuild(
+            "<div class='s'><div class='tall'>x</div></div>",
+            "body { margin: 0; } .s { overflow-y: auto; overflow-x: hidden; width: 100px; height: 80px; } .tall { height: 400px; }",
+            0.0,
+            40.0,
+        );
+    }
+
+    #[test]
+    fn override_matches_rebuild_both_axes_with_border() {
+        check_override_equals_rebuild(
+            "<div class='s'><div class='big'>x</div></div>",
+            "body { margin: 0; } .s { overflow: scroll; width: 120px; height: 90px; border: 3px solid #0f3460; } .big { width: 500px; height: 400px; }",
+            35.0,
+            60.0,
+        );
+    }
+
+    #[test]
+    fn override_matches_rebuild_zindexed_child_reestablished() {
+        check_override_equals_rebuild(
+            "<div class='s'><div class='inner'></div></div>",
+            "body { margin: 0; } .s { width: 100px; height: 100px; overflow: auto; } .inner { position: relative; z-index: 1; width: 50px; height: 200px; background: #0000ff; }",
+            0.0,
+            30.0,
+        );
+    }
+
+    #[test]
+    fn override_of_unknown_id_touches_nothing() {
+        let mut dl = ordered_of(&layout_for(
+            "<div class='s'><div class='tall'>x</div></div>",
+            ".s { overflow: auto; height: 50px; } .tall { height: 300px; }",
+        ));
+        let before = format!("{dl:?}");
+        let o = ScrollLayerOverride { id: u32::MAX, scroll_x: 0.0, scroll_y: 10.0, max_x: 0.0, max_y: 250.0 };
+        assert_eq!(apply_scroll_overrides(&mut dl, &[o]), 0);
+        assert_eq!(before, format!("{dl:?}"));
+    }
+
     /// Микробенч (не гейт): выигрыш патча против полной пересборки.
     /// `cargo test -p lumen-paint --release patch_scroll_layer_bench -- --ignored --nocapture`
     #[test]

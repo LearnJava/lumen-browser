@@ -1276,6 +1276,7 @@ pub fn find_snapped_nodes(container: &SnapContainer, scroll: (f32, f32)) -> Snap
 
 /// A scrollable overflow container collected from the layout tree.
 /// Shell uses this to route wheel events and update scroll offsets.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScrollContainer {
     /// The DOM node that owns this scroll region.
     pub node: lumen_dom::NodeId,

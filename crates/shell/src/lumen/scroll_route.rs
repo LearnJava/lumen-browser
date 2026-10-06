@@ -47,18 +47,15 @@ impl Lumen {
             && self.split_view.is_none()
             && self.snap_containers.is_empty()
             && self.layout_box.is_some();
-        let mut blockers: Vec<[f32; 4]> = self
-            .scroll_containers
+        // Контейнеры страницы цель колеса выбирает рендер-поток (`containers`);
+        // фреймы по-прежнему решает поток браузера.
+        let blockers: Vec<[f32; 4]> = self
+            .frames
             .iter()
-            .map(|c| [c.clip_rect.x, c.clip_rect.y, c.clip_rect.width, c.clip_rect.height])
+            .filter(|f| f.parent_doc.is_none())
+            .filter_map(|f| f.host_rect)
+            .map(|h| [h.x, h.y, h.width, h.height])
             .collect();
-        blockers.extend(
-            self.frames
-                .iter()
-                .filter(|f| f.parent_doc.is_none())
-                .filter_map(|f| f.host_rect)
-                .map(|h| [h.x, h.y, h.width, h.height]),
-        );
         ScrollSnapshot {
             enabled,
             dpr: r.scale_factor() as f32,
@@ -67,6 +64,8 @@ impl Lumen {
             max_y: self.max_scroll(),
             max_x: self.max_scroll_x(),
             blockers,
+            containers: if enabled { self.scroll_containers.clone() } else { Vec::new() },
+            adopted_gen: self.scroll_adopted_gen,
             wheel_listeners: Vec::new(),
         }
     }
@@ -106,6 +105,19 @@ impl Lumen {
         self.scroll_x = x;
         if let Some(link) = self.scroll_link.as_ref() {
             link.adopt(fb.gen_id, y, x);
+        }
+        // Контейнеры, которые вело колесо на рендер-потоке: тот же хвост, что у
+        // колеса потока браузера (раскладка, список, `scroll`-события).
+        for (id, cx, cy) in fb.containers {
+            let Some(node) = self
+                .scroll_containers
+                .iter()
+                .find(|c| c.node.index() as u32 == id && (c.scroll_x != cx || c.scroll_y != cy))
+                .map(|c| c.node)
+            else {
+                continue;
+            };
+            self.apply_container_scroll(node, cx, cy);
         }
         self.request_redraw();
         true

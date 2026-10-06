@@ -427,7 +427,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
             // snapshot) makes the content an off-screen group translated at
             // composite time, exactly like `PushTransform` — the clip is mapped
             // through the inverse so it still gates the pre-translation draws.
-            DisplayCommand::PushScrollLayer { clip_rect: cr, scroll_x, scroll_y } => {
+            DisplayCommand::PushScrollLayer { clip_rect: cr, scroll_x, scroll_y, .. } => {
                 clip_stack.push(*cr);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
@@ -3495,7 +3495,7 @@ mod tests {
         let grey = Color { r: 128, g: 128, b: 128, a: 255 };
         let green = Color { r: 0, g: 128, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushScrollLayer { clip_rect: rect(0.0, 0.0, 40.0, 60.0), scroll_x: 0.0, scroll_y: 10.0 },
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 40.0, 60.0), scroll_x: 0.0, scroll_y: 10.0 },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
             DisplayCommand::FillRect { rect: rect(0.0, 40.0, 40.0, 100.0), color: green },
             DisplayCommand::PopScrollLayer,
@@ -3513,7 +3513,7 @@ mod tests {
     fn scroll_layer_at_origin_is_plain_clip() {
         let grey = Color { r: 128, g: 128, b: 128, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushScrollLayer { clip_rect: rect(0.0, 0.0, 20.0, 20.0), scroll_x: 0.0, scroll_y: 0.0 },
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 20.0, 20.0), scroll_x: 0.0, scroll_y: 0.0 },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
             DisplayCommand::PopScrollLayer,
         ];

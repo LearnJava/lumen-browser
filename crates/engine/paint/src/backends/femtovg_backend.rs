@@ -4140,7 +4140,7 @@ impl FemtovgBackend {
             }
 
             // ── Scroll layer ────────────────────────────────────────────────
-            DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+            DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y, .. } => {
                 // BUG-337: capture the scrollport bound BEFORE this layer's own
                 // scroll translate joins the canvas transform, same convention
                 // as `push_sticky_bound` for the three `PushClip*` commands —

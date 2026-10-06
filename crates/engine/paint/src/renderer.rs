@@ -2689,7 +2689,7 @@ impl Renderer {
                 // CSS Overflow L3 §3.2 — PushScrollLayer: clip to padding-box + translate
                 // content by (-scroll_x, -scroll_y). Combines a PushClipRect and a 2D
                 // translation on the transform stack; PopScrollLayer unwinds both.
-                DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+                DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y, .. } => {
                     // Clip (same as PushClipRect, accounting for sticky dx/dy).
                     // Apply the accumulated transform so the clip lands in screen
                     // space (BUG-276 fix, missed here originally — BUG-335): the
