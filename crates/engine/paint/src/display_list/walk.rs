@@ -1337,16 +1337,8 @@ fn dispatch<'a>(
         }
         BoxKind::FormControl { kind } => {
             // Replaced element: background + border box (Phase 0, no content).
-            //
-            // LAYOUT-2 срез 9: this `return` (like the five other `!is_paint_
-            // visible`/zero-size early returns below, on Image/Video/Canvas/
-            // Audio/Iframe) skips the `is_fixed`/`is_sticky` closing at
-            // `dispatch`'s own tail — a pre-existing quirk (an invisible
-            // `position:fixed`/`sticky` replaced element leaves its `Begin*
-            // Layer` unmatched), reproduced bit-for-bit rather than fixed
-            // here (out of scope — filed as BUG-1037 for follow-up).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
@@ -1408,7 +1400,7 @@ fn dispatch<'a>(
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → <img>.
             // background/border у `<img>` валидны по CSS — например, для
@@ -1475,7 +1467,7 @@ fn dispatch<'a>(
         BoxKind::Video { src, poster } => {
             // visibility:hidden на `<video>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → placeholder.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1545,7 +1537,7 @@ fn dispatch<'a>(
         BoxKind::Canvas { .. } => {
             // visibility:hidden on <canvas> skips everything (no children).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Painter's order for replaced element: background → bg-image → border → bitmap.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1598,7 +1590,7 @@ fn dispatch<'a>(
         }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Phase 0: grey bar for audio controls UI.
             let grey = Color { r: 200, g: 200, b: 200, a: 255 };
@@ -1607,7 +1599,7 @@ fn dispatch<'a>(
         }
         BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Phase 0: grey placeholder — no sub-document navigation.
             // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
@@ -1698,6 +1690,14 @@ fn dispatch<'a>(
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
     }
+    close_position_layers(is_fixed, is_sticky, out)
+}
+
+/// Closes the `BeginFixedLayer`/`BeginStickyLayer` that `dispatch` opened for
+/// this box. Every exit of `dispatch` after the markers are pushed — including
+/// the early returns of invisible replaced elements — goes through here, so the
+/// brackets stay balanced (BUG-1037).
+fn close_position_layers<'a>(is_fixed: bool, is_sticky: bool, out: &mut DisplayList) -> WalkOutcome<'a> {
     if is_fixed {
         out.push(DisplayCommand::EndFixedLayer);
     }

@@ -109,3 +109,39 @@ fn legacy_walk_fixed_under_cb_is_not_an_overlay() {
     assert!(!legacy_has_fixed_marker(html, &format!(".t{{filter:blur(0px);height:50px}}{F}")));
     assert!(legacy_has_fixed_marker(html, &format!(".t{{height:50px}}{F}")));
 }
+
+/// BUG-1037: невидимый `fixed`/`sticky` replaced-элемент не оставляет
+/// `Begin*Layer` без пары.
+#[test]
+fn legacy_walk_invisible_replaced_keeps_layer_brackets_balanced() {
+    let tags = [
+        r#"<canvas class="x"></canvas>"#,
+        r#"<img class="x" src="a.png" width="10" height="10">"#,
+        r#"<video class="x"></video>"#,
+        r#"<audio class="x" controls></audio>"#,
+        r#"<iframe class="x"></iframe>"#,
+        r#"<input class="x">"#,
+    ];
+    for pos in ["fixed", "sticky"] {
+        for tag in tags {
+            for vis in ["visibility:hidden", "width:0;height:0"] {
+                let doc = lumen_html_parser::parse(&format!("<div>{tag}</div>"));
+                let css = format!("body{{margin:0}}.x{{position:{pos};top:0;{vis}}}");
+                let sheet = lumen_css_parser::parse(&css);
+                let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+                let dl = build_display_list(&tree);
+                let n = |f: fn(&DisplayCommand) -> bool| dl.iter().filter(|c| f(c)).count();
+                assert_eq!(
+                    n(|c| matches!(c, DisplayCommand::BeginFixedLayer)),
+                    n(|c| matches!(c, DisplayCommand::EndFixedLayer)),
+                    "{pos} {vis} {tag}"
+                );
+                assert_eq!(
+                    n(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. })),
+                    n(|c| matches!(c, DisplayCommand::EndStickyLayer)),
+                    "{pos} {vis} {tag}"
+                );
+            }
+        }
+    }
+}

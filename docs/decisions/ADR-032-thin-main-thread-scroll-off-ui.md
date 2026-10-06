@@ -103,6 +103,67 @@ Rules:
 10. `background-attachment: fixed` keeps today's fallback: the band compositor
     renders directly (`CAPABILITIES.md` §backgrounds). It is not pinned by rule 4.
 
+### Slice 1 probe results (2026-10-06)
+
+**How `position:fixed` stays pinned today.** Nobody relayouts per scroll step.
+The display list is scroll-independent: `walk` brackets a fixed box with
+`BeginFixedLayer`/`EndFixedLayer` (`display_list/walk.rs`), `overlay_partition`
+splits those ranges into the `overlay` list, and the renderer applies the page
+offset only to the `content` list (`renderer.rs:1363`: `is_overlay` → `(0, 0)`,
+else `(-scroll_y, -scroll_x)`; the offset seed is dropped at the content|overlay
+boundary, `renderer.rs:1329`). The markers themselves are no-ops
+(`renderer.rs:3438`) — they are partition metadata, so the comment in
+`commands.rs:453` ("already in viewport coordinates") means "coordinates of the
+overlay list, which is never shifted". Consequence for rule 4: the render thread
+only needs the offset; fixed/sticky pinning already happens at draw time from
+the brackets. A fixed box under a transform/filter ancestor is deliberately not
+bracketed (page content). Rule 4 relies on balanced brackets: BUG-1037 (early
+`return` of an invisible fixed/sticky replaced element) is fixed in this slice
+(`close_position_layers`, regression test in `tests/fixed_cb_scroll.rs`).
+
+**`ActiveEventLoop` uses** (all of them; everything else in the 14 files that
+mention the type only passes it through):
+
+| Use | Where | Plan for slice 2 |
+|---|---|---|
+| `exit()` | `app/about_to_wait.rs:36`, `app/mod.rs:213`, `app/resumed.rs:39,137`, `lumen/keyboard.rs:621`, `lumen/tabs_cmd.rs:212`, `update_ui.rs:360` | `BrowserRequest::Exit` through the proxy |
+| `create_window` | `app/resumed.rs:35` (main window), `lumen/pip.rs:85,144,266` (PiP, document PiP) | Main window is created on the main thread *before* the browser thread starts and handed over as `Arc<Window>`; PiP windows: request → main thread creates → `Arc<Window>` returned by channel |
+| `set_control_flow` | `app/about_to_wait.rs:543,551,1314,1316` | Browser thread computes the wake-up and sends it; main thread applies `WaitUntil`. Cheapest form: browser thread owns its own timer and the main thread stays in `Wait` |
+| `create_proxy` | `main.rs`, `window_mode.rs` | Cloned to the browser thread at spawn |
+| `run_app` | `window_mode.rs:679` | Stays on the main thread; `ApplicationHandler` becomes a forwarder |
+
+**Other main-thread affinities** (all reached through `Arc<Window>` or free
+functions, none through `ActiveEventLoop`):
+
+| Affinity | Where | Verdict |
+|---|---|---|
+| Clipboard | `platform/clipboard.rs` — raw Win32 `OpenClipboard`, `pbcopy`, `wl-copy` | Not tied to the UI thread on any platform (no `arboard`); safe on the browser thread |
+| File dialog | `platform/file_dialog.rs` — Win32 call | Blocking; moves with the browser thread, which is better than blocking the pump |
+| IME | `lumen/text_input.rs:433-465` (`Ime::*` events in, `set_ime_*` out) | Events arrive on main and are forwarded in order (rule 2); `Window::set_ime_*` is `Send + Sync` in winit 0.30 |
+| Cursor icon / grab (pointer lock) | `lumen/cursor.rs`, `app/about_to_wait.rs:1662`, `lumen/keyboard.rs:214` | `Window` methods; callable from the browser thread. **Unverified on macOS** (winit dispatches to the main thread internally — cost to be measured, not assumed) |
+| DPI change | `app/mod.rs:143,195,260` (`ScaleFactorChanged`) | Event forwarded; `scale_factor` reads from `Arc<Window>` |
+| `request_redraw`, `set_title`, `set_fullscreen`, `drag_window`, … | ~40 files, all via `Arc<Window>` | Direct calls from the browser thread; no proxy needed |
+| `EventLoopProxy::send_event` (`LoadEvent`) | `page_load.rs`, `frames.rs`, `dynamic_image_hook.rs`, `app/user_event.rs` | Already thread-safe; `user_event` handler moves to the browser thread |
+| Raw window handle (GPU surface, startup trace) | `app/resumed.rs`, `renderer_process.rs` | Created on main at window creation, owned by the render thread already (ADR-029) |
+| Automation / BiDi / MCP | `lumen/automation.rs`, `about_to_wait.rs:966,1347` | Polled from `about_to_wait` today; polling moves to the browser thread unchanged |
+
+**Plan for slice 2.**
+1. `main` creates the window in `resumed` as today, then spawns the browser
+   thread, which constructs `Lumen` from `Arc<Window>`, a `Receiver<UiMsg>` and a
+   proxy clone (rule 1).
+2. `ApplicationHandler::window_event`/`device_event` on main only wrap and send
+   `UiMsg::Window(event)` (wheel included in this slice — behaviour-identical).
+3. `ActiveEventLoop` call sites listed above are replaced by a small
+   `MainRequest` enum sent back through the proxy (`Exit`, `CreatePipWindow`,
+   `WakeAt`); `&ActiveEventLoop` parameters in the 14 files disappear from
+   signatures and are replaced by a `&MainHandle` (channel + proxy).
+4. `about_to_wait` logic runs as the browser thread's loop (`recv_timeout` against
+   the wake-up deadline), so idle CPU stays ~0% (ADR-016 invariant 6).
+5. `LUMEN_NO_BROWSER_THREAD=1` keeps the old in-place path (rule 6).
+6. Risk to measure first inside slice 2: the macOS cost of `Window` calls made
+   off the main thread, and event ordering of `RedrawRequested` (must be
+   forwarded, not dropped).
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats
