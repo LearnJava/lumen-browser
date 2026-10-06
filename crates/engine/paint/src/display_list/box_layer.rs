@@ -132,6 +132,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
         if (is_scroll_x || is_scroll_y) && !paint_contain {
             overflow_pre.push(DisplayCommand::PushScrollLayer {
+                id: b.node.index() as u32,
                 clip_rect: cr,
                 scroll_x: b.scroll_x,
                 scroll_y: b.scroll_y,
@@ -174,6 +175,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
             // `hidden` scrolled by script: see the same branch in `walk`.
             if scrolled_hidden(b) {
                 overflow_pre.push(DisplayCommand::PushScrollLayer {
+                    id: b.node.index() as u32,
                     clip_rect: cr,
                     scroll_x: b.scroll_x,
                     scroll_y: b.scroll_y,

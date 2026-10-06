@@ -251,6 +251,7 @@ use super::text_and_images::build;
         use lumen_core::geom::Rect;
         let dl = vec![
             DisplayCommand::PushScrollLayer {
+                id: 0,
                 clip_rect: Rect::new(10.0, 20.0, 100.0, 50.0),
                 scroll_x: 5.0,
                 scroll_y: 15.0,

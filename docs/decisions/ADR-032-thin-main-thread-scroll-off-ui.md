@@ -226,6 +226,55 @@ differs from the plan above:
   thread (the sites are too noisy for two runs; slice 6) and a display above
   60 Hz.
 
+### Slice 4 result (2026-10-06)
+
+Landed (`display_list/scrollbars.rs`, `wheel_scroll.rs`, `render_thread.rs`,
+`lumen/scroll_route.rs`). Where it differs from the plan above:
+
+- **Layer id.** `PushScrollLayer` carries `id` — the container's DOM node index
+  (`b.node.index()`), the same key as `ScrollContainer::node`. `patch_scroll_layer`
+  finds the layers by id instead of the bit-exact `clip_rect` (two containers with
+  the same rectangle no longer collide); BUG-159 re-emitted copies share the id.
+  The id is not part of the textual snapshot or the fingerprint — it is a function
+  of the node, so it cannot change without the list changing.
+- **Who resolves the target.** The main thread no longer treats containers as
+  blockers: it sends the wheel with the cursor (CSS px from the page origin) and
+  the render thread resolves the chain itself
+  (`wheel_scroll::resolve_container_wheel` → `lumen_layout::resolve_scroll_chain_target`,
+  rule 8) over the containers of the latest `ScrollSnapshot` (now pushed to the
+  render thread as `RenderMsg::Snapshot`), with the offsets it owns laid over the
+  snapshot's. `overscroll-behavior: contain|none` swallows the gesture on the
+  render thread, `auto` at a boundary hands the delta to the next container or the
+  page. A container moves instantly, as before (BUG-822), not along the page curve;
+  a touchpad gesture over a container does not start page momentum.
+  Frames (`<iframe>` host rects) are still blockers and stay on the browser thread.
+- **Who owns the offset.** The render thread keeps `owned_containers` (id, x, y,
+  generation) and draws the page list through `apply_scroll_overrides`, which
+  rewrites `scroll_x/scroll_y` of the matching `PushScrollLayer`s and moves the
+  `DrawScrollbar` thumbs by the same formula as `scrollbar_rects`
+  (`override_matches_rebuild_*` pin equality with a full rebuild). The patched copy
+  is cached until the list or the offsets change. Feedback carries the whole map;
+  the browser thread adopts it through `Lumen::apply_container_scroll` — the tail
+  of the old `try_scroll_overflow_container` (layout, in-place list patch, `scroll`
+  and `scrollend` to the page).
+- **When an offset is released.** An entry is dropped only when both the last
+  frame (`FrameCommit::adopted_gen`, the raw adopted generation — `ack_gen` is
+  replaced by `ACK_BROWSER_SET` after any programmatic page scroll) and the last
+  snapshot (`ScrollSnapshot::adopted_gen`) say the browser thread has adopted its
+  generation. A frame taken before adoption is drawn with the render thread's
+  offset, so a stale frame cannot roll a container back.
+- **Not done here.** Programmatic container scroll (`el.scrollTop = …`, anchors,
+  find-in-page, keyboard) still writes on the browser thread — the epoch-tagged
+  command form of rule 7 arrives with slice 5. The patched copy of the page list is
+  O(commands) per wheel tick over a container; for lists in the tens of thousands
+  of commands an in-place layer table in the backend would be cheaper (measure
+  before building it). Scroll-snap pages and split view still disable routing
+  altogether.
+- **Checked** live (`dev-release`, 60 Hz, `--maximized`): a page with a 60vh
+  `overflow:auto` container of 600 rows — 10 notches over it give `scrollTop` 400,
+  30 give 1200, 10 up give 800, equal to `LUMEN_NO_WHEEL_ROUTE=1`; the picture and
+  the scrollbar thumb follow the offset.
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats

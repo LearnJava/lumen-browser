@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
+use lumen_layout::ScrollContainer;
 use winit::event::{MouseScrollDelta, TouchPhase, WindowEvent};
 
 use crate::browser_thread::UiMsg;
@@ -51,9 +52,15 @@ pub(crate) struct ScrollSnapshot {
     pub(crate) max_y: f32,
     /// Предел горизонтального смещения страницы, CSS px.
     pub(crate) max_x: f32,
-    /// Прямоугольники документа `[x, y, w, h]`, колесо над которыми крутит не
-    /// страницу, а контейнер или фрейм — их решает поток браузера (срез 4).
+    /// Прямоугольники документа `[x, y, w, h]` фреймов: колесо над ними крутит
+    /// под-документ, это решает поток браузера.
     pub(crate) blockers: Vec<[f32; 4]>,
+    /// Overflow-контейнеры страницы (ADR-032, срез 4): цель колеса и цепочка
+    /// прокрутки решаются по ним на рендер-потоке, который ведёт их смещения.
+    pub(crate) containers: Vec<ScrollContainer>,
+    /// Поколение смещения рендер-потока, которое поток браузера усыновил к
+    /// моменту снимка: смещения контейнеров, усыновленные раньше, уже в `containers`.
+    pub(crate) adopted_gen: u64,
     /// Зарезервировано под области с неpassive-слушателем `wheel` (ADR-032,
     /// правило 9, BUG-865): JS-событий `wheel` пока нет, поле всегда пусто.
     pub(crate) wheel_listeners: Vec<[f32; 4]>,
@@ -100,12 +107,56 @@ pub(crate) enum WheelInput {
 }
 
 /// Смещение страницы, которое рендер-поток вернул потоку браузера.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScrollFeedback {
     /// Поколение: растёт с каждым изменением, принадлежащим рендер-потоку.
     pub(crate) gen_id: u64,
     pub(crate) y: f32,
     pub(crate) x: f32,
+    /// Смещения overflow-контейнеров, которые ведёт рендер-поток и поток
+    /// браузера ещё не усыновил: `(id слоя, x, y)`.
+    pub(crate) containers: Vec<(u32, f32, f32)>,
+}
+
+/// Смещение overflow-контейнера, которое ведёт рендер-поток (ADR-032, срез 4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ContainerOffset {
+    /// `PushScrollLayer::id` — индекс узла контейнера.
+    pub(crate) id: u32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    /// Поколение обратной связи, с которым смещение ушло потоку браузера.
+    pub(crate) gen_id: u64,
+}
+
+/// Цель дельты колеса среди контейнеров снимка с учётом смещений, которыми
+/// владеет рендер-поток: тот же ход по цепочке прокрутки и тот же
+/// `overscroll-behavior`, что у потока браузера (правило 8 ADR-032 — одна
+/// чистая функция, `lumen_layout::resolve_scroll_chain_target`). `doc` — точка
+/// документа. `None` — контейнера нет и колесо крутит страницу.
+pub(crate) fn resolve_container_wheel(
+    snap: &ScrollSnapshot,
+    owned: &[ContainerOffset],
+    doc: (f32, f32),
+    dx: f32,
+    dy: f32,
+) -> Option<lumen_layout::ScrollChainTarget> {
+    if snap.containers.is_empty() {
+        return None;
+    }
+    let with_offsets: Vec<ScrollContainer> = snap
+        .containers
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            if let Some(o) = owned.iter().find(|o| o.id == c.node.index() as u32) {
+                c.scroll_x = o.x;
+                c.scroll_y = o.y;
+            }
+            c
+        })
+        .collect();
+    lumen_layout::resolve_scroll_chain_target(&with_offsets, doc.0, doc.1, dx, dy)
 }
 
 /// Состояние, разделяемое главным потоком, потоком браузера и рендер-потоком.
@@ -134,8 +185,13 @@ impl ScrollShared {
     }
 
     pub(crate) fn publish_snapshot(&self, s: ScrollSnapshot) {
+        let s = Arc::new(s);
         if let Ok(mut g) = self.snapshot.lock() {
-            *g = Arc::new(s);
+            *g = Arc::clone(&s);
+        }
+        // Рендер-поток решает цель колеса по контейнерам снимка сам.
+        if let Some(link) = self.link() {
+            link.send_snapshot(s);
         }
     }
 
@@ -216,6 +272,14 @@ impl WheelRouter {
         }
     }
 
+    /// Курсор в CSS px от начала области страницы: рендер-поток прибавляет своё
+    /// смещение и получает точку документа для хит-теста контейнеров.
+    fn viewport_point(&self, snap: &ScrollSnapshot) -> Option<(f32, f32)> {
+        let (cx, cy) = self.cursor?;
+        let dpr = snap.dpr.max(1e-6);
+        Some((cx as f32 / dpr - snap.origin.0, cy as f32 / dpr - snap.origin.1))
+    }
+
     /// `true` — колесо отдано рендер-потоку, потоку браузера слать не нужно.
     pub(crate) fn route(&mut self, delta: MouseScrollDelta, phase: TouchPhase) -> bool {
         if wheel_route_disabled() {
@@ -237,7 +301,7 @@ impl WheelRouter {
                 }
                 crate::present_log::wheel(lines);
                 let (dx, dy) = swap(-cols * LINE_STEP_PX, -lines * LINE_STEP_PX, self.shift);
-                link.send_wheel(WheelInput::Notch { dx, dy }, snap.max_y, snap.max_x);
+                link.send_wheel(WheelInput::Notch { dx, dy }, snap.max_y, snap.max_x, self.viewport_point(&snap));
                 true
             }
             MouseScrollDelta::PixelDelta(p) => {
@@ -266,7 +330,7 @@ impl WheelRouter {
                     TouchPhase::Ended => WheelInput::TouchEnd,
                     TouchPhase::Cancelled => WheelInput::TouchCancel,
                 };
-                link.send_wheel(input, snap.max_y, snap.max_x);
+                link.send_wheel(input, snap.max_y, snap.max_x, self.viewport_point(&snap));
                 true
             }
         }
@@ -286,6 +350,8 @@ mod tests {
             max_y: 5000.0,
             max_x: 0.0,
             blockers: vec![[50.0, 1000.0, 200.0, 100.0]],
+            containers: Vec::new(),
+            adopted_gen: 0,
             wheel_listeners: vec![],
         }
     }
@@ -303,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn container_under_cursor_goes_to_browser_thread() {
+    fn frame_under_cursor_goes_to_browser_thread() {
         // Документная точка (100, 1050): окно (100, 100 + 1050 - 1000 = 150) при scroll 1000.
         let s = snap();
         assert!(!s.page_wheel_at((200.0, 300.0), (0.0, 1000.0)));
@@ -329,13 +395,13 @@ mod tests {
     fn feedback_wakes_once_until_taken() {
         let (tx, rx) = std::sync::mpsc::channel();
         let shared = ScrollShared::new(tx);
-        shared.post_feedback(ScrollFeedback { gen_id: 1, y: 10.0, x: 0.0 });
-        shared.post_feedback(ScrollFeedback { gen_id: 2, y: 20.0, x: 0.0 });
+        shared.post_feedback(ScrollFeedback { gen_id: 1, y: 10.0, x: 0.0, containers: Vec::new() });
+        shared.post_feedback(ScrollFeedback { gen_id: 2, y: 20.0, x: 0.0, containers: Vec::new() });
         assert!(matches!(rx.try_recv(), Ok(UiMsg::ScrollFeedback)));
         assert!(rx.try_recv().is_err(), "второе пробуждение не нужно");
         let fb = shared.take_feedback().expect("feedback");
         assert_eq!(fb.gen_id, 2, "побеждает последнее значение");
-        shared.post_feedback(ScrollFeedback { gen_id: 3, y: 30.0, x: 0.0 });
+        shared.post_feedback(ScrollFeedback { gen_id: 3, y: 30.0, x: 0.0, containers: Vec::new() });
         assert!(matches!(rx.try_recv(), Ok(UiMsg::ScrollFeedback)));
     }
 }

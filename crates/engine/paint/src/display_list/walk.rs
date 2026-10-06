@@ -1254,6 +1254,7 @@ fn dispatch<'a>(
 
                 if use_scroll_layer {
                     out.push(DisplayCommand::PushScrollLayer {
+                        id: b.node.index() as u32,
                         clip_rect: cr,
                         scroll_x: b.scroll_x,
                         scroll_y: b.scroll_y,
@@ -1265,6 +1266,7 @@ fn dispatch<'a>(
                     // move its content, so a non-zero offset translates it.
                     if hidden_scrolled {
                         out.push(DisplayCommand::PushScrollLayer {
+                            id: b.node.index() as u32,
                             clip_rect: cr,
                             scroll_x: b.scroll_x,
                             scroll_y: b.scroll_y,

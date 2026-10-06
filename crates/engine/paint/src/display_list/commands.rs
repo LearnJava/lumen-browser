@@ -496,6 +496,11 @@ pub enum DisplayCommand {
     /// P4 wires: in `box_layer_ops` replace the `PushClipRect` for `Overflow::Scroll|Auto`
     /// with `PushScrollLayer { clip_rect, scroll_x: b.scroll_x, scroll_y: b.scroll_y }`.
     PushScrollLayer {
+        /// Stable id of the scroll container: its DOM node index (ADR-032, slice 4).
+        /// Survives relayout, so the render thread can key container offsets on it
+        /// instead of matching the bit-exact `clip_rect`. Copies re-emitted around
+        /// child stacking contexts (BUG-159) carry the same id.
+        id: u32,
         /// Padding-box of the scroll container in CSS px (document-relative).
         clip_rect: Rect,
         /// Horizontal scroll offset in CSS px. Content is shifted left by this amount.
@@ -962,7 +967,7 @@ mod tests {
             DisplayCommand::EndFixedLayer,
             DisplayCommand::BeginFixedBackground,
             DisplayCommand::EndFixedBackground,
-            DisplayCommand::PushScrollLayer { clip_rect: rect, scroll_x: 1.0, scroll_y: 2.0 },
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect, scroll_x: 1.0, scroll_y: 2.0 },
             DisplayCommand::PopScrollLayer,
             DisplayCommand::DrawSvgPath { vertices: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], color },
             DisplayCommand::DrawSvgFill { contours: vec![vec![[0.0, 0.0], [1.0, 1.0]]], color },

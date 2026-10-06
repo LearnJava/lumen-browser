@@ -706,6 +706,7 @@ mod tests {
         // The exact real-world case: sticky inside an overflow:scroll container.
         let dl = vec![
             DisplayCommand::PushScrollLayer {
+                id: 0,
                 clip_rect: Rect::new(0.0, 0.0, 100.0, 100.0),
                 scroll_x: 0.0,
                 scroll_y: 0.0,
@@ -744,6 +745,7 @@ mod tests {
     /// A `PushScrollLayer` to stand in for an `overflow:scroll` ancestor.
     fn push_scroll_layer() -> DisplayCommand {
         DisplayCommand::PushScrollLayer {
+            id: 0,
             clip_rect: Rect::new(0.0, 0.0, 100.0, 100.0),
             scroll_x: 0.0,
             scroll_y: 0.0,
