@@ -982,6 +982,14 @@ impl Lumen {
             .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// THREAD-9 срез 5: может ли страница слушать `navigate`. Без движкового
+    /// потока или без флага — да (прежний синхронный путь); иначе по флагу.
+    pub(crate) fn navigate_listeners_present(&self) -> bool {
+        self.navigate_listeners_flag
+            .as_ref()
+            .is_none_or(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     /// ADR-016 M2.3: consume (clear + return) the DOM-dirty flag lock-free via the
     /// cached UI-side atomic (companion to [`Self::take_raf_pending_lockfree`]).
     pub(crate) fn take_dom_dirty_lockfree(&self) -> bool {
@@ -2041,12 +2049,16 @@ impl Lumen {
                 // engine `query`. `None` clears them (blank/JS-less tab).
                 self.raf_pending_flag = handle.as_ref().and_then(|h| h.raf_pending_flag());
                 self.dom_dirty_flag = handle.as_ref().and_then(|h| h.dom_dirty_flag());
+                self.navigate_listeners_flag = handle.as_ref().and_then(|h| h.navigate_listeners_flag());
                 self.dom_touched_drain = handle.as_ref().and_then(|h| h.dom_touched_drain());
                 self.js_ctx = None;
                 engine.task(move |state| state.js = handle);
             }
             // Flag off (default): the UI thread owns the handle, exactly as before.
-            None => self.js_ctx = handle,
+            None => {
+                self.navigate_listeners_flag = None;
+                self.js_ctx = handle;
+            }
         }
     }
 

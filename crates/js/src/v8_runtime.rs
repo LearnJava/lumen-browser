@@ -409,6 +409,7 @@ impl V8JsRuntime {
             let nav_state = Arc::clone(&self.nav_state);
             let pending_navigation_updates = Arc::clone(&self.pending_navigation_updates);
             let pending_nav_intercepted = Arc::clone(&self.pending_nav_intercepted);
+            let navigate_listeners = Arc::clone(&self.navigate_listeners);
             let fullscreen_requests = Arc::clone(&self.fullscreen_requests);
             let print_requests = Arc::clone(&self.print_requests);
             let pending_focus_requests = Arc::clone(&self.pending_focus_requests);
@@ -498,6 +499,7 @@ impl V8JsRuntime {
                 Arc::clone(&nav_state),
                 Arc::clone(&pending_navigation_updates),
                 Arc::clone(&pending_nav_intercepted),
+                Arc::clone(&navigate_listeners),
             )?;
 
             install::install_navigation(scope, ctx, store, Arc::clone(&nav_out))?;

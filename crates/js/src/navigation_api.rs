@@ -595,6 +595,22 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
   for (const t of ['navigate', 'navigatesuccess', 'navigateerror', 'currententrychange']) {
     defineHandlerAttr(Navigation.prototype, t);
   }
+  // THREAD-9 срез 5: shell пропускает диспатч `navigate`, пока никто не
+  // подписан — сообщаем ему о первой подписке (флаг липкий).
+  function noteNavigateListener() {
+    if (typeof _lumen_navigation_note_listener === 'function') _lumen_navigation_note_listener();
+  }
+  const baseAdd = Navigation.prototype.addEventListener;
+  Navigation.prototype.addEventListener = function(type, ...rest) {
+    if (type === 'navigate') noteNavigateListener();
+    return baseAdd.call(this, type, ...rest);
+  };
+  const onNavDesc = Object.getOwnPropertyDescriptor(Navigation.prototype, 'onnavigate');
+  Object.defineProperty(Navigation.prototype, 'onnavigate', {
+    get: onNavDesc.get,
+    set(v) { noteNavigateListener(); onNavDesc.set.call(this, v); },
+    enumerable: true, configurable: true
+  });
 
   // Create global singleton
   const navigation = new Navigation();

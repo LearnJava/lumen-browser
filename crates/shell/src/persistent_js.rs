@@ -184,6 +184,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// THREAD-9 срез 5: флаг «страница слушает `navigate`». `None` — не
+    /// поддерживается (по умолчанию): shell считает, что слушатель есть.
+    fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
     /// BUG-935 S80: сброс набора затронутых узлов ([`Self::take_dom_touched`]),
     /// который UI-поток может звать сам, не ставя запрос в очередь движкового
     /// потока. `None` — не поддерживается (по умолчанию).
@@ -1097,6 +1102,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.dom_dirty_flag())
+    }
+    fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.navigate_listeners_flag())
     }
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
         let read = self.rt.dom_changes_reader();
