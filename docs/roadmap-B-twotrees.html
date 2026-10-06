@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-06",
  "counts": {
-  "open": 181,
+  "open": 189,
   "fixed": 1063,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1246,
+ "total_bugs": 1254,
  "phases": [
   {
    "id": "P0",
@@ -563,7 +563,7 @@
      "title": "GRID-ABSPOS: abspos в grid-области",
      "status": "planned",
      "size": "M",
-     "note": "Абсолютно позиционированные дети grid: containing block — область по `grid-area`/`grid-row`/`grid-column` (автолинии — padding box контейнера), статическая позиция — начало padding box (сейчас — начало content box, и у горизонтальной сетки расхождение с Edge), выравнивание `align-self`/`justify-self` внутри неё, вертикальные режимы. Критерий готовности: WPT `css-grid/abspos` (39 файлов с `writing-mode`, `grid-abspos-staticpos-*`, `positioned-grid-items-*`)"
+     "note": "Абсолютно позиционированные дети grid: containing block — область по `grid-area`/`grid-row`/`grid-column` (автолинии — padding box контейнера), статическая позиция — начало padding box (сейчас — начало content box, и у горизонтальной сетки расхождение с Edge), выравнивание `align-self`/`justify-self` внутри неё, вертикальные режимы. Замер WPT-RUN-14 S7 (2026-10-06): 149 id первой половины `css-grid` (125 reftest — 109 thick; 24 testharness, 195 сабтестов); abspos со статической позицией по baseline учтены в кластере baseline (39 id); проба — `position:absolute; width:100%; height:100%` в области 100×70 даёт 420×240 (padding box контейнера). Не мерять через `positioned-grid-descendants-*` до BUG-1306 (Ahem-снимок). Критерий готовности: WPT `css-grid/abspos` (39 файлов с `writing-mode`, `grid-abspos-staticpos-*`, `positioned-grid-items-*`)"
     },
     {
      "id": "GRID-FR-ROWS",
@@ -5931,9 +5931,9 @@
       {
        "id": "WPT-RUN-14-S7",
        "title": "WPT-RUN-14-S7: css-grid часть 1",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон первой половины css/css-grid (abspos, alignment, animation, grid-definition, grid-items и файлы в корне, около 1000 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон первой половины css/css-grid (abspos, alignment, animation, grid-definition, grid-items и файлы в корне, около 1000 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-06 (ветка `p2-wpt-run14-s7`): 995 automatable id, 29.55 % (reftest 181/566, testharness 3137/9492 сабтестов, crashtest 12/12, print-reftest 1 без исполнителя), 170 с, «no leak». 741 не зелёный id разнесён на 15 кластеров (`docs/wpt-vendor-notes/css.md` §css-grid, часть 1). Главное: 219 testharness-id (4 007 сабтестов) падают не на раскладке, а на том, что `offsetWidth` после `document.fonts.ready` читается из устаревшего снимка геометрии — оценка шрифта вместо Ahem (BUG-1306; тот же приём в 545 файлах `css/`, переносится на S9/S10). Заведено: BUG-1306 (снимок геометрии), BUG-1307 (`getComputedStyle` grid, 29 id / 974 сабтеста), BUG-1308 (`%` по оси строк и `row-gap`), BUG-1309 (intrinsic-ширина: неявные столбцы, `aspect-ratio`), BUG-1310 (`%` margin/padding от области), BUG-1311 (`stretch` у replaced, 47 id), BUG-1312 (`order` и порядок paint), BUG-1313 (`safe`-fallback `space-*`, `minmax(auto,0)`); остальное уже в очереди P1: `GRID-ABSPOS` (149 id), `GRID-VWM-2` (113), `GRID-RTL` (28), `GRID-BASELINE-2` (39). Не разобрано 58 id («прочее»). Починен `score_audit.py` (`ZeroDivisionError` в `wall_clock` при срезе без TIMEOUT)"
       },
       {
        "id": "WPT-RUN-14-S8",
@@ -9129,6 +9129,62 @@
    "status": "open",
    "title": "Web Animations: неявный («neutral») ключевой кадр, шорткод `border-width`, `background-size` и `box-shadow` не интерполируются (на 30 % — начальное/конечное зна…",
    "component": "layout (`crates/engine/layout/src/animation.rs` — сборка ключевых кадров и интерполятор)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1306": {
+   "status": "open",
+   "title": "`offsetWidth`/`getBoundingClientRect` читаются из устаревшего снимка: после загрузки `@font-face` значение остаётся оценкой шрифта (34,1 вместо 50 у `XX` Ahem 2…",
+   "component": "layout/shell (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для JS)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1307": {
+   "status": "open",
+   "title": "`getComputedStyle()` не отдаёт grid-лонгхендов: `grid-template-*`, `grid-auto-*`, `grid-column/row/area`, `row-gap`/`column-gap` — `\"\"` (тот же класс, что BUG-1…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1308": {
+   "status": "open",
+   "title": "Проценты в `grid-template-rows` и `row-gap` при неопределённой высоте контейнера считаются от ширины (`60%` → 120 при ширине 200, ожидается `auto`/0). WPT `css/…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — `%` в треках и gap)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1309": {
+   "status": "open",
+   "title": "`width:max-content`/`inline-grid` не учитывают неявные столбцы (`grid-auto-flow: column` → 90 вместо 180, второй ребёнок поверх первого); `inline-grid` с `aspec…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — intrinsic-размер контейнера)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1310": {
+   "status": "open",
+   "title": "Процентные `margin`/`padding` grid-item считаются от ширины контейнера, а не grid-области (`margin-left:30%` при области 200 в контейнере 300 → 90 вместо 60). W…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — база `%` у item'а)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1311": {
+   "status": "open",
+   "title": "`align-self`/`justify-self: stretch` не растягивает `<img>`/`<canvas>`/form controls в grid-области (`canvas 10×10` остаётся 10×10, ожидается 100×100). WPT `css…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — `stretch` у replaced)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1312": {
+   "status": "open",
+   "title": "`order` на grid-item не меняет порядок отрисовки: в display list `order:1` рисуется раньше `order:0` (CSS Grid L1 §6.3). WPT `css/css-grid`: 10 reftest (`grid-o…",
+   "component": "layout/paint (порядок paint grid-items)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1313": {
+   "status": "open",
+   "title": "`space-evenly`/`space-around` при переполнении центрирует небезопасно (ребёнок 100 в контейнере 50 → y = −17, ожидается 0); `minmax(auto, 0px)` не поднимает тре…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — выравнивание контента и размер трека)",
    "date": null,
    "debtor": false
   },
@@ -17862,6 +17918,21 @@
   "layout (`crates/engine/layout/src/box_tree/flex_trampoline.rs` — `align_abs_static_positions`)": [
    "BUG-1251"
   ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs` — `%` в треках и gap)": [
+   "BUG-1308"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs` — `stretch` у replaced)": [
+   "BUG-1311"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs` — intrinsic-размер контейнера)": [
+   "BUG-1309"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs` — база `%` у item'а)": [
+   "BUG-1310"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs` — выравнивание контента и размер трека)": [
+   "BUG-1313"
+  ],
   "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)": [
    "BUG-644"
   ],
@@ -17953,6 +18024,7 @@
    "BUG-1050",
    "BUG-1254",
    "BUG-1278",
+   "BUG-1307",
    "BUG-506",
    "BUG-532",
    "BUG-537"
@@ -18078,11 +18150,17 @@
   "layout/paint (бокс-обёртка таблицы)": [
    "BUG-1289"
   ],
+  "layout/paint (порядок paint grid-items)": [
+   "BUG-1312"
+  ],
   "layout/paint/shell": [
    "BUG-242"
   ],
   "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)": [
    "BUG-1293"
+  ],
+  "layout/shell (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для JS)": [
+   "BUG-1306"
   ],
   "layout/shell (`crates/shell/src/subresources.rs`, `crates/engine/image/src/svg.rs` — внутренние размеры и пропорции SVG-картинки)": [
    "BUG-1295"
