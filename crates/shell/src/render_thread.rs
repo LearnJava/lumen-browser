@@ -161,8 +161,10 @@ enum RenderMsg {
         /// Максимальный горизонтальный скролл (клампинг).
         max_scroll_x: f32,
     },
-    /// Отмена render-side momentum (новый жест / навигация).
+    /// Отмена render-side momentum и анимации щелчка (новый жест / навигация).
     StopRenderMomentum,
+    /// Старт render-side анимации щелчка колеса (THREAD-6).
+    StartRenderScrollAnim { start_y: f32, target_y: f32 },
     /// Завершение потока (шлётся из `Drop`).
     Shutdown,
 }
@@ -379,6 +381,10 @@ impl RenderBackend for ThreadedRenderBackend {
         self.send(RenderMsg::StopRenderMomentum);
     }
 
+    fn start_render_scroll_anim(&mut self, start_y: f32, target_y: f32) {
+        self.send(RenderMsg::StartRenderScrollAnim { start_y, target_y });
+    }
+
     fn debug_mem_report(&self) -> String {
         "threaded backend (mem report on render thread)".to_owned()
     }
@@ -462,6 +468,9 @@ struct RenderState {
     anchor_commit_id: u64,
     /// Активный momentum, если есть.
     momentum: Option<RenderMomentum>,
+    /// Активная анимация щелчка колеса (THREAD-6); время старта — по часам
+    /// рендер-потока.
+    scroll_anim: Option<crate::scroll_anim::ScrollAnim>,
 }
 
 impl RenderState {
@@ -475,6 +484,7 @@ impl RenderState {
             anchor_t_ms: 0.0,
             anchor_commit_id: 0,
             momentum: None,
+            scroll_anim: None,
         }
     }
 }
@@ -511,7 +521,7 @@ fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg
     let clock = Instant::now();
     let mut state = RenderState::new();
     loop {
-        let first = if state.momentum.is_some() {
+        let first = if state.momentum.is_some() || state.scroll_anim.is_some() {
             match rx.recv_timeout(MOMENTUM_TICK) {
                 Ok(m) => Some(m),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -545,6 +555,7 @@ fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg
                 // Таймаут при активном momentum: UI-поток молчит — тикаем сами.
                 let now_ms = clock.elapsed().as_secs_f64() * 1000.0;
                 self_tick_momentum(backend, &mut state, now_ms);
+                self_tick_scroll_anim(backend, &mut state, now_ms);
             }
         }
     }
@@ -580,6 +591,33 @@ fn self_tick_momentum(
     crate::present_log::present(state.anchor_commit_id, true);
     if done {
         state.momentum = None;
+    }
+}
+
+/// Self-tick анимации щелчка колеса (THREAD-6): сэмплирует кривую по часам
+/// рендер-потока и презентует последний закоммиченный кадр с новым `scroll_y`.
+/// Вызывается только по таймауту (UI-поток молчит ≥ один тик).
+fn self_tick_scroll_anim(
+    backend: &mut Box<dyn RenderBackend>,
+    state: &mut RenderState,
+    now_ms: f64,
+) {
+    let Some(anim) = state.scroll_anim else {
+        return;
+    };
+    if state.last_content.is_empty() {
+        return;
+    }
+    let (scroll_y, done) = anim.sample(now_ms);
+    backend.set_frame_commit_id(state.anchor_commit_id, true);
+    if let Err(err) =
+        backend.render(&state.last_content, &state.last_overlay, scroll_y, state.anchor_scroll_x)
+    {
+        eprintln!("[render-thread] ошибка self-tick scroll-anim: {err:?}");
+    }
+    crate::present_log::present(state.anchor_commit_id, true);
+    if done {
+        state.scroll_anim = None;
     }
 }
 
@@ -637,7 +675,18 @@ fn process_batch(
                     max_x: max_scroll_x,
                 });
             }
-            RenderMsg::StopRenderMomentum => state.momentum = None,
+            RenderMsg::StopRenderMomentum => {
+                state.momentum = None;
+                state.scroll_anim = None;
+            }
+            RenderMsg::StartRenderScrollAnim { start_y, target_y } => {
+                state.momentum = None;
+                state.scroll_anim = Some(crate::scroll_anim::ScrollAnim {
+                    start_y,
+                    target_y,
+                    start_time_ms: now_ms,
+                });
+            }
             RenderMsg::Resize { width, height } => backend.resize(width, height),
             RenderMsg::SetScaleFactor(s) => backend.set_scale_factor(s),
             RenderMsg::SetCanvasBackground(c) => backend.set_canvas_background(c),
@@ -768,5 +817,39 @@ mod tests {
         let m = momentum(2.0, 100_000.0);
         let (y, _, _) = momentum_scroll_at(&m, 500.0, 0.0, 200.0, 250.0);
         assert!(y > 500.0, "y={y} должно продолжать от якоря 500");
+    }
+
+    fn tick_state() -> (Box<dyn RenderBackend>, RenderState) {
+        let backend: Box<dyn RenderBackend> =
+            Box::new(crate::no_paint_backend::NoPaintBackend::new(100, 100, 1.0));
+        let mut state = RenderState::new();
+        state.last_content = vec![DisplayCommand::FillRect {
+            rect: lumen_core::geom::Rect::new(0.0, 0.0, 1.0, 1.0),
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+        }];
+        (backend, state)
+    }
+
+    #[test]
+    fn scroll_anim_self_tick_runs_to_completion_and_clears() {
+        let (mut backend, mut state) = tick_state();
+        let batch = vec![RenderMsg::StartRenderScrollAnim { start_y: 0.0, target_y: 100.0 }];
+        process_batch(&mut backend, batch, &mut state, 10.0);
+        assert!(state.scroll_anim.is_some());
+        self_tick_scroll_anim(&mut backend, &mut state, 50.0);
+        assert!(state.scroll_anim.is_some(), "анимация ещё идёт");
+        self_tick_scroll_anim(&mut backend, &mut state, 10.0 + crate::scroll_anim::DURATION_MS + 1.0);
+        assert!(state.scroll_anim.is_none(), "по завершении сбрасывается");
+    }
+
+    #[test]
+    fn stop_message_cancels_scroll_anim() {
+        let (mut backend, mut state) = tick_state();
+        let batch = vec![
+            RenderMsg::StartRenderScrollAnim { start_y: 0.0, target_y: 100.0 },
+            RenderMsg::StopRenderMomentum,
+        ];
+        process_batch(&mut backend, batch, &mut state, 0.0);
+        assert!(state.scroll_anim.is_none());
     }
 }

@@ -370,6 +370,14 @@ pub trait RenderBackend: Send {
     /// [`start_render_momentum`]: RenderBackend::start_render_momentum
     fn stop_render_momentum(&mut self) {}
 
+    /// Передаёт рендер-потоку анимацию щелчка колеса (THREAD-6): кривая
+    /// `start_y → target_y` (out-cubic, длительность `scroll_anim::DURATION_MS`)
+    /// ведётся на vsync рендер-потоком из последнего закоммиченного кадра, пока
+    /// UI-поток занят. Отменяется [`stop_render_momentum`]. Дефолт — no-op.
+    ///
+    /// [`stop_render_momentum`]: RenderBackend::stop_render_momentum
+    fn start_render_scroll_anim(&mut self, _start_y: f32, _target_y: f32) {}
+
     /// Аннотирует следующий кадр в `LUMEN_FRAME_LOG` (ADR-016 M1).
     ///
     /// Рендер-поток вызывает это перед каждым [`render`](RenderBackend::render):
