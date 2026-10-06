@@ -108,7 +108,7 @@
 
 **Своя реализация.** На старте — простой CPU-растеризатор (line/rect/path/text) в `lumen-paint`. С v0.5 — GPU-pipeline поверх `wgpu` (единственная внешняя зависимость в этом слое, см. §5). Не берём `tiny-skia` / `skia`.
 
-**Crate:** `engine/compositor`.
+**Crate:** `engine/paint` (`compositor.rs`, `renderer/band_compose.rs`) — no separate compositor crate exists.
 
 ### 6.8 JS engine integration
 
