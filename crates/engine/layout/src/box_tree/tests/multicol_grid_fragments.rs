@@ -401,3 +401,29 @@ fn a_subgrid_item_cut_by_the_columns_keeps_only_the_tracks_of_its_window() {
         .collect();
     assert_eq!(subs, vec![1, 1, 1], "{subs:?}");
 }
+
+#[test]
+fn a_subgrid_fragment_starting_in_its_own_row_gap_drops_the_gap_at_its_top() {
+    // subgrid-gap-decorations-fragmentation-015: an empty subgrid on rows 2..-2 of a 5×(~20px)
+    // grid with 10px gaps, cut by 80px columns. The second window starts inside the subgrid's
+    // gap between its tracks: that gap is not drawn at the top of the column, so the first track
+    // of the fragment starts at 0 and the fragment is that much shorter.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;column-gap:0;width:280px;height:80px} \
+         #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);\
+         gap:10px;height:140px} \
+         #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;\
+         grid-column:2/-2;grid-row:2/-2;row-rule:blue solid 10px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let firsts: Vec<f32> = v
+        .iter()
+        .flat_map(|g| g.children.iter())
+        .filter_map(|c| c.subgrid_tracks.as_ref().filter(|t| t.fragment))
+        .filter_map(|t| t.rows.as_ref().and_then(|r| r.first().map(|f| f.0)))
+        .collect();
+    assert!(!firsts.is_empty(), "no subgrid fragments");
+    assert!(firsts.iter().all(|&y| y.abs() < 0.01), "{firsts:?}");
+}
