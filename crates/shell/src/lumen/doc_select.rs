@@ -82,6 +82,15 @@ fn with_measurer<R>(f: impl FnOnce(&dyn TextMeasurer) -> R) -> Option<R> {
     Some(f(&m))
 }
 
+/// (идентификатор документа, прямоугольники, цвет).
+type SelectionOverlayCache = Option<(usize, (Vec<Rect>, Color))>;
+
+thread_local! {
+    /// Последний результат `doc_selection_overlay` с идентификатором документа.
+    static LAST_SELECTION_OVERLAY: std::cell::RefCell<SelectionOverlayCache> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl Lumen {
     /// Anchor a page-text selection at the press point `(x_css, y_css)` — runs
     /// right after `handle_click_at`, like [`Self::begin_text_drag_select`].
@@ -162,7 +171,31 @@ impl Lumen {
     pub(crate) fn doc_selection_overlay(&self) -> Option<(Vec<Rect>, Color)> {
         let src = self.layout_source.as_ref()?;
         let lb = self.layout_box.as_ref()?;
-        let doc = src.document.lock().ok()?;
+        // THREAD-12: не ждать мьютекс документа на UI-потоке — пока поток
+        // движка держит его в JS-задаче, кадр стоил 0,5–1 с (`build: chrome`
+        // на ria.ru). При занятом мьютексе отдаём результат прошлого кадра
+        // для того же документа.
+        let doc_id = std::sync::Arc::as_ptr(&src.document) as usize;
+        let doc = match src.document.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return LAST_SELECTION_OVERLAY.with(|c| {
+                    c.borrow().as_ref().filter(|(id, _)| *id == doc_id).map(|(_, v)| v.clone())
+                });
+            }
+            Err(_) => return None,
+        };
+        let result = Self::selection_overlay_locked(self, &doc, src, lb);
+        LAST_SELECTION_OVERLAY.with(|c| *c.borrow_mut() = result.clone().map(|v| (doc_id, v)));
+        result
+    }
+
+    fn selection_overlay_locked(
+        &self,
+        doc: &lumen_dom::Document,
+        src: &LayoutSource,
+        lb: &lumen_layout::LayoutBox,
+    ) -> Option<(Vec<Rect>, Color)> {
         let range = doc.get_selection().get_range().filter(|r| !r.is_collapsed())?;
         let rects = with_measurer(|m| lumen_layout::selection_rects(lb, &range, m))?;
         if rects.is_empty() {
@@ -172,7 +205,7 @@ impl Lumen {
             let viewport = self.relayout_viewport()?;
             let elem = doc.get(range.start.container).parent.unwrap_or(range.start.container);
             let style = lumen_layout::compute_selection_style(
-                &doc,
+                doc,
                 elem,
                 &src.stylesheet,
                 &lumen_layout::ComputedStyle::root(),
