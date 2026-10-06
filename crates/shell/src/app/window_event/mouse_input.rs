@@ -946,33 +946,11 @@ impl Lumen {
                 let xu = (pos.x as f32) / dpr;
                 let yu = (pos.y as f32) / dpr;
                 let hit_nid = hov.index() as u32;
-                // Pointer Events L3 §4.1: route pointerup to capture target if active.
-                // ADR-016 M2.2c-2d: pre-dispatch capture-read через `route_query_js`
-                // (под флагом — блокирующий `query`; внешний `None` = ветка «без JS»
-                // → `hit_nid`, как прежний `and_then(...).unwrap_or(hit_nid)`).
-                let ptr_nid = route_query_js(
-                    self.engine_thread.as_ref(),
-                    self.js_ctx.as_ref(),
-                    |c| c.pointer_capture_nid(),
-                )
-                .flatten()
-                .unwrap_or(hit_nid);
                 // Buffered moves must fire ahead of pointerup.
                 self.flush_pointer_moves();
-                self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
-                self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
-                // Pointer Events L3 §4.1: implicit release on pointerup.
-                // Читается **после** уже маршрутизированных pointerup/mouseup
-                // eval-`task` — read-after-eval порядок сохранён.
-                if let Some(cap_nid) = route_query_js(
-                    self.engine_thread.as_ref(),
-                    self.js_ctx.as_ref(),
-                    |c| c.take_pointer_capture(),
-                )
-                .flatten()
-                {
-                    self.js_capture_event(cap_nid, "lostpointercapture");
-                }
+                // Pointer Events L3 §4.1: pointerup goes to the capture target, and
+                // the capture is released implicitly afterwards.
+                self.js_pointer_release(hit_nid, xu, yu);
             }
             // BUG-480 срез 16: отпускание над содержимым фрейма — парная
             // ветка к `pointerdown`/`mousedown` выше. Захват указателя
