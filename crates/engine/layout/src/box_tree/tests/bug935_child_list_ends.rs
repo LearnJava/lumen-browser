@@ -448,3 +448,104 @@ fn positional_selectors_beyond_the_ends_still_restyle_every_child() {
         false,
     );
 }
+
+// ── срез 92: что достаёт до потомков ребёнка — потомки, подходящие под субъект селектора ─────────
+
+/// A page-sized wrapper per row, `.x` in a few of them: `div:first-child .x` can only restyle `.x`.
+fn wrapped_list_html(rows: usize) -> String {
+    let rows: String = (0..rows)
+        .map(|i| {
+            let x = if i % 7 == 0 { "<span class=\"x\">x</span>" } else { "" };
+            format!(
+                "<div id=\"r{i}\" class=\"row\"><section><p>a <b>b{i}</b> <i>c</i></p><ul><li>1</li><li>2 {x}</li></ul>\
+                 <em>e</em></section></div>"
+            )
+        })
+        .collect();
+    format!("<div id=\"l\">{rows}</div>")
+}
+
+const REACH_CSS: &str = "div:first-child .x { color: red } div:last-child .x { font-weight: bold } \
+                         .row:nth-child(2) em { color: blue } .row + .row li { margin: 2px } .row { margin: 1px }";
+
+/// The recascade of a child no longer takes its subtree: only what the selector's subject can match.
+#[test]
+fn a_child_feeding_a_selector_recascades_only_the_subject_matches() {
+    let steps = || -> Vec<Step> {
+        vec![Box::new(|d, log| {
+            let l = by_id(d, "l");
+            let e = el(d, "div", Some("new"));
+            log.append(d, l, e);
+        })]
+    };
+    let ends = drive(&wrapped_list_html(40), REACH_CSS, steps(), false);
+    let (recomputed, elements) = ends[0];
+    // 40 rows × 9 elements; the container, the 41 children and the new row are recascaded either
+    // way, and a `.row + .row li` reader makes every row's `li`s part of the answer (80 of them).
+    assert!((recomputed as usize) * 2 < elements, "recomputed {recomputed} of {elements}");
+}
+
+/// Every kind of edit, on a list where the subject elements sit under the first, the last and the
+/// second row: each step has to equal a full cascade.
+#[test]
+fn subject_reach_matches_a_full_cascade_across_edits() {
+    drive(
+        &wrapped_list_html(8),
+        REACH_CSS,
+        vec![
+            Box::new(|d, log| {
+                let first = by_id(d, "r0");
+                let e = el(d, "div", Some("head"));
+                log.insert_before(d, e, first);
+            }),
+            Box::new(|d, log| {
+                let l = by_id(d, "l");
+                let first = nth_el(d, l, 0);
+                log.remove(d, first);
+            }),
+            Box::new(|d, log| {
+                let l = by_id(d, "l");
+                let e = el(d, "div", Some("tail"));
+                log.append(d, l, e);
+            }),
+            Box::new(|d, log| {
+                let l = by_id(d, "l");
+                let n = d.get(l).children.len();
+                let last = nth_el(d, l, n - 1);
+                log.remove(d, last);
+            }),
+            Box::new(|d, log| {
+                let mid = by_id(d, "r4");
+                let e = el(d, "div", Some("mid"));
+                log.insert_before(d, e, mid);
+            }),
+            Box::new(|d, log| {
+                let mid = by_id(d, "r3");
+                log.remove(d, mid);
+            }),
+        ],
+        false,
+    );
+}
+
+/// The same edits reported as a plain `ChildList` (no end information) are sound too.
+#[test]
+fn subject_reach_with_a_plain_child_list_report_matches_a_full_cascade() {
+    drive(
+        &wrapped_list_html(8),
+        REACH_CSS,
+        vec![
+            Box::new(|d, log| {
+                let first = by_id(d, "r0");
+                let e = el(d, "div", Some("head"));
+                log.insert_before(d, e, first);
+            }),
+            Box::new(|d, log| {
+                let l = by_id(d, "l");
+                let first = nth_el(d, l, 0);
+                log.remove(d, first);
+            }),
+        ],
+        true,
+    );
+}
