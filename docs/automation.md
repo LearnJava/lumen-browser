@@ -140,6 +140,8 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 |---|---|
 | `LUMEN_BACKEND` | Renderer: empty = probe (wgpu first), `femtovg`, `wgpu` |
 | `WGPU_BACKEND` / `LUMEN_NO_BACKEND_PROBE` | Force / skip GPU backend probe |
+| `LUMEN_NO_BROWSER_THREAD=1` | **Rollback** for the browser thread (ADR-032 slice 2, on by default): `Lumen` state lives on the `lumen-browser` thread and the main thread only forwards winit events. `=1` restores `Lumen` as the `ApplicationHandler` on the main thread |
+| `LUMEN_NO_DEMO_PANEL=1` | Hides the floating dev panel `#demoBar` (no paint, no hit-test). `graphic_tests/run.py` sets it for its live window (BUG-1077) |
 | `LUMEN_NO_ENGINE_THREAD=1` | **Rollback** for the off-thread layout engine thread, which is **on by default since ADR-023** (was opt-in `LUMEN_ENGINE_THREAD=1`, ADR-016 M2.2). `LUMEN_ENGINE_THREAD=0` also disables it; a leftover `=1` still works and now just agrees with the default |
 | `LUMEN_NO_RENDER_THREAD=1` | **Rollback** for the off-UI-thread rasterization/present thread, which is **on by default since ADR-029** (was opt-in `LUMEN_RENDER_THREAD=1`, ADR-016 M1). `LUMEN_RENDER_THREAD=0` also disables it; a leftover `=1` still works and now just agrees with the default |
 | `LUMEN_PRESENT` | Present mode override |

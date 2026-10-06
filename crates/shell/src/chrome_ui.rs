@@ -903,7 +903,7 @@ impl Lumen {
         &mut self,
         x_css: f32,
         y_css: f32,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) -> bool {
         if !self.point_over_chrome(x_css, y_css) {
             return false;
@@ -946,7 +946,7 @@ impl Lumen {
         &mut self,
         nid: NodeId,
         action: lumen_chrome::ChromeAction,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         use lumen_chrome::ChromeAction;
         match action {

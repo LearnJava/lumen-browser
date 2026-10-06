@@ -29,6 +29,124 @@ pub(crate) fn run_window_mode(
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
     automation_mode: bool,
 ) -> ExitCode {
+    // Streaming pipeline: окно создаётся немедленно, загрузка стартует
+    // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
+    let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
+    // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
+    // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
+    // UI-потока умирают на ~790 уровнях вложенности. winit по умолчанию
+    // отказывается строить event loop вне главного потока процесса; на
+    // Wayland/X11 это разрешается явным `with_any_thread`. Флаг выставляется
+    // обоим бэкендам: какой из них живой, решается в рантайме.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
+            &mut event_loop_builder,
+            true,
+        );
+        winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
+            &mut event_loop_builder,
+            true,
+        );
+    }
+    let event_loop = match event_loop_builder.build() {
+        Ok(el) => el,
+        Err(err) => {
+            eprintln!("Не удалось создать event loop: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let load_proxy = event_loop.create_proxy();
+    // ADR-032: состояние `Lumen` живёт на потоке браузера, главный поток —
+    // только переходник winit. `LUMEN_NO_BROWSER_THREAD=1` — прежняя схема.
+    if browser_thread::browser_thread_disabled() {
+        return run_window_mode_inner(
+            source,
+            event_sink,
+            blocked_log,
+            network_log,
+            initial_scroll,
+            no_scrollbar,
+            maximized,
+            forced_colors,
+            deterministic,
+            viewport_override,
+            automation_handle,
+            automation_cmd_tx,
+            automation_rx,
+            automation_mode,
+            load_proxy,
+            LoopMode::Direct(event_loop),
+        );
+    }
+    let (ui_tx, ui_rx) = std::sync::mpsc::channel::<browser_thread::UiMsg>();
+    let guard_proxy = load_proxy.clone();
+    let spawned = std::thread::Builder::new()
+        .name("lumen-browser".to_owned())
+        .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
+        .spawn(move || {
+            // Любой выход потока (в том числе паника) гасит цикл главного потока.
+            let _exit_main = browser_thread::ExitMainOnDrop(guard_proxy);
+            run_window_mode_inner(
+                source,
+                event_sink,
+                blocked_log,
+                network_log,
+                initial_scroll,
+                no_scrollbar,
+                maximized,
+                forced_colors,
+                deterministic,
+                viewport_override,
+                automation_handle,
+                automation_cmd_tx,
+                automation_rx,
+                automation_mode,
+                load_proxy,
+                LoopMode::Thread(ui_rx),
+            )
+        });
+    let browser = match spawned {
+        Ok(h) => h,
+        Err(err) => {
+            eprintln!("Не удалось создать поток браузера: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = event_loop.run_app(&mut browser_thread::MainForwarder { tx: ui_tx }) {
+        eprintln!("Ошибка event loop: {err}");
+        return ExitCode::FAILURE;
+    }
+    browser.join().unwrap_or(ExitCode::FAILURE)
+}
+
+/// Где крутится цикл: на главном потоке (прежняя схема) или на потоке браузера.
+enum LoopMode {
+    Direct(EventLoop<LoadEvent>),
+    Thread(std::sync::mpsc::Receiver<browser_thread::UiMsg>),
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+fn run_window_mode_inner(
+    source: PageSource,
+    event_sink: Arc<dyn EventSink>,
+    blocked_log: Arc<std::sync::Mutex<panels::shields_panel::BlockedLog>>,
+    network_log: Arc<std::sync::Mutex<devtools::network_panel::NetworkLog>>,
+    initial_scroll: (f32, f32),
+    no_scrollbar: bool,
+    maximized: bool,
+    forced_colors: bool,
+    deterministic: deterministic::DetConfig,
+    viewport_override: Option<(f32, f32)>,
+    automation_handle: AutomationHandle,
+    automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
+    automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
+    automation_mode: bool,
+    load_proxy: EventLoopProxy<LoadEvent>,
+    mode: LoopMode,
+) -> ExitCode {
+    let browser_proxy = load_proxy.clone();
     println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
@@ -136,34 +254,6 @@ pub(crate) fn run_window_mode(
             .ok();
     }
 
-    // Streaming pipeline: окно создаётся немедленно, загрузка стартует
-    // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
-    let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
-    // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
-    // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
-    // UI-потока умирают на ~790 уровнях вложенности. winit по умолчанию
-    // отказывается строить event loop вне главного потока процесса; на
-    // Wayland/X11 это разрешается явным `with_any_thread`. Флаг выставляется
-    // обоим бэкендам: какой из них живой, решается в рантайме.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
-            &mut event_loop_builder,
-            true,
-        );
-        winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
-            &mut event_loop_builder,
-            true,
-        );
-    }
-    let event_loop = match event_loop_builder.build() {
-        Ok(el) => el,
-        Err(err) => {
-            eprintln!("Не удалось создать event loop: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let load_proxy = event_loop.create_proxy();
     // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
     // Created by main() (not here) so front-ends spawned before the window
     // exists (bidi_spawn) already hold a valid handle — see call site.
@@ -676,9 +766,18 @@ pub(crate) fn run_window_mode(
     if !app.deterministic.enabled && !config::global().no_persistent_state {
         app.update_ui.start_check(false);
     }
-    if let Err(err) = event_loop.run_app(&mut app) {
-        eprintln!("Ошибка event loop: {err}");
-        return ExitCode::FAILURE;
+    match mode {
+        LoopMode::Direct(event_loop) => {
+            if let Err(err) = event_loop.run_app(&mut app) {
+                eprintln!("Ошибка event loop: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+        LoopMode::Thread(ui_rx) => {
+            let handle = MainHandle::remote(browser_proxy);
+            app.run_browser_loop(&handle, &ui_rx);
+            app.on_exiting();
+        }
     }
     // UPD-9: «Перезапустить и обновить» already swapped the binaries and
     // saved the session; start the new one only after this process has let

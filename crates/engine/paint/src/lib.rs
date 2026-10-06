@@ -45,6 +45,10 @@ pub mod hit_test;
 mod invariants;
 pub mod layer_cache;
 pub mod overlay_partition;
+#[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg"))]
+pub mod surface_window;
+#[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg"))]
+pub use surface_window::SurfaceWindow;
 #[cfg(feature = "backend-wgpu")]
 pub mod backend_probe;
 #[cfg(feature = "backend-wgpu")]

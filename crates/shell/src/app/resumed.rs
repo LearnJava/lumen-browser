@@ -8,7 +8,7 @@
 use crate::*;
 
 impl Lumen {
-    pub(crate) fn on_resumed(&mut self, event_loop: &ActiveEventLoop) {
+    pub(crate) fn on_resumed(&mut self, event_loop: &MainHandle<'_>) {
         let (win_w, win_h) = if let Some((w, h)) = self.viewport_override {
             // `--viewport` (DEVX-1) wins over both defaults below — lets
             // `--deterministic` be combined with graphic_tests' fixed 1024×720

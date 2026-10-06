@@ -23,7 +23,6 @@ use lumen_paint::WgpuBackend;
 use lumen_paint::FemtovgBackend;
 #[cfg(feature = "backend-vello")]
 use lumen_paint::VelloBackend;
-use winit::window::Window;
 
 /// Создаёт windowed рендер-бэкенд для окна `window`.
 ///
@@ -52,7 +51,7 @@ use winit::window::Window;
 /// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
 /// завершилась ошибкой.
 pub fn create_backend(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
@@ -115,7 +114,7 @@ pub fn create_backend(
 /// вызывающая сторона откатывается на однопоточный in-process путь).
 #[cfg(feature = "backend-femtovg")]
 fn create_threaded_femtovg(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
 ) -> Result<Box<dyn RenderBackend>, String> {
     // Создаём бэкенд на главном потоке (window handle доступен только здесь).
@@ -151,7 +150,7 @@ fn create_threaded_femtovg(
 /// вызывающая сторона откатывается на однопоточный in-process путь).
 #[cfg(feature = "backend-wgpu")]
 fn create_threaded_wgpu(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, String> {
@@ -201,7 +200,7 @@ fn render_thread_enabled() -> bool {
 /// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
 /// завершилась ошибкой.
 fn create_backend_inprocess(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
@@ -244,7 +243,7 @@ fn create_backend_inprocess(
 ///
 /// Вызывается только для дефолта (пустой `LUMEN_BACKEND`).
 fn create_wgpu_or_femtovg(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
@@ -265,7 +264,7 @@ fn create_wgpu_or_femtovg(
 ///
 /// Вызывается для явного `LUMEN_BACKEND=femtovg`.
 fn create_femtovg_or_wgpu(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
@@ -282,7 +281,7 @@ fn create_femtovg_or_wgpu(
 /// Создаёт `WgpuBackend` (Phase 1 / Phase 2 fallback).
 #[cfg(feature = "backend-wgpu")]
 fn create_wgpu(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
@@ -292,7 +291,7 @@ fn create_wgpu(
 /// Создаёт `FemtovgBackend` (Phase 2 default, ADR-010 RB-9).
 #[cfg(feature = "backend-femtovg")]
 fn create_femtovg(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
     font_bytes: Vec<u8>,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
     Ok(Box::new(FemtovgBackend::new(window, font_bytes)?))
@@ -304,7 +303,7 @@ fn create_femtovg(
 /// Заглушка не требует `font_bytes` — текст не рендерится.
 #[cfg(feature = "backend-vello")]
 fn create_vello(
-    window: Arc<Window>,
+    window: Arc<lumen_paint::SurfaceWindow>,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
     let size = window.inner_size();
     Ok(Box::new(VelloBackend::new(size.width.max(1), size.height.max(1))))
@@ -314,7 +313,7 @@ fn create_vello(
 // Нормальная ситуация при --no-default-features --features backend-femtovg.
 #[cfg(not(feature = "backend-wgpu"))]
 fn create_wgpu(
-    _window: Arc<Window>,
+    _window: Arc<lumen_paint::SurfaceWindow>,
     _font_bytes: Vec<u8>,
     _target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {

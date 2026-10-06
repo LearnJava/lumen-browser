@@ -40,7 +40,6 @@ use lumen_font::{
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
 use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, font_palette::FontPaletteSelection, style::TextOrientation};
-use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry, InsertOutcome};
 use crate::display_list::{

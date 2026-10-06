@@ -16,6 +16,8 @@ impl Lumen {
             // (see the variant doc comment); the automation dispatch that runs
             // right after in `about_to_wait` handles the actual command.
             LoadEvent::AutomationWake => {}
+            // Обслуживаются главным потоком (`MainForwarder`) и сюда не попадают.
+            LoadEvent::MainExit | LoadEvent::MainCreateWindow(_) => {}
             LoadEvent::EarlyPreloadHints(hints, base, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {
                     self.mark_bg_tab_needs_reload(tab_id);

@@ -56,7 +56,7 @@ pub(crate) struct Lumen {
     pub(crate) source: PageSource,
     pub(crate) event_sink: Arc<dyn EventSink>,
     pub(crate) modifiers: ModifiersState,
-    pub(crate) window: Option<Arc<Window>>,
+    pub(crate) window: Option<Arc<lumen_paint::SurfaceWindow>>,
     /// Physical size of the last `WindowEvent::Resized` that actually ran a
     /// relayout (BUG-996). Windows re-delivers `WM_SIZE` for a top-level
     /// window the shell considers unresponsive (DWM/ghost-window hang probes:

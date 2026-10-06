@@ -24,7 +24,7 @@ impl Lumen {
         &mut self,
         code: KeyCode,
         key_event: &KeyEvent,
-        event_loop: &ActiveEventLoop,
+        event_loop: &MainHandle<'_>,
     ) {
         let _ = event_loop;
         match code {

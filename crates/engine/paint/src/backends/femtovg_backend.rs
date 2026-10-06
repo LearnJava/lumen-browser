@@ -39,9 +39,7 @@ use glutin::context::{
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::prelude::*;
 use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface};
-use glutin_winit::GlWindow;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::Window;
 
 use lumen_core::ext::{FontProvider, NORMAL_STRETCH_PERCENT};
 use lumen_core::geom::Size;
@@ -1744,7 +1742,7 @@ impl FemtovgBackend {
     /// - glutin не может создать контекст или surface
     /// - femtovg не может инициализировать рендерер
     pub fn new(
-        window: Arc<Window>,
+        window: Arc<crate::SurfaceWindow>,
         font_bytes: Vec<u8>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let display_handle = window.display_handle()?.as_raw();
@@ -1784,9 +1782,14 @@ impl FemtovgBackend {
         };
 
         // Создаём surface из winit-окна.
-        let surface_attrs = window
-            .build_surface_attributes(SurfaceAttributesBuilder::<WindowSurface>::new())
-            .map_err(|e| format!("femtovg surface attrs: {e:?}"))?;
+        // Не `GlWindow::build_surface_attributes`: он читает `window_handle()` у
+        // самого winit-окна, а оно отдаётся только потоку-создателю (ADR-032).
+        let inner = window.inner_size();
+        let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+            window_handle,
+            std::num::NonZeroU32::new(inner.width.max(1)).unwrap_or(std::num::NonZeroU32::MIN),
+            std::num::NonZeroU32::new(inner.height.max(1)).unwrap_or(std::num::NonZeroU32::MIN),
+        );
         let gl_surface = unsafe {
             // SAFETY: surface_attrs совместим с gl_config.
             gl_display.create_window_surface(&gl_config, &surface_attrs)?
