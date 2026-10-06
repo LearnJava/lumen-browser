@@ -1048,6 +1048,11 @@ pub(crate) struct Lumen {
     /// поток — [`Lumen::dispatch_pending_frame_loads`] опустошает эту очередь
     /// на СЛЕДУЮЩЕМ тике `about_to_wait`, не в момент скана.
     pub(crate) pending_frame_load_dispatch: Vec<crate::lumen::frame_dynamic::PendingFrameLoad>,
+    /// BUG-935 срез 87: последний [`Lumen::poll_dynamic_frames`] не смог взять
+    /// документ (его держал движковый поток) — скан надо повторить на ближайшем
+    /// проходе `pump_raf_engine_thread`, иначе вставленный скриптом `<iframe>`
+    /// остался бы без загрузки до следующей мутации DOM.
+    pub(crate) frame_scan_retry: bool,
     /// Shared GIF-video store — same Arc used by JS native bindings (PH3-12).
     ///
     /// The shell owns the Arc; JS bindings hold clones captured at context

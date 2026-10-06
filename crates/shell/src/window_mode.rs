@@ -429,6 +429,7 @@ pub(crate) fn run_window_mode(
         frame_nav_requests: Vec::new(),
         pending_new_frames: Vec::new(),
         pending_frame_load_dispatch: Vec::new(),
+        frame_scan_retry: false,
         video_gif_store,
         text_track_store,
         image_cache: lumen_image::ImageDecodeCache::new(),

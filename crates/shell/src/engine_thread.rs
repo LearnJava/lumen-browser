@@ -312,6 +312,19 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         &self,
         job: impl FnOnce(&mut S) -> R + Send + 'static,
     ) -> Option<R> {
+        self.query_within(QUERY_TIMEOUT, job)
+    }
+
+    /// [`Self::query`] с собственным сроком ожидания. BUG-935 срез 87: UI-поток,
+    /// которому ответ нужен «если дёшево» (хэндл JS для нового `<iframe>`), не
+    /// должен стоять за секундным заданием соседа по FIFO — `None` по сроку, и
+    /// вызывающий повторит позже.
+    #[track_caller]
+    pub fn query_within<R: Send + 'static>(
+        &self,
+        timeout: Duration,
+        job: impl FnOnce(&mut S) -> R + Send + 'static,
+    ) -> Option<R> {
         let caller = std::panic::Location::caller();
         // Queue depth 1: ровно один ответ на одно задание.
         let (reply_tx, reply_rx) = mpsc::sync_channel::<R>(1);
@@ -329,7 +342,7 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         // Ограниченное ожидание (BUG-935 S6): `Err` — и `Disconnected`
         // (sender дропнут при shutdown), и `Timeout` (задание застряло в
         // очереди позади долгого синхронного соседа) — трактуются одинаково.
-        reply_rx.recv_timeout(QUERY_TIMEOUT).ok()
+        reply_rx.recv_timeout(timeout).ok()
     }
 }
 
@@ -835,6 +848,18 @@ mod tests {
             None,
             "query обязан истечь по QUERY_TIMEOUT, а не ждать долгий сосед по FIFO-очереди"
         );
+    }
+
+    #[test]
+    fn query_within_gives_up_at_its_own_deadline() {
+        // BUG-935 срез 87: UI-поток, которому хэндл нужен «если дёшево», ждёт
+        // сотые доли секунды, а не `QUERY_TIMEOUT`, — и свободный поток отвечает.
+        let engine = EngineThread::<u64, u64>::spawn_with_state(7).expect("spawn engine thread");
+        assert_eq!(engine.query_within(Duration::from_secs(2), |s| *s), Some(7));
+        engine.task(|_| thread::sleep(Duration::from_millis(300)));
+        let t0 = std::time::Instant::now();
+        assert_eq!(engine.query_within(Duration::from_millis(20), |s| *s), None);
+        assert!(t0.elapsed() < Duration::from_millis(200), "ждали дольше собственного срока");
     }
 
     #[test]

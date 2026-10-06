@@ -404,6 +404,10 @@ impl Lumen {
             // Keep the loop warm while rAF work remains: a batch is queued, or a
             // turn is still running whose dom-dirty must be re-checked when it
             // finishes. Peek lock-free (does not consume the pending flag).
+            if self.frame_scan_retry {
+                let retry = std::time::Instant::now() + std::time::Duration::from_millis(8);
+                next_wakeup = Some(next_wakeup.map_or(retry, |t| t.min(retry)));
+            }
             if self.raf_pending_lockfree() || self.raf_turn_inflight() {
                 let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
                 let raf_wakeup = std::time::Instant::now()

@@ -95,6 +95,10 @@ fn m4_wide_restyle_off_thread(last_full_cost_ms: Option<f32>, deep_elements: usi
 /// rAF), к моменту следующего тика давно старше порога.
 const M4_BUSY_MIN: std::time::Duration = std::time::Duration::from_millis(1);
 
+/// BUG-935 срез 87: сколько UI-поток ждёт хэндл JS у свободного на вид
+/// движкового потока (задание могло стартовать после проверки `busy`).
+const M4_JS_HANDLE_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
+
 /// BUG-935 S86: держит ли движковый поток, занятый уже `since`, on-thread тик.
 fn m4_busy_blocks_tick(since: std::time::Duration) -> bool {
     since >= M4_BUSY_MIN
@@ -1007,6 +1011,7 @@ impl Lumen {
         // Consume a completed turn's DOM mutations first (before any re-fire) so a
         // continuous rAF-DOM loop still relayouts each cycle.
         let mut submitted = false;
+        let mut scanned = false;
         if self.take_dom_dirty_lockfree() {
             // FRAME-8: под движковым потоком (default, ADR-023) это —
             // единственное место, где страничный `dom_dirty` потребляется:
@@ -1015,6 +1020,7 @@ impl Lumen {
             // `LUMEN_NO_ENGINE_THREAD=1`. Довесок к уже добытому флагу, не
             // отдельный опрос — см. doc-comment `frame_dynamic.rs`.
             self.poll_dynamic_frames();
+            scanned = true;
             self.relayout_raf_dirty();
             submitted = true;
         } else if self.engine_job_generation == self.engine_applied_generation
@@ -1046,6 +1052,12 @@ impl Lumen {
             // but its commit never survived to land.
             self.relayout_raf_dirty();
             submitted = true;
+        }
+        // BUG-935 срез 87: скан фреймов, отложенный из-за занятого документа
+        // (`poll_dynamic_frames` не ждёт движковый поток на UI-потоке). Мутации
+        // DOM без нового `dom_dirty` его не повторят — повторяем здесь.
+        if self.frame_scan_retry && !scanned {
+            self.poll_dynamic_frames();
         }
         // Drain gate: the first non-inflight pass after a turn completes is
         // reserved for the deferred `drain_query_js` queues (which run this pass,
@@ -2065,6 +2077,20 @@ impl Lumen {
             Some(engine) => engine.query(|state| state.js.clone()).flatten(),
             None => self.js_ctx.clone(),
         }
+    }
+
+    /// BUG-935 срез 87: [`Self::clone_js_ctx`] для UI-потока, который не должен
+    /// стоять за заданием движкового потока. Внешний `None` — движковый поток
+    /// занят (или не ответил за [`M4_JS_HANDLE_WAIT`]), хэндл не получен и
+    /// вызывающему стоит повторить позже; `Some(None)` — на странице нет JS.
+    pub(crate) fn try_clone_js_ctx(&self) -> Option<Option<Arc<dyn PersistentJs>>> {
+        let Some(engine) = self.engine_thread.as_ref() else {
+            return Some(self.js_ctx.clone());
+        };
+        if engine.busy().is_some_and(|(_, since)| m4_busy_blocks_tick(since)) {
+            return None;
+        }
+        engine.query_within(M4_JS_HANDLE_WAIT, |state| state.js.clone())
     }
 }
 
