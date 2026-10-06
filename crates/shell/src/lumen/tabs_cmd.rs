@@ -499,11 +499,19 @@ impl Lumen {
             // could mutate a parked tab before this slice — so pick up the
             // dirty flag the same way a rAF turn's mutation does and force
             // one relayout before the stale layout gets painted.
-            if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_dom_dirty()
-            })
-            .unwrap_or(false)
-            {
+            // THREAD-9: под движковым потоком флаг читается lock-free через
+            // кэшированный атомик (его перекэшировал `restore_page_snapshot`
+            // выше), а не блокирующим `query` за очередью движка; тот же
+            // `swap(false)`, что у `take_dom_dirty`.
+            let dom_dirty = if self.engine_thread.is_some() {
+                self.take_dom_dirty_lockfree()
+            } else {
+                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.take_dom_dirty()
+                })
+                .unwrap_or(false)
+            };
+            if dom_dirty {
                 self.poll_dynamic_frames();
                 self.relayout_raf_dirty();
             }
