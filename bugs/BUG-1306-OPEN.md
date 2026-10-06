@@ -34,3 +34,7 @@ WPT-RUN-14 срез 7: 219 id / 4 007 упавших сабтестов `css/css
 ## Как проверить
 
 `css/css-grid/abspos/positioned-grid-descendants-001.html`, `alignment/grid-alignment-implies-size-change-001.html`; проба выше (`run_report.py --all --root css/css-grid/abspos --limit 12`, временный `promise_test` с `setTimeout`/`rAF` и чтением `offsetWidth`). После правки число упавших сабтестов в `css/css-grid` падает на величину этого кластера (4 007), остаток — GRID-ABSPOS/GRID-RTL/GRID-VWM-2.
+
+## Дополнение: WPT-RUN-14 срез 8 (2026-10-06, `css/css-grid`, часть 2)
+
+В `grid-model`, `layout-algorithm`, `placement`, `subgrid` приём `document.fonts.ready` → измерение даёт ещё 23 id / 414 сабтестов (`grid-model/grid-gutters-and-flex-content-001.html`, `grid-find-fr-size-gutters-001/002.html`, `layout-algorithm/grid-intrinsic-track-sizes-001.html` и др.), в `grid-lanes` — ещё 4 id / 210 сабтестов. Итого в `css-grid` целиком: 242 + 4 id и около 4 600 сабтестов, не говорящих ни о grid, ни об Ahem-раскладке.
