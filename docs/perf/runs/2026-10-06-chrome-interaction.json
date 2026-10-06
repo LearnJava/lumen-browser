@@ -1,0 +1,1164 @@
+{
+ "date": "2026-10-06",
+ "browser": "Chromium 153.0.8010.12",
+ "scenario": {
+  "settle_s": 15.0,
+  "ticks": 20,
+  "delta": 400.0,
+  "window": "maximized"
+ },
+ "sites": {
+  "https://ria.ru": {
+   "summary": {
+    "ok_runs": 3,
+    "settle.style.n": 450,
+    "settle.style.p50": 0.09,
+    "settle.style.p90": 0.25,
+    "settle.style.max": 1.26,
+    "settle.style.sum": 48.3,
+    "settle.layout.n": 54,
+    "settle.layout.p50": 0.23,
+    "settle.layout.p90": 0.38,
+    "settle.layout.max": 3.5,
+    "settle.layout.sum": 14.2,
+    "settle.long_tasks.n": 0,
+    "settle.long_tasks.tbt": 0,
+    "settle.long_tasks.max": 0.0,
+    "scroll.style.n": 36,
+    "scroll.style.p50": 0.68,
+    "scroll.style.p90": 1.45,
+    "scroll.style.max": 2.6,
+    "scroll.style.sum": 27.7,
+    "scroll.layout.n": 25,
+    "scroll.layout.p50": 0.42,
+    "scroll.layout.p90": 0.72,
+    "scroll.layout.max": 1.09,
+    "scroll.layout.sum": 10.8,
+    "scroll.long_tasks.n": 0,
+    "scroll.long_tasks.tbt": 0,
+    "scroll.long_tasks.max": 0.0,
+    "scroll.latency_scroll.n": 13,
+    "scroll.latency_scroll.p50": 18.53,
+    "scroll.latency_scroll.p90": 64.22,
+    "scroll.latency_scroll.max": 78.48,
+    "scroll.latency_wheel.n": 40,
+    "scroll.latency_wheel.p50": 12.49,
+    "scroll.latency_wheel.p90": 21.29,
+    "scroll.latency_wheel.max": 48.38,
+    "scroll.frames.presented": 117,
+    "scroll.frames.partial": 7,
+    "scroll.frames.dropped": 7,
+    "cdp_wheel_rtt.p50": 3.62,
+    "cdp_wheel_rtt.p90": 5.8,
+    "cdp_wheel_rtt.max": 31.42
+   },
+   "runs": [
+    {
+     "url": "https://ria.ru",
+     "run": 0,
+     "ready_s": 4.08,
+     "ready_complete": true,
+     "location": "https://ria.ru/",
+     "nav_timing": {
+      "dcl": 1326,
+      "load": 3577,
+      "transfer": 45413
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 4866,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 3.32,
+      "p90": 3.96,
+      "max": 30.94,
+      "sum": 88.9
+     },
+     "trace_events": 289500,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.1
+     },
+     "load": {
+      "style": {
+       "n": 768,
+       "p50": 0.1,
+       "p90": 0.39,
+       "max": 16.16,
+       "sum": 150.7
+      },
+      "layout": {
+       "n": 161,
+       "p50": 0.29,
+       "p90": 1.0,
+       "max": 151.52,
+       "sum": 359.2
+      },
+      "long_tasks": {
+       "n": 6,
+       "sum": 2047.9,
+       "tbt": 1747.9,
+       "max": 987.5
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 162,
+       "p50": 0.09,
+       "p90": 0.25,
+       "max": 1.37,
+       "sum": 19.4
+      },
+      "layout": {
+       "n": 31,
+       "p50": 0.23,
+       "p90": 0.38,
+       "max": 3.5,
+       "sum": 10.6
+      },
+      "long_tasks": {
+       "n": 1,
+       "sum": 165.6,
+       "tbt": 115.6,
+       "max": 165.6
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 35,
+       "p50": 0.68,
+       "p90": 1.64,
+       "max": 5.06,
+       "sum": 30.2
+      },
+      "layout": {
+       "n": 24,
+       "p50": 0.41,
+       "p90": 0.72,
+       "max": 1.06,
+       "sum": 10.7
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      },
+      "latency_scroll": {
+       "n": 13,
+       "p50": 17.63,
+       "p90": 61.06,
+       "max": 63.68,
+       "sum": 322.2
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 12.49,
+       "p90": 21.29,
+       "max": 48.38,
+       "sum": 550.1
+      },
+      "frames": {
+       "presented": 117,
+       "partial": 8,
+       "dropped": 7
+      }
+     }
+    },
+    {
+     "url": "https://ria.ru",
+     "run": 1,
+     "ready_s": 3.38,
+     "ready_complete": true,
+     "location": "https://ria.ru/",
+     "nav_timing": {
+      "dcl": 1194,
+      "load": 3345,
+      "transfer": 45352
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 4866,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 3.98,
+      "p90": 6.95,
+      "max": 31.42,
+      "sum": 104.2
+     },
+     "trace_events": 313013,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.12
+     },
+     "load": {
+      "style": {
+       "n": 615,
+       "p50": 0.1,
+       "p90": 0.3,
+       "max": 10.82,
+       "sum": 104.2
+      },
+      "layout": {
+       "n": 142,
+       "p50": 0.24,
+       "p90": 0.62,
+       "max": 141.21,
+       "sum": 292.0
+      },
+      "long_tasks": {
+       "n": 7,
+       "sum": 1783.7,
+       "tbt": 1433.7,
+       "max": 893.3
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 608,
+       "p50": 0.11,
+       "p90": 0.27,
+       "max": 1.26,
+       "sum": 80.1
+      },
+      "layout": {
+       "n": 73,
+       "p50": 0.26,
+       "p90": 0.44,
+       "max": 5.07,
+       "sum": 28.7
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 55,
+       "p50": 0.12,
+       "p90": 1.22,
+       "max": 2.6,
+       "sum": 23.2
+      },
+      "layout": {
+       "n": 46,
+       "p50": 0.43,
+       "p90": 0.72,
+       "max": 1.09,
+       "sum": 20.9
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      },
+      "latency_scroll": {
+       "n": 14,
+       "p50": 18.53,
+       "p90": 76.22,
+       "max": 125.47,
+       "sum": 495.6
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 13.61,
+       "p90": 22.38,
+       "max": 48.97,
+       "sum": 581.8
+      },
+      "frames": {
+       "presented": 125,
+       "partial": 5,
+       "dropped": 21
+      }
+     }
+    },
+    {
+     "url": "https://ria.ru",
+     "run": 2,
+     "ready_s": 3.37,
+     "ready_complete": true,
+     "location": "https://ria.ru/",
+     "nav_timing": {
+      "dcl": 1232,
+      "load": 2889,
+      "transfer": 45352
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 4866,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 3.62,
+      "p90": 5.8,
+      "max": 34.84,
+      "sum": 116.8
+     },
+     "trace_events": 292633,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.13
+     },
+     "load": {
+      "style": {
+       "n": 620,
+       "p50": 0.11,
+       "p90": 0.39,
+       "max": 15.76,
+       "sum": 126.3
+      },
+      "layout": {
+       "n": 142,
+       "p50": 0.24,
+       "p90": 0.82,
+       "max": 120.72,
+       "sum": 318.9
+      },
+      "long_tasks": {
+       "n": 7,
+       "sum": 1823.2,
+       "tbt": 1473.2,
+       "max": 945.6
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 450,
+       "p50": 0.09,
+       "p90": 0.22,
+       "max": 1.03,
+       "sum": 48.3
+      },
+      "layout": {
+       "n": 54,
+       "p50": 0.19,
+       "p90": 0.36,
+       "max": 2.15,
+       "sum": 14.2
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 36,
+       "p50": 0.72,
+       "p90": 1.45,
+       "max": 1.64,
+       "sum": 27.7
+      },
+      "layout": {
+       "n": 25,
+       "p50": 0.42,
+       "p90": 0.61,
+       "max": 1.18,
+       "sum": 10.8
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      },
+      "latency_scroll": {
+       "n": 13,
+       "p50": 19.56,
+       "p90": 64.22,
+       "max": 78.48,
+       "sum": 379.5
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 11.2,
+       "p90": 19.73,
+       "max": 36.57,
+       "sum": 547.4
+      },
+      "frames": {
+       "presented": 110,
+       "partial": 7,
+       "dropped": 5
+      }
+     }
+    }
+   ]
+  },
+  "https://lenta.ru": {
+   "summary": {
+    "ok_runs": 2,
+    "settle.style.n": 1811.5,
+    "settle.style.p50": 0.15,
+    "settle.style.p90": 0.24,
+    "settle.style.max": 1.24,
+    "settle.style.sum": 304.5,
+    "settle.layout.n": 898.5,
+    "settle.layout.p50": 0.29,
+    "settle.layout.p90": 0.43,
+    "settle.layout.max": 4.13,
+    "settle.layout.sum": 284.65,
+    "settle.long_tasks.n": 0.0,
+    "settle.long_tasks.tbt": 0.0,
+    "settle.long_tasks.max": 0.0,
+    "scroll.style.n": 809.0,
+    "scroll.style.p50": 0.12,
+    "scroll.style.p90": 0.54,
+    "scroll.style.max": 6.24,
+    "scroll.style.sum": 203.45,
+    "scroll.layout.n": 398.0,
+    "scroll.layout.p50": 0.29,
+    "scroll.layout.p90": 0.59,
+    "scroll.layout.max": 17.39,
+    "scroll.layout.sum": 185.95,
+    "scroll.long_tasks.n": 1.5,
+    "scroll.long_tasks.tbt": 18.2,
+    "scroll.long_tasks.max": 65.95,
+    "scroll.latency_scroll.n": 20.0,
+    "scroll.latency_scroll.p50": 63.81,
+    "scroll.latency_scroll.p90": 178.48,
+    "scroll.latency_scroll.max": 326.25,
+    "scroll.latency_wheel.n": 40.0,
+    "scroll.latency_wheel.p50": 32.03,
+    "scroll.latency_wheel.p90": 126.04,
+    "scroll.latency_wheel.max": 167.71,
+    "scroll.frames.presented": 436.0,
+    "scroll.frames.partial": 24.0,
+    "scroll.frames.dropped": 76.5,
+    "cdp_wheel_rtt.p50": 32.67,
+    "cdp_wheel_rtt.p90": 127.12,
+    "cdp_wheel_rtt.max": 167.47
+   },
+   "runs": [
+    {
+     "url": "https://lenta.ru",
+     "run": 0,
+     "ready_s": 14.25,
+     "ready_complete": true,
+     "location": "https://lenta.ru/",
+     "nav_timing": {
+      "dcl": 201,
+      "load": 10985,
+      "transfer": 38815
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 7323,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 33.08,
+      "p90": 150.64,
+      "max": 192.2,
+      "sum": 1218.1
+     },
+     "trace_events": 1035362,
+     "phase_s": {
+      "settle": 15.01,
+      "scroll": 6.23
+     },
+     "load": {
+      "style": {
+       "n": 721,
+       "p50": 0.26,
+       "p90": 0.59,
+       "max": 15.2,
+       "sum": 263.1
+      },
+      "layout": {
+       "n": 70,
+       "p50": 0.29,
+       "p90": 11.65,
+       "max": 108.51,
+       "sum": 299.9
+      },
+      "long_tasks": {
+       "n": 9,
+       "sum": 1426.9,
+       "tbt": 976.9,
+       "max": 760.9
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 1817,
+       "p50": 0.16,
+       "p90": 0.25,
+       "max": 1.24,
+       "sum": 319.4
+      },
+      "layout": {
+       "n": 900,
+       "p50": 0.29,
+       "p90": 0.42,
+       "max": 6.92,
+       "sum": 283.1
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 850,
+       "p50": 0.11,
+       "p90": 0.44,
+       "max": 5.49,
+       "sum": 188.4
+      },
+      "layout": {
+       "n": 388,
+       "p50": 0.3,
+       "p90": 0.61,
+       "max": 14.77,
+       "sum": 189.5
+      },
+      "long_tasks": {
+       "n": 2,
+       "sum": 121.2,
+       "tbt": 21.2,
+       "max": 66.7
+      },
+      "latency_scroll": {
+       "n": 20,
+       "p50": 64.24,
+       "p90": 195.08,
+       "max": 424.07,
+       "sum": 2142.0
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 32.54,
+       "p90": 150.3,
+       "max": 192.17,
+       "sum": 2413.5
+      },
+      "frames": {
+       "presented": 409,
+       "partial": 24,
+       "dropped": 104
+      }
+     }
+    },
+    {
+     "url": "https://lenta.ru",
+     "run": 1,
+     "ready_s": 3.04,
+     "ready_complete": true,
+     "location": "https://id.sber.ru/CSAFront/oidc/authorize.do?prompt=light&machineClick=aggressivelogin&logUid=1626497789594efb91af15913c79a1f8&state=b7916eb6-dc57-4019-a779-87797b95ce1e&nonce=c846bd14-e7b3-4b96-b2e4-eebfdfd15954&client_id=b49889df-cfce-4f40-9d74-ef52196255de&client_type=PRIVATE&display=page&response_type=code&scope=openid+email+name+mobile+offline_access+avatar+gender+birthdate+prime_subscription+bonus_balance+api%2Fv1%2Fuserdata+api%2Fv1%2Fbadgeinfo-provider&redirect_uri=https%3A%2F%2Flenta.ru&callback_uri=https%3A%2F%2Flenta.ru%2Fapi%2Funity-id%2Fv1%2Fcallback&link=https%3A%2F%2Fid.sber.ru%3Fclient_id%3Db49889df-cfce-4f40-9d74-ef52196255de%26client_type%3DPRIVATE%26display%3Dpage%26expires_at%3D2026-10-06%2B11%253A29%253A03%2B%252B0300%26nonce%3Dc846bd14-e7b3-4b96-b2e4-eebfdfd15954%26redirect_uri%3Dhttps%253A%252F%252Flenta.ru%26request_id%3D167b172ead6d4bb2857a8d1e2d161b80%26response_type%3Dcode%26scope%3Dopenid%2Bemail%2Bname%2Bmobile%2Boffline_access%2Bavatar%2Bgender%2Bbirthdate%2Bprime_subscription%2Bbonus_balance%2Bapi%252Fv1%252Fuserdata%2Bapi%252Fv1%252Fbadgeinfo-provider%26state%3Db7916eb6-dc57-4019-a779-87797b95ce1e&expires_at=2026-10-06T11%3A29%3A03.347%2B03%3A00",
+     "nav_timing": {
+      "dcl": 2307,
+      "load": 2307,
+      "transfer": 1239
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 7313,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 33.96,
+      "p90": 306.92,
+      "max": 403.78,
+      "sum": 1900.8
+     },
+     "trace_events": 930048,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 6.98
+     },
+     "load": {
+      "style": {
+       "n": 6,
+       "p50": 0.01,
+       "p90": 0.07,
+       "max": 0.62,
+       "sum": 0.7
+      },
+      "layout": {
+       "n": 7,
+       "p50": 0.03,
+       "p90": 0.09,
+       "max": 0.31,
+       "sum": 0.5
+      },
+      "long_tasks": {
+       "n": 2,
+       "sum": 2118.8,
+       "tbt": 2018.8,
+       "max": 2012.1
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 0
+      },
+      "layout": {
+       "n": 0
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 0
+      },
+      "layout": {
+       "n": 0
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      },
+      "latency_scroll": {
+       "n": 20,
+       "p50": 64.41,
+       "p90": 477.65,
+       "max": 507.61,
+       "sum": 2986.2
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 32.88,
+       "p90": 307.12,
+       "max": 396.37,
+       "sum": 3743.3
+      },
+      "frames": {
+       "presented": 455,
+       "partial": 28,
+       "dropped": 181
+      }
+     },
+     "error": "страница ушла на другой хост: https://id.sber.ru/CSAFront/oidc/authorize.do?prompt=light&machineClick=aggressi"
+    },
+    {
+     "url": "https://lenta.ru",
+     "run": 2,
+     "ready_s": 14.09,
+     "ready_complete": true,
+     "location": "https://lenta.ru/",
+     "nav_timing": {
+      "dcl": 209,
+      "load": 11069,
+      "transfer": 38848
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 7294,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 32.27,
+      "p90": 103.61,
+      "max": 142.74,
+      "sum": 884.5
+     },
+     "trace_events": 1119254,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.9
+     },
+     "load": {
+      "style": {
+       "n": 702,
+       "p50": 0.27,
+       "p90": 0.86,
+       "max": 15.65,
+       "sum": 294.1
+      },
+      "layout": {
+       "n": 94,
+       "p50": 0.28,
+       "p90": 5.56,
+       "max": 105.11,
+       "sum": 316.5
+      },
+      "long_tasks": {
+       "n": 7,
+       "sum": 1794.9,
+       "tbt": 1444.9,
+       "max": 700.4
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 1806,
+       "p50": 0.14,
+       "p90": 0.23,
+       "max": 1.24,
+       "sum": 289.6
+      },
+      "layout": {
+       "n": 897,
+       "p50": 0.29,
+       "p90": 0.45,
+       "max": 1.35,
+       "sum": 286.2
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 768,
+       "p50": 0.13,
+       "p90": 0.64,
+       "max": 6.99,
+       "sum": 218.5
+      },
+      "layout": {
+       "n": 408,
+       "p50": 0.28,
+       "p90": 0.58,
+       "max": 20.01,
+       "sum": 182.4
+      },
+      "long_tasks": {
+       "n": 1,
+       "sum": 65.2,
+       "tbt": 15.2,
+       "max": 65.2
+      },
+      "latency_scroll": {
+       "n": 20,
+       "p50": 63.39,
+       "p90": 161.87,
+       "max": 228.44,
+       "sum": 1575.6
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 31.53,
+       "p90": 101.78,
+       "max": 143.25,
+       "sum": 1739.5
+      },
+      "frames": {
+       "presented": 463,
+       "partial": 24,
+       "dropped": 49
+      }
+     }
+    }
+   ]
+  },
+  "https://www.rbc.ru": {
+   "summary": {
+    "ok_runs": 3,
+    "settle.style.n": 578,
+    "settle.style.p50": 0.16,
+    "settle.style.p90": 0.29,
+    "settle.style.max": 1.79,
+    "settle.style.sum": 109.2,
+    "settle.layout.n": 86,
+    "settle.layout.p50": 0.17,
+    "settle.layout.p90": 0.47,
+    "settle.layout.max": 5.33,
+    "settle.layout.sum": 20.7,
+    "settle.long_tasks.n": 2,
+    "settle.long_tasks.tbt": 386.6,
+    "settle.long_tasks.max": 401.5,
+    "scroll.style.n": 555,
+    "scroll.style.p50": 0.17,
+    "scroll.style.p90": 0.62,
+    "scroll.style.max": 4.41,
+    "scroll.style.sum": 183.9,
+    "scroll.layout.n": 207,
+    "scroll.layout.p50": 0.44,
+    "scroll.layout.p90": 1.61,
+    "scroll.layout.max": 5.91,
+    "scroll.layout.sum": 141.1,
+    "scroll.long_tasks.n": 2,
+    "scroll.long_tasks.tbt": 131.9,
+    "scroll.long_tasks.max": 146.9,
+    "scroll.latency_scroll.n": 20,
+    "scroll.latency_scroll.p50": 63.77,
+    "scroll.latency_scroll.p90": 129.0,
+    "scroll.latency_scroll.max": 245.42,
+    "scroll.latency_wheel.n": 40,
+    "scroll.latency_wheel.p50": 48.14,
+    "scroll.latency_wheel.p90": 97.22,
+    "scroll.latency_wheel.max": 278.77,
+    "scroll.frames.presented": 769,
+    "scroll.frames.partial": 73,
+    "scroll.frames.dropped": 43,
+    "cdp_wheel_rtt.p50": 32.37,
+    "cdp_wheel_rtt.p90": 66.65,
+    "cdp_wheel_rtt.max": 157.34
+   },
+   "runs": [
+    {
+     "url": "https://www.rbc.ru",
+     "run": 0,
+     "ready_s": 0.68,
+     "ready_complete": true,
+     "location": "https://www.rbc.ru/",
+     "nav_timing": {
+      "dcl": 473,
+      "load": 479,
+      "transfer": 34641
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 8000,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 32.66,
+      "p90": 66.65,
+      "max": 157.34,
+      "sum": 773.2
+     },
+     "trace_events": 600453,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.78
+     },
+     "load": {
+      "style": {
+       "n": 20,
+       "p50": 0.23,
+       "p90": 1.99,
+       "max": 12.76,
+       "sum": 21.2
+      },
+      "layout": {
+       "n": 15,
+       "p50": 0.1,
+       "p90": 30.33,
+       "max": 71.56,
+       "sum": 119.3
+      },
+      "long_tasks": {
+       "n": 3,
+       "sum": 311.4,
+       "tbt": 161.4,
+       "max": 153.5
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 578,
+       "p50": 0.1,
+       "p90": 0.17,
+       "max": 13.26,
+       "sum": 109.2
+      },
+      "layout": {
+       "n": 114,
+       "p50": 0.17,
+       "p90": 1.28,
+       "max": 13.93,
+       "sum": 73.9
+      },
+      "long_tasks": {
+       "n": 4,
+       "sum": 1544.0,
+       "tbt": 1344.0,
+       "max": 1016.6
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 520,
+       "p50": 0.15,
+       "p90": 0.62,
+       "max": 4.41,
+       "sum": 161.7
+      },
+      "layout": {
+       "n": 327,
+       "p50": 0.46,
+       "p90": 1.24,
+       "max": 5.91,
+       "sum": 202.5
+      },
+      "long_tasks": {
+       "n": 5,
+       "sum": 512.3,
+       "tbt": 262.3,
+       "max": 155.3
+      },
+      "latency_scroll": {
+       "n": 20,
+       "p50": 62.99,
+       "p90": 130.69,
+       "max": 245.42,
+       "sum": 1461.5
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 48.14,
+       "p90": 128.87,
+       "max": 278.77,
+       "sum": 2589.2
+      },
+      "frames": {
+       "presented": 470,
+       "partial": 111,
+       "dropped": 43
+      }
+     }
+    },
+    {
+     "url": "https://www.rbc.ru",
+     "run": 1,
+     "ready_s": 60.17,
+     "ready_complete": false,
+     "location": "https://www.rbc.ru/",
+     "nav_timing": {
+      "dcl": 434,
+      "load": 0,
+      "transfer": 34649
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 8000,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 31.91,
+      "p90": 52.28,
+      "max": 93.38,
+      "sum": 632.5
+     },
+     "trace_events": 2652904,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.65
+     },
+     "load": {
+      "style": {
+       "n": 2426,
+       "p50": 0.16,
+       "p90": 0.26,
+       "max": 13.89,
+       "sum": 478.1
+      },
+      "layout": {
+       "n": 144,
+       "p50": 0.22,
+       "p90": 0.84,
+       "max": 71.36,
+       "sum": 220.1
+      },
+      "long_tasks": {
+       "n": 13,
+       "sum": 2148.9,
+       "tbt": 1498.9,
+       "max": 1072.6
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 488,
+       "p50": 0.17,
+       "p90": 0.32,
+       "max": 1.79,
+       "sum": 102.0
+      },
+      "layout": {
+       "n": 28,
+       "p50": 0.21,
+       "p90": 0.47,
+       "max": 5.33,
+       "sum": 11.2
+      },
+      "long_tasks": {
+       "n": 2,
+       "sum": 486.6,
+       "tbt": 386.6,
+       "max": 401.5
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 555,
+       "p50": 0.17,
+       "p90": 0.75,
+       "max": 3.76,
+       "sum": 183.9
+      },
+      "layout": {
+       "n": 173,
+       "p50": 0.44,
+       "p90": 1.98,
+       "max": 4.05,
+       "sum": 133.6
+      },
+      "long_tasks": {
+       "n": 2,
+       "sum": 231.9,
+       "tbt": 131.9,
+       "max": 146.9
+      },
+      "latency_scroll": {
+       "n": 20,
+       "p50": 63.77,
+       "p90": 94.89,
+       "max": 145.09,
+       "sum": 1439.1
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 49.03,
+       "p90": 97.22,
+       "max": 146.27,
+       "sum": 2308.6
+      },
+      "frames": {
+       "presented": 769,
+       "partial": 73,
+       "dropped": 41
+      }
+     }
+    },
+    {
+     "url": "https://www.rbc.ru",
+     "run": 2,
+     "ready_s": 60.31,
+     "ready_complete": false,
+     "location": "https://www.rbc.ru/",
+     "nav_timing": {
+      "dcl": 449,
+      "load": 0,
+      "transfer": 34645
+     },
+     "viewport": [
+      1920,
+      897
+     ],
+     "scroll_y": 8000,
+     "cdp_wheel_rtt": {
+      "n": 20,
+      "p50": 32.37,
+      "p90": 71.55,
+      "max": 224.45,
+      "sum": 841.2
+     },
+     "trace_events": 3261285,
+     "phase_s": {
+      "settle": 15.0,
+      "scroll": 5.86
+     },
+     "load": {
+      "style": {
+       "n": 1881,
+       "p50": 0.17,
+       "p90": 0.42,
+       "max": 13.99,
+       "sum": 453.9
+      },
+      "layout": {
+       "n": 140,
+       "p50": 0.19,
+       "p90": 1.71,
+       "max": 65.08,
+       "sum": 191.0
+      },
+      "long_tasks": {
+       "n": 8,
+       "sum": 1998.9,
+       "tbt": 1598.9,
+       "max": 963.9
+      }
+     },
+     "settle": {
+      "style": {
+       "n": 1072,
+       "p50": 0.16,
+       "p90": 0.29,
+       "max": 1.47,
+       "sum": 194.5
+      },
+      "layout": {
+       "n": 86,
+       "p50": 0.1,
+       "p90": 0.38,
+       "max": 2.21,
+       "sum": 20.7
+      },
+      "long_tasks": {
+       "n": 1,
+       "sum": 77.8,
+       "tbt": 27.8,
+       "max": 77.8
+      }
+     },
+     "scroll": {
+      "style": {
+       "n": 658,
+       "p50": 0.25,
+       "p90": 0.62,
+       "max": 8.14,
+       "sum": 233.2
+      },
+      "layout": {
+       "n": 207,
+       "p50": 0.36,
+       "p90": 1.61,
+       "max": 6.83,
+       "sum": 141.1
+      },
+      "long_tasks": {
+       "n": 0,
+       "sum": 0,
+       "tbt": 0,
+       "max": 0.0
+      },
+      "latency_scroll": {
+       "n": 20,
+       "p50": 77.31,
+       "p90": 129.0,
+       "max": 420.29,
+       "sum": 1884.9
+      },
+      "latency_wheel": {
+       "n": 40,
+       "p50": 47.05,
+       "p90": 85.38,
+       "max": 424.81,
+       "sum": 2442.0
+      },
+      "frames": {
+       "presented": 774,
+       "partial": 68,
+       "dropped": 94
+      }
+     }
+    }
+   ]
+  }
+ }
+}
