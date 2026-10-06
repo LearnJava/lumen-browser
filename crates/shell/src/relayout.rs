@@ -1240,10 +1240,11 @@ impl Lumen {
         // стороны сравнения были одинаково склеенными.
         apply_step!("dl_splice_diff_cache", {
             crate::frames::splice_frame_content(&mut new_dl, &self.frames);
-            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-            // Cache display list directly (avoid &mut self while layout_source is borrowed).
-            let _dl_hash = lumen_paint::hash_commands(&new_dl);
-            self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
+            // THREAD-7: the per-command `tile_grid` diff and the full-DL clone into
+            // `display_list_cache` used to run here (~18 ms per tick on ria.ru).
+            // Neither has a reader — nothing calls `TileGrid::is_dirty`/`dirty_tiles`
+            // or `DisplayListCache::get` — so both were pure UI-thread cost.
+            // Only the (much rarer) scroll/form patch paths still feed them.
         });
         // Поля пишутся напрямую (не через `set_display_list`): `layout_source`
         // здесь заимствован, `&mut self` целиком взять нельзя.

@@ -71,7 +71,7 @@ pub(crate) struct PageSnapshot {
     pub(crate) animation_scheduler: animation_scheduler::AnimationScheduler,
     pub(crate) transition_scheduler: TransitionScheduler,
     pub(crate) starting_style_tracker: StartingStyleTracker,
-    pub(crate) prev_styles: HashMap<NodeId, ComputedStyle>,
+    pub(crate) prev_styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` — must travel
     /// with `layout_box` (same producer, same invalidation rule) so a tab
     /// switch back to this snapshot cannot resurrect a cache that no longer

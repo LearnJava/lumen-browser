@@ -1683,9 +1683,9 @@ impl TransitionScheduler {
     /// `fill-mode: forwards/both` (`state.completed`) is dropped silently —
     /// it already fired `transitionend`, so no `transitioncancel` follows.
     /// Call once per relayout, after the regular per-node `sync()` loop.
-    pub fn cancel_missing(
+    pub fn cancel_missing<S>(
         &mut self,
-        present: &HashMap<NodeId, ComputedStyle>,
+        present: &HashMap<NodeId, S>,
         now: f32,
     ) -> Vec<TransitionEventInfo> {
         let mut events = Vec::new();
@@ -3221,7 +3221,7 @@ mod tests {
         assert!(!sched.active.is_empty());
         // `present` is empty — the node no longer appears in the layout tree
         // (removed from the DOM, or `display: none`).
-        let present = HashMap::new();
+        let present: HashMap<NodeId, ComputedStyle> = HashMap::new();
         let events = sched.cancel_missing(&present, 0.3);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, TransitionEventKind::Cancel);
@@ -3259,7 +3259,7 @@ mod tests {
         let (_frame, end_events) = sched.tick(2.0); // past duration=1.0
         assert!(end_events.iter().any(|e| e.kind == TransitionEventKind::End));
         assert!(!sched.active.is_empty(), "forwards fill-mode must keep the entry");
-        let present = HashMap::new();
+        let present: HashMap<NodeId, ComputedStyle> = HashMap::new();
         let events = sched.cancel_missing(&present, 2.3);
         assert!(events.is_empty(), "an already-ended transition must not fire transitioncancel");
         assert!(sched.active.is_empty());
