@@ -4976,3 +4976,28 @@ fire-and-forget `deliver_scroll_progress` (0,2–0,5 мс), и тик `about_to_
 **Что осталось.** Первый off-thread коммит на ria.ru всё равно стоит 0,6–1,4 с компьютации и применяется на UI-потоке (`apply_relayout_result`);
 пока тики идут чаще длительности задания, коммит откладывается до паузы — latest-wins в `poll_engine_commit` отбрасывает устаревшие поколения.
 Бюджет 100 мс на lenta.ru тесен (один тик 117 мс → 8 off-thread тиков по ~300 мс дороже on-thread); `relayout_raf_dirty_readback` не менялся.
+
+## Срез 87 (P1, 2026-10-06) — `poll_dynamic_frames` блокировал UI-поток запросом к движковому FIFO: кадры ria.ru по 0,7–2,3 с
+
+**Замер на коде среза 86** (`--maximized`, `LUMEN_NO_ADBLOCK=1`, census, ria.ru). Из ~47 кадров за прогон ~10 стоили 0,55–2,3 с, и почти весь кадр — шаг `js`
+(`[frame] top: … js 773`). Вставки таймеров по шагу показали: `run_rendering_step` 0,0 мс, `relayout_raf_dirty` 0,3–0,6 мс (срезы 85–86 работают), а
+`pump_raf_engine_thread` целиком — 0,7–2,3 с, и всё это `poll_dynamic_frames` (FRAME-8, скан новых `<iframe>`; ria.ru вставляет рекламные фреймы).
+
+**Корень.** `poll_dynamic_frames` начинался с `self.clone_js_ctx()` — блокирующий `engine.query` (до `QUERY_TIMEOUT` = 5 с), то есть UI-поток стоял в
+FIFO за любым заданием движкового потока (`maybe_flush` 987 мс после `scroll`-обработчика страницы, JS-ход rAF). Хэндл JS нужен только для **нового**
+фрейма (`prepare_new_frame_load`), а запрашивался на каждый `dom_dirty`-тик. Побочная находка: скан брал `doc.lock()` блокирующе — тоже за чужим JS-ходом.
+
+**Что сделано.** (1) `poll_dynamic_frames` больше не просит хэндл заранее; `poll_dynamic_frames_in` берёт его через `Lumen::try_clone_js_ctx` только при
+непустом `delta.new` верхнего документа и только если движковый поток не занят дольше `M4_BUSY_MIN` (иначе — `EngineThread::query_within` с ожиданием
+20 мс). (2) `scan_dynamic_frames` берёт документ через `try_lock` и возвращает `Option`. (3) Отказ в любом из двух мест взводит `Lumen::frame_scan_retry`:
+`pump_raf_engine_thread` повторяет скан на следующем проходе, `about_to_wait` ставит будильник через 8 мс — вставленный `<iframe>` не остаётся
+без загрузки до следующей мутации DOM. Фреймы остаются «новыми» (бронь `pending_new_frames` ставится только после успешного скана).
+
+**Тесты.** `scan_skips_a_document_held_by_another_thread` (`frame_dynamic_load.rs`), `query_within_gives_up_at_its_own_deadline` (`engine_thread.rs`).
+
+**Живой замер после правки** (ria.ru, 3 прогона): кадров за прогон 140–156 против 47 (UI не стоит), кадров >200 мс — 1–2 против ~10; scroll RTT avg 0,3 с
+против 1,1–1,4 с. Оставшийся кадр >200 мс — `build: chrome` ~1,8 с на первом кадре (`scroll_y 0`), другой корень.
+
+**Что осталось.** RTT-пики 1,1–1,6 с у MCP `scroll` — это очередь движкового потока (`task 1001 мс` от `redraw_requested.rs:80` — `maybe_flush` 987 мс,
+`planned=2124`, после `scroll`-обработчика страницы); первый off-thread коммит 0,55–0,75 с и `apply_relayout_result` на UI; другие блокирующие
+`route_query_js` на UI-потоке не инвентаризированы (`clone_js_ctx` остаётся в `frame_links.rs:481` — клик по ссылке фрейма, не горячий путь).

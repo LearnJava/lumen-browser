@@ -49,13 +49,15 @@ impl Lumen {
     /// [`frames::scan_dynamic_frames`] — полный проход дерева, и его цена
     /// оправдана только когда что-то в дереве действительно тронуто.
     pub(crate) fn poll_dynamic_frames(&mut self) {
+        self.frame_scan_retry = false;
         let Some(env) = self.frame_env.clone() else { return };
         let Some(page_doc) = self.layout_source.as_ref().map(|s| Arc::clone(&s.document)) else {
             return;
         };
         let page_base = env.page_base.clone();
-        let page_js = self.clone_js_ctx();
-        self.poll_dynamic_frames_in(&page_doc, true, 0, &page_base, page_js.as_ref());
+        // Хэндл JS страницы нужен только новому `<iframe>` — берётся внутри, без
+        // блокирующего запроса к движковому потоку (срез 87).
+        self.poll_dynamic_frames_in(&page_doc, true, 0, &page_base, None);
 
         // Снимок индексов: `self.frames` уже плоский список по всем уровням
         // вложенности, поэтому один проход по нему покрывает и глубокие
@@ -86,7 +88,32 @@ impl Lumen {
         base: &ResourceBase,
         js: Option<&Arc<dyn PersistentJs>>,
     ) {
-        let delta = frame_dynamic_load::scan_dynamic_frames(doc, &self.frames, is_top);
+        // BUG-935 срез 87: документ занят движковым потоком — не ждём его на UI-потоке.
+        let Some(delta) = frame_dynamic_load::scan_dynamic_frames(doc, &self.frames, is_top) else {
+            self.frame_scan_retry = true;
+            return;
+        };
+        // BUG-935 срез 87: хэндл JS страницы берётся только при новом `<iframe>` и
+        // без ожидания чужого задания — `clone_js_ctx` стоял на UI-потоке до
+        // 2,3 с за движковым FIFO (кадры ria.ru). Занят — скан повторится.
+        let page_js;
+        let js = if is_top && !delta.new.is_empty() {
+            match self.try_clone_js_ctx() {
+                Some(handle) => {
+                    page_js = handle;
+                    page_js.as_ref()
+                }
+                None => {
+                    self.frame_scan_retry = true;
+                    for (idx, new_src) in delta.changed {
+                        self.navigate_frame_to(idx, &new_src, base, None);
+                    }
+                    return;
+                }
+            }
+        } else {
+            js
+        };
         for info in delta.new {
             let prep = frame_dynamic_load::prepare_new_frame_load(info, doc, depth, base, js);
             let key = frame_dynamic_load::new_frame_load_key(&prep);

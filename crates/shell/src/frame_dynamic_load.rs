@@ -39,15 +39,21 @@ pub(crate) struct DynamicFrameDelta {
 /// (абсолютный адрес vs `about:blank`/`about:srcdoc`). Пустой live `src`
 /// (атрибут снят) реакцию не запускает — спека этого случая не описывает
 /// точной навигацией, а движок сегодня не умеет «обесфреймить» хэндл.
-#[allow(clippy::unwrap_used)] // короткий лок дерева, docs/lint-policy.md §10
+///
+/// BUG-935 срез 87: `None` — документ занят (движковый поток держит его на
+/// JS-ходе или флаше — секунды на ria.ru, где скрипты вставляют `<iframe>` с
+/// рекламой), скан отложен. Раньше здесь стоял блокирующий `lock()`, и
+/// `pump_raf_engine_thread` на UI-потоке стоял за чужим JS: кадры по 0,7–2,3 с,
+/// почти целиком — этот скан. Вызывающий повторит скан на следующем проходе.
 pub(crate) fn scan_dynamic_frames(
     doc: &Arc<Mutex<Document>>,
     frames: &[FrameHandle],
     is_top: bool,
-) -> DynamicFrameDelta {
-    let infos = {
-        let d = doc.lock().unwrap();
-        collect_iframes(&d)
+) -> Option<DynamicFrameDelta> {
+    let infos = match doc.try_lock() {
+        Ok(d) => collect_iframes(&d),
+        Err(std::sync::TryLockError::Poisoned(p)) => collect_iframes(&p.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => return None,
     };
     let mut delta = DynamicFrameDelta { new: Vec::new(), changed: Vec::new() };
     for info in infos {
@@ -69,7 +75,7 @@ pub(crate) fn scan_dynamic_frames(
             }
         }
     }
-    delta
+    Some(delta)
 }
 
 /// Всё, что [`run_new_frame_load`] нужно от нового host-элемента, снятое ДО
@@ -159,4 +165,20 @@ pub(crate) fn apply_new_frame_load(
     }
     frames.extend(handles);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BUG-935 срез 87: скан не ждёт документ, занятый движковым потоком.
+    #[test]
+    fn scan_skips_a_document_held_by_another_thread() {
+        let doc = Arc::new(Mutex::new(Document::new()));
+        let held = doc.lock().unwrap();
+        assert!(scan_dynamic_frames(&doc, &[], true).is_none(), "занятый документ — скан отложен");
+        drop(held);
+        let delta = scan_dynamic_frames(&doc, &[], true).expect("свободный документ сканируется");
+        assert!(delta.new.is_empty() && delta.changed.is_empty());
+    }
 }
