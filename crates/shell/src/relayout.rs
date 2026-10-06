@@ -30,47 +30,66 @@ fn defer_js_push_override() -> Option<bool> {
     })
 }
 
-/// BUG-935 S46: measurement-only override for the M4-routing order in
+/// BUG-935 S46: override for the M4-routing order in
 /// [`Lumen::relayout_raf_dirty`] — S12/S14/S18/S27 each tried the same swap
 /// (incremental-first) via a literal edit + full rebuild between runs, and
 /// each lost the comparison to noise introduced by the rebuild+link gap
 /// itself (see [`defer_js_push_override`]'s doc for the same lesson). This
 /// mirrors that fix: an env var read once per process, no rebuild needed to
-/// flip it. `None` (unset, the default) leaves the shipped order (full
-/// off-thread first) unchanged for anyone who has not set the var.
+/// flip it. S85: unset is now the budgeted order ([`M4Swap::Guarded`]);
+/// `LUMEN_BUG935_M4_SWAP=0` restores the pre-S85 order.
 fn m4_swap_override() -> bool {
     m4_swap_mode() != M4Swap::Off
 }
 
-/// BUG-935 S80: бюджет on-thread тика `LUMEN_BUG935_M4_SWAP=2`. Тик дороже —
-/// инкрементальный путь на этой странице не дешевле полного каскада (ria.ru:
-/// правка `class` у корня расширяет рестайл на весь документ, ~580 мс), и
-/// UI-поток платит их зря.
-const M4_TICK_BUDGET_MS: f32 = 150.0;
+/// BUG-935 S85: бюджет on-thread тика (режим `Guarded`, по умолчанию). Тик
+/// дороже — инкрементальный путь на этой странице не дешевле полного каскада
+/// (ria.ru: 0,5–2,1 с на UI-потоке, срез 84), и UI-поток платит их зря. На
+/// lenta.ru своп-тик укладывается в 38–106 мс (срезы 81–84).
+const M4_TICK_BUDGET_MS: f32 = 100.0;
 
-/// Сколько следующих тиков после превышения бюджета идёт off-thread. Кэш
-/// каскада в это время держат живым коммиты движкового потока.
+/// Сколько следующих тиков после первого превышения бюджета идёт off-thread.
+/// Кэш каскада в это время держат живым коммиты движкового потока.
 const M4_BACKOFF_TICKS: u8 = 8;
 
-/// BUG-935 S80: режимы измерительного флага `LUMEN_BUG935_M4_SWAP`.
+/// Потолок экспоненциального отката: страница, где on-thread тик дорог
+/// всегда (ria.ru), пробует его раз в 128 тиков, а не раз в 8.
+const M4_BACKOFF_MAX_TICKS: u8 = 128;
+
+/// BUG-935 S85: решение после on-thread тика — `(тиков off-thread, штраф
+/// следующего превышения)`. В бюджете — штраф сбрасывается; сверх бюджета —
+/// откат растёт вдвое при каждом повторном превышении подряд.
+fn m4_tick_verdict(elapsed_ms: f32, penalty: u8) -> (u8, u8) {
+    if elapsed_ms <= M4_TICK_BUDGET_MS {
+        return (0, 0);
+    }
+    let ticks = penalty.clamp(M4_BACKOFF_TICKS, M4_BACKOFF_MAX_TICKS);
+    (ticks, ticks.saturating_mul(2).min(M4_BACKOFF_MAX_TICKS))
+}
+
+/// BUG-935 S80/S85: режимы `LUMEN_BUG935_M4_SWAP` — порядок маршрутизации
+/// rAF-рестайла в [`Lumen::relayout_raf_dirty`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum M4Swap {
-    /// Флаг не задан: полный off-thread первым (поставляемый порядок).
+    /// `=0`: полный off-thread первым (порядок до среза 85) — рычаг отката.
     Off,
-    /// `=1`: инкрементальный путь на UI-потоке первым безусловно (срезы 46–52).
+    /// `=1`: инкрементальный путь на UI-потоке первым безусловно (срезы 46–52,
+    /// измерительный режим).
     Plain,
-    /// `=2`: то же, но тик, рядом с которым движковый поток занят, уходит
-    /// off-thread — UI-поток не должен ждать `document.lock()`, который держит
-    /// JS страницы (срез 79: тики по ~2 с на ria.ru).
+    /// Не задан или `=2` (дефолт со среза 85): on-thread, пока тик укладывается
+    /// в [`M4_TICK_BUDGET_MS`]; тик, рядом с которым движковый поток занят, и
+    /// тики после превышения бюджета уходят off-thread — UI-поток не должен
+    /// ждать `document.lock()`, который держит JS страницы (срез 79: тики по
+    /// ~2 с на ria.ru), и не должен считать секундный каскад сам (срез 84).
     Guarded,
 }
 
 fn m4_swap_mode() -> M4Swap {
     static MODE: std::sync::OnceLock<M4Swap> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| match std::env::var("LUMEN_BUG935_M4_SWAP").ok().as_deref() {
+        Some("0") => M4Swap::Off,
         Some("1") => M4Swap::Plain,
-        Some("2") => M4Swap::Guarded,
-        _ => M4Swap::Off,
+        _ => M4Swap::Guarded,
     })
 }
 
@@ -733,8 +752,8 @@ impl Lumen {
             let handled = self.try_relayout_raf_incremental();
             if let Some(t0) = outer_t0 {
                 let ms = t0.elapsed().as_secs_f32() * 1000.0;
-                if guarded && handled && ms > M4_TICK_BUDGET_MS {
-                    self.m4_swap_backoff = M4_BACKOFF_TICKS;
+                if guarded && handled {
+                    (self.m4_swap_backoff, self.m4_swap_penalty) = m4_tick_verdict(ms, self.m4_swap_penalty);
                 }
                 if lumen_paint::frame_log_enabled() {
                     eprintln!(
@@ -2795,5 +2814,43 @@ mod bug935_s26_pending_lazy_image_drain_tests {
         let slot = Arc::new(Mutex::new(vec![(1u32, "a.png".to_string())]));
         let _first = take_pending_lazy_image_reqs(&slot);
         assert!(take_pending_lazy_image_reqs(&slot).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod bug935_s85_adaptive_m4_routing_tests {
+    use super::{m4_tick_verdict, M4_BACKOFF_MAX_TICKS, M4_BACKOFF_TICKS, M4_TICK_BUDGET_MS};
+
+    #[test]
+    fn tick_within_budget_clears_backoff_and_penalty() {
+        assert_eq!(m4_tick_verdict(M4_TICK_BUDGET_MS, 64), (0, 0));
+        assert_eq!(m4_tick_verdict(38.0, 0), (0, 0));
+    }
+
+    #[test]
+    fn first_overrun_backs_off_the_base_ticks_and_arms_a_longer_next_one() {
+        assert_eq!(m4_tick_verdict(M4_TICK_BUDGET_MS + 0.1, 0), (M4_BACKOFF_TICKS, M4_BACKOFF_TICKS * 2));
+    }
+
+    #[test]
+    fn repeated_overruns_double_the_backoff_up_to_the_cap() {
+        let mut penalty = 0;
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            let (ticks, next) = m4_tick_verdict(1500.0, penalty);
+            seen.push(ticks);
+            penalty = next;
+        }
+        assert_eq!(seen, [8, 16, 32, 64, 128, 128, 128, 128]);
+        assert!(seen.iter().all(|&t| t <= M4_BACKOFF_MAX_TICKS));
+    }
+
+    #[test]
+    fn a_cheap_tick_after_overruns_resets_the_ladder() {
+        let (_, penalty) = m4_tick_verdict(900.0, 0);
+        let (_, penalty) = m4_tick_verdict(900.0, penalty);
+        let (ticks, penalty) = m4_tick_verdict(40.0, penalty);
+        assert_eq!((ticks, penalty), (0, 0));
+        assert_eq!(m4_tick_verdict(900.0, penalty).0, M4_BACKOFF_TICKS);
     }
 }

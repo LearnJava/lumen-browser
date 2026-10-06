@@ -708,9 +708,12 @@ pub(crate) struct Lumen {
     /// `relayout()` выставляет их равными (off-thread задание не ждётся);
     /// `poll_engine_commit` продвигает это поле применённым `commit.generation`.
     pub(crate) engine_applied_generation: u64,
-    /// BUG-935 S80: сколько следующих rAF-тиков `LUMEN_BUG935_M4_SWAP=2` отдаёт
-    /// off-thread после дорогого on-thread тика (см. `M4_TICK_BUDGET_MS`).
+    /// BUG-935 S80/S85: сколько следующих rAF-тиков отдаётся off-thread после
+    /// дорогого on-thread тика (см. `M4_TICK_BUDGET_MS`).
     pub(crate) m4_swap_backoff: u8,
+    /// BUG-935 S85: длина отката при следующем превышении бюджета подряд
+    /// (0 — последний on-thread тик уложился в бюджет).
+    pub(crate) m4_swap_penalty: u8,
     /// ADR-016 M2.2: монотонный номер async-relayout задания. Растёт при каждой
     /// постановке off-thread задания (`submit_relayout_job`) **и** при каждом
     /// синхронном `relayout()` — так результат уже поставленного, но ещё не
