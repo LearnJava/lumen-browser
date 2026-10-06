@@ -301,6 +301,18 @@ browser thread without an epoch; scroll anchoring (BUG-524) and
 (`getBoundingClientRect` ignoring the scroll offset) and BUG-286 are separate
 defects. Not measured live — covered by unit tests only.
 
+### Slice 5, part 2 result (2026-10-06)
+
+Programmatic scroll of overflow containers (`el.scrollTop = …` drained in
+`about_to_wait`, `scroll_nested_ancestors_into_view` for fragment navigation)
+now goes through the same epoch command: `RenderBackend::scroll_command` carries
+`disown` — the ids of containers the browser thread has just written. The render
+thread drops its `owned_containers` entries for them (so frames are not drawn
+with a stale wheel offset), and the browser thread keeps `scroll_cmd_containers`
+until a feedback of the current epoch arrives; stale feedback does not apply
+those ids. Still not done: iframe scroll (`frames.rs`), scroll anchoring
+(BUG-524), `scroll-initial-target` (BUG-944), live measurement.
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats

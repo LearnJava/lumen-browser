@@ -560,6 +560,9 @@ pub(crate) struct Lumen {
     pub(crate) scroll_adopted_gen: u64,
     /// Эпоха программных прокруток потока браузера (ADR-032, правило 7).
     pub(crate) scroll_cmd_epoch: u64,
+    /// Контейнеры, записанные программно с последней обратной связью текущей
+    /// эпохи: устаревшая связь их смещений не применяет.
+    pub(crate) scroll_cmd_containers: Vec<u32>,
     /// Мгновенная скорость тачпада от последних `PixelDelta`-событий
     /// (CSS px / ms). Обновляется EWMA-фильтром. Используется при
     /// `TouchPhase::Ended` для запуска `momentum_anim`.

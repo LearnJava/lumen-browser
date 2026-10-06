@@ -248,7 +248,7 @@ enum RenderMsg {
     StopRenderMomentum,
     /// Программная прокрутка потока браузера (ADR-032, правило 7): страница в
     /// `(y, x)`, эпоха команды растёт монотонно.
-    ScrollCommand { epoch: u64, y: f32, x: f32 },
+    ScrollCommand { epoch: u64, y: f32, x: f32, disown: Vec<u32> },
     /// Старт render-side анимации щелчка колеса (THREAD-6).
     StartRenderScrollAnim { start_y: f32, target_y: f32 },
     /// Колесо/тачпад с главного потока (ADR-032, срез 3): смещение страницы
@@ -533,8 +533,8 @@ impl RenderBackend for ThreadedRenderBackend {
         self.send(RenderMsg::StopRenderMomentum);
     }
 
-    fn scroll_command(&mut self, epoch: u64, y: f32, x: f32) {
-        self.send(RenderMsg::ScrollCommand { epoch, y, x });
+    fn scroll_command(&mut self, epoch: u64, y: f32, x: f32, disown: &[u32]) {
+        self.send(RenderMsg::ScrollCommand { epoch, y, x, disown: disown.to_vec() });
     }
 
     fn start_render_scroll_anim(&mut self, start_y: f32, target_y: f32) {
@@ -845,6 +845,16 @@ impl RenderState {
         }
         self.containers_version += 1;
         Some(true)
+    }
+
+    /// Забывает смещения контейнеров, которым поток браузера записал своё
+    /// (программная прокрутка, ADR-032 правило 7).
+    fn disown_containers(&mut self, ids: &[u32]) {
+        let before = self.owned_containers.len();
+        self.owned_containers.retain(|o| !ids.contains(&o.id));
+        if self.owned_containers.len() != before {
+            self.containers_version += 1;
+        }
     }
 
     /// Забывает смещения контейнеров, которые поток браузера уже усыновил и
@@ -1243,8 +1253,9 @@ fn process_batch(
                 state.scroll_anim = None;
                 state.owned = false;
             }
-            RenderMsg::ScrollCommand { epoch, y, x } => {
+            RenderMsg::ScrollCommand { epoch, y, x, disown } => {
                 state.cmd_epoch = state.cmd_epoch.max(epoch);
+                state.disown_containers(&disown);
                 state.momentum = None;
                 state.scroll_anim = None;
                 state.owned = false;
@@ -1501,8 +1512,8 @@ mod tests {
         let (mut backend, mut state) = tick_state();
         let batch = vec![
             RenderMsg::StartRenderScrollAnim { start_y: 0.0, target_y: 100.0 },
-            RenderMsg::ScrollCommand { epoch: 3, y: 40.0, x: 0.0 },
-            RenderMsg::ScrollCommand { epoch: 2, y: 10.0, x: 0.0 },
+            RenderMsg::ScrollCommand { epoch: 3, y: 40.0, x: 0.0, disown: Vec::new() },
+            RenderMsg::ScrollCommand { epoch: 2, y: 10.0, x: 0.0, disown: Vec::new() },
         ];
         process_batch(&mut backend, batch, &mut state, 0.0);
         assert!(state.scroll_anim.is_none());
@@ -1710,6 +1721,17 @@ mod tests {
         assert!(!st.driving(), "кривой страницы нет");
         assert_eq!(st.owned_containers.len(), 1);
         assert_eq!((st.owned_containers[0].id, st.owned_containers[0].y), (5, 40.0));
+    }
+
+    #[test]
+    fn scroll_command_disowns_programmatically_written_container() {
+        let mut st = container_state(vec![container(5, [0.0, 0.0, 100.0, 100.0], 400.0)]);
+        st.apply_wheel_at(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, Some((50.0, 50.0)), 0.0);
+        assert_eq!(st.owned_containers.len(), 1);
+        st.disown_containers(&[7]);
+        assert_eq!(st.owned_containers.len(), 1, "чужой id не трогаем");
+        st.disown_containers(&[5]);
+        assert!(st.owned_containers.is_empty(), "записанный потоком браузера контейнер отпущен");
     }
 
     #[test]

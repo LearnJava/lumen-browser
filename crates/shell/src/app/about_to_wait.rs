@@ -1845,6 +1845,7 @@ impl Lumen {
             // Вьюпорт — до мутабельного заимствования `layout_box` ниже: им
             // позиционируются `background-attachment: fixed` слои (§3.6).
             let fixed_bg_vp = self.relayout_viewport();
+            let mut cmd_ids: Vec<u32> = Vec::new();
             if !scroll_reqs.is_empty()
                 && let Some(lb) = self.layout_box.as_mut()
             {
@@ -1881,6 +1882,7 @@ impl Lumen {
                         .iter()
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();
+                    let scrolled_nids_copy = scrolled_nids.clone();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                         j.update_scroll_states(states);
                         for nid in scrolled_nids {
@@ -1896,7 +1898,11 @@ impl Lumen {
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
+                    cmd_ids = scrolled_nids_copy;
                 }
+            }
+            if !cmd_ids.is_empty() {
+                self.issue_container_scroll_command(&cmd_ids);
             }
         }
 

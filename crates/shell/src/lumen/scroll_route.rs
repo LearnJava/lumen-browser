@@ -102,9 +102,12 @@ impl Lumen {
             if let Some(link) = self.scroll_link.as_ref() {
                 link.adopt(fb.gen_id, self.scroll_y, self.scroll_x);
             }
-            self.apply_feedback_containers(fb.containers);
+            let skip = self.scroll_cmd_containers.clone();
+            let kept = fb.containers.into_iter().filter(|c| !skip.contains(&c.0)).collect();
+            self.apply_feedback_containers(kept);
             return false;
         }
+        self.scroll_cmd_containers.clear();
         let y = clamp_scroll(fb.y, self.max_scroll());
         let x = clamp_scroll(fb.x, self.max_scroll_x());
         // Кривую и инерцию теперь ведёт рендер-поток.
@@ -124,10 +127,19 @@ impl Lumen {
     /// рендер-потоку новое смещение под новой эпохой. Вызывается после записи
     /// `scroll_y`/`scroll_x`; обратная связь со старой эпохой отбрасывается.
     pub(crate) fn issue_scroll_command(&mut self) {
+        self.issue_container_scroll_command(&[]);
+    }
+
+    /// То же, что [`Self::issue_scroll_command`], плюс программная запись
+    /// смещений контейнеров `ids` (`el.scrollTop`, `scrollIntoView`, якорь):
+    /// рендер-поток снимает с них своё смещение, а устаревшая связь не
+    /// откатывает запись.
+    pub(crate) fn issue_container_scroll_command(&mut self, ids: &[u32]) {
+        self.scroll_cmd_containers.extend_from_slice(ids);
         self.scroll_cmd_epoch += 1;
         let (epoch, y, x) = (self.scroll_cmd_epoch, self.scroll_y, self.scroll_x);
         if let Some(r) = self.renderer.as_mut() {
-            r.scroll_command(epoch, y, x);
+            r.scroll_command(epoch, y, x, ids);
         }
     }
 
