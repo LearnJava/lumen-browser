@@ -118,3 +118,13 @@ below the Chromium baseline of the THREAD-13 slice 6 table.
 - **Future:** close THREAD-11 when the criterion above holds; revisit workers
   (slice 7) only with a measured over-budget `frame` present left; remove
   `LUMEN_BAND_PARTIAL` after one release, as with ADR-029.
+
+### Slice 1 result (2026-10-06)
+
+Landed `crates/engine/paint/src/band_diff.rs` (`diff_band`, `BandDiff`,
+`FullReason`, 13 unit tests, not wired to the renderer yet). One rule found
+while testing that the design above did not state: a leaf inside an enclosing
+transform / scroll / sticky / fixed group has a **local** `cull_rect`, so a
+change inside such a group falls back to the full band even when the group's
+own commands are unchanged (they sit in the common prefix/suffix, not in the
+window). Only clip, opacity and blend groups are extent-bounded.

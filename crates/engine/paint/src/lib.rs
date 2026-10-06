@@ -59,6 +59,7 @@ pub mod svg_path;
 pub mod varied_text;
 #[cfg(feature = "backend-wgpu")]
 pub mod texture_pool;
+pub mod band_diff;
 pub mod tile_grid;
 #[cfg(feature = "backend-wgpu")]
 pub mod webgpu_compute;
