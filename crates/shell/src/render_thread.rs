@@ -80,7 +80,7 @@
 //!
 //! [`displacement_since`]: momentum_anim::displacement_since
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -92,11 +92,27 @@ use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, RenderBackend, RenderError};
 
 use crate::momentum_anim;
+use crate::wheel_scroll::{ScrollFeedback, ScrollShared, WheelInput};
 
 /// Бюджет кадра для self-tick momentum (~60 fps). При активном render-side
 /// momentum поток ждёт сообщения не дольше этого; таймаут = UI-поток ничего не
 /// прислал за интервал → он застопорился → продолжаем инерцию сами.
 const MOMENTUM_TICK: Duration = Duration::from_millis(16);
+
+/// Нижняя граница интервала между тиками кривой/инерции колеса, которой
+/// владеет рендер-поток (мс). Темп задаёт сам `render`: он блокируется на
+/// vsync, поэтому следующий тик наступает сразу после возврата, как у кадров
+/// потока браузера. Таймер «раз в 16,7 мс» с этим не уживается: фаза плывёт
+/// относительно vsync и презентации идут парами «3 мс, 30 мс». Граница
+/// спасает лишь бэкенды, у которых `render` не блокируется.
+const OWNED_MIN_TICK_MS: f64 = 8.0;
+
+/// Фора кривой, начатой из покоя (мс): первый кадр показывается сразу, а не
+/// через таймер (`recv_timeout` на Windows квантуется ~15,6 мс, и первая
+/// презентация приходила на 23 мс позже щелчка против 8 мс у потока браузера),
+/// поэтому кривая стартует «задним числом» на время, за которое поток браузера
+/// успевал бы выдать первый кадр.
+const OWNED_HEAD_START_MS: f64 = 8.0;
 
 /// Один кадр, переданный рендер-потоку. Владеющая копия — снапшот, который
 /// поток рисует независимо от main (ADR-016 инвариант 1).
@@ -111,6 +127,56 @@ struct FrameCommit {
     scroll_x: f32,
     /// Монотонный идентификатор коммита (для диагностики / frame-log).
     commit_id: u64,
+    /// Какое поколение смещения рендер-потока поток браузера уже усыновил к
+    /// моменту кадра (ADR-032, срез 3); [`ACK_BROWSER_SET`] — поток браузера
+    /// сам сдвинул страницу (навигация, клавиатура, `scrollTo`) и его смещение
+    /// главнее.
+    ack_gen: u64,
+}
+
+/// `FrameCommit::ack_gen` кадра, чьё смещение задал сам поток браузера.
+const ACK_BROWSER_SET: u64 = u64::MAX;
+
+/// Что поток браузера усыновил из обратной связи рендер-потока:
+/// `(поколение, y, x)`.
+type Adopted = Arc<Mutex<(u64, f32, f32)>>;
+
+/// Ручка к рендер-потоку, которую можно отдать другим потокам: канал команд и
+/// запись усыновлённого смещения. `Clone + Send`.
+#[derive(Clone)]
+pub(crate) struct RenderLink {
+    tx: Sender<RenderMsg>,
+    adopted: Adopted,
+}
+
+impl RenderLink {
+    /// Колесо прямо рендер-потоку (с главного потока, мимо потока браузера).
+    pub(crate) fn send_wheel(&self, input: WheelInput, max_y: f32, max_x: f32) {
+        let _ = self.tx.send(RenderMsg::Wheel { input, max_y, max_x });
+    }
+
+    /// Подключить обратную связь: рендер-поток начнёт возвращать смещение.
+    pub(crate) fn attach(&self, shared: Arc<ScrollShared>) {
+        let _ = self.tx.send(RenderMsg::AttachScrollLink(shared));
+    }
+
+    /// Поток браузера усыновил смещение поколения `gen_id`.
+    pub(crate) fn adopt(&self, gen_id: u64, y: f32, x: f32) {
+        if let Ok(mut g) = self.adopted.lock() {
+            *g = (gen_id, y, x);
+        }
+    }
+}
+
+thread_local! {
+    /// Ручка последнего рендер-потока, созданного на этом потоке — владелец
+    /// окна забирает её сразу после `create_backend`.
+    static LAST_LINK: std::cell::RefCell<Option<RenderLink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Забирает ручку рендер-потока, созданного на этом потоке последним.
+pub(crate) fn take_last_link() -> Option<RenderLink> {
+    LAST_LINK.with(|l| l.borrow_mut().take())
 }
 
 /// Сообщение рендер-потоку. Кадры коалесцируются (latest-wins); все прочие —
@@ -165,6 +231,11 @@ enum RenderMsg {
     StopRenderMomentum,
     /// Старт render-side анимации щелчка колеса (THREAD-6).
     StartRenderScrollAnim { start_y: f32, target_y: f32 },
+    /// Колесо/тачпад с главного потока (ADR-032, срез 3): смещение страницы
+    /// ведёт рендер-поток. `max_*` — пределы из снимка прокрутки.
+    Wheel { input: WheelInput, max_y: f32, max_x: f32 },
+    /// Подключение обратной связи со смещением (ADR-032, срез 3).
+    AttachScrollLink(Arc<ScrollShared>),
     /// Завершение потока (шлётся из `Drop`).
     Shutdown,
 }
@@ -202,6 +273,13 @@ pub struct ThreadedRenderBackend {
     /// Последний переданный рендер-потоку контент с его версией (THREAD-8):
     /// пока версия не сменилась, кадр делит тот же `Arc`, без копии списка.
     sent_content: Option<(u64, Arc<Vec<DisplayCommand>>)>,
+    /// Усыновлённое потоком браузера смещение рендер-потока (ADR-032, срез 3).
+    adopted: Adopted,
+    /// Последнее поколение из `adopted`, которое прокси уже учёл.
+    seen_adopted_gen: u64,
+    /// Смещение, которое поток браузера считает своим: сравнение с ним отличает
+    /// «браузер сдвинул страницу сам» от «браузер просто перерисовал».
+    browser_scroll: Option<(f32, f32)>,
 }
 
 impl ThreadedRenderBackend {
@@ -224,6 +302,7 @@ impl ThreadedRenderBackend {
         F: FnOnce() -> Result<Box<dyn RenderBackend>, String> + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<RenderMsg>();
+        let adopted: Adopted = Arc::new(Mutex::new((0, 0.0, 0.0)));
         // Одноразовый handshake-канал: поток отдаёт caps или ошибку создания.
         let (caps_tx, caps_rx) = mpsc::sync_channel::<Result<BackendCaps, String>>(1);
 
@@ -245,8 +324,14 @@ impl ThreadedRenderBackend {
             }
         };
 
+        LAST_LINK.with(|l| {
+            *l.borrow_mut() = Some(RenderLink { tx: tx.clone(), adopted: Arc::clone(&adopted) });
+        });
         Ok(Self {
             tx,
+            adopted,
+            seen_adopted_gen: 0,
+            browser_scroll: None,
             join: Some(join),
             scale: caps.scale,
             phys_w: caps.phys_w,
@@ -256,6 +341,19 @@ impl ThreadedRenderBackend {
             content_epoch: 0,
             sent_content: None,
         })
+    }
+
+    /// `ack_gen` для кадра со смещением `(y, x)`: поколение, усыновленное
+    /// потоком браузера, либо [`ACK_BROWSER_SET`], если он сдвинул страницу сам.
+    fn ack_for_frame(&mut self, y: f32, x: f32) -> u64 {
+        let (gen_id, ay, ax) = self.adopted.lock().map(|g| *g).unwrap_or((0, 0.0, 0.0));
+        if gen_id != self.seen_adopted_gen {
+            self.seen_adopted_gen = gen_id;
+            self.browser_scroll = Some((ay, ax));
+        }
+        let baseline = self.browser_scroll.unwrap_or((y, x));
+        self.browser_scroll = Some((y, x));
+        if baseline == (y, x) { gen_id } else { ACK_BROWSER_SET }
     }
 
     /// Отправляет управляющее сообщение; молча игнорирует, если поток уже мёртв
@@ -291,12 +389,14 @@ impl RenderBackend for ThreadedRenderBackend {
                 arc
             }
         };
+        let ack_gen = self.ack_for_frame(scroll_y, scroll_x);
         let frame = FrameCommit {
             content,
             overlay: overlay.to_vec(),
             scroll_y,
             scroll_x,
             commit_id: self.commit_counter,
+            ack_gen,
         };
         self.send(RenderMsg::Frame(frame));
         // Fire-and-forget latest-wins: main не ждёт present (ADR-016 инвариант 4).
@@ -499,6 +599,28 @@ struct RenderState {
     /// Активная анимация щелчка колеса (THREAD-6); время старта — по часам
     /// рендер-потока.
     scroll_anim: Option<crate::scroll_anim::ScrollAnim>,
+    /// Обратная связь со смещением (ADR-032, срез 3); `None` — маршрутизация
+    /// колеса выключена.
+    shared: Option<Arc<ScrollShared>>,
+    /// Смещение страницы, с которым рендер-поток рисует сейчас.
+    cur_y: f32,
+    cur_x: f32,
+    /// Поколение смещения, которым владеет рендер-поток: растёт с каждым
+    /// изменением от колеса и уходит потоку браузера обратной связью.
+    gen_id: u64,
+    /// Смещением сейчас владеет рендер-поток (колесо пришло мимо потока
+    /// браузера и тот ещё не догнал).
+    owned: bool,
+    /// Пределы смещения из последнего снимка прокрутки.
+    max_y: f32,
+    max_x: f32,
+    /// EWMA-скорость пальца на тачпаде (CSS px/ms) и время последнего события.
+    touch_vel: (f32, f32),
+    touch_t_ms: f64,
+    /// В текущей пачке уже была презентация (кадр или колесо).
+    presented: bool,
+    /// Дедлайн следующего тика колеса (ms от старта рендер-потока).
+    next_tick_ms: f64,
 }
 
 impl RenderState {
@@ -513,6 +635,195 @@ impl RenderState {
             anchor_commit_id: 0,
             momentum: None,
             scroll_anim: None,
+            shared: None,
+            cur_y: 0.0,
+            cur_x: 0.0,
+            gen_id: 0,
+            owned: false,
+            max_y: 0.0,
+            max_x: 0.0,
+            touch_vel: (0.0, 0.0),
+            touch_t_ms: 0.0,
+            presented: false,
+            next_tick_ms: 0.0,
+        }
+    }
+
+    /// Идёт ли анимация или инерция, которую ведёт рендер-поток.
+    fn driving(&self) -> bool {
+        self.scroll_anim.is_some() || self.momentum.is_some()
+    }
+
+    /// Продвигает смещение по активной кривой или инерции до `now_ms`.
+    /// Возвращает `true`, если смещение изменилось.
+    fn advance(&mut self, now_ms: f64) -> bool {
+        let (ny, nx) = if let Some(anim) = self.scroll_anim {
+            let (y, done) = anim.sample(now_ms);
+            if done {
+                self.scroll_anim = None;
+            }
+            (y, self.cur_x)
+        } else if let Some(m) = self.momentum.as_ref() {
+            let (y, x, done) = momentum_scroll_at(
+                m,
+                self.anchor_scroll_y,
+                self.anchor_scroll_x,
+                self.anchor_t_ms,
+                now_ms,
+            );
+            if done {
+                self.momentum = None;
+            }
+            (y, x)
+        } else {
+            return false;
+        };
+        let changed = (ny, nx) != (self.cur_y, self.cur_x);
+        self.cur_y = ny;
+        self.cur_x = nx;
+        changed
+    }
+
+    /// Отдаёт текущее смещение потоку браузера под новым поколением.
+    fn publish(&mut self) {
+        self.gen_id += 1;
+        if let Some(sh) = self.shared.as_ref() {
+            sh.post_feedback(ScrollFeedback { gen_id: self.gen_id, y: self.cur_y, x: self.cur_x });
+        }
+    }
+
+    /// Плавный сдвиг по Y на `dy`: новая кривая к цели с учётом идущей
+    /// (повтор колеса дописывает дельту к цели, а не откатывает назад).
+    fn smooth_by(&mut self, dy: f32, now_ms: f64) {
+        if dy == 0.0 {
+            return;
+        }
+        let base = self.scroll_anim.map_or(self.cur_y, |a| a.target());
+        let target = (base + dy).clamp(0.0, self.max_y.max(0.0));
+        if (target - self.cur_y).abs() <= f32::EPSILON {
+            self.scroll_anim = None;
+            return;
+        }
+        let start_y = self.scroll_anim.map_or(self.cur_y, |a| a.sample(now_ms).0);
+        self.scroll_anim = Some(crate::scroll_anim::ScrollAnim {
+            start_y,
+            target_y: target,
+            start_time_ms: now_ms,
+        });
+    }
+
+    /// Мгновенный сдвиг по X. `true`, если сдвинулось.
+    fn shift_x(&mut self, dx: f32) -> bool {
+        if dx == 0.0 {
+            return false;
+        }
+        let nx = (self.cur_x + dx).clamp(0.0, self.max_x.max(0.0));
+        let moved = (nx - self.cur_x).abs() > f32::EPSILON;
+        self.cur_x = nx;
+        moved
+    }
+
+    /// Применяет ввод колеса. `true` — смещение изменилось сразу (не кривой).
+    fn apply_wheel(&mut self, input: WheelInput, max_y: f32, max_x: f32, now_ms: f64) -> bool {
+        let was_driving = self.owned && self.driving();
+        if self.advance(now_ms) {
+            self.publish();
+        }
+        self.owned = true;
+        self.max_y = max_y;
+        self.max_x = max_x;
+        let moved = self.apply_input(input, max_y, max_x, now_ms);
+        if !was_driving && self.driving() {
+            if let Some(a) = self.scroll_anim.as_mut() {
+                a.start_time_ms -= OWNED_HEAD_START_MS;
+            }
+            self.next_tick_ms = now_ms;
+        }
+        moved
+    }
+
+    fn apply_input(&mut self, input: WheelInput, max_y: f32, max_x: f32, now_ms: f64) -> bool {
+        match input {
+            WheelInput::Notch { dx, dy } => {
+                self.momentum = None;
+                self.touch_vel = (0.0, 0.0);
+                self.smooth_by(dy, now_ms);
+                self.shift_x(dx)
+            }
+            WheelInput::TouchStart { dx, dy } => {
+                self.momentum = None;
+                self.scroll_anim = None;
+                self.touch_vel = (0.0, 0.0);
+                self.touch_t_ms = now_ms;
+                self.smooth_by(dy, now_ms);
+                self.shift_x(dx)
+            }
+            WheelInput::TouchMove { dx, dy } => {
+                let dt = (now_ms - self.touch_t_ms).max(1.0) as f32;
+                self.touch_t_ms = now_ms;
+                // Те же α = 0.6, что у потока браузера: быстро следует за
+                // движением, сглаживает дрожание.
+                const ALPHA: f32 = 0.6;
+                let (vx, vy) = self.touch_vel;
+                self.touch_vel = (ALPHA * dx / dt + (1.0 - ALPHA) * vx, ALPHA * dy / dt + (1.0 - ALPHA) * vy);
+                self.smooth_by(dy, now_ms);
+                self.shift_x(dx)
+            }
+            WheelInput::TouchEnd => {
+                let (vx, vy) = self.touch_vel;
+                self.touch_vel = (0.0, 0.0);
+                if vx.abs() + vy.abs() >= momentum_anim::MIN_VELOCITY_PX_MS {
+                    self.scroll_anim = None;
+                    self.anchor_scroll_y = self.cur_y;
+                    self.anchor_scroll_x = self.cur_x;
+                    self.anchor_t_ms = now_ms;
+                    self.momentum = Some(RenderMomentum {
+                        v0_y: vy,
+                        v0_x: vx,
+                        t0_ms: now_ms,
+                        max_y,
+                        max_x,
+                    });
+                }
+                false
+            }
+            WheelInput::TouchCancel => {
+                self.touch_vel = (0.0, 0.0);
+                false
+            }
+        }
+    }
+
+    /// Выбирает смещение кадра потока браузера (ADR-032, срез 3): пока
+    /// рендер-поток владеет смещением, кадры, снятые до усыновления, рисуются с
+    /// его смещением; сдвиг, заданный самим потоком браузера, главнее.
+    fn resolve_frame_scroll(&mut self, frame: &mut FrameCommit, now_ms: f64) {
+        if self.owned {
+            if frame.ack_gen == ACK_BROWSER_SET {
+                self.scroll_anim = None;
+                self.momentum = None;
+                self.owned = false;
+            } else {
+                // Шаг, сделанный здесь, тоже уходит потоку браузера: иначе
+                // последний шаг кривой терялся, а кадр с усыновлённым
+                // прежним смещением откатывал бы страницу на долю пикселя.
+                if self.advance(now_ms) {
+                    self.publish();
+                }
+                if frame.ack_gen < self.gen_id || self.driving() {
+                    frame.scroll_y = self.cur_y;
+                    frame.scroll_x = self.cur_x;
+                } else {
+                    self.owned = false;
+                }
+            }
+        } else {
+            frame.scroll_y = frame_scroll_y(self, frame.scroll_y, now_ms);
+        }
+        self.cur_y = frame.scroll_y;
+        self.cur_x = frame.scroll_x;
+        if let Some(sh) = self.shared.as_ref() {
+            sh.set_offset(self.cur_y, self.cur_x);
         }
     }
 }
@@ -554,7 +865,14 @@ fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg
     // «период + период» = ~30 мс, то есть каждый второй vsync пропущен.
     let mut last_work = Instant::now();
     loop {
-        let first = if state.momentum.is_some() || state.scroll_anim.is_some() {
+        let first = if state.owned && state.driving() {
+            let wait_ms = (state.next_tick_ms - clock.elapsed().as_secs_f64() * 1000.0).max(0.0);
+            match rx.recv_timeout(Duration::from_secs_f64(wait_ms / 1000.0)) {
+                Ok(m) => Some(m),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        } else if state.momentum.is_some() || state.scroll_anim.is_some() {
             match rx.recv_timeout(MOMENTUM_TICK.saturating_sub(last_work.elapsed())) {
                 Ok(m) => Some(m),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -581,17 +899,57 @@ fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg
                     }
                 }
                 let now_ms = clock.elapsed().as_secs_f64() * 1000.0;
+                state.presented = false;
                 if process_batch(backend, batch, &mut state, now_ms) {
                     return; // получен Shutdown
+                }
+                // Колесо идёт чаще тика: без этого таймаут не наступал бы и
+                // кривая стояла, пока сообщения не кончатся.
+                let now_ms = clock.elapsed().as_secs_f64() * 1000.0;
+                if state.owned
+                    && state.driving()
+                    && !state.presented
+                    && now_ms >= state.next_tick_ms
+                {
+                    self_tick_owned(backend, &mut state, now_ms);
                 }
             }
             None => {
                 // Таймаут при активном momentum: UI-поток молчит — тикаем сами.
                 let now_ms = clock.elapsed().as_secs_f64() * 1000.0;
-                self_tick_momentum(backend, &mut state, now_ms);
-                self_tick_scroll_anim(backend, &mut state, now_ms);
+                if state.owned {
+                    self_tick_owned(backend, &mut state, now_ms);
+                } else {
+                    self_tick_momentum(backend, &mut state, now_ms);
+                    self_tick_scroll_anim(backend, &mut state, now_ms);
+                }
             }
         }
+    }
+}
+
+/// Презентует последний закоммиченный кадр с текущим смещением рендер-потока.
+fn present_owned(backend: &mut Box<dyn RenderBackend>, state: &mut RenderState) {
+    if state.last_content.is_empty() {
+        return; // кадров ещё не было — нечего презентовать
+    }
+    backend.set_frame_commit_id(state.anchor_commit_id, true);
+    if let Err(err) =
+        backend.render(&state.last_content, &state.last_overlay, state.cur_y, state.cur_x)
+    {
+        eprintln!("[render-thread] ошибка презентации колеса: {err:?}");
+    }
+    crate::present_log::present(state.anchor_commit_id, true);
+    state.presented = true;
+}
+
+/// Тик кривой/инерции колеса, которым владеет рендер-поток (ADR-032, срез 3):
+/// продвигает смещение, презентует и возвращает его потоку браузера.
+fn self_tick_owned(backend: &mut Box<dyn RenderBackend>, state: &mut RenderState, now_ms: f64) {
+    state.next_tick_ms = now_ms + OWNED_MIN_TICK_MS;
+    if state.advance(now_ms) {
+        state.publish();
+        present_owned(backend, state);
     }
 }
 
@@ -679,21 +1037,32 @@ fn process_batch(
                     // рендер-поток — `scroll_y` кадра UI мог быть снят до того,
                     // как UI-поток встал в долгий кадр, и тащил бы страницу назад.
                     let mut frame = frame;
-                    frame.scroll_y = frame_scroll_y(state, frame.scroll_y, now_ms);
-                    // ADR-016 M1: аннотируем кадр в LUMEN_FRAME_LOG (не self-tick).
-                    backend.set_frame_commit_id(frame.commit_id, false);
-                    if let Err(err) = backend.render(
-                        &frame.content,
-                        &frame.overlay,
-                        frame.scroll_y,
-                        frame.scroll_x,
-                    ) {
-                        eprintln!(
-                            "[render-thread] ошибка рендера (commit {}): {err:?}",
-                            frame.commit_id
-                        );
+                    state.resolve_frame_scroll(&mut frame, now_ms);
+                    // Пока кривая или инерция колеса идёт, презентует тик
+                    // рендер-потока: кадр потока браузера со прежним списком
+                    // лишь обновляет overlay. Вторая презентация на тик
+                    // упёрлась бы в vsync и вдвое сбила бы темп. Новый список
+                    // рисуется сразу: бэкенд кэширует разницу между
+                    // соседними `render`, и пропуск версий давал полную
+                    // перерисовку по ~90 мс на lenta.ru.
+                    let scroll_only = Arc::ptr_eq(&frame.content, &state.last_content);
+                    if !(state.owned && state.driving() && scroll_only) {
+                        state.presented = true;
+                        // ADR-016 M1: аннотируем кадр в LUMEN_FRAME_LOG (не self-tick).
+                        backend.set_frame_commit_id(frame.commit_id, false);
+                        if let Err(err) = backend.render(
+                            &frame.content,
+                            &frame.overlay,
+                            frame.scroll_y,
+                            frame.scroll_x,
+                        ) {
+                            eprintln!(
+                                "[render-thread] ошибка рендера (commit {}): {err:?}",
+                                frame.commit_id
+                            );
+                        }
+                        crate::present_log::present(frame.commit_id, false);
                     }
-                    crate::present_log::present(frame.commit_id, false);
                     // Удерживаем кадр как якорь momentum (M1.3): UI-поток жив и
                     // ведёт презентацию — обновляем базу, чтобы при последующем
                     // застое продолжить инерцию с актуальной позиции.
@@ -706,6 +1075,7 @@ fn process_batch(
                 }
             }
             RenderMsg::StartRenderMomentum { vel_y, vel_x, max_scroll_y, max_scroll_x } => {
+                state.owned = false;
                 state.momentum = Some(RenderMomentum {
                     v0_y: vel_y,
                     v0_x: vel_x,
@@ -717,8 +1087,17 @@ fn process_batch(
             RenderMsg::StopRenderMomentum => {
                 state.momentum = None;
                 state.scroll_anim = None;
+                state.owned = false;
             }
+            RenderMsg::Wheel { input, max_y, max_x } => {
+                if state.apply_wheel(input, max_y, max_x, now_ms) {
+                    state.publish();
+                    present_owned(backend, state);
+                }
+            }
+            RenderMsg::AttachScrollLink(shared) => state.shared = Some(shared),
             RenderMsg::StartRenderScrollAnim { start_y, target_y } => {
+                state.owned = false;
                 state.momentum = None;
                 state.scroll_anim = Some(crate::scroll_anim::ScrollAnim {
                     start_y,
@@ -788,6 +1167,7 @@ mod tests {
             scroll_y: 0.0,
             scroll_x: 0.0,
             commit_id,
+            ack_gen: 0,
         })
     }
 
@@ -947,5 +1327,159 @@ mod tests {
         ];
         process_batch(&mut backend, batch, &mut state, 0.0);
         assert!(state.scroll_anim.is_none());
+    }
+
+    // --- ADR-032, срез 3: колесо ведёт рендер-поток ---
+
+    fn wheel_state() -> RenderState {
+        let mut st = RenderState::new();
+        st.max_y = 10_000.0;
+        st
+    }
+
+    fn browser_frame(y: f32, ack_gen: u64) -> FrameCommit {
+        FrameCommit {
+            content: Arc::new(Vec::new()),
+            overlay: Vec::new(),
+            scroll_y: y,
+            scroll_x: 0.0,
+            commit_id: 1,
+            ack_gen,
+        }
+    }
+
+    #[test]
+    fn notch_starts_curve_and_advances_without_browser() {
+        let mut st = wheel_state();
+        assert!(!st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 0.0));
+        assert!(st.owned && st.driving());
+        assert!(st.advance(100.0));
+        assert!(st.cur_y > 0.0 && st.cur_y < 120.0, "cur_y={}", st.cur_y);
+        st.advance(crate::scroll_anim::DURATION_MS + 1.0);
+        assert_eq!(st.cur_y, 120.0);
+        assert!(!st.driving());
+    }
+
+    #[test]
+    fn repeated_notch_extends_target_instead_of_rolling_back() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 0.0);
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 50.0);
+        st.advance(1000.0);
+        assert_eq!(st.cur_y, 240.0);
+    }
+
+    #[test]
+    fn notch_clamps_to_page_end() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 500.0 }, 200.0, 0.0, 0.0);
+        st.advance(1000.0);
+        assert_eq!(st.cur_y, 200.0);
+        // На пределе колесо ничего не запускает.
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 40.0 }, 200.0, 0.0, 1000.0);
+        assert!(!st.driving());
+    }
+
+    #[test]
+    fn horizontal_notch_moves_instantly() {
+        let mut st = wheel_state();
+        assert!(st.apply_wheel(WheelInput::Notch { dx: 40.0, dy: 0.0 }, 10_000.0, 500.0, 0.0));
+        assert_eq!(st.cur_x, 40.0);
+    }
+
+    #[test]
+    fn touch_end_with_velocity_starts_momentum() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::TouchStart { dx: 0.0, dy: 5.0 }, 10_000.0, 0.0, 0.0);
+        st.apply_wheel(WheelInput::TouchMove { dx: 0.0, dy: 40.0 }, 10_000.0, 0.0, 10.0);
+        st.apply_wheel(WheelInput::TouchEnd, 10_000.0, 0.0, 20.0);
+        assert!(st.momentum.is_some(), "быстрый жест запускает инерцию");
+        let before = st.cur_y;
+        st.advance(60.0);
+        assert!(st.cur_y > before);
+    }
+
+    #[test]
+    fn slow_touch_end_has_no_momentum() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::TouchStart { dx: 0.0, dy: 0.0 }, 10_000.0, 0.0, 0.0);
+        st.apply_wheel(WheelInput::TouchEnd, 10_000.0, 0.0, 500.0);
+        assert!(st.momentum.is_none());
+    }
+
+    #[test]
+    fn stale_browser_frame_is_drawn_at_render_offset() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 0.0);
+        st.advance(1000.0);
+        st.publish(); // поколение 1, поток браузера ещё не усыновил
+        let mut f = browser_frame(0.0, 0);
+        st.resolve_frame_scroll(&mut f, 1000.0);
+        assert_eq!(f.scroll_y, 120.0, "кадр со старым смещением не откатывает страницу");
+        assert!(st.owned);
+    }
+
+    #[test]
+    fn adopted_frame_hands_ownership_back() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 0.0);
+        st.advance(1000.0);
+        st.publish();
+        let mut f = browser_frame(120.0, st.gen_id);
+        st.resolve_frame_scroll(&mut f, 1000.0);
+        assert!(!st.owned, "поток браузера догнал — владеет им");
+        assert_eq!(st.cur_y, 120.0);
+    }
+
+    #[test]
+    fn browser_set_offset_overrides_render_ownership() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 0.0);
+        let mut f = browser_frame(0.0, ACK_BROWSER_SET);
+        st.resolve_frame_scroll(&mut f, 10.0);
+        assert!(!st.owned && !st.driving(), "навигация/клавиатура отменяют кривую колеса");
+        assert_eq!(f.scroll_y, 0.0);
+    }
+
+    #[test]
+    fn running_curve_beats_adopted_frame() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 400.0 }, 10_000.0, 0.0, 0.0);
+        st.advance(50.0);
+        st.publish();
+        let mut f = browser_frame(st.cur_y, st.gen_id);
+        st.resolve_frame_scroll(&mut f, 100.0);
+        assert!(st.owned, "кривая ещё идёт");
+        assert!(f.scroll_y > 0.0 && f.scroll_y < 400.0);
+    }
+
+    #[test]
+    fn ack_for_frame_tells_redraw_from_browser_scroll() {
+        let mut b = ThreadedRenderBackend::new(|| {
+            Ok(Box::new(crate::no_paint_backend::NoPaintBackend::new(100, 100, 1.0))
+                as Box<dyn RenderBackend>)
+        })
+        .expect("spawn");
+        let link = take_last_link().expect("ручка");
+        assert_eq!(b.ack_for_frame(0.0, 0.0), 0);
+        assert_eq!(b.ack_for_frame(0.0, 0.0), 0, "перерисовка без сдвига");
+        assert_eq!(b.ack_for_frame(300.0, 0.0), ACK_BROWSER_SET, "браузер сдвинул сам");
+        link.adopt(7, 500.0, 0.0);
+        assert_eq!(b.ack_for_frame(500.0, 0.0), 7, "усыновление не считается сдвигом браузера");
+        assert_eq!(b.ack_for_frame(500.0, 0.0), 7);
+    }
+
+    #[test]
+    fn last_curve_step_taken_inside_a_frame_is_not_lost() {
+        let mut st = wheel_state();
+        st.apply_wheel(WheelInput::Notch { dx: 0.0, dy: 120.0 }, 10_000.0, 0.0, 0.0);
+        st.advance(100.0);
+        st.publish();
+        let adopted = st.gen_id;
+        // Кривая закончилась, пока кадр потока браузера ехал к рендер-потоку.
+        let mut f = browser_frame(st.cur_y, adopted);
+        st.resolve_frame_scroll(&mut f, crate::scroll_anim::DURATION_MS + 50.0);
+        assert_eq!(f.scroll_y, 120.0, "финальная точка, а не усыновлённая раньше");
+        assert!(st.gen_id > adopted, "и она ушла обратной связью");
     }
 }

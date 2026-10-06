@@ -36,7 +36,9 @@ impl Lumen {
         // «не рисовать» (см. crates/shell/src/bench_frames.rs).
         let bench_t0 = bench_frames::active().then(std::time::Instant::now);
 
-        // Step 1: scroll update.
+        // Step 1: scroll update. ADR-032, срез 3: сначала смещение, которое
+        // вело колесо на рендер-потоке.
+        self.adopt_scroll_feedback();
         if self.advance_scroll_anim() {
             self.request_redraw();
         }

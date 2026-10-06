@@ -177,6 +177,55 @@ surface attributes from them instead of `GlWindow`. Idle CPU on
 Graphic tests: identical results in both modes (11 failures, all pre-existing).
 macOS behaviour of off-main `Window` calls is still unmeasured.
 
+### Slice 3 result (2026-10-06)
+
+Landed (`wheel_scroll.rs`, `lumen/scroll_route.rs`, `render_thread.rs`). Where it
+differs from the plan above:
+
+- **Who routes.** `MainForwarder` tracks the cursor and Shift itself (it sees
+  `CursorMoved`/`ModifiersChanged` first) and decides per wheel event against the
+  published `ScrollSnapshot`; a touchpad gesture keeps one sink from `Started`
+  to `Ended`. Wheel over chrome, a panel, split view, a page with
+  `scroll-snap`, an overflow container or an iframe is *not* routed — those
+  stay on the browser thread until slice 4 (`blockers` in the snapshot, plus a
+  reserved empty `wheel_listeners`, rule 9).
+- **Who owns the offset.** The render thread keeps `cur_y/cur_x` and a `gen`
+  counter while it drives a wheel curve or touchpad momentum (`owned`). Every
+  change is posted back (`ScrollShared::post_feedback`, latest wins, one wake-up
+  per pending value); the browser thread adopts it
+  (`Lumen::adopt_scroll_feedback`) and redraws.
+- **Epoch rule (7), in this slice's form.** A frame commit carries `ack_gen`:
+  the generation the browser thread had adopted. `ThreadedRenderBackend` derives
+  it at commit time; if the offset the browser passes differs from what it
+  believes it has (navigation, keyboard, `scrollTo`, MCP `scroll`), the frame is
+  tagged `ACK_BROWSER_SET` and wins over the render thread's offset. Frames with
+  an older `ack_gen` are drawn at the render thread's offset. So programmatic
+  sources still *write* `scroll_y` on the browser thread — the "command with an
+  epoch" form of rule 7 for them (and for `AutomationCommand::Scroll` /
+  `InputCommand::Scroll`) is the next step, with the async consumers of
+  slice 5.
+- **Pacing.** The render thread ticks a driven curve itself and presents the
+  last frame at the new offset; browser frames with an unchanged display list
+  only refresh the overlay while a curve runs (a second present per tick halved
+  the cadence). New lists are still presented at once — skipping versions cost
+  ~90 ms full repaints on lenta.ru. Ticks follow `render()` (it blocks on
+  vsync) with an 8 ms floor; a fixed 16.7 ms timer drifted against vsync and gave
+  "3 ms, 30 ms" pairs. A curve started from rest gets an 8 ms head start,
+  because `recv_timeout` on Windows quantises to ~15.6 ms (first present was
+  23 ms after the click, against 8 ms before).
+- **Measured** (`scripts/scroll_smoothness_run.py`, 60 Hz, `--maximized`,
+  ad-block off, 30 clicks): a 2000-row local page — on-time 0.92–0.97 vs
+  0.91–0.94 with `LUMEN_NO_WHEEL_ROUTE=1`, click→present latency 2–3.5 ms vs
+  7–9 ms, no jerks in either. lenta.ru (3×3 runs): routing off presents only
+  46 frames for 30 clicks (the busy UI thread eats the curve), routing on
+  presents ~140 — the full 200 ms curve per click — at 16 ms cadence; the
+  remaining ~90 ms gaps are post-scroll browser frames repainting new content,
+  not scroll. Scroll position after wheel, MCP `scroll` and another wheel click
+  agrees with the old path (400 → 500 → 540). Graphic tests: 11 failures, same
+  as slice 2. Not measured: ria.ru/rbc.ru with an artificially stalled browser
+  thread (the sites are too noisy for two runs; slice 6) and a display above
+  60 Hz.
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats

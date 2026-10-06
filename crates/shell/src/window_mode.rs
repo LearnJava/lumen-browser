@@ -77,9 +77,12 @@ pub(crate) fn run_window_mode(
             automation_mode,
             load_proxy,
             LoopMode::Direct(event_loop),
+            None,
         );
     }
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<browser_thread::UiMsg>();
+    let scroll_shared = wheel_scroll::ScrollShared::new(ui_tx.clone());
+    let browser_scroll_shared = Arc::clone(&scroll_shared);
     let guard_proxy = load_proxy.clone();
     let spawned = std::thread::Builder::new()
         .name("lumen-browser".to_owned())
@@ -104,6 +107,7 @@ pub(crate) fn run_window_mode(
                 automation_mode,
                 load_proxy,
                 LoopMode::Thread(ui_rx),
+                Some(browser_scroll_shared),
             )
         });
     let browser = match spawned {
@@ -113,7 +117,12 @@ pub(crate) fn run_window_mode(
             return ExitCode::FAILURE;
         }
     };
-    if let Err(err) = event_loop.run_app(&mut browser_thread::MainForwarder { tx: ui_tx }) {
+    let forwarder = browser_thread::MainForwarder {
+        tx: ui_tx,
+        wheel: wheel_scroll::WheelRouter::new(scroll_shared),
+    };
+    let mut forwarder = forwarder;
+    if let Err(err) = event_loop.run_app(&mut forwarder) {
         eprintln!("Ошибка event loop: {err}");
         return ExitCode::FAILURE;
     }
@@ -145,6 +154,7 @@ fn run_window_mode_inner(
     automation_mode: bool,
     load_proxy: EventLoopProxy<LoadEvent>,
     mode: LoopMode,
+    scroll_shared: Option<Arc<wheel_scroll::ScrollShared>>,
 ) -> ExitCode {
     let browser_proxy = load_proxy.clone();
     println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
@@ -408,6 +418,10 @@ fn run_window_mode_inner(
         scroll_drag: None,
         frame_scroll_drag: None,
         scroll_anim: None,
+        scroll_shared,
+        scroll_link: None,
+        scroll_snapshot_sent: None,
+        scroll_adopted_gen: 0,
         momentum_anim: None,
         touchpad_vel: (0.0, 0.0),
         touchpad_vel_time_ms: 0.0,
