@@ -577,6 +577,7 @@ fn self_tick_momentum(
     if let Err(err) = backend.render(&state.last_content, &state.last_overlay, scroll_y, scroll_x) {
         eprintln!("[render-thread] ошибка self-tick momentum: {err:?}");
     }
+    crate::present_log::present(state.anchor_commit_id, true);
     if done {
         state.momentum = None;
     }
@@ -615,6 +616,7 @@ fn process_batch(
                             frame.commit_id
                         );
                     }
+                    crate::present_log::present(frame.commit_id, false);
                     // Удерживаем кадр как якорь momentum (M1.3): UI-поток жив и
                     // ведёт презентацию — обновляем базу, чтобы при последующем
                     // застое продолжить инерцию с актуальной позиции.

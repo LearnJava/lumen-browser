@@ -8,6 +8,10 @@ use crate::*;
 
 impl Lumen {
     pub(crate) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        present_log::wheel(match delta {
+            MouseScrollDelta::LineDelta(_, l) => l,
+            MouseScrollDelta::PixelDelta(p) => p.y as f32,
+        });
         // DevTools inspector intercepts the wheel while visible (§7E.2):
         // scroll the active tab's property list. The Network tab is
         // page-wide and scrolls even without a pinned element.
