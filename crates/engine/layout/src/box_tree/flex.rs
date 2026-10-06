@@ -150,6 +150,7 @@ fn column_item_avail_cross(
     item: &LayoutBox,
     s: &ComputedStyle,
     content_width: f32,
+    wrapped: bool,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
@@ -178,7 +179,9 @@ fn column_item_avail_cross(
     );
     // Выровненный (не растянутый) элемент занимает по поперечной оси свой
     // fit-content, а не всю ширину — иначе двигать нечего.
-    let used_cross = if auto_cross || aligned_cross {
+    // A wrapped column sizes its lines by the items' fit-content widths; `finish_frame` stretches
+    // the items to the final line width afterwards (Flexbox L1 §9.4 steps 7-11).
+    let used_cross = if auto_cross || aligned_cross || (wrapped && column_wrap_stretchable(item, s)) {
         let max_c = max_content_outer_width(item, measurer, viewport);
         let min_c = min_content_outer_width(item, measurer, viewport);
         max_c.min(avail_cross).max(min_c).min(avail_cross).max(0.0)
@@ -186,6 +189,25 @@ fn column_item_avail_cross(
         avail_cross
     };
     used_cross + m_l + m_r
+}
+
+/// An item of a wrapped column container whose width is `auto` and which `align-self` stretches:
+/// its hypothetical cross size is fit-content, and once the line is sized it grows to the line's
+/// width (Flexbox L1 §9.4 steps 7 and 11). Only horizontal block-level items are handled;
+/// replaced boxes keep the old full-width behaviour.
+pub(crate) fn column_wrap_stretchable(item: &LayoutBox, s: &ComputedStyle) -> bool {
+    let is = &item.style;
+    if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || !matches!(is.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || is.width.is_some()
+        || !matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || matches!(is.margin_left, LengthOrAuto::Auto)
+        || matches!(is.margin_right, LengthOrAuto::Auto)
+    {
+        return false;
+    }
+    let cross_align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
+    matches!(cross_align, AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
 }
 
 /// FLEX-VWM-3: a column item in a vertical writing mode whose block size
@@ -465,7 +487,7 @@ pub(crate) fn build_flex_init(
     if is_column {
         for (k, &i) in item_idxs.iter().enumerate() {
             probe_cross[k] = column_item_avail_cross(
-                &children[i], s, content_width, measurer, viewport,
+                &children[i], s, content_width, is_wrap, measurer, viewport,
             );
         }
     }

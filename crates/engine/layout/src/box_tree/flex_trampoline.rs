@@ -994,6 +994,47 @@ fn finish_line(
     frame.init.cross_cursor += line_cross + frame.init.cross_gap;
 }
 
+/// Lays the item `i` of a wrapped column line `line_w` wide out again at the line's width when it
+/// is an auto-width `align-self: stretch` item narrower than the line (`max-width` caps the growth).
+/// Its height stays the main size the flexbox algorithm gave it.
+fn stretch_wrapped_column_item(
+    frame: &mut Frame,
+    i: usize,
+    line_w: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    let cw = frame.init.content_width;
+    let item = &frame.b.children[i];
+    if !super::flex::column_wrap_stretchable(item, &frame.init.s) {
+        return;
+    }
+    let is = Arc::clone(&item.style);
+    let iem = is.font_size;
+    let (m_l, m_r) = (is.margin_left.resolve_or_zero(iem, cw, viewport), is.margin_right.resolve_or_zero(iem, cw, viewport));
+    let m_t = is.margin_top.resolve_or_zero(iem, cw, viewport);
+    let mut target = (line_w - m_l - m_r).max(0.0);
+    if let Some(max_w) = is.max_width.as_ref().and_then(|l| l.resolve(iem, Some(cw), viewport)) {
+        target = target.min(max_w);
+    }
+    if target <= item.rect.width + 0.01 {
+        return;
+    }
+    let (rx, ry, h) = (item.rect.x - m_l, item.rect.y - m_t, item.rect.height);
+    let pcb = frame.init.children_pcb;
+    lay_out_with_used_size(
+        &mut frame.b.children[i], rx, ry, target + m_l + m_r, Some(h), measurer, viewport, pcb, hp, false,
+        UsedSizeOverride {
+            width: Some(target),
+            height: Some(h),
+            box_sizing: Some(BoxSizing::BorderBox),
+            clear_intrinsic_hint: true,
+            percentage_base: Some(cw),
+        },
+    );
+}
+
 /// FLEX-VWM-4: lays the row item `i` out again with its stretched border-box
 /// height `stretch_h` as an authored height, keeping its x and width.
 fn relayout_stretched_row_item(
@@ -1264,6 +1305,19 @@ fn finish_frame(
             }
 
             total_cross = frame.init.line_cross_sizes.iter().sum::<f32>() + line_gap_total;
+        }
+
+        // CSS Flexbox §9.4 step 11 for a wrapped column: an `align-self: stretch` item with an
+        // auto width was laid out at its fit-content width (`column_item_avail_cross`); it grows
+        // to the width of its (possibly `align-content`-stretched) line now.
+        if is_column {
+            for li in 0..n_lines {
+                let line_w = frame.init.line_cross_sizes[li];
+                for jx in 0..frame.init.line_inits[li].line_keys.len() {
+                    let i = frame.init.item_idxs[frame.init.line_inits[li].line_keys[jx]];
+                    stretch_wrapped_column_item(frame, i, line_w, measurer, viewport, hp);
+                }
+            }
         }
 
         // The lines of a wrapped row container for gap rules cut by a multicol break
