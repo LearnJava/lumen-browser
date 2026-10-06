@@ -233,6 +233,8 @@ impl Renderer {
             view,
             blit_bg,
             key: 0, // невалиден, пока Band-рендер не пройдёт
+            cmds: Vec::new(),
+            digests: Vec::new(),
             band_top_css,
             // Свежая полоса перерисовывается целиком, то есть фаза кольца
             // нулевая: строка 0 текстуры держит документную строку `band_top`.
@@ -873,6 +875,9 @@ impl Renderer {
             band_result?;
             if let Some(b) = self.page_band.as_mut() {
                 b.key = key;
+                // THREAD-11 S2: список и дайджесты, которыми нарисована полоса.
+                b.digests = static_content.iter().map(crate::display_list::hash_one_command).collect();
+                b.cmds = static_content.into_owned();
                 b.band_top_css = band_top_css;
                 if ring.is_none() {
                     // Полная перерисовка обнуляет фазу кольца: строка 0
