@@ -102,6 +102,37 @@ pub(in crate::style) struct CascadeIndex {
     /// pseudo-elements, and a linear `eq_ignore_ascii_case` scan over ≤10 short
     /// names beats hashing a `&str` (and needs no allocation at the call site).
     pseudo_subjects: Vec<Box<str>>,
+    /// BUG-935 срез 90 — [`RuleIndex`] over only the top-level rules that have a
+    /// pseudo-element in a selector's subject, reporting the same indices into
+    /// `sheet.rules` as [`Self::rules`].
+    ///
+    /// `compute_pseudo_element_style` runs for every rebuilt block box, twice
+    /// (`::before`, `::after`), and `matches_complex_for_pseudo` rejects any
+    /// selector whose subject carries no pseudo-element before looking at the
+    /// node — so the candidates of the general index (every rule keyed by the
+    /// node's tag/classes, plus all universal ones) were almost all thrown away
+    /// one by one. On ria.ru that probe was 86 % of the incremental box build
+    /// (4.3 of 5.0 s over a census run).
+    pub(in crate::style) pseudo_rules: RuleIndex,
+    /// The `@media` blocks that hold at least one pseudo-subject rule, with the
+    /// global rule index their first rule has in `compute_pseudo_element_style`'s
+    /// running numbering (`sheet.rules.len()` + the rules of every earlier media
+    /// block). Blocks without such a rule are not listed at all, so a sheet with
+    /// a hundred breakpoints costs the pseudo probe nothing for them.
+    pub(in crate::style) pseudo_media: Vec<PseudoBlockIndex>,
+    /// Likewise for `@supports` blocks; their base continues after the last media block.
+    pub(in crate::style) pseudo_supports: Vec<PseudoBlockIndex>,
+}
+
+/// One `@media`/`@supports` block's pseudo-subject rules — see
+/// [`CascadeIndex::pseudo_media`].
+pub(in crate::style) struct PseudoBlockIndex {
+    /// Position in `sheet.media_rules` / `sheet.supports_rules`.
+    pub(in crate::style) block: usize,
+    /// Global index of the block's first rule in the pseudo cascade's numbering.
+    pub(in crate::style) base: usize,
+    /// Candidates carry indices into the block's own `rules`.
+    pub(in crate::style) index: RuleIndex,
 }
 
 impl CascadeIndex {
@@ -119,6 +150,9 @@ impl CascadeIndex {
             has_webkit_scrollbar_rules: false,
             has_quote_content: false,
             pseudo_subjects: Vec::new(),
+            pseudo_rules: RuleIndex::empty(),
+            pseudo_media: Vec::new(),
+            pseudo_supports: Vec::new(),
         }
     }
 
@@ -187,6 +221,31 @@ impl CascadeIndex {
                 }
             }
         }
+        let has_pseudo_subject = |r: &Rule| r.selectors.iter().any(|s| selector_pseudo_subjects(s).next().is_some());
+        let pseudo_rules = RuleIndex::build_from_indexed(
+            sheet.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
+        );
+        let mut base = sheet.rules.len();
+        let mut pseudo_media = Vec::new();
+        for (block, m) in sheet.media_rules.iter().enumerate() {
+            if m.rules.iter().any(has_pseudo_subject) {
+                let index = RuleIndex::build_from_indexed(
+                    m.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
+                );
+                pseudo_media.push(PseudoBlockIndex { block, base, index });
+            }
+            base += m.rules.len();
+        }
+        let mut pseudo_supports = Vec::new();
+        for (block, sp) in sheet.supports_rules.iter().enumerate() {
+            if sp.rules.iter().any(has_pseudo_subject) {
+                let index = RuleIndex::build_from_indexed(
+                    sp.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
+                );
+                pseudo_supports.push(PseudoBlockIndex { block, base, index });
+            }
+            base += sp.rules.len();
+        }
         let predicates_ns = t.elapsed().as_nanos() as u64;
 
         let idx = Self {
@@ -202,6 +261,9 @@ impl CascadeIndex {
             has_webkit_scrollbar_rules,
             has_quote_content,
             pseudo_subjects,
+            pseudo_rules,
+            pseudo_media,
+            pseudo_supports,
         };
         let stats = CascadeIndexStats {
             builds: 1,

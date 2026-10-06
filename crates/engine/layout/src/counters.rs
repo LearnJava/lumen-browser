@@ -129,6 +129,23 @@ pub struct CascadeStyles {
     /// sheet-wide scan can see. Recording what the pass actually produced has no
     /// such hole.
     generated_content: bool,
+    /// BUG-935 срез 90 — whether the pass that filled this cache recorded any
+    /// quote depth. Quote depth is a running document-order counter that a
+    /// skipped subtree cannot advance, so unlike counter snapshots it still
+    /// switches the spine off for the whole pass.
+    quotes_recorded: bool,
+    /// BUG-935 срез 90 — every node that carries a counter snapshot in the pass
+    /// that filled this cache, plus all of its composed-tree ancestors.
+    ///
+    /// A snapshot exists exactly where the counter stacks are non-empty, so a
+    /// subtree outside this set held no `counter-reset`/`-increment`/`-set` and
+    /// no counter in scope: re-walking it can neither record a snapshot nor move
+    /// the stacks, which is what lets the spine skip it even though *another*
+    /// part of the document uses counters. A single `counter-reset` anywhere
+    /// (ria.ru: one `notifications` scope) used to switch the skip off for the
+    /// whole document — every forced flush walked all 6000 nodes to re-cascade
+    /// four.
+    counter_scopes: HashSet<NodeId>,
 }
 
 impl CascadeStyles {
@@ -140,6 +157,8 @@ impl CascadeStyles {
             visited: 0,
             swept: false,
             generated_content: false,
+            quotes_recorded: false,
+            counter_scopes: HashSet::new(),
         }
     }
 
@@ -257,6 +276,12 @@ impl CascadeStyles {
         self.generated_content = any;
     }
 
+    /// Whether the pass that filled this cache recorded a quote depth — see the
+    /// `quotes_recorded` field.
+    pub fn quotes_recorded(&self) -> bool {
+        self.quotes_recorded
+    }
+
     /// The style this cache holds for `id`, if any.
     pub fn get(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
         self.entries.get(id).map(|(style, _, _)| style)
@@ -310,6 +335,8 @@ impl CascadeStyles {
             // document's generated content looks like, so it never licenses the
             // no-op path.
             generated_content: true,
+            quotes_recorded: true,
+            counter_scopes: HashSet::new(),
         }
     }
 }
@@ -550,9 +577,21 @@ impl CounterMap {
     /// Called by both cascade entry points, never by the no-op path itself: that
     /// path did not walk, so it has nothing new to say and must leave the fact
     /// exactly as the pass that did walk left it.
-    fn record_generated_content(&mut self) {
+    fn record_generated_content(&mut self, doc: &Document, flat: &FlatTree) {
         let any = !self.nodes.is_empty() || !self.quotes.is_empty();
         self.styles.note_generated_content(any);
+        // BUG-935 срез 90: which parts of the document held counters, for the
+        // spine's per-subtree licence. The climb stops at the first node already
+        // in the set, so the chains share their tails.
+        self.styles.quotes_recorded = !self.quotes.is_empty();
+        let mut scopes = HashSet::with_capacity(self.nodes.len() * 4);
+        for &id in self.nodes.keys() {
+            let mut cur = Some(id);
+            while let Some(n) = cur.filter(|n| scopes.insert(*n)) {
+                cur = flat.parent_of(doc, n);
+            }
+        }
+        self.styles.counter_scopes = scopes;
     }
 
     /// Hand the carried cascade cache on to the next pass (BUG-341 S24).
@@ -711,7 +750,7 @@ pub fn precompute_counters(
     let t = std::time::Instant::now();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false);
     note_walk_ns(t.elapsed().as_nanos() as u64);
-    map.record_generated_content();
+    map.record_generated_content(doc, flat);
     map
 }
 
@@ -941,21 +980,22 @@ pub fn incremental_precompute_counters(
         // how many entries this one will hold — closer than `node_count`, which
         // counts text and comment nodes too. S24: and it *is* this pass's cache.
         let elements = delta.prev_styles.len();
-        let RestyleDelta { prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty } = delta;
+        let RestyleDelta { mut prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty } = delta;
         // BUG-341 S27: read off the carried cache before it is moved into the
         // map — it is the previous walking pass's report, and the licence to
         // skip depends on it.
-        let prev_generated_content = prev_styles.generated_content();
+        let prev_quotes = prev_styles.quotes_recorded();
+        let prev_counter_scopes = std::mem::take(&mut prev_styles.counter_scopes);
         let spine = restyle_spine(
             doc,
             flat,
             dirty_roots.iter().chain(shallow_roots.iter()).chain(point_roots.iter()).copied(),
             &content_dirty,
             ctx.quotes_possible,
-            prev_generated_content,
+            prev_quotes,
         );
         let map = CounterMap::continuing(prev_styles, elements);
-        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine })
+        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes })
     };
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
@@ -967,7 +1007,7 @@ pub fn incremental_precompute_counters(
         let _prof = lumen_core::profile::scope("cascade_finish_pass");
         map.styles.finish_pass();
     }
-    map.record_generated_content();
+    map.record_generated_content(doc, flat);
     map
 }
 
@@ -994,6 +1034,10 @@ struct IncrRestyle<'a> {
     /// `None` when this pass may not skip anything, which keeps the pre-S27
     /// traversal verbatim — see [`restyle_spine`] for the three conditions.
     spine: Option<HashSet<NodeId>>,
+    /// BUG-935 срез 90 — [`CascadeStyles::counter_scopes`] of the previous pass,
+    /// moved out of the carried cache: the subtrees the spine may not skip
+    /// because they held counters (or sat inside a counter scope).
+    prev_counter_scopes: HashSet<NodeId>,
 }
 
 /// BUG-341 S27 — the part of the document a pass with this delta can possibly
@@ -1029,19 +1073,22 @@ struct IncrRestyle<'a> {
 ///   may have changed", which no spine can narrow.
 /// * **No quote content in the sheet.** `quote_depth` is a running
 ///   document-order counter; a subtree that is not entered cannot advance it.
-/// * **No generated content in the previous pass.** `nodes` and `quotes` are
-///   rebuilt by the walk rather than carried (the S26 licence, for the same
-///   reason): a skipped subtree contributes nothing to them, which is only
-///   equivalent when it would have contributed nothing anyway.
+/// * **No quote depth in the previous pass.** `quotes` is rebuilt by the walk
+///   rather than carried (the S26 licence, for the same reason), and a skipped
+///   subtree contributes nothing to it, which is only equivalent when it would
+///   have contributed nothing anyway. Counter snapshots (`nodes`) are the same
+///   story but decided per subtree — BUG-935 срез 90: [`skip_clean_subtree`]
+///   declines a subtree the previous pass put a snapshot in, so a document with
+///   one `counter-reset` keeps skipping everywhere else.
 fn restyle_spine(
     doc: &Document,
     flat: &FlatTree,
     roots: impl Iterator<Item = NodeId>,
     content_dirty: &ContentDirty<'_>,
     quotes_possible: bool,
-    prev_generated_content: bool,
+    prev_quotes: bool,
 ) -> Option<HashSet<NodeId>> {
-    if !content_dirty.tracked() || quotes_possible || prev_generated_content {
+    if !content_dirty.tracked() || quotes_possible || prev_quotes {
         return None;
     }
     let content: &[NodeId] = match content_dirty {
@@ -1141,6 +1188,10 @@ fn skip_clean_subtree(
         // mutation names exactly that DOM parent.
         || doc.get(child).parent.is_some_and(|p| p != parent && delta.content_dirty.contains(p))
         || !ctx.stacks.is_empty()
+        // BUG-935 срез 90: the previous pass recorded a counter snapshot inside
+        // this subtree (or put the subtree in a counter scope) — walking it again
+        // is what refreshes them.
+        || delta.prev_counter_scopes.contains(&child)
         || !matches!(doc.get(child).data, NodeData::Element { .. })
     {
         return false;
@@ -2867,14 +2918,16 @@ mod tests {
         );
     }
 
-    /// BUG-341 S27 gate: a document that generates content keeps the pre-S27
-    /// traversal, and keeps its counter values.
+    /// BUG-341 S27 gate: the subtrees that hold counters are still walked, and
+    /// keep their counter values.
     ///
     /// `nodes` and `quotes` are rebuilt by the walk rather than carried, and
     /// `quote_depth` is a running document-order counter, so a subtree that is
     /// never entered contributes nothing to either. That is only equivalent
     /// when it would have contributed nothing anyway — the same licence S26
-    /// established, applied per subtree.
+    /// established, applied per subtree. (BUG-935 срез 90: per subtree, not per
+    /// document — a counter-free sibling of the `<ol>` may be skipped, the `<ol>`
+    /// and its `<li>` may not.)
     ///
     /// Both arms: the second is what a "skip everything" regression would fail.
     #[test]
@@ -2887,14 +2940,8 @@ mod tests {
         let target = s27_find(&doc, "ol");
         let mut content = HashSet::new();
         content.insert(target);
-        let (stats, map) = s27_cycle(&doc, &sheet, prev, HashSet::new(), &content);
+        let (_stats, map) = s27_cycle(&doc, &sheet, prev, HashSet::new(), &content);
 
-        assert_eq!(
-            stats.skipped_subtrees, 0,
-            "a document whose previous pass recorded counter snapshots must not skip any subtree \
-             — the snapshots live only in the map the walk builds, so a skipped <li> renders its \
-             `counter()` as nothing",
-        );
         let lis: Vec<NodeId> = s27_all_ids(&doc)
             .into_iter()
             .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
@@ -2906,6 +2953,83 @@ mod tests {
             (Some(1), Some(2), Some(3)),
             "the counter chain must survive a cycle that only touched <ol>",
         );
+    }
+
+    /// BUG-935 срез 90 gate: one counter scope in a document must not switch the
+    /// spine off for the rest of it — and must not cost the scope its values.
+    ///
+    /// Before this slice any snapshot recorded by the previous pass (`nodes`)
+    /// made `restyle_spine` return `None` for the whole pass, so a page with a
+    /// single `counter-reset` (ria.ru: `notifications`) walked all of its ~6000
+    /// nodes on every forced flush to re-cascade four. The licence is now per
+    /// subtree: a subtree the previous pass put no snapshot in (and no snapshot
+    /// scope around) cannot produce one now either, provided the stacks are empty
+    /// where it starts.
+    ///
+    /// Three arms: the counter-free sibling is skipped, the counter subtree is
+    /// still walked and keeps its values, and the output equals a full cascade
+    /// for every node (counter values included).
+    #[test]
+    fn bug935_s90_a_counter_scope_elsewhere_does_not_disable_the_spine() {
+        let vp = Size::new(800.0, 600.0);
+        let doc = lumen_html_parser::parse(
+            "<div id=a><ol><li>a</li><li>b</li></ol></div><div id=b><p id=t>x</p></div>             <div id=c><p>y</p><p>z</p></div>",
+        );
+        let sheet = lumen_css_parser::parse(
+            "ol { counter-reset: n 0; } li { counter-increment: n; } li::before { content: counter(n); }",
+        );
+        let prev = s27_cold(&doc, &sheet);
+        let target = doc.find_by_id("t").expect("fixture must have #t");
+        let mut dirty = HashSet::new();
+        dirty.insert(target);
+        let content = HashSet::new();
+        let (stats, map) = s27_cycle(&doc, &sheet, prev, dirty, &content);
+
+        assert!(
+            stats.skipped_subtrees > 0,
+            "the previous pass recorded counter snapshots in <ol> only; the counter-free <div id=c>              must still be skipped (skipped_subtrees={}, visited={})",
+            stats.skipped_subtrees,
+            stats.visited,
+        );
+        let lis: Vec<NodeId> = s27_all_ids(&doc)
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
+            .collect();
+        let value = |id: NodeId| map.counters(id).and_then(|s| s.get("n")).and_then(|v| v.last()).copied();
+        assert_eq!((value(lis[0]), value(lis[1])), (Some(1), Some(2)), "the counter scope must keep its values");
+
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+        for id in s27_all_ids(&doc) {
+            assert_eq!(map.counters(id), full.counters(id), "counter snapshot differs from the full cascade at {id:?}");
+        }
+    }
+
+    /// BUG-935 срез 90 gate: a counter that leaks forward (`counter-increment`
+    /// with no enclosing reset) puts every later node in scope, so the subtrees
+    /// after it must be walked — the per-position stack check, not the previous
+    /// pass's scope set, is what protects them when nothing in the delta moved.
+    #[test]
+    fn bug935_s90_a_leaking_counter_keeps_later_subtrees_walked() {
+        let vp = Size::new(800.0, 600.0);
+        let doc = lumen_html_parser::parse(
+            "<div id=a><p id=t>x</p></div><div id=b class=k><p>y</p></div><div id=c><p>z</p></div>",
+        );
+        let sheet = lumen_css_parser::parse(".k { counter-increment: m; } p::before { content: counter(m); }");
+        let prev = s27_cold(&doc, &sheet);
+        let target = doc.find_by_id("t").expect("fixture must have #t");
+        let mut dirty = HashSet::new();
+        dirty.insert(target);
+        let content = HashSet::new();
+        let (_stats, map) = s27_cycle(&doc, &sheet, prev, dirty, &content);
+
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+        for id in s27_all_ids(&doc) {
+            assert_eq!(map.counters(id), full.counters(id), "counter snapshot differs from the full cascade at {id:?}");
+        }
+        let c = doc.find_by_id("c").expect("fixture must have #c");
+        assert!(map.counters(c).is_some(), "#c sits after the leaking increment and must keep its snapshot");
     }
 
     // ── Custom counter style tests ────────────────────────────────────────────

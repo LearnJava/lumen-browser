@@ -418,8 +418,12 @@ fn compute_pseudo_element_style_inner(
         _ => &[],
     };
     ensure_cascade_index(sheet, viewport, dark_mode);
+    // BUG-935 срез 90: candidates come from the pseudo-subject indices — rules without a
+    // pseudo-element in a subject cannot match here (`matches_complex_for_pseudo` returns
+    // `None` for them before it looks at the node), and a `@media`/`@supports` block with no
+    // such rule is not visited at all. Indices are the general index's own (same numbering).
     let cands = with_front_cascade_index(|idx| {
-        idx.rules.candidates(node_tag, node_id, &node_classes, node_attrs)
+        idx.pseudo_rules.candidates(node_tag, node_id, &node_classes, node_attrs)
     });
     for rule_idx in cands {
         let rule = &sheet.rules[rule_idx];
@@ -443,66 +447,40 @@ fn compute_pseudo_element_style_inner(
     // "active" precomputed once per (sheet, viewport, dark_mode) rather than
     // re-evaluated on every element (this function runs twice per element,
     // for `::before` and `::after`).
-    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
-    let mut next_rule_idx = sheet.rules.len();
-    for (media_i, media) in sheet.media_rules.iter().enumerate() {
-        if !active_media[media_i] {
-            next_rule_idx += media.rules.len();
-            continue;
-        }
-        let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, &node_classes, node_attrs)
-        });
-        for rule_idx in media_cands {
-            let rule = &media.rules[rule_idx];
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
-                }
-            }
-            if let Some(spec) = best {
-                let global_rule_idx = next_rule_idx + rule_idx;
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
-                }
-            }
-        }
-        next_rule_idx += media.rules.len();
-    }
     // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
-    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
-    for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
-        if !active_supports[supports_i] {
-            next_rule_idx += supports.rules.len();
-            continue;
-        }
-        let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes, node_attrs)
-        });
-        for rule_idx in supports_cands {
-            let rule = &supports.rules[rule_idx];
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
+    with_front_cascade_index(|idx| {
+        let blocks = idx
+            .pseudo_media
+            .iter()
+            .filter(|b| idx.active_media[b.block])
+            .map(|b| (b, &sheet.media_rules[b.block].rules))
+            .chain(
+                idx.pseudo_supports
+                    .iter()
+                    .filter(|b| idx.active_supports[b.block])
+                    .map(|b| (b, &sheet.supports_rules[b.block].rules)),
+            );
+        for (block, rules) in blocks {
+            for rule_idx in block.index.candidates(node_tag, node_id, &node_classes, node_attrs) {
+                let rule = &rules[rule_idx];
+                let mut best: Option<Specificity> = None;
+                for complex in &rule.selectors {
+                    if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                        best = Some(match best {
+                            Some(prev) if prev >= spec => prev,
+                            _ => spec,
+                        });
+                    }
+                }
+                if let Some(spec) = best {
+                    let global_rule_idx = block.base + rule_idx;
+                    for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                        matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
+                    }
                 }
             }
-            if let Some(spec) = best {
-                let global_rule_idx = next_rule_idx + rule_idx;
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
-                }
-            }
         }
-        next_rule_idx += supports.rules.len();
-    }
+    });
 
     if matched.is_empty() {
         // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
