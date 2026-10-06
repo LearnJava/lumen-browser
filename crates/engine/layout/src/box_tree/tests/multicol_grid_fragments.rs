@@ -360,3 +360,21 @@ fn a_column_flex_break_inside_an_item_whose_line_cannot_fit_pushes_the_line_not_
     let r: Vec<(f32, f32, f32)> = v.iter().map(|b| (b.rect.x, b.rect.y, b.rect.height)).collect();
     assert_eq!(r.iter().map(|f| f.2).collect::<Vec<_>>(), vec![47.0, 47.0, 20.0], "{r:?}");
 }
+
+#[test]
+fn an_empty_grid_is_cut_by_its_row_tracks_and_drops_the_gaps_at_the_breaks() {
+    // grid-gap-decorations-fragmentation-016: 13 rows of 10px with a 10px row gap (250px) and no
+    // items, in three 92px columns. Rows end at 10/30/…; the breaks at 92 and 184 fall inside a
+    // track, so every column is cut there (92/92/66px) and keeps its own row tracks.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:10px;width:320px;height:92px} \
+         #g{display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(13,10px);\
+         column-gap:10px;row-gap:10px;row-rule:solid 5px red;column-rule:solid 6px blue}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let h: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
+    assert_eq!(h.len(), 3, "{h:?}");
+    assert!(h[0] > 90.0 && h[1] > 90.0 && h[2] < h[0], "{h:?}");
+}
