@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — thread table amended by [ADR-032](ADR-032-thin-main-thread-scroll-off-ui.md) (chrome UI state moves from Main to a browser thread)
 
 ## Date
 

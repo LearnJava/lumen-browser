@@ -71,6 +71,37 @@ Rules:
    wins, as in Chromium.
 6. Rollback lever `LUMEN_NO_BROWSER_THREAD=1` (same idiom as ADR-029) until the
    default has a live measurement.
+7. **One writer of the offset — the render thread.** Every other source sends it
+   a command instead of writing `scroll_y`: `scroll_to(target, smooth)` /
+   `scroll_by(delta, smooth)` tagged with a monotonically increasing epoch.
+   Today these sources write `scroll_y` on the UI thread directly:
+   - JS `scrollTo`/`scrollBy`/`scrollIntoView` — drained in
+     `about_to_wait.rs:1905`;
+   - keyboard (`keyboard.rs:597`, vim keys `:144`), scrollbar drag
+     (`cursor_moved.rs:195`) and track click (`mouse_input.rs:890`);
+   - find-in-page (`find_bar.rs:87`, `find.rs:136`);
+   - fragment/anchor navigation and scroll restore (`page_load.rs`), bfcache,
+     hibernation, session restore, tab switch;
+   - iframes (`frames.rs`);
+   - scroll anchoring and `scroll-initial-target` (BUG-524, BUG-944);
+   - automation: MCP `AutomationCommand::Scroll` (`about_to_wait.rs:966`) and
+     `InputCommand::Scroll` (`:1347`).
+
+   The browser thread updates its own copy optimistically when it issues a
+   command, so `scrollY` read right after `scrollTo` returns the new value
+   (CSSOM View; BUG-949 already shows ~500 ms lag). Feedback carrying an older
+   epoch is dropped and never overwrites a newer programmatic target.
+8. Scroll-chain, snap and `overscroll-behavior` resolution
+   (`resolve_scroll_chain_target`, `lumen/scrolling.rs:31`, `:511`) become pure
+   functions over `ScrollSnapshot`, so the main thread (wheel) and the browser
+   thread (keyboard, programmatic scroll) use the same code and give the same
+   answers.
+9. `ScrollSnapshot` reserves a field for regions with a non-passive `wheel`
+   listener (BUG-865). JS `wheel` events are not dispatched today. Once they are,
+   a wheel over such a region goes to the browser thread and waits for
+   `preventDefault`, as in Chromium; everywhere else it stays on the fast path.
+10. `background-attachment: fixed` keeps today's fallback: the band compositor
+    renders directly (`CAPABILITIES.md` §backgrounds). It is not pinned by rule 4.
 
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
@@ -109,9 +140,14 @@ Work item: `ROADMAP.md` THREAD-13. Slices, in order:
   events, scroll timelines) lag by at least one frame. A wheel over a
   container added since the last snapshot scrolls its ancestor for up to one
   commit. Every `ActiveEventLoop` operation becomes an asynchronous request.
-  Debugging spans one more thread. JS `wheel` events are not dispatched today;
-  when they are, non-passive listeners need Chromium's model (block scroll only
-  when such a listener exists in the hit region).
+  Debugging spans one more thread. Offsets keyed by scroll-layer id must
+  survive a relayout; a fresh layout tree that resets offsets to 0 is a known
+  failure mode (BUG-1215). Once slice 3 lands, the MCP `scroll` round-trip used
+  by BUG-935 and by `input_perf.py`/`scroll_perf.py`/`mt_stall_bench.py`
+  measures the command path, not the user's wheel. The wheel metric is THREAD-5
+  (`SendInput`).
+- **Amends:** the ADR-016 thread table — chrome UI state moves from Main to the
+  browser thread.
 - **Future:** close THREAD-13 when THREAD-5 metrics with a busy engine are not
   worse than Chromium on ria/lenta/rbc and idle CPU stays ~0% (ADR-016
   invariant 6). Then remove `LUMEN_NO_BROWSER_THREAD` after one release, as
