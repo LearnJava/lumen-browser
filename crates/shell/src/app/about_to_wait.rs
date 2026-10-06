@@ -529,8 +529,12 @@ impl Lumen {
         // commit — arm a short poll deadline. Bounded by the always-landing newest
         // job (coalescing) so this clears promptly. A future slice can replace this
         // with an `EventLoopProxy` wake on commit.
+        // THREAD-9 срез 6: клик ждёт ответа движка («не отменён ли») — тот же
+        // короткий опрос, пока `click_proceed_inbox` не заберут.
         if self.engine_thread.is_some()
-            && self.engine_job_generation != self.engine_applied_generation
+            && (self.engine_job_generation != self.engine_applied_generation
+                || !self.pending_clicks.is_empty()
+                || !self.pending_submits.is_empty())
         {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(4);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
@@ -1977,6 +1981,8 @@ impl Lumen {
         // Executed after the initial page render so the user sees something
         // before the redirect completes (matches browser behaviour).
         self.collect_js_nav_inbox();
+        self.collect_js_url_inbox();
+        self.collect_click_proceed();
         if let Some(nav) = self.pending_js_navigate.take() {
             match nav {
                 JsNavigateRequest::Push(url) => {
@@ -1987,10 +1993,7 @@ impl Lumen {
                     // session-history entry), regardless of whether it was
                     // assigned via `location.href=` (push) or `.replace()`.
                     if let Some(code) = javascript_url_code(&url) {
-                        if let Some(html) = self.eval_javascript_url(code) {
-                            let current = self.current_display_url().to_owned();
-                            self.navigate_replace(PageSource::Static { html, url: current });
-                        }
+                        self.queue_javascript_url(code);
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
                         match resolve_js_navigation(&resolved, &self.source) {
@@ -2002,10 +2005,7 @@ impl Lumen {
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
                     if let Some(code) = javascript_url_code(&url) {
-                        if let Some(html) = self.eval_javascript_url(code) {
-                            let current = self.current_display_url().to_owned();
-                            self.navigate_replace(PageSource::Static { html, url: current });
-                        }
+                        self.queue_javascript_url(code);
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         match resolve_js_navigation(&resolved, &self.source) {
                             Ok(source) => self.navigate_replace(source.with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""))),

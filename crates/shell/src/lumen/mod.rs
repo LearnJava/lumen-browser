@@ -13,7 +13,7 @@ mod animated_computed_style;
 mod animation_events;
 mod automation;
 mod bfcache;
-mod click;
+pub(crate) mod click;
 mod content_visibility;
 mod cursor;
 mod docking;
