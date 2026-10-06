@@ -3,6 +3,7 @@
 **Статус:** OPEN (DEBTOR)
 **Компонент:** shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`, `relayout_raf_dirty_readback`, `submit_relayout_job`, `try_relayout_raf_incremental`)
 **Найден:** 2026-09-01 (P3), при ревизии BUG-286 (DEBTOR, `content-visibility:auto` scroll stopor) — свежий живой замер на ria.ru показал не одну паузу ~580мс, а 33 полных off-thread relayout'а (по 850–2600мс каждый) за ~15–20с сессии, все при неизменном `dl=1690 styled=1744` (без роста DOM)
+**Выделено 2026-10-06 (решение пользователя):** остаток по потокам — `apply_relayout_result` на UI, рестайл M4 на UI-потоке (S85), блокирующие `route_query_js`, `build: chrome`, копия display list на кадр, прокрутка колесом вне рендер-потока, тайловый растр — заведён задачами [THREAD-5…THREAD-12](../ROADMAP.md) в очереди P6 (`STATUS-P6.md`). Срезы BUG-935 их не берут; здесь остаётся каскад и флаши.
 
 ## Симптом
 
