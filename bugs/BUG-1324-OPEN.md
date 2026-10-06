@@ -30,3 +30,7 @@ WPT-RUN-14 срез 9: `css/css-text/hyphens/` (48 не зелёных id из 5
 ## Как проверить
 
 `css/css-text/hyphens/hyphens-manual-011.html`, `hyphens-auto-002.html`; `word-break`-тесты — в срезе S10; проба выше (`--dump-layout`).
+
+## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
+
+`word-break/word-break-break-all-*` — 37 не зелёных id (30 в `word-break-break-all-0NN`, 9 `-inline-*`; 10 из них с `pre-wrap`). Проба: `width: 100px; word-break: break-all`, `aaaa…` (28 символов) — одна строка (высота 24,2); `xx aaaa…` — слово после пробела режется (3 строки, 96,8). Тот же дефект, что в основном описании.

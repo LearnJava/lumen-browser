@@ -27,3 +27,7 @@ WPT-RUN-14 срез 9: `css/css-text/i18n/css3-text-line-break-baspglwj-*` (113 
 ## Как проверить
 
 `css/css-text/i18n/css3-text-line-break-baspglwj-001.html` (сабтесты `white-space:pre-wrap`/`break-spaces`); проба выше одной страницей с тремя `div`.
+
+## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
+
+Проба на другой выборке: `width: 100px; white-space: pre-wrap`, `<i>aaaaaa</i> <i>bbbbbb</i> <i>cc</i>` — три слова на одной строке (x = 0 / 67 / 141); `日本語×6` в `pre-wrap` — одна строка (высота 24,2), в `normal` — три. В `white-space/`, `word-break/`, `text-transform/` и остальных каталогах второй половины 276 из 654 не зелёных id содержат `pre-wrap`/`break-spaces`/`white-space-collapse`/`text-wrap-mode`/`<textarea>` (по тексту, не по причине). Часть `break-spaces-newline-*`/`pre-wrap-018` падает по другой причине — [BUG-1327](BUG-1327-OPEN.md).
