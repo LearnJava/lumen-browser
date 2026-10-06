@@ -53,6 +53,7 @@ mod nav_history;
 mod no_paint_backend;
 mod page_source;
 mod page_state;
+mod present_log;
 mod parallel_fetch;
 mod resource_base;
 mod css_url_rebase;
