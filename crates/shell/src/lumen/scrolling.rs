@@ -589,6 +589,7 @@ impl Lumen {
         // Инстант-путь cancel-ит активную анимацию — мы только что
         // *приказали* быть в конкретной точке.
         self.scroll_anim = None;
+        self.forward_momentum_stop();
         let clamped = clamp_scroll(target, self.max_scroll());
         if (clamped - self.scroll_y).abs() > f32::EPSILON {
             self.scroll_y = clamped;
@@ -608,6 +609,7 @@ impl Lumen {
         let target_clamped = self.apply_page_y_snap(target_clamped);
         if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
             self.scroll_anim = None;
+            self.forward_momentum_stop();
             return;
         }
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
@@ -616,6 +618,11 @@ impl Lumen {
             target_y: target_clamped,
             start_time_ms: now_ms,
         });
+        // THREAD-6: кривую ведёт и рендер-поток — кадры не пропадут, пока UI занят.
+        let start_y = self.scroll_y;
+        if let Some(r) = self.renderer.as_mut() {
+            r.start_render_scroll_anim(start_y, target_clamped);
+        }
         self.request_redraw();
     }
 
