@@ -613,13 +613,16 @@ impl Lumen {
             return;
         }
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        // THREAD-6: пока UI занят, `scroll_y` устарел, а идущая кривая уже
+        // продвинулась (её ведёт рендер-поток) — новая стартует из её текущей
+        // точки, иначе серия щелчков откатывала бы страницу назад.
+        let start_y = self.scroll_anim.as_ref().map_or(self.scroll_y, |a| a.sample(now_ms).0);
         self.scroll_anim = Some(scroll_anim::ScrollAnim {
-            start_y: self.scroll_y,
+            start_y,
             target_y: target_clamped,
             start_time_ms: now_ms,
         });
         // THREAD-6: кривую ведёт и рендер-поток — кадры не пропадут, пока UI занят.
-        let start_y = self.scroll_y;
         if let Some(r) = self.renderer.as_mut() {
             r.start_render_scroll_anim(start_y, target_clamped);
         }
