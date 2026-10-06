@@ -491,6 +491,7 @@ impl Lumen {
     pub(crate) fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
         let Some(src) = self.layout_source.as_ref() else { return };
         let mut ancestor = src.document.lock().unwrap().get(node).parent;
+        let mut moved: Vec<u32> = Vec::new();
         while let Some(n) = ancestor {
             let Some(c) = self.scroll_containers.iter().find(|c| c.node == n) else {
                 ancestor = src.document.lock().unwrap().get(n).parent;
@@ -509,10 +510,14 @@ impl Lumen {
                 && let Some(lb) = self.layout_box.as_mut()
             {
                 set_scroll_position(lb, n, c.scroll_x, new_scroll_y);
+                moved.push(n.index() as u32);
             }
             ancestor = src.document.lock().unwrap().get(n).parent;
         }
         self.update_scroll_containers();
+        if !moved.is_empty() {
+            self.issue_container_scroll_command(&moved);
+        }
     }
 
     /// Apply CSS Scroll Snap L1 to a proposed page-level Y scroll offset.
