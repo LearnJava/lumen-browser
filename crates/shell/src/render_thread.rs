@@ -102,7 +102,7 @@ const MOMENTUM_TICK: Duration = Duration::from_millis(16);
 /// поток рисует независимо от main (ADR-016 инвариант 1).
 struct FrameCommit {
     /// Команды страницы (уже с применённым scroll на стороне рендера).
-    content: Vec<DisplayCommand>,
+    content: Arc<Vec<DisplayCommand>>,
     /// Команды поверх страницы (tab bar, панели, pop-up'ы).
     overlay: Vec<DisplayCommand>,
     /// Текущий вертикальный скролл в CSS px.
@@ -196,6 +196,12 @@ pub struct ThreadedRenderBackend {
     supports_page_offset: bool,
     /// Монотонный счётчик кадров.
     commit_counter: u64,
+    /// Версия retained-списка, объявленная `set_content_epoch` для ближайшего
+    /// кадра; `0` — список производный, версии нет. Гасится после `render`.
+    content_epoch: u64,
+    /// Последний переданный рендер-потоку контент с его версией (THREAD-8):
+    /// пока версия не сменилась, кадр делит тот же `Arc`, без копии списка.
+    sent_content: Option<(u64, Arc<Vec<DisplayCommand>>)>,
 }
 
 impl ThreadedRenderBackend {
@@ -247,6 +253,8 @@ impl ThreadedRenderBackend {
             phys_h: caps.phys_h,
             supports_page_offset: caps.supports_page_offset,
             commit_counter: 0,
+            content_epoch: 0,
+            sent_content: None,
         })
     }
 
@@ -267,8 +275,24 @@ impl RenderBackend for ThreadedRenderBackend {
     ) -> Result<(), RenderError> {
         self.commit_counter = self.commit_counter.wrapping_add(1);
         // Владеющий снапшот кадра — рендер-поток рисует его независимо от main.
+        // THREAD-8: версия retained-списка не изменилась — рендер-поток уже
+        // держит этот же список, копировать его заново (O(команд) на UI в
+        // каждом кадре прокрутки) незачем. Версия бампается при каждой правке
+        // списка на месте (`bump_display_list_epoch`); длину сверяем как
+        // страховку от рассинхрона.
+        let epoch = std::mem::take(&mut self.content_epoch);
+        let content = match &self.sent_content {
+            Some((e, arc)) if epoch != 0 && *e == epoch && arc.len() == content.len() => {
+                Arc::clone(arc)
+            }
+            _ => {
+                let arc = Arc::new(content.to_vec());
+                self.sent_content = (epoch != 0).then(|| (epoch, Arc::clone(&arc)));
+                arc
+            }
+        };
         let frame = FrameCommit {
-            content: content.to_vec(),
+            content,
             overlay: overlay.to_vec(),
             scroll_y,
             scroll_x,
@@ -277,6 +301,10 @@ impl RenderBackend for ThreadedRenderBackend {
         self.send(RenderMsg::Frame(frame));
         // Fire-and-forget latest-wins: main не ждёт present (ADR-016 инвариант 4).
         Ok(())
+    }
+
+    fn set_content_epoch(&mut self, epoch: u64) {
+        self.content_epoch = epoch;
     }
 
     fn set_preview_scale(&mut self, scale: f32) {
@@ -453,7 +481,7 @@ struct RenderMomentum {
 /// UI-поток застопорился и новых кадров нет.
 struct RenderState {
     /// Последний закоммиченный контент страницы (для повторной презентации).
-    last_content: Vec<DisplayCommand>,
+    last_content: Arc<Vec<DisplayCommand>>,
     /// Последний закоммиченный overlay.
     last_overlay: Vec<DisplayCommand>,
     /// Вертикальный скролл последнего кадра — якорь momentum.
@@ -477,7 +505,7 @@ impl RenderState {
     /// Пустое состояние: кадров ещё не было, momentum неактивен.
     fn new() -> Self {
         Self {
-            last_content: Vec::new(),
+            last_content: Arc::new(Vec::new()),
             last_overlay: Vec::new(),
             anchor_scroll_y: 0.0,
             anchor_scroll_x: 0.0,
@@ -755,12 +783,42 @@ mod tests {
 
     fn frame(commit_id: u64) -> RenderMsg {
         RenderMsg::Frame(FrameCommit {
-            content: Vec::new(),
+            content: Arc::new(Vec::new()),
             overlay: Vec::new(),
             scroll_y: 0.0,
             scroll_x: 0.0,
             commit_id,
         })
+    }
+
+    fn fill() -> DisplayCommand {
+        DisplayCommand::FillRect {
+            rect: lumen_core::geom::Rect::new(0.0, 0.0, 1.0, 1.0),
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+        }
+    }
+
+    #[test]
+    fn same_content_epoch_shares_snapshot_without_copy() {
+        let mut b = ThreadedRenderBackend::new(|| {
+            Ok(Box::new(crate::no_paint_backend::NoPaintBackend::new(100, 100, 1.0))
+                as Box<dyn RenderBackend>)
+        })
+        .expect("spawn");
+        let list = vec![fill(), fill()];
+        b.set_content_epoch(5);
+        b.render(&list, &[], 0.0, 0.0).unwrap();
+        let first = Arc::clone(&b.sent_content.as_ref().unwrap().1);
+        b.set_content_epoch(5);
+        b.render(&list, &[], 10.0, 0.0).unwrap();
+        assert!(Arc::ptr_eq(&first, &b.sent_content.as_ref().unwrap().1));
+        // Новая версия — новый снимок.
+        b.set_content_epoch(6);
+        b.render(&list, &[], 10.0, 0.0).unwrap();
+        assert!(!Arc::ptr_eq(&first, &b.sent_content.as_ref().unwrap().1));
+        // Версия не объявлена (производный список) — копия, кэша нет.
+        b.render(&list, &[], 10.0, 0.0).unwrap();
+        assert!(b.sent_content.is_none());
     }
 
     #[test]
@@ -847,10 +905,10 @@ mod tests {
         let backend: Box<dyn RenderBackend> =
             Box::new(crate::no_paint_backend::NoPaintBackend::new(100, 100, 1.0));
         let mut state = RenderState::new();
-        state.last_content = vec![DisplayCommand::FillRect {
+        state.last_content = Arc::new(vec![DisplayCommand::FillRect {
             rect: lumen_core::geom::Rect::new(0.0, 0.0, 1.0, 1.0),
             color: Color { r: 0, g: 0, b: 0, a: 255 },
-        }];
+        }]);
         (backend, state)
     }
 
