@@ -98,7 +98,6 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
         && [&s.padding_top, &s.padding_bottom, &s.padding_left, &s.padding_right]
             .iter()
             .all(|p| matches!(p, Length::Px(v) if *v == 0.0))
-        && b.children.iter().any(|c| !matches!(c.kind, BoxKind::Skip))
         && b.children.iter().all(|c| {
             matches!(c.kind, BoxKind::Skip)
                 || matches!(c.style.position, Position::Absolute | Position::Fixed)
