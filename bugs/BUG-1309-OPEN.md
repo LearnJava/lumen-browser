@@ -31,3 +31,7 @@ WPT-RUN-14 срез 7: `child-border-box-and-max-content-001/002.html`, `grid-it
 ## Как проверить
 
 `css/css-grid/child-border-box-and-max-content-001.html`, `grid-items/aspect-ratio-001.html`, `grid-definition/grid-auto-repeat-aspect-ratio-001.html`.
+
+## Дополнение: WPT-RUN-14 срез 8 (2026-10-06, `css/css-grid`, часть 2)
+
+Тот же механизм (intrinsic-размер ребёнка с `aspect-ratio` и `%`-высотой) у пяти reftest: `layout-algorithm/grid-fit-content-width-percent-height-aspect-ratio-001.html`, `grid-float-intrinsic-width-percent-height-aspect-ratio-001.html`, `grid-inline-grid-intrinsic-width-percent-height-aspect-ratio-001.html`, `grid-max-content-width-percent-height-aspect-ratio-001.html`, `grid-min-content-width-percent-height-aspect-ratio-001.html` — все thick. Причина не проверена пробой: отнесены по имени файла и по тому, что в них `aspect-ratio` в grid-контейнере с intrinsic-шириной.

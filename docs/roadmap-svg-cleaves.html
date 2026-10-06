@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-06",
  "counts": {
-  "open": 189,
+  "open": 196,
   "fixed": 1063,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1254,
+ "total_bugs": 1261,
  "phases": [
   {
    "id": "P0",
@@ -622,6 +622,13 @@
      "bugs": [
       "BUG-1304"
      ]
+    },
+    {
+     "id": "GRID-LANES",
+     "title": "GRID-LANES: display: grid-lanes",
+     "status": "planned",
+     "size": "L",
+     "note": "`display: grid-lanes` (CSS Grid L3, бывший `masonry`): раскладка по полосам (lanes) — элементы без явного места падают в самую короткую полосу, `flow-tolerance`, `grid-lanes-direction`, `grid-lanes-pack`, шорткат `grid-lanes`, `grid-template-columns/rows` на одной оси и `masonry`-ключевое слово на другой, `subgrid` в grid-lanes, abspos, baseline, `order`, intrinsic sizing. Сейчас значение разбирается без ошибки, но `getComputedStyle(el).display` отдаёт `block`, и контейнер раскладывается как блок: проба — `display:grid-lanes; grid-template-columns:100px 100px; gap:10px; width:300px` с четырьмя детьми 50/30/20/20 даёт детей друг под другом шириной 300. `masonry.rs` (waterfall) лежит неподключённым; решение «masonry — запасной вариант обычной сетки по образцу Edge» (CSS-SPECS.md:508, BUG-105/143) принято до переименования в `grid-lanes` и требует подтверждения пользователя перед стартом. Замер WPT-RUN-14 S8 (2026-10-06): `css/css-grid/grid-lanes` — 884 id, 124 зелёных случайно (раскладка блока совпала с эталоном), 760 не зелёных: 669 reftest (666 thick) и 91 testharness (1 193 сабтеста). По подкаталогам не зелёные / всего: `subgrid` 180/226, `track-sizing` 173/196, `alignment` 88/97, `intrinsic-sizing` 60/69, `item-placement` 64/67, `tentative` 60/64, `baseline` 40/40. Часть testharness-провалов — `getComputedStyle` (BUG-1307) и разбор (BUG-1315), не раскладка; свойства `flow-tolerance`/`grid-lanes-*` — P4 (`CSS-SPECS.md:508`). Критерий готовности: `display: grid-lanes` вычисляется как есть, четыре базовых reftest из `grid-lanes/track-sizing` зелёные, остаток по подкаталогам разобран заново"
     }
    ],
    "date": "2026-06"
@@ -5920,9 +5927,9 @@
       {
        "id": "WPT-RUN-14-S8",
        "title": "WPT-RUN-14-S8: css-grid часть 2",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон второй половины css/css-grid (grid-lanes, grid-model, layout-algorithm, parsing, placement, subgrid и др., около 1220 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон второй половины css/css-grid (grid-lanes, grid-model, layout-algorithm, parsing, placement, subgrid и др., около 1220 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-06 (ветка `p2-wpt-run14-s8`): 1222 automatable id, 19.66 % (reftest 181/974, testharness 2015/5195 сабтестов, crashtest 21/22), 180 с, «no leak». 998 не зелёных id разнесены на 20 кластеров (`docs/wpt-vendor-notes/css.md` §css-grid, часть 2). Главное: 760 id (76 %) лежат в `grid-lanes/` — `display: grid-lanes` движок не знает (вычисляется в `block`), заведено `GRID-LANES` (P1). Остальное: BUG-1314 (`min-*`/`max-*` высота flex/grid-контейнера не применяется, 5 id), BUG-1315 (невалидное `style.<grid-prop>` не отклоняется, 12 id / 338 сабтестов), BUG-1316 (у живого `document` нет `children`/`childElementCount`, 3 id), BUG-1317 (shrink-to-fit grid с элементом, размещённым по имени, 10 id), BUG-1318 (subgrid не передаёт вклад элементов в авто-дорожки родителя, 41 id), BUG-1319 (subgrid не наследует имена линий родителя, 20 id), BUG-1320 (`repeat(1000, …)` × 100 000 — 12,4 ГБ и 20 с, RSS-кап убивает процесс); `getComputedStyle` (46 id / 1 005 сабтестов) — в BUG-1307, Ahem-измерения (23 id) — в BUG-1306; baseline/orthogonal/abspos в subgrid уже в очереди P1 (`GRID-BASELINE-2`, `GRID-VWM-2`, `GRID-ABSPOS`). Не разобрано 26 id («прочее») и 6 `::first-letter`/`::first-line`. Движок не менялся"
       },
       {
        "id": "WPT-RUN-14-S9",
@@ -7628,7 +7635,7 @@
        "title": "THREAD-6: прокрутка колесом в рендер-потоке",
        "status": "planned",
        "size": "L",
-       "note": "Прокрутка колесом и её анимация — в рендер-потоке, без участия UI-потока (ADR-016, инварианты 3–4). Сейчас `mouse_wheel.rs:206` → `scroll_by_smooth` (`scrolling.rs:627`) меняет `scroll_y`/`scroll_anim` на winit-потоке, а шаги анимации продвигает `RedrawRequested` (`advance_scroll_anim`) — пока UI-поток занят (`apply_relayout_result`, рестайл M4 51–86 мс на lenta.ru), кадры анимации пропускаются, отсюда рывки. Инерция тачпада уже продолжается в рендер-потоке (M1.3, `render_thread.rs:63-79`), но `LineDelta` колеса мыши её сбрасывает (`mouse_wheel.rs:171`). Цель: UI-поток только пересылает дельту, смещение и кривую анимации щелчка по vsync ведёт рендер-поток поверх готового display list и полосы растра; событие `scroll` в JS и sticky/fixed-слои догоняют асинхронно (последнее значение побеждает). Критерий — метрики THREAD-5 на ria/lenta/rbc не хуже Chromium при занятом движке. Срезы 1–2 (кривая щелчка и серия в рендер-потоке) влиты; срез 3 — `body{overflow-y:scroll}` больше не перехватывает колесо (`collect_page_scroll_containers`), lenta.ru теперь реально прокручивается и упирается в кадры UI 160–314 мс (журнал 2026-10-06); срез 4 — тик рендер-потока отсчитывается от начала прошлой работы, а не от конца (раньше `recv_timeout` после блокирующего на vsync `render` давал шаг ~30 мс, т.е. каждый второй vsync пропущен): lenta.ru «в срок» 0,15→0,42–0,50, кадров 110→87–145; срез 6 — пока идёт кривая щелчка, `scroll_y` кадра UI переопределяется кривой рендер-потока (`frame_scroll_y`), устаревший кадр не тащит страницу назад; не замерено вживую; остаток — перенос обработки колеса и события `scroll` с UI-потока (ввод по-прежнему принимает winit-поток), стопоры UI-кадра 55–80 мс в фазе `js` (rAF/SMIL `smil.rs:28`/рестайл `relayout.rs:1512` ждёт движок на UI-потоке, это THREAD-7/10/11) и смещение/`scroll`-события без UI-потока."
+       "note": "Прокрутка колесом и её анимация — в рендер-потоке, без участия UI-потока (ADR-016, инварианты 3–4). Сейчас `mouse_wheel.rs:206` → `scroll_by_smooth` (`scrolling.rs:627`) меняет `scroll_y`/`scroll_anim` на winit-потоке, а шаги анимации продвигает `RedrawRequested` (`advance_scroll_anim`) — пока UI-поток занят (`apply_relayout_result`, рестайл M4 51–86 мс на lenta.ru), кадры анимации пропускаются, отсюда рывки. Инерция тачпада уже продолжается в рендер-потоке (M1.3, `render_thread.rs:63-79`), но `LineDelta` колеса мыши её сбрасывает (`mouse_wheel.rs:171`). Цель: UI-поток только пересылает дельту, смещение и кривую анимации щелчка по vsync ведёт рендер-поток поверх готового display list и полосы растра; событие `scroll` в JS и sticky/fixed-слои догоняют асинхронно (последнее значение побеждает). Критерий — метрики THREAD-5 на ria/lenta/rbc не хуже Chromium при занятом движке. Срезы 1–2 (кривая щелчка и серия в рендер-потоке) влиты; срез 3 — `body{overflow-y:scroll}` больше не перехватывает колесо (`collect_page_scroll_containers`), lenta.ru теперь реально прокручивается и упирается в кадры UI 160–314 мс (журнал 2026-10-06); срез 4 — тик рендер-потока отсчитывается от начала прошлой работы, а не от конца (раньше `recv_timeout` после блокирующего на vsync `render` давал шаг ~30 мс, т.е. каждый второй vsync пропущен): lenta.ru «в срок» 0,15→0,42–0,50, кадров 110→87–145; срез 6 — пока идёт кривая щелчка, `scroll_y` кадра UI переопределяется кривой рендер-потока (`frame_scroll_y`), устаревший кадр не тащит страницу назад; не замерено вживую; остаток — перенос обработки колеса и события `scroll` с UI-потока (ввод по-прежнему принимает winit-поток), стопоры UI-кадра 55–80 мс в фазе `js` (rAF/SMIL `smil.rs:28`/рестайл `relayout.rs:1512` ждёт движок на UI-потоке, это THREAD-7/10/11) и смещение/`scroll`-события без UI-потока. Срез 8 (перенос hit-test колеса и копия списка скроллеров в рендер-поток) разобран и отклонён 2026-10-06: событие приходит только в winit-поток, поэтому пока тот стоит в `apply_relayout_result`/ожидании движка, перенос решения «какой скроллер под курсором» (микросекунды, `mouse_wheel.rs:10`) задержку не меняет, а прокрутка overflow-контейнера правит display list и `layout_box` UI-потока (`scrolling.rs:57`) — вторая копия дерева слоёв разойдётся с первой. Остаток — **отдельная задача с ADR**: ввод вне UI-потока (собственный поток оконного цикла/Win32 message pump, передача событий рендер-потоку), плюс снятие стопоров UI-кадра (THREAD-7/10/11). THREAD-6 в рамках текущей постановки исчерпана."
       },
       {
        "id": "THREAD-7",
@@ -9167,6 +9174,55 @@
    "status": "open",
    "title": "`space-evenly`/`space-around` при переполнении центрирует небезопасно (ребёнок 100 в контейнере 50 → y = −17, ожидается 0); `minmax(auto, 0px)` не поднимает тре…",
    "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — выравнивание контента и размер трека)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1314": {
+   "status": "open",
+   "title": "`min-height`/`min-block-size`/`max-height`/`max-block-size` у flex- и grid-контейнера с `height: auto` или заданной `height` не применяются: `display:grid; min-…",
+   "component": "layout (`crates/engine/layout/src/box_tree/flex.rs`, `grid.rs` — высота flex-/grid-контейнера не проходит через min/max-height)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1315": {
+   "status": "open",
+   "title": "`element.style.<grid-longhand> = <невалидное значение>` принимается и отдаётся обратно: `gridTemplateColumns = \"-10px\"`, `\"10px 10pxx\"`, `gridAutoFlow = \"row ro…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — для grid-свойств грамматики нет, значение проходит как есть)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1316": {
+   "status": "open",
+   "title": "`document.children`, `document.childElementCount`, `document.firstElementChild`, `document.lastElementChild` у живого документа — `undefined` (у `documentElemen…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — у живого `document` нет `ParentNode`-аксессоров; у отсоединённого документа (`:5211`) они есть)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1317": {
+   "status": "open",
+   "title": "`inline-grid`/`float`/`abspos`/`width:max-content` с явными px-дорожками и **хотя бы одним** элементом, размещённым по имени (`grid-area: a`, `grid-column: x`),…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs`, `intrinsic.rs` — shrink-to-fit ширина контейнера с элементами, размещёнными по имени линии/области)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1318": {
+   "status": "open",
+   "title": "элементы subgrid не дают вклада в авто-дорожки родительской сетки: `inline-grid` с `grid-template-columns:auto auto` и subgrid `grid-column:1/3` с двумя детьми…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs`, subgrid — вклад элементов subgrid в размеры авто-дорожек родителя)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1319": {
+   "status": "open",
+   "title": "auto-fit)` перед/после subgrid-имён)",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs`, subgrid — имена линий родителя, `repeat(auto-fill",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1320": {
+   "status": "open",
+   "title": "`grid-template-columns` из 100 000 повторов `repeat(1000, Npx)` (100 млн дорожек) раскладывается 20,5 с и занимает 12,4 ГБ пика (`--dump-layout`); в wptrunner п…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — разбор `grid-template-columns` без верхней границы числа дорожек)",
    "date": null,
    "debtor": false
   },
@@ -16753,6 +16809,9 @@
   "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — `FlexWrap`)": [
    "BUG-1259"
   ],
+  "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — разбор `grid-template-columns` без верхней границы числа дорожек)": [
+   "BUG-1320"
+  ],
   "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\": [
    "BUG-521"
   ],
@@ -17257,6 +17316,9 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js::Element.scrollIntoView`, `_lumen_align_scroll`) + layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-962"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — для grid-свойств грамматики нет, значение проходит как есть)": [
+   "BUG-1315"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_make_shadow_root`)": [
    "BUG-877"
   ],
@@ -17340,6 +17402,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)": [
    "BUG-929"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — у живого `document` нет `ParentNode`-аксессоров; у отсоединённого документа (`:5211`) они есть)": [
+   "BUG-1316"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — фабрики коллекций `getElementsByTagName`/`getElementsByClassName`/`querySelectorAll`/`children`)": [
    "BUG-994"
@@ -17897,6 +17962,9 @@
   "layout (`crates/engine/layout/src/box_tree/flex.rs` — распределение свободного места при сумме `flex-grow`/`flex-shrink` < 1)": [
    "BUG-1260"
   ],
+  "layout (`crates/engine/layout/src/box_tree/flex.rs`, `grid.rs` — высота flex-/grid-контейнера не проходит через min/max-height)": [
+   "BUG-1314"
+  ],
   "layout (`crates/engine/layout/src/box_tree/flex_trampoline.rs` — `align_abs_static_positions`)": [
    "BUG-1251"
   ],
@@ -17914,6 +17982,15 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/grid.rs` — выравнивание контента и размер трека)": [
    "BUG-1313"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs`, `intrinsic.rs` — shrink-to-fit ширина контейнера с элементами, размещёнными по имени линии/области)": [
+   "BUG-1317"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs`, subgrid — вклад элементов subgrid в размеры авто-дорожек родителя)": [
+   "BUG-1318"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs`, subgrid — имена линий родителя, `repeat(auto-fill": [
+   "BUG-1319"
   ],
   "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)": [
    "BUG-644"
