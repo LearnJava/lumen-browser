@@ -34,7 +34,7 @@ window, independent of the browser's own automation surface) ran alongside a liv
 - The main thread, when it appears in the per-sample top-CPU-consumer list, burns
   **734 ms of CPU per second of wall time during a hang** against **172 ms/s** in
   normal samples — i.e. a hang is a long *synchronous* task on the UI thread, not a
-  mutex wait or an idle stall (full write-up: `bugs/BUG-988-OPEN.md`,
+  mutex wait or an idle stall (full write-up: `bugs/BUG-988-FIXED.md`,
   `docs/perf/metrics.md` 2026-09-04 entry).
 
 ## Decision
@@ -132,12 +132,12 @@ live window either way).
 **Explicitly out of scope**
 
 - BUG-988 (a worker thread pinning a full core, survives navigation) — filed
-  separately, still open.
+  separately (fixed 2026-09-05).
 - TEST-150/151/155 pixel `FAIL`s — pre-existing, confirmed unrelated by the
   byte-identical delta above.
 - One crash during the flag-on measurement window (Outlook, `dom/lib.rs:706:20`,
   `index out of bounds: len 143, index 190`) — the same signature already on
-  record in `bugs/BUG-988-OPEN.md`'s observation writeup as a `NodeId`-crosses-
+  record in `bugs/BUG-988-FIXED.md`'s observation writeup as a `NodeId`-crosses-
   document candidate, not a new defect introduced by this ADR.
 
 ## Alternatives considered
@@ -154,7 +154,7 @@ live window either way).
 
 - ADR-016 — multithreaded render pipeline (the mandate and M0–M4 staging)
 - ADR-023 — engine thread default flip (the idiom this ADR reuses)
-- `bugs/BUG-988-OPEN.md` — the spin-thread finding from the same observation window
+- `bugs/BUG-988-FIXED.md` — the spin-thread finding from the same observation window
 - `docs/perf/metrics.md` 2026-09-04 entry — THREAD-0 waterfall + observation writeup
 - `docs/perf-method.md` — counter/identity-over-wall-clock acceptance rule
 - `ROADMAP.md` THREAD-1 row — full slice history
