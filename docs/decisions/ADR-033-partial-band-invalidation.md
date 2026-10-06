@@ -128,3 +128,12 @@ transform / scroll / sticky / fixed group has a **local** `cull_rect`, so a
 change inside such a group falls back to the full band even when the group's
 own commands are unchanged (they sit in the common prefix/suffix, not in the
 window). Only clip, opacity and blend groups are extent-bounded.
+
+### Slice 2 result (2026-10-06)
+
+`PageBandCache` now retains `cmds` (the static part of the list the band was
+drawn from) and `digests` (`hash_one_command` per command), filled at the band
+MISS next to `key`. Deviation from the text above: the digests are computed at
+the miss, not in the key pass — `diff_band` also needs the **old commands**
+(their `cull_rect` bounds), so the list is cloned too; the cost is paid only
+where a full re-raster already costs tens of ms. Nothing reads them yet (S3).
