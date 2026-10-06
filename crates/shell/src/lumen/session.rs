@@ -144,6 +144,7 @@ impl Lumen {
                 self.source = PageSource::from_arg(Some(&tab.url));
                 self.scroll_x = tab.scroll_x;
                 self.scroll_y = tab.scroll_y;
+                self.issue_scroll_command();
                 self.title = Some(tab.title);
             } else {
                 // Background tab: park as hibernated so switch_tab restores it

@@ -41,6 +41,7 @@ impl Lumen {
         self.hint = hints::HintState::default();
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
+        self.issue_scroll_command();
         // ADR-016 M3.2: the retained scroll band belongs to the old page — drop
         // it so the next frame repaints instead of blitting stale pixels.
         self.scroll_cache.invalidate();

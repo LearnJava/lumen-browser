@@ -275,6 +275,32 @@ Landed (`display_list/scrollbars.rs`, `wheel_scroll.rs`, `render_thread.rs`,
   30 give 1200, 10 up give 800, equal to `LUMEN_NO_WHEEL_ROUTE=1`; the picture and
   the scrollbar thumb follow the offset.
 
+### Slice 5, part 1 result (2026-10-06)
+
+Landed (`RenderBackend::scroll_command`, `RenderMsg::ScrollCommand`,
+`Lumen::issue_scroll_command`, `ScrollFeedback::cmd_epoch`). The asynchronous
+consumers (JS `scroll`/`scrollend`, scroll-timeline progress, content-visibility,
+IntersectionObserver) already read the offset adopted in `on_redraw_requested`
+after `adopt_scroll_feedback`, so they follow the render thread's value without
+a change. What was missing was the epoch of rule 7: feedback posted by the render
+thread *before* it saw a programmatic scroll was adopted afterwards and
+overwrote the target (`scroll_anim` was cleared, `scroll_y` rolled back);
+`scrollTo` to the value the browser thread already believed in was lost against a
+running curve. Now every programmatic write sends the new offset with a growing
+epoch, the render thread drops its curve, momentum and ownership and stamps all
+later feedback with the epoch, and the browser thread adopts no page offset from
+older feedback (containers it carries are still applied). Writers covered:
+`scroll_to`, `start_smooth_scroll` (JS `scrollTo`, keyboard, find, anchors via
+`scroll_by_smooth`), `scroll_x_by`, MCP/automation `Scroll`, navigation, scroll
+restore, bfcache, hibernation, session restore, tab switch, page snapshot.
+
+Not done: programmatic scroll of overflow containers and iframes
+(`el.scrollTop`, `scrollIntoView` in containers, `frames.rs`) still writes on the
+browser thread without an epoch; scroll anchoring (BUG-524) and
+`scroll-initial-target` (BUG-944) run in layout and are not routed; BUG-1166
+(`getBoundingClientRect` ignoring the scroll offset) and BUG-286 are separate
+defects. Not measured live — covered by unit tests only.
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats

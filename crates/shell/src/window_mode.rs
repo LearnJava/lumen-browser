@@ -422,6 +422,7 @@ fn run_window_mode_inner(
         scroll_link: None,
         scroll_snapshot_sent: None,
         scroll_adopted_gen: 0,
+        scroll_cmd_epoch: 0,
         momentum_anim: None,
         touchpad_vel: (0.0, 0.0),
         touchpad_vel_time_ms: 0.0,

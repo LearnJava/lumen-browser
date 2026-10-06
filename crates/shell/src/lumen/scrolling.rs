@@ -589,6 +589,7 @@ impl Lumen {
             self.scroll_x = snapped;
             self.request_redraw();
         }
+        self.issue_scroll_command();
     }
 
     /// Установить scroll_y в абсолютное значение (после clamping-а). `f32::INFINITY`
@@ -608,6 +609,9 @@ impl Lumen {
             self.scroll_y = clamped;
             self.request_redraw();
         }
+        // Даже при том же значении: устаревшую обратную связь рендер-потока
+        // команда отсекает (ADR-032, правило 7).
+        self.issue_scroll_command();
     }
 
     /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
@@ -620,6 +624,7 @@ impl Lumen {
         // Apply page-level CSS Scroll Snap L1: snap to the nearest declared
         // snap point before starting the animation.
         let target_clamped = self.apply_page_y_snap(target_clamped);
+        self.issue_scroll_command();
         if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
             self.scroll_anim = None;
             self.forward_momentum_stop();

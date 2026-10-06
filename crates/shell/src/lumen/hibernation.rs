@@ -101,6 +101,7 @@ impl Lumen {
         if let Ok(Some(data)) = self.t2_store.fetch(tab_id as i64) {
             self.scroll_x = data.scroll_x;
             self.scroll_y = data.scroll_y;
+            self.issue_scroll_command();
             self.form_state = tab_lifecycle::deserialize_form_state(&data.form_state_json);
             let _ = self.t2_store.delete(tab_id as i64);
         }
@@ -258,6 +259,7 @@ impl Lumen {
         self.sync_engine_js_state();
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
+        self.issue_scroll_command();
         self.content_height = content_height_of(&self.display_list);
         self.content_width = content_width_of(&self.display_list);
 

@@ -246,6 +246,9 @@ enum RenderMsg {
     },
     /// Отмена render-side momentum и анимации щелчка (новый жест / навигация).
     StopRenderMomentum,
+    /// Программная прокрутка потока браузера (ADR-032, правило 7): страница в
+    /// `(y, x)`, эпоха команды растёт монотонно.
+    ScrollCommand { epoch: u64, y: f32, x: f32 },
     /// Старт render-side анимации щелчка колеса (THREAD-6).
     StartRenderScrollAnim { start_y: f32, target_y: f32 },
     /// Колесо/тачпад с главного потока (ADR-032, срез 3): смещение страницы
@@ -530,6 +533,10 @@ impl RenderBackend for ThreadedRenderBackend {
         self.send(RenderMsg::StopRenderMomentum);
     }
 
+    fn scroll_command(&mut self, epoch: u64, y: f32, x: f32) {
+        self.send(RenderMsg::ScrollCommand { epoch, y, x });
+    }
+
     fn start_render_scroll_anim(&mut self, start_y: f32, target_y: f32) {
         self.send(RenderMsg::StartRenderScrollAnim { start_y, target_y });
     }
@@ -632,6 +639,9 @@ struct RenderState {
     /// Поколение смещения, которым владеет рендер-поток: растёт с каждым
     /// изменением от колеса и уходит потоку браузера обратной связью.
     gen_id: u64,
+    /// Эпоха последней программной прокрутки потока браузера; её несёт вся
+    /// обратная связь, и поток браузера отбрасывает связь старее своей эпохи.
+    cmd_epoch: u64,
     /// Смещением сейчас владеет рендер-поток (колесо пришло мимо потока
     /// браузера и тот ещё не догнал).
     owned: bool,
@@ -674,6 +684,7 @@ impl RenderState {
             cur_y: 0.0,
             cur_x: 0.0,
             gen_id: 0,
+            cmd_epoch: 0,
             owned: false,
             max_y: 0.0,
             max_x: 0.0,
@@ -731,6 +742,7 @@ impl RenderState {
             let containers = self.owned_containers.iter().map(|o| (o.id, o.x, o.y)).collect();
             sh.post_feedback(ScrollFeedback {
                 gen_id: self.gen_id,
+                cmd_epoch: self.cmd_epoch,
                 y: self.cur_y,
                 x: self.cur_x,
                 containers,
@@ -1231,6 +1243,14 @@ fn process_batch(
                 state.scroll_anim = None;
                 state.owned = false;
             }
+            RenderMsg::ScrollCommand { epoch, y, x } => {
+                state.cmd_epoch = state.cmd_epoch.max(epoch);
+                state.momentum = None;
+                state.scroll_anim = None;
+                state.owned = false;
+                state.cur_y = y;
+                state.cur_x = x;
+            }
             RenderMsg::Snapshot(snap) => {
                 state.snap = snap;
                 state.prune_containers();
@@ -1474,6 +1494,20 @@ mod tests {
         ];
         process_batch(&mut backend, batch, &mut state, 0.0);
         assert!(state.scroll_anim.is_none());
+    }
+
+    #[test]
+    fn scroll_command_cancels_drive_and_stamps_feedback() {
+        let (mut backend, mut state) = tick_state();
+        let batch = vec![
+            RenderMsg::StartRenderScrollAnim { start_y: 0.0, target_y: 100.0 },
+            RenderMsg::ScrollCommand { epoch: 3, y: 40.0, x: 0.0 },
+            RenderMsg::ScrollCommand { epoch: 2, y: 10.0, x: 0.0 },
+        ];
+        process_batch(&mut backend, batch, &mut state, 0.0);
+        assert!(state.scroll_anim.is_none());
+        assert!(!state.owned);
+        assert_eq!(state.cmd_epoch, 3, "эпоха не откатывается");
     }
 
     // --- ADR-032, срез 3: колесо ведёт рендер-поток ---

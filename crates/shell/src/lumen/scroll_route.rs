@@ -96,6 +96,15 @@ impl Lumen {
             return false;
         }
         self.scroll_adopted_gen = fb.gen_id;
+        if fb.cmd_epoch < self.scroll_cmd_epoch {
+            // Связь снята до программной прокрутки (правило 7): страницу она
+            // не двигает, но поколение усыновлено и контейнеры не теряются.
+            if let Some(link) = self.scroll_link.as_ref() {
+                link.adopt(fb.gen_id, self.scroll_y, self.scroll_x);
+            }
+            self.apply_feedback_containers(fb.containers);
+            return false;
+        }
         let y = clamp_scroll(fb.y, self.max_scroll());
         let x = clamp_scroll(fb.x, self.max_scroll_x());
         // Кривую и инерцию теперь ведёт рендер-поток.
@@ -106,9 +115,26 @@ impl Lumen {
         if let Some(link) = self.scroll_link.as_ref() {
             link.adopt(fb.gen_id, y, x);
         }
-        // Контейнеры, которые вело колесо на рендер-потоке: тот же хвост, что у
-        // колеса потока браузера (раскладка, список, `scroll`-события).
-        for (id, cx, cy) in fb.containers {
+        self.apply_feedback_containers(fb.containers);
+        self.request_redraw();
+        true
+    }
+
+    /// Программная прокрутка страницы (ADR-032, правило 7): сообщает
+    /// рендер-потоку новое смещение под новой эпохой. Вызывается после записи
+    /// `scroll_y`/`scroll_x`; обратная связь со старой эпохой отбрасывается.
+    pub(crate) fn issue_scroll_command(&mut self) {
+        self.scroll_cmd_epoch += 1;
+        let (epoch, y, x) = (self.scroll_cmd_epoch, self.scroll_y, self.scroll_x);
+        if let Some(r) = self.renderer.as_mut() {
+            r.scroll_command(epoch, y, x);
+        }
+    }
+
+    /// Контейнеры, которые вело колесо на рендер-потоке: тот же хвост, что у
+    /// колеса потока браузера (раскладка, список, `scroll`-события).
+    fn apply_feedback_containers(&mut self, containers: Vec<(u32, f32, f32)>) {
+        for (id, cx, cy) in containers {
             let Some(node) = self
                 .scroll_containers
                 .iter()
@@ -119,7 +145,5 @@ impl Lumen {
             };
             self.apply_container_scroll(node, cx, cy);
         }
-        self.request_redraw();
-        true
     }
 }

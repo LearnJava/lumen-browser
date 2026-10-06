@@ -111,6 +111,9 @@ pub(crate) enum WheelInput {
 pub(crate) struct ScrollFeedback {
     /// Поколение: растёт с каждым изменением, принадлежащим рендер-потоку.
     pub(crate) gen_id: u64,
+    /// Эпоха последней программной прокрутки, которую рендер-поток уже принял
+    /// (ADR-032, правило 7): связь старее эпохи потока браузера устарела.
+    pub(crate) cmd_epoch: u64,
     pub(crate) y: f32,
     pub(crate) x: f32,
     /// Смещения overflow-контейнеров, которые ведёт рендер-поток и поток
@@ -395,13 +398,13 @@ mod tests {
     fn feedback_wakes_once_until_taken() {
         let (tx, rx) = std::sync::mpsc::channel();
         let shared = ScrollShared::new(tx);
-        shared.post_feedback(ScrollFeedback { gen_id: 1, y: 10.0, x: 0.0, containers: Vec::new() });
-        shared.post_feedback(ScrollFeedback { gen_id: 2, y: 20.0, x: 0.0, containers: Vec::new() });
+        shared.post_feedback(ScrollFeedback { gen_id: 1, cmd_epoch: 0, y: 10.0, x: 0.0, containers: Vec::new() });
+        shared.post_feedback(ScrollFeedback { gen_id: 2, cmd_epoch: 0, y: 20.0, x: 0.0, containers: Vec::new() });
         assert!(matches!(rx.try_recv(), Ok(UiMsg::ScrollFeedback)));
         assert!(rx.try_recv().is_err(), "второе пробуждение не нужно");
         let fb = shared.take_feedback().expect("feedback");
         assert_eq!(fb.gen_id, 2, "побеждает последнее значение");
-        shared.post_feedback(ScrollFeedback { gen_id: 3, y: 30.0, x: 0.0, containers: Vec::new() });
+        shared.post_feedback(ScrollFeedback { gen_id: 3, cmd_epoch: 0, y: 30.0, x: 0.0, containers: Vec::new() });
         assert!(matches!(rx.try_recv(), Ok(UiMsg::ScrollFeedback)));
     }
 }
