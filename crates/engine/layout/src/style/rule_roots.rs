@@ -1,7 +1,8 @@
 //! BUG-935 срез 64 — restyle roots for a change of the cascade sheet itself.
 //!
-//! [`lumen_css_parser::Stylesheet::changed_plain_rules`] names the plain style rules that
-//! were added, removed or moved between two versions of the sheet. The elements whose
+//! [`lumen_css_parser::Stylesheet::changed_style_rules`] names the style rules (plain and
+//! inside `@media`/`@supports` blocks) that were added, removed or moved between two versions
+//! of the sheet. The elements whose
 //! computed style can differ are exactly the ones those rules select: a rule's effect on
 //! an element is decided by the element alone (and its ancestors/siblings for the
 //! combinators), never by the style of another element. Each such element is returned as a
@@ -12,10 +13,12 @@ use std::collections::HashSet;
 use lumen_css_parser::{ComplexSelector, PseudoClass, Rule, SimpleSelector};
 use lumen_dom::{Document, NodeData, NodeId};
 
+use crate::rule_index::RuleIndex;
 use crate::style::matches_complex;
 
-/// More changed rules than this and the walk costs about what the full cascade does.
-const MAX_RULES: usize = 128;
+/// More changed rules than this and the walk costs about what the full cascade does. The rules
+/// are looked up through a [`RuleIndex`], so only an element's candidates are matched.
+const MAX_RULES: usize = 2048;
 
 /// The deep restyle roots for the style rules in `changed`, matched against `doc`'s light
 /// tree. `None` when the answer cannot be given by looking at the elements alone — the rule
@@ -34,25 +37,24 @@ pub fn restyle_roots_for_rule_changes(doc: &Document, changed: &[&Rule]) -> Opti
     if changed.len() > MAX_RULES {
         return None;
     }
-    let mut selectors: Vec<&ComplexSelector> = Vec::new();
-    for rule in changed {
-        for complex in &rule.selectors {
-            if !selects_elements_only(complex) {
-                return None;
-            }
-            selectors.push(complex);
-        }
+    if changed.iter().flat_map(|rule| &rule.selectors).any(|complex| !selects_elements_only(complex)) {
+        return None;
     }
+    let index = RuleIndex::build_from_indexed(changed.iter().copied().enumerate());
     let mut roots = HashSet::new();
-    if selectors.is_empty() {
-        return Some(roots);
-    }
     let mut stack = vec![doc.root()];
     while let Some(id) = stack.pop() {
         let node = doc.get(id);
-        if matches!(node.data, NodeData::Element { .. }) && selectors.iter().any(|s| matches_complex(s, doc, id)) {
-            roots.insert(id);
-            continue;
+        if let NodeData::Element { name, attrs, .. } = &node.data {
+            let classes: Vec<&str> = node.get_attr("class").unwrap_or("").split_whitespace().collect();
+            let selected = index
+                .candidates(name.local.as_str(), node.get_attr("id"), &classes, attrs)
+                .into_iter()
+                .any(|rule| changed[rule].selectors.iter().any(|s| matches_complex(s, doc, id)));
+            if selected {
+                roots.insert(id);
+                continue;
+            }
         }
         stack.extend(node.children.iter().copied());
     }
