@@ -1140,6 +1140,7 @@ impl Lumen {
                 // entirely — invalidate so the next `try_relayout_raf_incremental`
                 // doesn't diff a stale cache against this fresh tree.
                 self.page_prev_cascade_styles = None;
+                self.m4_full_cost_ms = None;
                 self.layout_box = Some(page.layout_box);
                 // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
                 self.cv_relevant.clear();

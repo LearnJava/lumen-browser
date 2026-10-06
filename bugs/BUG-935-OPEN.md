@@ -4949,3 +4949,30 @@ RTT avg 1,8 с против 3,3 с (шум велик) — UI-блока сек�
 
 **Что осталось.** Первый тик `full=no-basis`, стоимость `apply_relayout_result` и раскладки на узком рестайле (ria.ru); `relayout_raf_dirty_readback`
 не менялся. Статус `OPEN (DEBTOR)` не меняется — основной симптом на lenta/rbc снят, на ria.ru остаётся.
+
+## Срез 86 (P1, 2026-10-06) — первый тик и широкие рестайлы не блокируют UI; микро-задания не уводят тик off-thread
+
+**Замер на коде среза 85** (`--maximized`, `LUMEN_NO_ADBLOCK=1`, census, 8–15 с settle). ria.ru: первый rAF-тик `full=unattributed` шёл on-thread —
+970 мс на UI-потоке (в срезе 85 это «первый после базиса»); следующий тик с `restyle=1`, но корнями `div(2151)` при 1860 стилизованных
+(`cascade_recomputed=7843`) — 666 мс, то есть полный проход под видом рестайла. lenta.ru: из ~35 settle-тиков 16–24 уходили off-thread
+(~210 мс против ~60 on-thread), причина — `Guarded`-проверка `engine.busy()`: `redraw_requested.rs:182` на **каждом** кадре ставит движковому потоку
+fire-and-forget `deliver_scroll_progress` (0,2–0,5 мс), и тик `about_to_wait` почти всегда заставал его на ходу («busy with task … for 0.2ms»).
+Это не регрессия среза 86: тот же код среза 85 даёт 16/19 off-thread и 14/11 «busy» (A/B на пересобранной базе).
+
+**Что сделано** (`crates/shell/src/relayout.rs`, `lumen/state.rs`, `window_mode.rs`, `page_load.rs`). Только режим `Guarded` при живом движковом потоке:
+1. Предсказанный полный тик (`touched.unattributed` или нет базиса стилей) уходит off-thread, если цена последнего полного прохода неизвестна или
+   больше бюджета (`m4_full_tick_off_thread`, поле `m4_full_cost_ms`: пишут off-thread коммит и on-thread тик без `restyle`; сбрасывается в `page_load`).
+   `touched` читается в начале `try_relayout_raf_incremental` — до побочных эффектов, отказ их не оставляет; потерянный набор не нужен, полный проход видит документ целиком.
+2. Широкий рестайл: после расчёта корней доля элементов под глубокими корнями × цена полного прохода > бюджета → off-thread
+   (`m4_wide_restyle_off_thread`); `prev_lb` возвращается в `layout_box`, thread-local состояние сбрасывается.
+3. `busy` короче 1 мс не откладывает тик (`m4_busy_blocks_tick`, `M4_BUSY_MIN`); JS-ход rAF, держащий `document.lock()`, к следующему тику давно старше порога.
+
+**Тесты.** 3 юнита (`predicted_full_tick…`, `wide_restyle…`, `a_task_that_just_started…`) рядом с тестами среза 85. Shell clippy чист.
+
+**Живой замер после правки.** ria.ru: on-thread тиков нет вовсе (`full tick -> off-thread` ×9), UI не блокируется, scroll RTT avg 2,7–3,0 с против 5,8 с на том же запуске до правки
+(шум велик). lenta.ru: «busy» 0 против 11–24; второй прогон 20 on-thread по 52–86 мс и 2 off-thread, scroll RTT avg 7 мс. rbc.ru: on-thread 38–70 мс, один
+`wide restyle -> off-thread`.
+
+**Что осталось.** Первый off-thread коммит на ria.ru всё равно стоит 0,6–1,4 с компьютации и применяется на UI-потоке (`apply_relayout_result`);
+пока тики идут чаще длительности задания, коммит откладывается до паузы — latest-wins в `poll_engine_commit` отбрасывает устаревшие поколения.
+Бюджет 100 мс на lenta.ru тесен (один тик 117 мс → 8 off-thread тиков по ~300 мс дороже on-thread); `relayout_raf_dirty_readback` не менялся.
