@@ -31,3 +31,7 @@ WPT-RUN-14 срез 6: режим `Web Animations` — 266 упавших саб
 ## Как проверить
 
 `css/css-backgrounds/animations/{background-color,background-position-x,background-size,border-width,border-color,box-shadow}-interpolation.html`; проба в таблице выше.
+
+## Дополнение: WPT-RUN-14 срез 9 (2026-10-06, `css/css-text`, часть 1)
+
+`css/css-text/animations/{letter-spacing,word-spacing,text-indent}-interpolation.html` — по 20 сабтестов «from neutral» (+ `inherit`/`unset`/`initial`/`normal` по 19–20). Проба на `letter-spacing`: элемент с `letter-spacing: 10px`, `animate([{letterSpacing:'20px'}], …)` на 50 % читает `20px` (ожидается `15px`); двухкадровая `0px → 20px` на 50 % — `10px` (верно); `composite: 'add'` поверх `100px` — `120px`/`110px` (верно). То есть сломан неявный кадр, а не сложение. `letter-spacing-composition.html`/`word-spacing-composition.html`/`text-indent-composition.html` (CSS Animations + `animation-composition`, 15–31 сабтест) читают базовое значение `50px` вместо сложенного — этот путь пробой не проверялся. Всего 6 id / 396 сабтестов; ещё 2 id / 180 сабтестов (`hyphen-limit-chars-interpolation`, `hyphen-no-interpolation`) — самих свойств `hyphenate-*` нет (CSS-SPECS.md:76).
