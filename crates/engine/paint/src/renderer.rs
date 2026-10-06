@@ -5984,7 +5984,7 @@ use pipelines::{
 
 mod band_compose;
 #[cfg(test)]
-use band_compose::{band_blit_quads, band_geometry, ring_advance_plan, RingStrip};
+use band_compose::{band_blit_quads, band_geometry, dirty_strips, ring_advance_plan, RingStrip};
 
 mod frame_entry;
 

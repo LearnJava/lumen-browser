@@ -140,7 +140,7 @@ where a full re-raster already costs tens of ms. Nothing reads them yet (S3).
 
 ### Slice 3 result (2026-10-06)
 
-`Renderer::try_adopt_band_key` (`band_compose.rs`) runs before the band
+`Renderer::try_partial_band` (`band_compose.rs`) runs before the band
 hit/miss decision for stable-content frames: if the key changed but
 `band_diff::outside_band` says every dirty row lies outside the band (or the
 static list is identical), the band adopts the new key, list and digests and
@@ -151,3 +151,21 @@ also folds the generation (images, fonts, canvas bg), which per-command digests
 cannot see, so a generation bump always re-rasters. Behind
 `LUMEN_BAND_PARTIAL=1`, **off by default** until slice 6 measures it; frame
 log level 2 prints `band-partial: adopt|full (<diff>)`. Not yet measured live.
+
+### Slice 4 result (2026-10-06)
+
+`try_adopt_band_key` became `try_partial_band`: besides adopting the key it now
+redraws in-band dirty rows. `dirty_strips` (`band_compose.rs`, pure) clamps the
+`band_diff` ranges to the band, rounds outward to whole device rows, merges,
+and refuses (→ full MISS) for more than 4 ranges or more than half the band; a
+range split by the texture edge becomes two `RingStrip`s, same row formula as
+`ring_advance_plan`. Passes go through the existing `BandStrip` clip with the
+whole new static list (painter's order stays exact), via the new
+`render_band_passes` (also used by the full-miss path). Preconditions beyond
+S3: opaque canvas background and integer device rows for `band_top`/
+`ring_base` (the ring's own conditions); otherwise full MISS. Frame log level 2
+prints `band-partial: strips <rows>`. Gate: GPU test
+`partial_band_strips_match_full_redraw` (`--include-ignored`) — a band updated
+by strips is byte-identical to a band drawn from scratch. Not measured live;
+the flag is still off by default (S6 flips it). Unstable-key frames (S5) still
+go monolithic.
