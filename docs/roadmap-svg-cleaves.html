@@ -7701,7 +7701,51 @@
        "title": "THREAD-13: тонкий главный поток, прокрутка без UI-потока",
        "status": "planned",
        "size": "L",
-       "note": "Заведена 2026-10-06 по решению пользователя (вариант F разбора THREAD-10): ввод колеса и прокрутка страницы не ждут UI-поток. Решение — [ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md): оконный цикл winit остаётся на главном потоке, но становится тонким; всё состояние `Lumen` переезжает в новый поток браузера (создаётся там же, `Send` не нужен); главный поток маршрутизирует колесо над областью страницы по опубликованному `ScrollSnapshot` прямо в рендер-поток, который владеет смещениями страницы и скролл-контейнеров; JS `scroll`, scroll-timeline, content-visibility, lazy-картинки догоняют асинхронно. Срезы: 1 — проба (как сейчас держится `position:fixed` при `BeginFixedLayer` = no-op, `renderer.rs:3438`; опись `ActiveEventLoop` и прочих привязок к главному потоку); 2 — поток браузера без смены поведения; 3 — прокрутка страницы в рендер-потоке; 4 — overflow-контейнеры (id скролл-слоёв); 5 — асинхронные потребители смещения; 6 — замер и дефолт, рычаг `LUMEN_NO_BROWSER_THREAD=1`. Критерий — метрики THREAD-5 при занятом движке и UI-потоке не хуже Chromium на ria/lenta/rbc, простой CPU ≈ 0 % (ADR-016 инв. 6)."
+       "note": "Заведена 2026-10-06 по решению пользователя (вариант F разбора THREAD-10): ввод колеса и прокрутка страницы не ждут UI-поток. Решение — [ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md): оконный цикл winit остаётся на главном потоке, но становится тонким; всё состояние `Lumen` переезжает в новый поток браузера (создаётся там же, `Send` не нужен); главный поток маршрутизирует колесо над областью страницы по опубликованному `ScrollSnapshot` прямо в рендер-поток, который владеет смещениями страницы и скролл-контейнеров; JS `scroll`, scroll-timeline, content-visibility, lazy-картинки догоняют асинхронно. Срезы: 1 — проба (как сейчас держится `position:fixed` при `BeginFixedLayer` = no-op, `renderer.rs:3438`; опись `ActiveEventLoop` и прочих привязок к главному потоку); 2 — поток браузера без смены поведения; 3 — прокрутка страницы в рендер-потоке; 4 — overflow-контейнеры (id скролл-слоёв); 5 — асинхронные потребители смещения; 6 — замер и дефолт, рычаг `LUMEN_NO_BROWSER_THREAD=1`. Критерий — метрики THREAD-5 при занятом движке и UI-потоке не хуже Chromium на ria/lenta/rbc, простой CPU ≈ 0 % (ADR-016 инв. 6).",
+       "tasks": [
+        {
+         "id": "THREAD-13-S1",
+         "title": "THREAD-13 срез 1: проба fixed и привязок к главному потоку",
+         "status": "planned",
+         "size": "S",
+         "note": "Проба перед кодом ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 1). Выяснить, как сейчас держится `position:fixed` при прокрутке: paint считает `BeginFixedLayer` no-op (`renderer.rs:3438`), весь контент сдвигается на `-scroll_y`, а `commands.rs:453` утверждает «уже в координатах вьюпорта» — найти, кто это делает (раскладка на каждый шаг прокрутки?). Опись всех применений `ActiveEventLoop` (8 файлов `crates/shell/src`) и прочих привязок к главному потоку: буфер обмена, IME, курсор, диалоги, смена DPI, pointer lock, автоматизация/BiDi. Итог — таблица в ADR-032 §Decision и план среза 2."
+        },
+        {
+         "id": "THREAD-13-S2",
+         "title": "THREAD-13 срез 2: поток браузера",
+         "status": "planned",
+         "size": "L",
+         "note": "Поток браузера без смены поведения ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 2): `Lumen` создаётся в новом потоке и не пересекает границ; главный поток пересылает все `WindowEvent` (колесо тоже) по порядку, операции `ActiveEventLoop` — запросами через `EventLoopProxy`; рычаг `LUMEN_NO_BROWSER_THREAD=1`. Критерий — полный прогон графтестов и scoped-тестов без изменений, простой CPU ≈ 0 %."
+        },
+        {
+         "id": "THREAD-13-S3",
+         "title": "THREAD-13 срез 3: прокрутка страницы в рендер-потоке",
+         "status": "planned",
+         "size": "L",
+         "note": "Прокрутка страницы в рендер-потоке ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 3): `ScrollSnapshot` (`Arc`, latest-wins) после каждого relayout; главный поток маршрутизирует колесо/тачпад над областью страницы прямо в рендер-поток; рендер-поток владеет `scroll_y`/`scroll_x` страницы (кривая щелчка, инерция, clamp, snap) и возвращает смещение потоку браузера. Критерий — метрики THREAD-5 на lenta/ria при искусственно занятом потоке браузера."
+        },
+        {
+         "id": "THREAD-13-S4",
+         "title": "THREAD-13 срез 4: overflow-контейнеры",
+         "status": "planned",
+         "size": "L",
+         "note": "Overflow-контейнеры ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 4): id у `PushScrollLayer` вместо поиска по `clip_rect` (`display_list/scrollbars.rs:277`), смещения контейнеров у рендер-потока, цепочка прокрутки и `overscroll-behavior` по снимку. Снимает возражение отклонённого среза 8 THREAD-6 (две копии дерева слоёв): владелец смещения один."
+        },
+        {
+         "id": "THREAD-13-S5",
+         "title": "THREAD-13 срез 5: асинхронные потребители смещения",
+         "status": "planned",
+         "size": "M",
+         "note": "Асинхронные потребители смещения ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 5): JS `scroll`/`scrollend`, scroll-timeline (`deliver_scroll_progress`), content-visibility, lazy-картинки, IntersectionObserver, всплывающие формы/подсказки берут последнее смещение от рендер-потока; программная прокрутка (`window.scrollTo`, якоря, find-in-page, клавиатура, перетаскивание полосы) отправляет цель в рендер-поток, а не пишет `scroll_y` сама."
+        },
+        {
+         "id": "THREAD-13-S6",
+         "title": "THREAD-13 срез 6: замер и дефолт",
+         "status": "planned",
+         "size": "M",
+         "note": "Замер и дефолт ([ADR-032](docs/decisions/ADR-032-thin-main-thread-scroll-off-ui.md), срез 6): метрики THREAD-5 при занятом движке и потоке браузера против Chromium на ria/lenta/rbc, без VPN, `--maximized`, 8–10 прогонов на сайт; при успехе — дефолт, запись в журнал, ADR-032 Future. Закрывает THREAD-13."
+        }
+       ]
       }
      ]
     },
