@@ -879,6 +879,9 @@ pub(crate) struct Lumen {
     /// trigger an asynchronous relayout after an off-thread rAF turn mutated the
     /// DOM, instead of a synchronous read blocked behind that turn.
     pub(crate) dom_dirty_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// THREAD-9 срез 5: UI-сторонний клон флага «есть слушатель `navigate`»
+    /// (только под движковым потоком; `None` — слушатель считается есть).
+    pub(crate) navigate_listeners_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// BUG-935 S80: UI-сторонний сброс набора затронутых узлов (`js_ctx` под
     /// движковым потоком пуст). `None` — нет JS или нет движкового потока.
     /// Срез 81: читатель с собственной отметкой эпохи, трекер не сбрасывает.

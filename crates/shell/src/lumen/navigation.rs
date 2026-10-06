@@ -44,13 +44,15 @@ impl Lumen {
         // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
         // блокирующий `query` встаёт в очередь **после** него — read-after-eval
         // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
-        {
+        let listen = self.navigate_listeners_present();
+        if listen {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', {can_intercept}, false)"));
             });
         }
         if can_intercept
+            && listen
             && let Some(intercept) = route_query_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
@@ -195,13 +197,14 @@ impl Lumen {
     pub(crate) fn navigate_replace(&mut self, source: PageSource) {
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
-        {
+        let listen = self.navigate_listeners_present();
+        if listen {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 j.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
             });
         }
-        if let Some(intercept) = route_query_js(
+        if listen && let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             |j| j.take_nav_intercept_result(),
@@ -312,10 +315,13 @@ impl Lumen {
         // BUG-639: the target entry's key, so `NavigateEvent.destination`
         // describes that entry (`key`/`id`/`index`/`getState()`).
         let dest_key = self.nav_back.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+        let listen = self.navigate_listeners_present();
+        if listen {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
         });
-        if let Some(intercept) = route_query_js(
+        }
+        if listen && let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             |j| j.take_nav_intercept_result(),
@@ -506,10 +512,13 @@ impl Lumen {
         // BUG-639: the target entry's key, so `NavigateEvent.destination`
         // describes that entry (`key`/`id`/`index`/`getState()`).
         let dest_key = self.nav_fwd.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+        let listen = self.navigate_listeners_present();
+        if listen {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
         });
-        if let Some(intercept) = route_query_js(
+        }
+        if listen && let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             |j| j.take_nav_intercept_result(),

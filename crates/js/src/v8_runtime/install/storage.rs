@@ -107,6 +107,7 @@ pub(crate) fn install_navigation_api(
     nav_state: Arc<Mutex<String>>,
     pending_navigation_updates: Arc<Mutex<Vec<crate::dom::NavUpdate>>>,
     pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
+    navigate_listeners: Arc<std::sync::atomic::AtomicBool>,
 ) -> JsResult<()> {
     // ── Navigation API ──────────────────────────────────────────────────────────
     // Shell-backed Navigation API.  All mutations are queued via
@@ -175,6 +176,13 @@ pub(crate) fn install_navigation_api(
             "_lumen_navigation_set_state",
             move |json: String| {
                 *ns_set.lock().unwrap() = json;
+            }
+        );
+
+        reg!(scope, ctx, store,
+            "_lumen_navigation_note_listener",
+            move || {
+                navigate_listeners.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         );
 

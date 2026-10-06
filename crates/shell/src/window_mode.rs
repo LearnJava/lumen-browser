@@ -396,6 +396,7 @@ pub(crate) fn run_window_mode(
         js_present: false,
         raf_pending_flag: None,
         dom_dirty_flag: None,
+        navigate_listeners_flag: None,
         dom_touched_drain: None,
         pseudo_styles_needed_flag: None,
         custom_props_needed_flag: None,

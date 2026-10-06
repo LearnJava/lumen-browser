@@ -436,3 +436,22 @@ fn navigate_resolves_relative_url_and_throws_syntax_error() {
     assert_eq!(urls, ["https://example.com/page.html#frag", "https://example.com/page.html?q=1"]);
     assert_eq!(str_of(&rt, "__err"), "SyntaxError");
 }
+
+/// THREAD-9 срез 5: флаг «есть слушатель `navigate`» липкий и ставится
+/// `addEventListener('navigate')` и `onnavigate`, но не другими событиями.
+#[test]
+fn navigate_listener_flag_set_by_listener_or_handler_only() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let rt = runtime();
+    let flag = rt.navigate_listeners_flag();
+    assert!(!flag.load(Relaxed));
+    rt.eval("navigation.addEventListener('currententrychange', () => {}); \
+             navigation.oncurrententrychange = () => {}; true").unwrap();
+    assert!(!flag.load(Relaxed));
+    rt.eval("navigation.addEventListener('navigate', () => {}); true").unwrap();
+    assert!(flag.load(Relaxed));
+    let rt2 = runtime();
+    let flag2 = rt2.navigate_listeners_flag();
+    rt2.eval("navigation.onnavigate = () => {}; true").unwrap();
+    assert!(flag2.load(Relaxed));
+}

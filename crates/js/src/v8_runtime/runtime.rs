@@ -538,6 +538,10 @@ pub struct V8JsRuntime {
     pub(super) pending_navigation_updates: Arc<Mutex<Vec<crate::dom::NavUpdate>>>,
     /// Queued by `_lumen_navigation_report_intercept` during `NavigateEvent` dispatch.
     pub(super) pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
+    /// THREAD-9 срез 5: страница когда-либо вешала обработчик `navigate` на
+    /// `window.navigation` (`addEventListener`/`onnavigate`). Липкий; без него
+    /// shell не диспатчит `NavigateEvent` и не читает intercept-результат.
+    pub(super) navigate_listeners: Arc<AtomicBool>,
     /// Fullscreen requests emitted by `element.requestFullscreen()` / `document.exitFullscreen()`.
     pub(super) fullscreen_requests: Arc<Mutex<Vec<crate::dom::FullscreenRequest>>>,
     /// CSS View Transitions L1 events emitted by `document.startViewTransition` (Ph3
@@ -781,6 +785,7 @@ impl V8JsRuntime {
             nav_state: Arc::new(Mutex::new(String::from(r#"{"entries":[],"index":0}"#))),
             pending_navigation_updates: Arc::new(Mutex::new(Vec::new())),
             pending_nav_intercepted: Arc::new(Mutex::new(Vec::new())),
+            navigate_listeners: Arc::new(AtomicBool::new(false)),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1132,6 +1137,11 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::dom_dirty_flag`].
     pub fn dom_dirty_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.dom_dirty)
+    }
+
+    /// THREAD-9 срез 5: lock-free ручка флага «есть слушатель `navigate`».
+    pub fn navigate_listeners_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.navigate_listeners)
     }
 
     /// BUG-935 S43: shared, lock-free handle to [`Self::pseudo_styles_needed`].
