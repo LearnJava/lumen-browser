@@ -177,3 +177,14 @@ partial verdict (adopt / strips) updates the band in that frame and the key
 matches, so the frame is composed from the band instead of drawn monolithically;
 a `full` verdict leaves the old behaviour (monolith, band untouched). No new
 code path, only the removed condition; correctness rests on the S4 gate.
+
+### S6 (measured, 2026-10-06)
+
+A/B `LUMEN_BAND_PARTIAL=0/1`, 3 runs × lenta/ria/rbc, probe scenario — table in
+[journal](../perf/journal.md). No win: on-time share and max gap are within run
+noise, `=1` not better. Frame log: one `adopt`, no `strips` per run; the band's
+MISSes are scroll shifts (10–28 ms), the 150–350 ms frames are `build: chrome`
+(THREAD-12). **The default is not flipped** (stays off) and S7 is not
+justified by this data. Open: whether a content-heavy scenario (lazy images
+loading while scrolling) exists where strips fire; until one is found the flag
+stays an opt-in.
