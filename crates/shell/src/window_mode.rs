@@ -325,6 +325,7 @@ pub(crate) fn run_window_mode(
         layout_source: None,
         pending_reload: Rc::new(Cell::new(false)),
         pending_js_navigate: None,
+        js_nav_inbox: Arc::new(std::sync::Mutex::new(None)),
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),

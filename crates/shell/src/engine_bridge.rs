@@ -187,6 +187,20 @@ pub(crate) fn route_query_js<R: Send + 'static>(
     }
 }
 
+/// THREAD-9: кладёт результат `take_navigate_request` в почтовый ящик
+/// (`Lumen::js_nav_inbox`) из движковой задачи. `None` ящик не трогает, чтобы
+/// пустое чтение не стёрло ещё не забранный запрос.
+pub(crate) fn deposit_js_navigate(
+    inbox: &Mutex<Option<crate::JsNavigateRequest>>,
+    nav: Option<crate::JsNavigateRequest>,
+) {
+    if let Some(nav) = nav
+        && let Ok(mut slot) = inbox.lock()
+    {
+        *slot = Some(nav);
+    }
+}
+
 /// Whether the ADR-016 engine thread should be spawned.
 ///
 /// **ADR-023 (default flip 2026-07-28): now enabled by default.** ADR-016's

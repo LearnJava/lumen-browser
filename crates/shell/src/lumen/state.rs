@@ -570,6 +570,12 @@ pub(crate) struct Lumen {
     /// захваченный во время выполнения скриптов страницы. Обрабатывается
     /// в `about_to_wait` после первого рендера загруженной страницы.
     pub(crate) pending_js_navigate: Option<JsNavigateRequest>,
+    /// THREAD-9: почтовый ящик навигационных запросов JS. Движковая задача
+    /// кладёт сюда результат `take_navigate_request` сама (UI-поток не ждёт
+    /// ответа блокирующим `query`), `about_to_wait` переносит его в
+    /// `pending_js_navigate`. Последний запрос перекрывает предыдущий — как и
+    /// прежняя запись `pending_js_navigate = Some(..)`.
+    pub(crate) js_nav_inbox: Arc<std::sync::Mutex<Option<JsNavigateRequest>>>,
     /// Proxy для отправки LoadEvent из background-потока загрузки в event loop.
     pub(crate) load_proxy: EventLoopProxy<LoadEvent>,
     /// Инкрементальный HTML-парсер — активен во время streaming load.

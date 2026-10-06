@@ -79,13 +79,7 @@ impl Lumen {
             );
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
-        if let Some(Some(nav)) = route_query_js(
-            self.engine_thread.as_ref(),
-            self.js_ctx.as_ref(),
-            |j| j.take_navigate_request(),
-        ) {
-            self.pending_js_navigate = Some(nav);
-        }
+        self.queue_js_navigate_read();
     }
 
     /// Classify `nid` as a mutable text-editing form control and read the value
@@ -382,13 +376,7 @@ impl Lumen {
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, &key);
         }
-        if let Some(Some(nav)) = route_query_js(
-            self.engine_thread.as_ref(),
-            self.js_ctx.as_ref(),
-            |j| j.take_navigate_request(),
-        ) {
-            self.pending_js_navigate = Some(nav);
-        }
+        self.queue_js_navigate_read();
         consumed
     }
 

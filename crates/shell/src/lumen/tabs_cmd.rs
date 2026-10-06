@@ -49,6 +49,9 @@ impl Lumen {
         self.layout_source = None;
         self.pending_reload = Rc::new(Cell::new(false));
         self.pending_js_navigate = None;
+        if let Ok(mut inbox) = self.js_nav_inbox.lock() {
+            *inbox = None;
+        }
         self.stream_builder = None;
         self.stream_last_paint = std::time::Instant::now();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
