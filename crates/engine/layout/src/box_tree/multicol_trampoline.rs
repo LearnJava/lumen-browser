@@ -1012,9 +1012,16 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     // An item that is a grid itself (a subgrid spanning the container's rows) is cut
                     // like the container: its row tracks are clipped to this window, so the gaps a
                     // break splits are not painted (`subgrid-gap-decorations-fragmentation-001`).
+                    // The part of one of the item's own row gaps that the window starts in is not                    // drawn at its top: the first track moves up to the fragment's edge and the                    // item is that much shorter (`subgrid-gap-decorations-fragmentation-015`).
+                    let mut dropped = 0.0f32;
                     if top < ws - 0.01 || bot > we + 0.01 {
-                        k.subgrid_tracks = c.subgrid_tracks.as_ref().and_then(|t| item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi));
+                        let cut = c.subgrid_tracks.as_ref().and_then(|t| item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi));
+                        if let Some((tracks, d)) = cut {
+                            dropped = d;
+                            k.subgrid_tracks = Some(tracks);
+                        }
                     }
+                    k.rect.height = (k.rect.height - dropped).max(0.0);
                     // The children of the item that fall in this window, moved with it.
                     let (dx, dy) = (col_x - gx, cur_y - gy - ws);
                     k.children = c
@@ -1026,7 +1033,8 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                         })
                         .map(|g| {
                             let mut g = g.clone();
-                            super::shift_tree(&mut g, dx, dy);
+                            let up = if dropped > 0.0 && g.rect.y - gy >= lo + dropped - 0.01 { dropped } else { 0.0 };
+                            super::shift_tree(&mut g, dx, dy - up);
                             g
                         })
                         .collect();
@@ -1093,12 +1101,15 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
 /// The row tracks of a grid item cut by a column window, as the fragment of that item: `t.rows`
 /// run from the item's content top (`content_top`, container coordinates), the item keeps the part
 /// `lo..hi` of itself. `None` when the item has no row tracks to clip (the item keeps its own).
+/// The second value is the block size of the item's own row gap that the window starts in (a
+/// window edge on the leading edge of the gap or inside it): that gap is dropped, the first
+/// visible track moves up to the fragment's top edge by this amount.
 fn item_fragment_tracks(
     t: &crate::subgrid::SubgridTracks,
     content_top: f32,
     lo: f32,
     hi: f32,
-) -> Option<Box<crate::subgrid::SubgridTracks>> {
+) -> Option<(Box<crate::subgrid::SubgridTracks>, f32)> {
     let rows = t.rows.as_ref()?;
     let visible: Vec<(usize, (f32, f32))> = rows
         .iter()
@@ -1108,13 +1119,19 @@ fn item_fragment_tracks(
             (b > a).then_some((k, (a - lo, b - lo)))
         })
         .collect();
-    Some(Box::new(crate::subgrid::SubgridTracks {
-        cols: t.cols.clone(),
-        rows: Some(visible.iter().map(|v| v.1).collect()),
-        fragment: true,
-        row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
-        line_gaps: None,
-    }))
+    // A first visible track that is not the item's first and starts below the window edge: the
+    // edge is in the gap before it.
+    let dropped = visible.first().filter(|v| v.0 > 0 && v.1.0 > 0.01).map_or(0.0, |v| v.1.0);
+    Some((
+        Box::new(crate::subgrid::SubgridTracks {
+            cols: t.cols.clone(),
+            rows: Some(visible.iter().map(|v| (v.1.0 - dropped, v.1.1 - dropped)).collect()),
+            fragment: true,
+            row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
+            line_gaps: None,
+        }),
+        dropped,
+    ))
 }
 
 /// CSS Multicol §3.4 atomic fallback — greedy column assignment by height,
