@@ -41,7 +41,7 @@ impl Lumen {
     /// Used by the wheel handler to route scroll events to overflow containers.
     pub(crate) fn update_scroll_containers(&mut self) {
         match &self.layout_box {
-            Some(lb) => self.scroll_containers = collect_scroll_containers(lb),
+            Some(lb) => self.scroll_containers = lumen_layout::collect_page_scroll_containers(lb),
             None => self.scroll_containers.clear(),
         }
     }
@@ -202,7 +202,7 @@ impl Lumen {
         }
 
         self.frames[idx].scroll_containers =
-            lumen_layout::collect_scroll_containers(self.frames[idx].layout.as_ref().unwrap());
+            lumen_layout::collect_page_scroll_containers(self.frames[idx].layout.as_ref().unwrap());
         // Точечного патча (как `patch_scroll_layer` у страницы) для фрейма
         // нет — тот же грубый грануляр, что уже принят у [`Self::apply_frame_scroll`]:
         // пересобрать content_dl фрейма (и его предков — функция сама

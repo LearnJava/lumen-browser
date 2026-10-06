@@ -1386,7 +1386,7 @@ pub(crate) fn sync_frame_viewports(
                 &measurer,
                 state,
             );
-            frames[i].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
+            frames[i].scroll_containers = lumen_layout::collect_page_scroll_containers(&layout);
             frames[i].layout = Some(layout);
             frames[i].viewport = size;
             frames[i].interactive = state;
@@ -1493,7 +1493,7 @@ pub(crate) fn relayout_frame_content(
         &measurer,
         state,
     );
-    frames[idx].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
+    frames[idx].scroll_containers = lumen_layout::collect_page_scroll_containers(&layout);
     frames[idx].layout = Some(layout);
     frames[idx].interactive = state;
     frames[idx].content_dl.clear();
