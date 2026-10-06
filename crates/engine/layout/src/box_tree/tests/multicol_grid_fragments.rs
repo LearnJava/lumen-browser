@@ -378,3 +378,26 @@ fn an_empty_grid_is_cut_by_its_row_tracks_and_drops_the_gaps_at_the_breaks() {
     assert_eq!(h.len(), 3, "{h:?}");
     assert!(h[0] > 90.0 && h[1] > 90.0 && h[2] < h[0], "{h:?}");
 }
+
+#[test]
+fn a_subgrid_item_cut_by_the_columns_keeps_only_the_tracks_of_its_window() {
+    // subgrid-gap-decorations-fragmentation-001: a subgrid spanning the three 80px rows (30px
+    // gap) of a grid cut by 100px columns. The subgrid is cut with the container, so each of its
+    // fragments knows only the one track in its window and the gap a break splits is not painted.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"><div></div><div></div><div></div></div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:0;width:300px;height:100px} \
+         #g{display:grid;grid-template-rows:repeat(3,80px);row-gap:30px} \
+         #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:1/-1;\
+         grid-row:1/-1;row-rule:solid 10px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let subs: Vec<usize> = v
+        .iter()
+        .flat_map(|g| g.children.iter())
+        .filter_map(|c| c.subgrid_tracks.as_ref().filter(|t| t.fragment))
+        .map(|t| t.rows.as_ref().unwrap().len())
+        .collect();
+    assert_eq!(subs, vec![1, 1, 1], "{subs:?}");
+}
