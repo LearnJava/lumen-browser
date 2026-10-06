@@ -313,6 +313,18 @@ until a feedback of the current epoch arrives; stale feedback does not apply
 those ids. Still not done: iframe scroll (`frames.rs`), scroll anchoring
 (BUG-524), `scroll-initial-target` (BUG-944), live measurement.
 
+### Slice 5, part 3 result (2026-10-06)
+
+No code. The three leftovers turned out not to be writers of the render-thread
+offset: (1) iframe scroll (`frames.rs`) lives on the browser thread only — the
+render thread does not own frame offsets, and the wheel over a frame is routed
+through `ScrollSnapshot::blockers` to the browser thread, so there is one writer
+per offset; (2) scroll anchoring (BUG-524) is not implemented anywhere, so there
+is nothing to convert — when it lands it must send a command (rule 7);
+(3) `scroll-initial-target` is applied to the fresh layout before the first
+paint and the resulting page offset leaves through `issue_scroll_command`.
+Live measurement is slice 6.
+
 Work item: `ROADMAP.md` THREAD-13. Slices, in order:
 
 1. **Probe**: how `position:fixed` stays pinned today (paint treats
