@@ -849,7 +849,10 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     }) else {
         return false;
     };
-    if rows.len() < 2 || (frame.outer_hs[0] - grid.rect.height).abs() > 0.01 || limit < 1.0 {
+    // A column flex container whose items overlap along the block axis (two lines of different
+    // item sizes) merges into one track: it is still cut, by its items' line boxes
+    // (`flex/fragmentation/013`).
+    if rows.len() < if col_flex { 1 } else { 2 } || (frame.outer_hs[0] - grid.rect.height).abs() > 0.01 || limit < 1.0 {
         return false;
     }
     // Items that overflow a definite container height (`height: 140px` under 154px of lines)

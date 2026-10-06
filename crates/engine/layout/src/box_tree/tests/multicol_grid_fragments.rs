@@ -342,3 +342,21 @@ fn a_column_flex_break_inside_a_line_box_moves_up_to_the_top_of_the_line() {
     let items: Vec<usize> = v.iter().map(|b| b.children.len()).collect();
     assert_eq!(items, vec![2, 2], "{items:?}");
 }
+
+#[test]
+fn a_column_flex_break_inside_an_item_whose_line_cannot_fit_pushes_the_line_not_the_break() {
+    // flex/fragmentation/013: 110px wrapped column flex (line 1: 25px + 50px items, line 2: two
+    // 50px items), `row-gap: 10px`, in 47px columns. The break at 47px falls inside the text line
+    // of the second item of line 1. Chrome cuts the container at 47/94 (rule heights 45/47/18); only
+    // that item moves to the next column, the lines next to it keep their geometry.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div id=\"one\">One</div><div>Two</div><div>Three</div><div>Four</div></div></div>",
+        "body{margin:0} #m{columns:3;height:47px;column-width:110px;width:330px} \
+         #f{border:2px solid #688;display:flex;column-gap:10px;row-gap:10px;width:110px;flex-wrap:wrap;\
+         height:110px;flex-direction:column;column-rule:10px solid blue;row-rule:10px solid gold;row-rule-break:intersection;\n         row-rule-inset:0} #f>div{width:50px;height:50px} #one{height:25px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let r: Vec<(f32, f32, f32)> = v.iter().map(|b| (b.rect.x, b.rect.y, b.rect.height)).collect();
+    assert_eq!(r.iter().map(|f| f.2).collect::<Vec<_>>(), vec![47.0, 47.0, 20.0], "{r:?}");
+}
