@@ -29,7 +29,7 @@ impl Lumen {
         self.animation_scheduler = animation_scheduler::AnimationScheduler::new();
         self.transition_scheduler = TransitionScheduler::new();
         self.starting_style_tracker = StartingStyleTracker::new();
-        self.prev_styles = HashMap::new();
+        self.prev_styles = crate::layout_walk::StyleMap::default();
         self.page_prev_cascade_styles = None;
         self.page_prev_interactive = (None, None, None);
         self.anim_frame = None;

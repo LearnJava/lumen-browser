@@ -1683,9 +1683,9 @@ impl TransitionScheduler {
     /// `fill-mode: forwards/both` (`state.completed`) is dropped silently —
     /// it already fired `transitionend`, so no `transitioncancel` follows.
     /// Call once per relayout, after the regular per-node `sync()` loop.
-    pub fn cancel_missing<S>(
+    pub fn cancel_missing<S, H: std::hash::BuildHasher>(
         &mut self,
-        present: &HashMap<NodeId, S>,
+        present: &HashMap<NodeId, S, H>,
         now: f32,
     ) -> Vec<TransitionEventInfo> {
         let mut events = Vec::new();

@@ -625,3 +625,9 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
 | `dl_splice_diff_cache` | 109,0 | 0,2 |
 
 Причины: `collect_box_styles` глубоко копировал каждый `ComputedStyle` (теперь `Arc`); `tile_grid.update_from_diff` и клон DL в `display_list_cache` не имеют читателей. `apply_ms` одного инкрементального тика 66,5→7,6. Живой замер плавности в этом прогоне шумный (мышь, 10–22 щелчка из 30) — вывод по THREAD-5 не делается; цель ≤ 1 мс не достигнута (≈2,8 мс на тик).
+
+## 2026-10-06 — THREAD-7 срез 2: замер остатка apply на UI и IdMap для prev_styles
+
+`LUMEN_FRAME_LOG=1`, lenta.ru (59 тиков), `dev-release`. Шаги `apply-step` на UI-потоке, среднее за тик: `transitions_sync` 1,02, `clone_hit_test_tree` 0,75, `cv_snap_scroll_state` 0,47, `js_shift_collect` 0,41, `frame_sync` 0,16; сумма ≈2,8 мс, `apply_ms` медиана 4,2 (макс 8,9). Шаги `collect_*` (8 мс на `collect_computed_styles`) идут в отложенной задаче движка, UI не блокируют.
+
+Правка: `prev_styles`/`chrome_prev_styles` — `IdMap` вместо SipHash-`HashMap` (`NodeId` — плотный индекс). `transitions_sync` 1,02→0,79 мс, `apply_ms` медиана 4,2→3,9. Плавность (lenta «в срок» 0,25, ria 0,26–0,34) не изменилась: стопоры кадра UI 55–80 мс — не `apply`. Критерий ≤ 1 мс не достигнут: остаток упирается в `clone_hit_test_tree` и обходы дерева, снять их можно только через `Arc<LayoutBox>`, а `scrolling.rs:83` мутирует дерево на месте (общий `Arc` сделает каждый скролл глубокой копией).

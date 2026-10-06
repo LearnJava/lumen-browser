@@ -289,7 +289,7 @@ impl Lumen {
         // chrome_doc nodes in place rather than inserting/removing them, so
         // there are no "entering" nodes the way JS page mutation can produce.
         let now_s = self.epoch.elapsed().as_secs_f32();
-        let mut new_styles = HashMap::new();
+        let mut new_styles = crate::layout_walk::StyleMap::default();
         collect_box_styles(&layout, &mut new_styles);
         for (node, new_style) in &new_styles {
             if let Some(old_style) = self.chrome_prev_styles.get(node) {
