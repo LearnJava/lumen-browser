@@ -36,6 +36,19 @@ def parse(path):
     return sorted(frames), sorted(wheels)
 
 
+def wheel_clicks(path):
+    """Сумма |dy| по строкам `W` — число щелчков, а не сообщений. Windows склеивает
+    колёсные сообщения, пока поток не качает очередь (UI в долгом кадре), в одно с
+    суммарной дельтой: `W -4` = четыре щелчка. Дистанция прокрутки при этом цела."""
+    total = 0.0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            p = line.split()
+            if len(p) >= 3 and p[0] == "W":
+                total += abs(float(p[2]))
+    return round(total)
+
+
 def analyze(frames, wheels, period, run_gap, tol=1.0, burst_gap=200.0):
     out = {"frames": len(frames), "wheel_events": len(wheels), "period_ms": period}
     if len(frames) < 2:

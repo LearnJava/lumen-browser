@@ -92,13 +92,23 @@ def focus_center(hwnd: int) -> None:
     time.sleep(0.5)
     r = wintypes.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(r))
-    user32.SetCursorPos((r.left + r.right) // 2, (r.top + r.bottom) // 2 + 100)
+    center_cursor(hwnd)
     time.sleep(0.2)
 
 
-def send_scenario(args) -> None:
+def center_cursor(hwnd: int) -> None:
+    r = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    user32.SetCursorPos((r.left + r.right) // 2, (r.top + r.bottom) // 2 + 100)
+
+
+def send_scenario(args, hwnd: int | None = None) -> None:
     for _ in range(args.bursts):
         for _ in range(args.ticks):
+            if hwnd:
+                # Рука на мыши уводит курсор из окна — колесо уходит не в страницу
+                # (замер 13–19 из 30 щелчков). Ставим курсор перед каждым щелчком.
+                center_cursor(hwnd)
             wheel_click()
             time.sleep(args.tick_ms / 1000)
         time.sleep(args.burst_pause_ms / 1000)
@@ -118,8 +128,9 @@ def run_lumen(args, url: str, idx: int) -> dict:
         time.sleep(args.load_s + args.settle_s)
         focus_center(hwnd)
         mark = os.path.getsize(log) if os.path.exists(log) else 0
-        send_scenario(args)
-        time.sleep(1.0)
+        send_scenario(args, hwnd)
+        # хвост: события колеса, застрявшие за долгим кадром UI, дойдут позже секунды
+        time.sleep(float(os.environ.get('SS_TAIL_S', '1.0')))
     finally:
         proc.kill()
         proc.wait(timeout=10)
@@ -131,7 +142,9 @@ def run_lumen(args, url: str, idx: int) -> dict:
     with open(part, 'w') as f:
         f.write(tail)
     frames, wheels = ss.parse(part)
-    return {'url': url, 'browser': 'lumen', **ss.analyze(frames, wheels, args.period_ms, 100.0)}
+    res = ss.analyze(frames, wheels, args.period_ms, 100.0)
+    # wheel_events — сообщений; wheel_clicks — щелчков (Windows склеивает сообщения)
+    return {'url': url, 'browser': 'lumen', **res, 'wheel_clicks': ss.wheel_clicks(part)}
 
 
 def run_chromium(args, url: str, idx: int) -> dict:
