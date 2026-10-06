@@ -37,7 +37,7 @@ use crate::style::{
     compute_pseudo_element_style, Content, ComputedStyle, ContentItem, ListStyleType, ShareCache,
 };
 use lumen_css_parser::Stylesheet;
-use lumen_core::id_hash::IdSet;
+use lumen_core::id_hash::{IdMap, IdSet};
 use lumen_core::Size;
 
 /// Per-element counter stacks snapshot.
@@ -95,10 +95,15 @@ pub struct CascadeStyles {
     /// of the composed-tree parent the style was cascaded under — [`NO_PARENT`] when
     /// unknown).
     ///
+    /// BUG-935 срез 91: keyed with [`IdMap`], not SipHash — every element of a skipped
+    /// subtree is one lookup here ([`confirm_clean_subtree`]), and on ria.ru that was
+    /// the largest part of a forced flush (median 8,5 → 4,8 мс with only the hasher
+    /// changed). The keys are arena indices the engine itself hands out.
+    ///
     /// BUG-935 срез 60: the parent is what tells a shallow restyle that a child was
     /// *moved* — a moved node keeps its entry (every pass visits it) but its
     /// descendants were matched against a different ancestor chain.
-    entries: HashMap<NodeId, (Arc<ComputedStyle>, u32, u32)>,
+    entries: IdMap<NodeId, (Arc<ComputedStyle>, u32, u32)>,
     /// Ordinal of the pass currently writing into this map, or of the last one
     /// to have finished. Wraps; see [`Self::reuse`] for why that is harmless.
     pass: u32,
@@ -145,20 +150,20 @@ pub struct CascadeStyles {
     /// (ria.ru: one `notifications` scope) used to switch the skip off for the
     /// whole document — every forced flush walked all 6000 nodes to re-cascade
     /// four.
-    counter_scopes: HashSet<NodeId>,
+    counter_scopes: IdSet<NodeId>,
 }
 
 impl CascadeStyles {
     /// An empty cache sized for a document of `elements` styled elements.
     fn with_capacity(elements: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(elements),
+            entries: IdMap::with_capacity_and_hasher(elements, Default::default()),
             pass: 0,
             visited: 0,
             swept: false,
             generated_content: false,
             quotes_recorded: false,
-            counter_scopes: HashSet::new(),
+            counter_scopes: IdSet::default(),
         }
     }
 
@@ -336,7 +341,7 @@ impl CascadeStyles {
             // no-op path.
             generated_content: true,
             quotes_recorded: true,
-            counter_scopes: HashSet::new(),
+            counter_scopes: IdSet::default(),
         }
     }
 }
@@ -584,7 +589,7 @@ impl CounterMap {
         // spine's per-subtree licence. The climb stops at the first node already
         // in the set, so the chains share their tails.
         self.styles.quotes_recorded = !self.quotes.is_empty();
-        let mut scopes = HashSet::with_capacity(self.nodes.len() * 4);
+        let mut scopes = IdSet::with_capacity_and_hasher(self.nodes.len() * 4, Default::default());
         for &id in self.nodes.keys() {
             let mut cur = Some(id);
             while let Some(n) = cur.filter(|n| scopes.insert(*n)) {
@@ -1037,7 +1042,7 @@ struct IncrRestyle<'a> {
     /// BUG-935 срез 90 — [`CascadeStyles::counter_scopes`] of the previous pass,
     /// moved out of the carried cache: the subtrees the spine may not skip
     /// because they held counters (or sat inside a counter scope).
-    prev_counter_scopes: HashSet<NodeId>,
+    prev_counter_scopes: IdSet<NodeId>,
 }
 
 /// BUG-341 S27 — the part of the document a pass with this delta can possibly
