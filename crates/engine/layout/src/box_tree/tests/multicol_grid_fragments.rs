@@ -304,3 +304,23 @@ fn a_wrapped_column_flex_is_cut_by_its_items_and_keeps_a_gap_the_break_falls_in_
     let heights: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
     assert_eq!(heights, vec![50.0, 47.0, 13.0], "{heights:?}");
 }
+
+#[test]
+fn a_column_flex_fragment_after_a_dropped_gap_keeps_the_block_size_the_gap_took() {
+    // flex/fragmentation/006: 200px column flex (two columns of four 30px items, `row-gap: 20px`,
+    // centred) in a 150px multicol, balanced to 100px columns. The break falls inside the gap
+    // before item 4; its rest is dropped, but the second fragment is as tall as the first
+    // (102px with the borders) instead of losing the dropped part of the gap, so the column
+    // rule of the second column runs 100px as in the reference.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div><div>8</div></div></div>",
+        "body{margin:0} #m{columns:2;column-width:100px;height:150px;width:330px} \
+         #f{border:2px solid #688;display:flex;column-gap:10px;row-gap:20px;width:90px;flex-wrap:wrap;\
+         flex-direction:column;height:200px;align-items:center;justify-content:center} \
+         #f>div{width:30px;height:30px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let heights: Vec<f32> = v.iter().map(|b| b.rect.height).collect();
+    assert_eq!(heights, vec![102.0, 102.0], "{heights:?}");
+}
