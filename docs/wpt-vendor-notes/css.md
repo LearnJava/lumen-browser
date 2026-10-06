@@ -188,3 +188,50 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - 30 flex, 10 grid, 16 abspos и 4 table reftest уже зелёные — содержимое помещается в одну колонку или тест проверяет только отсутствие красного.
 - `text-indent-and-wide-float.html` — identical в `--screenshot` 800×600, но FAIL в wptrunner; reftest-ы снимаются в 1024×720 (`Unexpected viewport size`, как в срезе 1).
 - BUG-1283: шаг оконного конвейера, который растёт с высотой содержимого, не найден — исключены только растр и layout.
+
+## css-transforms — вердикт и кластеры (WPT-RUN-14 срез 5, 2026-10-06)
+
+Прогон: `run_corpus.py --prefixes css/css-transforms --out-dir .tmp/wpt-run14/transforms`, сборка `dev-release` от `main` 0e2f5e1bb (движок не менялся), `--processes 7`, 66 с. `score_audit.py`: «no leak», вердикт есть у всех 928 исполненных id; ещё 7 шардов (manual/visual) в знаменатель не входят.
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 793 | 280.00 | 35.3 % |
+| testharness | 107 | 42.51 (2982 из 5508 сабтестов) | 40 % |
+| crashtest | 28 | 28.00 | 100 % |
+| **итого** | **928** | **350.51 = 37.77 %** | |
+
+592 id не зелёные: 513 reftest FAIL и 79 testharness (76 с упавшими сабтестами, 2 TIMEOUT, 1 ERROR). Пиксельный разбор 513 reftest (`reftest_pixdiff.py --viewport 800x600 --ahem`): 468 thick, 39 thin-only (шов антиалиасинга, [BUG-1249](../../bugs/BUG-1249-OPEN.md)), 3 no-match-ref, 2 identical (в WPT падают из-за шрифта/окна 1024×720).
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** по исходнику теста и эталона (таблица в порядке применения, `.tmp/wpt-run14/transforms-clusters.json`); один id — один кластер. Причина у каждого кластера, кроме помеченных «не разобрано», подтверждена пробой: `--screenshot` страницы с минимальной разметкой, цвет пикселей, `--dump-display-list`. Для SVG-reftest ещё считались красные пиксели на снимке самого теста (`red.py`): красный «якорь» остаётся у 205 из 305 SVG-reftest, то есть они падают из-за нарисованного, а не из-за шва.
+
+| Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|---|
+| SVG: `transform-origin`, `transform-box`, CSS-трансформ на фигуре | 158 | — | 137 thick, 21 thin | `transform-origin/svg-origin-length-001.html`, `transform-box/fill-box-002.html`, `2d-rotate-001.html`, `inline-styles/svg-inline-styles-004.html` | `<rect style="transform:translate(100px,0)">`, `#a{transform:…}`, `translate:`, `rotate:` и `transform-origin=`/CSS на фигуре не читаются (читается только атрибут `transform`); на `<g>` и HTML-боксе те же свойства работают; `transform-box` в движке нет вовсе | P3 / P4 | [BUG-1286](../../bugs/BUG-1286-OPEN.md); `transform-box` — `CSS-SPECS.md` (`STATUS-P4.md`) |
+| SVG `<pattern>` | 71 | — | 71 thick | `matrix/svg-matrix-008.html`, `patternTransform/*` | элемента нет вовсе: `fill="url(#p)"` ничего не рисует (`SvgPaint` без паттерна, градиенты есть) | P1 | [BUG-1294](../../bugs/BUG-1294-OPEN.md) → `SVG-PATTERN` (`ROADMAP.md`, `STATUS-P1.md`) |
+| SVG: проценты и `em` в геометрии | 41 | — | 41 thick | `scale/svg-scale-010.html`, `rotate/svg-rotate-angle-45-001.html` | `<rect width="100%" height="100%">` не рисуется (`svg_attr_f32` читает голое число): падает эталон, не тест | P3 | [BUG-1287](../../bugs/BUG-1287-OPEN.md) |
+| `PushTransform` и содержимое вне полотна | 16 (+25 пересечений с кластерами выше) | — | 16 thick | `group/svg-transform-group-007.html`, `svg-transform-nested-017.html` | CPU-растр рисует содержимое трансформа в слой размером с полотно в локальных координатах: что до трансформации левее/выше нуля или за краем — отбрасывается (`left:900px; translate(-700px)` пропадает, повёрнутый блок с `left:-50px` наполовину) | P3 | [BUG-1288](../../bugs/BUG-1288-OPEN.md) |
+| HTML: 3D (`perspective`, `preserve-3d`, `backface-visibility`, `translateZ`) | 77 | — | 71 thick, 3 no-match-ref, 2 identical | `transform3d-perspective-006.html`, `transform3d-preserve3d-009.html`, `perspective-origin-004.html` | CPU-растр сплющивает матрицу `PushTransform` до 2D-аффинной (`mat4_to_2d_affine`): `perspective:100px` + `translateZ(50px)` даёт 50×50 вместо 100×100, `perspective()+translateZ(25px)` не рисуется; живое окно (wgpu) не проверялось | P3 | [BUG-1290](../../bugs/BUG-1290-OPEN.md) |
+| HTML: `transform` на `<input>` | 19 | — | 19 thick | `transform-input-005.html` | дефект в **эталоне**: `position:relative; top:±10px` не сдвигает `inline-block`/`<input>` по вертикали (`left` работает), тест (`translateY`) верен | P3 | [BUG-1291](../../bugs/BUG-1291-OPEN.md) |
+| HTML: `transform` на таблице | 16 | — | 16 thick | `transform-table-004.html`, `transform-display-002.html`, `transform-abspos-006.html` | в display list нет `PushTransform` у `<table>`/`display:table` (у `inline-block`, `list-item` есть) | P3 | [BUG-1289](../../bugs/BUG-1289-OPEN.md) |
+| HTML: процентный `translate` | 13 | — | 13 thick | `transform-percent-001.html`, `transform-inherit-002.html` | `translateX(50%)`, `translate(50%,100%)`, `translate: 50% 0` — сдвиг 0 (`TransformFn` хранит px); из 35 id модуля с процентным translate 13 — reftest | P3 | [BUG-1292](../../bugs/BUG-1292-OPEN.md) |
+| testharness: интерполяция `transform`/`perspective-origin`/individual (`animation/*`) | 15 | 1681 | — | `animation/transform-interpolation-001.html` (335), `-005` (325), `-004` (188), `list-interpolation.html` | CSS-переход/анимация создаётся на следующем кадре: синхронное `getComputedStyle()` после смены стиля с `transition-delay:-50s` отдаёт конечное значение, `getAnimations()` пуст; Web Animations (`pause()`+`currentTime`) при этом верны | P3 | [BUG-1293](../../bugs/BUG-1293-OPEN.md) |
+| testharness: `composite: add/accumulate` (`*-composition.html`) | 8 | 418 | — | `animation/transform-skew-composition.html`, `transform-rotate-composition.html` | CSS Animations: свойство `animation-composition` не парсится (`CSS.supports` — `false`) — большая часть 327 сабтестов; Web Animations: `composite:'add'` простых значений (`opacity`, `translateX`) верен (проба), остальные 91 сабтест (skew/rotate/perspective) — причина не подтверждена | P4 / не разобрано | `CSS-SPECS.md` (`animation-composition`, `STATUS-P4.md`); `skew`/`rotate` — не разобрано |
+| testharness: `getComputedStyle` | 10 | 151 | — | `parsing/transform-origin-computed.html`, `parsing/scale-parsing-computed.html`, `inheritance.html` | `scale`/`rotate`/`translate`/`transform-origin`/`backface-visibility`/`transform-box`/`transform-style` — `""` в `getComputedStyle` (нет строк в рукописной карте — механизм [BUG-472](../../bugs/BUG-472-OPEN.md)/[BUG-1278](../../bugs/BUG-1278-OPEN.md)); `perspective-origin` отдаёт `10% 50%` вместо px | P3 | **без записи** (< 20 id) |
+| testharness: парсинг `*-valid`/`*-invalid`/каноническая сериализация | 18 | 159 | — | `parsing/transform-valid.html` (22: `scale(250%)` → `scale(2.5)`), `parsing/transform-invalid.html` (20: `none scale(2)` принято), `translate-parsing-*`, `perspective-origin-*`, `rotate-parsing-*` | класс [BUG-484](../../bugs/BUG-484-FIXED.md): `element.style` принимает недопустимое и не канонизирует | P4 | **без записи** (< 20 id) |
+| testharness: hit-test в 3D, `3d-point-mapping*` | 15 | 76 | — | `3d-point-mapping.html`, `transform-hit-testing.html` | `elementFromPoint` по точке внутри 3D-преобразованного элемента даёт не тот узел/`null` (2D `translate`/`rotate` верны — проверено); три файла (`hittest-preserve-3d*`, `scroll-preserve-3d`) ждут `testdriver-actions.js` и падают в TIMEOUT/ERROR | P3 | **без записи** (< 20 id); `testdriver` — известный гэп WPT-RUN-2 |
+| testharness: прочее | 13 | 41 | — | `2d-rotate-js.html`, `transform-getBoundingClientRect-001.html`, `transform-important.html` | разные формы (`!important` попадает в значение, число с точностью 7 знаков, `getBoundingClientRect` с 125 вместо 25, `transform-origin` у `<svg>` в shadow) | — | **не разобрано** |
+| HTML: прочее reftest | 82 | — | 75 thick, 7 thin | `transform-origin-010.html`, `transform-fixed-bg-004.html`, `animation/rotate-explicit-and-implicit-keyframes.html`, `transform-box/cssbox-*` | **не разобрано**; часть (`animation/*` ~14 reftest) — вероятно [BUG-1293](../../bugs/BUG-1293-OPEN.md), `transform-box/cssbox-*` — `transform-box` | — | — |
+| SVG: прочее | 20 | — | 9 thick, 11 thin | `gradientTransform/svg-gradientTransform-001.html`, `rotate/svg-rotate-3args-invalid-002.html` | **не разобрано** (`gradientTransform` — свойства градиента; `rotate(90 30%)` — невалидный синтаксис должен отбрасываться) | — | — |
+
+Сумма по таблице: 513 reftest + 79 testharness = 592. Кластеры SVG пересекаются (один id мог упасть и по BUG-1286, и по BUG-1288/1287); число id у каждого — по первому совпавшему правилу, поэтому «ожидаемый выигрыш» от одной правки по этим числам оценивать нельзя.
+
+### Что остаётся неизвестным
+
+- 102 reftest (82 HTML + 20 SVG) без разбора; в `animation/*` reftest вероятно сидит BUG-1293, но не проверено.
+- Кластеры SVG пересекаются: после BUG-1286/1287/1288/1294 цифры перераспределятся — перепрогон модуля имеет смысл сделать после первых двух.
+- BUG-1290 (3D) проверен только в CPU-растре, через который wptrunner снимает reftest (`lumen --ipc-server`); живое окно (wgpu) заявлено перспективно-корректным и не измерялось.
+- wptrunner снимает reftest-ы в 1024×720, не 800×600 (`Unexpected viewport size`, как в срезе 1): влияет на тесты, привязанные к размеру окна.
+- `hittest-preserve-3d*`, `scroll-preserve-3d` — TIMEOUT/ERROR из-за `testdriver-actions.js`; движок эти файлы не оценены.
+- Эффект `animation-composition` отделён от BUG-1293 только на уровне `CSS.supports`; доля падений `Compositing CSS Animations` (327 сабтестов) после BUG-1293 неизвестна.
