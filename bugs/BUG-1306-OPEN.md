@@ -38,3 +38,7 @@ WPT-RUN-14 срез 7: 219 id / 4 007 упавших сабтестов `css/css
 ## Дополнение: WPT-RUN-14 срез 8 (2026-10-06, `css/css-grid`, часть 2)
 
 В `grid-model`, `layout-algorithm`, `placement`, `subgrid` приём `document.fonts.ready` → измерение даёт ещё 23 id / 414 сабтестов (`grid-model/grid-gutters-and-flex-content-001.html`, `grid-find-fr-size-gutters-001/002.html`, `layout-algorithm/grid-intrinsic-track-sizes-001.html` и др.), в `grid-lanes` — ещё 4 id / 210 сабтестов. Итого в `css-grid` целиком: 242 + 4 id и около 4 600 сабтестов, не говорящих ни о grid, ни об Ahem-раскладке.
+
+## Дополнение: WPT-RUN-14 срез 9 (2026-10-06, `css/css-text`, часть 1)
+
+`css/css-text/i18n/{ja,zh,other-lang,unknown-lang}/css-text-line-break-*.html` — 84 id / 1 104 сабтеста (по 21 файлу на каталог): страница строит `div` с японским/китайским текстом на `@font-face` M+ (`/fonts/mplus-1p-regular.woff`), `document.fonts.ready.then(validate)` и сравнивает `getBoundingClientRect().left` span-а в тесте и в эталоне. Проба (`promise_test`): сразу после `fonts.ready` — `offsetHeight`/`left` = 32/167 (строка не перенеслась, ширина по оценщику), через 1 000 мс — 62/99 (строка перенеслась; совпадение с эталонным значением теста не проверялось — метрики кандзи в этом стенде оценочные, см. «Что остаётся неизвестным» в разделе css-text). Все сабтесты падают `expected 48.375 but got 166.5` — 166,5 это позиция span-а при однострочной раскладке.

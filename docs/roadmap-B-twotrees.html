@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-06",
  "counts": {
-  "open": 196,
+  "open": 202,
   "fixed": 1063,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1261,
+ "total_bugs": 1267,
  "phases": [
   {
    "id": "P0",
@@ -647,6 +647,23 @@
      "status": "planned",
      "size": "L",
      "note": "`display: grid-lanes` (CSS Grid L3, бывший `masonry`): раскладка по полосам (lanes) — элементы без явного места падают в самую короткую полосу, `flow-tolerance`, `grid-lanes-direction`, `grid-lanes-pack`, шорткат `grid-lanes`, `grid-template-columns/rows` на одной оси и `masonry`-ключевое слово на другой, `subgrid` в grid-lanes, abspos, baseline, `order`, intrinsic sizing. Сейчас значение разбирается без ошибки, но `getComputedStyle(el).display` отдаёт `block`, и контейнер раскладывается как блок: проба — `display:grid-lanes; grid-template-columns:100px 100px; gap:10px; width:300px` с четырьмя детьми 50/30/20/20 даёт детей друг под другом шириной 300. `masonry.rs` (waterfall) лежит неподключённым; решение «masonry — запасной вариант обычной сетки по образцу Edge» (CSS-SPECS.md:508, BUG-105/143) принято до переименования в `grid-lanes` и требует подтверждения пользователя перед стартом. Замер WPT-RUN-14 S8 (2026-10-06): `css/css-grid/grid-lanes` — 884 id, 124 зелёных случайно (раскладка блока совпала с эталоном), 760 не зелёных: 669 reftest (666 thick) и 91 testharness (1 193 сабтеста). По подкаталогам не зелёные / всего: `subgrid` 180/226, `track-sizing` 173/196, `alignment` 88/97, `intrinsic-sizing` 60/69, `item-placement` 64/67, `tentative` 60/64, `baseline` 40/40. Часть testharness-провалов — `getComputedStyle` (BUG-1307) и разбор (BUG-1315), не раскладка; свойства `flow-tolerance`/`grid-lanes-*` — P4 (`CSS-SPECS.md:508`). Критерий готовности: `display: grid-lanes` вычисляется как есть, четыре базовых reftest из `grid-lanes/track-sizing` зелёные, остаток по подкаталогам разобран заново"
+    },
+    {
+     "id": "LINEBREAK-UAX14",
+     "title": "LINEBREAK-UAX14: возможности переноса строки по UAX #14",
+     "status": "planned",
+     "size": "M",
+     "note": "Возможности переноса строки по UAX #14 вне CJK. `box_tree/inline_wrap.rs` режет текст по `split_whitespace()`, а `line_break.rs` знает только ~60 символов CJK-классов (OP/CL/EX/NS/PR/PO) и включается лишь рядом с CJK-символом. Пробы (`--dump-layout`, 20ch/50ch): после U+2010, U+2013, `-` (`word-word-word-word-word-word-word` в 20ch — одна строка 34 символа), U+200B, `\\|`, после ряда BA/B2-символов переноса нет; `<wbr>` работает; рядом с inline-блоком перенос есть всегда, хотя WJ, U+200D, U+FEFF, U+180E, U+034F, U+2011, U+0F08 его запрещают (`line-breaking-atomic-006/011/013/014/016/020/022/024/026` — красное остаётся в локальном A/B на Ahem); OP-символы вне таблицы (U+0F3C, U+2045, U+2768 — `css3-text-line-break-opclns-005/009/014`: `中中⁅` / `文` вместо `中中` / `⁅文`; по выборке 40 из 158 `opclns`, каждый четвёртый, с реальным CJK-шрифтом 14 совпали с эталоном, 26 нет). Что нужно: классы UAX #14 для всего Unicode (в `lumen-encoding` уже есть ICU4x `LineSegmenter`, `unicode_provider.rs:24`; `lumen-layout` от него не зависит — граница слоёв решается владельцем), `line-break: strict/normal/loose/anywhere` и `word-break: keep-all` поверх них, GL/WJ/ZWJ у inline-блоков (CSS Text L3 §5.1, §5.2; BUG-1323 — отдельно, дёшево: NBSP/NNBSP/U+2007 считаются пробелом). Замер WPT-RUN-14 S9 (2026-10-06): `css/css-text/i18n/css3-text-line-break-baspglwj-*` 80 id, `opclns-*` 158 reftest, `line-breaking/line-breaking-atomic-*`/`-replaced-*` 34 id (по локальному A/B на Ahem красное остаётся у 17 из 33 reftest, у остальных 16 — вероятно BUG-1273), `line-breaking-001…012` 12 (красное — у 001 и 012, остальные 10 — вероятно BUG-1273). Критерий готовности: baspglwj-* зелёные по `normal` и `pre-line`, `opclns-*` совпадают с эталоном, `line-breaking-atomic-*` без красного",
+     "bugs": [
+      "BUG-1323"
+     ]
+    },
+    {
+     "id": "TEXT-JUSTIFY",
+     "title": "TEXT-JUSTIFY: text-align justify",
+     "status": "planned",
+     "size": "L",
+     "note": "`text-align: justify`/`justify-all`/`match-parent` и `text-align-last: justify`, `text-justify`. `TextAlign` (`style/values/typography.rs:69`) знает только start/end/left/center/right; разбор `text.rs:102` на неизвестное значение оставляет прежнее (`getComputedStyle` отдаёт `center` вместо `justify`), `TextAlignLast::Justify` в `align_one_line` приравнен к `start` (`inline_wrap.rs:1108`), раскладка с растяжением межсловных промежутков отсутствует: проба `text-align:justify` в 25ch — строки по `x=0` с естественной шириной. Нужно: режим justify в выравнивании строки (растяжение пробелов, `text-justify: inter-word|inter-character|none|auto`, последняя строка и строка перед `<br>` — по `text-align-last`), `justify-all`, `match-parent` (CSS Text L3 §7.1–7.3). Замер WPT-RUN-14 S9 (2026-10-06): `text-align/text-align-justify-*`, `-justifyall-*`, `-last-justify*`, `-match-parent-*` — 23 reftest; `text-justify` — 3 id / 8 сабтестов parsing (разбор свойства — P4, `CSS-SPECS.md:76`). Критерий готовности: reftest перечисленных семейств совпадают с эталоном"
     }
    ],
    "date": "2026-06"
@@ -5952,9 +5969,9 @@
       {
        "id": "WPT-RUN-14-S9",
        "title": "WPT-RUN-14-S9: css-text часть 1",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон первой половины css/css-text (подкаталоги от animations до text-align и файлы в корне, около 1040 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон первой половины css/css-text (подкаталоги от animations до text-align и файлы в корне, около 1040 id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-06 (ветка `p2-wpt-run14-s9`): 1032 automatable id, 21.69 % (reftest 132/696, testharness 1109/3694 сабтестов, crashtest 25/25), 348 с, «no leak». 833 не зелёных id разнесены на 22 кластера (`docs/wpt-vendor-notes/css.md` §css-text, часть 1). Главное: сам перенос строк — `inline_wrap.rs` режет текст по `split_whitespace()` и знает UAX #14 только внутри CJK-таблицы на ~60 символов (`line_break.rs`), отсюда 80 id baspglwj (нет переноса после дефиса, тире, ZWSP) + 158 reftest opclns (часть OP-класса вне таблицы) + рядом с inline-блоком — заведено `LINEBREAK-UAX14` (P1); `text-align: justify`/`justify-all` не реализован вовсе (значение молча игнорируется) — `TEXT-JUSTIFY` (P1). Дефекты: BUG-1321 (атрибут `dir` не задаёт `direction`, 90 id содержат `dir`, 16 reftest в `text-align`), BUG-1322 (`pre-wrap`/`break-spaces` не переносят строку, 22 id / 44 сабтеста только на этом), BUG-1323 (NBSP/NNBSP/FIGURE SPACE — точка переноса), BUG-1324 (первое слово строки не режется `break-all`/`&shy;`, 48 id hyphens), BUG-1325 (CSSOM свойств CSS Text, 64 id / 483 сабтеста parsing), BUG-1326 (`tab-size`: N × 8 px вместо позиций табуляции, 11 id); BUG-1305/1306/1273 дополнены (интерполяция «from neutral» 396 сабтестов, `fonts.ready` → M+ 84 id / 1 104 сабтеста, 59 Ahem-identical). Свойств нет вовсе: `hanging-punctuation`, `hyphenate-character`, `hyphenate-limit-chars`, `text-autospace`, `text-fit`, `text-group-align`, `text-justify`, `text-spacing(-trim)`, `word-space-transform` (23 id / 207 сабтестов parsing, 16 reftest hanging-punctuation, 2 id animations) — `CSS-SPECS.md:76` (P4). Не разобрано: 35 id «прочее» (segment-break-transformation 18), `shaping/` + `boundary-shaping/` 47, `letter-spacing/` 22, `line-break/` 51. Движок не менялся"
       },
       {
        "id": "WPT-RUN-14-S10",
@@ -9241,6 +9258,48 @@
    "status": "open",
    "title": "`grid-template-columns` из 100 000 повторов `repeat(1000, Npx)` (100 млн дорожек) раскладывается 20,5 с и занимает 12,4 ГБ пика (`--dump-layout`); в wptrunner п…",
    "component": "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — разбор `grid-template-columns` без верхней границы числа дорожек)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1321": {
+   "status": "open",
+   "title": "HTML-атрибут `dir` (`<div dir=rtl>`, `<bdo dir>`, `dir=auto`) не задаёт `direction`: `getComputedStyle` отдаёт `ltr`, текст не сдвигается к правому краю, хотя `…",
+   "component": "layout (`crates/engine/layout/src/style/ua.rs`, `style/presentational.rs` — нет правила для атрибута `dir`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1322": {
+   "status": "open",
+   "title": "`white-space: pre-wrap` и `break-spaces` не переносят строку по ширине — ведут себя как `pre` (текст из 11 слов в 200 px: высота 22,15 против 44,30 у `normal`).…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:600` — ветка `preserves_whitespace()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1323": {
+   "status": "open",
+   "title": "U+00A0, U+202F, U+2007 (UAX #14 класс GL) дают возможность переноса: `aaaa bbbb&nbsp;cccc` в 10ch → `aaaa bbbb` / `cccc`; по CSS Text L3 §4.1.1 пробелами докуме…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:383,676,1228`, `inline_build.rs` — `split_whitespace()`/`is_whitespace()` считают пробелом NBSP, NNBSP, FIGURE SPACE)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1324": {
+   "status": "open",
+   "title": "слово, начинающее строку, не режется: `word-break: break-all` на 29 буквах без пробелов — одна строка (ожидается 4), `hyphens: manual` на `aaaa&shy;bbbbbbbbbbbb…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:735,816,880` — `break-all`, мягкий и автоматический перенос стоят за условием `needs_wrap`, а оно требует непустой строки)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1325": {
+   "status": "open",
+   "title": "CSSOM свойств CSS Text: `getComputedStyle()` отдаёт `\"\"` для `tab-size`, `text-wrap*`, `line-break`, `word-break`, `overflow-wrap`, `hyphens`, `text-align-last`…",
+   "component": "js/layout (`crates/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — нет строк и грамматики для свойств CSS Text)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1326": {
+   "status": "open",
+   "title": "`tab-size`: табуляция — фиксированные N × 8 px после предшествующего текста, а не расстояние до следующей позиции в ширинах пробела (`tab-size: 8` после `abcdef…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `measure_text_w_varied(…, tab_size, …)`)",
    "date": null,
    "debtor": false
   },
@@ -17788,6 +17847,9 @@
   "js/layout (`crates/js/src/v8_runtime/style_flush.rs` — инкрементальная ветка `maybe_flush`; `crates/engine/layout/src/lib.rs` — `collect_layout_rects_scoped`/`collect_client_rects_scoped`/`collect_computed_styles_scoped`)": [
    "BUG-1238"
   ],
+  "js/layout (`crates/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — нет строк и грамматики для свойств CSS Text)": [
+   "BUG-1325"
+  ],
   "js/layout (computed-style reflection)": [
    "BUG-470"
   ],
@@ -18019,6 +18081,15 @@
   "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — `is_inline_content`/`is_atomic_inline_level`)": [
    "BUG-928"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:600` — ветка `preserves_whitespace()`)": [
+   "BUG-1322"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:735,816,880` — `break-all`, мягкий и автоматический перенос стоят за условием `needs_wrap`, а оно требует непустой строки)": [
+   "BUG-1324"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `measure_text_w_varied(…, tab_size, …)`)": [
+   "BUG-1326"
+  ],
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — слияние слов в `InlineFrag`; критерий `ComputedStyle::text_rendering_eq`)": [
    "BUG-1190"
   ],
@@ -18153,6 +18224,9 @@
   ],
   "layout (`crates/engine/layout/src/style/ua.rs::strip_ua_appearance_box_styling` — только при `appearance: none`), paint (`display_list/form_controls.rs`)": [
    "BUG-1277"
+  ],
+  "layout (`crates/engine/layout/src/style/ua.rs`, `style/presentational.rs` — нет правила для атрибута `dir`)": [
+   "BUG-1321"
   ],
   "layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)": [
    "BUG-1275"
