@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-06",
  "counts": {
-  "open": 161,
+  "open": 170,
   "fixed": 1063,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1226,
+ "total_bugs": 1235,
  "phases": [
   {
    "id": "P0",
@@ -620,6 +620,16 @@
      "status": "planned",
      "size": "M",
      "note": "Остаток фрагментации grid: `is_fragmentable_grid` (`box_tree/multicol_abspos.rs:57`) режет только сетку без рамок, с элементами-листьями, в multicol с definite height (`balance` допускается с BUG-553 среза 69, после прогона S4); иначе сетка ставится атомарно. Проба: ряды 100px + 100px, один элемент с `border` или с ребёнком — сетка 50×200 в первой колонке. Нужно: разрыв между рядами в общем случае (рамки/padding сетки, элементы с содержимым, `balance`), разрыв внутри элемента (параллельные потоки), abspos-элементы сетки, subgrid. WPT `css/css-break/grid/*`: 89 id — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+    },
+    {
+     "id": "SVG-PATTERN",
+     "title": "SVG-PATTERN: SVG `<pattern>`",
+     "status": "planned",
+     "size": "M",
+     "note": "SVG `<pattern>` (SVG 1.1 §13.3, SVG 2 §13.8): элемента нет вовсе — `fill=\"url(#p)\"` на `rect`/`circle`/`path` ничего не рисует (`grep -i pattern crates/engine/layout/src/box_tree/svg*.rs` пуст), `SvgPaint` знает `Color`/`Gradient`/`Url`, не `Pattern`. Нужно: разбор `<pattern>` (`patternUnits`, `patternContentUnits`, `patternTransform`, `x`/`y`/`width`/`height`, `viewBox`/`preserveAspectRatio`, `href`-наследование), тип паттерна рядом с `SvgGradientDef` (LIB-5), заливка плиткой через клип и `PushTransform` (фигура + `stroke`), обе ветки растра (CPU и wgpu). Проба (`--screenshot`): прямоугольник с `fill=\"url(#p)\"` — белый, градиент в тех же условиях рисуется. WPT `css/css-transforms`: 71 reftest (`matrix/svg-matrix-*` 69, `patternTransform/*` 2) — красный «якорь» остаётся на снимке у 58 из 71; плюс `svg/painting`, `svg/pservers`. Кластер — `docs/wpt-vendor-notes/css.md` §css-transforms (WPT-RUN-14 S5, 2026-10-06).",
+     "bugs": [
+      "BUG-1294"
+     ]
     }
    ],
    "date": "2026-06"
@@ -2312,7 +2322,7 @@
        "id": "css-specs-t0",
        "title": "CSS модули — Tier 0 (Foundation)",
        "status": "active",
-       "note": "9✅ 2🟡 0⬜ 0🚫 из 11 модулей CSS-SPECS.md (Tier 0)"
+       "note": "8✅ 3🟡 0⬜ 0🚫 из 11 модулей CSS-SPECS.md (Tier 0)"
       },
       {
        "id": "css-specs-t1",
@@ -5897,7 +5907,7 @@
       {
        "id": "WPT-RUN-14-S5",
        "title": "WPT-RUN-14-S5: css-transforms",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Прогон css/css-transforms (около 940 id) через run_corpus --prefixes, кластеры провалов и записи в очереди. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
       },
@@ -7619,7 +7629,7 @@
        "title": "THREAD-5: замер плавности прокрутки колесом против Chromium",
        "status": "planned",
        "size": "M",
-       "note": "Заведена 2026-10-06 по решению пользователя (очередь P6): прокрутка колесом в Chromium заметно плавнее, чем в Lumen, а метрики BUG-935 (RTT MCP `scroll`, медиана флаша) плавность не описывают. Нужен замер плавности, общий для обоих браузеров: настоящие события колеса через Win32 `SendInput` в окно на переднем плане (CDP/MCP обходят путь ОС), серия щелчков на ria.ru/lenta.ru/rbc.ru без VPN, `--maximized`, `LUMEN_NO_ADBLOCK=1`. Метрики: доля кадров вовремя (интервал present ≤ периода vsync монитора), максимальный разрыв между кадрами, число рывков (разрыв > 2 периодов), задержка от щелчка до первого кадра со сдвигом. Chromium — из трейса (`PipelineReporter`, `EventLatency` `FIRST_GESTURE_SCROLL_UPDATE`), портабельный Chromium 153 из кэша Playwright; Lumen — нужна метка времени present в рендер-потоке (`crates/shell/src/render_thread.rs`) рядом с `LUMEN_FRAME_LOG`. Основа — `scripts/chrome_interaction_baseline.py` (база Chromium по стилям/раскладке/длинным задачам, 2026-10-06). Итог: база в `docs/perf/runs/`, запись в `docs/perf/journal.md`, пороги «не хуже Chromium» для THREAD-6…THREAD-12. Делается первой: остальные задачи дорожки меряются этим инструментом."
+       "note": "Заведена 2026-10-06 по решению пользователя (очередь P6): прокрутка колесом в Chromium заметно плавнее, чем в Lumen, а метрики BUG-935 (RTT MCP `scroll`, медиана флаша) плавность не описывают. Нужен замер плавности, общий для обоих браузеров: настоящие события колеса через Win32 `SendInput` в окно на переднем плане (CDP/MCP обходят путь ОС), серия щелчков на ria.ru/lenta.ru/rbc.ru без VPN, `--maximized`, `LUMEN_NO_ADBLOCK=1`. Метрики: доля кадров вовремя (интервал present ≤ периода vsync монитора; машина пользователя — встроенный дисплей 1920×1080, 60,027 Гц, Intel Iris Plus, то есть период 16,66 мс), максимальный разрыв между кадрами, число рывков (разрыв > 2 периодов), задержка от щелчка до первого кадра со сдвигом. Chromium — из трейса (`PipelineReporter`, `EventLatency` `FIRST_GESTURE_SCROLL_UPDATE`), портабельный Chromium 153 из кэша Playwright; Lumen — нужна метка времени present в рендер-потоке (`crates/shell/src/render_thread.rs`) рядом с `LUMEN_FRAME_LOG`. Основа — `scripts/chrome_interaction_baseline.py` (база Chromium по стилям/раскладке/длинным задачам, 2026-10-06). Итог: база в `docs/perf/runs/`, запись в `docs/perf/journal.md`, пороги «не хуже Chromium» для THREAD-6…THREAD-12. Делается первой: остальные задачи дорожки меряются этим инструментом."
       },
       {
        "id": "THREAD-6",
@@ -8969,6 +8979,69 @@
    "status": "open",
    "title": "`mixed-content` под wptrunner не измеряет enforcement: `http://*.localhost` для движка a priori authenticated (Secure Contexts §3.1), http-хоп с https-страницы…",
    "component": "тулинг WPT (`tools/wptrunner/wptrunner/browsers/lumen.py::env_options` — `browser_host = \"localhost\"`; движок `origin.rs::is_loopback_host` прав)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1286": {
+   "status": "open",
+   "title": "SVG-фигуры (`rect`/`circle`/`path`…) читают только атрибут `transform`: CSS `transform`/`translate`/`rotate`/`scale` в `style` и таблицах стилей, `transform-ori…",
+   "component": "layout (`crates/engine/layout/src/box_tree/svg.rs` — `parse_svg_transform(get_attr(\"transform\"))`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1287": {
+   "status": "open",
+   "title": "Процентные длины SVG-геометрии (`width=\"100%\"`, `cx=\"50%\"`, `x=\"10%\"`, `5em`) вычисляются в 0: `<rect width=\"100%\" height=\"100%\">` не даёт `FillRect`. WPT `css/…",
+   "component": "layout (`crates/engine/layout/src/box_tree/svg.rs::svg_attr_f32`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1288": {
+   "status": "open",
+   "title": "CPU-растр рисует содержимое `PushTransform` в слой размером с полотно в локальных координатах: блок, лежащий до трансформации левее/выше нуля или за краем полот…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs`, ветка `PushTransform`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1289": {
+   "status": "open",
+   "title": "`transform` на `<table>`/`display:table` не применяется (в display list нет `PushTransform`), на `inline-block`/`list-item` — применяется. WPT `css/css-transfor…",
+   "component": "layout/paint (бокс-обёртка таблицы)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1290": {
+   "status": "open",
+   "title": "CPU-растр сплющивает 3D-матрицу `PushTransform` до 2D-аффинной (z-строка и деление на w отбрасываются): `perspective` + `translateZ`, `perspective()`, `rotateX/…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs`, `PushTransform` → `mat4_to_2d_affine`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1291": {
+   "status": "open",
+   "title": "`position: relative; top/bottom` не сдвигает `inline-block`/`<input>`/`<button>` по вертикали (`left` работает; у `display:block` работает обе оси). WPT `css/cs…",
+   "component": "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1292": {
+   "status": "open",
+   "title": "Проценты в `translate()`/`translateX/Y/3d()`/свойстве `translate` вычисляются как 0 (`TransformFn` хранит только px; `translateX(50%)` — нет `PushTransform` воо…",
+   "component": "layout (`crates/engine/layout/src/style/parse/transform.rs::parse_transform_fn`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1293": {
+   "status": "open",
+   "title": "CSS-переход/анимация создаётся на следующем кадре: синхронное `getComputedStyle()` после смены стиля с `transition-delay:-50s` отдаёт конечное значение, `getAni…",
+   "component": "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1294": {
+   "status": "open",
+   "title": "SVG `<pattern>` (`fill=\"url(#p)\"`, `patternTransform`) не реализован: заливка не рисуется. WPT `css/css-transforms`: 71 reftest (`matrix/svg-matrix-*`). OPEN (Д…",
+   "component": "layout/paint (`box_tree/svg.rs`, `SvgPaint`)",
    "date": null,
    "debtor": false
   },
@@ -17660,6 +17733,9 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738"
   ],
+  "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)": [
+   "BUG-1291"
+  ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`, `collapsed_bottom_margin`; `block_flow_trampoline.rs`; `box_tree/types.rs` — `BoxRole`/`PseudoKind`)": [
    "BUG-1026"
   ],
@@ -17725,6 +17801,12 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — `auto`-поля через `resolve_or_zero`)": [
    "BUG-1282"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/svg.rs::svg_attr_f32`)": [
+   "BUG-1287"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/svg.rs` — `parse_svg_transform(get_attr(\"transform\"))`)": [
+   "BUG-1286"
   ],
   "layout (`crates/engine/layout/src/box_tree/tests/grid_trampoline.rs`, `box_tree/grid_trampoline.rs`)": [
    "BUG-1266"
@@ -17809,6 +17891,9 @@
   "layout (`crates/engine/layout/src/style/matching/forms.rs:1240`), shell (`crates/shell/src/frame_dynamic_load.rs:49`)": [
    "BUG-1218"
   ],
+  "layout (`crates/engine/layout/src/style/parse/transform.rs::parse_transform_fn`)": [
+   "BUG-1292"
+  ],
   "layout (`crates/engine/layout/src/style/substitute.rs::expand_custom_functions_scoped`, `style/cascade.rs::shadow_function_chain`)": [
    "BUG-519"
   ],
@@ -17885,8 +17970,14 @@
   "layout/paint (`crates/engine/layout/src/invariants.rs`, `crates/engine/paint/src/invariants.rs`)": [
    "BUG-1053"
   ],
+  "layout/paint (бокс-обёртка таблицы)": [
+   "BUG-1289"
+  ],
   "layout/paint/shell": [
    "BUG-242"
+  ],
+  "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)": [
+   "BUG-1293"
   ],
   "layout/shell (замещаемые элементы, aspect-ratio)": [
    "BUG-269"
@@ -18091,6 +18182,12 @@
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — растеризация прямоугольников с дробными координатами)": [
    "BUG-1249"
+  ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs`, `PushTransform` → `mat4_to_2d_affine`)": [
+   "BUG-1290"
+  ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs`, ветка `PushTransform`)": [
+   "BUG-1288"
   ],
   "paint (`crates/engine/paint/src/display_list/walk.rs`)": [
    "BUG-1037"
