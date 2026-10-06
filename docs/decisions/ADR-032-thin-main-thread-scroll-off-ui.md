@@ -374,3 +374,7 @@ Work item: `ROADMAP.md` THREAD-13. Slices, in order:
   worse than Chromium on ria/lenta/rbc and idle CPU stays ~0% (ADR-016
   invariant 6). Then remove `LUMEN_NO_BROWSER_THREAD` after one release, as
   with ADR-029.
+- **Closed 2026-10-06 by user decision, criterion not met:** on-time share 0.89–0.93
+  vs Chromium 0.94–0.99; jerks and latency not worse; idle CPU with the thread
+  is not above the old path (journal). Default unchanged, `LUMEN_NO_BROWSER_THREAD`
+  stays. Remainder — long `render()` calls, i.e. THREAD-11.
