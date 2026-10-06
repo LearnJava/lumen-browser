@@ -108,8 +108,11 @@ def run_lumen(args, url: str, idx: int) -> dict:
     log = os.path.join(REPO, '.tmp', f'present-{idx}.log')
     os.makedirs(os.path.dirname(log), exist_ok=True)
     env = dict(os.environ, LUMEN_PRESENT_LOG=log, LUMEN_NO_ADBLOCK='1')
+    # SS_STDERR=<файл> — stderr Lumen в файл (например, с LUMEN_FRAME_LOG=1)
+    err_path = os.environ.get('SS_STDERR')
+    err = open(err_path, 'wb') if err_path else subprocess.DEVNULL
     proc = subprocess.Popen([args.lumen, '--maximized', url], env=env,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=err)
     try:
         hwnd = find_window(proc.pid)
         time.sleep(args.load_s + args.settle_s)

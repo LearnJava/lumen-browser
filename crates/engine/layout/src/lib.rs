@@ -1343,6 +1343,32 @@ pub fn collect_scroll_containers_for_js_state_scoped(roots: &[&LayoutBox]) -> Ve
     scroll_rollup::collect_for_js_state(roots)
 }
 
+/// [`collect_scroll_containers`] для корня страницы (`html`-бокс): без
+/// контейнеров, чей `overflow` ушёл во вьюпорт.
+///
+/// CSS Overflow L3 §3.5 — `overflow` корня (а при `visible` у корня — `body`)
+/// относится к вьюпорту и самостоятельным контейнером не остаётся. Без этой
+/// фильтрации `body{overflow-y:scroll}` (lenta.ru) делался «контейнером» размером
+/// с документ, перехватывал каждый щелчок колеса и не отдавал его странице.
+pub fn collect_page_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> {
+    // `root` — бокс документа, его единственный не-Skip ребёнок — `html`,
+    // у `html` — `body`.
+    fn first_box(b: &LayoutBox) -> Option<&LayoutBox> {
+        b.children.iter().find(|c| !matches!(c.kind, box_tree::BoxKind::Skip))
+    }
+    let mut out = collect_scroll_containers(root);
+    out.retain(|c| c.node != root.node);
+    if let Some(html) = first_box(root) {
+        out.retain(|c| c.node != html.node);
+        let html_visible = matches!(html.style.overflow_x, style::Overflow::Visible)
+            && matches!(html.style.overflow_y, style::Overflow::Visible);
+        if html_visible && let Some(body) = first_box(html) {
+            out.retain(|c| c.node != body.node);
+        }
+    }
+    out
+}
+
 fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     scroll_container_into(b, out, include_non_wheel);
     for child in &b.children {

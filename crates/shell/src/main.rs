@@ -287,7 +287,7 @@ use lumen_dom::{
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
 use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
-use lumen_layout::{collect_scroll_containers, collect_scroll_containers_for_js_state, collect_snap_containers, find_snap_target, set_scroll_position};
+use lumen_layout::{collect_scroll_containers_for_js_state, collect_snap_containers, find_snap_target, set_scroll_position};
 #[cfg(feature = "v8")]
 use lumen_layout::{collect_client_rects, collect_computed_styles, collect_custom_properties, collect_layout_rects, collect_pseudo_computed_styles};
 use lumen_layout::apply_intrinsic_size;

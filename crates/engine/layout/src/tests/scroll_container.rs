@@ -1410,3 +1410,17 @@ fn inline_block_inside_inline_element_stays_in_the_row() {
         "inline-block {}×{} вместо 30×12", ib.rect.width, ib.rect.height
     );
 }
+
+#[test]
+fn page_collector_drops_viewport_propagated_overflow() {
+    // `html` visible → `body{overflow-y:scroll}` уходит во вьюпорт и не контейнер.
+    let doc = lumen_html_parser::parse("<body><div class='s'><div class='t'></div></div></body>");
+    let sheet = lumen_css_parser::parse(
+        "body { overflow-y: scroll; overflow-x: hidden; height: 100px; } \
+         .s { width: 100px; height: 100px; overflow: scroll; } .t { width: 300px; height: 300px; }",
+    );
+    let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let all = collect_scroll_containers(&root);
+    let page = collect_page_scroll_containers(&root);
+    assert_eq!(all.len(), page.len() + 1, "body убран, .s остался");
+}
