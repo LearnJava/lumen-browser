@@ -80,11 +80,17 @@ impl Lumen {
                     // `preventDefault()` the navigation. That made every
                     // SPA login form (Keycloak, Next.js) unusable, through
                     // the UI and through MCP/BiDi `click` alike.
-                    if fire_submit_event
-                        && let Some(sub) = submitter
-                        && !self.dispatch_submit_event(form, sub)
-                    {
-                        return;
+                    if fire_submit_event && let Some(sub) = submitter {
+                        // THREAD-9 срез 6: с движковым потоком ответ «не
+                        // отменён ли submit» приходит сообщением, а отправка
+                        // повторяется без события (`collect_click_proceed`).
+                        if self.engine_thread.is_some() {
+                            self.queue_submit_dispatch(form, sub);
+                            return;
+                        }
+                        if !self.dispatch_submit_event(form, sub) {
+                            return;
+                        }
                     }
                     // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
                     //
@@ -234,6 +240,31 @@ impl Lumen {
         });
         eprintln!("forms: submit blocked by CSP form-action");
         true
+    }
+
+    /// THREAD-9 срез 6: ставит `submit`-событие в движок и запоминает форму до
+    /// ответа; UI-поток не ждёт.
+    fn queue_submit_dispatch(&mut self, form: NodeId, submitter: NodeId) {
+        let script = format!(
+            "_lumen_dispatch_submit_event({}, {})",
+            form.index(),
+            submitter.index(),
+        );
+        let id = self.next_click_proceed_id;
+        self.next_click_proceed_id += 1;
+        let inbox = Arc::clone(&self.click_proceed_inbox);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            let proceed = match j.eval_js_value(&script) {
+                Ok(json) => json.trim() != "false",
+                Err(_) => true,
+            };
+            if let Ok(mut q) = inbox.lock() {
+                q.push((id, proceed));
+            }
+        });
+        self.pending_submits.push((id, form, submitter, self.current_display_url().to_owned(), std::time::Instant::now()));
+        self.queue_js_navigate_read();
+        self.request_redraw();
     }
 
     fn dispatch_submit_event(&mut self, form: NodeId, submitter: NodeId) -> bool {

@@ -13,6 +13,23 @@
 
 use crate::*;
 
+/// THREAD-9 срез 6: клик, диспетчеризованный в движок, но ещё не получивший
+/// ответа «не отменён ли `preventDefault()`». Хранит всё, что нужно нативной
+/// активации ([`Lumen::click_activate`]), чтобы UI-поток не ждал движок.
+#[derive(Clone)]
+pub(crate) struct PendingClick {
+    x_css: f32,
+    y_css: f32,
+    page_x: f32,
+    page_y: f32,
+    scroll_y: f32,
+    hit_result: Option<lumen_paint::HitTestResult>,
+    click_log_hit: Option<(u32, String, String, String)>,
+    /// Страница на момент клика: ответ про другую страницу отбрасывается.
+    display_url: String,
+    queued_at: std::time::Instant,
+}
+
 impl Lumen {
     /// Клик по точке вьюпорта — и, если он сдвинул фокус ВНУТРИ фрейма,
     /// пересчёт под-документа (BUG-480 срез 23).
@@ -605,6 +622,39 @@ impl Lumen {
             // это `false` только при `preventDefault()`. Тогда нативная активация
             // (ссылка, submit, флажок, details) не выполняется: так SPA-роутер
             // берёт переход на себя. Запрос встаёт в очередь после диспетчеризации.
+            let pending = PendingClick {
+                x_css,
+                y_css,
+                page_x,
+                page_y,
+                scroll_y,
+                hit_result: hit_result.clone(),
+                click_log_hit: click_log_hit.clone(),
+                display_url: self.current_display_url().to_owned(),
+                queued_at: std::time::Instant::now(),
+            };
+            if self.engine_thread.is_some() {
+                // THREAD-9 срез 6: продолжение вместо блокирующего `query`.
+                // Задача ставится после диспетчеризации (FIFO движка), ответ
+                // приходит в `click_proceed_inbox`, нативную активацию
+                // запускает `collect_click_proceed` из `about_to_wait`.
+                let id = self.next_click_proceed_id;
+                self.next_click_proceed_id += 1;
+                let inbox = Arc::clone(&self.click_proceed_inbox);
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    let proceed = match j.eval_js_value(&script) {
+                        Ok(json) => json.trim() != "false",
+                        Err(_) => true,
+                    };
+                    if let Ok(mut q) = inbox.lock() {
+                        q.push((id, proceed));
+                    }
+                });
+                self.pending_clicks.push((id, pending));
+                self.queue_js_navigate_read();
+                self.request_redraw();
+                return;
+            }
             let proceed = match route_query_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
@@ -617,7 +667,27 @@ impl Lumen {
             if !proceed {
                 return;
             }
+            self.click_activate(pending);
+        } else {
+            self.click_activate(PendingClick {
+                x_css,
+                y_css,
+                page_x,
+                page_y,
+                scroll_y,
+                hit_result: None,
+                click_log_hit,
+                display_url: String::new(),
+                queued_at: std::time::Instant::now(),
+            });
         }
+    }
+
+    /// THREAD-9 срез 6: нативная активация клика (форма, ссылка, details…) после
+    /// того, как обработчики страницы не отменили событие.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn click_activate(&mut self, pending: PendingClick) {
+        let PendingClick { x_css, y_css, page_x, page_y, scroll_y, hit_result, click_log_hit, .. } = pending;
         let form_action: forms::FormClickAction =
             if let (Some(result), Some(src)) =
                 (hit_result.as_ref(), self.layout_source.as_ref())
@@ -854,10 +924,7 @@ impl Lumen {
                     // `window.open` opener freeze, BUG-883: routing the result
                     // into another browsing context isn't load-bearing yet).
                     if let Some(code) = javascript_url_code(&href) {
-                        if let Some(html) = self.eval_javascript_url(code) {
-                            let current = self.current_display_url().to_owned();
-                            self.navigate_replace(PageSource::Static { html, url: current });
-                        }
+                        self.queue_javascript_url(code);
                         return;
                     }
                     // GAP-CSPENF срез 33: `navigate-to` gates the destination
@@ -1121,6 +1188,60 @@ impl Lumen {
                         outcome,
                     });
                 }
+            }
+        }
+    }
+
+    /// THREAD-9 срез 6: забирает ответы движка «не отменён ли click» и
+    /// запускает отложенную нативную активацию. Клики, застрявшие дольше
+    /// 6 с (движок не ответил) или оказавшиеся на другой странице, снимаются.
+    pub(crate) fn collect_click_proceed(&mut self) {
+        let replies: Vec<(u64, bool)> = self
+            .click_proceed_inbox
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default();
+        for (id, proceed) in replies {
+            if let Some(pos) = self.pending_clicks.iter().position(|(i, _)| *i == id) {
+                let (_, pending) = self.pending_clicks.remove(pos);
+                if proceed && pending.display_url == self.current_display_url() {
+                    self.click_activate(pending);
+                }
+            } else if let Some(pos) = self.pending_submits.iter().position(|s| s.0 == id) {
+                let (_, form, sub, url, _) = self.pending_submits.remove(pos);
+                if proceed && url == self.current_display_url() {
+                    self.run_form_submission(form, Some(sub), false);
+                }
+            }
+        }
+        const STALE: std::time::Duration = std::time::Duration::from_secs(6);
+        let now = std::time::Instant::now();
+        let mut stale = Vec::new();
+        self.pending_clicks.retain(|(_, p)| {
+            if now.duration_since(p.queued_at) > STALE {
+                stale.push(p.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for pending in stale {
+            if pending.display_url == self.current_display_url() {
+                self.click_activate(pending);
+            }
+        }
+        let mut stale_submits = Vec::new();
+        self.pending_submits.retain(|s| {
+            if now.duration_since(s.4) > STALE {
+                stale_submits.push((s.1, s.2, s.3.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        for (form, sub, url) in stale_submits {
+            if url == self.current_display_url() {
+                self.run_form_submission(form, Some(sub), false);
             }
         }
     }

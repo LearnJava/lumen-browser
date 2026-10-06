@@ -576,6 +576,17 @@ pub(crate) struct Lumen {
     /// `pending_js_navigate`. Последний запрос перекрывает предыдущий — как и
     /// прежняя запись `pending_js_navigate = Some(..)`.
     pub(crate) js_nav_inbox: Arc<std::sync::Mutex<Option<JsNavigateRequest>>>,
+    /// THREAD-9 срез 6: ответы движка «клик не отменён» (`id`, proceed).
+    pub(crate) click_proceed_inbox: Arc<std::sync::Mutex<Vec<(u64, bool)>>>,
+    /// THREAD-9 срез 6: клики, ждущие ответа движка (`id` → контекст активации).
+    pub(crate) pending_clicks: Vec<(u64, crate::lumen::click::PendingClick)>,
+    pub(crate) next_click_proceed_id: u64,
+    /// То же для `submit`-события формы: (`id`, форма, submitter, страница, момент).
+    pub(crate) pending_submits: Vec<(u64, NodeId, NodeId, String, std::time::Instant)>,
+    /// THREAD-9 срез 6: результаты `javascript:` URL (клик, `location.href=`),
+    /// вычисленные движковой задачей; `about_to_wait` превращает каждый в
+    /// `navigate_replace`. Попадает только строковое значение завершения.
+    pub(crate) js_url_inbox: Arc<std::sync::Mutex<Vec<String>>>,
     /// Proxy для отправки LoadEvent из background-потока загрузки в event loop.
     pub(crate) load_proxy: EventLoopProxy<LoadEvent>,
     /// Инкрементальный HTML-парсер — активен во время streaming load.

@@ -266,6 +266,34 @@ impl Lumen {
         .flatten()
     }
 
+    /// THREAD-9 срез 6: неблокирующий вариант [`Self::eval_javascript_url`] —
+    /// код считает движковая задача, строковый результат ложится в
+    /// `js_url_inbox`, навигацию делает [`Self::collect_js_url_inbox`]. Без
+    /// движкового потока задача идёт синхронно и ящик забирается сразу.
+    pub(crate) fn queue_javascript_url(&mut self, code: &str) {
+        let code = code.to_owned();
+        let inbox = Arc::clone(&self.js_url_inbox);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            if let Ok(Some(html)) = j.eval_js_completion(&code)
+                && let Ok(mut q) = inbox.lock()
+            {
+                q.push(html);
+            }
+        });
+        if self.engine_thread.is_none() {
+            self.collect_js_url_inbox();
+        }
+    }
+
+    /// THREAD-9 срез 6: заменяет текущий документ результатами `javascript:` URL.
+    pub(crate) fn collect_js_url_inbox(&mut self) {
+        let ready = self.js_url_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        for html in ready {
+            let current = self.current_display_url().to_owned();
+            self.navigate_replace(PageSource::Static { html, url: current });
+        }
+    }
+
     /// FRAME-4: consume one frame-only history step off the top of
     /// `nav_back` (`back = true`) or `nav_fwd` (`back = false`) — called only
     /// once the caller has confirmed the top entry carries `frame_target`.
