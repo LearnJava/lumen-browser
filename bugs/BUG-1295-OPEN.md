@@ -35,3 +35,7 @@ WPT-RUN-14 срез 6: `css/css-backgrounds/background-size/vector/*` — 206 re
 ## Как проверить
 
 `css/css-backgrounds/background-size/vector/{tall,wide}--*.html` (≈ 150), `zero-*-ratio-*.html`, `diagonal-percentage-vector-background.html`, `background-size-vector-0{01…29}.html`; `background-size/background-size-{contain,cover}-svg-view.html`.
+
+## Дополнение: WPT-RUN-14 срез 11 (2026-10-06, `css/CSS2`: backgrounds + borders)
+
+Тот же кластер у `css/CSS2/backgrounds`: `background-intrinsic-001/003/004/005/006/007/008.xht` — `green-intrinsic-height.svg`/`red-intrinsic-height.svg` (SVG без `width`, только `height`) как `background-image`, расхождение 480…6 576 px. 7 id.

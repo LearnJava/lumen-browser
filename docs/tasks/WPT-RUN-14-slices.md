@@ -1,8 +1,8 @@
-# WPT-RUN-14 — срезы S1…S10: прогон `css` по модулям
+# WPT-RUN-14 — срезы S1…S15: прогон `css` по модулям
 
 Родительская задача — WPT-RUN-14 (ROADMAP:970). Владелец — P2. Цель родителя: у всей категории `css` есть вердикт, топ-10 кластеров разнесены по очередям P1/P4.
 
-Этот файл описывает первую волну из десяти модулей. CSS2 (~9 200 id, примерно 6 срезов по `CSS2/<подкаталог>`), остальные модули и агрегирующий срез заводятся после неё.
+Этот файл описывает первую волну из десяти модулей (S1…S10) и первые пять срезов CSS2 (S11…S15). Остальные модули `css` и агрегирующий срез заводятся после них.
 
 ## Почему через `run_corpus.py`, а не `run_report.py`
 
@@ -57,8 +57,13 @@
 | S8 | css-grid, часть 2 | `css/css-grid/grid-lanes,css/css-grid/grid-model,css/css-grid/implicit-grids,css/css-grid/layout-algorithm,css/css-grid/parsing,css/css-grid/placement,css/css-grid/subgrid,css/css-grid/test-plan` | ~1220 | `.tmp/wpt-run14/grid-2` |
 | S9 | css-text, часть 1 | `--prefixes css/css-text --exclude-prefixes <все префиксы S10>`: подкаталоги от `animations` до `text-align` по алфавиту и 9 файлов в корне | ~1040 | `.tmp/wpt-run14/text-1` |
 | S10 | css-text, часть 2 | `css/css-text/<d>` для каждого подкаталога от `text-autospace` до `writing-system` по алфавиту (`text-transform`, `white-space`, `word-break` и др.) | ~870 | `.tmp/wpt-run14/text-2` |
+| S11 | CSS2: backgrounds + borders | `css/CSS2/backgrounds,css/CSS2/borders` | ~843 | `.tmp/wpt-run14/css2-1` |
+| S12 | CSS2: normal-flow + margin-padding-clear | `css/CSS2/normal-flow,css/CSS2/margin-padding-clear` | ~1500 | `.tmp/wpt-run14/css2-2` |
+| S13 | CSS2: tables, positioning, floats | `css/CSS2/tables,css/CSS2/positioning,css/CSS2/floats,css/CSS2/floats-clear,css/CSS2/abspos,css/CSS2/stacking-context,css/CSS2/zindex,css/CSS2/zorder` | ~1340 | `.tmp/wpt-run14/css2-3` |
+| S14 | CSS2: text, linebox, fonts, lists | `css/CSS2/text,css/CSS2/linebox,css/CSS2/fonts,css/CSS2/generated-content,css/CSS2/lists,css/CSS2/bidi-text` | ~1260 | `.tmp/wpt-run14/css2-4` |
+| S15 | CSS2: остальное | `css/CSS2 --exclude-prefixes <все префиксы S11…S14>`: box, box-display, cascade, cascade-import, colors, css1, css21-errata, csswg-issues, media, other-formats, pagination, sec5, selectors, syntax, ui, values, visudet, visufx, visuren и файлы в корне | ~1420 | `.tmp/wpt-run14/css2-5` |
 
-Числа — файлы тестов на диске, без `support/`, `reference/` и `-ref.*`. Точные id даёт манифест. Если срез заметно длиннее часа, разделить его на два и записать это в ROADMAP-строку среза.
+Числа S1…S10 — файлы тестов на диске, без `support/`, `reference/` и `-ref.*`. Точные id даёт манифест. Если срез заметно длиннее часа, разделить его на два и записать это в ROADMAP-строку среза.
 
 ## Не трогать
 
@@ -72,4 +77,4 @@
 tests/wpt/.venv/Scripts/python.exe tests/wpt/run_corpus.py --selftest
 ```
 
-У S2…S10 кода нет; гейт — п. «Готово, когда».
+У S2…S15 кода нет; гейт — п. «Готово, когда».
