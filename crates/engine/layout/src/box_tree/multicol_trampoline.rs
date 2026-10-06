@@ -907,7 +907,14 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         frag.rect.y = cur_y;
         // A column that ends in a forced break keeps the full column height (the column gaps run
         // through it); every other fragment is as tall as its window.
-        let frag_h = if forced_end { (we - ws).max(cut_at) } else { we - ws };
+        let mut frag_h = if forced_end { (we - ws).max(cut_at) } else { we - ws };
+        // In a wrapped column flex container the part of a gap that a break dropped still belongs
+        // to the next fragment's lines: they reach to the end of the remaining block size, which
+        // the column rules run along (`flex/fragmentation/006`: 100px, not the 90px of content).
+        if col_flex && f > 0 && !forced_end {
+            let dropped = (ws - windows[f - 1].1).max(0.0);
+            frag_h = (frag_h + dropped).min(frag_h.max(cut_at));
+        }
         frag.rect.height = frag_h;
         // A fragment keeps the border edge it owns: the top one the first, the bottom one the last.
         let (first, last) = (f == 0, f + 1 == windows.len());
