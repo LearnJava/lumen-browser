@@ -146,3 +146,31 @@ fn column_wrap_align_content_stretch_widens_lines_and_realigns_items() {
     assert_eq!(rect(&root, &doc, "a").x, 30.0);
     assert_eq!(rect(&root, &doc, "c").x, 130.0);
 }
+
+#[test]
+fn column_wrap_auto_width_items_stretch_to_the_width_of_their_line() {
+    // flex/fragmentation/020: no item width, so every item is laid out at its fit-content width
+    // and grows to the line's width afterwards. 119px, `column-gap: 3px`, five items in two lines
+    // (100+50+50+250 | 400): the lines share the free width (58px each), not 119px per item.
+    let (doc, root) = lay(
+        r#"<div id="f"><div id="a"></div><div id="b"></div><div id="c"></div><div id="d"></div><div id="e"></div></div>"#,
+        "body{margin:0} #f{display:flex;flex-direction:column;flex-wrap:wrap;width:119px;height:500px;column-gap:3px;row-gap:3px} \
+         #a{height:100px} #b,#c{height:50px} #d{height:250px} #e{height:400px}",
+    );
+    for id in ["a", "b", "c", "d"] {
+        assert_eq!(rect(&root, &doc, id).width, 58.0, "{id}");
+    }
+    let e = rect(&root, &doc, "e");
+    assert_eq!((e.x, e.width), (61.0, 58.0), "line 2 starts after 58px + 3px column-gap");
+}
+
+#[test]
+fn column_wrap_stretch_respects_max_width_and_explicit_width() {
+    let (doc, root) = lay(
+        r#"<div id="f"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#,
+        "body{margin:0} #f{display:flex;flex-direction:column;flex-wrap:wrap;align-content:flex-start;width:200px;height:100px} \
+         #a{height:50px;max-width:30px} #b{height:50px;width:40px} #c{height:50px}",
+    );
+    assert_eq!(rect(&root, &doc, "a").width, 30.0, "capped by max-width");
+    assert_eq!(rect(&root, &doc, "b").width, 40.0, "explicit width is not stretched");
+}
