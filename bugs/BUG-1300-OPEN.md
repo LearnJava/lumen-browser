@@ -30,3 +30,7 @@ WPT-RUN-14 срез 6: `background-color-body-propagation-00{1,3,8,9}.html` (4),
 ## Как проверить
 
 `css/css-backgrounds/background-color-body-propagation-00{1,3,8,9}.html`, `background-margin-root.html`, `background-attachment-margin-root-00{1,2}.html`.
+
+## Дополнение: WPT-RUN-14 срез 11 (2026-10-06, `css/CSS2`: backgrounds + borders)
+
+`css/CSS2/backgrounds/background-root-002/005/007/008/009/010/012b/015/016/018/019/024.xht` — 12 id (`body { background: green; border: solid lime }`, `html { background: transparent; border: solid blue }`, `* { margin: 1em; padding: 1em }`): фон `<body>` не уходит на холст. Ещё три (`background-root-101…103.xht`) — смена класса из `setTimeout` после `onload`, в BUG-1300 не входят.

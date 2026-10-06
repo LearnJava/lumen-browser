@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-06",
+ "generated": "2026-10-07",
  "counts": {
-  "open": 208,
+  "open": 223,
   "fixed": 1064,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1274,
+ "total_bugs": 1289,
  "phases": [
   {
    "id": "P0",
@@ -6021,6 +6021,41 @@
        "status": "planned",
        "size": "S",
        "note": "Baseline expectations для html/anonymous-iframe, html/capability-delegation, html/user-activation, html/cross-origin-embedder-policy и html/cross-origin-opener-policy. Бриф [docs/tasks/WPT-RUN-7-slices.md](docs/tasks/WPT-RUN-7-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S11",
+       "title": "WPT-RUN-14-S11: CSS2 backgrounds+borders",
+       "status": "done",
+       "size": "S",
+       "note": "Прогон css/CSS2/backgrounds и css/CSS2/borders (843 автоматизируемых id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-06 (ветка `p2-wpt-run14-s11`): 843 automatable id, 42.56 % (reftest 358/842, testharness 128/168 сабтестов), 52 с, «no leak». 485 не зелёных id разнесены на 24 кластера (`docs/wpt-vendor-notes/css.md` §css/CSS2: backgrounds + borders). Главное: 249 id отличаются от эталона только 1-px линиями — в эталонах CSS2 прямоугольник нарисован растянутой `<img>`, а `DrawImage` на дробной `y` даёт полупрозрачную кромку (BUG-1337); у `<p>`/`<ul>`/`<blockquote>`/`<pre>` нет полей UA (BUG-1334, A/B на 235 thick: 37 → identical без новых провалов). Заведены BUG-1334…1348; дополнены BUG-1249/1295/1298/1300/1301. Не разобрано 5 id."
+      },
+      {
+       "id": "WPT-RUN-14-S12",
+       "title": "WPT-RUN-14-S12: CSS2 normal-flow и margin-padding-clear",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон `css/CSS2/normal-flow` и `css/CSS2/margin-padding-clear` (около 1 500 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S13",
+       "title": "WPT-RUN-14-S13: CSS2 tables, positioning, floats",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон `css/CSS2/{tables,positioning,floats,floats-clear,abspos,stacking-context,zindex,zorder}` (около 1 340 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S14",
+       "title": "WPT-RUN-14-S14: CSS2 text, linebox, fonts, lists",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон `css/CSS2/{text,linebox,fonts,generated-content,lists,bidi-text}` (около 1 260 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+      },
+      {
+       "id": "WPT-RUN-14-S15",
+       "title": "WPT-RUN-14-S15: CSS2 остальное",
+       "status": "planned",
+       "size": "S",
+       "note": "Прогон `css/CSS2` — остальные каталоги (`box`, `box-display`, `cascade`, `colors`, `css1`, `selectors`, `syntax`, `ui`, `values`, `visudet`, `visufx`, `visuren`, `pagination` и файлы в корне) (около 1 420 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
       }
      ]
     },
@@ -9393,6 +9428,111 @@
    "status": "open",
    "title": "`word-spacing` в процентах (и `calc()` с `%`) не применяется",
    "component": "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `word-spacing`; `getComputedStyle` отдаёт `0px`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1334": {
+   "status": "open",
+   "title": "У `<p>`, `<ul>`, `<ol>`, `<dl>`, `<blockquote>`, `<pre>`, `<figure>`, `<menu>` нет полей и отступов UA-таблицы",
+   "component": "layout (`crates/engine/layout/src/style/ua.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1335": {
+   "status": "open",
+   "title": "`<table>` / `display: table` без `width` занимает всю ширину контейнера, если ширина колонок задана не явно",
+   "component": "layout (`crates/engine/layout/src/box_tree/table.rs:616` `table_intrinsic_content_width`, `layout_dispatch.rs:1778`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1336": {
+   "status": "open",
+   "title": "`display: table-column` / `table-column-group` (и `<col>`, `<colgroup>`): фон и рамка не рисуются — бокс 0×0",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/table.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1337": {
+   "status": "open",
+   "title": "`DrawImage` на дробной позиции не привязан к пикселям: у картинки 1-px полупрозрачная кромка, у блока рядом — нет",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1338": {
+   "status": "open",
+   "title": "Float, идущий после строчного содержимого на той же строке, ставится под строку, а не к её верху",
+   "component": "layout (`crates/engine/layout/src/box_tree/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1339": {
+   "status": "open",
+   "title": "`word-spacing` / `letter-spacing` измеряются в раскладке, но не рисуются, если слова в одном `DrawText`",
+   "component": "paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1340": {
+   "status": "open",
+   "title": "Единицы `ex` и `ch` — константы 0,546 em / 0,631 em, а не метрики шрифта",
+   "component": "layout (`crates/engine/layout/src/style/values/length.rs:171`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1341": {
+   "status": "open",
+   "title": "`display: inline-block` без явной ширины и с блочными детьми без ширины получает ширину контейнера",
+   "component": "layout (`crates/engine/layout/src/box_tree/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1342": {
+   "status": "open",
+   "title": "Сокращение `border` не сбрасывает `border-color` в `currentcolor`, если цвет не указан",
+   "component": "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1343": {
+   "status": "open",
+   "title": "Плитка `background-image` на полупиксельной позиции (`center`, `bottom` при нечётной разности) рисуется со швами по 1 px между плитками",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1344": {
+   "status": "open",
+   "title": "В сокращении `background` длины в `in`/`cm`/`mm`/`pt`/`pc`/`ex`/`ch`/`calc()` сбрасывают позицию в `0% 0%`",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/parse/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1345": {
+   "status": "open",
+   "title": "У `<img>` отступ `padding` в `em`/`rem`/`%` растягивает картинку на область padding; в `px` — верно",
+   "component": "layout (`crates/engine/layout/src/box_tree/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1346": {
+   "status": "open",
+   "title": "`border-collapse: collapse` с `width: 100px` и рамкой 4 px у строки/группы: внешняя ширина 100, а не 104",
+   "component": "layout (`crates/engine/layout/src/box_tree/table.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1347": {
+   "status": "open",
+   "title": "`background-image: url(…) repeat` (лишний токен) принимается; недопустимое объявление должно отбрасываться",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/apply/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1348": {
+   "status": "open",
+   "title": "`html { height: 100% }` не разрешается против вьюпорта: высота корня — по содержимому",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)",
    "date": null,
    "debtor": false
   },
@@ -16977,8 +17117,14 @@
   "css-parser/layout (`crates/engine/layout/src/style.rs`), paint (`crates/engine/paint/src/gap_decorations.rs`)": [
    "BUG-553"
   ],
+  "css-parser/layout (`crates/engine/layout/src/style/apply/`)": [
+   "BUG-1347"
+  ],
   "css-parser/layout (`crates/engine/layout/src/style/apply/paint.rs::apply_declaration`, `selector_query.rs::computed_style_to_map`)": [
    "BUG-495"
+  ],
+  "css-parser/layout (`crates/engine/layout/src/style/parse/`)": [
+   "BUG-1344"
   ],
   "css-parser/layout (`crates/engine/layout/src/style/values/background.rs:215` — `enum BackgroundRepeat`, один на обе оси)": [
    "BUG-1299"
@@ -18118,6 +18264,11 @@
   "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)": [
    "BUG-1291"
   ],
+  "layout (`crates/engine/layout/src/box_tree/`)": [
+   "BUG-1338",
+   "BUG-1341",
+   "BUG-1345"
+  ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`, `collapsed_bottom_margin`; `block_flow_trampoline.rs`; `box_tree/types.rs` — `BoxRole`/`PseudoKind`)": [
    "BUG-1026"
   ],
@@ -18224,6 +18375,7 @@
    "BUG-1240"
   ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
+   "BUG-1348",
    "BUG-466"
   ],
   "layout (`crates/engine/layout/src/box_tree/line_break.rs`, `inline_wrap.rs` — для класса SA возможностей переноса нет; `lang` не используется)": [
@@ -18240,6 +18392,12 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/svg.rs` — `parse_svg_transform(get_attr(\"transform\"))`)": [
    "BUG-1286"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/table.rs:616` `table_intrinsic_content_width`, `layout_dispatch.rs:1778`)": [
+   "BUG-1335"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/table.rs`)": [
+   "BUG-1346"
   ],
   "layout (`crates/engine/layout/src/box_tree/tests/grid_trampoline.rs`, `box_tree/grid_trampoline.rs`)": [
    "BUG-1266"
@@ -18334,6 +18492,9 @@
   "layout (`crates/engine/layout/src/style/matching/forms.rs:1240`), shell (`crates/shell/src/frame_dynamic_load.rs:49`)": [
    "BUG-1218"
   ],
+  "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`)": [
+   "BUG-1342"
+  ],
   "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` `border-*-width`)": [
    "BUG-1298"
   ],
@@ -18346,8 +18507,14 @@
   "layout (`crates/engine/layout/src/style/ua.rs::strip_ua_appearance_box_styling` — только при `appearance: none`), paint (`display_list/form_controls.rs`)": [
    "BUG-1277"
   ],
+  "layout (`crates/engine/layout/src/style/ua.rs`)": [
+   "BUG-1334"
+  ],
   "layout (`crates/engine/layout/src/style/ua.rs`, `style/presentational.rs` — нет правила для атрибута `dir`)": [
    "BUG-1321"
+  ],
+  "layout (`crates/engine/layout/src/style/values/length.rs:171`)": [
+   "BUG-1340"
   ],
   "layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)": [
    "BUG-1275"
@@ -18415,6 +18582,9 @@
    "BUG-198",
    "BUG-230",
    "BUG-239"
+  ],
+  "layout/paint (`crates/engine/layout/src/box_tree/table.rs`)": [
+   "BUG-1336"
   ],
   "layout/paint (`crates/engine/layout/src/invariants.rs`, `crates/engine/paint/src/invariants.rs`)": [
    "BUG-1053"
@@ -18644,6 +18814,10 @@
   "paint (`crates/engine/paint/src/cpu_raster.rs` — растеризация прямоугольников с дробными координатами)": [
    "BUG-1249"
   ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs`)": [
+   "BUG-1337",
+   "BUG-1343"
+  ],
   "paint (`crates/engine/paint/src/cpu_raster.rs`, `PushTransform` → `mat4_to_2d_affine`)": [
    "BUG-1290"
   ],
@@ -18728,6 +18902,9 @@
   "paint/layout": [
    "BUG-096",
    "BUG-156"
+  ],
+  "paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`)": [
+   "BUG-1339"
   ],
   "paint/layout (font metrics; `upright` per-glyph advance)": [
    "BUG-290"

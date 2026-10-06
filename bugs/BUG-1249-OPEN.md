@@ -31,3 +31,7 @@ WPT-RUN-14 срез 1: 710 упавших reftest `css-flexbox` отрендер
 ## Как проверить
 
 Перерисовать пример выше `--screenshot`; затем `run_corpus.py --prefixes css/css-flexbox` — число reftest `thin-only` (`.tmp/probe/pixdiff.py`, см. `docs/wpt-vendor-notes/css.md` §css-flexbox) должно упасть с 130.
+
+## Дополнение: WPT-RUN-14 срез 11 (2026-10-06, `css/CSS2`: backgrounds + borders)
+
+Ещё два id с тем же швом на дробной границе, не связанных с `<img>`: `borders/border-bottom-width-003.xht`, `border-top-width-003.xht` (`border-bottom-width: 1px` на `y = 25.72`: строки `(71,71,71)` и `(183,183,183)` вместо чёрной линии). Соседний дефект с другой командой — `DrawImage` — заведён отдельно: [BUG-1337](BUG-1337-OPEN.md) (249 id в этих двух каталогах).

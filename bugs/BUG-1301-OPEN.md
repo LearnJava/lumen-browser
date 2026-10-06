@@ -20,3 +20,7 @@ WPT-RUN-14 срез 6: `background-size-034.html` (`background-size: inherit` �
 ## Как проверить
 
 `css/css-backgrounds/background-size-034.html`, `background-origin-008.html`; проба выше.
+
+## Дополнение: WPT-RUN-14 срез 11 (2026-10-06, `css/CSS2`: backgrounds + borders)
+
+`css/CSS2/backgrounds`: `background-repeat-005.xht`, `background-position-150.xht`, `-151.xht` — `background-repeat: inherit` / `background-position: inherit` у элемента с `background-image`: `DrawBackgroundImage` 0 раз (проба: `#d { background-image: url(…); background-repeat: inherit }` — картинки нет; тот же элемент без `inherit` — рисуется). Тот же арм `css_wide.rs:1209`.
