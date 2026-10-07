@@ -51,6 +51,7 @@ pub use container_anchor::apply_container_styles;
 use container_anchor::apply_anchor_positions;
 
 mod inline_wrap;
+mod inline_wrap_preserved;
 pub use inline_wrap::{measure_text_w, measure_text_w_families, measure_text_w_varied};
 pub(crate) use inline_wrap::strip_soft_hyphens;
 use inline_wrap::{
