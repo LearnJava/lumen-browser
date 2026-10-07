@@ -1,6 +1,6 @@
 # BUG-1255 — Процентная `height` flex-элемента не разрешается против определённой высоты контейнера: в `display:flex;flex-direction:column;height:100px` ребёнок с 
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** layout (`crates/engine/layout/src/box_tree/flex.rs` — процентная высота flex-элемента)
 
@@ -19,3 +19,10 @@ WPT-RUN-14 срез 1; `percentage-heights-011.html`, `flex-minimum-height-flex-
 ## Как проверить
 
 `css/css-flexbox/percentage-heights-*.html`.
+
+## Исправление
+
+Проба column-flex-элемента с процентной/calc `height` шла с `available_height: None`; теперь базой служит определённая главная высота контейнера (`flex.rs`, `pct_probe_h`), memo проб для таких элементов отключён. Тесты: `box_tree/tests/flex_column_percent_height.rs`. Вложенный `height:100
+## Исправление
+
+Проба column-flex-элемента с процентной/calc `height` шла с `available_height: None`; теперь базой служит определённая главная высота контейнера (`flex.rs`, `pct_probe_h`), memo проб для таких элементов отключено. Тесты: `box_tree/tests/flex_column_percent_height.rs`. Вложенный `height:100%` в `flex:1` отдельно не воспроизводится (даёт 80).
