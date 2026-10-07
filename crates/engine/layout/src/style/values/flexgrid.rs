@@ -402,12 +402,12 @@ impl GridTrackSize {
                     if count == RepeatCount::Fixed(0) {
                         // zero repeat, add nothing
                     } else if matches!(count, RepeatCount::Fixed(_)) {
-                        // Expand fixed repeat immediately
+                        // Expand fixed repeat immediately, within the track-count limit
                         let n = match count {
                             RepeatCount::Fixed(n) => n,
                             _ => unreachable!(),
                         };
-                        for _ in 0..n {
+                        for _ in 0..clamp_repeat(n, tracks.len(), result.len()) {
                             result.extend(tracks.iter().cloned());
                         }
                     } else {
@@ -428,6 +428,22 @@ impl GridTrackSize {
         }
         result
     }
+}
+
+/// Upper bound on the explicit tracks of one axis a `repeat(<integer>, …)` may expand to (UA limit,
+/// CSS Grid L1 §7.2.3.2 lets the UA clamp; Chrome and Firefox keep the same order of magnitude).
+/// Without it `repeat(1000, 1px)` written 100 000 times builds 100 million tracks (BUG-1320).
+const MAX_EXPLICIT_TRACKS: usize = 10_000;
+
+/// How many whole iterations of a `repeat(count, …)` with `per_iter` tracks each fit under
+/// [`MAX_EXPLICIT_TRACKS`] when `used` tracks are already in the list. Both the track list and its
+/// line names use it, so their lengths stay in step. A track-less body (invalid) is capped at one
+/// iteration so a huge count cannot spin.
+fn clamp_repeat(count: usize, per_iter: usize, used: usize) -> usize {
+    if per_iter == 0 {
+        return count.min(1);
+    }
+    count.min(MAX_EXPLICIT_TRACKS.saturating_sub(used) / per_iter)
 }
 
 /// Extracts auto-fill/auto-fit repeat metadata from a track-list string: the single auto
@@ -586,7 +602,7 @@ fn parse_subgrid_names(s: &str) -> Option<(Vec<Vec<String>>, Option<NameFill>)> 
             names.extend(groups);
         } else {
             let times = count.trim().parse::<usize>().ok().filter(|&n| n >= 1)?;
-            for _ in 0..times {
+            for _ in 0..clamp_repeat(times, groups.len(), names.len()) {
                 names.extend(groups.iter().cloned());
             }
         }
@@ -618,7 +634,7 @@ fn collect_line_names(s: &str, is_quirks: bool) -> (usize, Vec<Vec<String>>) {
                 continue;
             };
             let (inner_tracks, inner_names) = collect_line_names(rest.trim(), is_quirks);
-            for _ in 0..times {
+            for _ in 0..clamp_repeat(times, inner_tracks, n_tracks) {
                 for (k, group) in inner_names.iter().enumerate() {
                     if k > 0 {
                         n_tracks += 1;
