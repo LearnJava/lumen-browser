@@ -27,3 +27,7 @@ WPT-RUN-14 срез 11: 249 из 484 упавших reftest `css/CSS2/{backgroun
 ## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
 
 Тот же дефект: 138 id `thin-only` с `<img>` в эталоне — `floats-clear/adjacent-floats-001.xht`, `clear-001.xht`, `clear-002.xht` (в основном `floats-clear`, `positioning/absolute-replaced-width-*`). Закрытие даёт до 138 id в этих каталогах; вместе со срезами 11–12 — `css/CSS2` целиком (`docs/wpt-vendor-notes/css.md` §срез 13).
+
+## Срез 14 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` text/linebox/fonts/…)
+
+65 id `thin-only` с `<img>` в эталоне (`bidi-text/bidi-box-model-010…`, `linebox/*`, 3 в `text`): `linebox` — 39, `bidi-text` — 23, `text` — 3. Закрытие даёт до 65 id; вместе со срезами 11–13 — `css/CSS2` целиком (`docs/wpt-vendor-notes/css.md` §срез 14).

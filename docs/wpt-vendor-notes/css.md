@@ -715,3 +715,83 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - **testharness (12 id с не-PASS сабтестами)** — не разбирались; `float-no-interpolation.html`/`clear-no-interpolation.html` (42 сабтеста) — отсутствие анимации `float`/`clear` (дискретная интерполяция), `hit-test-floats-*` — `elementsFromPoint` на float'ах.
 - Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в `wptrunner` против 800×600 в пиксельном разборе.
 - Срез закрывает `tables`, `positioning`, `floats`, `floats-clear`, `abspos`, `stacking-context`, `zindex`, `zorder` из `css/CSS2` (1 335 id из 6 357 автоматизируемых; остальные каталоги — срезы S14–S15).
+
+
+## css/CSS2: text + linebox + fonts + generated-content + lists + bidi-text — вердикт и кластеры (WPT-RUN-14 срез 14, 2026-10-07)
+
+Прогон: `run_corpus.py --prefixes css/CSS2/text,css/CSS2/linebox,css/CSS2/fonts,css/CSS2/generated-content,css/CSS2/lists,css/CSS2/bidi-text --out-dir .tmp/wpt-run14/css2-4`, сборка `dev-release` от `main` 1a22377b9 (движок не менялся), 1 мин 56 с суммарно по 6 шардам. `score_audit.py`: «no leak», вердикт есть у всех 1 259 автоматизируемых id (шарды вместе — 1 855 id манифеста, остальные 596 — `visual`/`manual`).
+
+**Прогон нестабилен на холодном старте** ([BUG-1273](../../bugs/BUG-1273-OPEN.md), дополнен). Первый прогон сразу после сборки и обновления манифеста дал **436 зелёных (34.76 %)**; два повторных на той же сборке — **506 (40.32 %)** и побайтно тот же вердикт. Разошлись 74 id: 72 (`fonts/font-0*`, `linebox/*`, `text/*` — все на `Ahem`) в первом прогоне FAIL, в повторных PASS, и все 72 `identical` по `reftest_pixdiff.py`; 2 наоборот (`fonts/font-family-013.xht`, `fonts/fonts-013.xht` — в первом прогоне обе стороны рисовались запасным шрифтом, потому и совпали). Ниже — числа повторного прогона (`.tmp/wpt-run14/css2-4-rerun3`); кластеры построены по первому (820 FAIL), из которого убраны 72 `identical`. Срезы 1–13 такой проверки не проходили: сколько в их числах холодного старта, неизвестно.
+
+| Каталог | id | зелёных | не зелёных |
+|---|---|---|---|
+| `text` | 411 | 239 | 172 |
+| `fonts` | 160 | 123 | 37 |
+| `linebox` | 201 | 53 | 148 |
+| `lists` | 156 | 53 | 103 |
+| `generated-content` | 226 | 18 | 208 |
+| `bidi-text` | 105 | 20 | 85 |
+| **итого** | **1 259** | **506** | **753** |
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 1 248 | 498.00 | 39.9 % |
+| crashtest | 5 | 5.00 | 100 % |
+| testharness | 6 | 4.69 (сабтесты 346 из 664) | 78.1 % |
+| **итого** | **1 259** | **507.69 = 40.32 %** | |
+
+753 не зелёных: 750 reftest FAIL и 3 testharness с не-PASS сабтестами (`linebox/animations/line-height-interpolation.html` — 303 из 628, `vertical-align-top-bottom-001.html` — 12 из 20, `inline-negative-margin-001.html` — 3 из 13). Пиксельный разбор первого прогона (`reftest_pixdiff.py --viewport 800x600 --ahem`, 820 reftest, 21 мин): **631 thick, 116 thin-only, 72 identical**, 1 `no-match-ref`. Для сравнения: срез 13 — 32.27 %, срез 12 — 62.17 %; здесь 40.32 %.
+
+### Главное
+
+1. **Однодвоеточные `:before`, `:after`, `:first-line`, `:first-letter` не распознаются** ([BUG-1366](../../bugs/BUG-1366-OPEN.md)): `parse_pseudo` ищет эти имена только после `::`. 298 из 820 id пишут селектор в старом виде; A/B (копии пар «тест + эталон» с `:before` → `::before` в `<style>`, `.tmp/ab14.py`, не закоммичены): **208 → `identical`**, 90 остаются `thick` по другим причинам. Это 25 % всех провалов среза и 28 % — по `generated-content`/`lists`, где почти каждый тест — `div:before { content: … }`. На реальных страницах тот же приём (`a:before`, `p:first-letter`) — норма.
+2. **`letter-spacing`/`word-spacing` не рисуются** ([BUG-1339](../../bugs/BUG-1339-OPEN.md), дополнен): 54 id.
+3. **Escape в строке `content` не декодируется** ([BUG-1367](../../bugs/BUG-1367-OPEN.md)): `\A`, `\41`, `\"`. Экранированная кавычка хуже остального — остаток правила выводится на страницу как текст.
+4. **`counter-reset`/`counter-increment` на `::before`/`::after` не применяются** ([BUG-1368](../../bugs/BUG-1368-OPEN.md)): 35 id после правки BUG-1366.
+5. **`line-height` меньше глифа** ([BUG-1369](../../bugs/BUG-1369-OPEN.md), 41 id) и **`vertical-align: <length>|%`** ([BUG-1370](../../bugs/BUG-1370-OPEN.md), 33 id) — две отдельные вертикальные ошибки строки.
+6. **`unicode-bidi: bidi-override` не доходит до вложенных inline и `<bdo>`** ([BUG-1371](../../bugs/BUG-1371-OPEN.md)): 44 id.
+7. **Ahem 16 px: глиф `X` на 17 строк, а не на 16** ([BUG-1372](../../bugs/BUG-1372-OPEN.md)): 51 id `thin-only` без `<img>` в эталоне — самый крупный остаток «тонких» провалов после BUG-1337.
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** (порядок как в таблице; `.tmp/final14.py` → `.tmp/final14.json`, один id — один кластер). Причина подтверждена пробой (`--dump-display-list`/`--screenshot` на минимальной странице) у кластеров с записью; числа — по правилу, не по причине (id может страдать от нескольких дефектов сразу).
+
+| Кластер | id | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|
+| однодвоеточные псевдоэлементы | 208 | 208 thick → `identical` после A/B | `generated-content/content-003.xht`, `after-content-display-001.xht`, `lists/counter-increment-005.xht` | `.a:before{content:"A1 "}` не создаёт бокс, `.b::before` — создаёт | P3 | [BUG-1366](../../bugs/BUG-1366-OPEN.md) |
+| thin-only: эталон с `<img>` | 65 | 65 thin-only | `bidi-text/bidi-box-model-010.xht`, `linebox/*` (39) | как в срезах 11–13 | P3 | [BUG-1337](../../bugs/BUG-1337-OPEN.md) (дополнен) |
+| `text`: не разобрано | 55 | 55 thick | `text/white-space-processing-013.xht`, `white-space-normal-001.xht`, `white-space-pre-001.xht` | `white-space-*` (около 40: `table` с `td{font:20px/1 Ahem}` и `div`/`pre` внутри), `text-transform-bicameral`, `bidi-flag-emoji`; отдельных проб нет | — | без записи |
+| `letter-spacing`/`word-spacing` | 54 | 54 thick | `text/letter-spacing-007.xht`, `word-spacing-019.xht`, `letter-spacing-applies-to-001.xht` | один `DrawText` без поля интервала; раскладка ширину учитывает | P3 | [BUG-1339](../../bugs/BUG-1339-OPEN.md) (дополнен) |
+| thin-only: Ahem 16 px | 51 | 51 thin-only | `text/white-space-processing-001.xht`, `fonts/font-size-121.xht` | у `X` 16 px верхняя строка `64`, нижняя `192` из 255 (17 строк вместо 16); при 10/20/25/30/40 px — чисто | P3 | [BUG-1372](../../bugs/BUG-1372-OPEN.md) |
+| `bidi-override` и `<bdo>` | 44 | 44 thick | `bidi-text/bidi-001.xht`, `bidi-box-model-003.xht`, `unicode-bidi-applies-to-001.xht` | `<p class=o><span>abc</span> def</p>` → `abc fed` вместо `fed cba`; `<bdo dir=rtl>` — без эффекта | P3 | [BUG-1371](../../bugs/BUG-1371-OPEN.md) |
+| `line-height` меньше глифа | 41 | 41 thick | `linebox/line-height-002.xht`, `-004.xht`, `-005.xht` | отрицательное полу-ведущее зажато в 0 | P3 | [BUG-1369](../../bugs/BUG-1369-OPEN.md) |
+| счётчик на `::before`/`::after` | 35 | 35 thick (после правки «:») | `generated-content/content-011.xht`, `counters-order-000.xht`, `lists/counter-reset-increment-002.xht` | `counter-increment:zb 3` в `::before` → `P:0`; на самом элементе работает | P3 | [BUG-1368](../../bugs/BUG-1368-OPEN.md) |
+| `vertical-align: <length>|%` | 33 | 33 thick | `linebox/vertical-align-007.xht`, `-008.xht`, `-019.xht` | строка не растёт под поднятый бокс (`div` 20 px вместо 116, `DrawText y=-96`) | P3 | [BUG-1370](../../bugs/BUG-1370-OPEN.md) |
+| `*-applies-to-*` на `display:table-*` | 27 | 27 thick | `bidi-text/direction-applies-to-005.xht`, `linebox/line-height-applies-to-001.xht`, `lists/list-style-position-applies-to-001.xht` | свойство ставится на `table-row-group`/`table-column-group`/`table-cell`; пробы нет | P1 | TABLE-ANON / [BUG-1357](../../bugs/BUG-1357-OPEN.md) — по аналогии, без пробы |
+| `fonts`: не разобрано | 25 | 25 thick | `fonts/font-family-invalid-characters-001.xht`, `font-family-applies-to-006.xht`, `font-042.xht` | `font-family` с недопустимыми символами (6), `*-applies-to` на `table-*` (4); пробы нет | — | без записи |
+| после правки «:»: прочее `generated-content`/`lists` | 23 | 23 thick | `counter-reset-applies-to-005.xht`, `before-after-positioned-001.xht`, `content-inherit-002.xht` | отдельных проб нет | — | без записи |
+| `linebox`: не разобрано | 22 | 22 thick | `linebox/inline-formatting-context-002.xht`, `border-padding-bleed-001.xht`, `empty-inline-001.xht` | `inline-formatting-context-*` (12): `div{display:inline}` с блочным ребёнком; по аналогии — [BUG-1353](../../bugs/BUG-1353-OPEN.md), без пробы | P1 | без записи |
+| escape в `content` | 15 | 15 thick (после правки «:») | `generated-content/content-171.xht`, `content-white-space-001.xht`, `after-content-display-015.xht` | `"\A"` → буквально `\A`; `"\""` обрывает литерал | P3 | [BUG-1367](../../bugs/BUG-1367-OPEN.md) |
+| `bidi-text`: не разобрано | 14 | 14 thick | `bidi-text/bidi-box-model-020.xht`, `-021.xht` | `bidi-box-model-*` с `unicode-bidi: embed`/`normal` и рамкой `span`; пробы нет | — | без записи |
+| `list-style-*` | 10 | 10 thick | `lists/list-style-019.xht`, `list-style-applies-to-012.xht` | пробы нет | — | без записи |
+| `text-indent` | 8 | 8 thick | `text/text-indent-011.xht`, `-012.xht` | `text-indent: 200%` во вложенном `div` (`font:30px/0 monospace`); пробы нет | — | без записи |
+| `counter()` со стилем | 7 | 7 thick (после правки «:») | `generated-content/content-010.xht`, `content-counter-004.xht` | `decimal-leading-zero` при 0 даёт `0`, а не `00`; `square`/`disc`/`circle` рисуются текстовым `▪`/`•`, а эталон — маркером `li` | P3 | без записи (< 20 id) |
+| `::before` у `head`/`meta` | 5 | 5 thick (после правки «:») | `generated-content/content-067.xht`, `content-123.xht` | `head{display:block}` + `head:before{content:attr(profile)}`; пробы нет | — | без записи |
+| `display:list-item` у `::before` | 3 | 3 thick (после правки «:») | `generated-content/before-content-display-003.xht` | маркер у `::before{display:list-item}` не рисуется (текст есть) | P3 | без записи (< 20 id) |
+| `content:url()` | 2 | 2 thick (после правки «:») | `generated-content/content-004.xht` | `DrawImage 32×17.7` вместо `100×100` (интринсик картинки не берётся) | P3 | без записи (< 20 id) |
+| без `rel=match` | 1 | — | `text/text-indent-wrap-001-ref-float.xht` | файл-эталон попал в список | — | — |
+| *идентичны при 800×600 и 1024×720; FAIL только в холодном прогоне* | 72 | 72 identical | `fonts/font-011.xht`…, `linebox/vertical-align-004.xht`, `text/text-indent-007.xht` | см. «Прогон нестабилен» выше | P2 | [BUG-1273](../../bugs/BUG-1273-OPEN.md) (дополнен) |
+
+Сумма по таблице: 820 id первого прогона (из них 72 в повторных прогонах PASS; ещё 2 id — `font-family-013`, `fonts-013` — наоборот FAIL в повторных: пикселями не разбирались).
+
+### Что остаётся неизвестным
+
+- **«Не разобрано»** — 55 + 25 + 23 + 22 + 14 + 10 + 8 + 5 = **162 id** (20 % разобранных): кластеры по 1–40 id, проб нет. Крупнейший — `text/white-space-*` (около 40 id): тест строит фигуру из `table` и `pre`/`div`, а у `<pre>` нет UA-полей ([BUG-1334](../../bugs/BUG-1334-OPEN.md)).
+- **После BUG-1366 числа 35, 23, 15, 7, 5, 3, 2 — по A/B на копиях**, а не на движке: само исправление может открыть ещё дефекты за этими 90 `thick`.
+- **BUG-1368 (35 id)** — число по правилу «`counter-reset|increment` в блоке `::before|::after`»; проба — на 6 отдельных страницах, не на каждом id.
+- **BUG-1370 (33 id)**, **BUG-1371 (44 id)** — число по имени/источнику (`vertical-align-*`; `bidi-override`/`U+202E`/`<bdo>`), проб по одному–двум id. `bidi-001.xht` (явные `U+202E`…`U+202C` внутри рамки) — другая причина, не отделена.
+- **BUG-1369 (41 id)** — проба на трёх `div`, в таблицах выше. Отдельно не проверялось, лежит ли в основе `line-height: 0` у блоков с `position:absolute`-соседом (`line-height-002.xht`), или сам расчёт у блока.
+- **Кластеры пересекаются**: BUG-1337, BUG-1339, BUG-1366…1372 делят id; после закрытия любого разбивка изменится.
+- **testharness (3 id)** — не разбирались; `line-height-interpolation.html` — 303 из 628 сабтестов (интерполяция `line-height`, дискретный/числовой случай), `vertical-align-top-bottom-001.html`/`inline-negative-margin-001.html` — `getBoundingClientRect` у inline.
+- Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в `wptrunner` против 800×600 в пиксельном разборе.
+- Срез закрывает `text`, `linebox`, `fonts`, `generated-content`, `lists`, `bidi-text` из `css/CSS2` (1 259 id из 6 357 автоматизируемых; остальное — срез S15).
