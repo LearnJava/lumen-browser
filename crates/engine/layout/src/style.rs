@@ -243,6 +243,7 @@ pub use values::timing::{
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub(crate) use values::rule_computed::insert_gap_rule_computed;
+pub use values::grid_cssom::canonical_specified_grid;
 pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
 pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
 pub use values::rule_anim::{
