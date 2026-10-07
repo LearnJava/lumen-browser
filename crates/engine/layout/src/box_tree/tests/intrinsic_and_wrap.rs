@@ -290,15 +290,15 @@ fn bug740_auto_fill_falls_back_to_widest_child() {
     assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
 }
 
-/// Явное позиционирование ребёнка (`grid-column`) может увести его в
-/// колонку, отличную от предполагаемой раскладкой «по кругу», или создать
-/// перекрытие — та же осторожность, что и с auto-fill выше.
+/// Явное позиционирование ребёнка (`grid-column`): дорожки считаются по
+/// настоящему размещению (BUG-1318), а не по схеме «по кругу». Первый элемент
+/// уходит в колонку 2, второй встаёт в свободную колонку 1 — 40 + 40.
 #[test]
-fn bug740_explicit_item_placement_falls_back_to_widest_child() {
+fn bug740_explicit_item_placement_sums_the_real_tracks() {
     let css = format!(
         "{GRID_CSS} .inner > .leaf:first-child {{ grid-column: 2; }}"
     );
-    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+    assert_eq!(child_widths(GRID_HTML, &css), vec![80.0, 30.0]);
 }
 
 /// Колоночный поток (`grid-auto-flow: column`) не соответствует
@@ -346,12 +346,12 @@ fn bug1317_named_areas_keep_shrink_to_fit() {
     assert_eq!(child_widths(&html, &css), vec![50.0, 30.0]);
 }
 
-/// Имя, которого нет среди линий, создаёт неявные колонки — быстрый путь
-/// по явным дорожкам не применяется, ширина — не 50.
+/// Имя, которого нет среди линий, создаёт неявную колонку — её ширина
+/// берётся по содержимому элемента: 25 + 25 + 20.
 #[test]
 fn bug1317_unknown_name_is_not_in_explicit_grid() {
-    let html = NAMED_HTML.replace("grid-column:x", "grid-column:nope");
-    assert_ne!(child_widths(&html, NAMED_CSS)[0], 50.0);
+    let html = NAMED_HTML.replace("grid-column:x", "grid-column:nope;width:20px");
+    assert_eq!(child_widths(&html, NAMED_CSS)[0], 70.0);
 }
 
 // ── BUG-738: out-of-flow дети не участвуют в intrinsic-ширине ─────────────
