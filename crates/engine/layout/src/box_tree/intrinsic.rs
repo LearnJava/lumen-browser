@@ -304,6 +304,11 @@ pub(super) fn grid_col_intrinsic_sum(
         }
         return Some(sum);
     }
+    if !vertical
+        && let Some(sum) = grid_col_sum_by_tracks(b, viewport, &col_axis, per_item)
+    {
+        return Some(sum);
+    }
     if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
         return None;
     }
@@ -344,6 +349,73 @@ pub(super) fn grid_col_intrinsic_sum(
     }
 
     Some(col_widths.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
+}
+
+/// CSS Grid L1 §11.5 / L2 §9 — the column sum of a grid whose items are placed
+/// explicitly or through a subgrid (BUG-1318): the placement and track-sizing
+/// passes `build_grid_init` runs, against an infinite width. `None` when the
+/// grid is not of that kind (every item auto-placed and none a subgrid — the
+/// round-robin rule in `grid_col_intrinsic_sum` covers it), when a track is not
+/// `auto` or a definite length, or when the axis is not plain row flow.
+fn grid_col_sum_by_tracks(
+    b: &LayoutBox,
+    viewport: Size,
+    col_axis: &GridAxis,
+    per_item: &dyn Fn(&LayoutBox) -> f32,
+) -> Option<f32> {
+    use super::grid::{grid_item_indices, place_grid_items};
+    use super::grid_auto_cols as gac;
+    let s = &b.style;
+    let template = &s.grid_template_columns;
+    if matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
+        return None;
+    }
+    let item_idxs = grid_item_indices(&b.children);
+    let needs_tracks = item_idxs.iter().any(|&i| {
+        let st = &b.children[i].style;
+        gac::is_col_subgrid(&b.children[i])
+            || !matches!(st.grid_column_start, GridLine::Auto)
+            || !matches!(st.grid_column_end, GridLine::Auto)
+    });
+    if !needs_tracks {
+        return None;
+    }
+    let row_axis = GridAxis {
+        n_tracks: s.grid_template_rows.len().max(s.grid_template_areas.len()) as u32,
+        names: &s.grid_template_row_line_names,
+        areas: &s.grid_template_areas,
+        is_col: false,
+    };
+    let n_explicit = template.len().max(1);
+    let placements = place_grid_items(
+        &b.children,
+        &item_idxs,
+        s,
+        n_explicit,
+        s.grid_template_rows.len(),
+        col_axis,
+        &row_axis,
+    );
+    let n_cols = placements
+        .iter()
+        .map(|&(_, ce, _, _)| ce.saturating_sub(1) as usize)
+        .max()
+        .unwrap_or(1)
+        .max(n_explicit);
+    let kinds = gac::classify_col_tracks(template, &s.grid_auto_columns, n_cols, &|l| {
+        l.resolve(s.font_size, None, viewport)
+    })?;
+    let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+    let mut contribs = Vec::new();
+    let measure = |c: &LayoutBox| {
+        let w = per_item(c);
+        (w, w)
+    };
+    gac::collect_col_contributions(
+        &b.children, &item_idxs, &placements, n_cols, 0, 0.0, 0.0, viewport, &measure, &mut contribs,
+    );
+    let (_, limit) = gac::base_and_limit(&kinds, &contribs, gap);
+    Some(limit.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
 }
 
 /// CSS Flexbox L1 §9.9 — intrinsic width contribution of a **row-direction**
