@@ -1,6 +1,6 @@
 # BUG-1260 — Если сумма `flex-grow` < 1, свободное место должно делиться пропорционально факторам, а оставаться нераспределённой частью (CSS Flexbox L1 §9.7 п
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** layout (`crates/engine/layout/src/box_tree/flex.rs` — распределение свободного места при сумме `flex-grow`/`flex-shrink` < 1)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 1.
 ## Как проверить
 
 `css/css-flexbox/flex-factor-less-than-one.html`.
+
+## Исправление
+
+`flex.rs`: в цикле заморозки grow свободное место умножается на `min(1, сумма grow незамороженных)` (§9.7 п. 4.c). Попутно `flex: <g> <s> 0` (безразмерный ноль третьим токеном) принимается как basis (`shorthand.rs`). Тесты: `tests/flex_factor_below_one.rs`.

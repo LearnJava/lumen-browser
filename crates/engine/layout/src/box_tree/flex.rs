@@ -982,6 +982,9 @@ fn build_line_inits(
                             }
                             break;
                         }
+                        // §9.7 п. 4.c: при сумме факторов < 1 делится лишь её доля
+                        // свободного места (BUG-1260).
+                        let remaining = remaining * total_weight.min(1.0);
                         let mut violated = false;
                         for &j in &unfrozen {
                             let target = base[j] + remaining * (grows[j] / total_weight);
