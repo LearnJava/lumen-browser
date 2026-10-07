@@ -24,6 +24,10 @@ use std::hash::BuildHasher;
 use std::sync::Arc;
 
 type StyleMaps = HashMap<u32, crate::StyleMap>;
+/// The published pseudo-element computed styles, keyed by `(owner node index, pseudo name)`.
+pub type PseudoMaps = HashMap<(u32, String), HashMap<String, String>>;
+/// The published resolved custom properties, keyed by node index.
+pub type CustomPropMaps = HashMap<u32, Arc<HashMap<String, String>>>;
 
 /// BUG-935 срез 59 — which nodes of an incremental flush really changed, as far
 /// as a computed-style entry can tell.
@@ -221,6 +225,9 @@ impl ChainBreaks {
 /// One box the collectors must visit.
 struct Item<'a> {
     b: &'a LayoutBox,
+    /// The node of the box whose `children` list `b` lives in (the root's own node for the root):
+    /// the owner a `::first-letter` entry is keyed by.
+    parent: NodeId,
     /// The geometry context `b` itself is resolved in (its parent's child context).
     ctx: GeomCtx,
     /// `true` — the whole subtree is re-collected (a dirty root, or a clean subtree
@@ -342,12 +349,12 @@ impl<'a> ScopedCollection<'a> {
         // what the context is made of, so the context `apply_used_geometry` resolves this box in is the
         // one its published entry was resolved in ([`chain_through`]).
         // The fifth: the box is inside a dirty root (срез 70).
-        let mut stack = vec![(root, GeomCtx::root(viewport), true, true, true, false)];
-        while let Some((b, ctx, parent_stable, chain, full, in_root)) = stack.pop() {
+        let mut stack = vec![(root, root.node, GeomCtx::root(viewport), true, true, true, false)];
+        while let Some((b, parent, ctx, parent_stable, chain, full, in_root)) = stack.pop() {
             let is_root = dirty_roots.contains(&b.node);
             let in_root = in_root || is_root;
             if is_root && prune_changed.is_none() {
-                items.push(Item { b, ctx, whole: true, styles: true, in_root });
+                items.push(Item { b, parent, ctx, whole: true, styles: true, in_root });
                 if let Some(changed) = style_changed {
                     plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                 }
@@ -389,13 +396,13 @@ impl<'a> ScopedCollection<'a> {
                         pruned.push(b);
                     }
                 } else if unmoved {
-                    items.push(Item { b, ctx, whole: true, styles: true, in_root });
+                    items.push(Item { b, parent, ctx, whole: true, styles: true, in_root });
                     if let Some(changed) = style_changed {
                         plan_style_skips(b, ctx, (chain, full), layout_rects, viewport, changed, &mut seen, &mut skips);
                     }
                 } else {
                     let styles = !translation_keeps_styles(b, r, published, parent_stable);
-                    items.push(Item { b, ctx, whole: true, styles, in_root });
+                    items.push(Item { b, parent, ctx, whole: true, styles, in_root });
                     if !styles && in_root {
                         translated.push(b);
                     }
@@ -405,7 +412,7 @@ impl<'a> ScopedCollection<'a> {
                 }
                 continue;
             }
-            items.push(Item { b, ctx, whole: false, styles: true, in_root });
+            items.push(Item { b, parent, ctx, whole: false, styles: true, in_root });
             let first = seen.insert(b.node);
             let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
             let stable = published.is_some_and(|p| p[0] == r.x && p[2] == r.width);
@@ -432,7 +439,7 @@ impl<'a> ScopedCollection<'a> {
             {
                 skips.own.insert(b.node.index() as u32);
             }
-            stack.extend(b.children.iter().rev().map(|c| (c, child_ctx, stable, child_chain, child_full, in_root)));
+            stack.extend(b.children.iter().rev().map(|c| (c, b.node, child_ctx, stable, child_chain, child_full, in_root)));
         }
         let mut pruned_ids = IdSet::default();
         let mut pruned_raw_ids = IdSet::default();
@@ -558,6 +565,45 @@ impl<'a> ScopedCollection<'a> {
                 collect_client_rects_rec(doc, it.b, &boxed, &mut fresh);
             } else {
                 collect_client_rects_box(doc, it.b, &boxed, &mut fresh);
+            }
+        }
+        out.extend(fresh);
+    }
+
+    /// BUG-935 срез 95: [`Self::collect_layout_rects`] for the pseudo-element computed styles
+    /// (`getComputedStyle(el, '::before')`). The entry is a function of the box's style alone, so
+    /// the planned boxes are all there is to rebuild; the caller evicts what it rebuilds first
+    /// ([`crate::forget_pseudo_computed_styles`]).
+    pub fn collect_pseudo_computed_styles(&self, out: &mut PseudoMaps) {
+        let mut fresh = HashMap::new();
+        for it in &self.items {
+            if !it.whole {
+                crate::collect_pseudo_computed_styles_box(it.b, it.parent, &mut fresh);
+                continue;
+            }
+            let mut stack = vec![(it.b, it.parent)];
+            while let Some((b, owner)) = stack.pop() {
+                crate::collect_pseudo_computed_styles_box(b, owner, &mut fresh);
+                stack.extend(b.children.iter().rev().map(|c| (c, b.node)));
+            }
+        }
+        out.extend(fresh);
+    }
+
+    /// [`Self::collect_pseudo_computed_styles`] for the resolved custom properties
+    /// ([`crate::collect_custom_properties`]); the caller evicts by node index first.
+    pub fn collect_custom_properties(&self, viewport: lumen_core::geom::Size, out: &mut CustomPropMaps) {
+        let mut fresh = HashMap::new();
+        let mut resolved = HashMap::new();
+        for it in &self.items {
+            if !it.whole {
+                crate::collect_custom_properties_box(it.b, viewport, &mut fresh, &mut resolved);
+                continue;
+            }
+            let mut stack = vec![it.b];
+            while let Some(b) = stack.pop() {
+                crate::collect_custom_properties_box(b, viewport, &mut fresh, &mut resolved);
+                stack.extend(b.children.iter().rev());
             }
         }
         out.extend(fresh);
