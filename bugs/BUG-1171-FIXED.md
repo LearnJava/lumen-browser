@@ -1,6 +1,6 @@
 # BUG-1171 — `TreeWalker.nextNode()` обходит поддерево `root`, а не идёт от `currentNode`: Lit не находит частей шаблона
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P3). TreeWalker идёт по ссылкам дерева от `currentNode` (DOM §6.2); тест `tree_walker_next_node_from_current_outside_root`.
 **Заведён:** 2026-09-25 (P6, при закрытии [BUG-1130](BUG-1130-FIXED.md) — перемер archive.org)
 **Область:** js — `crates/js/src/shim/web_api_shim_mid_b4.js:1612` (`_TreeWalker.prototype.nextNode`
 через `_tw_subtree(root)`/`indexOf(cur)`; тот же приём у `previousNode`/`nextSibling`/…)
