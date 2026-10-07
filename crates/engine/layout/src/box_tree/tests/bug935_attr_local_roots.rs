@@ -72,6 +72,15 @@ struct Step {
     shallow: usize,
     /// Descendants of a shallow root the cascade is asked to recompute on their own.
     point: usize,
+    /// Elements that took a parent's changed custom properties without a cascade (срез 98).
+    inherited: u32,
+}
+
+impl Step {
+    /// Elements whose style came out of the cascade (`recomputed` counts the inherited ones too).
+    fn cascaded(&self) -> u32 {
+        self.recomputed - self.inherited
+    }
 }
 
 /// Runs `steps` against `html`/`css`.
@@ -149,7 +158,14 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
         collect(&full, &mut b);
         assert_eq!(a, b, "step {step}: the narrowed incremental tree diverged from a full rebuild");
 
-        out.push(Step { recomputed: stats.recomputed, elements: full_counters.styles().len(), deep, shallow, point });
+        out.push(Step {
+            recomputed: stats.recomputed,
+            elements: full_counters.styles().len(),
+            deep,
+            shallow,
+            point,
+            inherited: stats.inherited,
+        });
         prev = incr;
         prev_counters = incr_counters;
     }
@@ -657,4 +673,83 @@ fn an_inherited_change_stops_where_a_descendant_overrides_it() {
             }),
         ],
     );
+}
+
+// ── срез 98: custom property на shallow-узле не гонит весь каскад поддерева ───────────────────────
+
+fn toggle_style(value: &'static str) -> Mutation {
+    Box::new(move |d| {
+        let w = by_id(d, "w");
+        set(d, w, "style", value);
+    })
+}
+
+/// `--sc` written on the wrapper. Only `.dep` reads it directly and `#inner` builds `--w` from it
+/// for `.use`; the other paragraphs inherit the new map without a cascade, and the result is the
+/// one a full cascade gives (the differential in [`drive`]).
+#[test]
+fn a_custom_property_write_cascades_only_the_elements_a_rule_reads_it_through() {
+    let paras = 20;
+    let html = {
+        let ps: String = (0..paras)
+            .map(|i| {
+                let class = match i {
+                    3 => " class=\"dep\"",
+                    7 => " class=\"use\"",
+                    11 => " style=\"margin-left: var(--sc)\"",
+                    _ => "",
+                };
+                format!("<p{class}>para {i} <b>bold</b></p>")
+            })
+            .collect();
+        format!("<div id=\"w\" class=\"wrap\"><div id=\"inner\">{ps}</div></div><div id=\"tail\"><p>tail</p></div>")
+    };
+    let css = ".dep { padding-left: var(--sc, 1px) } #inner { --w: calc(var(--sc, 0px) * 2) } .use { margin-left: var(--w) } p { margin-top: 1px }";
+    let r = drive(
+        &html,
+        css,
+        vec![toggle_style("--sc: 15px"), toggle_style("--sc: 40px"), toggle_style(""), toggle_style("--sc: 7px")],
+    );
+    for (i, step) in r.iter().enumerate() {
+        assert!(step.shallow >= 1 && step.deep == 0, "step {i}: expected a shallow root");
+        assert!(step.inherited >= paras as u32, "step {i}: only {} elements inherited without a cascade", step.inherited);
+        assert!(step.cascaded() <= 12, "step {i}: {} of {} elements went through the cascade", step.cascaded(), step.elements);
+    }
+}
+
+/// A custom property no rule reads: the whole subtree inherits, nothing below the wrapper is cascaded.
+#[test]
+fn an_unread_custom_property_cascades_nothing_below_the_element() {
+    let r = drive(
+        &wrapped(20),
+        "p { margin: 1px } #inner { --own: 3px }",
+        vec![toggle_style("--theme: dark"), toggle_style("--theme: light"), toggle_style("--own: 9px")],
+    );
+    for (i, step) in r.iter().enumerate() {
+        assert!(step.inherited >= 20, "step {i}: {} elements inherited", step.inherited);
+        assert!(step.cascaded() <= 3, "step {i}: {} elements went through the cascade", step.cascaded());
+    }
+}
+
+/// A descendant that declares the changed name itself keeps its own value: the declaring rule is
+/// reached, so it is cascaded and its descendants see its value, not the wrapper's.
+#[test]
+fn a_descendant_that_redeclares_the_property_is_cascaded() {
+    drive(
+        "<div id=\"w\" class=\"wrap\"><div id=\"a\"><p class=\"c\">a <b>x</b></p></div><div id=\"b\" class=\"own\"><p class=\"c\">b <b>y</b></p></div></div>",
+        ".own { --sc: 5px } .c { padding-left: var(--sc, 0px) }",
+        vec![toggle_style("--sc: 20px"), toggle_style("--sc: 30px")],
+    );
+}
+
+/// `@property` can type, reset or give an initial value to a custom property in ways a text scan
+/// cannot follow: the descendants go through the cascade as before.
+#[test]
+fn a_sheet_with_property_registrations_keeps_the_cascade() {
+    let r = drive(
+        &wrapped(10),
+        "@property --sc { syntax: '<length>'; inherits: true; initial-value: 0px } p { padding-left: var(--sc) }",
+        vec![toggle_style("--sc: 15px"), toggle_style("--sc: 3px")],
+    );
+    assert!(r.iter().all(|s| s.inherited == 0), "the analysis must stay off with @property");
 }
