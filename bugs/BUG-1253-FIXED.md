@@ -1,6 +1,6 @@
 # BUG-1253 — Автоматический минимальный размер (`min-width/min-height: auto`) реализован только для column-контейнера в ветке `flex-basis: <length>` (BUG-158, `fle
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** layout (`crates/engine/layout/src/box_tree/flex.rs` — автоматический минимальный размер flex-элемента, CSS Flexbox L1 §4.5)
 
@@ -26,3 +26,7 @@ WPT-RUN-14 срез 1. Кластер определён регулярным в
 ## Как проверить
 
 `run_report.py --root css/css-flexbox --recursive`, файлы `flex-minimum-height-flex-items-*`, `flex-minimum-width-flex-items-*`.
+
+## Исправление
+
+`build_line_inits` (`flex.rs`): автоматический минимум (§4.5) теперь ограничивает и распределение `flex-grow` (цикл заморозки клампит цель по `[min, max]`; раньше учитывал только `max`), и сжатие column-контейнера (раньше минимум колонки был 0): `col_auto_mins` — высота содержимого элемента с `height:auto`, `min-height:auto`, `overflow-y:visible`. Тесты — `box_tree/tests/flex_auto_min_size.rs`. Остаток: column-элемент с определённой `height` (минимум `min(content, specified)`) и `total_grow == 0` не зажимаются по минимуму.
