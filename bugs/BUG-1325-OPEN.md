@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 9, `css/css-text`, первая половина)
-**Область:** js/layout (`crates/layout/src/selector_query.rs::computed_style_to_map` — нет строк для перечисленных ниже свойств; `crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — для них нет грамматики; тот же класс, что [BUG-1254](BUG-1254-OPEN.md) для flex, [BUG-1278](BUG-1278-OPEN.md) для CSS UI, [BUG-1307](BUG-1307-OPEN.md) для grid)
+**Область:** js/layout (`crates/layout/src/selector_query.rs::computed_style_to_map` — нет строк для перечисленных ниже свойств; `crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — для них нет грамматики; тот же класс, что [BUG-1254](BUG-1254-FIXED.md) для flex, [BUG-1278](BUG-1278-OPEN.md) для CSS UI, [BUG-1307](BUG-1307-OPEN.md) для grid)
 
 ## Симптом
 
