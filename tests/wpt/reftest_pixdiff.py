@@ -95,8 +95,9 @@ def classify(t):
         src = open('tests/wpt' + t, encoding='utf-8', errors='replace').read()
     except OSError:
         return t, 'nosrc', 0
-    m = re.search(r'<link[^>]+rel=["\']match["\'][^>]*href=["\']([^"\']+)["\']', src) or \
-        re.search(r'<link[^>]+href=["\']([^"\']+)["\'][^>]*rel=["\']match["\']', src)
+    # `(?:\w+:)?` — в `.svg`-тестах ссылка записана как `<html:link rel="match" …/>`.
+    m = re.search(r'<(?:\w+:)?link[^>]+rel=["\']match["\'][^>]*href=["\']([^"\']+)["\']', src) or \
+        re.search(r'<(?:\w+:)?link[^>]+href=["\']([^"\']+)["\'][^>]*rel=["\']match["\']', src)
     if not m:
         return t, 'no-match-ref', 0
     ref = m.group(1)
