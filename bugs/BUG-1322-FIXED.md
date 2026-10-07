@@ -1,6 +1,6 @@
 # BUG-1322 — `white-space: pre-wrap` и `break-spaces` не переносят строку по ширине: ведут себя как `pre`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 9, `css/css-text`, первая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:600` — ветка `if white_space.preserves_whitespace()` отдаёт сегмент одним куском без переноса; `WhiteSpace::PreWrap`/`BreakSpaces` входят в `preserves_whitespace()`, а различие «переносится / нет» живёт в `is_nowrap()`, до которого ветка не доходит)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 9: `css/css-text/i18n/css3-text-line-break-baspglwj-*` (113 
 ## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
 
 Проба на другой выборке: `width: 100px; white-space: pre-wrap`, `<i>aaaaaa</i> <i>bbbbbb</i> <i>cc</i>` — три слова на одной строке (x = 0 / 67 / 141); `日本語×6` в `pre-wrap` — одна строка (высота 24,2), в `normal` — три. В `white-space/`, `word-break/`, `text-transform/` и остальных каталогах второй половины 276 из 654 не зелёных id содержат `pre-wrap`/`break-spaces`/`white-space-collapse`/`text-wrap-mode`/`<textarea>` (по тексту, не по причине). Часть `break-spaces-newline-*`/`pre-wrap-018` падает по другой причине — [BUG-1327](BUG-1327-OPEN.md).
+
+## Исправление (2026-10-07, P6)
+
+Новый модуль `box_tree/inline_wrap_preserved.rs`: `wrap_preserved_segment` режет сегмент `pre-wrap`/`break-spaces` по мягким возможностям переноса — после пробела/табуляции (у `pre-wrap` — после всей серии пробелов), внутри слова по UAX #14 (`line_break::break_opportunities`), для `word-break: break-all` между любыми символами, для `overflow-wrap: break-word|anywhere` и `word-break: break-word` — по символам, если слово шире строки. Жадная укладка: пробелы в конце строки у `pre-wrap` висят и в ширину не входят, у `break-spaces` занимают место. Соседние токены одной строки склеены в один фрагмент. `wrap_inline_run` вызывает модуль для `!is_nowrap()`; `pre` остался единым фрагментом. Тесты — `box_tree/tests/pre_wrap.rs`. Пробельный узел между inline-соседями в этих режимах отбрасывается раньше раскладки — отдельный дефект [BUG-1327](BUG-1327-OPEN.md).
