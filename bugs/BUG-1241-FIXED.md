@@ -1,6 +1,6 @@
 # BUG-1241 — `cargo test -p lumen-js --lib` не компилируется: в `dom/tests/*` не резолвятся `make_doc`, `Arc`, `Mutex`, `Document`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Тип:** сборка тестов.
 **Заведён:** 2026-10-02 (P4, найден в гейте задачи `block-size-logical`, не относится к ней)
 **Область:** js (`crates/js/src/dom/tests/v8_bug1148_srcset_img_load.rs`, `v8_bug1158_raw_text_inner_html.rs`, `v8_bug1167_ce_wrapper_gc.rs` и др.).
@@ -12,3 +12,9 @@
 ## Как проверить
 
 `cargo test -p lumen-js --lib --no-run` на чистом `main`.
+
+## Корень и исправление
+
+В `crates/js/src/dom/tests/mod.rs` атрибут `#[cfg(feature = "v8-backend")]` стоял только у первого `mod` блока; 20 следующих модулей (`v8_bug935_s58…s77`, `v8_bug1148…`, `v8_bug1158…`, `v8_bug1167…`, `v8_bug1207…`, `v8_soft_navigation_s1` и др.) компилировались без фичи и не находили v8-only символы (`make_doc`, `Arc`, `crate::v8_runtime`, `v8_bug935_s55_content_journal`). Каждому модулю добавлен свой `cfg`. Проверка: `cargo test -p lumen-js --lib --no-run` (без фичи) и с `--features v8-backend` собираются.
+
+Не относится к багу: `cargo clippy -p lumen-js -- -D warnings` без `v8-backend` красный на самом lib (неиспользуемые импорты в `push_api.rs`, `worker.rs`, `deterministic_patch_script`); рабочий гейт идёт с `--features v8-backend`.
