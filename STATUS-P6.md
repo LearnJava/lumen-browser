@@ -1,3 +1,4 @@
+docs/tasks/P6-CLAUDE-MD-TASK-CLAIM.md:1
 BUGS.md:222
 BUGS.md:223
 BUGS.md:224
