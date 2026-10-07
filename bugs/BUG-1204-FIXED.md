@@ -1,6 +1,6 @@
 # BUG-1204 — контроллеры и `ReadableStreamBYOBRequest` конструируются страницей через `new`, хотя конструктора у них нет
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Компонент:** js (`crates/js/src/shim/streams_shim.js`)
 **Найден:** P3, при фиксе BUG-684, 2026-09-28
 
@@ -32,3 +32,9 @@ ReadableStreamDefaultController({})` молча строит объект, ко�
 если где-то нужна цепочка конструкторов). Проверка — WPT
 `streams/idlharness.any.js` (раздел «interface object … must throw when
 called as a constructor»).
+
+## Исправление
+
+`_stream_illegal_unless_internal()` в пяти конструкторах бросает `TypeError: Illegal constructor`,
+если вход не через `_stream_create(Ctor, …)` (флаг-капча, сбрасывается сразу и в `finally`).
+Стримы создают контроллеры через `_stream_create`. Тест `stream_controllers_have_illegal_constructor`.
