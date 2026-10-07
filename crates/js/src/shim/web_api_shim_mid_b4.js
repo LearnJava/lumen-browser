@@ -2393,7 +2393,7 @@ function _lumen_frame_script_will_start(nid) {
     // error-таском (спека ставит already started до обеих веток).
     var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
     if (src !== null) return true;
-    var body = _lumen_u2n(_lumen_get_text_content(nid));
+    var body = _lumen_script_child_text(nid);
     return body !== null && String(body).trim() !== '';
 }
 var _lumen_frame_scripts_started = {};
