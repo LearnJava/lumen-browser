@@ -13416,7 +13416,8 @@ var document = {
     // CSSOM View §3: elementsFromPoint(x, y) — every element hit by the point,
     // topmost first, deduplicated. Empty array if nothing is hit.
     elementsFromPoint: function(x, y) {
-        return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element);
+        return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element)
+            .filter(function(e) { return e && e.nodeType === 1 && e.localName; });  // BUG-1202: drop the document node (no localName)
     },
     // HTML LS §8.1.7.2.2 (DocumentAndElementEventHandlers) is already covered by
     // the curated list looped in below; these two are Document-only, not part of

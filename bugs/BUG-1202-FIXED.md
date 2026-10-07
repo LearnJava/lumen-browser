@@ -1,6 +1,6 @@
 # BUG-1202 — `elementFromPoint`/`elementsFromPoint` отвечают по устаревшему дереву хит-теста: только что вставленный элемент не находится
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Компонент:** js (`crates/js/src/v8_runtime/install/platform.rs:386`/`:394` — нативы `_lumen_element_from_point`/`_lumen_elements_from_point` в `install_point_hit_test`)
 **Найден:** P3, попутно к [BUG-680](BUG-680-FIXED.md), 2026-09-28
 
@@ -50,3 +50,10 @@ document.elementFromPoint(...)               // → null
 Попутное наблюдение: в результате `elementsFromPoint` после `html` идёт ещё один
 элемент без `localName` (в `map(e => e.localName).join('>')` — пустой хвост) — вероятно,
 узел документа; CSSOM View §3 требует только элементы, `html` последним.
+
+## Исправление
+
+`install_point_hit_test` теперь зовёт `flush.maybe_flush()` и, если флаш опубликовал дерево новее
+пушнутого шеллом (`FlushHandles::hit_tree_stale`, сбрасывается в `update_hit_test_tree`), хит-тестит
+`incr_basis.layout`. `document.elementsFromPoint` отбрасывает узел документа (хвост без `localName`).
+Тест: `v8_point_hit_test::element_from_point_finds_node_inserted_this_tick`.
