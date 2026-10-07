@@ -13,11 +13,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use lumen_css_parser::{
-    Combinator, ComplexSelector, CompoundSelector, PseudoClass, PseudoElementKind, SimpleSelector, Stylesheet,
+    AttrSelector, Combinator, ComplexSelector, CompoundSelector, PseudoClass, PseudoElementKind, SimpleSelector, Stylesheet,
 };
 use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::matches_simple;
+use crate::style::matching::attr_value_matches;
 
 /// `node`'s ancestor chain, root-first, `node` itself last. Empty if `node` is
 /// `None`.
@@ -426,6 +427,51 @@ fn complex_selector_has_any_has(c: &ComplexSelector) -> bool {
     compound_has_any_has(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_any_has(comp))
 }
 
+/// BUG-1211 — registers the subject compounds of every `S` in the `:nth-child(… of S)` /
+/// `:nth-last-child(… of S)` of `complex` (looking through `:not()`/`:is()`/`:where()`), and
+/// answers whether all of them are of the one shape the narrowing models: a single compound of
+/// type/class/id/attribute selectors, which is decided by the sibling's own attributes.
+///
+/// A sibling matching `S` counts into the position of the siblings before it (`:nth-last-child`) and
+/// after it (`:nth-child`), so a write that can flip `S` on a node reaches all of its siblings
+/// ([`NodeRestyleIndex::attr_change_hits_nth_of`]). A longer `S`, one with a pseudo-class or a
+/// `:has()` in it reads more than the sibling's own attributes, and that is left to the
+/// whole-sheet fallback.
+fn collect_nth_of_sources<'a>(complex: &'a ComplexSelector, out: &mut Vec<&'a CompoundSelector>) -> bool {
+    let mut simple = true;
+    for compound in std::iter::once(&complex.head).chain(complex.tail.iter().map(|(_, c)| c)) {
+        for part in &compound.parts {
+            let SimpleSelector::PseudoClass(pc) = part else { continue };
+            match pc {
+                PseudoClass::NthChild(_, Some(list)) | PseudoClass::NthLastChild(_, Some(list)) => {
+                    for s in list {
+                        let one_compound = s.tail.is_empty()
+                            && s.head.parts.iter().all(|p| {
+                                matches!(
+                                    p,
+                                    SimpleSelector::Type(_)
+                                        | SimpleSelector::Class(_)
+                                        | SimpleSelector::Id(_)
+                                        | SimpleSelector::Universal
+                                        | SimpleSelector::Attribute(_)
+                                )
+                            });
+                        simple &= one_compound;
+                        out.push(&s.head);
+                    }
+                }
+                PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list) => {
+                    for c in list {
+                        simple &= collect_nth_of_sources(c, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    simple
+}
+
 /// BUG-341 S17 — true if `complex` uses `:nth-child(… of S)` /
 /// `:nth-last-child(… of S)`.
 ///
@@ -753,12 +799,16 @@ struct ReaderTable<'a> {
     classes: HashMap<String, Vec<Arc<CompoundRef<'a>>>>,
     ids: HashMap<String, Vec<Arc<CompoundRef<'a>>>>,
     attrs: HashMap<String, Vec<Arc<CompoundRef<'a>>>>,
+    /// BUG-1211 — the `class`/`id` attribute selectors read from an ancestor position, each with
+    /// the subject it styles. They are not in [`Self::attrs`]: a write reaches the subject only
+    /// when it flips the selector ([`attr_selector_may_flip`]), not on every `class` write.
+    attr_sels: Vec<(AttrSelector, Arc<CompoundRef<'a>>)>,
 }
 
 impl<'a> ReaderTable<'a> {
     fn scan<'s>(sheet: &'s Stylesheet, wrap: impl Fn(&'s CompoundSelector) -> CompoundRef<'a>) -> Self {
         let mut table = Self::default();
-        let mut deps = AncestorDeps::default();
+        let mut deps = AncestorDeps { keep_attr_sels: true, ..AncestorDeps::default() };
         for rules in stylesheet_rule_groups(sheet) {
             for rule in rules {
                 for selector in &rule.selectors {
@@ -772,8 +822,12 @@ impl<'a> ReaderTable<'a> {
                     deps.classes.clear();
                     deps.ids.clear();
                     deps.attrs.clear();
+                    deps.attr_sels.clear();
                     deps.collect_selector(selector);
                     let subject = Arc::new(wrap(selector.tail.last().map_or(&selector.head, |(_, c)| c)));
+                    for sel in deps.attr_sels.drain(..) {
+                        table.attr_sels.push((sel, Arc::clone(&subject)));
+                    }
                     for (map, keys) in [
                         (&mut table.classes, &deps.classes),
                         (&mut table.ids, &deps.ids),
@@ -852,6 +906,12 @@ struct AncestorDeps {
     ids: HashSet<String>,
     /// Lowercased attribute names keyed by an attribute selector.
     attrs: HashSet<String>,
+    /// BUG-1211 — `class`/`id` attribute selectors, kept apart from [`Self::attrs`] (only
+    /// [`Self::keep_attr_sels`] does it): a write flips one only when the value it matches
+    /// differs between the old and the new value, which [`Self::class_write_hits`] and
+    /// [`Self::id_write_hits`] then ask.
+    attr_sels: Vec<AttrSelector>,
+    keep_attr_sels: bool,
     /// An ancestor-position compound carries a pseudo-class that reads a link's `href`
     /// (`a:link > span`): a write to `href` then reaches descendants.
     link_state: bool,
@@ -874,7 +934,11 @@ impl AncestorDeps {
                     self.ids.insert(i.to_ascii_lowercase());
                 }
                 SimpleSelector::Attribute(a) if !subject => {
-                    self.attrs.insert(a.name.to_ascii_lowercase());
+                    if self.keep_attr_sels && (a.name.eq_ignore_ascii_case("class") || a.name.eq_ignore_ascii_case("id")) {
+                        self.attr_sels.push(a.clone());
+                    } else {
+                        self.attrs.insert(a.name.to_ascii_lowercase());
+                    }
                 }
                 SimpleSelector::PseudoClass(pc) => self.collect_pseudo_class(pc, subject),
                 SimpleSelector::PseudoElement(PseudoElementKind::Slotted(Some(list))) => {
@@ -974,7 +1038,7 @@ impl AncestorDeps {
     /// anything this scan holds: a token on one side only that is listed, or an attribute
     /// selector keyed on the attribute itself (whose match reads the whole value).
     fn class_write_hits(&self, old: &str, new: &str) -> bool {
-        if self.attrs.contains("class") {
+        if self.attrs.contains("class") || self.attr_sels_flip("class", old, new) {
             return true;
         }
         let in_set = |token: &str| self.classes.contains(&token.to_ascii_lowercase());
@@ -982,9 +1046,17 @@ impl AncestorDeps {
             || new.split_ascii_whitespace().filter(|t| !old.split_ascii_whitespace().any(|o| o == *t)).any(in_set)
     }
 
+    /// Whether some kept attribute selector on `name` matches one of `old`/`new` and not the other.
+    /// An empty `old`/`new` is an absent attribute or an empty one, which are not told apart: it
+    /// counts as a flip when the selector matches an empty value at all (`[class]`, `[class=""]`).
+    fn attr_sels_flip(&self, name: &str, old: &str, new: &str) -> bool {
+        self.attr_sels.iter().filter(|s| s.name.eq_ignore_ascii_case(name)).any(|s| attr_selector_may_flip(s, old, new))
+    }
+
     fn id_write_hits(&self, old: &str, new: &str) -> bool {
         old != new
             && (self.attrs.contains("id")
+                || self.attr_sels_flip("id", old, new)
                 || self.ids.contains(&old.to_ascii_lowercase())
                 || self.ids.contains(&new.to_ascii_lowercase()))
     }
@@ -1022,6 +1094,12 @@ pub struct NodeRestyleIndex<'a> {
     /// [`has_dependent`](Self::has_dependent) — widening to the parent is not
     /// enough for it (BUG-349).
     conservative: bool,
+    /// BUG-1211 — the `S` of every `:nth-child(… of S)`/`:nth-last-child(… of S)`
+    /// ([`collect_nth_of_sources`]): a write that can flip one on a node moves the position of every
+    /// sibling, so [`Self::attr_change_hits_nth_of`] sends it to the parent.
+    nth_of_sources: Vec<CompoundRef<'a>>,
+    /// The class/id tokens and attribute names of [`Self::nth_of_sources`].
+    nth_of_deps: AncestorDeps,
     /// BUG-349 — `sheet` contains a `:has()` selector anywhere. A `:has()`
     /// match can flip on an ancestor arbitrarily far above the mutated node —
     /// not just its parent — so [`restyle_root_set_for_node_change`] widens
@@ -1038,6 +1116,10 @@ pub struct NodeRestyleIndex<'a> {
     /// Some `:has()` argument looks forward along siblings, so the previous
     /// siblings of the changed node's ancestors can flip too.
     has_sibling_reach: bool,
+    /// BUG-1211 — the class/id tokens and attribute names read by the arguments of every
+    /// `:has()` in the sheet. A write whose name/tokens appear in none of them cannot flip
+    /// any `:has()` result ([`Self::change_can_flip_has`]).
+    has_deps: AncestorDeps,
     /// The document has an author shadow root. Shadow-tree sheets are not scanned
     /// and `:has()` does not cross the boundary, so with a `:has()` in the sheet
     /// the whole document is restyled, as before.
@@ -1057,6 +1139,34 @@ pub struct NodeRestyleIndex<'a> {
     /// [`Self::set_attr_narrowing`]: the A/B switch of a live measurement and the baseline
     /// of the differential tests.
     attr_narrowing: bool,
+}
+
+/// BUG-1211 — [`add_readers`] for the `name` attribute selectors that a write of `old` -> `new` can flip.
+fn add_flipped_attr_readers<'t>(
+    subjects: &mut SubjectIndex<'t>,
+    readers: &mut usize,
+    table: &'t ReaderTable<'_>,
+    name: &str,
+    old: &str,
+    new: &str,
+) {
+    for (sel, subject) in &table.attr_sels {
+        if sel.name.eq_ignore_ascii_case(name) && attr_selector_may_flip(sel, old, new) {
+            subjects.insert(subject);
+            *readers += 1;
+        }
+    }
+}
+
+/// BUG-1211 — whether a write that moved an attribute from `old` to `new` can change `sel`'s result.
+/// An empty value is an absent attribute or an empty one, not told apart: it counts as a flip when
+/// `sel` matches an empty value at all (`[class]`, `[class=""]`).
+fn attr_selector_may_flip(sel: &AttrSelector, old: &str, new: &str) -> bool {
+    if (old.is_empty() || new.is_empty()) && attr_value_matches(sel, "") {
+        return true;
+    }
+    let matches = |v: &str| !v.is_empty() && attr_value_matches(sel, v);
+    matches(old) != matches(new)
 }
 
 /// Indexes the subject compounds of `list` and counts them into `readers`.
@@ -1082,6 +1192,39 @@ impl<'a> NodeRestyleIndex<'a> {
     /// document.
     pub fn has_has_dependency(&self) -> bool {
         self.has_dependent
+    }
+
+    /// BUG-1211 — whether `written` (`None`: not an attribute write) on `node` can flip
+    /// the result of some `:has()`.
+    ///
+    /// A `:has()` argument reads descendants through selector matches only, so a write to
+    /// an attribute no argument names cannot flip it: `data-*`/`aria-*` by name, `style`
+    /// (the declarations are not matched by a selector), `class`/`id` by the tokens that
+    /// changed — the same attributes [`Self::attr_change_stays_local`] narrows, for the
+    /// same reason. Anything else (`lang`, `disabled`, … read through pseudo-classes) and
+    /// a write whose old value is unknown for `class`/`id` stay on the wide path.
+    fn change_can_flip_has(&self, doc: &Document, node: NodeId, written: Option<(&str, Option<&str>)>) -> bool {
+        let deps = &self.has_deps;
+        let Some((attr, old)) = written else { return true };
+        if !self.attr_narrowing || deps.unmodelled {
+            return true;
+        }
+        let name = attr.to_ascii_lowercase();
+        if deps.attrs.contains(&name) {
+            return true;
+        }
+        let NodeData::Element { attrs, .. } = &doc.get(node).data else {
+            return true;
+        };
+        let current = |wanted: &str| {
+            attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case(wanted)).map_or("", |a| a.value.as_str())
+        };
+        match name.as_str() {
+            "class" => old.is_none_or(|old| deps.class_write_hits(old, current("class"))),
+            "id" => old.is_none_or(|old| deps.id_write_hits(old, current("id"))),
+            "style" => false,
+            n => !(n.starts_with("data-") || n.starts_with("aria-")),
+        }
     }
 
     /// BUG-935 срез 58 — the elements whose `:has()` result a change on `node` can
@@ -1169,6 +1312,36 @@ impl<'a> NodeRestyleIndex<'a> {
                 }
                 stack.extend(n.children.iter().rev().copied());
             }
+        }
+    }
+
+    /// BUG-1211 — can a write of `attr` on `node` (`old`: its value before, when known) flip an
+    /// `S` of some `:nth-child(… of S)` on `node`, and so move the position of its siblings,
+    /// before and after it alike? Such a write takes the parent's whole subtree.
+    pub fn attr_change_hits_nth_of(&self, doc: &Document, node: NodeId, attr: &str, old: Option<&str>) -> bool {
+        if self.nth_of_sources.is_empty() {
+            return false;
+        }
+        if !self.nth_of_sources.iter().any(|c| compound_could_match_after_attr_change(c, doc, node, attr)) {
+            return false;
+        }
+        let deps = &self.nth_of_deps;
+        let name = attr.to_ascii_lowercase();
+        if deps.attrs.contains(&name) {
+            return true;
+        }
+        let NodeData::Element { attrs, .. } = &doc.get(node).data else {
+            return true;
+        };
+        let current = |wanted: &str| {
+            attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case(wanted)).map_or("", |a| a.value.as_str())
+        };
+        match (name.as_str(), old) {
+            ("class", Some(old)) => deps.class_write_hits(old, current("class")),
+            ("id", Some(old)) => deps.id_write_hits(old, current("id")),
+            // `S` is decided by the attributes it names (checked above) and by `class`/`id` tokens.
+            ("class" | "id", None) => true,
+            _ => false,
         }
     }
 
@@ -1287,6 +1460,7 @@ impl<'a> NodeRestyleIndex<'a> {
                     add_readers(&mut subjects, &mut readers, table.classes.get(token));
                 }
                 add_readers(&mut subjects, &mut readers, table.attrs.get("class"));
+                add_flipped_attr_readers(&mut subjects, &mut readers, table, "class", old, new);
             }
             "id" => {
                 let (old, new) = (old?, current("id"));
@@ -1295,6 +1469,7 @@ impl<'a> NodeRestyleIndex<'a> {
                     add_readers(&mut subjects, &mut readers, table.ids.get(&new.to_ascii_lowercase()));
                 }
                 add_readers(&mut subjects, &mut readers, table.attrs.get("id"));
+                add_flipped_attr_readers(&mut subjects, &mut readers, table, "id", old, new);
             }
             n if n.starts_with("data-") || n.starts_with("aria-") => {
                 add_readers(&mut subjects, &mut readers, table.attrs.get(n));
@@ -1434,8 +1609,13 @@ fn build_node_index<'a, 's>(
     let mut has_subjects: Vec<(&CompoundSelector, bool)> = Vec::new();
     let mut structure_sensitive: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
     let mut structure_ends: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
-    let mut ancestor_deps = AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), ..AncestorDeps::default() };
+    let mut ancestor_deps =
+        AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), keep_attr_sels: true, ..AncestorDeps::default() };
     let mut sibling_deps = AncestorDeps::default();
+    let mut nth_of_sources: Vec<&CompoundSelector> = Vec::new();
+    let mut nth_of_deps = AncestorDeps { keep_attr_sels: true, ..AncestorDeps::default() };
+    let mut has_deps =
+        AncestorDeps { unmodelled: !sheet.scope_rules.is_empty(), keep_attr_sels: true, ..AncestorDeps::default() };
     for rules in stylesheet_rule_groups(sheet) {
         for rule in rules {
             for selector in &rule.selectors {
@@ -1445,8 +1625,39 @@ fn build_node_index<'a, 's>(
                     has_dependent = true;
                     has_sibling_reach |= complex_has_sibling_reach(selector);
                     collect_has_subjects(selector, &mut has_subjects);
+                    for_each_has_arg_in_complex(selector, false, &mut |rels, _| {
+                        for r in rels {
+                            has_deps.collect_complex(&r.selector, false);
+                        }
+                    });
                 }
-                conservative |= complex_selector_has_nth_of(selector);
+                if complex_selector_has_nth_of(selector) {
+                    let before = nth_of_sources.len();
+                    if collect_nth_of_sources(selector, &mut nth_of_sources) {
+                        for compound in &nth_of_sources[before..] {
+                            for part in &compound.parts {
+                                match part {
+                                    SimpleSelector::Class(c) => {
+                                        nth_of_deps.classes.insert(c.to_ascii_lowercase());
+                                    }
+                                    SimpleSelector::Id(i) => {
+                                        nth_of_deps.ids.insert(i.to_ascii_lowercase());
+                                    }
+                                    SimpleSelector::Attribute(a) => {
+                                        if a.name.eq_ignore_ascii_case("class") || a.name.eq_ignore_ascii_case("id") {
+                                            nth_of_deps.attr_sels.push(a.clone());
+                                        } else {
+                                            nth_of_deps.attrs.insert(a.name.to_ascii_lowercase());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    } else {
+                        conservative = true;
+                    }
+                }
                 collect_sibling_source_compounds(selector, &mut sibling_sources);
                 collect_structure_sensitive_compounds(selector, &mut structure_sensitive, &mut structure_ends);
             }
@@ -1457,12 +1668,15 @@ fn build_node_index<'a, 's>(
         readers: std::cell::OnceCell::new(),
         sibling_sources: sibling_sources.into_iter().map(&wrap).collect(),
         conservative,
+        nth_of_sources: nth_of_sources.into_iter().map(&wrap).collect(),
+        nth_of_deps,
         has_dependent,
         has_subjects: has_subjects
             .into_iter()
             .map(|(compound, fanout)| HasSubject { compound: wrap(compound), fanout })
             .collect(),
         has_sibling_reach,
+        has_deps,
         has_in_shadow_doc,
         structure_sensitive: structure_sensitive
             .into_iter()
@@ -1693,6 +1907,15 @@ fn fresh_node_change_is_covered(doc: &Document, n: NodeId, change: &NodeChange<'
         && !tag_is(doc, n, &["html", "head", "body", "base", "link", "meta", "style", "slot", "template"])
 }
 
+/// The attribute `change` wrote and, when the source knows it, the value it had before.
+fn change_written<'c>(change: &NodeChange<'c>) -> Option<(&'c str, Option<&'c str>)> {
+    match *change {
+        NodeChange::Attr(name) => Some((name, None)),
+        NodeChange::AttrFrom { name, old } => Some((name, Some(old))),
+        NodeChange::Unattributed | NodeChange::ChildList | NodeChange::ChildListEnds { .. } => None,
+    }
+}
+
 fn root_set_impl<'a>(
     doc: &Document,
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
@@ -1715,7 +1938,7 @@ fn root_set_impl<'a>(
             && has_style.is_some_and(|has| !has(n))
             && fresh_node_change_is_covered(doc, n, &change)
         {
-            if index.has_dependent {
+            if index.has_dependent && index.change_can_flip_has(doc, n, change_written(&change)) {
                 index.has_reach_roots(doc, n, &mut roots.deep);
             }
             continue;
@@ -1781,13 +2004,23 @@ fn root_set_impl<'a>(
                 }
             }
             other => {
-                let (needs_fanout, written) = match other {
-                    NodeChange::Attr(attr) => (index.attr_change_needs_fanout(doc, n, attr), Some((attr, None))),
-                    NodeChange::AttrFrom { name, old } => {
-                        (index.attr_change_needs_fanout_from(doc, n, name, Some(old)), Some((name, Some(old))))
-                    }
-                    NodeChange::Unattributed | NodeChange::ChildList | NodeChange::ChildListEnds { .. } => (true, None),
+                let written = change_written(&other);
+                let needs_fanout = match other {
+                    NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
+                    NodeChange::AttrFrom { name, old } => index.attr_change_needs_fanout_from(doc, n, name, Some(old)),
+                    NodeChange::Unattributed | NodeChange::ChildList | NodeChange::ChildListEnds { .. } => true,
                 };
+                // BUG-1211: the write can flip a `:nth-child(… of S)` selector on `n`, which moves the
+                // position of siblings on both sides of it.
+                if let Some((name, old)) = written
+                    && index.attr_change_hits_nth_of(doc, n, name, old)
+                {
+                    roots.deep.insert(doc.get(n).parent.unwrap_or(n));
+                    if index.has_dependent && index.change_can_flip_has(doc, n, written) {
+                        index.has_reach_roots(doc, n, &mut roots.deep);
+                    }
+                    continue;
+                }
                 // BUG-935 срез 68: nothing below `n` reads what was written, so `n` and its
                 // direct children are restyled and the walk goes deeper only if `n`'s style
                 // moved — the shallow-root contract, with the attribute (not the child
@@ -1818,7 +2051,7 @@ fn root_set_impl<'a>(
                 }
             }
         }
-        if index.has_dependent {
+        if index.has_dependent && index.change_can_flip_has(doc, n, change_written(&change)) {
             index.has_reach_roots(doc, n, &mut roots.deep);
         }
     }

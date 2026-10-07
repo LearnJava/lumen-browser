@@ -19,3 +19,7 @@ WPT-RUN-14 срез 11: `borders/border-001.xht`, `border-003.xht` — этал�
 ## Как проверить
 
 `css/CSS2/borders/border-001.xht` — после правки `identical`.
+
+## Срез 14 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` text/linebox/fonts/…)
+
+54 `thick` id в `text/letter-spacing-*`, `word-spacing-*`, `*-applies-to-*` (правило: `letter-spacing`/`word-spacing` в `<style>` теста или эталона, каталог `text`/`linebox`). Проба: `<div style="letter-spacing:10px">XXX</div>` — один `DrawText "XXX"` с рамкой 296 px, глифы вплотную; то же у `word-spacing:40px` и у `<span>`, `<p>`. Раскладка ширину учитывает (`measure_text_w`), растр — нет; `letter-spacing: -0px`-тесты (`letter-spacing-004.xht`, `word-spacing-004.xht`) проходят. Закрытие даёт до 54 id (пересекается с BUG-1372 и BUG-1369).
