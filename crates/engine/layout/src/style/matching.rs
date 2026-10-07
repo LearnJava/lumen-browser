@@ -269,24 +269,26 @@ pub(in crate::style) fn matches_simple(
 }
 
 fn matches_attribute(sel: &AttrSelector, attrs: &[Attribute]) -> bool {
-    let Some(attr) = attrs.iter().find(|a| a.name.local == sel.name) else {
-        return false;
-    };
+    attrs.iter().find(|a| a.name.local == sel.name).is_some_and(|attr| attr_value_matches(sel, &attr.value))
+}
+
+/// Совпадает ли `value` — значение присутствующего атрибута — с `sel` (оператор и образец).
+pub(in crate::style) fn attr_value_matches(sel: &AttrSelector, value: &str) -> bool {
     let ci = sel.case_insensitive;
     match (sel.op, sel.value.as_deref()) {
         (None, _) => true,
-        (Some(AttrOp::Equals), Some(v)) => str_eq(&attr.value, v, ci),
+        (Some(AttrOp::Equals), Some(v)) => str_eq(value, v, ci),
         (Some(AttrOp::Includes), Some(v)) => {
-            !v.is_empty() && attr.value.split_whitespace().any(|w| str_eq(w, v, ci))
+            !v.is_empty() && value.split_whitespace().any(|w| str_eq(w, v, ci))
         }
         (Some(AttrOp::DashMatch), Some(v)) => {
             // Точное совпадение или префикс с разделителем `-`. `i` применяется
             // к обеим частям сравнения (CSS L4 §6.3.6).
-            str_eq(&attr.value, v, ci) || str_starts_with(&attr.value, &format!("{v}-"), ci)
+            str_eq(value, v, ci) || str_starts_with(value, &format!("{v}-"), ci)
         }
-        (Some(AttrOp::Prefix), Some(v)) => !v.is_empty() && str_starts_with(&attr.value, v, ci),
-        (Some(AttrOp::Suffix), Some(v)) => !v.is_empty() && str_ends_with(&attr.value, v, ci),
-        (Some(AttrOp::Substring), Some(v)) => !v.is_empty() && str_contains(&attr.value, v, ci),
+        (Some(AttrOp::Prefix), Some(v)) => !v.is_empty() && str_starts_with(value, v, ci),
+        (Some(AttrOp::Suffix), Some(v)) => !v.is_empty() && str_ends_with(value, v, ci),
+        (Some(AttrOp::Substring), Some(v)) => !v.is_empty() && str_contains(value, v, ci),
         _ => false,
     }
 }
