@@ -25,11 +25,24 @@ use super::*;
 
     #[test]
     fn border_width_shorthand_1_value() {
-        let s = style_for("border-width: 5px");
+        let s = style_for("border-width: 5px; border-style: solid");
         assert!((s.border_top_width - 5.0).abs() < 0.01);
         assert!((s.border_right_width - 5.0).abs() < 0.01);
         assert!((s.border_bottom_width - 5.0).abs() < 0.01);
         assert!((s.border_left_width - 5.0).abs() < 0.01);
+    }
+
+    /// CSS Backgrounds L3 §4.2: `border-style: none|hidden` → вычисленная ширина стороны 0.
+    #[test]
+    fn border_width_is_zero_without_a_border_style() {
+        let s = style_for("border-width: 5px 6px 7px 8px");
+        assert_eq!(
+            (s.border_top_width, s.border_right_width, s.border_bottom_width, s.border_left_width),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        // Стиль только у одной стороны оставляет ширину только ей.
+        let s = style_for("border-width: 5px; border-left-style: solid");
+        assert_eq!((s.border_left_width, s.border_top_width), (5.0, 0.0));
     }
 
     #[test]
@@ -103,7 +116,7 @@ use super::*;
 
     #[test]
     fn border_per_side_width_properties() {
-        let s = style_for("border-left-width: 4px; border-right-width: 6px");
+        let s = style_for("border-left-width: 4px; border-right-width: 6px; border-style: solid");
         assert!((s.border_left_width - 4.0).abs() < 0.01);
         assert!((s.border_right_width - 6.0).abs() < 0.01);
         assert!((s.border_top_width - 0.0).abs() < 0.01);

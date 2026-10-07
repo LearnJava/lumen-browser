@@ -301,15 +301,16 @@ fn bug740_explicit_item_placement_sums_the_real_tracks() {
     assert_eq!(child_widths(GRID_HTML, &css), vec![80.0, 30.0]);
 }
 
-/// Колоночный поток (`grid-auto-flow: column`) не соответствует
-/// предположению «по кругу построчно» — тоже честный откат.
+/// Колоночный поток (`grid-auto-flow: column`) не соответствует предположению «по кругу
+/// построчно», поэтому ширину даёт настоящее размещение (GRID-BASELINE-2): каждый item
+/// получает свой неявный столбец — 40 + 40, а не самый широкий item.
 #[test]
-fn bug740_column_flow_falls_back_to_widest_child() {
+fn bug740_column_flow_sums_the_real_columns() {
     let css = GRID_CSS.replace(
         "grid-template-columns: auto auto;",
         "grid-template-columns: auto auto; grid-auto-flow: column;",
     );
-    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+    assert_eq!(child_widths(GRID_HTML, &css), vec![80.0, 30.0]);
 }
 
 /// Однoколоночный grid складывает элементы вертикально — как блок,

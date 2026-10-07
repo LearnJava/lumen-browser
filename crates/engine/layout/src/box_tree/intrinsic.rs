@@ -268,7 +268,10 @@ pub(super) fn grid_col_intrinsic_sum(
     if s.grid_template_col_auto_repeat.is_some() {
         return None;
     }
-    if matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense) {
+    // `grid-auto-flow: column` — items fill columns, not rows: the round-robin rule below
+    // does not apply and only the placement pass (`grid_col_sum_by_tracks`) can size it.
+    let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+    if column_flow && vertical {
         return None;
     }
     let template = &s.grid_template_columns;
@@ -309,6 +312,9 @@ pub(super) fn grid_col_intrinsic_sum(
         && let Some(sum) = grid_col_sum_by_tracks(b, viewport, &col_axis, per_item)
     {
         return Some(sum);
+    }
+    if column_flow {
+        return None;
     }
     if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
         return None;
@@ -372,12 +378,14 @@ fn grid_col_sum_by_tracks(
         return None;
     }
     let item_idxs = grid_item_indices(&b.children);
-    let needs_tracks = item_idxs.iter().any(|&i| {
-        let st = &b.children[i].style;
-        gac::is_col_subgrid(&b.children[i])
-            || !matches!(st.grid_column_start, GridLine::Auto)
-            || !matches!(st.grid_column_end, GridLine::Auto)
-    });
+    let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+    let needs_tracks = column_flow
+        || item_idxs.iter().any(|&i| {
+            let st = &b.children[i].style;
+            gac::is_col_subgrid(&b.children[i])
+                || !matches!(st.grid_column_start, GridLine::Auto)
+                || !matches!(st.grid_column_end, GridLine::Auto)
+        });
     if !needs_tracks {
         return None;
     }

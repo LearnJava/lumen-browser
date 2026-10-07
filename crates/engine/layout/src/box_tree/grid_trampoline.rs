@@ -77,6 +77,14 @@ pub(super) struct GridInit {
     /// То же для группы `last baseline` (items с концом в строке) — базовая линия
     /// отстоит от низа строки на спуск.
     pub(super) row_last_group: Vec<(f32, f32)>,
+    /// Baseline-выравнивание по оси столбцов (`justify-self: [first|last] baseline`, CSS Grid L1
+    /// §6.2): линия вертикальна и измеряется по `x`. Участвуют только items ортогонального
+    /// (вертикального) режима в горизонтальной сетке — у параллельных линии вдоль inline-оси
+    /// нет, они прижимаются к краю (Align L3 §9.1). Индекс как у `item_idxs`.
+    pub(super) item_col_baselines: Vec<Option<ItemBaseline>>,
+    /// По столбцам: `(подъём, спуск)` группы у левого края (`First`) и у правого (`Last`).
+    pub(super) col_first_group: Vec<(f32, f32)>,
+    pub(super) col_last_group: Vec<(f32, f32)>,
     /// GRID-VWM: контейнер в вертикальном `writing-mode` — столбцы идут по физической
     /// оси `y`, строки по `x`. Все размеры и смещения дорожек остаются логическими
     /// (inline / block), в физические координаты их переводят `grid_vertical`-хелперы.
@@ -396,6 +404,73 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         }
     }
     record_item_baseline(frame, i, measurer, viewport);
+    record_item_col_baseline(frame, i, measurer, viewport);
+}
+
+/// CSS Grid L1 §6.2, ось столбцов: item с `justify-self: [first|last] baseline` входит в
+/// baseline-группу своего столбца. Линия «поперечна» оси столбцов: в горизонтальной сетке она
+/// вертикальна и читается по `x` (есть только у items вертикального режима — параллельные
+/// прижимаются к краю, Align L3 §9.1), в вертикальной — горизонтальна и читается по `y`
+/// (ортогональные горизонтальные items; у вертикальных линия синтезируется по середине). Группа —
+/// по краю, к которому тянется линия item'а. Ширину `auto`-столбцов группа не растит (столбцы
+/// размеряются раньше, чем известны items).
+fn record_item_col_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasurer>, viewport: Size) {
+    use super::baseline::{baseline_phys_side_in_axis, box_baseline_in_axis, PhysSide};
+    let k = frame.k;
+    let (cs, ce, rs, _) = frame.init.placements[k];
+    let item = &frame.b.children[i];
+    if cs == 0
+        || rs == 0
+        || frame.init.s.grid_template_columns.first() == Some(&GridTrackSize::Subgrid)
+        || (frame.init.vertical.is_none()
+            && (!super::baseline::is_vertical(&item.style) || frame.init.s.direction == Direction::Rtl))
+    {
+        return;
+    }
+    let Some(requested) =
+        super::baseline::align_baseline_side(super::grid_vertical::resolved_justify(&item.style, &frame.init.s))
+    else {
+        return;
+    };
+    let n_cols = frame.init.n_cols;
+    let first_col = (cs - 1).min(n_cols.saturating_sub(1)) as usize;
+    let last_col = ((ce - 1).min(n_cols) as usize).saturating_sub(1).max(first_col);
+    let em = item.style.font_size;
+    let cw = frame.init.content_width;
+    let (m_l, m_r) = (
+        item.style.margin_left.resolve_or_zero(em, cw, viewport),
+        item.style.margin_right.resolve_or_zero(em, cw, viewport),
+    );
+    let (m_t, m_b) = (
+        item.style.margin_top.resolve_or_zero(em, cw, viewport),
+        item.style.margin_bottom.resolve_or_zero(em, cw, viewport),
+    );
+    // Подъём — от кромки начала оси столбцов (слева; у `inline_rev` сверху вниз наоборот — снизу).
+    let (ascent, outer, start) = match frame.init.vertical {
+        None => {
+            let bx = box_baseline_in_axis(item, &frame.init.s, true, requested, measurer);
+            (m_l + bx, item.rect.width + m_l + m_r, PhysSide::Min)
+        }
+        Some(g) => {
+            let by = box_baseline_in_axis(item, &frame.init.s, false, requested, measurer);
+            let outer = item.rect.height + m_t + m_b;
+            if g.inline_rev { (outer - (m_t + by), outer, PhysSide::Max) } else { (m_t + by, outer, PhysSide::Min) }
+        }
+    };
+    let descent = (outer - ascent).max(0.0);
+    let axis_vertical = frame.init.vertical.is_none();
+    let side = if baseline_phys_side_in_axis(item, &frame.init.s, axis_vertical, requested) == start {
+        BaselineSide::First
+    } else {
+        BaselineSide::Last
+    };
+    frame.init.item_col_baselines[k] = Some(ItemBaseline { side, ascent });
+    let group = match side {
+        BaselineSide::First => &mut frame.init.col_first_group[first_col],
+        BaselineSide::Last => &mut frame.init.col_last_group[last_col],
+    };
+    group.0 = group.0.max(ascent);
+    group.1 = group.1.max(descent);
 }
 
 /// CSS Grid L1 §6.2 — item с `align-self: [first|last] baseline` входит в группу
@@ -423,10 +498,19 @@ fn record_item_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn TextM
     let m_b = st.margin_bottom.resolve_or_zero(em, frame.init.content_width, viewport);
     // Вертикальная сетка: линия вертикальна, подъём считается по block-оси (физический `x`).
     let (ascent, outer) = match frame.init.vertical {
-        None => (m_t + super::baseline::box_baseline_or_synth(item, side, measurer), item.rect.height + m_t + m_b),
+        None => (
+            m_t + super::baseline::box_baseline_in_axis(item, &frame.init.s, false, side, measurer),
+            item.rect.height + m_t + m_b,
+        ),
         Some(g) => super::grid_vertical::block_ascent(&frame.init, g, item, side, viewport, measurer),
     };
     let descent = (outer - ascent).max(0.0);
+    // Группа — по краю, к которому тянется линия (Align L3 §9.3): у item'а с обратным ходом
+    // блоков `first baseline` сидит в группе конца строки, и наоборот.
+    let side = match frame.init.vertical {
+        None => side,
+        Some(g) => super::grid_vertical::group_side(&frame.init, g, item, side),
+    };
     frame.init.item_baselines[k] = Some(ItemBaseline { side, ascent });
     let group = match side {
         BaselineSide::First => &mut frame.init.row_first_group[first_row],
@@ -863,6 +947,24 @@ fn post_final_item(
         AlignValue::Center => {
             item.rect.x = cell_x + (cell_w - item_outer_w) / 2.0 + m_l;
         }
+        AlignValue::Baseline | AlignValue::LastBaseline if frame.init.item_col_baselines[k].is_some() => {
+            // Общая вертикальная линия группы столбца: на подъёме группы от левого края
+            // (`First`) либо на спуске от правого (`Last`).
+            let ib = frame.init.item_col_baselines[k].unwrap_or(ItemBaseline { side: BaselineSide::First, ascent: m_l });
+            let bl = ib.ascent - m_l;
+            item.rect.x = match ib.side {
+                BaselineSide::First => cell_x + frame.init.col_first_group[c0].0 - bl,
+                BaselineSide::Last => {
+                    let last_col = c1.saturating_sub(1).max(c0);
+                    cell_x + cell_w - frame.init.col_last_group[last_col].1 - bl
+                }
+            };
+        }
+        // Линии вдоль inline-оси у параллельного item'а нет: `first` — к началу, `last` — к
+        // концу (Align L3 §9.1, запасное выравнивание).
+        AlignValue::LastBaseline => {
+            item.rect.x = cell_x + cell_w - item.rect.width - m_r;
+        }
         AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
             item.rect.x = cell_x + m_l;
         }
@@ -996,7 +1098,7 @@ fn container_baselines(frame: &Frame, measurer: Option<&dyn TextMeasurer>) -> Op
     let row_top = |r: usize| init.content_y + init.row_offsets[r];
     let item_baseline = |k: usize, side: BaselineSide| {
         let c = &frame.b.children[init.item_idxs[k]];
-        c.rect.y + super::baseline::box_baseline_or_synth(c, side, measurer)
+        c.rect.y + super::baseline::box_baseline_in_axis(c, &init.s, false, side, measurer)
     };
     let starts_in_row = |k: usize, r: usize| init.placements[k].2 as usize == r + 1;
     let ends_in_row = |k: usize, r: usize| {
@@ -1017,12 +1119,17 @@ fn container_baselines(frame: &Frame, measurer: Option<&dyn TextMeasurer>) -> Op
         })
     };
 
-    let first = group_baseline(0, BaselineSide::First).or_else(|| {
-        placed.iter().copied().find(|&k| starts_in_row(k, 0)).map(|k| item_baseline(k, BaselineSide::First))
+    // Пустая первая (последняя) строка не мешает: берётся ближайшая строка с items
+    // (WPT `grid-baseline-004`: «items in the second row are evaluated»).
+    let first = (0..n_rows).find_map(|r| {
+        group_baseline(r, BaselineSide::First).or_else(|| {
+            placed.iter().copied().find(|&k| starts_in_row(k, r)).map(|k| item_baseline(k, BaselineSide::First))
+        })
     });
-    let last_row = n_rows - 1;
-    let last = group_baseline(last_row, BaselineSide::Last).or_else(|| {
-        placed.iter().rev().copied().find(|&k| ends_in_row(k, last_row)).map(|k| item_baseline(k, BaselineSide::Last))
+    let last = (0..n_rows).rev().find_map(|r| {
+        group_baseline(r, BaselineSide::Last).or_else(|| {
+            placed.iter().rev().copied().find(|&k| ends_in_row(k, r)).map(|k| item_baseline(k, BaselineSide::Last))
+        })
     });
     match (first, last) {
         (None, None) => None,
