@@ -72,6 +72,14 @@ const SCENARIOS: &[(&str, &str)] = &[
         "[function() { var n = document.createElement('div'); n.className = 'box'; n.style.height = '90px'; root.insertBefore(n, els[4]); },
           function() { root.removeChild(els[4].previousSibling); }]",
     ),
+    (
+        // BUG-935 срез 96: a card below the growing box is translated (outside every dirty root,
+        // keeps its published entries) while another one further down is restyled in the same flush.
+        "sibling_grows_while_a_card_below_is_restyled",
+        "[function() { var n = document.createElement('div'); n.className = 'box'; n.style.height = '70px'; root.insertBefore(n, els[2]); els[7].className = 'c hot'; },
+          function() { root.removeChild(els[2].previousSibling); els[7].className = 'c nobefore'; },
+          function() { var n = document.createElement('div'); n.className = 'c hot'; n.innerHTML = '<p>late</p>'; root.insertBefore(n, els[5]); els[3].className = 'c gap2'; }]",
+    ),
 ];
 
 fn run(steps: &str, scoped: bool) -> String {

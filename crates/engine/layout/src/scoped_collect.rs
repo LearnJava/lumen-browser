@@ -574,16 +574,25 @@ impl<'a> ScopedCollection<'a> {
     /// (`getComputedStyle(el, '::before')`). The entry is a function of the box's style alone, so
     /// the planned boxes are all there is to rebuild; the caller evicts what it rebuilds first
     /// ([`crate::forget_pseudo_computed_styles`]).
+    ///
+    /// BUG-935 срез 96: a box outside a dirty root keeps the entry that is published
+    /// ([`Self::evictable`] evicts nothing else): it is carried over or merely translated by a
+    /// resized sibling, and rebuilding its entries wrote back what was there (on rbc.ru a flush
+    /// that restyled two elements rebuilt 1326 boxes' worth). One with no published entry —
+    /// a node the shell's snapshot never named — is built, so the map stays whole.
     pub fn collect_pseudo_computed_styles(&self, out: &mut PseudoMaps) {
         let mut fresh = HashMap::new();
         for it in &self.items {
+            // A box outside a dirty root is carried over or merely translated: it keeps the entry
+            // that is published, and one that is not yet is built as before.
+            let held = (!it.in_root).then_some(&*out);
             if !it.whole {
-                crate::collect_pseudo_computed_styles_box(it.b, it.parent, &mut fresh);
+                crate::collect_pseudo_computed_styles_box(it.b, it.parent, held, &mut fresh);
                 continue;
             }
             let mut stack = vec![(it.b, it.parent)];
             while let Some((b, owner)) = stack.pop() {
-                crate::collect_pseudo_computed_styles_box(b, owner, &mut fresh);
+                crate::collect_pseudo_computed_styles_box(b, owner, held, &mut fresh);
                 stack.extend(b.children.iter().rev().map(|c| (c, b.node)));
             }
         }
@@ -596,13 +605,14 @@ impl<'a> ScopedCollection<'a> {
         let mut fresh = HashMap::new();
         let mut resolved = HashMap::new();
         for it in &self.items {
+            let held = (!it.in_root).then_some(&*out);
             if !it.whole {
-                crate::collect_custom_properties_box(it.b, viewport, &mut fresh, &mut resolved);
+                crate::collect_custom_properties_box(it.b, viewport, held, &mut fresh, &mut resolved);
                 continue;
             }
             let mut stack = vec![it.b];
             while let Some(b) = stack.pop() {
-                crate::collect_custom_properties_box(b, viewport, &mut fresh, &mut resolved);
+                crate::collect_custom_properties_box(b, viewport, held, &mut fresh, &mut resolved);
                 stack.extend(b.children.iter().rev());
             }
         }
