@@ -147,6 +147,18 @@ pub fn resolve_specifier_with(
     }
     // (4) Bare specifier — try import map
     if let Some(resolved) = import_map.resolve(name, Some(base)) {
+        // Значение карты — URL, разрешаемый от базового URL карты (документа):
+        // относительное значение иначе дошло бы до загрузчика строкой `./x.js`.
+        if !page_url.is_empty() {
+            if resolved.starts_with("./") || resolved.starts_with("../") {
+                return resolve_relative(page_url, &resolved);
+            }
+            if resolved.starts_with('/')
+                && let Some(abs) = resolve_from_origin(page_url, &resolved)
+            {
+                return abs;
+            }
+        }
         return resolved;
     }
     // Fall back to returning as-is
@@ -275,6 +287,15 @@ fn normalize_path(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_import_map_value_resolves_against_page_url() {
+        // BUG-879: значение карты `./x.js` — URL относительно документа.
+        let map = ImportMap::parse(r#"{"imports":{"m":"./x.js","r":"/y.js"}}"#).unwrap();
+        let page = "https://page.example/a/b.html";
+        assert_eq!(resolve_specifier_with(page, &map, page, "m"), "https://page.example/a/x.js");
+        assert_eq!(resolve_specifier_with(page, &map, page, "r"), "https://page.example/y.js");
+    }
 
     #[test]
     fn root_relative_specifier_resolves_against_base_origin() {

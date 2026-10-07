@@ -1,6 +1,6 @@
 # BUG-879 — значения import map не резолвятся относительно базового URL карты: относительный таргет даёт «module not found»
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — значение карты с `./`, `../`, `/` резолвится от URL страницы в ветке (4) `resolve_specifier_with`; остаток (TypeError вместо Error, `HTMLScriptElement.supports`) не входит
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, варианты `importmap`/`importmap-absolute`)
 **Область:** `crates/js/src/esm.rs:148-151` — ветка (4) `resolve_specifier_with` отдаёт `import_map.resolve(name, Some(base))` наружу как есть, тогда как ветки (3)/(3b) выше резолвят относительный и root-relative спецификатор против базы; значение карты через них не проходит
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
