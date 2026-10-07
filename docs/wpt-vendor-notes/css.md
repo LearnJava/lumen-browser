@@ -36,7 +36,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | `<img>`/svg/aspect-ratio как flex-элемент | 73 | 107 | `flex-aspect-ratio-img-row-014.html`, `image-as-flexitem-size-001.html` | подтверждена на `<img height:30px>` | P3 | [BUG-1256](../../bugs/BUG-1256-OPEN.md) |
 | `flex-wrap: balance`, `flex-line-count` | 40 | 23 | `balance/balance-001.html` | свойства нет: `enum FlexWrap` без `balance` | P4 | [BUG-1259](../../bugs/BUG-1259-OPEN.md) → `CSS-SPECS.md:301` (`STATUS-P4.md`) |
 | процентные высоты | 58 | 70 | `percentage-heights-009.html`, `dynamic-isize-change-001.html` | подтверждена: `height:50%` у ребёнка column-flex даёт 0 | P3 | [BUG-1255](../../bugs/BUG-1255-OPEN.md) |
-| abspos `height:N%` = 0 | 16 | — | `abspos/abspos-autopos-htb-ltr.html` | подтверждена без flex | P3 | [BUG-1250](../../bugs/BUG-1250-OPEN.md) |
+| abspos `height:N%` = 0 | 16 | — | `abspos/abspos-autopos-htb-ltr.html` | подтверждена без flex | P3 | [BUG-1250](../../bugs/BUG-1250-FIXED.md) |
 | прочее | 487 | 671 | `abspos/abspos-descendent-001.html`, `col-wrap-*`, `align-self-*`, `flex-flow-*`, `flex-basis-*`, `gap-*` | **не разобрано** | — | — |
 
 Не входят в кластеры по имени, но пересекаются с ними:
