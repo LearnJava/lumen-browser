@@ -13,7 +13,7 @@
 
 Раскладка эти свойства знает: в `--dump-layout` того же элемента `outline-offset=4.00 accent=#ff0000ff cursor=Pointer`.
 Не хватает строк в рукописной карте `computed_style_to_map` (тот же механизм, что [BUG-472](BUG-472-OPEN.md) и
-[BUG-1254](BUG-1254-OPEN.md) у flex-свойств).
+[BUG-1254](BUG-1254-FIXED.md) у flex-свойств).
 
 ## Как найдено
 

@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 7, `css/css-grid`)
-**Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — там `grid` встречается только в `display`; тот же класс, что [BUG-1254](BUG-1254-OPEN.md) для flex)
+**Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — там `grid` встречается только в `display`; тот же класс, что [BUG-1254](BUG-1254-FIXED.md) для flex)
 
 ## Симптом
 
