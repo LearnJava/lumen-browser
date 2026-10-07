@@ -23,6 +23,7 @@ mod canvas_size_attributes;
 mod canvas_object_model;
 mod bug454_canvas_noise;
 mod selectors_canvas_window;
+mod bug923_factory_functions;
 
 /// V8 twin of [`super::runtime_with_dom`]: same fixture document, same
 /// `install_dom` argument list (the two signatures are identical), same
