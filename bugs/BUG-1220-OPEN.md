@@ -28,3 +28,15 @@ Next отбрасывает RSC-навигацию и делает жёстку�
    или собрать чанк календаря и прогнать его правила через `CSSStyleSheet.insertRule` в изолированном тесте.
 2. Минимизировать правило до одной строки и определить, какой at-rule/селектор парсер отвергает.
 3. Проверить, что `link.sheet` не `null` для загруженной таблицы (наблюдалось на сборке 09-24, на 09-29 не проверено отдельно).
+
+## Дополнение: WPT-RUN-14 срез 18 (2026-10-07, `css/css-fonts`)
+
+Проба `<style id=st></style>` + `st.sheet.insertRule(...)` (`--dump-layout`, V8): принимаются только `.a{color:red}` и
+`@media screen{.a{color:red}}`. `SyntaxError` дают **`@font-face{…}`** (все формы: `src:url()`, `src:local()`,
+`ascent-override`, `size-adjust`), **`@keyframes`**, **`@property`**, **`@layer foo{}`**, **`@supports (…){…}`**,
+`@font-feature-values`, `@font-palette-values`. Причина — `Stylesheet::insert_rule` (`css-parser/src/parser.rs:647`)
+вставляет только `TopLevelRuleKind::Style` и `Media` (`:672…676`), а `parsed != Stylesheet::default()` (`:667`)
+отвергает всё, что парсер раскладывает по другим спискам (`@font-face`, `@keyframes`, …). Это, вероятно, и есть
+отвергнутое правило `/calendar` (Next.js вставляет `@font-face` и `@keyframes` через `insertRule`). Затронуты
+`css-fonts/parsing/font-face-{src-format,src-list,src-local,src-tech,size-adjust,metric-overrides}.html` — 6 id, 136 из 136
+сабтестов (`Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.`).

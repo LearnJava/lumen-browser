@@ -21,6 +21,7 @@ use crate::style::{
     BackgroundRepeat, BackgroundSize, BgSizeAxis, BlockStepAlign, BlockStepInsert, BlockStepRound,
     BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
+    FlexBasis, FlexDirection, FlexWrap,
     ContainFlags, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
@@ -1660,6 +1661,32 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("justify-items".into(), align_value_to_css(style.justify_items).into());
     m.insert("justify-self".into(), align_value_to_css(style.justify_self).into());
     m.insert("justify-content".into(), align_value_to_css(style.justify_content).into());
+
+    // ── Flexbox (CSS Flexbox L1 §4–§7) ────────────────────────────
+    let fd = match style.flex_direction {
+        FlexDirection::Row => "row",
+        FlexDirection::RowReverse => "row-reverse",
+        FlexDirection::Column => "column",
+        FlexDirection::ColumnReverse => "column-reverse",
+    };
+    let fw = match style.flex_wrap {
+        FlexWrap::Nowrap => "nowrap",
+        FlexWrap::Wrap => "wrap",
+        FlexWrap::WrapReverse => "wrap-reverse",
+    };
+    let fb = match &style.flex_basis {
+        FlexBasis::Auto => "auto".to_string(),
+        FlexBasis::Content => "content".to_string(),
+        FlexBasis::Length(l) => length_to_css(l),
+    };
+    m.insert("flex-direction".into(), fd.into());
+    m.insert("flex-wrap".into(), fw.into());
+    m.insert("flex-flow".into(), format!("{fd} {fw}"));
+    m.insert("flex-grow".into(), style.flex_grow.to_string());
+    m.insert("flex-shrink".into(), style.flex_shrink.to_string());
+    m.insert("flex".into(), format!("{} {} {fb}", style.flex_grow, style.flex_shrink));
+    m.insert("flex-basis".into(), fb);
+    m.insert("order".into(), style.order.to_string());
 
     // ── Cursor / pointer ─────────────────────────────────────────
     m.insert("cursor".into(), match style.cursor {

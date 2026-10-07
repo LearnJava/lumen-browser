@@ -1865,8 +1865,19 @@ fn rasterize_fill_rect(
         blend_mode: tiny_skia::BlendMode::SourceOver,
     };
 
-    let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
-        .ok_or("Invalid rect dimensions")?;
+    // BUG-1249: pixel snapping рёбер бокса (CSS Painting) — иначе дробная
+    // граница двух соседей даёт AA-шов, через который виден фон родителя.
+    // Рёбра округляются, а не ширина, поэтому соседи делят одно ребро.
+    let (x0, y0) = (rect.x.round(), rect.y.round());
+    let (x1, y1) = ((rect.x + rect.width).round(), (rect.y + rect.height).round());
+    if x1 <= x0 || y1 <= y0 {
+        // Бокс тоньше пикселя: рисуем исходный прямоугольник как есть.
+        let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+            .ok_or("Invalid rect dimensions")?;
+        pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), clip);
+        return Ok(());
+    }
+    let skia_rect = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1).ok_or("Invalid rect dimensions")?;
 
     pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), clip);
     Ok(())
@@ -4385,6 +4396,23 @@ mod tests {
         ];
         let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 32, 32), (255, 255, 255, 255), "fully transparent group");
+    }
+
+    /// BUG-1249: соседние боксы с общей дробной границей не оставляют шва —
+    /// фон родителя не просвечивает.
+    #[test]
+    fn adjacent_fractional_fills_leave_no_seam() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 80.0), color: red },
+            DisplayCommand::FillRect { rect: rect(0.0, 25.72, 20.0, 25.0), color: green },
+            DisplayCommand::FillRect { rect: rect(0.0, 50.72, 20.0, 25.0), color: green },
+        ];
+        let img = rasterize_cpu(32, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        for y in 27..75 {
+            assert_eq!(px(&img, 10, y), (0, 128, 0, 255), "row {y}");
+        }
     }
 
     /// Group opacity fades the *whole* subtree by one alpha: two sibling fills in

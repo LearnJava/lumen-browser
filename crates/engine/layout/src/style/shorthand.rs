@@ -573,6 +573,11 @@ pub(in crate::style) fn apply_flex_shorthand(style: &mut ComputedStyle, val: &st
             style.flex_shrink = numbers[1];
             style.flex_basis = b;
         }
+        (3, None) if numbers[2] == 0.0 => {
+            // flex: <grow> <shrink> 0 — unitless zero is the basis (§7.1.1)
+            style.flex_grow = numbers[0];
+            style.flex_shrink = numbers[1];
+        }
         (0, Some(b)) => {
             // flex: <basis> only (e.g. flex: 100px)
             style.flex_basis = b;

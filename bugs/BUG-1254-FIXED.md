@@ -1,6 +1,6 @@
 # BUG-1254 — `getComputedStyle()` не отдаёт ни одного flex-лонгхенда: `flex-direction`, `flex-wrap`, `flex-grow`, `flex-shrink`, `flex-basis`, `order`, шорткоды `f
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 1, кластер «computed flex props empty». Значе�
 ## Как проверить
 
 `run_report.py --root css/css-flexbox/parsing --recursive` и `.../getcomputedstyle`.
+
+## Исправление
+
+`computed_style_to_map` выводит flex-direction/wrap/flow/grow/shrink/basis, flex, order. Тесты: `layout_props.rs::computed_style_map_*`.

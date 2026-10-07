@@ -54,3 +54,18 @@ Ahem-reftest-ов не должна быть ниже, чем у остальн�
 ## Срез 15 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` остальное)
 
 Холодного старта в этом срезе не видно: повторный прогон на чистом каталоге дал 0 расхождений из 1 381 id. Но **28 id `identical` при 800×600 (26 из них и при 1024×720) FAIL под `wptrunner`**, все используют `Ahem`; 9 — с `class="reftest-wait"` и скриптом на `onload` (`box-display/delete-block-in-inlines-*.xht`, `insert-block-in-inlines-*.xht`, `insert-inline-in-blocks-n-inlines-*-002.xht`). Три пробы под `run_corpus.py --prefixes <id>` (`anonymous-boxes-inheritance-001`, `delete-block-in-inlines-end-001`, `insert-block-in-inlines-end-001`) снова FAIL — значит, это не холодный старт, а постоянный разрыв между `--screenshot` из командной строки (Ahem через `LOCALAPPDATA`-подмену из `docs/probe-method.md`) и снимком IPC-исполнителя, где `@font-face url()` не ждётся (см. «Причина» выше). Закрытие BUG-1273 даст до 28 id здесь и 72 в срезе 14.
+
+## Дополнение: WPT-RUN-14 срез 18 (2026-10-07, `css/css-fonts`, `css/WOFF2`)
+
+Масштаб в шрифтовых модулях. Из 1 166 reftest/crashtest-id среза у 566 в тесте или эталоне есть `@font-face … url()`
+(`css-fonts` — 268 из 381 reftest/crashtest-id, `WOFF2` — все 298; проверка по тексту). Проба: `@font-face{src:url(/_s18probe/Ahem.ttf)}`
+по http, `font:50px/1 AH` — 1 544 зелёных px (ожидается 10 000 для `XXXX`): шрифт не применён. Следствия:
+
+- **`css/WOFF2` — 264 PASS ненадёжны.** Тест (`F` запасным шрифтом) и эталон (`P`) рисуются одним и тем же шрифтом Inter и совпадают
+  *случайно* в том смысле, что у обоих нет ни одного загруженного веб-шрифта; 34 FAIL — те, где разметка теста и эталона
+  различается. Валидные WOFF2 (`valid-001.woff2` и т. д.) в снимок не попадают. Считать WOFF2 «88,6 %» нельзя до этого бага.
+- `css-fonts`: 5 `identical` при 800×600 (`font-size-adjust-006/007/008.xht`, `line-gap-override.html`, `variations/variable-avar2-*`) —
+  FAIL под `wptrunner`, зелёные при `--screenshot --ahem`; ещё 218 из 230 падающих reftest `css-fonts` зависят от веб-шрифта
+  (`@font-face` в тесте или эталоне, либо `Ahem`), поэтому их причина не локализуема до закрытия этого бага
+  (`font-variant-*`, `font-synthesis-*`, `font-size-adjust-*`, `size-adjust`, `ascent-descent-override`, `font-palette-*`,
+  `font-kerning-*`: см. кластеры §css-fonts в `docs/wpt-vendor-notes/css.md`).

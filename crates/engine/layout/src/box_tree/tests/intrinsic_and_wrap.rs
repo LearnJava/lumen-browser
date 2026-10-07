@@ -134,6 +134,19 @@ fn bug736_column_flex_replaced_item_stretches_and_derives_height() {
     assert!((h - 170.19).abs() < 0.1, "height={h}");
 }
 
+/// BUG-1256: authored `height` with `width: auto` in a row container — the
+/// width is that height carried through the intrinsic ratio (Flexbox §9.2),
+/// not the raw intrinsic width. 30 × 725/852 inverse: 852×725 → 30 × 852/725.
+#[test]
+fn bug1256_row_flex_img_with_authored_height_transfers_width() {
+    let (w, h) = img_border_box(
+        r#"<div class="row"><img width="852" height="725" src="x.png"></div>"#,
+        ".row { display: flex; width: 600px; } img { height: 30px; width: auto; }",
+    );
+    assert!((w - 35.26).abs() < 0.1, "width={w}");
+    assert!((h - 30.0).abs() < 0.1, "height={h}");
+}
+
 // ── BUG-737: intrinsic width of a row flex container ──────────────────────
 
 /// Border-box widths of the direct children of the element with `id="outer"`.

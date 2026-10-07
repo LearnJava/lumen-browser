@@ -17,7 +17,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 13: `positioning/absolute-non-replaced-width-*`, `absolute-replaced-width-*`, `right-*` с `direction: rtl` и `left: auto; right: auto` — 19 id по правилу («rtl» + `position:absolute` в стиле, thick). Пример `positioning/absolute-non-replaced-width-002.xht` (ожидается синий квадрат в правом верхнем углу, Lumen — в левом). Связано с [BUG-1321](BUG-1321-OPEN.md) (атрибут `dir` не задаёт `direction`) — но здесь `direction` задан CSS.
+WPT-RUN-14 срез 13: `positioning/absolute-non-replaced-width-*`, `absolute-replaced-width-*`, `right-*` с `direction: rtl` и `left: auto; right: auto` — 19 id по правилу («rtl» + `position:absolute` в стиле, thick). Пример `positioning/absolute-non-replaced-width-002.xht` (ожидается синий квадрат в правом верхнем углу, Lumen — в левом). Связано с [BUG-1321](BUG-1321-FIXED.md) (атрибут `dir` не задаёт `direction`) — но здесь `direction` задан CSS.
 
 ## Что делать
 

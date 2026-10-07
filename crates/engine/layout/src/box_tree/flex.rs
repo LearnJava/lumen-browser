@@ -528,7 +528,16 @@ pub(crate) fn build_flex_init(
             // the container's — two column containers of different widths, or
             // one item aligned and one stretched, must not collide.
             let probe_width = if is_column { probe_cross[k] } else { content_width };
-            let memoized = if memo_usable && cacheable_for_layout_result_cache(&children[i]) {
+            // BUG-1255: a percentage block size resolves against the column's
+            // definite main size (CSS Sizing L3 §5.2.1); the probe's height is
+            // then a function of the container's height, which the memo key
+            // (node, width) does not carry.
+            let pct_probe_h = if is_column && matches!(children[i].style.height, Some(Length::Percent(_) | Length::Calc(_))) {
+                explicit_main
+            } else {
+                None
+            };
+            let memoized = if memo_usable && pct_probe_h.is_none() && cacheable_for_layout_result_cache(&children[i]) {
                 let key: FlexProbeKey = (children[i].node, probe_width.to_bits());
                 FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
                     m.borrow().get(&key).and_then(|(style, h)| {
@@ -578,7 +587,7 @@ pub(crate) fn build_flex_init(
                         },
                     );
                 } else {
-                    lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, children_pcb, hp, false);
+                    lay_out(&mut children[i], content_x, content_y, probe_width, pct_probe_h, measurer, viewport, children_pcb, hp, false);
                 }
                 let cv_here = CV_AUTO_TOUCHED.with(|c| c.get());
                 let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
@@ -596,7 +605,7 @@ pub(crate) fn build_flex_init(
                 // probe and the one being served pass `available_height: None`,
                 // so whatever a percentage block size resolved to is the same
                 // for each.
-                if !cv_here && memo_usable && cacheable_for_layout_result_cache(&children[i]) {
+                if !cv_here && memo_usable && pct_probe_h.is_none() && cacheable_for_layout_result_cache(&children[i]) {
                     let key: FlexProbeKey = (children[i].node, probe_width.to_bits());
                     let entry = (Arc::clone(&children[i].style), children[i].rect.height);
                     FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
@@ -706,7 +715,26 @@ pub(crate) fn build_flex_init(
                         } else {
                             None
                         };
-                        let w = if let Some(t) = transferred {
+                        // BUG-1256: an authored definite `height` with `width:
+                        // auto` on a replaced item with an intrinsic ratio —
+                        // the flex base size is that height transferred
+                        // through the ratio (Flexbox §9.2, Sizing L4 §4.1),
+                        // not the raw intrinsic width.
+                        let transferred_from_height = if transferred.is_none()
+                            && (is.width.is_none() || is.width_is_intrinsic_hint)
+                            && !is.height_is_intrinsic_hint
+                            && is.box_sizing == BoxSizing::ContentBox
+                        {
+                            match (&is.height, is.aspect_ratio) {
+                                (Some(Length::Px(h)), Some((aw, ah))) if ah > 0.0 => {
+                                    Some(h.max(0.0) * aw / ah)
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        let w = if let Some(t) = transferred.or(transferred_from_height) {
                             t
                         } else if let Some(bw) = block_axis_width[k] {
                             flex_auto_base_main_width_from(item, bw, cb, measurer, viewport)
@@ -784,8 +812,37 @@ pub(crate) fn build_flex_init(
     // line up front, independent of visiting order.
     let n_lines = lines.len();
     let ordered_line_idxs: Vec<usize> = (0..n_lines).collect();
+    // CSS Flexbox §4.5 — a column item's automatic minimum size is its content
+    // height (BUG-1253). Only content-sized items (`height: auto`, horizontal
+    // writing mode, visible overflow, `min-height: auto`) have one: with a definite
+    // `height` the probe measured the specified size, not the content, and the
+    // spec floor `min(content, specified)` is unknown here.
+    let col_auto_mins: Vec<f32> = if is_column {
+        item_idxs
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| {
+                let item = &children[i];
+                let is = &item.style;
+                if is.min_height.is_none()
+                    && is.height.is_none()
+                    && is.overflow_y == Overflow::Visible
+                    && matches!(is.writing_mode, crate::style::WritingMode::HorizontalTb)
+                {
+                    let iem = is.font_size;
+                    probed_main[k].unwrap_or(item.rect.height)
+                        + is.margin_top.resolve_or_zero(iem, cb, viewport)
+                        + is.margin_bottom.resolve_or_zero(iem, cb, viewport)
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let line_inits = build_line_inits(
-        &lines, &item_idxs, children, &all_hyp, s, container_main, main_definite,
+        &lines, &item_idxs, children, &all_hyp, &col_auto_mins, s, container_main, main_definite,
         item_gap, content_width, measurer, viewport, axes,
     );
 
@@ -842,6 +899,7 @@ fn build_line_inits(
     item_idxs: &[usize],
     children: &[LayoutBox],
     all_hyp: &[f32],
+    col_auto_mins: &[f32],
     s: &ComputedStyle,
     container_main: f32,
     main_definite: Option<f32>,
@@ -854,6 +912,19 @@ fn build_line_inits(
     use super::flex_trampoline::FlexLineInit;
     let cb = content_width;
     let is_column = axes.main_vertical;
+    // §4.5 automatic minimum main size (outer, margins included) of the item at
+    // line position `k` — the floor §9.7 step 4 clamps the flexed size to.
+    let min_main = |k: usize| -> f32 {
+        let item = &children[item_idxs[k]];
+        if is_column {
+            return col_auto_mins.get(k).copied().unwrap_or(0.0);
+        }
+        let is = &item.style;
+        let iem = is.font_size;
+        let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
+        let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
+        flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
+    };
 
     lines
         .iter()
@@ -885,8 +956,14 @@ fn build_line_inits(
                             flex_item_max_main_outer(&children[item_idxs[k]], cb, measurer, viewport, is_column)
                         })
                         .collect();
+                    let mins: Vec<f32> = line_keys.iter().map(|&k| min_main(k)).collect();
                     let base: Vec<f32> = hyp_mains.clone();
                     let mut frozen: Vec<bool> = grows.iter().map(|&g| g <= 0.0).collect();
+                    for j in 0..n {
+                        if frozen[j] {
+                            hyp_mains[j] = base[j].max(mins[j].min(maxes[j]));
+                        }
+                    }
                     // Каждый проход замораживает хотя бы один элемент, поэтому `n`
                     // проходов заведомо хватает.
                     for _ in 0..n {
@@ -901,16 +978,19 @@ fn build_line_inits(
                         let total_weight: f32 = unfrozen.iter().map(|&j| grows[j]).sum();
                         if remaining <= 0.0 || total_weight <= 0.0 {
                             for &j in &unfrozen {
-                                hyp_mains[j] = base[j].min(maxes[j]);
+                                hyp_mains[j] = base[j].min(maxes[j]).max(mins[j].min(maxes[j]));
                             }
                             break;
                         }
+                        // §9.7 п. 4.c: при сумме факторов < 1 делится лишь её доля
+                        // свободного места (BUG-1260).
+                        let remaining = remaining * total_weight.min(1.0);
                         let mut violated = false;
                         for &j in &unfrozen {
                             let target = base[j] + remaining * (grows[j] / total_weight);
-                            let clamped = target.min(maxes[j]);
+                            let clamped = target.min(maxes[j]).max(mins[j].min(maxes[j]));
                             hyp_mains[j] = clamped;
-                            if clamped < target - 0.01 {
+                            if (clamped - target).abs() > 0.01 {
                                 frozen[j] = true;
                                 violated = true;
                             }
@@ -924,20 +1004,7 @@ fn build_line_inits(
                 // CSS Flexbox L1 §9.7 step 4 — «fix min/max violations». See the
                 // removed code's comment (BUG-433) for why shrinking needs the
                 // same freeze-and-redistribute loop instead of a single pass.
-                let mins: Vec<f32> = line_keys
-                    .iter()
-                    .map(|&k| {
-                        let item = &children[item_idxs[k]];
-                        if is_column {
-                            return 0.0;
-                        }
-                        let is = &item.style;
-                        let iem = is.font_size;
-                        let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
-                        let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
-                        flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
-                    })
-                    .collect();
+                let mins: Vec<f32> = line_keys.iter().map(|&k| min_main(k)).collect();
                 let shrink: Vec<f32> =
                     line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_shrink).collect();
                 let base: Vec<f32> = hyp_mains.clone();

@@ -1,6 +1,6 @@
 # BUG-1256 — `<img>` с одной заданной стороной (`height:30px`, `width:auto`) в row-контейнере получает ширину intrinsic-размера (1 px у GIF 1×1), а не перенесённую
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** layout (`crates/engine/layout/src/box_tree/flex.rs` — `<img>` как flex-элемент, перенос пропорций)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 1.
 ## Как проверить
 
 `css/css-flexbox/image-as-flexitem-size-*.html`.
+
+## Исправление
+
+flex.rs, ветка `FlexBasis::Auto` row: у replaced-элемента с ratio и авторской px-`height` базовый размер — высота, перенесённая через ratio (Flexbox §9.2). Тест `bug1256_row_flex_img_with_authored_height_transfers_width`. Остаток кластера (svg-root, `aspect-ratio` у не-img) — не проверялся.

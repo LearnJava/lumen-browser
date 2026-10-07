@@ -22,7 +22,7 @@ use crate::style::share_safety::selector_is_share_safe;
 use crate::style::{
     apply_align_presentational_hint, apply_background_image_presentational_hint,
     apply_bgcolor_presentational_hint, apply_bordercolor_presentational_hint,
-    apply_cellspacing_presentational_hint, apply_declaration,
+    apply_cellspacing_presentational_hint, apply_declaration, apply_dir_presentational_hint,
     apply_font_element_presentational_hints, apply_font_size, apply_forced_colors_mode,
     apply_image_presentational_hints, apply_property_initial_values, apply_quirks_html_height,
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
@@ -468,6 +468,9 @@ pub(crate) fn compute_style_shareable(
 
     // HTML5 §15.3.3: `align` на блочных элементах → text-align.
     apply_align_presentational_hint(doc, node, &mut style);
+
+    // HTML LS §15.3.6: `dir` → `direction` + `unicode-bidi` (BUG-1321).
+    apply_dir_presentational_hint(doc, node, &mut style);
 
     // CSS Quirks Mode §4.1 + HTML5 §14.3.9: `width`/`height` attr на
     // `<td>`/`<th>`/`<table>`. В quirks-mode width ячейки → min-width.
