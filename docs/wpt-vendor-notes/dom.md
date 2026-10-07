@@ -78,7 +78,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 
 | Подкаталог | id | OK | TIMEOUT | ERROR | сабтесты | Головная причина |
 |---|---:|---:|---:|---:|---|---|
-| `events/` | 192 | 141 | 16 | 35 | 198/578 | россыпь известных гэпов (см. ниже), крупнейший локальный — [BUG-865](../../bugs/BUG-865-OPEN.md) |
+| `events/` | 192 | 141 | 16 | 35 | 198/578 | россыпь известных гэпов (см. ниже), крупнейший локальный — [BUG-865](../../bugs/BUG-865-FIXED.md) |
 | `ranges/` | 57 | 33 | 0 | 24 | 10/251 | [BUG-863](../../bugs/BUG-863-FIXED.md) — **все 24 ERROR** из одной причины ; после починки (2026-09-25) — 46/57 OK, 12262/44063 сабтестов, после BUG-1159 (2026-10-01) — 31325/44063; причины остатка — [BUG-1232](../../bugs/BUG-1232-OPEN.md), [BUG-1159](../../bugs/BUG-1159-FIXED.md), [BUG-1160](../../bugs/BUG-1160-FIXED.md), [BUG-1161](../../bugs/BUG-1161-FIXED.md) |
 | `observable/` | 29 | 25 | 4 | 0 | 0/251 | `Observable` не реализован (WICG-предложение, каталог `tentative/`) |
 | `traversal/` | 18 | 14 | 1 | 3 | 26/56 | 3 ERROR — та же [BUG-863](../../bugs/BUG-863-FIXED.md) ; после починки — 17/18 OK, 1031/1583, остаток — [BUG-1164](../../bugs/BUG-1164-OPEN.md) |
@@ -97,7 +97,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
   Отсюда `ranges/` 10/251: категория не «провалена», а не запущена.
 * [BUG-864](../../bugs/BUG-864-OPEN.md) — `Node.lookupNamespaceURI`/`lookupPrefix`/
   `isDefaultNamespace` отсутствуют целиком (70 сабтестов одного файла, ни одного PASS).
-* [BUG-865](../../bugs/BUG-865-OPEN.md) — опция `passive` у `addEventListener` не
+* [BUG-865](../../bugs/BUG-865-FIXED.md) — опция `passive` у `addEventListener` не
   разбирается: 57 FAIL в `passive-by-default.html`, весь
   `AddEventListenerOptions-passive.any.*` и 6 файлов `non-cancelable-when-passive/`.
   Тихий дефект: страница просит пассивный слушатель, получает обычный.

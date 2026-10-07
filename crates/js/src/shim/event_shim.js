@@ -21,6 +21,7 @@ function Event(type, init) {
     this.currentTarget    = null;
     this.timeStamp        = Date.now ? Date.now() : 0;
     this._stopImmediate   = false;
+    this._inPassive       = false;
     // DOM §2.2 — NONE while the event is not being dispatched; set to
     // CAPTURING_PHASE/AT_TARGET/BUBBLING_PHASE by `_lumen_propagate` (BUG-873),
     // which is also what fills `_path` for the duration of one dispatch.
@@ -28,7 +29,7 @@ function Event(type, init) {
     this._path            = null;
 }
 Event.prototype.preventDefault = function() {
-    if (this.cancelable) this.defaultPrevented = true;
+    if (this.cancelable && !this._inPassive) this.defaultPrevented = true;
 };
 Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
 Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = true; this.cancelBubble = true; };

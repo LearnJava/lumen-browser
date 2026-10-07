@@ -1,6 +1,6 @@
 # BUG-865 — опция `passive` у `addEventListener` не разбирается вовсе: `preventDefault()` работает там, где спека требует его игнорировать
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (`passive` + дефолт для wheel/touch* на window/document/body; обёртка слушателя в `web_api_shim_mid.js`, флаг `_inPassive` в `Event.preventDefault`; тест `bug865_passive_listener.rs`)
 **Заведён:** 2026-08-23 (P2, `WPT-VENDOR-dom-rest` — первый прогон довендоренной категории `dom`)
 **Область:** `crates/js/src/dom.rs:443-460` — `EventTarget.prototype.addEventListener` читает из `options` только `capture` и `once`; слова `passive` нет во всём `crates/js/src/dom.rs` (единственное совпадение по крейту — `navigator_bindings.rs`, к событиям отношения не имеет)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
