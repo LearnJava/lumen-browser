@@ -10,7 +10,7 @@
 
 use super::*;
 // Кэш байт-кода — свой модуль (SPLIT-JS5), из `super::*` его имена не видны.
-use super::code_cache::{CODE_CACHE, CODE_CACHE_MIN_LEN, code_cache_hash};
+use super::code_cache::{CODE_CACHE, CODE_CACHE_MAX_ENTRIES, CODE_CACHE_MIN_LEN, code_cache_hash};
 use lumen_core::JsRuntime;
 
 fn rt() -> V8JsRuntime {
@@ -109,6 +109,33 @@ fn perf9_code_cache_hit_preserves_semantics() {
         bytes_after_hits, bytes_after_miss,
         "a cache hit must not rewrite or drop this test's own entry"
     );
+}
+
+/// BUG-1243: with `CODE_CACHE` at its cap, a miss must still store its own
+/// entry (evicting another) — before the fix the insert was silently
+/// dropped, which made `perf9_code_cache_hit_preserves_semantics` flake
+/// once the full suite had filled the process-wide cache.
+#[test]
+fn perf9_code_cache_full_still_stores_new_entry() {
+    let script = format!(
+        "(function() {{ return 7; }})();
+{}",
+        "// bug1243 padding to clear CODE_CACHE_MIN_LEN
+".repeat(30)
+    );
+    let hash = code_cache_hash(&script);
+    {
+        let mut map = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(&hash);
+        let mut fake = 0u64;
+        while map.len() < CODE_CACHE_MAX_ENTRIES {
+            map.insert(fake ^ 0xB06_1243_0000_0000, vec![0]);
+            fake += 1;
+        }
+    }
+    assert_eq!(rt().eval(&script).unwrap(), JsValue::Number(7.0));
+    let stored = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&hash);
+    assert!(stored, "a miss on a full cache must still populate its own entry");
 }
 
 /// PERF-9: scripts below `CODE_CACHE_MIN_LEN` (the vast majority of
