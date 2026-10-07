@@ -323,6 +323,7 @@ mod v8_bug599_get_root_node;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1055_detached_insert;
+mod v8_bug894_insert_before_validity;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug630_image_load_events;
