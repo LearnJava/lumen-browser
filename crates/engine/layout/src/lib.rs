@@ -1891,7 +1891,7 @@ fn collect_pseudo_computed_styles_rec(
 ) {
     let mut stack: Vec<(&LayoutBox, lumen_dom::NodeId)> = vec![(root, root_owner)];
     while let Some((b, container_owner)) = stack.pop() {
-        collect_pseudo_computed_styles_box(b, container_owner, out);
+        collect_pseudo_computed_styles_box(b, container_owner, None, out);
         for child in b.children.iter().rev() {
             stack.push((child, b.node));
         }
@@ -1900,10 +1900,13 @@ fn collect_pseudo_computed_styles_rec(
 
 /// One box's contribution to [`collect_pseudo_computed_styles`]: its own entry when it is a
 /// pseudo-element box, and the entries of the pseudo-element segments an `InlineRun` flattens.
-/// `container_owner` is the node of the box whose `children` list `b` lives in.
+/// `container_owner` is the node of the box whose `children` list `b` lives in. `held` — the
+/// entries already published, which are left as they are (BUG-935 срез 96: a box the flush did
+/// not restyle has the entry it had).
 pub(crate) fn collect_pseudo_computed_styles_box(
     b: &LayoutBox,
     container_owner: lumen_dom::NodeId,
+    held: Option<&scoped_collect::PseudoMaps>,
     out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
 ) {
     if let BoxRole::Pseudo(kind) = b.origin.role
@@ -1914,8 +1917,10 @@ pub(crate) fn collect_pseudo_computed_styles_box(
         } else {
             b.origin.node.unwrap_or(b.node)
         };
-        out.entry((owner.index() as u32, name.to_string()))
-            .or_insert_with(|| pseudo_style_map(&b.style, kind));
+        let key = (owner.index() as u32, name.to_string());
+        if !held.is_some_and(|h| h.contains_key(&key)) {
+            out.entry(key).or_insert_with(|| pseudo_style_map(&b.style, kind));
+        }
     }
     if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
         for seg in segments {
@@ -1931,8 +1936,10 @@ pub(crate) fn collect_pseudo_computed_styles_box(
                 } else {
                     seg.source_node
                 };
-                out.entry((owner.index() as u32, name.to_string()))
-                    .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+                let key = (owner.index() as u32, name.to_string());
+                if !held.is_some_and(|h| h.contains_key(&key)) {
+                    out.entry(key).or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+                }
             }
         }
     }
@@ -2019,17 +2026,19 @@ fn collect_custom_properties_rec(
 ) {
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        collect_custom_properties_box(b, viewport, out, resolved);
+        collect_custom_properties_box(b, viewport, None, out, resolved);
         for child in b.children.iter().rev() {
             stack.push(child);
         }
     }
 }
 
-/// One box's contribution to [`collect_custom_properties`].
+/// One box's contribution to [`collect_custom_properties`]. `held` — the entries already
+/// published, which are left as they are (BUG-935 срез 96).
 pub(crate) fn collect_custom_properties_box(
     b: &LayoutBox,
     viewport: lumen_core::geom::Size,
+    held: Option<&scoped_collect::CustomPropMaps>,
     out: &mut std::collections::HashMap<
         u32,
         std::sync::Arc<std::collections::HashMap<String, String>>,
@@ -2041,7 +2050,7 @@ pub(crate) fn collect_custom_properties_box(
 ) {
     // First box in tree order wins — see `collect_layout_rects_rec` for why
     // several boxes can carry the same `NodeId`.
-    if b.style.custom_props.is_empty() {
+    if b.style.custom_props.is_empty() || held.is_some_and(|h| h.contains_key(&(b.node.index() as u32))) {
         return;
     }
     let key = b.style.custom_props.as_ptr() as usize;
