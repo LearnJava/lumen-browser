@@ -795,3 +795,94 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - **testharness (3 id)** — не разбирались; `line-height-interpolation.html` — 303 из 628 сабтестов (интерполяция `line-height`, дискретный/числовой случай), `vertical-align-top-bottom-001.html`/`inline-negative-margin-001.html` — `getBoundingClientRect` у inline.
 - Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в `wptrunner` против 800×600 в пиксельном разборе.
 - Срез закрывает `text`, `linebox`, `fonts`, `generated-content`, `lists`, `bidi-text` из `css/CSS2` (1 259 id из 6 357 автоматизируемых; остальное — срез S15).
+
+## css/CSS2: остальное (selectors, css1, syntax, box-display, visufx, visudet, …) — вердикт и кластеры (WPT-RUN-14 срез 15, 2026-10-07)
+
+Прогон: `run_corpus.py --prefixes css/CSS2 --exclude-prefixes <18 каталогов срезов S11…S14> --out-dir .tmp/wpt-run14/css2-5`, сборка `dev-release` от `main` 8f777aca9 (движок не менялся), 20 шардов (7 — только manual/visual, не планируются), 7 мин 43 с суммарно. Повторный прогон с чистым каталогом дал побайтно тот же вердикт (0 расхождений из 1 381) — холодного старта, как в срезе 14 ([BUG-1273](../../bugs/BUG-1273-OPEN.md)), здесь не видно. `score_audit.py`: «no leak», вердикт есть у всех автоматизируемых id.
+
+| Каталог | id (выполнено) | зелёных | не зелёных |
+|---|---|---|---|
+| `selectors` | 479 | 79 | 400 |
+| `css1` | 164 | 37 | 127 |
+| `syntax` | 276 | 172 | 104 |
+| `box-display` | 120 | 73 | 47 |
+| `visufx` | 53 | 3 | 50 |
+| `visudet` | 39 | 10 | 29 |
+| `values` | 25 | 5 | 20 |
+| `ui` | 52 | 39 | 13 |
+| `visuren` | 39 | 27 | 12 |
+| `colors` | 19 | 8 | 11 |
+| корень `css/CSS2/*.xht`, `*.html` | 14 | 4 | 10 |
+| `box` | 9 | 0 | 9 |
+| `css21-errata` | 9 | 0 | 9 |
+| `cascade` + `cascade-import` | 39 | 29 | 10 |
+| `sec5`, `csswg-issues`, `media`, `other-formats` | 44 | 40 | 4 |
+| **итого** | **1 381** | **526** | **855** |
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 1 376 | 522.00 | 99.1 % (от набранного) |
+| crashtest | 3 | 3.00 | 100 % |
+| testharness | 2 | 1.72 (сабтесты 1 288 из 1 326) | 86 % |
+| print-reftest | 43 | 0 — нет исполнителя ([WPT-RUN-8](../../ROADMAP.md)) | в знаменателе |
+| **итого** | **1 424** | **526.72 = 36.99 %** | |
+
+855 не зелёных: 854 reftest FAIL и `visufx/animation/visibility-interpolation.html` (38 из 134 сабтестов — интерполяция `visibility`: промежуточные значения `visible`↔`hidden`). Пиксельный разбор (`reftest_pixdiff.py --viewport 800x600 --ahem`, 849 reftest, 18 мин): **790 thick, 25 thin-only, 28 identical**, 6 `no-match-ref` (`visudet/content-height-005.html`, `line-height-203/206.html`, `visufx/overflow-propagation-001a/b/c.html` — без `rel=match`); ещё 5 `visuren/remove-from-split-inline-N-ref.html` — файлы-эталоны в списке, пиксельный разбор их не брал. Для сравнения: срез 14 — 40.32 %, срез 13 — 32.27 %.
+
+### Главное
+
+1. **`::first-letter` в `selectors/first-letter-punctuation-*` — 339 id, 40 % всех провалов среза.** Все 339 пишут `div:first-letter` (одно двоеточие — [BUG-1366](../../bugs/BUG-1366-OPEN.md), найден в срезе 14), вокруг буквы стоит пунктуация и до, и после (`&#xNN;T&#xNN;est`). Помимо BUG-1366 мешают ещё два независимых дефекта: пунктуация **после** буквы не входит в буквицу ([BUG-1373](../../bugs/BUG-1373-OPEN.md)) и набор «пунктуации» — только ASCII и 10 кавычек, без Unicode Ps/Pe/Pi/Pf/Po ([BUG-1374](../../bugs/BUG-1374-OPEN.md)). A/B (`.tmp/ab15.py` → `.tmp/ab15b.py`, копии с `::first-letter` и снятой завершающей пунктуацией): **26 из 339 → `identical`**, остальные 313 держит BUG-1374 (321 из 339 id — ведущий знак не ASCII). Закрытие всех трёх — до 339 id.
+2. **Кодировки таблиц стилей** ([BUG-1375](../../bugs/BUG-1375-OPEN.md)): в `lumen-encoding` только UTF-8/16/32 и три кириллические; Shift_JIS, Big5, windows-1252 и ISO-8859-x не читаются, `from_label` их не знает. 32 id `syntax/at-charset-*`, `character-encoding-*`, `content-type-*`. Шире WPT: не-UTF-8 страница в этих кодировках не читается вовсе (`<meta charset=windows-1252>` → эвристика выбирает `koi8-r`/`ibm866`).
+3. **Парсер CSS не по CSS Syntax L3** — шесть мелких дефектов на 58 id `syntax`: CDO/CDC `<!--` `-->` ([BUG-1376](../../bugs/BUG-1376-OPEN.md)), невалидный `width`/`height` затирает прежнее значение ([BUG-1377](../../bugs/BUG-1377-OPEN.md)), имена свойств чувствительны к регистру ([BUG-1378](../../bugs/BUG-1378-OPEN.md)), комментарий внутри значения ([BUG-1379](../../bugs/BUG-1379-OPEN.md)), escape в значениях и `url()` ([BUG-1380](../../bugs/BUG-1380-OPEN.md)), восстановление после ошибок ([BUG-1381](../../bugs/BUG-1381-OPEN.md)). Каждая — проба на странице из 5–10 строк, причина отдельная.
+4. **`margin-right` у `<span>` без декорации теряется** ([BUG-1382](../../bugs/BUG-1382-OPEN.md)): `<span style="margin-right:40px">x</span>y` рисуется как `xy` вплотную — сегменты склеиваются в один фрагмент. С фоном, рамкой или `padding` тот же `margin-right` работает.
+5. **`clip: rect()`** не разобрано ([CSS-SPECS.md:459](../../CSS-SPECS.md), P4): 44 id `visufx/clip-*` — подтверждено: `clip:rect(+0px,+0px,+0px,+0px)` на `position:absolute` не скрывает фон. Это уже зафиксировано в срезе 2 (`css-writing-modes/clip-rect-*`, 16 id), теперь 60 id вместе.
+6. **У `<p>`/`<ul>`/`<blockquote>`/`<pre>` нет UA-полей** ([BUG-1334](../../bugs/BUG-1334-OPEN.md), из срезов 11–14): A/B (`.tmp/ab15c.py`: во все пары вставлен UA-блок `p,ul,ol,dl,blockquote,pre,figure,menu{margin:1em 0}…`) на 510 id → **15 дополнительных `identical`/`thin-only`** (12 в `css1`), новых провалов нет. Здесь дефект даёт мало: каталоги среза в основном без `<p>` поверх фигуры.
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** (порядок как в таблице; `.tmp/final15b.py` → `.tmp/final15b.json`, один id — один кластер). Причина подтверждена пробой (`--dump-display-list`/`--dump-layout` на минимальной странице в `.tmp/p15/`) у кластеров с записью; числа — по правилу, не по причине.
+
+| Кластер | id | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|
+| `first-letter-punctuation-*` | 339 | 339 thick | `selectors/first-letter-punctuation-001.xht`, `-100.xht`, `-300.xht` | три дефекта подряд: `:first-letter` (BUG-1366), пунктуация после буквы, не-ASCII пунктуация | P3 | [BUG-1366](../../bugs/BUG-1366-OPEN.md) (дополнен), [BUG-1373](../../bugs/BUG-1373-OPEN.md), [BUG-1374](../../bugs/BUG-1374-OPEN.md) |
+| `clip: rect()` | 44 | 44 thick | `visufx/clip-004.xht`, `-005.xht`, `-006.xht` | значение не разобрано, клип не рисуется | P4 | [CSS-SPECS.md:459](../../CSS-SPECS.md) (дополнен) |
+| однодвоеточные `:before`/`:after`/`:first-line`/`:first-letter` вне `first-letter-punctuation` | 30 | 30 thick → `identical` после A/B | `cascade/cascade-009a.xht`, `selectors/first-letter-nested-001.xht`, `selectors/first-line-pseudo-007.xht` | как BUG-1366 | P3 | [BUG-1366](../../bugs/BUG-1366-OPEN.md) (дополнен) |
+| `syntax`: кодировка (Shift_JIS, Big5, windows-1252, ISO-8859-x, MIME) | 32 | 32 thick | `syntax/at-charset-002.xht`, `at-charset-024.xht`, `character-encoding-031.xht` | `Encoding` не знает меток; селектор по `.平和`/`.t\xe9st` не совпадает | P3 | [BUG-1375](../../bugs/BUG-1375-OPEN.md) |
+| после правки «:»: прочее `first-letter`/`first-line`/`counters` | 37 | 37 thick (A/B не помог) | `selectors/first-letter-quote-002.xht`, `first-line-pseudo-012.xht`, `syntax/counters-001.xht` | `selectors` (21): `first-letter-quote-*`, `first-letter-selector-*`, `first-line-pseudo-012…016`, `pseudo-*`; `syntax/counters-*` (9): `counter-increment` на `::before` по аналогии с [BUG-1368](../../bugs/BUG-1368-OPEN.md); `syntax/quoted-string-003/004` — по аналогии с [BUG-1367](../../bugs/BUG-1367-OPEN.md); проб по одному id нет | P3 | без записи (BUG-1368 — по аналогии) |
+| `syntax`: escape в значениях и `url()` | 29 | 29 thick | `syntax/escapes-002.xht`, `escaped-ident-spaces-001.xht`, `uri-005.xht` | `color:\67reen`, `\75rl(…)`, `url(a\'b)` не раскрываются; в селекторах и именах свойств работает | P3 | [BUG-1380](../../bugs/BUG-1380-OPEN.md) |
+| `syntax`: восстановление после ошибок | 17 | 17 thick | `syntax/eof-002.xht`, `at-rule-001.xht`, `matching-brackets-001.xht` | EOF внутри `rgb(…`; `@ import`; парные скобки; пробы только на 3 id | P3 | [BUG-1381](../../bugs/BUG-1381-OPEN.md) |
+| UA: у p/ul/blockquote нет полей | 15 | 15 thick → `identical`/`thin-only` после A/B | `css1/c412-hz-box-000.xht`, `css1/c5502-imrgn-r-000.xht`, `colors/color-129.xht` | как BUG-1334 | P3 | [BUG-1334](../../bugs/BUG-1334-OPEN.md) (дополнен) |
+| `css1`: не разобрано | 89 | 89 thick | `css1/c414-flt-fit-000.xht`, `c534-bgreps-000.xht`, `c548-ln-ht-000.xht` | около 35 — `background-repeat`/`position` + блок-ребёнок (пробы нет); 13 — inline `span` с `padding`/`margin` (вероятно BUG-1382); 9 — `c414-flt-fit-*`: float + NBSP-«хвост» не переносится (вероятно [BUG-1323](../../bugs/BUG-1323-OPEN.md), не проверено); 4 — `line-height` (BUG-1369); остальное — единицы | — | без записи |
+| `css1`: `margin-right` у inline | 6 | 6 thick | `css1/c5502-imrgn-r-002.xht`, `-003.xht`, `c5504-imrgn-l-003.xht` | сегменты склеены, поле теряется | P3 | [BUG-1382](../../bugs/BUG-1382-OPEN.md) |
+| `box-display`: block-in-inline | 9 | 9 thick | `box-display/block-in-inline-001.xht`, `-002.xht`, `-relpos-001.xht` | то же, что BUG-1353 (`<span>`, разрезанный блоком); по аналогии | P3 | [BUG-1353](../../bugs/BUG-1353-OPEN.md) (дополнен, без пробы) |
+| `box-display`: не разобрано | 23 | 23 thick | `box-display/box-generation-001.xht`, `containing-block-008.xht`, `display-005.xht` | `display-005`: `div div{display:inline-block}` — пробы нет; `containing-block-*` (12) — абсолютное позиционирование от `relative`-предка, пробы нет | — | без записи |
+| `visudet`: не разобрано | 25 | 25 thick | `visudet/content-height-001.html`, `inline-block-baseline-001.xht`, `replaced-elements-width-40.html` | `inline-block-baseline-*` (9) — `inline-block` в строке с `line-height:5`, вертикальное положение; `replaced-elements-*` (8) — min/max у замещаемого; `content-height-*` (4) | — | без записи |
+| `identical` при 800×600, FAIL под `wptrunner` | 28 | 28 identical (26 и при 1024×720, 2 `thick` при 1024×720) | `box-display/anonymous-boxes-inheritance-001.xht`, `delete-block-in-inlines-end-001.xht`, `visufx/visibility-005.xht` | все 28 используют `Ahem`; 9 — `class="reftest-wait"` + скрипт на `onload`; под `run_corpus.py` три пробы (`anonymous-boxes-inheritance-001`, `delete-block-in-inlines-end-001`, `insert-block-in-inlines-end-001`) снова FAIL | P2 | [BUG-1273](../../bugs/BUG-1273-OPEN.md) (дополнен) |
+| `*-applies-to-*` на `display:table-*` | 10 | 10 thick | `colors/color-applies-to-001.xht`, `ui/overflow-applies-to-008.xht` | свойство ставится на `table-row-group`/`cell`; пробы нет | P1 | TABLE-ANON / [BUG-1357](../../bugs/BUG-1357-OPEN.md) — по аналогии, без пробы |
+| thin-only: эталон с `<img>` | 13 | 13 thin-only | `box-display/containing-block-027.xht`, `ui/overflow-applies-to-004.xht`, `values/numbers-units-004.xht` | как в срезах 11–14 | P3 | [BUG-1337](../../bugs/BUG-1337-OPEN.md) (дополнен) |
+| thin-only: без `<img>` в эталоне | 12 | 12 thin-only | `css1/c5502-imrgn-r-001.xht`, `values/numbers-units-007.xht` | у `css1` (5) — те же inline-поля (BUG-1382), у `values` (5) — по аналогии с BUG-1372 (Ahem), пробы нет | P3 | [BUG-1372](../../bugs/BUG-1372-OPEN.md) / [BUG-1382](../../bugs/BUG-1382-OPEN.md) по аналогии, без пробы |
+| `syntax`: невалидное значение затирает прежнее | 3 | 3 thick | `syntax/signed-numbers-001.xht`, `values/numbers-units-006.xht` | `height:20px; height:1 0px` → высота 0 | P3 | [BUG-1377](../../bugs/BUG-1377-OPEN.md) |
+| `syntax`: регистр имён свойств, комментарий в значении | 5 | 5 thick | `syntax/case-sensitive-000.xht`, `comments-001.xht` | `COLOR:green`, `color:/*c*/green` | P3 | [BUG-1378](../../bugs/BUG-1378-OPEN.md), [BUG-1379](../../bugs/BUG-1379-OPEN.md) |
+| CDO/CDC | 4 | 4 thick | `syntax/sgml-comments-000.xht`, `css1/c11-import-000.xht` | `<!--` проглатывает следующее правило | P3 | [BUG-1376](../../bugs/BUG-1376-OPEN.md) |
+| `box` (RTL/LTR, `direction` у `span`) | 9 | 9 thick | `box/ltr-basic.xht`, `rtl-span-only.xht` | пробы нет | — | без записи |
+| `css21-errata` (`overflow:hidden` на таблице, `margin-top:-15px`) | 9 | 9 thick | `css21-errata/s-11-1-1b-001.html` | пробы нет | — | без записи |
+| `selectors`: прочее | 16 | 16 thick | `selectors/attribute-value-selector-005.html`, `lang-selector-*` | пробы нет | — | без записи |
+| `values`: не разобрано | 9 | 9 thick | `values/numbers-units-012.xht`, `numbers-units-018.xht` | `ex` (BUG-1340) по аналогии; пробы нет | — | без записи |
+| корень: `bidi-*.xht`, `inline-svg-*.html` | 10 | 10 thick | `bidi-005.xht`, `inline-svg-margin-padding-border.html` | `bidi-005…010` — `unicode-bidi` по аналогии с BUG-1371; `inline-svg-*` — `<svg>` в потоке (BUG-1353-класс, как срез 13); пробы нет | — | без записи |
+| `visuren`, `ui`, `cascade`, `cascade-import`, `csswg-issues`, `sec5`, `colors`, `visufx`, `syntax/import-000` — мелочь | 20 | 20 thick | `visuren/anonymous-boxes-001a.xht`, `ui/overflow-applies-to-009.xht`, `cascade-import/cascade-import-001.xht` | кластеры по 1–7 id | — | без записи |
+| без `rel=match` | 6 | — | `visudet/content-height-005.html`, `visufx/overflow-propagation-001a.html` | у теста нет ссылки на эталон (причина не проверялась) | — | — |
+
+Сумма по таблице: 849 id пиксельного разбора; до 855 не хватает `visibility-interpolation.html` (testharness, 38 из 134 сабтестов) и 5 `visuren/remove-from-split-inline-N-ref.html` (эталоны, попавшие в список; в таблицу не вошли).
+
+### Что остаётся неизвестным
+
+- **«Не разобрано»** — `css1` 89 + `box-display` 23 + `visudet` 25 + `values` 9 + 16 `selectors` + 37 «после правки «:»» + 9 `box` + 9 `css21-errata` + 10 корень + 20 мелочь = **247 id** (29 %): кластеры по 1–35 id, отдельных проб нет. Самый крупный — `css1` с `background-repeat`/`position` (~35).
+- **После BUG-1366, BUG-1373, BUG-1374 числа у `first-letter-punctuation-*` — по A/B на копиях**, а не на движке; само исправление может открыть дефекты за ними (в A/B 313 из 339 остались `thick` только из-за BUG-1374, чего не проверить, пока набор символов не расширен).
+- **BUG-1376…1381 — пробы на странице из 5–10 строк**; число id в каждом — по имени/источнику теста, а не по проверке каждого. `syntax/at-rule-*`, `matching-brackets-*`, `strings-000`, `unterminated-string-001` прочитаны, но минимальная проба сделана только для `@ import`, EOF внутри `rgb(`; остальные 14 id (BUG-1381) — по описанию теста.
+- **BUG-1382** — число id (6 + 13 `css1` + 4 thin-only) по правилу «inline `span` с `padding`/`margin` в `<style>`», проба — на одной странице; `padding-right` на `span` работает, `margin-right` без декорации — нет.
+- **`clip: rect()` (44 id)** — пробы по одному id (`clip-006`); остальные по имени. CSS-SPECS.md:459 уже ссылался на 16 id срезa 2.
+- **28 `identical` под `wptrunner`** — три пробы под `run_corpus.py` снова FAIL, т. е. дело не в «холодном старте» (повторный прогон дал 0 расхождений); общее у всех 28 — `Ahem` ([BUG-1273](../../bugs/BUG-1273-OPEN.md): `@font-face url()` не ждётся в `--screenshot`/IPC), 9 из них — `reftest-wait` со скриптом. Чем это не объясняется: почему в срезе 14 те же 72 теста дали PASS после повторного прогона.
+- **`testharness` (2 id)** — `colors-007.html` (1 192 сабтеста, все PASS), `visibility-interpolation.html` — 38 из 134 не PASS (`visibility` при `t` ∈ (0, 1) должно быть `visible`; не разбиралось).
+- **print-reftest (43 id)** — не исполнялись (нет исполнителя, WPT-RUN-8); в знаменателе, score 0 по построению (`score_audit.py`: «no verdict 43 (100.0%)»).
+- Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в `wptrunner` против 800×600 в пиксельном разборе.
+- Срез закрывает **весь `css/CSS2`** (6 357 id из 6 357 автоматизируемых по срезам S11–S15 — 843 + 1 496 + 1 335 + 1 259 + 1 424 = 6 357). Остальные модули `css` — отдельные срезы после сводки.

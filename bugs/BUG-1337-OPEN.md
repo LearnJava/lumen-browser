@@ -31,3 +31,7 @@ WPT-RUN-14 срез 11: 249 из 484 упавших reftest `css/CSS2/{backgroun
 ## Срез 14 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` text/linebox/fonts/…)
 
 65 id `thin-only` с `<img>` в эталоне (`bidi-text/bidi-box-model-010…`, `linebox/*`, 3 в `text`): `linebox` — 39, `bidi-text` — 23, `text` — 3. Закрытие даёт до 65 id; вместе со срезами 11–13 — `css/CSS2` целиком (`docs/wpt-vendor-notes/css.md` §срез 14).
+
+## Срез 15 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` selectors/css1/syntax/…)
+
+13 id `thin-only` с `<img>` в эталоне (`box-display/containing-block-027.xht`, `-030.xht`, `display-change-001.xht`, `ui/overflow-applies-to-001…006.xht`, `values/numbers-units-004.xht`, `css1/c5510-padn-000.xht`, `c5512-brdr-rw-001.xht`, `c5514-brdr-lw-001.xht`).
