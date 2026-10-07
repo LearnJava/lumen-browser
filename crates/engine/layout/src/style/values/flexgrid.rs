@@ -241,6 +241,15 @@ impl GridTrackSize {
         if let Self::Fr(v) = self { Some(*v) } else { None }
     }
 
+    /// Flex factor of a flexible track: `Nfr` or `minmax(<min>, Nfr)` (CSS Grid L1 §7.2.3).
+    pub fn flex_factor(&self) -> Option<f32> {
+        match self {
+            Self::Fr(v) => Some(*v),
+            Self::Minmax(_, max) => max.fr(),
+            _ => None,
+        }
+    }
+
     /// True when this track inherits its size from the parent grid (subgrid axis).
     pub fn is_subgrid(&self) -> bool {
         matches!(self, Self::Subgrid)
