@@ -9,6 +9,7 @@
 //! перед `mod shapes_floats;`) без правок тел.
 
 use super::*;
+use super::grid::{resolve_grid_axis, GridAxis};
 
 /// max-content advance of a text run — all segments on one line (no wrapping).
 fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasurer>) -> f32 {
@@ -228,28 +229,17 @@ fn is_grid_container(b: &LayoutBox) -> bool {
     matches!(b.style.display, Display::Grid | Display::InlineGrid)
 }
 
-/// Does an item's column placement stay inside the `n_cols` explicit columns
-/// (so it cannot create an implicit column)? Conservative: named lines and
-/// anything unusual answer `false`.
-fn column_placement_in_explicit_grid(s: &ComputedStyle, n_cols: usize) -> bool {
-    let n = n_cols as i64;
-    // Line number → 1-based position from the start (`-1` is the last line, `n + 1`).
-    let pos = |i: i32| {
-        let i = i64::from(i);
-        if i > 0 { i } else { n + 2 + i }
-    };
-    let line = |i: i32| (1..=n + 1).contains(&pos(i));
-    match (&s.grid_column_start, &s.grid_column_end) {
-        (GridLine::Auto, GridLine::Auto) => true,
-        (GridLine::Line(a), GridLine::Auto) => (1..=n).contains(&pos(*a)),
-        (GridLine::Auto, GridLine::Line(e)) => (2..=n + 1).contains(&pos(*e)),
-        (GridLine::Span(k), GridLine::Auto) | (GridLine::Auto, GridLine::Span(k)) => i64::from(*k) <= n,
-        (GridLine::Line(a), GridLine::Line(e)) => line(*a) && line(*e),
-        (GridLine::Line(a), GridLine::Span(k)) => {
-            (1..=n).contains(&pos(*a)) && pos(*a) - 1 + i64::from(*k) <= n
-        }
-        (GridLine::Span(k), GridLine::Line(e)) => (2..=n + 1).contains(&pos(*e)) && i64::from(*k) < pos(*e),
-        _ => false,
+/// Does an item's column placement stay inside the explicit columns of `axis`
+/// (so it cannot create an implicit column)? Lines are resolved by the very
+/// routine placement uses (`resolve_grid_axis`), so numbers, `span`, line names
+/// and `grid-area` names all agree with what `lay_out_grid` will do.
+fn column_placement_in_explicit_grid(s: &ComputedStyle, axis: &GridAxis) -> bool {
+    let (start, end) = resolve_grid_axis(&s.grid_column_start, &s.grid_column_end, axis);
+    if start == 0 {
+        // Auto position: `end` carries the span (0 — one column).
+        end <= axis.n_tracks
+    } else {
+        end <= axis.last_line()
     }
 }
 
@@ -288,11 +278,20 @@ pub(super) fn grid_col_intrinsic_sum(
     // §7.1); any other track type has nothing to size it, so the caller's
     // fallback applies.
     let all_fixed = template.iter().all(|t| matches!(t, GridTrackSize::Length(_)));
-    let items_in_grid = b
-        .children
-        .iter()
-        .filter(|c| contributes_to_intrinsic_width(c))
-        .all(|c| column_placement_in_explicit_grid(&c.style, n_cols));
+    // `grid-template-areas` wider than the template adds auto columns that this
+    // fixed-length sum knows nothing about.
+    let areas_cols = s.grid_template_areas.first().map_or(0, Vec::len);
+    let col_axis = GridAxis {
+        n_tracks: n_cols as u32,
+        names: &s.grid_template_col_line_names,
+        areas: &s.grid_template_areas,
+        is_col: true,
+    };
+    let items_in_grid = areas_cols <= n_cols
+        && b.children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .all(|c| column_placement_in_explicit_grid(&c.style, &col_axis));
     // Fixed-length columns do not depend on their items at all, so the same sum
     // holds for a container whose items are placed explicitly, as long as no
     // item reaches past the explicit grid (that would add an implicit column).

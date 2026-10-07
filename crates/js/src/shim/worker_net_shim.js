@@ -62,6 +62,8 @@
   }
   ProgressEvent.prototype = Object.create(Event.prototype);
   ProgressEvent.prototype.constructor = ProgressEvent;
+  Object.defineProperty(ProgressEvent.prototype, Symbol.toStringTag,
+    { value: 'ProgressEvent', writable: false, enumerable: false, configurable: true });
   if (typeof globalThis.ProgressEvent !== 'function') globalThis.ProgressEvent = ProgressEvent;
 
   function XMLHttpRequestEventTarget() { EventTarget.call(this); }

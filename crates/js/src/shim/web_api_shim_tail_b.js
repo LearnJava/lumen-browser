@@ -7052,3 +7052,24 @@ Object.defineProperty(window, 'origin', {
     _lumen_window_et = take(window);
     _lumen_document_et = take(document);
 })();
+
+// WebIDL §3.7.3 (BUG-912): every event interface gets its own @@toStringTag on
+// its own prototype (an inherited one would make subclasses answer with the
+// base name). Own property already present (ErrorEvent, …) is left alone.
+(function() {
+    var names = ['UIEvent', 'MouseEvent', 'KeyboardEvent', 'InputEvent', 'FocusEvent',
+        'WheelEvent', 'PointerEvent', 'TouchEvent', 'AnimationEvent', 'TransitionEvent',
+        'StorageEvent', 'PopStateEvent', 'HashChangeEvent', 'TrackEvent', 'ToggleEvent',
+        'CommandEvent', 'InterestEvent', 'ContentVisibilityAutoStateChangeEvent',
+        'ErrorEvent', 'PromiseRejectionEvent', 'SubmitEvent', 'PageTransitionEvent',
+        'BeforeUnloadEvent', 'MessageEvent', 'MediaQueryListEvent', 'AnimationPlaybackEvent',
+        'CloseEvent', 'ProgressEvent', 'CompositionEvent', 'DragEvent', 'ClipboardEvent',
+        'FormDataEvent', 'SecurityPolicyViolationEvent'];
+    for (var i = 0; i < names.length; i++) {
+        var C = globalThis[names[i]];
+        if (typeof C !== 'function' || !C.prototype) continue;
+        if (Object.prototype.hasOwnProperty.call(C.prototype, Symbol.toStringTag)) continue;
+        Object.defineProperty(C.prototype, Symbol.toStringTag,
+            { value: names[i], writable: false, enumerable: false, configurable: true });
+    }
+})();
