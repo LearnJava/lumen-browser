@@ -484,7 +484,7 @@ x.com `abs.twimg.com` 454, github `github.githubassets.com` 130. Причина 
 - `EvalError: Code generation…` (BUG-1206): 3 сайта — youtube, live ×12, gemini ×4.
 - Белый кадр среди OK: instagram (`frame_dominant_frac` 0.997, ноль ошибок).
 - Повторившиеся HUNG: cnn, dailymail, udemy — оба прогона, cnn и udemy headless через туннель тоже
-  → [BUG-1211](../../bugs/BUG-1211-OPEN.md).
+  → [BUG-1211](../../bugs/BUG-1211-FIXED.md).
 
 **Сверка с закрытыми багами** (сайт: 09-23 → 09-28):
 
