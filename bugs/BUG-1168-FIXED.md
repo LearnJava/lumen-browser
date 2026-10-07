@@ -1,6 +1,6 @@
 # BUG-1168 — флейк `bug908_rendered_buffer_differs_across_sessions_when_noise_is_on`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Компонент:** js (`crates/js/src/web_audio.rs`, тест BUG-908)
 **Найден:** 2026-09-25, P3, при прогоне `scripts/scoped-test.sh` для BUG-636
 
@@ -32,3 +32,11 @@ assertion `left != right` failed: two sessions must not render a bit-identical b
 ```bash
 cargo test -p lumen-js --features v8-backend --lib   # иногда
 ```
+
+## Исправление
+
+Причина подтверждена: сдвиг ∈ {−1e-7, 0, +1e-7} на сэмпл, сумма 128 сэмплов
+даёт лишь несколько десятков различимых значений, и суммы двух сидов
+совпадают случайно. Тест теперь сравнивает векторы сэмплов целиком
+(`rendered_constant_source_samples`, вероятность совпадения 3^-128); сумма
+осталась только для проверки бюджета шума. Код движка не менялся.

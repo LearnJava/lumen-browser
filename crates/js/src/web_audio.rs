@@ -2645,8 +2645,22 @@ mod tests_v8 {
     /// `allow-panic-in-tests` only covers a `#[test]` function's own body,
     /// not a shared non-`#[test]` helper (docs/lint-policy.md §10).
     fn rendered_constant_source_sum(origin: &str, noise_enabled: bool) -> JsValue {
+        rendered_constant_source(origin, noise_enabled, "sum")
+    }
+
+    /// The same render as `rendered_constant_source_sum`, but every sample
+    /// (comma-joined, `Float32` widened to a double so the text is exact)
+    /// instead of their sum. A sum of 128 samples that each move by 0, or
+    /// ±1e-7, collapses to a few dozen distinct `f32`-ULP steps, so two
+    /// sessions' sums coincide by chance on a few percent of seeds (BUG-1168);
+    /// the sample vectors coincide with probability 3^-128.
+    fn rendered_constant_source_samples(origin: &str, noise_enabled: bool) -> JsValue {
+        rendered_constant_source(origin, noise_enabled, "Array.prototype.join.call(data, ',')")
+    }
+
+    fn rendered_constant_source(origin: &str, noise_enabled: bool, result: &str) -> JsValue {
         let rt = rt_with_web_audio_noise(origin, noise_enabled);
-        rt.eval(
+        rt.eval(&
             r#"
             var ctx = new OfflineAudioContext(1, 128, 44100);
             var src = ctx.createConstantSource();
@@ -2658,8 +2672,9 @@ mod tests_v8 {
             ctx.startRendering();
             var data = rendered.getChannelData(0), sum = 0;
             for (var i = 0; i < data.length; i++) sum += data[i];
-            sum
-            "#,
+            RESULT
+            "#
+            .replace("RESULT", result),
         )
         .unwrap()
     }
@@ -2670,13 +2685,19 @@ mod tests_v8 {
     /// buffer is a working fingerprint again.
     #[test]
     fn bug908_rendered_buffer_differs_across_sessions_when_noise_is_on() {
+        let (JsValue::String(sa), JsValue::String(sb)) = (
+            rendered_constant_source_samples("https://a.example", true),
+            rendered_constant_source_samples("https://b.example", true),
+        ) else {
+            panic!("expected sample lists from both renders");
+        };
+        assert_ne!(sa, sb, "two sessions must not render a bit-identical buffer");
         let (JsValue::Number(a), JsValue::Number(b)) = (
             rendered_constant_source_sum("https://a.example", true),
             rendered_constant_source_sum("https://b.example", true),
         ) else {
             panic!("expected Number sums from both renders");
         };
-        assert_ne!(a, b, "two sessions must not render a bit-identical buffer");
         // ADR-007 Layer 4's own figure is ±1e-7 per sample over 128 samples;
         // the per-sample bound is widened to 2e-7 for the nearest-`f32`-ULP
         // rounding of that delta once added into the buffer's
