@@ -1,6 +1,6 @@
 # BUG-1215: headless `InProcessSession::scroll()` offset is lost on the next relayout
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — `layout_and_commit` принимает `prev_scroll`, `relayout` переносит смещения контейнеров на свежее дерево
 **Дата:** 2026-09-29
 **Компонент:** driver (`crates/driver/src/session.rs::layout_and_commit`/`relayout`/`scroll`)
 **Найден:** P6, side discovery while verifying [BUG-965](BUG-965-FIXED.md)'s fix
