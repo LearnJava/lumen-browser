@@ -76,11 +76,11 @@
  "generated": "2026-10-07",
  "counts": {
   "open": 223,
-  "fixed": 1064,
+  "fixed": 1071,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1289,
+ "total_bugs": 1296,
  "phases": [
   {
    "id": "P0",
@@ -6032,9 +6032,9 @@
       {
        "id": "WPT-RUN-14-S12",
        "title": "WPT-RUN-14-S12: CSS2 normal-flow и margin-padding-clear",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон `css/CSS2/normal-flow` и `css/CSS2/margin-padding-clear` (около 1 500 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон `css/CSS2/normal-flow` и `css/CSS2/margin-padding-clear` (около 1 500 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-07 (ветка `p2-wpt-run14-s12`): 1 496 automatable id, 62.17 % (reftest 908/1470, testharness 111 из 118 сабтестов, crashtest 1/2), 98 с, «no leak». 538 reftest не зелёных (229 thin-only, 297 thick, 12 identical при 800x600) разнесены на 20 кластеров (`docs/wpt-vendor-notes/css.md` §css/CSS2: normal-flow + margin-padding-clear). Главное: 215 thin-only — `DrawImage` в эталоне (BUG-1337); `ex` — константа (BUG-1340, A/B 38 из 38); `margin`/`padding` на внутренних табличных боксах (BUG-1352, 51 id). Заведены BUG-1349…1355; дополнены BUG-1335/1337/1340. Не разобрано 30 id (мелкие кластеры) и 12 identical."
       },
       {
        "id": "WPT-RUN-14-S13",
@@ -8598,13 +8598,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1168": {
-   "status": "open",
-   "title": "Флейк `bug908_rendered_buffer_differs_across_sessions_when_noise_is_on`: в полном прогоне lib-тестов lumen-js суммы отрендеренных буферов двух origin-ов совпали…",
-   "component": "js (`crates/js/src/web_audio.rs`, тест)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1169": {
    "status": "open",
    "title": "Под холодной сборкой `-j 8` рядом `run_report.py --processes 4` не начинает ни одного теста: `lumen` поднялись, но раннер не доходит до `init_succeeded` за 30 с…",
@@ -8661,31 +8654,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1200": {
-   "status": "open",
-   "title": "Детектор циклов сравнивает identity hash предков, а не сами объекты: коллизия хешей даёт ложный `[Circular]` при возврате значения из JS. Флак `eval_deeply_nest…",
-   "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — `ancestors.contains(&hash)` по `get_identity_hash()`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1201": {
-   "status": "open",
-   "title": "Флак `download::tests::build_bar_shows_progress_track_for_in_progress_only` в полном прогоне `lumen-shell --bin lumen`, изолированно проходит; гипотеза — поток…",
-   "component": "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1202": {
    "status": "open",
    "title": "`elementFromPoint`/`elementsFromPoint` отвечают по дереву хит-теста последнего кадра: только что вставленная `<button>` не находится (`[]`/`null`), хотя `getCli…",
    "component": "js (`crates/js/src/v8_runtime/install/platform.rs:386`/`:394` — `_lumen_element_from_point`/`_lumen_elements_from_point` без `flush.maybe_flush()`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1203": {
-   "status": "open",
-   "title": "Тест-бинарь `lumen-network --test all` проходит 60/60 и не завершает процесс (висит живой поток/сокет): `scoped-test.sh` без ручного снятия не заканчивается, по…",
-   "component": "network (`crates/network/tests/all.rs`)",
    "date": null,
    "debtor": false
   },
@@ -8854,27 +8826,6 @@
    "status": "open",
    "title": "`position: relative` ведёт себя неверно в двух режимах раскладки. (1) Полная: смещение применяется к `rect` бокса до того, как родитель отсчитывает от него курс…",
    "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — смещение `position: relative` через `shift_tree` после раскладки блока; инкрементальный путь `lay_out` для чистых поддеревьев)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1241": {
-   "status": "open",
-   "title": "`cargo test -p lumen-js --lib` не компилируется на чистом `main`: не резолвятся `make_doc`, `Arc`, `Mutex`, `Document`, `crate::v8_runtime` в `dom/tests/*` (28…",
-   "component": "js (`crates/js/src/dom/tests/v8_bug1148_srcset_img_load.rs`, `v8_bug1158_raw_text_inner_html.rs`, `v8_bug1167_ce_wrapper_gc.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1243": {
-   "status": "open",
-   "title": "`perf9_code_cache_hit_preserves_semantics` падает под нагрузкой полного `lumen-js --lib`, в одиночку зелёный. Найден P4, 2026-10-02.",
-   "component": "js (`crates/js/src/v8_runtime/tests/mod.rs:98`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1247": {
-   "status": "open",
-   "title": "Элементы автономного `.svg`-документа верхнего уровня получают пространство имён XHTML и `HTMLUnknownElement` (`<animate>`/`<rect>` внутри `<svg xmlns=\"http://w…",
-   "component": "dom/js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_element_prototype_for`, парсер XML/SVG-документа верхнего уровня)",
    "date": null,
    "debtor": false
   },
@@ -9533,6 +9484,55 @@
    "status": "open",
    "title": "`html { height: 100% }` не разрешается против вьюпорта: высота корня — по содержимому",
    "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1349": {
+   "status": "open",
+   "title": "Отрицательные `width`, `height`, `min-*`, `max-*` и `padding*` принимаются, а должны отбрасываться (CSS 2.1 §8.4, §10.2, §10.4, §10.5, §10.7)",
+   "component": "layout/css-parser (`crates/engine/layout/src/style/apply/`, `style/parse/` — `width`/`height`/`min-*`/`max-*`/`padding*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1350": {
+   "status": "open",
+   "title": "Пустой блок (`height: 0`, без содержимого) не схлопывает свои верхнее и нижнее поля друг с другом («collapse through», CSS 2.1 §8.3.1) — соседние поля складываю…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs`, `block_flow_trampoline.rs` — схлопывание полей пустого блока)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1351": {
+   "status": "open",
+   "title": "Ширина по содержимому (shrink-to-fit) не учитывает горизонтальные `margin` блочных детей: внешний бокс получается уже, чем ребёнок вместе с его полями",
+   "component": "layout (`crates/engine/layout/src/box_tree/intrinsic.rs`, `layout_dispatch.rs` — shrink-to-fit ширина `position:absolute`/`float`/`inline-block`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1352": {
+   "status": "open",
+   "title": "`margin` и `padding` на внутренних табличных боксах (`table-row-group`/`header-group`/`footer-group`/`row`) применяются при раскладке, а CSS 2.1 §17 их не приме…",
+   "component": "layout (`crates/engine/layout/src/box_tree/table.rs` — внутренние табличные боксы)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1353": {
+   "status": "open",
+   "title": "Строчный бокс, разрезанный блоком («block-in-inline», CSS 2.1 §9.2.1.1): рамка у фрагментов не по правилу `slice`, а первый фрагмент пропадает, если элемент нач…",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs` — строчный бокс, разрезанный блоком)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1354": {
+   "status": "open",
+   "title": "Встроенный `<svg>` внутри блока раскладывается как блок, а не как строчный replaced: нет строки и зазора под базовой линией",
+   "component": "layout (`crates/engine/layout/src/box_tree/svg.rs`, `inline_build.rs` — встроенный `<svg>` в потоке)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1355": {
+   "status": "open",
+   "title": "Краштест `block-in-inline-ax-crash.html` под `wptrunner` растит память `lumen.exe` до 5 ГБ и убивается лимитом `--max-browser-gb 4.0` (CRASH)",
+   "component": "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)",
    "date": null,
    "debtor": false
   },
@@ -16990,6 +16990,55 @@
    "component": "paint (`crates/engine/paint/src/display_list/walk.rs`)",
    "date": "2026-10-06",
    "debtor": false
+  },
+  "BUG-1241": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --lib` не компилируется на чистом `main`: не резолвятся `make_doc`, `Arc`, `Mutex`, `Document`, `crate::v8_runtime` в `dom/tests/*` (28…",
+   "component": "js (`crates/js/src/dom/tests/v8_bug1148_srcset_img_load.rs`, `v8_bug1158_raw_text_inner_html.rs`, `v8_bug1167_ce_wrapper_gc.rs`)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1243": {
+   "status": "fixed",
+   "title": "`perf9_code_cache_hit_preserves_semantics` падает под нагрузкой полного `lumen-js --lib`, в одиночку зелёный. Найден P4, 2026-10-02.",
+   "component": "js (`crates/js/src/v8_runtime/tests/mod.rs:98`)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1247": {
+   "status": "fixed",
+   "title": "Элементы автономного `.svg`-документа верхнего уровня получают пространство имён XHTML и `HTMLUnknownElement` (`<animate>`/`<rect>` внутри `<svg xmlns=\"http://w…",
+   "component": "dom/js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_element_prototype_for`, парсер XML/SVG-документа верхнего уровня)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1200": {
+   "status": "fixed",
+   "title": "Детектор циклов сравнивает identity hash предков, а не сами объекты: коллизия хешей даёт ложный `[Circular]` при возврате значения из JS. Флак `eval_deeply_nest…",
+   "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — `ancestors.contains(&hash)` по `get_identity_hash()`)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1201": {
+   "status": "fixed",
+   "title": "Флак `download::tests::build_bar_shows_progress_track_for_in_progress_only` в полном прогоне `lumen-shell --bin lumen`, изолированно проходит; гипотеза — поток…",
+   "component": "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1168": {
+   "status": "fixed",
+   "title": "Флейк `bug908_rendered_buffer_differs_across_sessions_when_noise_is_on`: в полном прогоне lib-тестов lumen-js суммы отрендеренных буферов двух origin-ов совпали…",
+   "component": "js (`crates/js/src/web_audio.rs`, тест)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1203": {
+   "status": "fixed",
+   "title": "Тест-бинарь `lumen-network --test all` проходит 60/60 и не завершает процесс (висит живой поток/сокет): `scoped-test.sh` без ручного снятия не заканчивается, по…",
+   "component": "network (`crates/network/tests/all.rs`)",
+   "date": "2026-10-07",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -18275,6 +18324,9 @@
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`, `collapsed_top_margin`)": [
    "BUG-1262"
   ],
+  "layout (`crates/engine/layout/src/box_tree/bfc.rs`, `block_flow_trampoline.rs` — схлопывание полей пустого блока)": [
+   "BUG-1350"
+  ],
   "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`)": [
    "BUG-1103"
   ],
@@ -18359,6 +18411,9 @@
   "layout (`crates/engine/layout/src/box_tree/intrinsic.rs` — `preferred_inline_block_width`/`max_content_outer_width`/`min_content_outer_width_of_contents`)": [
    "BUG-740"
   ],
+  "layout (`crates/engine/layout/src/box_tree/intrinsic.rs`, `layout_dispatch.rs` — shrink-to-fit ширина `position:absolute`/`float`/`inline-block`)": [
+   "BUG-1351"
+  ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — strut `InlineBlockRow`)": [
    "BUG-782"
   ],
@@ -18393,8 +18448,14 @@
   "layout (`crates/engine/layout/src/box_tree/svg.rs` — `parse_svg_transform(get_attr(\"transform\"))`)": [
    "BUG-1286"
   ],
+  "layout (`crates/engine/layout/src/box_tree/svg.rs`, `inline_build.rs` — встроенный `<svg>` в потоке)": [
+   "BUG-1354"
+  ],
   "layout (`crates/engine/layout/src/box_tree/table.rs:616` `table_intrinsic_content_width`, `layout_dispatch.rs:1778`)": [
    "BUG-1335"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/table.rs` — внутренние табличные боксы)": [
+   "BUG-1352"
   ],
   "layout (`crates/engine/layout/src/box_tree/table.rs`)": [
    "BUG-1346"
@@ -18556,6 +18617,9 @@
    "BUG-005",
    "BUG-023"
   ],
+  "layout/css-parser (`crates/engine/layout/src/style/apply/`, `style/parse/` — `width`/`height`/`min-*`/`max-*`/`padding*`)": [
+   "BUG-1349"
+  ],
   "layout/grid": [
    "BUG-1102"
   ],
@@ -18582,6 +18646,9 @@
    "BUG-198",
    "BUG-230",
    "BUG-239"
+  ],
+  "layout/paint (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs` — строчный бокс, разрезанный блоком)": [
+   "BUG-1353"
   ],
   "layout/paint (`crates/engine/layout/src/box_tree/table.rs`)": [
    "BUG-1336"
@@ -19144,6 +19211,9 @@
   ],
   "shell/js (`crates/shell/src/app/about_to_wait.rs` — `opener_tab_id` теперь читается один раз до цикла (P3, 2026-09-29); `lumen_js::window_messaging` — доставка попап → опенер)": [
    "BUG-1212"
+  ],
+  "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
+   "BUG-1355"
   ],
   "shell/network": [
    "BUG-234"
