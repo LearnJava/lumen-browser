@@ -877,6 +877,17 @@ fn animation_finish_state() {
     assert_eq!(r, lumen_core::JsValue::String("finished".into()));
 }
 
+/// BUG-861: a bare `currentTime` seek back out of `finished` revives the
+/// animation — new `finished` promise, second `finish` event on the way out.
+#[test]
+fn animation_seek_back_from_finished_refires_finish() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var el = document.createElement('div');                  var a = el.animate([{opacity:0},{opacity:1}], 100);                  var n = 0; a.onfinish = function() { n++; };                  a.finish(); _lumen_tick_timers();                  var p1 = a.finished;                  a.currentTime = 0;                  [n, a.playState, a.finished !== p1].join(',')"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("1,running,true".into()));
+}
+
 #[test]
 fn keyframe_effect_property_indexed_form() {
     let rt = v8_runtime_with_dom(make_doc());
