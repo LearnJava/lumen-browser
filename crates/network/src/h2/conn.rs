@@ -981,6 +981,12 @@ impl<S: Read + Write> H2Conn<S> {
         self.send_frame(&Frame::RstStream { stream_id: sid, error_code: ERROR_CANCEL })
     }
 
+    /// Liveness probe: PING (RFC 9113 §6.7). Any frame the peer sends back —
+    /// the ACK included — proves the connection is alive.
+    pub(crate) fn send_ping(&mut self) -> Result<(), Error> {
+        self.send_frame(&Frame::Ping { ack: false, opaque_data: *b"lumenliv" })
+    }
+
     /// Best-effort graceful shutdown notice (GOAWAY(NO_ERROR), RFC 9113 §6.8).
     pub(crate) fn send_goaway(&mut self) {
         let _ = self.send_frame(&Frame::Goaway {
