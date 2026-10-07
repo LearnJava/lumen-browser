@@ -1460,6 +1460,20 @@ use super::*;
     }
 
     #[test]
+    fn grid_template_columns_repeat_track_limit() {
+        // BUG-1320: `repeat(1000, Npx)` written 100 000 times must not build 100 million tracks.
+        let value = (0..100_000).map(|i| format!(" repeat(1000, {i}px)")).collect::<String>();
+        let parsed = GridTrackSize::parse_track_list(&value, false);
+        assert_eq!(parsed.len(), 10_000, "the explicit track count is clamped");
+        let names = crate::style::values::flexgrid::parse_track_line_names(&format!("[a] {value}"), false);
+        assert!(names.is_empty() || names.len() == parsed.len() + 1, "line names stay in step with the tracks");
+        // A huge count with a track-less body is not an endless loop.
+        let _ = GridTrackSize::parse_track_list("repeat(18446744073709551615, [a])", false);
+        let parsed = GridTrackSize::parse_track_list("repeat(18446744073709551615, 1px 2px)", false);
+        assert_eq!(parsed.len(), 10_000);
+    }
+
+    #[test]
     fn grid_template_columns_auto_fill_fit_content() {
         // `repeat(auto-fill, fit-content(200px))` should parse
         let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, fit-content(200px))", false);
