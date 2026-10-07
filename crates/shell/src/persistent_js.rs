@@ -198,6 +198,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
         None
     }
+    /// BUG-935 срез 94: оболочка дописала в DOM презентационные атрибуты
+    /// `width`/`height` узлам `nids` (`apply_intrinsic_size`) мимо JS — трекер
+    /// мутаций сам этого не видит, и флаш движкового потока оставил бы узлам
+    /// прежний стиль. Default no-op: движок без трекера и так идёт полным каскадом.
+    fn note_shell_attr_writes(&self, _nids: &[u32]) {}
     /// BUG-935 S43: shared, lock-free handle to a flag set `true` once the
     /// page has read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path — lets the embedder skip
@@ -1105,6 +1110,10 @@ impl PersistentJs for V8PersistentJs {
     }
     fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.navigate_listeners_flag())
+    }
+    fn note_shell_attr_writes(&self, nids: &[u32]) {
+        let nodes: Vec<lumen_dom::NodeId> = nids.iter().map(|&n| lumen_dom::NodeId::from_raw(n)).collect();
+        self.rt.note_shell_attr_writes(&nodes, &["width", "height"]);
     }
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
         let read = self.rt.dom_changes_reader();

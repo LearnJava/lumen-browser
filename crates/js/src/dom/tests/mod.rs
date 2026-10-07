@@ -299,6 +299,8 @@ mod v8_bug935_s77_scroll_rollup_cache;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s64_sheet_delta;
 #[cfg(feature = "v8-backend")]
+mod v8_bug935_s94_shell_attr_writes;
+#[cfg(feature = "v8-backend")]
 mod v8_bug1245_inline_restyle;
 #[cfg(feature = "v8-backend")]
 mod v8_gap_rule_cssom;

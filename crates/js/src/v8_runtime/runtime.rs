@@ -1079,6 +1079,23 @@ impl V8JsRuntime {
         Self::drain_dom_touched(&self.dom_touched)
     }
 
+    /// BUG-935 срез 94: the shell wrote presentational attributes into the document behind
+    /// the page's back (`apply_intrinsic_size` appends `width`/`height` to a decoded `<img>`).
+    /// Such a write is a cascade input like any other, but no JS primitive recorded it, so a
+    /// flush whose basis predates it kept the node's old style. Reported here as a plain
+    /// attribute write of `attr` on each node.
+    pub fn note_shell_attr_writes(&self, nodes: &[NodeId], attrs: &[&str]) {
+        for &node in nodes {
+            for &attr in attrs {
+                super::dom_helpers::record_dom_touch_attr(&self.dom_touched, node, attr, None);
+            }
+        }
+        // The same-tick flush skips a document nothing has marked stale.
+        if !nodes.is_empty() && !attrs.is_empty() {
+            self.flush_stale.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// BUG-935 S80: общий для [`Self::take_dom_touched`] и [`Self::dom_touched_drain`]
     /// сброс набора затронутых узлов.
     fn drain_dom_touched(touched: &Mutex<DomTouched>) -> DomTouched {

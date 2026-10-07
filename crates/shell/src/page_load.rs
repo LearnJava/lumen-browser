@@ -134,7 +134,9 @@ impl Lumen {
                         if let Some(src) = self.layout_source.as_ref() {
                             let mut doc = src.document.lock().unwrap();
                             let node_id = NodeId::from_index(nid as usize);
-                            apply_intrinsic_size(&mut doc, node_id, first.width, first.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
+                            if apply_intrinsic_size(&mut doc, node_id, first.width, first.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                                self.note_shell_attr_writes(vec![nid]);
+                            }
                         }
                         eprintln!(
                             "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
@@ -165,7 +167,9 @@ impl Lumen {
                                 if let Some(src) = self.layout_source.as_ref() {
                                     let mut doc = src.document.lock().unwrap();
                                     let node_id = NodeId::from_index(nid as usize);
-                                    apply_intrinsic_size(&mut doc, node_id, img.width, img.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
+                                    if apply_intrinsic_size(&mut doc, node_id, img.width, img.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                                        self.note_shell_attr_writes(vec![nid]);
+                                    }
                                 }
                                 eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
                                 let (w, h) = (img.width, img.height);
@@ -215,7 +219,9 @@ impl Lumen {
             if let Some(src) = self.layout_source.as_ref() {
                 let mut doc = src.document.lock().unwrap();
                 let node_id = NodeId::from_index(nid as usize);
-                apply_intrinsic_size(&mut doc, node_id, image.width, image.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
+                if apply_intrinsic_size(&mut doc, node_id, image.width, image.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                    self.note_shell_attr_writes(vec![nid]);
+                }
             }
             let (w, h) = (image.width, image.height);
             if let Some(r) = self.renderer.as_mut() {
@@ -358,7 +364,9 @@ impl Lumen {
                     if let Some(src_ref) = self.layout_source.as_ref() {
                         let mut doc = src_ref.document.lock().unwrap();
                         let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                        apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
+                        if apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                            self.note_shell_attr_writes(vec![nid]);
+                        }
                     }
                     eprintln!(
                         "video GIF: загружен nid={nid} ({}×{}, {} кадров)",
@@ -562,7 +570,9 @@ impl Lumen {
             if let Some(src_ref) = self.layout_source.as_ref() {
                 let mut doc = src_ref.document.lock().unwrap();
                 let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                apply_intrinsic_size(&mut doc, node_id, width, height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)));
+                if apply_intrinsic_size(&mut doc, node_id, width, height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                    self.note_shell_attr_writes(vec![nid]);
+                }
             }
             let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
             eprintln!("video FFmpeg: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
@@ -1721,6 +1731,19 @@ impl Lumen {
         self.spawn_image_requests(requests, csp_gate);
     }
 
+    /// BUG-935 срез 94: сообщить трекеру мутаций страницы, что оболочка дописала
+    /// `width`/`height` узлам `nids` (`apply_intrinsic_size`) — иначе флаш движкового
+    /// потока не знает о записи и оставляет узлам стиль, посчитанный без неё.
+    /// Задача встаёт в очередь движка после записи в DOM и раньше следующего флаша.
+    pub(crate) fn note_shell_attr_writes(&self, nids: Vec<u32>) {
+        if nids.is_empty() {
+            return;
+        }
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.note_shell_attr_writes(&nids);
+        });
+    }
+
     /// BUG-735: разнести intrinsic-размеры уже декодированных картинок по `<img>`
     /// живого документа и, если DOM от этого изменился, запросить релейаут.
     ///
@@ -1766,6 +1789,8 @@ impl Lumen {
         // `createImageBitmap` до сих пор не видел (регистрация была только
         // одноразовым проходом по снапшоту разбора, см. `page_pipeline.rs`).
         let mut bitmap_regs: Vec<(u32, Arc<lumen_image::Image>)> = Vec::new();
+        // BUG-935 срез 94: узлы, которым этот проход дописал `width`/`height`.
+        let mut written: Vec<u32> = Vec::new();
         let changed = {
             let Some(src) = self.layout_source.as_ref() else { return };
             let Ok(mut doc) = src.document.lock() else { return };
@@ -1783,13 +1808,19 @@ impl Lumen {
                 // OBJECT-1: `<object>`/`<embed>` получают размер, но не
                 // image-события — `load`/`error` им шлёт JS-шим.
                 if req.embedded_content {
-                    if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
-                        changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport);
+                    if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url)
+                        && apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport)
+                    {
+                        changed = true;
+                        written.push(nid);
                     }
                     continue;
                 }
                 if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
-                    changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport);
+                    if apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport) {
+                        changed = true;
+                        written.push(nid);
+                    }
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
                         fires.push((nid, Some((w, h))));
                         if let Some(image) = self.stream_image_pixels.get(&req.url) {
@@ -1862,6 +1893,9 @@ impl Lumen {
         // каскада. Кэш инкрементального рестайла (BUG-341) знает только о
         // мутациях, пришедших из JS, поэтому мутацию со стороны шелла ему нужно
         // объявить сбросом кэша — иначе стиль `<img>` переиспользуется прежний.
+        // То же для базиса флаша движкового потока (BUG-935 срез 94): ему мутацию
+        // объявляют записью атрибутов в трекере.
+        self.note_shell_attr_writes(written);
         self.page_prev_cascade_styles = None;
         self.relayout_raf_dirty();
     }

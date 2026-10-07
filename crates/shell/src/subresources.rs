@@ -440,6 +440,9 @@ pub(crate) fn fetch_and_decode_images(
     viewport: lumen_core::geom::Size,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
+    // BUG-935 срез 94: узлы, которым `apply_intrinsic_size` дописал `width`/`height` —
+    // вызывающий сообщает их трекеру мутаций страницы (см. `Lumen::note_shell_attr_writes`).
+    written: &mut Vec<u32>,
 ) -> (
     Vec<(String, Arc<lumen_image::Image>)>,
     Vec<(String, lumen_image::AnimatedGif)>,
@@ -626,8 +629,10 @@ pub(crate) fn fetch_and_decode_images(
             ImgOutcome::Skip => {}
             ImgOutcome::Blocked => blocked_by_img_src.push(base.resolve_str(&req.url)),
             ImgOutcome::Static { image, intrinsic, cross_origin } => {
-                if let Some((w, h)) = intrinsic {
-                    apply_intrinsic_size(doc, req.node_id, w, h, viewport);
+                if let Some((w, h)) = intrinsic
+                    && apply_intrinsic_size(doc, req.node_id, w, h, viewport)
+                {
+                    written.push(req.node_id.raw());
                 }
                 if cross_origin {
                     cross_origin_urls.push(req.url.clone());
@@ -635,8 +640,10 @@ pub(crate) fn fetch_and_decode_images(
                 out.push((req.url, image));
             }
             ImgOutcome::Animated { first, gif, intrinsic, cross_origin } => {
-                if let Some((w, h)) = intrinsic {
-                    apply_intrinsic_size(doc, req.node_id, w, h, viewport);
+                if let Some((w, h)) = intrinsic
+                    && apply_intrinsic_size(doc, req.node_id, w, h, viewport)
+                {
+                    written.push(req.node_id.raw());
                 }
                 if cross_origin {
                     cross_origin_urls.push(req.url.clone());
