@@ -269,4 +269,33 @@ mod tests {
             assert_eq!(ok, JsValue::Bool(true));
         });
     }
+
+    /// BUG-1172: `window.addEventListener` — handleEvent, дедупликация, once, signal.
+    #[test]
+    fn window_listener_handle_event_dedupe_once_signal() {
+        with_device_sensors(|rt| {
+            let ok = rt
+                .eval(
+                    r#"(function () {
+                        var o = 0, t = null;
+                        window.addEventListener('zz', { handleEvent() { o++; } });
+                        window.addEventListener('zz', function (e) { t = e.target; });
+                        window.dispatchEvent(new Event('zz'));
+                        var n1 = 0, n2 = 0, n3 = 0;
+                        function f1() { n1++; }
+                        window.addEventListener('yy', f1);
+                        window.addEventListener('yy', f1);
+                        window.addEventListener('yy', function () { n2++; }, { once: true });
+                        var ac = new AbortController();
+                        window.addEventListener('yy', function () { n3++; }, { signal: ac.signal });
+                        window.dispatchEvent(new Event('yy'));
+                        ac.abort();
+                        window.dispatchEvent(new Event('yy'));
+                        return o === 1 && t === window && n1 === 2 && n2 === 1 && n3 === 1;
+                    })()"#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
 }
