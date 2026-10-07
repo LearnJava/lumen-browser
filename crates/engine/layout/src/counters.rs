@@ -36,6 +36,7 @@ use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 use crate::style::{
     compute_pseudo_element_style, Content, ComputedStyle, ContentItem, ListStyleType, ShareCache,
 };
+use crate::custom_flow::CustomFlow;
 use lumen_css_parser::Stylesheet;
 use lumen_core::id_hash::{IdMap, IdSet};
 use lumen_core::Size;
@@ -206,6 +207,13 @@ impl CascadeStyles {
             }
             None => false,
         }
+    }
+
+    /// BUG-935 срез 98 — the style the immediately preceding pass cascaded for `id` under
+    /// `parent`, without restamping it. `None` when there is none or the node moved since.
+    fn peek_prev(&self, id: NodeId, parent: NodeId) -> Option<&Arc<ComputedStyle>> {
+        let (style, stamp, prev_parent) = self.entries.get(&id)?;
+        (stamp.wrapping_add(1) == self.pass && *prev_parent == parent.raw()).then_some(style)
     }
 
     /// One hash lookup, where the pre-S24 shape needed three (`contains_key`
@@ -753,7 +761,7 @@ pub fn precompute_counters(
     };
     let mut map = CounterMap::with_capacity(doc.node_count());
     let t = std::time::Instant::now();
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false);
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
     note_walk_ns(t.elapsed().as_nanos() as u64);
     map.record_generated_content(doc, flat);
     map
@@ -1005,7 +1013,7 @@ pub fn incremental_precompute_counters(
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
         let t = std::time::Instant::now();
-        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false, doc.root(), false, false);
+        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false, doc.root(), false, false, None);
         note_walk_ns(t.elapsed().as_nanos() as u64);
     }
     {
@@ -1299,6 +1307,9 @@ pub struct CascadeStats {
     /// equal what the previous pass had: the work a dependency-checked reuse of
     /// a deep root's subtree could save. Diagnostic only.
     pub forced_same: u32,
+    /// BUG-935 срез 98 — elements whose style was the previous one with a parent's changed
+    /// custom properties, with no cascade ([`crate::custom_flow`]).
+    pub inherited: u32,
 }
 
 thread_local! {
@@ -1320,6 +1331,7 @@ thread_local! {
             confirm_misses: 0,
             forced: 0,
             forced_same: 0,
+            inherited: 0,
         })
     };
 }
@@ -1348,6 +1360,15 @@ fn note_forced(same: bool) {
         let mut v = s.get();
         v.forced += 1;
         v.forced_same += u32::from(same);
+        s.set(v);
+    });
+}
+
+/// BUG-935 срез 98 — one element that took its parent's changed custom properties without a cascade.
+fn note_inherited() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.inherited += 1;
         s.set(v);
     });
 }
@@ -1458,6 +1479,8 @@ fn walk(
     // with new geometry-affecting properties is not a licence to reuse the old box), so the
     // subtree never reports itself clean.
     unclean: bool,
+    // BUG-935 срез 98: the parent's style changed in `custom_props` only — see [`CustomFlow`].
+    flow: Option<&CustomFlow<'_>>,
     // BUG-341 S4: returns `true` when this node's own style AND its entire
     // descendant subtree are unchanged from `prev_styles` (vacuously `true`
     // for non-element nodes, which carry no style of their own). Aggregated
@@ -1489,7 +1512,7 @@ fn walk(
                 if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, force) {
                     continue;
                 }
-                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false, false);
+                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false, false, None);
             }
             return all_clean;
         }
@@ -1531,9 +1554,30 @@ fn walk(
     // BUG-935 срез 92: of `subtree_changed`, the part that says the descendants' *matching* may
     // differ — the node is new or was moved — rather than just the style they inherit.
     let mut subtree_rematched = false;
-    let style: Arc<ComputedStyle> = match reused {
-        Some(style) => style,
-        None => {
+    // BUG-935 срез 98: a child of an element whose style changed in `custom_props` alone takes
+    // the previous style with the parent's new values, unless a rule can reach it.
+    let fast = match flow {
+        Some(f) if shallow && shallow_child && !is_shallow_root && !is_point_root => map
+            .styles
+            .peek_prev(id, parent)
+            .and_then(|prev| f.inherit(doc, id, prev).map(|new| (new, Arc::clone(prev), f))),
+        _ => None,
+    };
+    let mut child_flow: Option<CustomFlow<'_>> = None;
+    let style: Arc<ComputedStyle> = match (reused, fast) {
+        (Some(style), _) => style,
+        (None, Some((new, prev, f))) => {
+            let style = Arc::new(new);
+            note_inherited();
+            subtree_changed = *prev != *style;
+            if subtree_changed {
+                child_flow = Some(f.below(&prev, &style));
+            }
+            map.styles.write(id, Arc::clone(&style), parent);
+            map.replaced_styles.insert(id, prev);
+            style
+        }
+        (None, None) => {
             // BUG-284/THREAD-4 срез 2 (`style::share_cache`); result also feeds `build_box`.
             let style = map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode);
             // BUG-341 S24: keep whatever this displaced — the graft still needs
@@ -1545,6 +1589,18 @@ fn walk(
                 // one or a changed style says nothing of the kind.
                 subtree_rematched = displaced.as_ref().is_none_or(|(_, prev_parent)| *prev_parent != parent.raw());
                 subtree_changed = subtree_rematched || displaced.as_ref().is_some_and(|(prev, _)| **prev != *style);
+                // BUG-935 срез 98: a changed style that differs in `custom_props` alone may spare
+                // the descendants a cascade; a node a running flow could reach resumes it on the
+                // sheet analysis already made.
+                if subtree_changed
+                    && !subtree_rematched
+                    && let Some((prev, _)) = displaced.as_ref()
+                {
+                    child_flow = match flow {
+                        Some(f) => f.resume(prev, &style),
+                        None => CustomFlow::start(doc, sheet, prev, &style),
+                    };
+                }
             }
             if force {
                 note_forced(
@@ -1617,7 +1673,7 @@ fn walk(
         }
         let child_clean = walk(
             doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force, id, child_shallow,
-            child_unclean,
+            child_unclean, child_flow.as_ref(),
         );
         children_clean &= child_clean;
     }
