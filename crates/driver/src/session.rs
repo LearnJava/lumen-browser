@@ -381,7 +381,7 @@ impl InProcessSession {
         self.page_base_dir = local_base_dir(&url);
         self.load_subresource_images(&doc)?;
 
-        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
+        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet, &[])?;
 
         self.current_url = url;
         self.state = Some(SessionState { doc, stylesheet: sheet, layout_root, flat_tree, layout_pass_count: 1 });
@@ -399,6 +399,7 @@ impl InProcessSession {
         &mut self,
         doc: &Arc<Mutex<Document>>,
         sheet: &Arc<lumen_css_parser::Stylesheet>,
+        prev_scroll: &[(NodeId, f32, f32)],
     ) -> Result<(LayoutBox, lumen_dom::FlatTree)> {
         let doc_guard = Self::lock_arc_doc(doc)?;
         let font = lumen_font::Font::parse(INTER_FONT)
@@ -406,8 +407,11 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let (layout_root, counters) =
+        let (mut layout_root, counters) =
             lumen_layout::layout_measured_with_counters(&doc_guard, sheet, self.viewport, &measurer);
+        for &(node, x, y) in prev_scroll {
+            lumen_layout::set_scroll_position(&mut layout_root, node, x, y);
+        }
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
@@ -503,7 +507,15 @@ impl InProcessSession {
         let doc = Arc::clone(&state.doc);
         let sheet = Arc::clone(&state.stylesheet);
 
-        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
+        // BUG-1215: a fresh layout starts every scroll offset at 0 — carry the
+        // offsets `scroll()` set on the previous tree over to the new one.
+        let prev_scroll: Vec<_> = lumen_layout::collect_scroll_containers(&state.layout_root)
+            .into_iter()
+            .filter(|c| c.scroll_x != 0.0 || c.scroll_y != 0.0)
+            .map(|c| (c.node, c.scroll_x, c.scroll_y))
+            .collect();
+
+        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet, &prev_scroll)?;
 
         let state = self.state.as_mut().ok_or_else(|| {
             Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
@@ -2982,6 +2994,17 @@ mod tests {
         // routed to the nested container, not the root.
         let root_offset = s.active_property_trees().and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y));
         assert_eq!(root_offset, Some(0.0));
+    }
+
+    #[test]
+    fn scroll_offset_survives_relayout_after_eval() {
+        // BUG-1215: eval() relayouts into a fresh tree; the offset must carry over.
+        let mut s = make_session(nested_scroll_html());
+        s.scroll(&Target::Selector("#leaf".into()), ScrollDelta { x: 0.0, y: 50.0 })
+            .expect("scroll");
+        s.eval("1").expect("eval");
+        let containers = lumen_layout::collect_scroll_containers(&s.state().unwrap().layout_root);
+        assert_eq!(containers[0].scroll_y, 50.0);
     }
 
     #[test]

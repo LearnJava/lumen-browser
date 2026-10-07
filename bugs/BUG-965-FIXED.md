@@ -35,7 +35,7 @@ driver (`crates/driver/src/session.rs::relayout`)
 Попутно найден смежный, но отдельный дефект: `InProcessSession::scroll()`
 (нативный Rust-side скролл, минуя JS) теряется на следующем relayout, потому
 что `layout_and_commit` строит полностью новый `LayoutBox`-дерево без переноса
-`scroll_x`/`scroll_y` — заведён как [BUG-1215](BUG-1215-OPEN.md), не в скоуп
+`scroll_x`/`scroll_y` — заведён как [BUG-1215](BUG-1215-FIXED.md), не в скоуп
 этой задачи.
 
 ## Механизм
