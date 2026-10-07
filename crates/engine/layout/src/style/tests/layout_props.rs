@@ -1185,3 +1185,35 @@ use super::*;
         assert_eq!(s.width, Some(Length::Px(40.0)));
     }
 
+
+    // ── getComputedStyle: flex-лонгхенды (BUG-1254) ───────────────────────
+
+    #[test]
+    fn computed_style_map_exposes_flex_properties() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { display: flex; flex-direction: column; flex-wrap: wrap; \
+             flex-grow: 2; flex-shrink: 0; flex-basis: 10px; order: -3; }",
+        );
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
+        let m = crate::computed_style_to_map(&s);
+        let get = |k: &str| m.get(k).map(String::as_str);
+        assert_eq!(get("flex-direction"), Some("column"));
+        assert_eq!(get("flex-wrap"), Some("wrap"));
+        assert_eq!(get("flex-flow"), Some("column wrap"));
+        assert_eq!(get("flex-grow"), Some("2"));
+        assert_eq!(get("flex-shrink"), Some("0"));
+        assert_eq!(get("flex-basis"), Some("10px"));
+        assert_eq!(get("flex"), Some("2 0 10px"));
+        assert_eq!(get("order"), Some("-3"));
+    }
+
+    #[test]
+    fn computed_style_map_flex_initial_values() {
+        let m = crate::computed_style_to_map(&ComputedStyle::root());
+        assert_eq!(m.get("flex").map(String::as_str), Some("0 1 auto"));
+        assert_eq!(m.get("flex-flow").map(String::as_str), Some("row nowrap"));
+        assert_eq!(m.get("order").map(String::as_str), Some("0"));
+    }

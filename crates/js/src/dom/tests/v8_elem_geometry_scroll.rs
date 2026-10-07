@@ -196,6 +196,31 @@ fn offset_left_top_falls_back_to_body_when_no_positioned_ancestor() {
     assert_eq!(top, lumen_core::JsValue::Number(7.0));
 }
 
+/// BUG-1252: with `<body>` as `offsetParent` and a non-zero body margin
+/// (box at (8, 8)), offsetLeft/offsetTop still measure from the viewport
+/// origin, not from the body's border box.
+#[test]
+fn offset_left_top_body_parent_measures_from_viewport_origin() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (body_nid, span_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "span").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects(
+        [(body_nid, [8.0, 8.0, 784.0, 584.0]), (span_nid, [13.0, 15.0, 50.0, 20.0])]
+            .into_iter()
+            .collect(),
+    );
+    let left = rt.eval("document.getElementsByClassName('highlight')[0].offsetLeft").unwrap();
+    assert_eq!(left, lumen_core::JsValue::Number(13.0));
+    let top = rt.eval("document.getElementsByClassName('highlight')[0].offsetTop").unwrap();
+    assert_eq!(top, lumen_core::JsValue::Number(15.0));
+}
+
 /// BUG-482: `offsetParent` itself (not just the origin `offsetLeft`/`offsetTop`
 /// measure from) — same fixture as `offset_left_top_relative_to_positioned_ancestor`.
 #[test]

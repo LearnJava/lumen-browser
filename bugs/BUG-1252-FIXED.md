@@ -1,6 +1,6 @@
 # BUG-1252 — `offsetLeft`/`offsetTop` элемента, чей `offsetParent` — `<body>`, отсчитываются от border-box тела (с учётом его `margin` 8 px), а CSSOM View §5 велит
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_offset_origin`)
 
@@ -25,3 +25,7 @@ WPT-RUN-14 срез 1: `align-content-horiz-001a.html` (`offsetLeft expected 8 b
 `run_corpus.py --prefixes css/css-flexbox --out-dir .tmp/wpt-run14/flexbox` до и после; плюс регрессия в `crates/js/src/dom/tests/v8_elem_geometry_scroll.rs`.
 
 После починки перемерить `align-items-baseline-*` (css-flexbox): красны ровно на эти 8 px; остаток FLEX-VWM-5 п. 4 ([ROADMAP.md](../ROADMAP.md)).
+
+## Исправление
+
+`_lumen_offset_origin` возвращает `[0, 0]`, если `offsetParent` — `<body>` (или его нет). Тест: `offset_left_top_body_parent_measures_from_viewport_origin` в `v8_elem_geometry_scroll.rs`. Остаток FLEX-VWM-5 п. 4 — перемерить `align-items-baseline-*`.

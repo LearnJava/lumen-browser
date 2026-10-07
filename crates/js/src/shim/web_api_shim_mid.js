@@ -8103,7 +8103,9 @@ function _lumen_offset_parent_nid(nid) {
 // published in computed-style px, so a plain `parseFloat` resolves them.
 function _lumen_offset_origin(nid) {
     var parent = _lumen_offset_parent_nid(nid);
-    if (parent === null) return [0, 0];
+    // BUG-1252: CSSOM View §5 measures from the initial containing block when
+    // the offsetParent is <body>, not from the body's (margin-shifted) box.
+    if (parent === null || _lumen_is_body(parent)) return [0, 0];
     var r = _lumen_get_bounding_rect(parent);
     if (!r) return [0, 0];
     var bl = parseFloat(_lumen_get_computed_style(parent, 'border-left-width')) || 0;
@@ -12523,12 +12525,32 @@ function _lumen_document_collection(key, selector) {
 function HTMLImageElement() { throw new TypeError('Illegal constructor'); }
 HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
 HTMLImageElement.prototype.constructor = HTMLImageElement;
-function Image(width, height) {
+
+// WebIDL §3.7.6 [LegacyFactoryFunction] (BUG-923): `Image`/`Option`/`Audio` are
+// constructors only — a call without `new` throws — whose `.name` is the
+// exposed name, whose `.length` is 0 (every argument is optional) and whose
+// `.prototype` is the SAME object as `Interface.prototype`, read-only. The
+// global is {writable, configurable, non-enumerable}, like an interface object.
+// `build` returns the element; a returned object wins over `this`.
+function _lumen_define_legacy_factory(name, ifaceProto, build) {
+    var factory = function() {
+        if (!new.target) {
+            throw new TypeError("Failed to construct '" + name + "': Please use the 'new' operator, " +
+                "this DOM object constructor cannot be called as a function.");
+        }
+        return build.apply(null, arguments);
+    };
+    Object.defineProperty(factory, 'name', { value: name, writable: false, enumerable: false, configurable: true });
+    Object.defineProperty(factory, 'prototype', { value: ifaceProto, writable: false, enumerable: false, configurable: false });
+    Object.defineProperty(globalThis, name, { value: factory, writable: true, enumerable: false, configurable: true });
+    return factory;
+}
+_lumen_define_legacy_factory('Image', HTMLImageElement.prototype, function(width, height) {
     var img = document.createElement('img');
     if (width !== undefined && width !== null)  { img.width  = width; }
     if (height !== undefined && height !== null) { img.height = height; }
     return img;
-}
+});
 
 // ── DOM §4.4 Node over the live document's own child list (BUG-557) ──────────
 // The live document root is a real arena node (`_lumen_root_nid` is

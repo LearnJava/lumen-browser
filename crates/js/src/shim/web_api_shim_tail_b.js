@@ -3050,15 +3050,14 @@ Object.defineProperty(HTMLOptionElement.prototype, 'label', {
 });
 // HTML LS §4.10.10 — the legacy `Option(text, value, defaultSelected, selected)`
 // factory, the counterpart of `Image()`.
-function Option(text, value, defaultSelected, selected) {
+_lumen_define_legacy_factory('Option', HTMLOptionElement.prototype, function(text, value, defaultSelected, selected) {
     var op = document.createElement('option');
     if (text !== undefined && text !== null && String(text) !== '') op.text = String(text);
     if (value !== undefined && value !== null) op.setAttribute('value', String(value));
     if (defaultSelected) op.setAttribute('selected', '');
     op.selected = !!selected;
     return op;
-}
-window.Option = Option;
+});
 
 // ── <table>/<tr>/<thead>/<tbody>/<tfoot> (HTML LS §4.9.11, BUG-581) ──────────
 // The four table interfaces (`HTMLTableElement`, `HTMLTableSectionElement` —
