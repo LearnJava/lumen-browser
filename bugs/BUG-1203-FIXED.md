@@ -1,6 +1,6 @@
 # BUG-1203 — тест-бинарь `lumen-network` `tests/all.rs` проходит, но процесс не завершается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (join серверных потоков в bug785_extra_ca)
 **Компонент:** network (`crates/network/tests/all.rs` — какой-то кейс оставляет живой не-daemon поток/сокет)
 **Найден:** P3, в гейте `scripts/scoped-test.sh` к BUG-680, 2026-09-28
 
