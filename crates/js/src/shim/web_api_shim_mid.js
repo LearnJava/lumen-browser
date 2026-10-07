@@ -6951,6 +6951,9 @@ _lumen_create_cdata_section = _lumen_reclaim_and_retry(_lumen_create_cdata_secti
 // shadow-root) carries a `#`-prefixed node name, which a real element never does.
 function _lumen_is_element_nid(id) {
     if (_lumen_is_text_node(id)) return false;
+    // A doctype reports its name (`html`) as `tagName` — the only non-element
+    // child that does, and it only ever sits directly under the document.
+    if (_lumen_is_doctype(id)) return false;
     var t = _lumen_get_tag_name(id);
     return typeof t === 'string' && t.length > 0 && t.charAt(0) !== '#';
 }
@@ -13181,6 +13184,19 @@ var document = {
     get lastChild() {
         var kids = _lumen_get_children(_lumen_root_nid);
         return kids.length > 0 ? _lumen_make_node(kids[kids.length - 1]) : null;
+    },
+    // DOM §4.2.6 ParentNode (BUG-1316): element-only accessors, own copies for
+    // the same reason as `firstChild` — the literal never reaches
+    // `Document.prototype`. Mirrors the detached document's block above.
+    get children()          { return _lumen_make_html_collection(_lumen_root_nid); },
+    get childElementCount() { return _lumen_element_child_nids(_lumen_root_nid).length; },
+    get firstElementChild() {
+        var ch = _lumen_element_child_nids(_lumen_root_nid);
+        return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
+    },
+    get lastElementChild() {
+        var ch = _lumen_element_child_nids(_lumen_root_nid);
+        return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
     },
     // A document is the root of its tree and never has a parent or a sibling;
     // spelled out rather than left `undefined`, because `undefined` and `null`
