@@ -5091,7 +5091,16 @@ function _lumen_build_detached_document(proto, contentType) {
         enumerable: true,
     });
     doc.createElement = function(tag) {
-        var nid = _lumen_create_element(String(tag).toLowerCase());
+        // DOM §4.5: lower-casing only in an HTML document; the XHTML namespace
+        // in an HTML or XHTML document, `null` in any other XML document (BUG-1162).
+        var nid;
+        if (contentType === 'text/html') {
+            nid = _lumen_create_element(String(tag).toLowerCase());
+        } else if (contentType === 'application/xhtml+xml') {
+            nid = _lumen_create_element_ns('http://www.w3.org/1999/xhtml', String(tag));
+        } else {
+            nid = _lumen_create_element_ns('', String(tag));
+        }
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
         _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);

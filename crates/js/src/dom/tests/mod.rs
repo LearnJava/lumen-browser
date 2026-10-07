@@ -461,6 +461,7 @@ mod v8_bug1143_barprop;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug863_cdata_section;
+mod v8_bug1162_xml_create_element;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;
 #[cfg(feature = "v8-backend")]
