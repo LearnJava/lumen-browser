@@ -2037,18 +2037,42 @@ var window = {
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
     addEventListener: function(type, fn, options) {
-        if (typeof fn !== 'function') return;
+        // BUG-1172: DOM §2.7 — a listener is a callback function or an object
+        // with `handleEvent` (read at dispatch time); `null` is ignored.
+        var origFn = fn;
+        var isObj = fn !== null && typeof fn === 'object';
+        if (typeof fn !== 'function' && !isObj) return;
+        if (options !== null && typeof options === 'object' && options.signal && options.signal.aborted) return;
+        var capture = _lumen_capture_flag(options);
+        var wkey = 'win:' + (capture ? '1:' : '0:') + type;
+        var perFn = _lumen_once_wrappers.get(origFn);
+        // Same (type, callback, capture) twice is a no-op (DOM §2.7 step 4).
+        if (perFn && perFn[wkey] !== undefined) return;
+        if (isObj) {
+            var cbObj = origFn;
+            fn = function(ev) {
+                var h = cbObj.handleEvent;
+                if (typeof h === 'function') return h.call(cbObj, ev);
+            };
+        }
         // BUG-865: a passive listener (explicit, or the default for the
         // scroll-blocking types on the window) is stored as a wrapper that
         // makes `preventDefault()` a no-op; `removeEventListener` finds it
         // again through `_lumen_once_wrappers`.
-        if (_lumen_passive_flag(options, type, true)) {
-            var origFn = fn;
-            fn = _lumen_passive_wrap(origFn);
-            var wkey = 'win:' + (_lumen_capture_flag(options) ? '1:' : '0:') + type;
-            var perFn = _lumen_once_wrappers.get(origFn);
-            if (!perFn) { perFn = {}; _lumen_once_wrappers.set(origFn, perFn); }
-            perFn[wkey] = fn;
+        if (_lumen_passive_flag(options, type, true)) fn = _lumen_passive_wrap(fn);
+        if (options !== null && typeof options === 'object' && options.once) {
+            var inner = fn;
+            fn = function() {
+                window.removeEventListener(type, origFn, options);
+                return inner.apply(this, arguments);
+            };
+        }
+        if (!perFn) { perFn = {}; _lumen_once_wrappers.set(origFn, perFn); }
+        perFn[wkey] = fn;
+        if (options !== null && typeof options === 'object' && options.signal) {
+            options.signal.addEventListener('abort', function() {
+                window.removeEventListener(type, origFn, options);
+            }, { once: true });
         }
         // A capture listener on the window sees an event on its way DOWN to a
         // node, which is a different bucket from everything below (BUG-873).
@@ -2097,6 +2121,7 @@ var window = {
     },
     removeEventListener: function(type, fn, options) {
         var arr;
+        if (fn === null || (typeof fn !== 'function' && typeof fn !== 'object')) return;
         var perFn = _lumen_once_wrappers.get(fn);
         var wkey = 'win:' + (_lumen_capture_flag(options) ? '1:' : '0:') + type;
         if (perFn && perFn[wkey] !== undefined) { var wrapped = perFn[wkey]; delete perFn[wkey]; fn = wrapped; }

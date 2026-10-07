@@ -1,6 +1,6 @@
 # BUG-1172 — `window` как EventTarget: нет `handleEvent`, `once`, `signal`, дедупликации и `event.target`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — `window.addEventListener` принимает объект с `handleEvent`, отсекает дубликаты, поддерживает `once`/`signal`; `event.target` уже ставил BUG-1139. Тест `device_sensors::tests::window_listener_handle_event_dedupe_once_signal`
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid_b4.js` — объект-литерал `window`:
 `addEventListener` `:1887`, `removeEventListener` `:1934`, `dispatchEvent` `:1950`)
 **Найден:** 2026-09-25, P3, при починке [BUG-643](BUG-643-FIXED.md)
