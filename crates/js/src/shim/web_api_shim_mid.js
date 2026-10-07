@@ -2495,6 +2495,19 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
     'width': 1, 'height': 1,
 };
 
+// BUG-1315: grid-family properties (plus `flex-grow`/`flex-shrink` and
+// `flow-tolerance`) have no per-value canonical form here, only a grammar:
+// `_lumen_css_canonical_grid` (engine `style::values::grid_cssom`) returns the
+// trimmed value when it parses and `null` otherwise, so `style.gridRow = "5 / 8 / 3"`
+// is rejected like `width = "10pxx"` instead of being stored verbatim.
+var _LUMEN_GRID_PROPERTIES = {
+    'grid-template-columns': 1, 'grid-template-rows': 1, 'grid-template-areas': 1,
+    'grid-auto-columns': 1, 'grid-auto-rows': 1, 'grid-auto-flow': 1,
+    'grid-row-start': 1, 'grid-row-end': 1, 'grid-column-start': 1, 'grid-column-end': 1,
+    'grid-row': 1, 'grid-column': 1, 'grid-area': 1, 'grid-template': 1, 'grid': 1,
+    'flex-grow': 1, 'flex-shrink': 1, 'flow-tolerance': 1,
+};
+
 // CSSOM-2 (BUG-484, срез 7): plain keyword-enum longhands — the whole
 // grammar is a fixed list of case-insensitive keywords, validated and
 // canonicalized via `_lumen_css_canonical_keyword`. Lists mirror what
@@ -3148,6 +3161,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_sizing_length(strVal);
     }
+    if (_LUMEN_GRID_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_grid(key, strVal);
+    }
     if (_LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key)) {
         var scrollGrammar = _LUMEN_SCROLL_OFFSET_PROPERTIES[key];
         return _lumen_css_canonical_scroll_offset(strVal, scrollGrammar.allowAuto, scrollGrammar.nonNegative);
@@ -3397,6 +3413,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_GRID_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
         key === 'scrollbar-color' ||

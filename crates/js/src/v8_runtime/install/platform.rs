@@ -653,6 +653,17 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Grammar check for the inline-`style` grid family (`grid-*`, `flex-grow`/
+    // `flex-shrink`, `flow-tolerance`; BUG-1315): the trimmed value when it parses,
+    // `None` when the assignment must be dropped. `web_api_shim_mid.js`
+    // `_LUMEN_GRID_PROPERTIES` lists the keys routed here.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_grid",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_grid(&prop, &value)
+        }
+    );
+
     // Canonical sizing serialization for inline-`style` `width`/`height`
     // (CSS Sizing L3 §4, CSSOM-2/BUG-484 third slice) — same role as
     // `_lumen_css_canonical_length` above, but the grammar additionally
