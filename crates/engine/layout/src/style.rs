@@ -362,8 +362,8 @@ use matching::{complex_has_host, matches_slotted_complex};
 use presentational::{
     apply_align_presentational_hint, apply_background_image_presentational_hint,
     apply_bgcolor_presentational_hint, apply_bordercolor_presentational_hint,
-    apply_cellspacing_presentational_hint, apply_font_element_presentational_hints,
-    apply_image_presentational_hints, apply_svg_presentational_hints,
+    apply_cellspacing_presentational_hint, apply_dir_presentational_hint,
+    apply_font_element_presentational_hints, apply_image_presentational_hints, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint,
 };
 // Вызывателя внутри производственного `style.rs` у неё нет — только
