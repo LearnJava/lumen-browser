@@ -21,6 +21,10 @@ pub(super) struct GridInit {
     pub(super) n_rows: u32,
     pub(super) col_widths: Vec<f32>,
     pub(super) col_offsets: Vec<f32>,
+    /// Names of the container's lines per axis (own, with `repeat()` expanded and, for a subgrid,
+    /// merged with the parent's) — a subgrid item inherits the slice it spans.
+    pub(super) col_names: Vec<Vec<String>>,
+    pub(super) row_names: Vec<Vec<String>>,
     /// Masonry-stripped row template, owned — `grid::grid_track` reads it in
     /// both `post_probe_item` (auto-row growth) and `finish_probe_pass` (fr
     /// resolution/align-content), both of which outlive `build_grid_init`'s

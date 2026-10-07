@@ -42,7 +42,7 @@ use crate::style::{
     FlexWrap, FloatSide, FontFeatureSetting, FontOpticalSizing, FontPalette, FontSizeAdjust,
     FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
     FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
-    ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
+    ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, NameFill, Hyphens, ImageRendering,
     InterpolateSizeMode, Isolation, IterationCount, Length, LengthOrAuto, LineBreak,
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
     ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowAnchor, OverflowClipMarginBox, OverflowWrap,
@@ -850,6 +850,11 @@ pub struct ComputedStyle {
     pub grid_template_col_line_names: Vec<Vec<String>>,
     /// То же для `grid-template-rows`.
     pub grid_template_row_line_names: Vec<Vec<String>>,
+    /// CSS Grid Layout L2 §9 — `repeat(auto-fill, <line-names>+)` в `subgrid <line-name-list>`
+    /// столбцов: какие из `grid_template_col_line_names` — одно повторение. Non-inherited.
+    pub grid_template_col_subgrid_fill: Option<NameFill>,
+    /// То же для `grid-template-rows`.
+    pub grid_template_row_subgrid_fill: Option<NameFill>,
     /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
     pub grid_auto_flow: GridAutoFlow,
     /// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls placement order in
@@ -1469,6 +1474,8 @@ impl ComputedStyle {
             grid_template_areas: Vec::new(),
             grid_template_col_line_names: Vec::new(),
             grid_template_row_line_names: Vec::new(),
+            grid_template_col_subgrid_fill: None,
+            grid_template_row_subgrid_fill: None,
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_auto_columns: GridTrackSize::Auto,
@@ -1874,6 +1881,8 @@ impl ComputedStyle {
             grid_template_areas: Vec::new(),
             grid_template_col_line_names: Vec::new(),
             grid_template_row_line_names: Vec::new(),
+            grid_template_col_subgrid_fill: None,
+            grid_template_row_subgrid_fill: None,
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_auto_columns: GridTrackSize::Auto,

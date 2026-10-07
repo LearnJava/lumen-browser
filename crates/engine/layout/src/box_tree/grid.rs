@@ -5,7 +5,7 @@
 //! (анкер `fn grid_content_distribution`) без правок тел.
 
 use super::*;
-use crate::style::{GridRepeat, RepeatCount};
+use crate::style::{GridRepeat, NameFill, RepeatCount};
 
 /// CSS Box Alignment L3 §5 — content distribution along one axis of a grid container.
 ///
@@ -124,6 +124,56 @@ fn collapse_auto_fit(
         }
     }
     (tracks, collapsed)
+}
+
+/// Line names of both axes of a grid container, `[(subgrid, tracks, inherited, repeat_count); 2]`
+/// for columns then rows. A non-subgrid axis keeps the written names, with an auto `repeat()`
+/// expanded `repeat_count` times; a subgrid axis merges its own `subgrid [a] [b]` names with the
+/// parent lines it spans (`subgrid_line_names`). Out of line: this frame sits on the deep-chain
+/// stack the grid trampoline measures.
+#[inline(never)]
+fn axis_line_names(
+    s: &ComputedStyle,
+    axes: [(bool, usize, Option<&SubgridContext>, Option<usize>); 2],
+) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    let one = |col: bool, (subgrid, tracks, inherited, count): (bool, usize, Option<&SubgridContext>, Option<usize>)| {
+        let (written, fill, repeat) = if col {
+            (&s.grid_template_col_line_names, s.grid_template_col_subgrid_fill, &s.grid_template_col_auto_repeat)
+        } else {
+            (&s.grid_template_row_line_names, s.grid_template_row_subgrid_fill, &s.grid_template_row_auto_repeat)
+        };
+        if subgrid {
+            subgrid_line_names(written, fill, inherited.map_or(&[][..], |ctx| &ctx.names), tracks)
+        } else if let (Some(rep), Some(count)) = (repeat, count) {
+            rep.names.expand(count)
+        } else {
+            written.clone()
+        }
+    };
+    (one(true, axes[0]), one(false, axes[1]))
+}
+
+/// CSS Grid L2 §9 — names of the `tracks + 1` lines of a subgrid axis: the subgrid's own
+/// `subgrid [a] [b]` names (`fill` — its `repeat(auto-fill, …)`) plus the names of the parent
+/// lines it spans (`inherited`), merged line by line.
+pub(super) fn subgrid_line_names(
+    own: &[Vec<String>],
+    fill: Option<NameFill>,
+    inherited: &[Vec<String>],
+    tracks: usize,
+) -> Vec<Vec<String>> {
+    let lines = tracks + 1;
+    let own = match fill {
+        Some(fill) => fill.expand(own, lines),
+        None => own.to_vec(),
+    };
+    (0..lines)
+        .map(|i| {
+            let mut group = own.get(i).cloned().unwrap_or_default();
+            group.extend(inherited.get(i).into_iter().flatten().cloned());
+            group
+        })
+        .collect()
 }
 
 /// Start offsets of tracks sized `sizes` along one axis: one `gap` between consecutive
@@ -321,21 +371,25 @@ pub(crate) fn build_grid_init(
     let areas_rows = s.grid_template_areas.len();
     let subgrid_cols = eff_col_template.first() == Some(&GridTrackSize::Subgrid);
     let subgrid_rows = eff_row_template.first() == Some(&GridTrackSize::Subgrid);
+    let n_subgrid_rows = inherited_rows.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1);
+    let (col_names, row_names) = axis_line_names(
+        s,
+        [(subgrid_cols, n_explicit_cols, inherited_cols.as_ref(), col_repeat_count),
+         (subgrid_rows, n_subgrid_rows, inherited_rows.as_ref(), row_repeat_count)],
+    );
     let col_axis = GridAxis {
         n_tracks: if subgrid_cols { n_explicit_cols as u32 } else { eff_col_template.len().max(areas_cols) as u32 },
-        names: if subgrid_cols { &[] } else { &s.grid_template_col_line_names },
+        names: &col_names,
         areas: &s.grid_template_areas,
         is_col: true,
+        clamp: subgrid_cols,
     };
     let row_axis = GridAxis {
-        n_tracks: if subgrid_rows {
-            inherited_rows.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1) as u32
-        } else {
-            eff_row_template.len().max(areas_rows) as u32
-        },
-        names: if subgrid_rows { &[] } else { &s.grid_template_row_line_names },
+        n_tracks: if subgrid_rows { n_subgrid_rows as u32 } else { eff_row_template.len().max(areas_rows) as u32 },
+        names: &row_names,
         areas: &s.grid_template_areas,
         is_col: false,
+        clamp: subgrid_rows,
     };
 
     // --- Step 1: Resolve placements for every item ---
@@ -414,6 +468,7 @@ pub(crate) fn build_grid_init(
                 children,
                 &item_idxs,
                 &placements,
+                &col_names,
                 s,
                 eff_col_template,
                 n_cols as usize,
@@ -576,6 +631,8 @@ pub(crate) fn build_grid_init(
         n_rows,
         col_widths,
         col_offsets,
+        col_names,
+        row_names,
         eff_row_template: eff_row_template.to_vec(),
         row_collapsed,
         inherited_rows,
@@ -935,6 +992,9 @@ pub(super) struct GridAxis<'a> {
     pub(super) areas: &'a [Vec<String>],
     /// `true` — ось столбцов.
     pub(super) is_col: bool,
+    /// Ось subgrid: неявных дорожек нет, позиции за явной сеткой прижимаются к её краю
+    /// (CSS Grid L2 §9).
+    pub(super) clamp: bool,
 }
 
 impl GridAxis<'_> {
@@ -1051,6 +1111,19 @@ fn resolve_edge(line: &GridLine, axis: &GridAxis, is_start: bool) -> Edge {
 /// Возвращает `(start, end)` — номера линий, 1-based. `start == 0` означает
 /// авто-позицию: тогда `end` — число занимаемых треков (0 — один).
 pub(super) fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
+    let (a, b) = resolve_grid_axis_unclamped(start, end, axis);
+    if !axis.clamp {
+        return (a, b);
+    }
+    let n = axis.n_tracks.max(1);
+    if a == 0 {
+        return (0, b.min(n));
+    }
+    let a = a.min(n);
+    (a, b.clamp(a + 1, n + 1))
+}
+
+fn resolve_grid_axis_unclamped(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
     let s = resolve_edge(start, axis, true);
     let mut e = resolve_edge(end, axis, false);
     // Два `span` — end отбрасывается (§8.3.1).

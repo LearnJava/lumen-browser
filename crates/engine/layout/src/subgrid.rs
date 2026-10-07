@@ -28,6 +28,10 @@ pub struct SubgridContext {
     pub offsets: Vec<f32>,
     /// Gap between tracks (gap already included in offsets; stored for spacing items).
     pub gap: f32,
+    /// Names of the parent's lines the subgrid spans, one group per line (`sizes.len() + 1`
+    /// groups, or none when the parent has no names). CSS Grid L2 §9: the subgrid's own line
+    /// names are added to them.
+    pub names: Vec<Vec<String>>,
 }
 
 impl SubgridContext {
@@ -39,7 +43,13 @@ impl SubgridContext {
             offsets.push(cursor);
             cursor += s + gap;
         }
-        Self { sizes: sizes.to_vec(), offsets, gap }
+        Self { sizes: sizes.to_vec(), offsets, gap, names: Vec::new() }
+    }
+
+    /// The names of the spanned parent lines (see [`SubgridContext::names`]).
+    pub fn with_names(mut self, names: Vec<Vec<String>>) -> Self {
+        self.names = names;
+        self
     }
 
     /// Grid L2 §9: a subgrid with an explicit `column-gap`/`row-gap` replaces the parent's gutter
@@ -99,6 +109,12 @@ pub struct SubgridTracks {
     /// фрагменте (`flex-gap-decorations-fragmentation-011`: первый элемент ниже других), не даёт
     /// painter'у границу щели, так что щели считает раскладка по всему контейнеру.
     pub line_gaps: Option<Vec<Vec<(f32, f32)>>>,
+}
+
+/// Names of the lines `first..=end` (0-based track indices: the lines around tracks `first..end`)
+/// of a list that holds one group per line; lines the list does not reach have no names.
+pub(crate) fn line_names_between(names: &[Vec<String>], first: usize, end: usize) -> Vec<Vec<String>> {
+    (first..=end).map(|line| names.get(line).cloned().unwrap_or_default()).collect()
 }
 
 // ── Thread-local subgrid context ─────────────────────────────────────────────

@@ -50,7 +50,7 @@ use crate::style::{
     ScrollTargetGroup,
     ShapeOutside,
     parse_aspect_ratio_value,
-    parse_auto_repeat, parse_track_line_names,
+    parse_auto_repeat, parse_subgrid_name_fill, parse_track_line_names,
     parse_grid_template_areas,
     parse_length_q,
     parse_overflow_clip_margin,
@@ -204,7 +204,9 @@ pub(in crate::style) fn apply_decl_layout(
                 // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
                 style.grid_template_col_auto_repeat = parse_auto_repeat(val.trim());
                 style.grid_template_col_line_names = parse_track_line_names(val, is_quirks);
+                style.grid_template_col_subgrid_fill = parse_subgrid_name_fill(val);
             } else {
+                style.grid_template_col_subgrid_fill = None;
                 style.grid_template_columns = Vec::new();
                 style.grid_template_col_auto_repeat = None;
                 style.grid_template_col_line_names = Vec::new();
@@ -216,7 +218,9 @@ pub(in crate::style) fn apply_decl_layout(
                 // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
                 style.grid_template_row_auto_repeat = parse_auto_repeat(val.trim());
                 style.grid_template_row_line_names = parse_track_line_names(val, is_quirks);
+                style.grid_template_row_subgrid_fill = parse_subgrid_name_fill(val);
             } else {
+                style.grid_template_row_subgrid_fill = None;
                 style.grid_template_rows = Vec::new();
                 style.grid_template_row_auto_repeat = None;
                 style.grid_template_row_line_names = Vec::new();

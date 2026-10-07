@@ -286,6 +286,7 @@ pub(super) fn grid_col_intrinsic_sum(
         names: &s.grid_template_col_line_names,
         areas: &s.grid_template_areas,
         is_col: true,
+        clamp: false,
     };
     let items_in_grid = areas_cols <= n_cols
         && b.children
@@ -385,6 +386,7 @@ fn grid_col_sum_by_tracks(
         names: &s.grid_template_row_line_names,
         areas: &s.grid_template_areas,
         is_col: false,
+        clamp: false,
     };
     let n_explicit = template.len().max(1);
     let placements = place_grid_items(
@@ -412,7 +414,8 @@ fn grid_col_sum_by_tracks(
         (w, w)
     };
     gac::collect_col_contributions(
-        &b.children, &item_idxs, &placements, n_cols, 0, 0.0, 0.0, viewport, &measure, &mut contribs,
+        &b.children, &item_idxs, &placements, &s.grid_template_col_line_names, n_cols, 0, 0.0, 0.0, viewport,
+        &measure, &mut contribs,
     );
     let (_, limit) = gac::base_and_limit(&kinds, &contribs, gap);
     Some(limit.iter().sum::<f32>() + gap * (n_cols - 1) as f32)

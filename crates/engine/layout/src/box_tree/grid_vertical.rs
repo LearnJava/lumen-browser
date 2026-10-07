@@ -133,6 +133,7 @@ impl GridInit {
     /// у родителя нет таких дорожек. Если режим письма элемента ортогонален контейнеру, его
     /// inline-ось (столбцы) совпадает с block-осью родителя (строки), а строки — со
     /// столбцами родителя: источники меняются местами.
+    #[inline(never)]
     pub(super) fn subgrid_ctx(
         &self,
         item: &LayoutBox,
@@ -146,12 +147,16 @@ impl GridInit {
         let row_sub = st.grid_template_rows.first() == Some(&GridTrackSize::Subgrid);
         let ortho = (st.writing_mode != WritingMode::HorizontalTb) != self.vertical.is_some();
         let cols = || {
-            self.col_widths.get(c0..c1).filter(|t| !t.is_empty())
-                .map(|t| SubgridContext::from_parent_tracks(t, self.col_gap))
+            self.col_widths.get(c0..c1).filter(|t| !t.is_empty()).map(|t| {
+                SubgridContext::from_parent_tracks(t, self.col_gap)
+                    .with_names(crate::subgrid::line_names_between(&self.col_names, c0, c1))
+            })
         };
         let rows = || {
-            self.row_heights.get(r0..r1).filter(|t| !t.is_empty())
-                .map(|t| SubgridContext::from_parent_tracks(t, self.row_gap))
+            self.row_heights.get(r0..r1).filter(|t| !t.is_empty()).map(|t| {
+                SubgridContext::from_parent_tracks(t, self.row_gap)
+                    .with_names(crate::subgrid::line_names_between(&self.row_names, r0, r1))
+            })
         };
         let (inline_src, block_src) = if ortho { (rows(), cols()) } else { (cols(), rows()) };
         (if col_sub { inline_src } else { None }, if row_sub { block_src } else { None })
