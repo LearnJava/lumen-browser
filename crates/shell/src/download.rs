@@ -1782,7 +1782,19 @@ mod tests {
     fn build_bar_shows_progress_track_for_in_progress_only() {
         let mut dm = DownloadManager::new();
         dm.open();
-        let id = dm.start_download("file:///tmp/prog.bin".into(), PathBuf::from("/tmp/prog.bin"));
+        // Запись строится напрямую, без `start_download`: рабочий поток загрузки
+        // (файла нет) мог прислать Failed раньше, чем `poll()` обработает Progress.
+        let id = DownloadId(dm.next_id);
+        dm.next_id += 1;
+        dm.entries.push(DownloadEntry {
+            id,
+            url: "file:///tmp/prog.bin".into(),
+            dest: PathBuf::from("/tmp/prog.bin"),
+            filename: "prog.bin".into(),
+            status: DownloadStatus::InProgress,
+            received: 0,
+            total: None,
+        });
         dm.tx
             .send(DownloadEvent::Progress { id, received: 50, total: 100 })
             .unwrap();
