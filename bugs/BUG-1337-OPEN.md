@@ -19,3 +19,7 @@ WPT-RUN-14 срез 11: 249 из 484 упавших reftest `css/CSS2/{backgroun
 ## Как проверить
 
 `css/CSS2/backgrounds/background-001.xht` — `reftest_pixdiff.py` должен дать `identical`; затем `run_corpus.py --prefixes css/CSS2/backgrounds,css/CSS2/borders` — число `thin-only` (249) должно упасть.
+
+## Дополнение (P2, WPT-RUN-14 срез 12, `css/CSS2/normal-flow` + `margin-padding-clear`, 2026-10-07)
+
+Тот же дефект в этих каталогах: 215 id `thin-only` с `<img>` в эталоне (`normal-flow/height-003.xht`, `block-formatting-context-height-001.xht`, `block-formatting-contexts-008.xht`) и ещё 21 `thick` с `<img>` в эталоне. На `width-036.xht` (1 cm) — `FillRect (8, 26, 38, 96)` у теста и `DrawImage (8, 25.72, 37.8, 96)` у эталона: дробные и ширина, и `y`. Закрытие обещает до 215 + 21 id только в этих двух каталогах (`docs/wpt-vendor-notes/css.md` §срез 12).

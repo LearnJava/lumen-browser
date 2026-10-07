@@ -28,3 +28,7 @@ WPT-RUN-14 срез 11, `css/CSS2/{backgrounds,borders}/*-applies-to-*.xht`: 34 
 ## Как проверить
 
 `css/CSS2/borders/border-right-width-applies-to-001.xht`, `css/CSS2/backgrounds/background-position-applies-to-015.xht`.
+
+## Дополнение (P2, WPT-RUN-14 срез 12, `css/CSS2/margin-padding-clear`, 2026-10-07)
+
+`margin-padding-clear/padding-applies-to-*.xht` (`#table { display: table }` без `width`) — 10 id, у которых этот дефект единственный: A/B (`table,#table{width:fit-content}` в копиях пар) → 10 из 10 `identical`/`thin-only`, всего по двум каталогам 22 id. Проба: `<table style="border-spacing:0"><tr><td style="padding:0 50px;border:5px solid green"></td></tr></table>` → ширина 1024; с `width:fit-content` — 110.
