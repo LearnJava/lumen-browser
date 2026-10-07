@@ -1,6 +1,6 @@
 # BUG-1162 — `createElement` в XML-документе создаёт HTML-элемент: `tagName` в верхнем регистре, namespace XHTML
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-09-25 (P6, при закрытии [BUG-863](BUG-863-FIXED.md))
 **Область:** js — `crates/js/src/shim/web_api_shim_mid.js:4305`, `doc.createElement` у
 отсоединённого документа: `_lumen_create_element(String(tag).toLowerCase())` для любого

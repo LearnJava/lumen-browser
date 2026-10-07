@@ -62,4 +62,4 @@ s.getHTML()                                // '<b>x</b>' — верно
 внутри хоста, если он в `shadowRoots` либо (`serializableShadowRoots` и флаг `serializable`).
 `Element.getHTML` и `ShadowRoot.getHTML` делят `_lumen_get_html_opts`.
 `gethtml.html`: 6528 FAIL → 3264; baseline перегенерирован, три `--check` подряд чисты.
-Остаток: [BUG-1228](BUG-1228-OPEN.md) (setHTMLUnsafe без DSD), [BUG-1229](BUG-1229-OPEN.md) (текст script).
+Остаток: [BUG-1228](BUG-1228-OPEN.md) (setHTMLUnsafe без DSD), [BUG-1229](BUG-1229-FIXED.md) (текст script).

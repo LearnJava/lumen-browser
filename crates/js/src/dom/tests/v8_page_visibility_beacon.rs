@@ -357,6 +357,29 @@ fn dynamic_script_runs_exactly_once() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-1229: the source text is the script's Text children only (HTML LS
+/// §4.12.1 "child text content"); an appended element's text is not code.
+#[test]
+fn script_source_ignores_element_children() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            r#"globalThis.__b1229_err = 0;
+                       window.addEventListener('error', function () { globalThis.__b1229_err++; });
+                       var s = document.createElement('script');
+                       document.body.appendChild(s);
+                       var sp = document.createElement('span');
+                       sp.textContent = 'light';
+                       s.append(sp);
+                       var s2 = document.createElement('script');
+                       document.body.appendChild(s2);
+                       s2.append('globalThis.__b1229_ok = 1;');
+                       globalThis.__b1229_err === 0"#,
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-486 (`document.currentScript`, blocking BUG-703): a running
 // classic script must be able to find its own element — self-locating
 // bundles read their id/base URL off it (`currentScript.dataset.*`).

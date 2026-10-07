@@ -5091,7 +5091,16 @@ function _lumen_build_detached_document(proto, contentType) {
         enumerable: true,
     });
     doc.createElement = function(tag) {
-        var nid = _lumen_create_element(String(tag).toLowerCase());
+        // DOM §4.5: lower-casing only in an HTML document; the XHTML namespace
+        // in an HTML or XHTML document, `null` in any other XML document (BUG-1162).
+        var nid;
+        if (contentType === 'text/html') {
+            nid = _lumen_create_element(String(tag).toLowerCase());
+        } else if (contentType === 'application/xhtml+xml') {
+            nid = _lumen_create_element_ns('http://www.w3.org/1999/xhtml', String(tag));
+        } else {
+            nid = _lumen_create_element_ns('', String(tag));
+        }
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
         _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
@@ -13978,6 +13987,18 @@ function _lumen_script_empty_src_scan() {
     }
 }
 
+// HTML LS §4.12.1 "child text content": the script's source text is the
+// concatenation of its Text-node children only — element descendants don't
+// count (BUG-1229), unlike `textContent`.
+function _lumen_script_child_text(nid) {
+    var kids = _lumen_get_children(nid);
+    var text = '';
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_text_node(kids[i])) { text += _lumen_get_text_content(kids[i]); }
+    }
+    return text;
+}
+
 // HTML LS §4.12.1 "already started" flag (step 1 / step 12 below). Tracked
 // independently of `_lumen_resource_pending`, which is a one-shot "has the
 // insertion hook run once" map that suits link/track/source/style/embed/
@@ -14008,7 +14029,7 @@ function _lumen_script_prepare(nid) {
     var text = null;
     var hasBody = false;
     if (!hasSrcAttr) {
-        text = _lumen_u2n(_lumen_get_text_content(nid));
+        text = _lumen_script_child_text(nid);
         hasBody = text !== null && String(text).trim() !== '';
     }
     if (!hasSrcAttr && !hasBody) return;
@@ -14235,7 +14256,7 @@ function _lumen_dw_prepare_now(nid) {
     if (_lumen_u2n(_lumen_get_attr(nid, 'src')) === null
         && typeof _lumen_check_inline_script === 'function') {
         var nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
-        var body = _lumen_u2n(_lumen_get_text_content(nid));
+        var body = _lumen_script_child_text(nid);
         var r = _lumen_check_inline_script(nonce === null ? '' : String(nonce),
             body === null ? '' : String(body));
         if (r && r.length === 3) {

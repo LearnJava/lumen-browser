@@ -19,3 +19,7 @@
 (99 из 120), `outline-width-composition.html` (35 из 52): во время перехода/анимации `getComputedStyle` отдаёт
 конечное (`20px`, `rgb(0, 128, 0)`) или базовое значение. Свойства в карте `computed_style_to_map` есть, не хватает
 только интерполяции — тот же механизм.
+
+## Ещё экземпляры (WPT-RUN-14 срез 16, 2026-10-07, `css/css-sizing`, `css/css-overflow`)
+
+`css-sizing/animation/{width,height,min-width,min-height,max-width,max-height}-{interpolation,composition}.html`, `aspect-ratio-interpolation.html`, `contain-intrinsic-size/animation/contain-intrinsic-size-interpolation.html`, `css-overflow/overflow-no-interpolation.html` — 16 id, 1 470 из 3 567 сабтестов. Разрез по механизму (сабтесты `width`/`height`/`min-*`/`max-*`/`aspect-ratio`/`contain-intrinsic-size`): `CSS Animations` (`@keyframes`) — 37 PASS из 574; `CSS Transitions` — 888 из 1 154; `Web Animations` (`el.animate`) — 477 из 569; `Compositing CSS Animations` — 6 из 183. В упавших `CSS Animations` `getComputedStyle` отдаёт базовое значение (`expected "0px" but got "100px"`). Проба `el.animate({width:['10px','20px']}, {duration:1000, fill:'both'})` + `pause()` + `currentTime=500` → `15px` (верно). Проба `@keyframes` + `animation-delay:-500s` в `--dump-layout` ничего не говорит — там и `opacity` остаётся `1`, т. е. headless-режим не продвигает CSS-анимации; причину для `@keyframes` надо снимать в живом окне или `wptrunner`-ом. Промежуточные значения `%`/`em`/`vw` и `inherit`/`initial`/`unset` в концах падают и у `Web Animations` (4 из 6 для `10px → 100%`).

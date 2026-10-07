@@ -53,6 +53,8 @@ function ProgressEvent(type, init) {
 }
 ProgressEvent.prototype = Object.create(Event.prototype);
 ProgressEvent.prototype.constructor = ProgressEvent;
+Object.defineProperty(ProgressEvent.prototype, Symbol.toStringTag,
+    { value: 'ProgressEvent', writable: false, enumerable: false, configurable: true });
 
 // ── XMLHttpRequestEventTarget (XHR §3.1) ──────────────────────────────────
 // Base interface of XMLHttpRequest and XMLHttpRequestUpload, itself an
