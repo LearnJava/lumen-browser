@@ -1,6 +1,6 @@
 # BUG-1200 — `from_v8` принимает коллизию identity hash за цикл: ложный `[Circular]`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — `ancestors` хранит (hash, handle), совпадение хеша подтверждается `strict_equals`; юнит-тест `on_path_tests`.
 **Заведён:** 2026-09-28 (P6, гейт `scoped-test.sh` при закрытии BUG-1144; к той правке не относится).
 **Область:** js — [`crates/js/src/v8_runtime/value.rs`](../crates/js/src/v8_runtime/value.rs)
 (`from_v8_bounded`: `ancestors.contains(&hash)` по `get_identity_hash()` для массивов и объектов).
