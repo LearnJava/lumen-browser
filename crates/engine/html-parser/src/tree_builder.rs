@@ -653,11 +653,27 @@ impl IncrementalTreeBuilder {
                 // never itself foreign even when the context element is
                 // (`current_namespace` would report the context's foreign
                 // namespace here and pop the root right off the stack).
-                while is_foreign_namespace(self.real_current_namespace()) {
-                    if let Some(&node) = self.open_elements.last() {
-                        self.mark_if_foreign_script_not_executable(node);
+                // BUG-1247: an `h:`-prefixed tag that is NOT on the HTML
+                // breakout list and whose prefix is really bound to XHTML by an
+                // `xmlns:h` in scope is, in an XML document, an ordinary child of
+                // the current foreign element (`<svg><h:script/></svg>`) —
+                // popping the SVG ancestors here turned every following
+                // sibling of a standalone `.svg` into HTML-namespace content.
+                let bound_html_child = forced_breakout
+                    && self.xml_mode
+                    && !foreign_content::breaks_out_of_foreign_content(name, attrs)
+                    && self
+                        .pending_prefix
+                        .as_deref()
+                        .and_then(|p| self.resolve_prefix_namespace(p, attrs))
+                        == Some(Namespace::Html);
+                if !bound_html_child {
+                    while is_foreign_namespace(self.real_current_namespace()) {
+                        if let Some(&node) = self.open_elements.last() {
+                            self.mark_if_foreign_script_not_executable(node);
+                        }
+                        self.open_elements.pop();
                     }
-                    self.open_elements.pop();
                 }
                 self.dispatch(token);
             }
@@ -6543,6 +6559,26 @@ mod tests {
             1,
             "script body must be a single RAWTEXT node, not parsed markup: {doc}"
         );
+    }
+
+    #[test]
+    fn bound_html_prefix_inside_svg_root_keeps_following_siblings_svg() {
+        // BUG-1247: a standalone `.svg` with `xmlns:h` bound to XHTML and
+        // `<h:link/>`/`<h:script/>` right after the root used to pop the
+        // `<svg>` off the stack, so `<rect>`/`<animate>` landed in XHTML.
+        let doc = parse_xml_flavoured(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml"><h:link rel="help" href="x"/><h:script src="a.js"/><rect width="5"><animate attributeName="fill"/></rect><script>var a=1;</script></svg>"#,
+        );
+        let ns_of = |local: &str| {
+            let n = doc
+                .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == local))
+                .unwrap_or_else(|| panic!("{local}: {doc}"));
+            let NodeData::Element { name, .. } = &n.data else { unreachable!() };
+            name.namespace.clone()
+        };
+        assert_eq!(ns_of("link"), Namespace::Html, "{doc}");
+        assert_eq!(ns_of("rect"), Namespace::Svg, "{doc}");
+        assert_eq!(ns_of("animate"), Namespace::Svg, "{doc}");
     }
 
     #[test]
