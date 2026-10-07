@@ -1,6 +1,6 @@
 # BUG-1249 — Соседние боксы с дробной границей оставляют AA-шов: при `y = 25.72` нижняя граница первого и верхняя второго блока закрашиваются частичным покрытием к
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` — растеризация прямоугольников с дробными координатами)
 
@@ -39,3 +39,7 @@ WPT-RUN-14 срез 1: 710 упавших reftest `css-flexbox` отрендер
 ## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
 
 Кандидат: 18 id `thin-only`, эталон — не `<img>` (`abspos/static-inside-inline-001.html`, `-003.html`, `floats-clear/clear-on-child-with-margins-2.html`). Механизм по аналогии (AA-кромка на дробной границе), A/B не делался.
+
+## Исправление (2026-10-08, P3)
+
+`rasterize_fill_rect` (`cpu_raster.rs`) привязывает рёбра `FillRect` к целым пикселям (`round` каждого из четырёх краёв, а не ширины) — соседи делят одно ребро, AA-шва нет. Тест `adjacent_fractional_fills_leave_no_seam`; обновлены CPU-снимки 32, 34, 58. Бордеры (`DrawBorder`, срез 11) и `DrawImage` (BUG-1337) не затронуты — при необходимости заводить отдельно. wgpu-путь не менялся.

@@ -331,7 +331,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
 - `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
   `run_corpus.py` out-dir, renders test and `rel=match` reference with
   `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
-  geometry, `size-differs`). Separates "layout wrong" from "1-px seam" ([BUG-1249](../../bugs/BUG-1249-OPEN.md)).
+  geometry, `size-differs`). Separates "layout wrong" from "1-px seam" ([BUG-1249](../../bugs/BUG-1249-FIXED.md)).
   Both captures are cropped to the viewport before comparing (a whole-page
   `--screenshot` of a taller test used to come out `size-differs` regardless
   of what is on screen); `--viewport 800x600` matches wptrunner, `--ahem`
