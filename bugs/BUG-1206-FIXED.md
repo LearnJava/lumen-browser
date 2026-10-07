@@ -1,6 +1,6 @@
 # BUG-1206 — при `require-trusted-types-for 'script'` не исполняется ни один `<script>`, вставленный через DOM
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — уже исправлено BUG-1049 (`6bc805a5c`: тело `<script>` компилируется `v8::Script::compile`, а не `eval`, хук кодогенерации не вызывается); регрессия — `bug1206_inserted_script_runs_under_require_trusted_types`
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_script_execute_classic`, `(0, eval)(text)`; `crates/js/src/v8_runtime/codegen_hook.rs` + `crates/js/src/trusted_types.rs` — `_lumen_tt_get_compliant_script_for_codegen`)
 **Найден:** P6, живая проверка youtube к [BUG-1123](BUG-1123-FIXED.md), 2026-09-28
 

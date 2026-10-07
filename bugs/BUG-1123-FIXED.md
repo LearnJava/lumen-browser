@@ -98,4 +98,4 @@ EventTarget`, `window.addEventListener === EventTarget.prototype.addEventListene
 отдельно: ``CE connectedCallback (upgrade): Error: md`InjectionToken(PAGE_TOKEN)`` —
 [BUG-1207](BUG-1207-FIXED.md) (была и до исправления, так что не следствие BUG-1123);
 `EvalError: Code generation from strings disallowed` во фрейме accounts.google.com —
-[BUG-1206](BUG-1206-OPEN.md).
+[BUG-1206](BUG-1206-FIXED.md).
