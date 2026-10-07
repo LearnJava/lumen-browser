@@ -18,6 +18,7 @@ mod bug534_highlight_api;
 mod bug569_img_decode;
 mod bug576_options_collection_add;
 mod bug581_table_api;
+mod bug949_scroll_read;
 mod bug954_insert_cycle;
 mod bug786_srez25_pi_api;
 mod gap_origin_api;
