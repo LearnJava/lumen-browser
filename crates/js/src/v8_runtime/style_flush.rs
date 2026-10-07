@@ -1193,7 +1193,11 @@ impl FlushHandles {
             return None;
         }
         if basis.viewport != [viewport.width, viewport.height] {
-            declined("viewport changed");
+            declined(&format!(
+                "viewport changed {:?} -> {:?}",
+                basis.viewport,
+                [viewport.width, viewport.height]
+            ));
             return None;
         }
         // BUG-935 срез 64: a different sheet no longer forces the full path by itself — the
@@ -1313,9 +1317,16 @@ impl FlushHandles {
         // journal cannot vouch for — no baseline, or a shadow tree / `<slot>`
         // involved (see `journal_touches_shadow`) — stays `Untracked`.
         let content_nodes: Option<std::collections::HashSet<lumen_dom::NodeId>> = match content_journal {
-            Some(journal) if !content_journal_disabled() && !doc.journal_touches_shadow(journal) => {
-                Some(journal.iter().chain(new_touched.iter()).copied().collect())
-            }
+            Some(journal) if !content_journal_disabled() => match doc.journal_shadow_touch(journal) {
+                None => Some(journal.iter().chain(new_touched.iter()).copied().collect()),
+                Some(id) => {
+                    if lumen_paint::frame_log_enabled() {
+                        let tag = doc.get(id).element_name().map_or_else(|| "#node".to_string(), |n| n.local.to_string());
+                        eprintln!("[engine] content record dropped: shadow tree touched at <{tag}> (node {})", id.index());
+                    }
+                    None
+                }
+            },
             _ => None,
         };
         let content_dirty = match &content_nodes {

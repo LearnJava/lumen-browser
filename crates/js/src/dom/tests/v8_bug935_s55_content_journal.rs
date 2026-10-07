@@ -110,6 +110,16 @@ const SCENARIOS: &[(&str, &str)] = &[
           function() { els[10].querySelector('span').className = 'x'; els[10].querySelector('span').textContent = 'wide span text'; },
           function() { els[9].removeAttribute('hidden'); }]",
     ),
+    // BUG-935 срез 97: a `<video>` host (UA shadow tree without a `<slot>`) no longer drops the
+    // content record, so these flushes are journal-driven too.
+    (
+        "video",
+        "[function() { var v = document.createElement('video'); v.width = 120; v.height = 60; els[2].appendChild(v); },
+          function() { els[2].querySelector('video').setAttribute('width', '240'); },
+          function() { els[2].querySelector('video').appendChild(document.createElement('source')); els[3].style.width = '70px'; },
+          function() { var v = els[2].querySelector('video'); v.setAttribute('controls', ''); v.className = 'big'; els[2].querySelector('span').textContent = 'after video'; },
+          function() { els[2].removeChild(els[2].querySelector('video')); }]",
+    ),
     (
         "batch",
         "[function() { els[0].style.height = '40px'; els[6].textContent = 'replaced'; root.removeChild(els[11]); els[3].style.width = '90px'; }]",
