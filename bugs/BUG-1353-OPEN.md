@@ -19,3 +19,7 @@ WPT-RUN-14 срез 12: 21 id `normal-flow/block-in-inline-*` (+ `margin-right-1
 ## Как проверить
 
 `css/CSS2/normal-flow/block-in-inline-append-002-ref.xht`, `block-in-inline-first-line-001.html`.
+
+## Срез 15 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` остальное)
+
+`css/CSS2/box-display/block-in-inline-001/002/007.xht`, `block-in-inline-relpos-001/002.xht`, `block-in-inline-self-collapsing-only-child.html` — 9 id `thick` с `<span class="inline">…<span class="block">…</span>…</span>` (`display:block` внутри `display:inline`). Проба на этих id не выполнялась; единственное, что проверено: `<span class=inline>Line 1<span class=block>Line 2</span>Line 3</span>` (`--dump-layout`) даёт `InlineRun "Line 1"` + `Block` (зелёный, `Line 2`) + продолжение — деление на блоки есть, что с фоном/рамкой у фрагментов `inline` — не смотрели. Привязка к BUG-1353 — по сходству разметки.

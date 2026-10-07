@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-07",
  "counts": {
-  "open": 236,
-  "fixed": 1075,
+  "open": 243,
+  "fixed": 1078,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1313,
+ "total_bugs": 1323,
  "phases": [
   {
    "id": "P0",
@@ -6063,9 +6063,9 @@
       {
        "id": "WPT-RUN-14-S15",
        "title": "WPT-RUN-14-S15: CSS2 остальное",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон `css/CSS2` — остальные каталоги (`box`, `box-display`, `cascade`, `colors`, `css1`, `selectors`, `syntax`, `ui`, `values`, `visudet`, `visufx`, `visuren`, `pagination` и файлы в корне) (около 1 420 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон `css/CSS2` — остальные каталоги (`box`, `box-display`, `cascade`, `colors`, `css1`, `selectors`, `syntax`, `ui`, `values`, `visudet`, `visufx`, `visuren`, `pagination` и файлы в корне) (около 1 420 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-07 (ветка `p2-wpt-run14-s15`): 1 424 automatable id, 36.99 % (reftest 522/1376, crashtest 3/3, testharness 1 288 из 1 326 сабтестов), 360 с суммарно, «no leak», повторный прогон 0 расхождений. 855 не зелёных (790 thick, 25 thin-only, 28 identical) разнесены на 28 кластеров (`docs/wpt-vendor-notes/css.md` §css/CSS2: остальное). Главное: 339 id (40 %) — `selectors/first-letter-punctuation-*` (три дефекта подряд: BUG-1366, BUG-1373, BUG-1374); кодировки таблиц стилей Shift_JIS/Big5/windows-1252/ISO-8859 (BUG-1375, 32 id); шесть дефектов парсера CSS (BUG-1376…1381, 58 id `syntax`); `margin-right` у inline без декорации теряется (BUG-1382); `clip: rect()` — 44 id (CSS-SPECS.md:459). Заведены BUG-1373…1382; дополнены BUG-1273/1337/1353/1366. Не разобрано 247 id. Срез закрывает весь `css/CSS2` (S11…S15, 6 357 id)."
       }
      ]
     },
@@ -8615,13 +8615,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1171": {
-   "status": "open",
-   "title": "`TreeWalker.nextNode()` идёт по списку поддерева `root`, а не от `currentNode` (DOM §6.2): при `currentNode = template.content` обход начинается с `<html>` доку…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1612` `_TreeWalker.prototype.nextNode` — `_tw_subtree(root)` + `indexOf(currentNode)`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1172": {
    "status": "open",
    "title": "`window` как EventTarget: `addEventListener` молча отбрасывает слушатель-объект с `handleEvent` (`typeof fn !== 'function'`), регистрирует один и тот же слушате…",
@@ -8696,13 +8689,6 @@
    "status": "open",
    "title": "`@scope { … }` без явного `(<root>)` резолвит имплицитный корень как весь документ (`root_empty` → `true` безусловно), вместо родителя владеющего узла листа (CS…",
    "component": "layout (`crates/engine/layout/src/style/env.rs:275-276` — `node_in_scope`, `crates/engine/layout/src/style/cascade.rs:654-660`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1217": {
-   "status": "open",
-   "title": "`grid-template-columns: repeat(N, minmax(0, 1fr))` (так Tailwind пишет `grid-cols-N`) даёт нулевые треки: `grid-column: span 7` в 1612-px сетке с gap 24 занимае…",
-   "component": "layout (grid track sizing — `minmax(0, 1fr)` внутри `repeat()`)",
    "date": null,
    "debtor": false
   },
@@ -8801,13 +8787,6 @@
    "status": "open",
    "title": "youtube после BUG-1207: `[JS error]` нет, `ytd-page-manager` апгрейднут, но без детей, `innerText` пуст, ошибок в логе нет.",
    "component": "js — не локализовано (youtube не строит `ytd-browse`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1240": {
-   "status": "open",
-   "title": "`position: relative` ведёт себя неверно в двух режимах раскладки. (1) Полная: смещение применяется к `rect` бокса до того, как родитель отсчитывает от него курс…",
-   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — смещение `position: relative` через `shift_tree` после раскладки блока; инкрементальный путь `lay_out` для чистых поддеревьев)",
    "date": null,
    "debtor": false
   },
@@ -9634,6 +9613,76 @@
    "status": "open",
    "title": "Ahem 16 px: у глифа `X` 17 строк пикселей вместо 16 (верх `64`, низ `192` из 255), у блока рядом — чисто. 51 id `thin-only`",
    "component": "paint/font (`crates/engine/paint/src/cpu_raster.rs` — растр глифа)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1373": {
+   "status": "open",
+   "title": "`::first-letter` не включает пунктуацию, идущую сразу за первой буквой: `T)est` → буквица `T` вместо `T)`",
+   "component": "layout (`crates/engine/layout/src/box_tree/pseudo_text.rs::first_letter_text_len`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1374": {
+   "status": "open",
+   "title": "Пунктуация для `::first-letter` — только ASCII и 10 типографских кавычек, без Unicode Ps/Pe/Pi/Pf/Po: `༽Test` → буквица `༽` без `T`",
+   "component": "layout (`crates/engine/layout/src/box_tree/pseudo_text.rs::is_first_letter_punctuation`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1375": {
+   "status": "open",
+   "title": "Внешняя таблица стилей в Shift_JIS/Big5/windows-1252/ISO-8859-x не декодируется: `Encoding` знает только UTF-8/16/32 и три кириллические. 28 id `syntax/at-chars…",
+   "component": "shell/encoding (`crates/shell/src/stylesheets.rs::document_encoding`, `crates/engine/encoding/src/lib.rs::Encoding::from_label`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1376": {
+   "status": "open",
+   "title": "CDO/CDC (`<!--`, `-->`) в таблице стилей не пропускаются как токены верхнего уровня: следующее за `<!--` правило пропадает. 4 id",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs::parse_stylesheet`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1377": {
+   "status": "open",
+   "title": "Невалидное значение `width`/`height` не отбрасывается, а затирает прежнее: `height:20px; height:1 0px` → высота 0; `+ 10px`, `-5px`, `foo` — то же. `rgb(100%, 0…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/apply/layout.rs:293`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1378": {
+   "status": "open",
+   "title": "Имена свойств чувствительны к регистру: `COLOR:green`, `bACkGRounD:green`, `Color:green` не применяются (CSS 2.1 §4.1.3 — ASCII case-insensitive)",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_declaration`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1379": {
+   "status": "open",
+   "title": "Комментарий внутри значения (`color:/*c*/green`, `color:green/*c*/;`) обрывает разбор: объявление теряется",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_value_until_terminator`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1380": {
+   "status": "open",
+   "title": "CSS-escape в значениях и `url()` не декодируется: `color:\\67reen`, `\\75rl(…)` в значении, `url(support/\\'green\\ block.png)`. Идентификаторы в селекторах и имена…",
+   "component": "css-parser/layout (`crates/engine/css-parser/src/parser.rs::parse_ident` и разбор значений)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1381": {
+   "status": "open",
+   "title": "Восстановление после ошибок разбора не по CSS Syntax: `@ import` (с пробелом), незакрытая скобка в конце листа, `[`/`]`, неоконченная строка. 17 id",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1382": {
+   "status": "open",
+   "title": "`margin-right` (и `margin-left` у первого сегмента) на `<span>` без фона/рамки/отступа не сдвигает следующий текст: `<span style=\"margin-right:40px\">x</span>y`…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs:1020-1028`)",
    "date": null,
    "debtor": false
   },
@@ -17168,6 +17217,27 @@
    "component": "js (`crates/js/src/v8_runtime/style_flush.rs` — `FlushHandles::maybe_flush` синхронный full-relayout на каждый `getComputedStyle`-подобный same-tick read)",
    "date": "2026-10-07",
    "debtor": false
+  },
+  "BUG-1217": {
+   "status": "fixed",
+   "title": "`grid-template-columns: repeat(N, minmax(0, 1fr))` (так Tailwind пишет `grid-cols-N`) даёт нулевые треки: `grid-column: span 7` в 1612-px сетке с gap 24 занимае…",
+   "component": "layout (grid track sizing — `minmax(0, 1fr)` внутри `repeat()`)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1240": {
+   "status": "fixed",
+   "title": "`position: relative` ведёт себя неверно в двух режимах раскладки. (1) Полная: смещение применяется к `rect` бокса до того, как родитель отсчитывает от него курс…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — смещение `position: relative` через `shift_tree` после раскладки блока; инкрементальный путь `lay_out` для чистых поддеревьев)",
+   "date": "2026-10-07",
+   "debtor": false
+  },
+  "BUG-1171": {
+   "status": "fixed",
+   "title": "`TreeWalker.nextNode()` идёт по списку поддерева `root`, а не от `currentNode` (DOM §6.2): при `currentNode = template.content` обход начинается с `<html>` доку…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1612` `_TreeWalker.prototype.nextNode` — `_tw_subtree(root)` + `indexOf(currentNode)`)",
+   "date": "2026-10-07",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -17225,11 +17295,23 @@
   "css-parser (`crates/engine/css-parser/src/parser.rs:1664-1672` `MediaQuery::matches`, empty-clauses fallback)": [
    "BUG-528"
   ],
+  "css-parser (`crates/engine/css-parser/src/parser.rs::parse_stylesheet`)": [
+   "BUG-1376"
+  ],
   "css-parser (`crates/engine/css-parser/src/parser.rs::recover_to_block_end`)": [
    "BUG-1068"
   ],
   "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)": [
    "BUG-510"
+  ],
+  "css-parser (`crates/engine/css-parser/src/parser.rs`)": [
+   "BUG-1381"
+  ],
+  "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_declaration`)": [
+   "BUG-1378"
+  ],
+  "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_value_until_terminator`)": [
+   "BUG-1379"
   ],
   "css-parser (`crates/engine/css-parser/src/parser/media.rs` — `MediaFeature`, `parse_media_feature`)": [
    "BUG-1019"
@@ -17286,6 +17368,9 @@
   "css-parser/layout (`crates/engine/css-parser/src/lib.rs` — `SUPPORTED_PROPERTIES`; `style/values/misc.rs` — `BlockStepInsert`/`BlockStepAlign`/`BlockStepRound`; `style/values/length.rs` — `resolve_block_step_size`; `style/apply/layout.rs`, `style/apply/css_wide.rs`, `selector_query.rs`; JS-шим `web_api_shim_mid.js`)": [
    "BUG-517"
   ],
+  "css-parser/layout (`crates/engine/css-parser/src/parser.rs::parse_ident` и разбор значений)": [
+   "BUG-1380"
+  ],
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`)": [
    "BUG-492"
   ],
@@ -17300,6 +17385,9 @@
   ],
   "css-parser/layout (`crates/engine/layout/src/style/apply/`)": [
    "BUG-1347"
+  ],
+  "css-parser/layout (`crates/engine/layout/src/style/apply/layout.rs:293`)": [
+   "BUG-1377"
   ],
   "css-parser/layout (`crates/engine/layout/src/style/apply/paint.rs::apply_declaration`, `selector_query.rs::computed_style_to_map`)": [
    "BUG-495"
@@ -18531,6 +18619,9 @@
   "layout (`crates/engine/layout/src/box_tree/image_requests.rs::apply_intrinsic_size`)": [
    "BUG-1280"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_build.rs:1020-1028`)": [
+   "BUG-1382"
+  ],
   "layout (`crates/engine/layout/src/box_tree/inline_build.rs:148` `is_inline_content` и `box_tree/build.rs:1249` — текст, целиком состоящий из `char::is_whitespace()`, считается «пустым» и пропускается независимо от `white-space`)": [
    "BUG-1327"
   ],
@@ -18597,6 +18688,12 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — `auto`-поля через `resolve_or_zero`)": [
    "BUG-1282"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/pseudo_text.rs::first_letter_text_len`)": [
+   "BUG-1373"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/pseudo_text.rs::is_first_letter_punctuation`)": [
+   "BUG-1374"
   ],
   "layout (`crates/engine/layout/src/box_tree/svg.rs::svg_attr_f32`)": [
    "BUG-1287"
@@ -19381,6 +19478,9 @@
   ],
   "shell+font": [
    "BUG-170"
+  ],
+  "shell/encoding (`crates/shell/src/stylesheets.rs::document_encoding`, `crates/engine/encoding/src/lib.rs::Encoding::from_label`)": [
+   "BUG-1375"
   ],
   "shell/js": [
    "BUG-164",
