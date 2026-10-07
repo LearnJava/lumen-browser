@@ -1,6 +1,6 @@
 # BUG-861 — перемотка завершённой анимации назад не возвращает её в работу: второй `finish` не приходит, `finished` не заменяется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — сеттер `currentTime` зовёт `_leaveFinishedIfSeekedBack` (`web_api_shim_tail_b.js`): уход назад от конца возвращает `running`, заменяет `finished`, ставит анимацию в `_wa_animations` и RAF; остальные сеттеры (`startTime`/`playbackRate`) не затронуты
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 25 — живой замер, маркер `wa-seek-refire`)
 **Область:** `crates/js/src/dom.rs` — Web Animations shim: сеттер `currentTime` не выполняет «update the finished state» (Web Animations §4.4.11), `playState` остаётся `finished`, а `finished`-промис не пересоздаётся
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
