@@ -58,8 +58,20 @@ function _stream_require_new(newTarget, name) {
 }
 
 // ── ReadableStream §3 ────────────────────────────────────────────────────────
+// Контроллеры и ReadableStreamBYOBRequest не имеют публичного конструктора (WebIDL):
+// `new X()` со страницы бросает, а шим создаёт их через _stream_create (BUG-1204).
+var _stream_internal_ctor = false;
+function _stream_illegal_unless_internal() {
+    if (!_stream_internal_ctor) throw new TypeError('Illegal constructor');
+    _stream_internal_ctor = false;
+}
+function _stream_create(Ctor, a, b, c, d) {
+    _stream_internal_ctor = true;
+    try { return new Ctor(a, b, c, d); } finally { _stream_internal_ctor = false; }
+}
+
 function ReadableStreamDefaultController(stream) {
-    _stream_require_new(new.target, 'ReadableStreamDefaultController');
+    _stream_illegal_unless_internal();
     this._stream = stream;
     this._queue = [];
     this._closeRequested = false;
@@ -174,8 +186,8 @@ function ReadableStream(source, strategy) {
     this._rs_cancel_fn = typeof source.cancel === 'function' ? source.cancel : null;
     this._rs_pull_fn = typeof source.pull === 'function' ? source.pull : null;
     this._rs_ctrl = isBytes
-        ? new ReadableByteStreamController(this, autoAlloc === undefined ? 0 : Number(autoAlloc))
-        : new ReadableStreamDefaultController(this);
+        ? _stream_create(ReadableByteStreamController, this, autoAlloc === undefined ? 0 : Number(autoAlloc))
+        : _stream_create(ReadableStreamDefaultController, this);
     this._rs_started = false;
     this._rs_pulling = false;
     this._rs_pullAgain = false;
@@ -462,7 +474,7 @@ ReadableStreamDefaultReader.prototype.read = function() {
 // its own reference to the pre-read view still sees the bytes, where a spec
 // browser would have detached it.
 function ReadableByteStreamController(stream, autoAllocateChunkSize) {
-    _stream_require_new(new.target, 'ReadableByteStreamController');
+    _stream_illegal_unless_internal();
     this._stream = stream;
     this._queue = [];
     this._closeRequested = false;
@@ -558,7 +570,7 @@ function _rbs_byob_request(ctrl) {
         view = ctrl._autoView;
     }
     if (!view) return null;
-    ctrl._byobRequest = new ReadableStreamBYOBRequest(ctrl, view);
+    ctrl._byobRequest = _stream_create(ReadableStreamBYOBRequest, ctrl, view);
     return ctrl._byobRequest;
 }
 function _rbs_respond(request, bytes) {
@@ -581,7 +593,7 @@ function _rbs_respond(request, bytes) {
 
 // ── ReadableStreamBYOBRequest §3.10 ─────────────────────────────────────────
 function ReadableStreamBYOBRequest(ctrl, view) {
-    _stream_require_new(new.target, 'ReadableStreamBYOBRequest');
+    _stream_illegal_unless_internal();
     this._ctrl = ctrl;
     this._view = view;
 }
@@ -655,7 +667,7 @@ ReadableStreamBYOBReader.prototype.read = function(view) {
 var _WS_CLOSE_SENTINEL = { closeSentinel: true };
 
 function WritableStreamDefaultController(stream, sink, hwm, sizeFn) {
-    _stream_require_new(new.target, 'WritableStreamDefaultController');
+    _stream_illegal_unless_internal();
     this._stream = stream;
     this._sink = sink;
     this._queue = [];
@@ -945,7 +957,7 @@ function WritableStream(sink, strategy) {
     var hwm = strategy.highWaterMark === undefined ? 1 : Number(strategy.highWaterMark);
     if (hwm !== hwm || hwm < 0) throw new RangeError('invalid highWaterMark');
     var sizeFn = typeof strategy.size === 'function' ? strategy.size : null;
-    this._ws_ctrl = new WritableStreamDefaultController(this, sink, hwm, sizeFn);
+    this._ws_ctrl = _stream_create(WritableStreamDefaultController, this, sink, hwm, sizeFn);
     _ws_ctrl_setup(this._ws_ctrl);
 }
 Object.defineProperty(WritableStream.prototype, 'locked', {
@@ -1057,7 +1069,7 @@ WritableStreamDefaultWriter.prototype.releaseLock = function() {
 // side takes the other down, which is what «errors thrown in transform put the
 // writable and readable in an errored state» asks for.
 function TransformStreamDefaultController(ts) {
-    _stream_require_new(new.target, 'TransformStreamDefaultController');
+    _stream_illegal_unless_internal();
     this._ts = ts;
 }
 Object.defineProperty(TransformStreamDefaultController.prototype, 'desiredSize', {
@@ -1138,7 +1150,7 @@ function TransformStream(transformer, writableStrategy, readableStrategy) {
 function _ts_setup(self, transformer, writableStrategy, readableStrategy) {
     transformer = transformer || {};
     self._ts_transformer = transformer;
-    self._ts_ctrl = new TransformStreamDefaultController(self);
+    self._ts_ctrl = _stream_create(TransformStreamDefaultController, self);
     self._ts_readableCtrl = null;
     self.readable = new ReadableStream({
         start: function(ctrl) { self._ts_readableCtrl = ctrl; },

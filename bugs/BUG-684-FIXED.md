@@ -129,6 +129,6 @@ Guard отсекает и `X.call(this, …)`, поэтому два места,
 `filesystem_access::tests::writable_extends_the_runtime_writable_stream`
 теперь тоже требует `new`.
 
-Остаток вне скоупа — [BUG-1204](BUG-1204-OPEN.md): контроллеры и
+Остаток вне скоупа — [BUG-1204](BUG-1204-FIXED.md): контроллеры и
 `ReadableStreamBYOBRequest` по спеке вообще без конструктора, а `new X()`
 со страницы у них по-прежнему проходит.

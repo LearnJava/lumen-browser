@@ -1618,3 +1618,28 @@ fn stream_subclasses_still_construct() {
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-1204: controllers and `ReadableStreamBYOBRequest` have no public
+/// constructor — `new X(...)` from a page throws "Illegal constructor", while
+/// the streams themselves still build their controllers internally.
+#[test]
+fn stream_controllers_have_illegal_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var names = ['ReadableStreamDefaultController', 'ReadableByteStreamController', \
+                      'ReadableStreamBYOBRequest', 'WritableStreamDefaultController', \
+                      'TransformStreamDefaultController']; \
+         var bad = names.filter(function(n) { \
+           try { new globalThis[n]({}); return true; } \
+           catch (e) { return !(e instanceof TypeError) || e.message !== 'Illegal constructor'; } \
+         }); \
+         var rs = new ReadableStream({ start: function(c) { c.enqueue(1); } }); \
+         var bs = new ReadableStream({ type: 'bytes' }); \
+         var ws = new WritableStream({}); \
+         var ts = new TransformStream({}); \
+         var rs2 = new ReadableStream({ start: function(c) { \
+           try { new ReadableStreamDefaultController(rs); bad.push('inside'); } catch (e) {} } }); \
+         bad.join(',')",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(String::new()));
+}
