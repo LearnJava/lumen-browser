@@ -40,3 +40,9 @@ auto») не помогает: подсказка уже лежит в `style.wi
 
 WPT `css/css-ui/box-sizing-007…025.html` (19 reftest, все `<img>` с `box-sizing` и `min-/max-`), а также
 `css/css-sizing`, `css/CSS2/visudet` — не прогонялись, но форма та же.
+
+## Срез 16 (2026-10-07, P2, WPT-RUN-14 `css/css-sizing`)
+
+Тот же корень у `<canvas>`: размеры атрибутов `width`/`height` (по умолчанию 300×150) подставляются в оба измерения, и сторона из CSS не масштабирует вторую. `--dump-layout`: `<canvas width=15 height=15 style="width:20px;height:auto">` → 20×**15** (ожидается 20×20); `<canvas width=15 height=15 style="aspect-ratio:2;width:20px">` → 20×15 (20×10); `<canvas width=10 height=10 style="height:100%">` в `height:100px` → 10×100 (100×100); `<img style="height:20px">` → 60×20 (20×20). `<img style="aspect-ratio:2;width:20px;height:auto">` — 20×10, верно.
+
+WPT: `css-sizing/aspect-ratio/replaced-element-0*` (44 id, 156 из 189 сабтестов), `intrinsic-percent-replaced-0*` (30 id, 29 thick), `replaced-aspect-ratio-*`, `image-min-max-content-intrinsic-size-change-*` (8), `box-sizing-replaced-*` (3), `svg-intrinsic-size-*` — всего кластер «замещаемые» среза: 72 + 44 = 116 id.

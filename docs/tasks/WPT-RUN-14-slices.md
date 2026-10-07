@@ -1,8 +1,8 @@
-# WPT-RUN-14 — срезы S1…S15: прогон `css` по модулям
+# WPT-RUN-14 — срезы S1…S28: прогон `css` по модулям
 
 Родительская задача — WPT-RUN-14 (ROADMAP:970). Владелец — P2. Цель родителя: у всей категории `css` есть вердикт, топ-10 кластеров разнесены по очередям P1/P4.
 
-Этот файл описывает первую волну из десяти модулей (S1…S10) и первые пять срезов CSS2 (S11…S15). Остальные модули `css` и агрегирующий срез заводятся после них.
+Этот файл описывает первую волну из десяти модулей (S1…S10), пять срезов CSS2 (S11…S15), `css-overflow` + `css-sizing` (S16) и раскладку остальных модулей `css` (S17…S28, заведена 2026-10-07 при закрытии S16: 33 496 id `css` минус 18 000+ уже разобранных). Агрегирующий срез (сводка «кластер → id → владелец» по всему `css`) заводится после S28.
 
 ## Почему через `run_corpus.py`, а не `run_report.py`
 
@@ -62,8 +62,21 @@
 | S13 | CSS2: tables, positioning, floats | `css/CSS2/tables,css/CSS2/positioning,css/CSS2/floats,css/CSS2/floats-clear,css/CSS2/abspos,css/CSS2/stacking-context,css/CSS2/zindex,css/CSS2/zorder` | ~1340 | `.tmp/wpt-run14/css2-3` |
 | S14 | CSS2: text, linebox, fonts, lists | `css/CSS2/text,css/CSS2/linebox,css/CSS2/fonts,css/CSS2/generated-content,css/CSS2/lists,css/CSS2/bidi-text` | ~1260 | `.tmp/wpt-run14/css2-4` |
 | S15 | CSS2: остальное | `css/CSS2 --exclude-prefixes <все префиксы S11…S14>`: box, box-display, cascade, cascade-import, colors, css1, css21-errata, csswg-issues, media, other-formats, pagination, sec5, selectors, syntax, ui, values, visudet, visufx, visuren и файлы в корне | ~1420 | `.tmp/wpt-run14/css2-5` |
+| S16 | css-overflow + css-sizing | `css/css-overflow,css/css-sizing` | 1 498 | `.tmp/wpt-run14/overflow-sizing` |
+| S17 | css-multicol + css-contain | `css/css-multicol,css/css-contain` | ~1 297 | `.tmp/wpt-run14/multicol-contain` |
+| S18 | css-fonts + css-masking + WOFF2 | `css/css-fonts,css/css-masking,css/WOFF2` | ~1 392 | `.tmp/wpt-run14/fonts-masking` |
+| S19 | css-images + css-values + css-color | `css/css-images,css/css-values,css/css-color` | ~1 371 | `.tmp/wpt-run14/images-values-color` |
+| S20 | selectors + css-pseudo + css-nesting + css-namespaces + css-cascade | `css/selectors,css/css-pseudo,css/css-nesting,css/css-namespaces,css/css-cascade` | ~1 371 | `.tmp/wpt-run14/selectors-pseudo` |
+| S21 | css-anchor-position + css-position + css-display | `css/css-anchor-position,css/css-position,css/css-display` | ~1 126 | `.tmp/wpt-run14/anchor-position-display` |
+| S22 | css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins | `css/css-view-transitions,css/css-conditional,css/css-variables,css/css-properties-values-api,css/css-mixins` | ~1 350 | `.tmp/wpt-run14/view-transitions-variables` |
+| S23 | css-text-decor + css-gaps + css-shapes | `css/css-text-decor,css/css-gaps,css/css-shapes` | ~1 143 | `.tmp/wpt-run14/text-decor-gaps-shapes` |
+| S24 | filter-effects + css-inline + css-tables + css-align | `css/filter-effects,css/css-inline,css/css-tables,css/css-align` | ~1 368 | `.tmp/wpt-run14/filter-inline-tables-align` |
+| S25 | css-typed-om + cssom-view + cssom + css-lists + css-counter-styles | `css/css-typed-om,css/cssom-view,css/cssom,css/css-lists,css/css-counter-styles` | ~1 282 | `.tmp/wpt-run14/typed-om-cssom-lists` |
+| S26 | css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap | `css/css-page,css/css-animations,css/css-transitions,css/css-shadow,css/css-borders,css/css-scroll-snap` | ~1 194 | `.tmp/wpt-run14/page-animations-borders` |
+| S27 | css-ruby + css-layout-api + css-box + motion + css-highlight-api + css-paint-api + css-viewport + mediaqueries | `css/css-ruby,css/css-layout-api,css/css-box,css/motion,css/css-highlight-api,css/css-paint-api,css/css-viewport,css/mediaqueries` | ~1 059 | `.tmp/wpt-run14/ruby-box-motion-mq` |
+| S28 | остальные 30 малых модулей | `--prefixes` по каждому: css-logical, compositing, css-scroll-anchoring, css-content, css-scrollbars, css-will-change, css-syntax, css-color-adjust, css-rhythm, geometry, css-font-loading, printing, css-forms, css-image-animation, css-style-attr, css-easing, css-exclusions, css-overscroll-behavior, fill-stroke, css-env, css-device-adapt, css-size-adjust, css-link-params, css-forced-color-adjust, css-color-hdr, reference, css-zoom, css-motion-path, fetching, css-parser-api | ~794 | `.tmp/wpt-run14/small-modules` |
 
-Числа S1…S10 — файлы тестов на диске, без `support/`, `reference/` и `-ref.*`. Точные id даёт манифест. Если срез заметно длиннее часа, разделить его на два и записать это в ROADMAP-строку среза.
+Числа S17…S28 — automatable id по манифесту (без `manual`/`visual`), посчитаны 2026-10-07; числа S1…S10 — файлы тестов на диске, без `support/`, `reference/` и `-ref.*`. Точные id даёт манифест. Если срез заметно длиннее часа, разделить его на два и записать это в ROADMAP-строку среза.
 
 ## Не трогать
 
