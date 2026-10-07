@@ -2038,6 +2038,18 @@ var window = {
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
     addEventListener: function(type, fn, options) {
         if (typeof fn !== 'function') return;
+        // BUG-865: a passive listener (explicit, or the default for the
+        // scroll-blocking types on the window) is stored as a wrapper that
+        // makes `preventDefault()` a no-op; `removeEventListener` finds it
+        // again through `_lumen_once_wrappers`.
+        if (_lumen_passive_flag(options, type, true)) {
+            var origFn = fn;
+            fn = _lumen_passive_wrap(origFn);
+            var wkey = 'win:' + (_lumen_capture_flag(options) ? '1:' : '0:') + type;
+            var perFn = _lumen_once_wrappers.get(origFn);
+            if (!perFn) { perFn = {}; _lumen_once_wrappers.set(origFn, perFn); }
+            perFn[wkey] = fn;
+        }
         // A capture listener on the window sees an event on its way DOWN to a
         // node, which is a different bucket from everything below (BUG-873).
         // Only for the generic types: the specially-bucketed ones below are all
@@ -2085,6 +2097,9 @@ var window = {
     },
     removeEventListener: function(type, fn, options) {
         var arr;
+        var perFn = _lumen_once_wrappers.get(fn);
+        var wkey = 'win:' + (_lumen_capture_flag(options) ? '1:' : '0:') + type;
+        if (perFn && perFn[wkey] !== undefined) { var wrapped = perFn[wkey]; delete perFn[wkey]; fn = wrapped; }
         if (_lumen_capture_flag(options) && _LUMEN_WIN_TARGETED_EVENTS[type] !== 1) arr = _win_capture_listeners[type];
         else if (type === 'popstate') arr = _popstate_listeners;
         else if (type === 'pageshow') arr = _pageshow_listeners;

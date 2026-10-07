@@ -1112,23 +1112,59 @@ function _lumen_capture_flag(options) {
 // and remove it by the ORIGINAL function identity, same as a plain listener.
 var _lumen_once_wrappers = new WeakMap();
 
+// DOM §2.7/§2.8 `passive` (BUG-865): while a passive listener runs the event
+// carries `_inPassive`, which makes `preventDefault()` a no-op. The listener is
+// stored as a wrapper (like `once`) because every consumer of the listener
+// stores calls the entry directly; `_lumen_passive_wrap` is that wrapper and
+// `_lumen_once_wrappers` keeps it findable by the ORIGINAL function.
+var _LUMEN_PASSIVE_DEFAULT_TYPES = { touchstart: 1, touchmove: 1, wheel: 1, mousewheel: 1 };
+
+// The effective passive flag of one registration. `passiveByDefault` is true
+// for the targets the spec lists (Window, Document, document.body); an
+// explicit `passive` always wins over the default.
+function _lumen_passive_flag(options, type, passiveByDefault) {
+    if (options !== null && typeof options === 'object') {
+        var p = options.passive;
+        if (p !== undefined && p !== null) return !!p;
+    }
+    return !!passiveByDefault && _LUMEN_PASSIVE_DEFAULT_TYPES[type] === 1;
+}
+
+function _lumen_passive_wrap(fn) {
+    return function(ev) {
+        if (!ev || typeof ev !== 'object') return fn.apply(this, arguments);
+        var prev = ev._inPassive;
+        ev._inPassive = true;
+        try { return fn.apply(this, arguments); } finally { ev._inPassive = prev; }
+    };
+}
+
 function _lumen_add_listener(nid, type, fn, options) {
     if (typeof fn !== 'function') return;
     var capture = _lumen_capture_flag(options);
+    var passive = false;
+    if (options !== null && typeof options === 'object' || _LUMEN_PASSIVE_DEFAULT_TYPES[type] === 1) {
+        var byDefault = _LUMEN_PASSIVE_DEFAULT_TYPES[type] === 1 &&
+            (nid === _LUMEN_DOC_LISTENER_NID || (typeof document !== 'undefined' && document.body && document.body.__nid__ === nid));
+        passive = _lumen_passive_flag(options, type, byDefault);
+    }
     var store = capture ? _lumen_capture_listeners : _lumen_listeners;
     var key = String(nid) + ':' + String(type);
     if (!store[key]) store[key] = [];
-    var target = fn;
-    if (options && options.once) {
-        var wrapperKey = (capture ? '1:' : '0:') + key;
-        var wrapper = function() {
+    var target = passive ? _lumen_passive_wrap(fn) : fn;
+    var once = !!(options && options.once);
+    if (once) {
+        var inner = target;
+        target = function() {
             _lumen_rm_listener(nid, type, fn, options);
-            return fn.apply(this, arguments);
+            return inner.apply(this, arguments);
         };
+    }
+    if (once || passive) {
+        var wrapperKey = (capture ? '1:' : '0:') + key;
         var perFn = _lumen_once_wrappers.get(fn);
         if (!perFn) { perFn = {}; _lumen_once_wrappers.set(fn, perFn); }
-        perFn[wrapperKey] = wrapper;
-        target = wrapper;
+        perFn[wrapperKey] = target;
     }
     store[key].push(target);
 }
