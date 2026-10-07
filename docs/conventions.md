@@ -47,7 +47,7 @@ Write tests before code for parsers (`html-parser`, `css-parser`, `font`) and al
 - User-facing API: `Result<T, E>` with a meaningful `Error` enum.
 - Internal: `Option` where `None` means "not found" / "not applicable" (not an error).
 - No `panic!` / `unwrap()` / `expect()` in production code; allowed in tests.
-- **A `debug_assert!` is not a check in the profiles everyone builds** — `dev-release` and `release` compile it out, so one guarding a JS-visible spec requirement enforces nothing ([BUG-954](../bugs/BUG-954-OPEN.md)). If it is the only guard, it is not a guard ([`probe-method.md`](probe-method.md)).
+- **A `debug_assert!` is not a check in the profiles everyone builds** — `dev-release` and `release` compile it out, so one guarding a JS-visible spec requirement enforces nothing ([BUG-954](../bugs/BUG-954-FIXED.md)). If it is the only guard, it is not a guard ([`probe-method.md`](probe-method.md)).
 - FFI boundaries (wgpu, future V8): `unsafe` isolated in one module, documented, reviewed.
 
 ---

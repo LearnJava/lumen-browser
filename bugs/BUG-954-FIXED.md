@@ -1,6 +1,6 @@
 # BUG-954 — `appendChild`/`insertBefore` не бросают `HierarchyRequestError` на цикле и вешают движок
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 — `Document::append_child`/`insert_before`/`insert_after` безусловно отказываются строить цикл; JS `appendChild`/`insertBefore` бросают `HierarchyRequestError` (`_lumen_node_contains(c, this)`); тест `crates/js/tests/cases/bug954_insert_cycle.rs`.
 **Тип:** дефект реализованного кода — DOM-дерево и его нативные примитивы вставки уже есть; отсутствует ровно одна проверка (DOM §4.2.3 «pre-insert validity», случай «новый узел — включительный предок родителя»).
 **Заведён:** 2026-09-02 (WPT-RUN-6, срез 33, живая проба `verify_slice33_gaps.py --variant dom-cycle-appendchild`)
 **Область:** dom (`crates/engine/dom/src/lib.rs` — `Document::append_child`/`insert_before`/`insert_after`, единственная защита — `debug_assert!(!self.is_self_or_ancestor(...))`), js (`crates/js/src/v8_runtime/install/dom_core.rs` — `_lumen_append_child`/`_lumen_insert_before` зовут `doc.append_child`/`doc.insert_before` без какой-либо проверки со своей стороны; `crates/js/src/shim/web_api_shim_mid.js:4869` — JS-обёртка `appendChild` тоже ничего не проверяет, кроме CharacterData, BUG-325)

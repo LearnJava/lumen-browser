@@ -1778,12 +1778,12 @@ impl Document {
 
     /// Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first.
     pub fn append_child(&mut self, parent: NodeId, child: NodeId) {
-        debug_assert!(parent != child, "cannot append a node to itself");
-        debug_assert!(
-            !self.is_self_or_ancestor(child, parent),
-            "DEVX-8a: append_child(parent={parent:?}, child={child:?}) would create a DOM cycle: \
-             child is already an ancestor of parent"
-        );
+        // BUG-954: a real check, not `debug_assert!` — in `dev-release` it compiled
+        // to nothing and the cycle hung the engine. The JS layer throws
+        // `HierarchyRequestError` before getting here; this is the backstop.
+        if self.is_self_or_ancestor(child, parent) {
+            return;
+        }
         self.detach(child);
         self.content_journal.note(parent);
         self.content_journal.note(child);
@@ -1799,11 +1799,10 @@ impl Document {
     pub fn insert_after(&mut self, reference: NodeId, new_node: NodeId) {
         let parent = self.nodes[reference.index()].parent;
         if let Some(p) = parent {
-            debug_assert!(
-                !self.is_self_or_ancestor(new_node, p),
-                "DEVX-8a: insert_after(reference={reference:?}, new_node={new_node:?}) would create \
-                 a DOM cycle: new_node is already an ancestor of reference's parent"
-            );
+            // BUG-954: see `append_child` — refuse to build a cycle.
+            if self.is_self_or_ancestor(new_node, p) {
+                return;
+            }
         }
         self.detach(new_node);
         let Some(parent) = parent else { return };
@@ -1842,11 +1841,10 @@ impl Document {
     pub fn insert_before(&mut self, new_node: NodeId, reference: NodeId) {
         let parent = self.nodes[reference.index()].parent;
         if let Some(p) = parent {
-            debug_assert!(
-                !self.is_self_or_ancestor(new_node, p),
-                "DEVX-8a: insert_before(new_node={new_node:?}, reference={reference:?}) would create \
-                 a DOM cycle: new_node is already an ancestor of reference's parent"
-            );
+            // BUG-954: see `append_child` — refuse to build a cycle.
+            if self.is_self_or_ancestor(new_node, p) {
+                return;
+            }
         }
         self.detach(new_node);
         let Some(parent) = parent else { return };
