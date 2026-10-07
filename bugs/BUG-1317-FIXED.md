@@ -1,6 +1,6 @@
 # BUG-1317 — shrink-to-fit grid-контейнера ломается, если элемент размещён по имени линии или области
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 8, `css/css-grid`, вторая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/grid.rs`, `intrinsic.rs` — расчёт max-content ширины контейнера по дорожкам; путь с именованным размещением отличается от числового)
 
@@ -32,3 +32,11 @@ WPT-RUN-14 срез 8: `placement/grid-placement-using-named-grid-lines-001/002/
 ## Как проверить
 
 `css/css-grid/placement/grid-placement-using-named-grid-lines-001.html`, `grid-template-areas-must-keep-named-columns-order-001.html`.
+
+## Решение (2026-10-07, P6)
+
+Причина: `column_placement_in_explicit_grid` (`intrinsic.rs`) принимала только числовые `GridLine::{Auto,Line,Span}`, а `Named`/`NamedLine`/`SpanNamed` отвечала «не внутри явной сетки» — быстрый путь «сумма px-дорожек» отключался, и контейнер падал в правило «заполнить доступную ширину» (inline-grid/float/abspos — 1024, `max-content` — 0).
+
+Исправление: функция теперь вызывает ту же `resolve_grid_axis`, что и размещение (`grid.rs`, `GridAxis`/`resolve_grid_axis` стали `pub(super)`), так что числа, `span`, имена линий и имена областей (`grid-area: a` → `a-start`/`a-end`) разрешаются одинаково с раскладкой. Неизвестное имя даёт неявную линию за явной сеткой — быстрый путь по-прежнему не применяется. Добавлена защита: `grid-template-areas` шире шаблона колонок добавляет авто-колонки, которых сумма px не знает, — тогда откат.
+
+Тесты: `bug1317_*` в `box_tree/tests/intrinsic_and_wrap.rs`. Пиксельный гейт (`graphic_tests/run.py`) в сессии не выполнен — TEST-00 не находит маркер (захват экрана недоступен); `dump_golden.py` — 12/12 совпадают. Ожидания WPT-`.ini` не пересчитывались.

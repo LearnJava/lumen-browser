@@ -320,6 +320,40 @@ fn bug740_single_column_grid_stays_widest_child() {
     assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
 }
 
+// ── BUG-1317: именованное размещение не ломает shrink-to-fit при px-дорожках ──
+
+const NAMED_CSS: &str =
+    "#outer { display: flex; width: 600px; }      .inner { display: inline-grid; grid-template-columns: [x] 25px [y] 25px; }      .leaf { height: 10px; }      .tail { width: 30px; height: 10px; }";
+const NAMED_HTML: &str = r#"<div id="outer">
+    <div class="inner"><div class="leaf" style="grid-column:x"></div><div class="leaf" style="grid-column:y"></div></div>
+    <div class="tail"></div></div>"#;
+
+/// Именованные линии в `grid-column` разрешаются до расчёта: дорожки в px, поэтому
+/// ширина контейнера 50 при любом размещении (до BUG-1317 — вся доступная ширина).
+#[test]
+fn bug1317_named_lines_keep_shrink_to_fit() {
+    assert_eq!(child_widths(NAMED_HTML, NAMED_CSS), vec![50.0, 30.0]);
+}
+
+/// Область `grid-area: a` — неявные линии `a-start`/`a-end`.
+#[test]
+fn bug1317_named_areas_keep_shrink_to_fit() {
+    let css = NAMED_CSS.replace(
+        "grid-template-columns: [x] 25px [y] 25px;",
+        "grid-template-columns: 25px 25px; grid-template-areas: \"a b\";",
+    );
+    let html = NAMED_HTML.replace("grid-column:x", "grid-area:a").replace("grid-column:y", "grid-area:b");
+    assert_eq!(child_widths(&html, &css), vec![50.0, 30.0]);
+}
+
+/// Имя, которого нет среди линий, создаёт неявные колонки — быстрый путь
+/// по явным дорожкам не применяется, ширина — не 50.
+#[test]
+fn bug1317_unknown_name_is_not_in_explicit_grid() {
+    let html = NAMED_HTML.replace("grid-column:x", "grid-column:nope");
+    assert_ne!(child_widths(&html, NAMED_CSS)[0], 50.0);
+}
+
 // ── BUG-738: out-of-flow дети не участвуют в intrinsic-ширине ─────────────
 
 const ABS_CSS: &str =

@@ -873,20 +873,20 @@ fn find_named_area(areas: &[Vec<String>], name: &str) -> Option<(u32, u32, u32, 
 }
 
 /// Явная сетка одной оси для разрешения `<grid-line>` (CSS Grid L1 §8.3).
-struct GridAxis<'a> {
+pub(super) struct GridAxis<'a> {
     /// Число треков явной сетки (линий — на одну больше).
-    n_tracks: u32,
+    pub(super) n_tracks: u32,
     /// Имена линий: индекс `i` — линия номер `i + 1`.
-    names: &'a [Vec<String>],
+    pub(super) names: &'a [Vec<String>],
     /// `grid-template-areas` — источник неявных линий `<area>-start/-end`.
-    areas: &'a [Vec<String>],
+    pub(super) areas: &'a [Vec<String>],
     /// `true` — ось столбцов.
-    is_col: bool,
+    pub(super) is_col: bool,
 }
 
 impl GridAxis<'_> {
     /// Номер последней линии явной сетки.
-    fn last_line(&self) -> u32 {
+    pub(super) fn last_line(&self) -> u32 {
         self.n_tracks + 1
     }
 
@@ -997,7 +997,7 @@ fn resolve_edge(line: &GridLine, axis: &GridAxis, is_start: bool) -> Edge {
 ///
 /// Возвращает `(start, end)` — номера линий, 1-based. `start == 0` означает
 /// авто-позицию: тогда `end` — число занимаемых треков (0 — один).
-fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
+pub(super) fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
     let s = resolve_edge(start, axis, true);
     let mut e = resolve_edge(end, axis, false);
     // Два `span` — end отбрасывается (§8.3.1).
