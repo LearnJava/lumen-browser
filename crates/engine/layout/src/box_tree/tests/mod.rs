@@ -493,6 +493,7 @@ mod flex_vwm3;
 mod flex_vwm4;
 mod flex_vwm5;
 mod fixed_cb;
+mod relative_offset_flow;
 mod grid_vwm;
 mod fieldset_legend;
 mod ruby_pipeline;

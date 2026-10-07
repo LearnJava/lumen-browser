@@ -921,7 +921,9 @@ fn post_child_bookkeeping(
         frame.init.prev_block_mb = merged;
     } else {
         let child = &frame.b.children[idx];
-        frame.init.child_y = child.rect.y + child.rect.height + child_mb;
+        let (_, rel_dy) = super::layout_dispatch::relative_offset(
+            &child.style, child.style.font_size, content_width, viewport);
+        frame.init.child_y = child.rect.y - rel_dy + child.rect.height + child_mb;
         frame.init.prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
     }
     // CSS 2.1 §10.8 — inline-image line-box descent (the classic "image bottom

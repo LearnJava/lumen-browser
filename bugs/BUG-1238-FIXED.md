@@ -72,4 +72,4 @@ JS-тест среза 55 (`crates/js/src/dom/tests/v8_bug935_s55_content_journa
 
 Тест — `v8_bug1238_scoped_collectors` (цепочка инкрементальных флашей против одной полной
 раскладки, 7 сценариев) и три юнита `scoped_collect::tests`. Остаток: расхождение полной и
-инкрементальной раскладки у `position: relative` — [BUG-1240](BUG-1240-OPEN.md).
+инкрементальной раскладки у `position: relative` — [BUG-1240](BUG-1240-FIXED.md).

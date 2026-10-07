@@ -1,6 +1,6 @@
 # BUG-1240 — `position: relative`: смещение утекает в поток, а при инкрементальной раскладке теряется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P3). Родитель отсчитывает курсор потока от несмещённого `rect` (`relative_offset` в `layout_dispatch.rs`, `block_flow_trampoline.rs`); тест `relative_offset_flow.rs`.
 **Тип:** корректность раскладки. Найден P1 при [BUG-1238](BUG-1238-FIXED.md), 2026-10-02.
 **Область:** `crates/engine/layout/src/box_tree/layout_dispatch.rs` (смещение `position: relative`
 через `shift_tree` в конце раскладки блока), инкрементальный путь `lay_out` для чистых поддеревьев.
