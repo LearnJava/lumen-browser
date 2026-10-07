@@ -65,7 +65,9 @@ pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
 
-pub use scoped_collect::{ChainBreaks, ChangedNodes, PlanOptions, Reasons, ScopedCollection, StyleCollectStats};
+pub use scoped_collect::{
+    ChainBreaks, ChangedNodes, CustomPropMaps, PlanOptions, PseudoMaps, Reasons, ScopedCollection, StyleCollectStats,
+};
 
 pub use scroll_initial_target::{apply_scroll_initial_targets, InitialScroll};
 
@@ -1889,39 +1891,67 @@ fn collect_pseudo_computed_styles_rec(
 ) {
     let mut stack: Vec<(&LayoutBox, lumen_dom::NodeId)> = vec![(root, root_owner)];
     while let Some((b, container_owner)) = stack.pop() {
-        if let BoxRole::Pseudo(kind) = b.origin.role
-            && let Some(name) = pseudo_kind_name(kind)
-        {
-            let owner = if kind == PseudoKind::FirstLetter {
-                container_owner
-            } else {
-                b.origin.node.unwrap_or(b.node)
-            };
-            out.entry((owner.index() as u32, name.to_string()))
-                .or_insert_with(|| pseudo_style_map(&b.style, kind));
-        }
-        if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
-            for seg in segments {
-                // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
-                // uses for a pseudo-element whose sole content is `url(...)` — no owner
-                // to key on, so it is silently skipped (rare: image-only generated content).
-                if seg.source_node.index() == 0 {
-                    continue;
-                }
-                if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
-                    let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
-                        container_owner
-                    } else {
-                        seg.source_node
-                    };
-                    out.entry((owner.index() as u32, name.to_string()))
-                        .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
-                }
-            }
-        }
+        collect_pseudo_computed_styles_box(b, container_owner, out);
         for child in b.children.iter().rev() {
             stack.push((child, b.node));
         }
+    }
+}
+
+/// One box's contribution to [`collect_pseudo_computed_styles`]: its own entry when it is a
+/// pseudo-element box, and the entries of the pseudo-element segments an `InlineRun` flattens.
+/// `container_owner` is the node of the box whose `children` list `b` lives in.
+pub(crate) fn collect_pseudo_computed_styles_box(
+    b: &LayoutBox,
+    container_owner: lumen_dom::NodeId,
+    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+) {
+    if let BoxRole::Pseudo(kind) = b.origin.role
+        && let Some(name) = pseudo_kind_name(kind)
+    {
+        let owner = if kind == PseudoKind::FirstLetter {
+            container_owner
+        } else {
+            b.origin.node.unwrap_or(b.node)
+        };
+        out.entry((owner.index() as u32, name.to_string()))
+            .or_insert_with(|| pseudo_style_map(&b.style, kind));
+    }
+    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+        for seg in segments {
+            // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
+            // uses for a pseudo-element whose sole content is `url(...)` — no owner
+            // to key on, so it is silently skipped (rare: image-only generated content).
+            if seg.source_node.index() == 0 {
+                continue;
+            }
+            if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
+                let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
+                    container_owner
+                } else {
+                    seg.source_node
+                };
+                out.entry((owner.index() as u32, name.to_string()))
+                    .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+            }
+        }
+    }
+}
+
+/// The pseudo-element names [`collect_pseudo_computed_styles`] keys by.
+const PSEUDO_NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
+
+/// Drops every pseudo-element entry owned by the node with `NodeId::index` `node`
+/// (BUG-935 срез 95: the scoped flush evicts the entries of what it rebuilds).
+pub fn forget_pseudo_computed_styles(
+    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+    node: u32,
+) {
+    if out.is_empty() {
+        return;
+    }
+    for name in PSEUDO_NAMES {
+        out.remove(&(node, name.to_string()));
     }
 }
 
@@ -1989,36 +2019,53 @@ fn collect_custom_properties_rec(
 ) {
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        // First box in tree order wins — see `collect_layout_rects_rec` for why
-        // several boxes can carry the same `NodeId`.
-        if !b.style.custom_props.is_empty() {
-            let key = b.style.custom_props.as_ptr() as usize;
-            let map = match resolved.get(&key) {
-                Some(m) => std::sync::Arc::clone(m),
-                None => {
-                    let raw = b.style.custom_props.shared();
-                    let em_basis = b.style.font_size;
-                    let m = std::sync::Arc::new(
-                        raw.iter()
-                            .map(|(name, value)| {
-                                let computed = crate::style::expand_vars_and_env(
-                                    value, &raw, em_basis, viewport,
-                                )
-                                .unwrap_or_default();
-                                (name.clone(), computed.trim().to_string())
-                            })
-                            .collect::<std::collections::HashMap<String, String>>(),
-                    );
-                    resolved.insert(key, std::sync::Arc::clone(&m));
-                    m
-                }
-            };
-            out.entry(b.node.index() as u32).or_insert(map);
-        }
+        collect_custom_properties_box(b, viewport, out, resolved);
         for child in b.children.iter().rev() {
             stack.push(child);
         }
     }
+}
+
+/// One box's contribution to [`collect_custom_properties`].
+pub(crate) fn collect_custom_properties_box(
+    b: &LayoutBox,
+    viewport: lumen_core::geom::Size,
+    out: &mut std::collections::HashMap<
+        u32,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+    resolved: &mut std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+) {
+    // First box in tree order wins — see `collect_layout_rects_rec` for why
+    // several boxes can carry the same `NodeId`.
+    if b.style.custom_props.is_empty() {
+        return;
+    }
+    let key = b.style.custom_props.as_ptr() as usize;
+    let map = match resolved.get(&key) {
+        Some(m) => std::sync::Arc::clone(m),
+        None => {
+            let raw = b.style.custom_props.shared();
+            let em_basis = b.style.font_size;
+            let m = std::sync::Arc::new(
+                raw.iter()
+                    .map(|(name, value)| {
+                        let computed = crate::style::expand_vars_and_env(
+                            value, &raw, em_basis, viewport,
+                        )
+                        .unwrap_or_default();
+                        (name.clone(), computed.trim().to_string())
+                    })
+                    .collect::<std::collections::HashMap<String, String>>(),
+            );
+            resolved.insert(key, std::sync::Arc::clone(&m));
+            m
+        }
+    };
+    out.entry(b.node.index() as u32).or_insert(map);
 }
 
 // ──────────────── collect_layout_rects ────────────────

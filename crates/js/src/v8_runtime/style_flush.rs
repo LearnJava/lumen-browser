@@ -790,20 +790,74 @@ impl FlushHandles {
         // properties or `CSS.highlights`), so they stay full-document,
         // gated only by their existing `_needed` flags, matching the
         // pre-BUG-1211 behaviour exactly.
+        //
+        // BUG-935 срез 95: all but the text frags are scoped now. rbc.ru reads both, and the
+        // whole-document walk plus the drop of the previous map (a `HashMap<String, String>` of
+        // ~150 properties per pseudo box) was 57 % of its forced-flush time (5,4 of 9,4 s over 104
+        // flushes). Both entries are functions of a box's style alone, so what the plan collects
+        // (everything a dirty root rebuilt) is all there is to refresh; the ids the flush evicts
+        // for the geometry caches are the ones evicted here.
+        // `LUMEN_NO_SCOPE_PRUNE=1` (the way back for the scoped collectors) brings the whole-document
+        // walk of both back as well.
+        let scoped_ids = incr_scope
+            .as_ref()
+            .filter(|_| !scope_prune_disabled() && !self.scope_prune_off.load(Ordering::Relaxed))
+            .map(|(_, prev_node_ids, _, _)| evict_sets.as_ref().map_or(prev_node_ids, |(index, _)| index));
         if self.pseudo_styles_needed.load(Ordering::Relaxed) {
-            *self
-                .pseudo_computed_styles
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) =
-                lumen_layout::collect_pseudo_computed_styles(&layout_root);
+            let _pseudo_scope = lumen_core::profile::scope("flush.pseudo_styles");
+            let mut pseudo = self.pseudo_computed_styles.lock().unwrap_or_else(|e| e.into_inner());
+            match (&scoped_plan, scoped_ids) {
+                (Some(plan), Some(ids)) if self.pseudo_styles_collected.load(Ordering::Relaxed) => {
+                    for nid in ids {
+                        if !plan.keeps_published(*nid) {
+                            lumen_layout::forget_pseudo_computed_styles(&mut pseudo, *nid);
+                        }
+                    }
+                    plan.collect_pseudo_computed_styles(&mut pseudo);
+                    if verify_scope_prune() {
+                        // Entries of nodes the tree has no box for any more (a detached subtree the
+                        // shell's own, older snapshot still named) are not what this checks: no read
+                        // of a live element can reach them.
+                        let full = lumen_layout::collect_pseudo_computed_styles(&layout_root);
+                        let stale = full.iter().filter(|(k, v)| pseudo.get(*k) != Some(*v)).count();
+                        if stale > 0 {
+                            eprintln!(
+                                "[verify] scope-prune STALE pseudo styles: held {} full {} stale {stale}",
+                                pseudo.len(),
+                                full.len()
+                            );
+                        }
+                    }
+                }
+                _ => *pseudo = lumen_layout::collect_pseudo_computed_styles(&layout_root),
+            }
             self.pseudo_styles_collected.store(true, Ordering::Relaxed);
         }
         if self.custom_props_needed.load(Ordering::Relaxed) {
-            *self
-                .custom_properties
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) =
-                lumen_layout::collect_custom_properties(&layout_root, viewport);
+            let _custom_scope = lumen_core::profile::scope("flush.custom_props");
+            let mut custom = self.custom_properties.lock().unwrap_or_else(|e| e.into_inner());
+            match (&scoped_plan, scoped_ids) {
+                (Some(plan), Some(ids)) if self.custom_props_collected.load(Ordering::Relaxed) => {
+                    for nid in ids {
+                        if !plan.keeps_published(*nid) {
+                            custom.remove(nid);
+                        }
+                    }
+                    plan.collect_custom_properties(viewport, &mut custom);
+                    if verify_scope_prune() {
+                        let full = lumen_layout::collect_custom_properties(&layout_root, viewport);
+                        let stale = full.iter().filter(|(k, v)| custom.get(*k) != Some(*v)).count();
+                        if stale > 0 {
+                            eprintln!(
+                                "[verify] scope-prune STALE custom properties: held {} full {} stale {stale}",
+                                custom.len(),
+                                full.len()
+                            );
+                        }
+                    }
+                }
+                _ => *custom = lumen_layout::collect_custom_properties(&layout_root, viewport),
+            }
             self.custom_props_collected.store(true, Ordering::Relaxed);
         }
         if self.text_frags_needed.load(Ordering::Relaxed) {

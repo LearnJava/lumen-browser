@@ -292,6 +292,7 @@ mod v8_bug935_s60_shallow_roots;
 mod v8_bug935_s68_attr_local_roots;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s70_scope_prune;
+mod v8_bug935_s95_pseudo_custom_scope;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s74_node_index_cache;
 #[cfg(feature = "v8-backend")]
