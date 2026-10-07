@@ -2846,7 +2846,7 @@ mod tests {
         // Differing per-side values → 4-value shorthand (BUG-1050).
         let m = div_computed_map(
             "<div>x</div>",
-            "div { border-top-width: 1px; border-right-width: 2px; border-bottom-width: 3px; border-left-width: 4px; }",
+            "div { border-top-width: 1px; border-right-width: 2px; border-bottom-width: 3px; border-left-width: 4px; border-style: solid; }",
         );
         assert_eq!(m.get("border-width").map(String::as_str), Some("1px 2px 3px 4px"));
     }

@@ -1395,6 +1395,13 @@ pub(crate) fn compute_style_shareable(
     // CSS Logical Properties L1 — resolve logical properties to physical.
     resolve_logical_properties(&mut style);
 
+    // CSS Backgrounds L3 §4.2 — the computed `border-*-width` is `0` when the side's
+    // `border-style` is `none` or `hidden`: `border-width: 10px` without a style draws
+    // nothing and takes no room (WPT `grid-baseline-004`: `.style3 { border-width: … }`
+    // on an element that never gets `border-style`). Runs after logical → physical so
+    // `border-block-*` sides are covered too.
+    zero_unstyled_border_widths(&mut style);
+
     // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
     // apply_ua_form_controls ran before the cascade and may have set explicit UA
     // dimensions. Now that field_sizing is final, clear width/height for text-entry
@@ -1433,4 +1440,23 @@ pub(crate) fn compute_style_shareable(
     apply_zoom_to_lengths(&mut style, z, rem_k, root_k);
 
     (style, shareable)
+}
+
+/// CSS Backgrounds L3 §4.2: a side whose `border-style` is `none`/`hidden` has a computed
+/// width of `0` whatever `border-width` says.
+fn zero_unstyled_border_widths(style: &mut ComputedStyle) {
+    use crate::BorderStyle;
+    let unstyled = |s: BorderStyle| matches!(s, BorderStyle::None | BorderStyle::Hidden);
+    if unstyled(style.border_top_style) {
+        style.border_top_width = 0.0;
+    }
+    if unstyled(style.border_right_style) {
+        style.border_right_width = 0.0;
+    }
+    if unstyled(style.border_bottom_style) {
+        style.border_bottom_width = 0.0;
+    }
+    if unstyled(style.border_left_style) {
+        style.border_left_width = 0.0;
+    }
 }

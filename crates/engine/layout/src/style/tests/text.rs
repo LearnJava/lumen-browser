@@ -845,7 +845,7 @@ use super::*;
 
     #[test]
     fn border_inline_start_width_longhand() {
-        let s = cascade_at("<div>", "div { border-inline-start-width: 5px; }", &[0]);
+        let s = cascade_at("<div>", "div { border-inline-start-width: 5px; border-inline-start-style: solid; }", &[0]);
         assert!((s.border_left_width - 5.0).abs() < 0.1);
     }
 
