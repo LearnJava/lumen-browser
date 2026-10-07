@@ -267,7 +267,7 @@ impl GridInit {
         let (x, y) = self.probe_origin(c0);
         let offer = self.inline_offer(item, cell_in, viewport, measurer);
         match self.vertical {
-            None => (x, y, offer, None),
+            None => (x, y, offer, self.orthogonal_fit_height(item, cell_in, None, viewport, measurer)),
             Some(g) => {
                 // Элемент ортогонального (горизонтального) режима: физическая ширина — его
                 // inline-размер, и размер строки неизвестен, пока строки не разрешены, поэтому
@@ -297,9 +297,34 @@ impl GridInit {
     ) -> (f32, f32, f32, Option<f32>) {
         let offer = self.inline_offer(item, cell_in, viewport, measurer);
         match self.vertical {
-            None => (origin.0, origin.1, offer, cell_block),
+            None => (
+                origin.0,
+                origin.1,
+                offer,
+                self.orthogonal_fit_height(item, cell_in, cell_block, viewport, measurer).or(cell_block),
+            ),
             Some(g) => (origin.0, origin.1, cell_block.unwrap_or(g.block_avail), Some(offer)),
         }
+    }
+
+    /// Горизонтальная сетка: item ортогонального (вертикального) режима с `height: auto` и
+    /// выравниванием не `stretch` (baseline, `start`, `center`…) обтягивает содержимое по своему
+    /// inline-размеру — физической высоте — вместо того чтобы занять всю область (Grid L1 §11.2,
+    /// Writing Modes L3 §7.3.1; WPT `grid-align-baseline-003`). `cell_block` ограничивает
+    /// результат. `None` — item не такой.
+    fn orthogonal_fit_height(
+        &self,
+        item: &LayoutBox,
+        cell_in: f32,
+        cell_block: Option<f32>,
+        viewport: Size,
+        measurer: Option<&dyn TextMeasurer>,
+    ) -> Option<f32> {
+        if self.vertical.is_some() || is_stretch(super::baseline::resolved_align(&item.style, &self.s)) {
+            return None;
+        }
+        let fit = super::intrinsic::orthogonal_fit_content_height(item, cell_in, measurer, viewport)?;
+        Some(cell_block.map_or(fit, |c| fit.min(c)))
     }
 
     /// Аргументы для элемента без размещения: горизонтальная сетка кладёт его стопкой под
@@ -312,13 +337,15 @@ impl GridInit {
         }
     }
 
-    /// Вклад элемента в размер строки (block-ось): высота border box в горизонтальном
-    /// режиме, ширина margin box — в вертикальном.
+    /// Вклад элемента в размер строки (block-ось): высота margin box в обоих режимах
+    /// (CSS Grid L1 §11.5 — вклад item'а считается по внешнему размеру).
     pub(super) fn item_block_size(&self, item: &LayoutBox, viewport: Size) -> f32 {
-        if self.vertical.is_none() {
-            return item.rect.height;
-        }
         let em = item.style.font_size;
+        if self.vertical.is_none() {
+            return item.rect.height
+                + item.style.margin_top.resolve_or_zero(em, self.content_width, viewport)
+                + item.style.margin_bottom.resolve_or_zero(em, self.content_width, viewport);
+        }
         item.rect.width
             + item.style.margin_left.resolve_or_zero(em, self.content_width, viewport)
             + item.style.margin_right.resolve_or_zero(em, self.content_width, viewport)
@@ -512,6 +539,26 @@ pub(super) fn block_ascent(
     (ascent, item.rect.width + m_l + m_r)
 }
 
+/// `justify-self` grid-item'а с учётом `justify-items` контейнера.
+pub(super) fn resolved_justify(item: &ComputedStyle, container: &ComputedStyle) -> AlignValue {
+    if matches!(item.justify_self, AlignValue::Auto) { container.justify_items } else { item.justify_self }
+}
+
+/// Группа baseline-выравнивания строки вертикальной сетки (`First` — прижата к кромке начала
+/// block-оси, `Last` — к кромке конца) для item'а, запросившего линию стороны `requested`.
+/// Линия тянется к краю, который задаёт режим самого item'а (`baseline_phys_side_in_axis`):
+/// `first baseline` бокса `vertical-rl` в сетке `vertical-lr` лежит у правого края, то есть у
+/// конца строки (WPT `grid-align-baseline-001`).
+pub(super) fn group_side(init: &GridInit, geom: VGridGeom, item: &LayoutBox, requested: BaselineSide) -> BaselineSide {
+    use super::baseline::{baseline_phys_side_in_axis, PhysSide};
+    let start = if geom.rl { PhysSide::Max } else { PhysSide::Min };
+    if baseline_phys_side_in_axis(item, &init.s, true, requested) == start {
+        BaselineSide::First
+    } else {
+        BaselineSide::Last
+    }
+}
+
 /// CSS Grid L1 §6.1 для вертикальной сетки: первая и последняя базовая линия контейнера как
 /// расстояние по `x` от левой кромки его border box (так их читает
 /// `baseline::vertical_content_baseline`). Первая — общая линия группы `first baseline` первой
@@ -560,12 +607,16 @@ pub(super) fn container_baselines(
             }
         })
     };
-    let first = group_baseline(0, BaselineSide::First).or_else(|| {
-        placed.iter().copied().find(|&k| starts_in_row(k, 0)).map(|k| item_baseline(k, BaselineSide::First))
+    // Пустая первая (последняя) строка не мешает: берётся ближайшая строка с items.
+    let first = (0..n_rows).find_map(|r| {
+        group_baseline(r, BaselineSide::First).or_else(|| {
+            placed.iter().copied().find(|&k| starts_in_row(k, r)).map(|k| item_baseline(k, BaselineSide::First))
+        })
     });
-    let last_row = n_rows - 1;
-    let last = group_baseline(last_row, BaselineSide::Last).or_else(|| {
-        placed.iter().rev().copied().find(|&k| ends_in_row(k, last_row)).map(|k| item_baseline(k, BaselineSide::Last))
+    let last = (0..n_rows).rev().find_map(|r| {
+        group_baseline(r, BaselineSide::Last).or_else(|| {
+            placed.iter().rev().copied().find(|&k| ends_in_row(k, r)).map(|k| item_baseline(k, BaselineSide::Last))
+        })
     });
     match (first, last) {
         (None, None) => None,
@@ -661,6 +712,7 @@ pub(super) fn place_item(
     // justify-* — inline-ось (физический `y`).
     let justify_auto = matches!(is.justify_self, AlignValue::Auto);
     let justify = if justify_auto { s.justify_items } else { is.justify_self };
+    let justify_baseline = matches!(justify, AlignValue::Baseline | AlignValue::LastBaseline);
     let justify = resolve_own(
         justify,
         if justify_auto { s.content_align_extra.justify_items_own } else { is.content_align_extra.justify_self_own },
@@ -687,7 +739,22 @@ pub(super) fn place_item(
     } else {
         (is.margin_top.is_auto(), is.margin_bottom.is_auto())
     };
-    let off_in = axis_offset(justify, cell_in, item.rect.height, m_is, m_ie, auto_is, auto_ie);
+    let off_in = match init.item_col_baselines[k] {
+        // CSS Grid L1 §6.2: общая линия группы столбца — на подъёме группы от кромки начала
+        // оси (`First`) либо на спуске от кромки конца (`Last`); `ascent` отсчитан от кромки
+        // начала, как и сам сдвиг (`off_in`).
+        Some(ib) if justify_baseline && !(auto_is || auto_ie) => {
+            let bl = ib.ascent - m_is;
+            match ib.side {
+                BaselineSide::First => init.col_first_group[c0].0 - bl,
+                BaselineSide::Last => {
+                    let last_col = c1.saturating_sub(1).max(c0);
+                    cell_in - init.col_last_group[last_col].1 - bl
+                }
+            }
+        }
+        _ => axis_offset(justify, cell_in, item.rect.height, m_is, m_ie, auto_is, auto_ie),
+    };
 
     // Растянутый по block-оси элемент раскладывается заново с итоговой шириной: потомки
     // (вложенные flex/grid, `%`) должны увидеть её, а не размер по содержимому.
