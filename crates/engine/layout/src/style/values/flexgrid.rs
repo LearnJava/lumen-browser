@@ -172,6 +172,71 @@ pub struct GridRepeat {
     pub before: Vec<GridTrackSize>,
     /// Tracks written after the auto `repeat()` (`[1fr]` in the example above).
     pub after: Vec<GridTrackSize>,
+    /// Line names written around and inside the `repeat()`; expanded together with the tracks.
+    pub names: RepeatLineNames,
+}
+
+/// Line names of a track list with one auto `repeat()` (CSS Grid L1 §7.2.2): the names written
+/// before, inside and after it. Each part lists the names of its lines, `tracks + 1` groups: the
+/// first group of `rep` / `after` is the line it shares with the end of the previous part.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RepeatLineNames {
+    pub before: Vec<Vec<String>>,
+    pub rep: Vec<Vec<String>>,
+    pub after: Vec<Vec<String>>,
+}
+
+impl RepeatLineNames {
+    /// Names of every line of the track list with the repeat expanded `count` times (`tracks + 1`
+    /// groups). The names on the seam between two repetitions, or between the repeat and its
+    /// neighbours, merge into one line.
+    pub fn expand(&self, count: usize) -> Vec<Vec<String>> {
+        let mut out = self.before.clone();
+        if out.is_empty() {
+            out.push(Vec::new());
+        }
+        if let Some((seam, inner)) = self.rep.split_first() {
+            for _ in 0..count {
+                if let Some(last) = out.last_mut() {
+                    last.extend(seam.iter().cloned());
+                }
+                out.extend(inner.iter().cloned());
+            }
+        }
+        if let Some((seam, rest)) = self.after.split_first() {
+            if let Some(last) = out.last_mut() {
+                last.extend(seam.iter().cloned());
+            }
+            out.extend(rest.iter().cloned());
+        }
+        out
+    }
+}
+
+/// Where `repeat(auto-fill, <line-names>+)` sits in the line-name list of `subgrid <line-name-list>`
+/// (CSS Grid L2 §9): `names[at..at + len]` is one repetition (written once in the stored list).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameFill {
+    pub at: usize,
+    pub len: usize,
+}
+
+impl NameFill {
+    /// The names of the `lines` lines of a subgrid: the repeat is repeated as many times as fit
+    /// next to the names written around it (possibly none), the list is cut at `lines`.
+    pub fn expand(self, names: &[Vec<String>], lines: usize) -> Vec<Vec<String>> {
+        let at = self.at.min(names.len());
+        let end = (self.at + self.len).min(names.len());
+        let outside = names.len() - (end - at);
+        let times = lines.saturating_sub(outside).checked_div(self.len).unwrap_or(0);
+        let mut out = names[..at].to_vec();
+        for _ in 0..times {
+            out.extend_from_slice(&names[at..end]);
+        }
+        out.extend_from_slice(&names[end..]);
+        out.truncate(lines);
+        out
+    }
 }
 
 /// Count type for grid-template-columns/rows `repeat()`.
@@ -305,7 +370,9 @@ impl GridTrackSize {
     pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
         let trimmed = s.trim();
         // CSS Grid L2 §9: `subgrid` replaces the entire track list for that axis.
-        if trimmed.eq_ignore_ascii_case("subgrid") {
+        if let Some(rest) = strip_subgrid_keyword(trimmed)
+            && parse_subgrid_names(rest).is_some()
+        {
             return vec![Self::Subgrid];
         }
         // CSS Grid L3 §14: `masonry` replaces the entire track list — waterfall placement axis.
@@ -368,7 +435,7 @@ impl GridTrackSize {
 /// (CSS Grid L1 §7.2.3.4, CSS Grid L2 §7.2.3.2). `None` when the list has no auto repeat,
 /// or has more than one (invalid).
 pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
-    let mut found: Option<(RepeatCount, Vec<GridTrackSize>)> = None;
+    let mut found: Option<(RepeatCount, Vec<GridTrackSize>, Vec<Vec<String>>)> = None;
     let (mut before, mut after): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
     for tok in split_track_list_tokens(s.trim()) {
         let lc = tok.to_ascii_lowercase();
@@ -391,7 +458,7 @@ pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
                 if tracks.is_empty() {
                     return None;
                 }
-                found = Some((count, tracks));
+                found = Some((count, tracks, collect_line_names(orig_rest.trim(), false).1));
                 continue;
             }
         }
@@ -401,12 +468,18 @@ pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
             before.push(tok);
         }
     }
-    let (count, tracks) = found?;
+    let (count, tracks, rep_names) = found?;
+    let (before, after) = (before.join(" "), after.join(" "));
     Some(GridRepeat {
         count,
         tracks,
-        before: GridTrackSize::parse_track_list(&before.join(" "), false),
-        after: GridTrackSize::parse_track_list(&after.join(" "), false),
+        names: RepeatLineNames {
+            before: collect_line_names(&before, false).1,
+            rep: rep_names,
+            after: collect_line_names(&after, false).1,
+        },
+        before: GridTrackSize::parse_track_list(&before, false),
+        after: GridTrackSize::parse_track_list(&after, false),
     })
 }
 
@@ -434,10 +507,13 @@ fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
 /// `none` дают пустой список.
 pub(crate) fn parse_track_line_names(s: &str, is_quirks: bool) -> Vec<Vec<String>> {
     let trimmed = s.trim();
-    if trimmed.eq_ignore_ascii_case("subgrid")
-        || trimmed.eq_ignore_ascii_case("masonry")
-        || trimmed.eq_ignore_ascii_case("none")
-    {
+    if let Some(rest) = strip_subgrid_keyword(trimmed) {
+        return match parse_subgrid_names(rest) {
+            Some((names, fill)) if fill.is_some() || names.iter().any(|g| !g.is_empty()) => names,
+            _ => Vec::new(),
+        };
+    }
+    if trimmed.eq_ignore_ascii_case("masonry") || trimmed.eq_ignore_ascii_case("none") {
         return Vec::new();
     }
     let (_, names) = collect_line_names(trimmed, is_quirks);
@@ -446,6 +522,76 @@ pub(crate) fn parse_track_line_names(s: &str, is_quirks: bool) -> Vec<Vec<String
         return Vec::new();
     }
     names
+}
+
+/// Position of the `repeat(auto-fill, …)` among the line names of `subgrid <line-name-list>`;
+/// `None` — the value is not a subgrid or has no auto-fill repeat.
+pub(crate) fn parse_subgrid_name_fill(s: &str) -> Option<NameFill> {
+    parse_subgrid_names(strip_subgrid_keyword(s.trim())?)?.1
+}
+
+/// The text after a leading `subgrid` keyword (`subgrid [a] [b]` → ` [a] [b]`); `None` when the
+/// value does not start with the keyword.
+fn strip_subgrid_keyword(s: &str) -> Option<&str> {
+    let head = s.get(.."subgrid".len())?;
+    let rest = &s["subgrid".len()..];
+    (head.eq_ignore_ascii_case("subgrid") && rest.chars().next().is_none_or(|c| c.is_whitespace() || c == '['))
+        .then_some(rest)
+}
+
+/// `[a b][c]` → the name groups, one per bracket pair; `None` on anything but brackets.
+fn bracket_groups(tok: &str) -> Option<Vec<Vec<String>>> {
+    let mut groups = Vec::new();
+    let mut rest = tok.trim();
+    while !rest.is_empty() {
+        let inner = rest.strip_prefix('[')?;
+        let close = inner.find(']')?;
+        let names: Vec<String> = inner[..close].split_whitespace().map(str::to_string).collect();
+        if !names.iter().all(|n| is_css_ident(n)) {
+            return None;
+        }
+        groups.push(names);
+        rest = inner[close + 1..].trim_start();
+    }
+    Some(groups)
+}
+
+/// `<line-name-list>` of `subgrid` (CSS Grid L2 §9): `[a] [b b2] repeat(2, [c] [d]) repeat(auto-fill, [e])`.
+/// Every bracket pair is one line; a fixed `repeat()` is expanded, the single `auto-fill` one is kept
+/// once and reported as a [`NameFill`]. `None` — not a valid list.
+fn parse_subgrid_names(s: &str) -> Option<(Vec<Vec<String>>, Option<NameFill>)> {
+    let mut names: Vec<Vec<String>> = Vec::new();
+    let mut fill = None;
+    for tok in split_track_list_tokens(s.trim()) {
+        let lc = tok.to_ascii_lowercase();
+        let Some(inner) = lc.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')')) else {
+            names.extend(bracket_groups(tok)?);
+            continue;
+        };
+        let (count, _) = split_paren_aware_comma(inner)?;
+        let (_, body) = split_paren_aware_comma(tok.get("repeat(".len()..tok.len() - 1)?)?;
+        let groups = split_track_list_tokens(body.trim())
+            .into_iter()
+            .map(bracket_groups)
+            .collect::<Option<Vec<_>>>()?
+            .concat();
+        if groups.is_empty() {
+            return None;
+        }
+        if count.trim() == "auto-fill" {
+            if fill.is_some() {
+                return None;
+            }
+            fill = Some(NameFill { at: names.len(), len: groups.len() });
+            names.extend(groups);
+        } else {
+            let times = count.trim().parse::<usize>().ok().filter(|&n| n >= 1)?;
+            for _ in 0..times {
+                names.extend(groups.iter().cloned());
+            }
+        }
+    }
+    Some((names, fill))
 }
 
 fn collect_line_names(s: &str, is_quirks: bool) -> (usize, Vec<Vec<String>>) {

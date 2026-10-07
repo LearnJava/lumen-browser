@@ -10,8 +10,9 @@ use lumen_core::geom::Size;
 
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::{
-    parse_auto_repeat, parse_grid_template_areas, parse_length, parse_track_line_names, ComputedStyle, CssColor,
-    FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Length,
+    parse_auto_repeat, parse_grid_template_areas, parse_length, parse_subgrid_name_fill, parse_track_line_names,
+    ComputedStyle, CssColor,
+    FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Length, NameFill,
     TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextWrapMode, TextWrapStyle, WhiteSpace,
 };
@@ -702,7 +703,7 @@ fn is_line_names(tok: &str) -> bool {
 }
 
 /// Значения осевого списка шортхенда: треки, метаданные auto-repeat и имена линий.
-type AxisTracks = (Vec<GridTrackSize>, Option<GridRepeat>, Vec<Vec<String>>);
+type AxisTracks = (Vec<GridTrackSize>, Option<GridRepeat>, Vec<Vec<String>>, Option<NameFill>);
 
 /// Разбор `<track-list>` оси: `None` — невалидный список (декларация целиком
 /// невалидна). `none` даёт пустой список.
@@ -713,14 +714,14 @@ fn parse_axis_tracks(s: &str, is_quirks: bool) -> Option<AxisTracks> {
         .collect::<Vec<_>>()
         .join(" ");
     if cleaned.eq_ignore_ascii_case("none") {
-        return Some((Vec::new(), None, Vec::new()));
+        return Some((Vec::new(), None, Vec::new(), None));
     }
     let tracks = GridTrackSize::parse_track_list(&cleaned, is_quirks);
     if tracks.is_empty() {
         return None;
     }
     let names = parse_track_line_names(s, is_quirks);
-    Some((tracks, parse_auto_repeat(&cleaned), names))
+    Some((tracks, parse_auto_repeat(s), names, parse_subgrid_name_fill(s)))
 }
 
 /// Разобранные longhand-ы `grid-template-*` (initial = пустые).
@@ -733,6 +734,8 @@ struct GridTemplateParts {
     areas: Vec<Vec<String>>,
     row_names: Vec<Vec<String>>,
     col_names: Vec<Vec<String>>,
+    row_fill: Option<NameFill>,
+    col_fill: Option<NameFill>,
 }
 
 impl GridTemplateParts {
@@ -744,6 +747,8 @@ impl GridTemplateParts {
         style.grid_template_areas = self.areas;
         style.grid_template_row_line_names = self.row_names;
         style.grid_template_col_line_names = self.col_names;
+        style.grid_template_row_subgrid_fill = self.row_fill;
+        style.grid_template_col_subgrid_fill = self.col_fill;
     }
 }
 
@@ -783,10 +788,11 @@ fn parse_grid_template_with_areas(
         return None; // непрямоугольная сетка или пустая строка
     }
     if let Some(cols) = right {
-        let (columns, col_repeat, col_names) = parse_axis_tracks(cols, is_quirks)?;
+        let (columns, col_repeat, col_names, col_fill) = parse_axis_tracks(cols, is_quirks)?;
         parts.columns = columns;
         parts.col_repeat = col_repeat;
         parts.col_names = col_names;
+        parts.col_fill = col_fill;
     }
     Some(parts)
 }
@@ -805,8 +811,8 @@ fn parse_grid_template(val: &str, is_quirks: bool) -> Option<GridTemplateParts> 
         return parse_grid_template_with_areas(left, right, is_quirks);
     }
     // `<'grid-template-rows'> / <'grid-template-columns'>` — `/` обязателен.
-    let (rows, row_repeat, row_names) = parse_axis_tracks(left, is_quirks)?;
-    let (columns, col_repeat, col_names) = parse_axis_tracks(right?, is_quirks)?;
+    let (rows, row_repeat, row_names, row_fill) = parse_axis_tracks(left, is_quirks)?;
+    let (columns, col_repeat, col_names, col_fill) = parse_axis_tracks(right?, is_quirks)?;
     Some(GridTemplateParts {
         rows,
         columns,
@@ -815,6 +821,8 @@ fn parse_grid_template(val: &str, is_quirks: bool) -> Option<GridTemplateParts> 
         areas: Vec::new(),
         row_names,
         col_names,
+        row_fill,
+        col_fill,
     })
 }
 
@@ -893,10 +901,10 @@ pub(in crate::style) fn apply_grid_shorthand(
     match (lf, rf) {
         // `auto-flow [dense]? <auto-rows>? / <template-columns>`
         (Some((dense, auto_rows)), None) => {
-            let Some((columns, col_repeat, col_names)) = parse_axis_tracks(right, is_quirks) else {
+            let Some((columns, col_repeat, col_names, col_fill)) = parse_axis_tracks(right, is_quirks) else {
                 return false;
             };
-            GridTemplateParts { columns, col_repeat, col_names, ..Default::default() }.apply(style);
+            GridTemplateParts { columns, col_repeat, col_names, col_fill, ..Default::default() }.apply(style);
             style.grid_auto_rows = auto_rows;
             style.grid_auto_columns = GridTrackSize::Auto;
             style.grid_auto_flow = if dense { GridAutoFlow::RowDense } else { GridAutoFlow::Row };
@@ -904,10 +912,10 @@ pub(in crate::style) fn apply_grid_shorthand(
         }
         // `<template-rows> / auto-flow [dense]? <auto-columns>?`
         (None, Some((dense, auto_columns))) => {
-            let Some((rows, row_repeat, row_names)) = parse_axis_tracks(left, is_quirks) else {
+            let Some((rows, row_repeat, row_names, row_fill)) = parse_axis_tracks(left, is_quirks) else {
                 return false;
             };
-            GridTemplateParts { rows, row_repeat, row_names, ..Default::default() }.apply(style);
+            GridTemplateParts { rows, row_repeat, row_names, row_fill, ..Default::default() }.apply(style);
             style.grid_auto_columns = auto_columns;
             style.grid_auto_rows = GridTrackSize::Auto;
             style.grid_auto_flow =

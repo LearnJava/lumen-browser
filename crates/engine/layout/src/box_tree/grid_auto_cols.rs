@@ -80,12 +80,15 @@ fn inline_edges(b: &LayoutBox, viewport: Size) -> (f32, f32) {
 /// (or subgrid) whose first track is track `base_col` of the sized grid and
 /// which has `n_cols` tracks. `edge_start` / `edge_end` is the extra
 /// margin/border/padding of the enclosing subgrids that an item on the first /
-/// last track must carry (Grid L2 §9, "extra margin").
+/// last track must carry (Grid L2 §9, "extra margin"). `col_names` — the names of the
+/// `n_cols + 1` column lines of this (sub)grid; a subgrid item adds the parent lines it spans
+/// to its own names (Grid L2 §9), which its items may be placed by.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn collect_col_contributions(
     children: &[LayoutBox],
     item_idxs: &[usize],
     placements: &[(u32, u32, u32, u32)],
+    col_names: &[Vec<String>],
     n_cols: usize,
     base_col: usize,
     edge_start: f32,
@@ -109,17 +112,25 @@ pub(super) fn collect_col_contributions(
             let sub_idxs = grid_item_indices(&item.children);
             let st = &item.style;
             let rows_len = st.grid_template_rows.len();
+            let sub_names = super::grid::subgrid_line_names(
+                &st.grid_template_col_line_names,
+                st.grid_template_col_subgrid_fill,
+                &crate::subgrid::line_names_between(col_names, local_start, local_end),
+                span,
+            );
             let col_axis = GridAxis {
                 n_tracks: span as u32,
-                names: &[],
+                names: &sub_names,
                 areas: &st.grid_template_areas,
                 is_col: true,
+                clamp: true,
             };
             let row_axis = GridAxis {
                 n_tracks: rows_len.max(st.grid_template_areas.len()) as u32,
                 names: &st.grid_template_row_line_names,
                 areas: &st.grid_template_areas,
                 is_col: false,
+                clamp: false,
             };
             let sub_placements =
                 place_grid_items(&item.children, &sub_idxs, st, span, rows_len, &col_axis, &row_axis);
@@ -128,6 +139,7 @@ pub(super) fn collect_col_contributions(
                 &item.children,
                 &sub_idxs,
                 &sub_placements,
+                &sub_names,
                 span,
                 base_col + local_start,
                 es + own_start,
@@ -262,6 +274,7 @@ pub(super) fn content_sized_col_widths(
     children: &[LayoutBox],
     item_idxs: &[usize],
     placements: &[(u32, u32, u32, u32)],
+    col_names: &[Vec<String>],
     s: &ComputedStyle,
     eff_col_template: &[GridTrackSize],
     n_cols: usize,
@@ -280,7 +293,7 @@ pub(super) fn content_sized_col_widths(
     let mut contribs = Vec::new();
     let measure = item_contribution(measurer, viewport);
     collect_col_contributions(
-        children, item_idxs, placements, n_cols, 0, 0.0, 0.0, viewport, &measure, &mut contribs,
+        children, item_idxs, placements, col_names, n_cols, 0, 0.0, 0.0, viewport, &measure, &mut contribs,
     );
     let (base, limit) = base_and_limit(&kinds, &contribs, col_gap);
     Some(distribute_free_space(&kinds, &base, &limit, col_gap, content_width))

@@ -478,6 +478,7 @@ mod flex_trampoline;
 mod grid_trampoline;
 mod grid_empty_tracks;
 mod grid_subgrid_contribution;
+mod grid_subgrid_line_names;
 mod grid_item_percent_height;
 mod table_trampoline;
 mod table_caption_layout;
