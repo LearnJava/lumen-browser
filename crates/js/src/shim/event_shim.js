@@ -79,3 +79,11 @@ CustomEvent.prototype.initCustomEvent = function(type, bubbles, cancelable, deta
     this.detail = detail !== undefined ? detail : null;
 };
 
+
+// WebIDL §3.7.3 (BUG-912): each interface prototype carries its own
+// @@toStringTag — never inherited from Event.prototype, or MouseEvent would
+// answer `[object Event]`.
+[Event, CustomEvent].forEach(function(C) {
+    Object.defineProperty(C.prototype, Symbol.toStringTag,
+        { value: C.name, writable: false, enumerable: false, configurable: true });
+});

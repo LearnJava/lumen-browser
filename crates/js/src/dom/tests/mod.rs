@@ -348,6 +348,7 @@ mod v8_bug560_sync_focus;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug589_window_exotic_object;
+mod v8_bug912_event_class_string;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug602_align_reflection;

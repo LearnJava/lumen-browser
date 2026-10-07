@@ -1,6 +1,6 @@
 # BUG-912 — у событий нет class string: `Object.prototype.toString.call(new Event('x'))` → `[object Object]`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-08-25 (P1, при закрытии [BUG-838](BUG-838-FIXED.md) — измерен WPT-прогоном, не чтением кода)
 **Область:** `crates/js/src/dom.rs` — 26 конструкторов событий шима; `Symbol.toStringTag` есть ровно у одного (`ErrorEvent`, `dom.rs:737`, заведён попутно с BUG-591/813). Плюс копии в `crates/js/src/worker.rs:389` (`_LumenWorkerErrorEvent` — есть) и в остальных пофичевых шимах (нет).
 **Владелец:** P3 (`lumen-js`)
@@ -69,3 +69,7 @@ Object.defineProperty(Event.prototype, Symbol.toStringTag, {
    — три указанных id должны стать PASS целиком.
 2. Прогнать категорию `dom/events` до и после: ассерт стоит во многих тестах
    событий, так что цифра по ней и есть мера.
+
+## Исправление (2026-10-07)
+
+`@@toStringTag` проставлен каждому классу отдельно на его прототипе: `event_shim.js` (Event, CustomEvent), цикл в конце `web_api_shim_tail_b.js` (UI/Mouse/Keyboard/…/Close/Message-события страницы), `xhr.rs` и `worker_net_shim.js` (ProgressEvent). Тест — `dom/tests/v8_bug912_event_class_string.rs`. Остаток: события в пофичевых шимах (`class X extends Event` в `navigation_api.rs`, `device_sensors.rs`, `csp.rs`, …) тега не получили.
