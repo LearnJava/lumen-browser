@@ -6049,8 +6049,28 @@ Object.defineProperty(Animation.prototype, 'currentTime', {
         // while `paused` (or `idle`/`finished`) nothing else will ever paint
         // it. See BUG-530.
         this._syncStyleAtCurrentTime();
+        this._leaveFinishedIfSeekedBack();
     },
     configurable: true,
+});
+// §4.4.11 «update the finished state», the part a seek can trigger: a
+// `finished` animation whose current time moved back before the end becomes
+// `running` again, its `finished` promise is replaced and the next arrival at
+// the end fires a new `finish` (BUG-861). Non-enumerable internal.
+Object.defineProperty(Animation.prototype, '_leaveFinishedIfSeekedBack', {
+    value: function() {
+        var eff = this.effect, ct = this.currentTime;
+        if (this._state !== 'finished' || !eff || ct === null || this._startTime === null) return;
+        if (_wa_iter_progress(eff._timing, ct) === -2 || _wa_after_end(eff._timing, ct)) return;
+        this._state = 'running';
+        if (this._finishRes === null) {
+            var self = this;
+            this.finished = new Promise(function(res) { self._finishRes = res; });
+        }
+        if (_wa_animations.indexOf(this) < 0) _wa_animations.push(this);
+        this._scheduleRaf();
+    },
+    writable: true, configurable: true,
 });
 Object.defineProperty(Animation.prototype, 'startTime', {
     get: function() { return this._startTime; },
