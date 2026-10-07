@@ -1,6 +1,6 @@
 # BUG-1201 — флак `download::tests::build_bar_shows_progress_track_for_in_progress_only`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P3). Тест строит запись `InProgress` напрямую, без `start_download` и рабочего потока; 3 прогона `download::tests` — 39/39.
 **Заведён:** 2026-09-28 (P6, гейт `scoped-test.sh` при закрытии BUG-1144; к той правке не относится).
 **Область:** shell — [`crates/shell/src/download.rs`](../crates/shell/src/download.rs)
 (тест `:1781`, `DownloadManager::start_download` — настоящий `std::thread::spawn` на загрузку).
