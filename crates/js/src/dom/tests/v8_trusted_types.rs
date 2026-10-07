@@ -979,3 +979,25 @@ fn tt_interfaces_have_webidl_shape() {
         lumen_core::JsValue::String("true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true".into())
     );
 }
+
+/// BUG-1206: a `<script>` inserted through the DOM under
+/// `require-trusted-types-for 'script'` without a default policy still runs —
+/// its text passed the TT check at the `text` sink, and executing the element
+/// is a Script compile, not an `eval` that the codegen hook would block.
+#[test]
+fn bug1206_inserted_script_runs_under_require_trusted_types() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+             var errs = []; \
+             window.addEventListener('error', function(e) { errs.push(String(e.message || e.error)); }); \
+             var p = trustedTypes.createPolicy('p', { createScript: function(x) { return x; } }); \
+             var sc = document.createElement('script'); \
+             sc.text = p.createScript('window.__ran = 1'); \
+             document.body.appendChild(sc); \
+             String(window.__ran) + '|' + errs.join(';')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("1|".into()));
+}

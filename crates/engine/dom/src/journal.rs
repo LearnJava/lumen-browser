@@ -73,8 +73,24 @@ impl Document {
     /// a shadow host, a node inside a shadow tree, or a `<slot>` itself, and let
     /// the caller fall back to "anything may have changed".
     pub fn journal_touches_shadow(&self, journal: &HashSet<NodeId>) -> bool {
-        journal.iter().any(|&id| {
-            if self.shadow_roots.contains_key(&id) || self.ua_shadow_roots.contains_key(&id) {
+        self.journal_shadow_touch(journal).is_some()
+    }
+
+    /// The first node of `journal` that [`Self::journal_touches_shadow`] objects to.
+    ///
+    /// BUG-935 slice 97: a host whose UA shadow tree has no `<slot>` (`<video>`/`<audio>`) does
+    /// not object. Nothing in its light tree is ever part of the flat tree, so there is no slot
+    /// the box tree could hold a child under that the journal would miss; the host itself is
+    /// journaled like any element. Before this every flush that touched a `<video>` (a player
+    /// script rewriting its attributes) lost the whole content record and re-collected every
+    /// box of the page.
+    pub fn journal_shadow_touch(&self, journal: &HashSet<NodeId>) -> Option<NodeId> {
+        journal.iter().copied().find(|&id| {
+            let host_with_slots = match self.shadow_roots.get(&id) {
+                Some(sr) => !self.ua_shadow_roots.contains_key(sr) || !self.nodes[sr.index()].children.is_empty(),
+                None => false,
+            };
+            if host_with_slots || self.ua_shadow_roots.contains_key(&id) {
                 return true;
             }
             let Some(mut cur) = self.nodes.get(id.index()) else {
@@ -182,5 +198,23 @@ mod tests {
         assert!(doc.journal_touches_shadow(&HashSet::from([a])), "a shadow host");
         assert!(doc.journal_touches_shadow(&HashSet::from([inner])), "a node inside a shadow tree");
         assert!(!doc.journal_touches_shadow(&HashSet::from([parent, b])), "siblings of a host are plain");
+    }
+
+    #[test]
+    fn journal_touches_shadow_ignores_a_slotless_ua_host_but_not_one_with_slots() {
+        let mut doc = Document::new();
+        let root = doc.root();
+        let video = doc.create_element(QualName::html("video"));
+        let audio = doc.create_element(QualName::html("audio"));
+        let details = doc.create_element(QualName::html("details"));
+        let select = doc.create_element(QualName::html("select"));
+        for host in [video, audio, details, select] {
+            doc.append_child(root, host);
+        }
+        let child = doc.create_element(QualName::html("source"));
+        doc.append_child(video, child);
+        assert!(!doc.journal_touches_shadow(&HashSet::from([video, audio, child])), "no slot, nothing slotted");
+        assert_eq!(doc.journal_shadow_touch(&HashSet::from([video, details])), Some(details));
+        assert!(doc.journal_touches_shadow(&HashSet::from([select])), "a slotted host");
     }
 }

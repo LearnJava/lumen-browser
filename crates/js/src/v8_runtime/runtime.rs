@@ -472,6 +472,8 @@ pub struct V8JsRuntime {
     /// cleared by [`Self::update_client_rects`] so fresh embedder geometry
     /// forces the next reader through a real flush.
     pub(super) text_frags_collected: Arc<AtomicBool>,
+    /// BUG-1202: mirrors [`super::style_flush::FlushHandles::hit_tree_stale`].
+    pub(super) hit_tree_stale: Arc<AtomicBool>,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
     /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
     /// geometry read can force a synchronous flush (see
@@ -768,6 +770,7 @@ impl V8JsRuntime {
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
+            hit_tree_stale: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
@@ -1291,6 +1294,7 @@ impl V8JsRuntime {
     /// [`Self::update_layout_rects`] wherever the shell pushes fresh geometry.
     pub fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>) {
         *self.hit_test_tree.lock().unwrap_or_else(|e| e.into_inner()) = Some(tree);
+        self.hit_tree_stale.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Update the current viewport dimensions.

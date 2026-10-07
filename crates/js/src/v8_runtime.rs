@@ -381,6 +381,7 @@ impl V8JsRuntime {
                 text_frag_rects: Arc::clone(&self.text_frag_rects),
                 text_frags_needed: Arc::clone(&self.text_frags_needed),
                 text_frags_collected: Arc::clone(&self.text_frags_collected),
+                hit_tree_stale: Arc::clone(&self.hit_tree_stale),
                 dom_touched: Arc::clone(&dom_touched),
                 incr_basis: Arc::new(Mutex::new(None)),
                 incremental_flushes: Arc::clone(&self.incremental_flushes),
@@ -562,7 +563,7 @@ impl V8JsRuntime {
                 flush_handles.clone(),
             )?;
 
-            install::install_point_hit_test(scope, ctx, store, Arc::clone(&hit_test_tree))?;
+            install::install_point_hit_test(scope, ctx, store, Arc::clone(&hit_test_tree), flush_handles.clone())?;
 
             install::install_match_media(scope, ctx, store)?;
 

@@ -162,6 +162,10 @@ pub(crate) struct FlushHandles {
     /// additionally cleared by `update_client_rects`, because the table is
     /// never pushed by the embedder alongside its fresh geometry.
     pub(crate) text_frags_collected: Arc<AtomicBool>,
+    /// BUG-1202: set when a flush publishes a layout tree newer than the one the embedder pushed
+    /// into `hit_test_tree`; `elementFromPoint`/`elementsFromPoint` then hit-test `incr_basis`
+    /// instead. Cleared by `V8JsRuntime::update_hit_test_tree`.
+    pub(crate) hit_tree_stale: Arc<AtomicBool>,
     /// BUG-1211: page-side DOM-mutation tracker (BUG-341 S7), read-only here
     /// — [`Self::maybe_flush`] only *peeks* at [`super::runtime::DomTouched`],
     /// it never drains it. Draining is [`super::runtime::V8JsRuntime::
@@ -947,6 +951,7 @@ impl FlushHandles {
             scroll_rollups: next_rollups,
         });
         drop(basis_scope);
+        self.hit_tree_stale.store(true, Ordering::Relaxed);
         self.never_flushed.store(false, Ordering::Relaxed);
         *self
             .last_flushed_focus
@@ -1188,7 +1193,11 @@ impl FlushHandles {
             return None;
         }
         if basis.viewport != [viewport.width, viewport.height] {
-            declined("viewport changed");
+            declined(&format!(
+                "viewport changed {:?} -> {:?}",
+                basis.viewport,
+                [viewport.width, viewport.height]
+            ));
             return None;
         }
         // BUG-935 срез 64: a different sheet no longer forces the full path by itself — the
@@ -1308,9 +1317,16 @@ impl FlushHandles {
         // journal cannot vouch for — no baseline, or a shadow tree / `<slot>`
         // involved (see `journal_touches_shadow`) — stays `Untracked`.
         let content_nodes: Option<std::collections::HashSet<lumen_dom::NodeId>> = match content_journal {
-            Some(journal) if !content_journal_disabled() && !doc.journal_touches_shadow(journal) => {
-                Some(journal.iter().chain(new_touched.iter()).copied().collect())
-            }
+            Some(journal) if !content_journal_disabled() => match doc.journal_shadow_touch(journal) {
+                None => Some(journal.iter().chain(new_touched.iter()).copied().collect()),
+                Some(id) => {
+                    if lumen_paint::frame_log_enabled() {
+                        let tag = doc.get(id).element_name().map_or_else(|| "#node".to_string(), |n| n.local.to_string());
+                        eprintln!("[engine] content record dropped: shadow tree touched at <{tag}> (node {})", id.index());
+                    }
+                    None
+                }
+            },
             _ => None,
         };
         let content_dirty = match &content_nodes {
