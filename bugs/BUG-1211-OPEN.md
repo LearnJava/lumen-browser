@@ -250,3 +250,14 @@ dump_golden" в корневом `CLAUDE.md`).
 `lumen_layout::ScopedCollection` (`scoped_collect.rs`) — обход свежего дерева с отсечением по
 `clean_subtrees` и совпавшему rect; карту `computed_styles` чисто вертикальный сдвиг не
 затрагивает. Строка `maybe_flush done` теперь печатает время rect-коллекторов.
+
+## Перепроверка P3 (2026-10-07, `b8167b775`, dev-release) — симптом «минуты» не воспроизводится
+
+- `samples/bug1211-flush-quadratic/repro.html` (N=3000/READS=500): раньше >60 с, теперь `loop took ms: 15959`
+  (~32 мс на итерацию). `LUMEN_FRAME_LOG=1`: `maybe_flush done 12–19 мс (rect collectors 0,9 мс) path=incremental
+  dirty_roots=1`. Остаток — линейный по документу cascade/layout в одном флаше, это уже территория BUG-935 (P1).
+- `--dump-layout https://edition.cnn.com/` (`LUMEN_NO_ADBLOCK=1`): завершается за 28 с (раньше не завершался за 200+ с).
+- udemy: `TLS handshake` отказ сети (42 с); dailymail: `H2 stream timed out after 60s` — сеть, до JS не дошли, поведение
+  на этих двух сайтах не проверено. Живое окно/MCP (`HUNG` в `perf_audit.py`) не перемерялось.
+- Вывод: заголовочный симптом закрыт срезами BUG-1211 + BUG-935 (S54/S55, BUG-1238). Баг остаётся OPEN только до
+  проверки udemy/dailymail при рабочей сети и `perf_audit.py` на cnn.
