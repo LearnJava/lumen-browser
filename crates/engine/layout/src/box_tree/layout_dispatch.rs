@@ -1870,20 +1870,7 @@ pub(super) fn finish_after_match(
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
     if matches!(s.position, Position::Relative) {
-        let off_x = match &s.left {
-            LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-            LengthOrAuto::Auto => match &s.right {
-                LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-                LengthOrAuto::Auto => 0.0,
-            },
-        };
-        let off_y = match &s.top {
-            LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-            LengthOrAuto::Auto => match &s.bottom {
-                LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-                LengthOrAuto::Auto => 0.0,
-            },
-        };
+        let (off_x, off_y) = relative_offset(s, em, cb, viewport);
         if off_x != 0.0 || off_y != 0.0 {
             shift_tree(b, off_x, off_y);
         }
@@ -1892,4 +1879,28 @@ pub(super) fn finish_after_match(
     // bottom/left) are resolved from ComputedStyle in lib.rs::collect_sticky_rec()
     // after this pass. P3 calls collect_sticky_boxes() + compute_sticky_offset() to
     // apply scroll-driven paint transforms at render time.
+}
+
+/// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` от `left/right/top/bottom`.
+/// Бокс уже сдвинут на это значение (`shift_tree` в конце раскладки), а родительский поток
+/// обязан отсчитывать курсор от несмещённой позиции — §9.4.3 «не влияет на соседей».
+pub(crate) fn relative_offset(s: &ComputedStyle, em: f32, cb: f32, viewport: Size) -> (f32, f32) {
+    if !matches!(s.position, Position::Relative) {
+        return (0.0, 0.0);
+    }
+    let off_x = match &s.left {
+        LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
+        LengthOrAuto::Auto => match &s.right {
+            LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
+            LengthOrAuto::Auto => 0.0,
+        },
+    };
+    let off_y = match &s.top {
+        LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
+        LengthOrAuto::Auto => match &s.bottom {
+            LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
+            LengthOrAuto::Auto => 0.0,
+        },
+    };
+    (off_x, off_y)
 }

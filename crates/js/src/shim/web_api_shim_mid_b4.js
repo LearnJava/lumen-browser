@@ -1647,156 +1647,126 @@ _TreeWalker.prototype._cur_nid = function() {
     return _lumen_tree_nid(this.currentNode);
 };
 
-// Returns the parent node within the root subtree, or null.
-_TreeWalker.prototype.parentNode = function() {
-    var cur = this._cur_nid();
-    var root = this._root_nid();
-    if (cur === null || cur === root) return null;
-    var p = _lumen_u2n(_lumen_get_parent(cur));
-    while (p !== null) {
-        if (p === root) { break; }
-        var pp = _lumen_u2n(_lumen_get_parent(p));
-        if (pp === null) { p = null; break; }
-        p = pp;
-    }
+// DOM LS §6.2 — the walker moves along tree links from `currentNode`; `root`
+// only bounds upward movement. `currentNode` may sit outside `root`'s subtree
+// (Lit points one walker over `document` at `template.content`).
+function _tw_parent(n) { return _lumen_u2n(_lumen_get_parent(n)); }
+function _tw_first(n) { var c = _lumen_get_children(n); return c.length ? c[0] : null; }
+function _tw_last(n) { var c = _lumen_get_children(n); return c.length ? c[c.length - 1] : null; }
+function _tw_sib(n, next) {
+    var p = _tw_parent(n);
     if (p === null) return null;
-    // Walk from root towards cur; find first ancestor that is accepted
-    // Actually per spec: parentNode returns the nearest accepted ancestor in root subtree.
-    var candidate = _lumen_u2n(_lumen_get_parent(cur));
-    while (candidate !== null && candidate !== root) {
-        var r = _nf_accepts(candidate, this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(candidate);
-            return this.currentNode;
-        }
-        candidate = _lumen_u2n(_lumen_get_parent(candidate));
-    }
-    // Check root itself
-    if (root !== null && cur !== root) {
-        var rr = _nf_accepts(root, this.whatToShow, this.filter);
-        if (rr === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = this.root;
-            return this.currentNode;
+    var c = _lumen_get_children(p), i = c.indexOf(n);
+    if (i < 0) return null;
+    i += next ? 1 : -1;
+    return i >= 0 && i < c.length ? c[i] : null;
+}
+
+_TreeWalker.prototype._set = function(nid) {
+    this.currentNode = _lumen_make_node_by_nid(nid);
+    return this.currentNode;
+};
+
+_TreeWalker.prototype.parentNode = function() {
+    var node = this._cur_nid(), root = this._root_nid();
+    while (node !== null && node !== root) {
+        node = _tw_parent(node);
+        if (node !== null && _nf_accepts(node, this.whatToShow, this.filter) === NodeFilter.FILTER_ACCEPT) {
+            return this._set(node);
         }
     }
     return null;
 };
 
-// Returns the first child of currentNode that passes the filter.
-_TreeWalker.prototype.firstChild = function() {
-    var cur = this._cur_nid();
+_TreeWalker.prototype._children = function(first) {
+    var cur = this._cur_nid(), root = this._root_nid();
     if (cur === null) return null;
-    var children = _lumen_get_children(cur);
-    for (var i = 0; i < children.length; i++) {
-        var r = _nf_accepts(children[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            return this.currentNode;
+    var node = first ? _tw_first(cur) : _tw_last(cur);
+    while (node !== null) {
+        var r = _nf_accepts(node, this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
+        if (r === NodeFilter.FILTER_SKIP) {
+            var ch = first ? _tw_first(node) : _tw_last(node);
+            if (ch !== null) { node = ch; continue; }
         }
-        if (r !== NodeFilter.FILTER_REJECT) {
-            // SKIP — recurse into its children (DOM spec §4.5.5)
-            var saved = this.currentNode;
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            var found = this.firstChild();
-            if (found) return found;
-            this.currentNode = saved;
-        }
-    }
-    return null;
-};
-
-// Returns the last child of currentNode that passes the filter.
-_TreeWalker.prototype.lastChild = function() {
-    var cur = this._cur_nid();
-    if (cur === null) return null;
-    var children = _lumen_get_children(cur);
-    for (var i = children.length - 1; i >= 0; i--) {
-        var r = _nf_accepts(children[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            return this.currentNode;
-        }
-        if (r !== NodeFilter.FILTER_REJECT) {
-            var saved = this.currentNode;
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            var found = this.lastChild();
-            if (found) return found;
-            this.currentNode = saved;
+        while (node !== null) {
+            var sib = _tw_sib(node, first);
+            if (sib !== null) { node = sib; break; }
+            var par = _tw_parent(node);
+            if (par === null || par === root || par === cur) return null;
+            node = par;
         }
     }
     return null;
 };
+_TreeWalker.prototype.firstChild = function() { return this._children(true); };
+_TreeWalker.prototype.lastChild = function() { return this._children(false); };
 
-// Returns the previous sibling (in root subtree) of currentNode.
-_TreeWalker.prototype.previousSibling = function() {
-    var cur = this._cur_nid();
-    var root = this._root_nid();
-    if (cur === null || cur === root) return null;
-    var pid = _lumen_u2n(_lumen_get_parent(cur));
-    if (pid === null) return null;
-    var sibs = _lumen_get_children(pid);
-    var idx  = sibs.indexOf(cur);
-    for (var i = idx - 1; i >= 0; i--) {
-        var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(sibs[i]);
-            return this.currentNode;
+_TreeWalker.prototype._siblings = function(next) {
+    var node = this._cur_nid(), root = this._root_nid();
+    if (node === null || node === root) return null;
+    for (;;) {
+        var sib = _tw_sib(node, next);
+        while (sib !== null) {
+            node = sib;
+            var r = _nf_accepts(node, this.whatToShow, this.filter);
+            if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
+            sib = next ? _tw_first(node) : _tw_last(node);
+            if (r === NodeFilter.FILTER_REJECT || sib === null) sib = _tw_sib(node, next);
         }
+        node = _tw_parent(node);
+        if (node === null || node === root) return null;
+        if (_nf_accepts(node, this.whatToShow, this.filter) === NodeFilter.FILTER_ACCEPT) return null;
     }
-    return null;
 };
+_TreeWalker.prototype.previousSibling = function() { return this._siblings(false); };
+_TreeWalker.prototype.nextSibling = function() { return this._siblings(true); };
 
-// Returns the next sibling (in root subtree) of currentNode.
-_TreeWalker.prototype.nextSibling = function() {
-    var cur = this._cur_nid();
-    var root = this._root_nid();
-    if (cur === null || cur === root) return null;
-    var pid = _lumen_u2n(_lumen_get_parent(cur));
-    if (pid === null) return null;
-    var sibs = _lumen_get_children(pid);
-    var idx  = sibs.indexOf(cur);
-    for (var i = idx + 1; i < sibs.length; i++) {
-        var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(sibs[i]);
-            return this.currentNode;
-        }
-    }
-    return null;
-};
-
-// Returns the previous node in document order (depth-first pre-order) that passes filter.
 _TreeWalker.prototype.previousNode = function() {
-    var root = this._root_nid();
-    var cur  = this._cur_nid();
-    if (cur === null || cur === root) return null;
-    var all = _tw_subtree(root);
-    var idx = all.indexOf(cur);
-    for (var i = idx - 1; i >= 0; i--) {
-        var r = _nf_accepts(all[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(all[i]);
-            return this.currentNode;
+    var node = this._cur_nid(), root = this._root_nid();
+    if (node === null) return null;
+    while (node !== root) {
+        var sib = _tw_sib(node, false);
+        while (sib !== null) {
+            node = sib;
+            var r = _nf_accepts(node, this.whatToShow, this.filter);
+            while (r !== NodeFilter.FILTER_REJECT && _tw_last(node) !== null) {
+                node = _tw_last(node);
+                r = _nf_accepts(node, this.whatToShow, this.filter);
+            }
+            if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
+            sib = _tw_sib(node, false);
         }
+        if (node === root) return null;
+        var par = _tw_parent(node);
+        if (par === null) return null;
+        node = par;
+        if (_nf_accepts(node, this.whatToShow, this.filter) === NodeFilter.FILTER_ACCEPT) return this._set(node);
     }
     return null;
 };
 
-// Returns the next node in document order (depth-first pre-order) that passes filter.
 _TreeWalker.prototype.nextNode = function() {
-    var root = this._root_nid();
-    var cur  = this._cur_nid();
-    if (root === null) return null;
-    var all = _tw_subtree(root);
-    var idx = cur !== null ? all.indexOf(cur) : -1;
-    for (var i = idx + 1; i < all.length; i++) {
-        var r = _nf_accepts(all[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(all[i]);
-            return this.currentNode;
+    var node = this._cur_nid(), root = this._root_nid();
+    if (node === null) return null;
+    var r = NodeFilter.FILTER_ACCEPT;
+    for (;;) {
+        while (r !== NodeFilter.FILTER_REJECT && _tw_first(node) !== null) {
+            node = _tw_first(node);
+            r = _nf_accepts(node, this.whatToShow, this.filter);
+            if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
         }
+        var sib = null, t = node;
+        while (t !== null) {
+            if (t === root) return null;
+            sib = _tw_sib(t, true);
+            if (sib !== null) { node = sib; break; }
+            t = _tw_parent(t);
+        }
+        if (sib === null) return null;
+        r = _nf_accepts(node, this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
     }
-    return null;
 };
 
 // ── NodeIterator (DOM LS §4.4) ───────────────────────────────────────────────
