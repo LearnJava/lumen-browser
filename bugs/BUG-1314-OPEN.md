@@ -21,7 +21,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 8: `css/css-grid/grid-model/grid-min-max-height-001.html` (8 сабтестов: `expected height 100 but got 17`), `grid-box-sizing-001.html` (7), `layout-algorithm/grid-stretch-respects-min-size-001.html` (reftest: у вложенного grid с `min-height:100px` в обёртке 50×50 страница короче референса на 50 px — 91,72 против 141,72). `layout-algorithm/grid-track-ignores-max-size-002.html` и `grid-intrinsic-track-sizes-min-size-001.html` попали в кластер по тексту теста (в нём `min-*`/`max-*`), пробой не проверены. Кластер «`min/max-height` контейнера flex/grid игнорируется» в `docs/wpt-vendor-notes/css.md` §css-grid, часть 2. Для flex причина та же и описана в [BUG-1253](BUG-1253-OPEN.md) только частично (там — автоматический минимум *элемента*, а не ограничение контейнера).
+WPT-RUN-14 срез 8: `css/css-grid/grid-model/grid-min-max-height-001.html` (8 сабтестов: `expected height 100 but got 17`), `grid-box-sizing-001.html` (7), `layout-algorithm/grid-stretch-respects-min-size-001.html` (reftest: у вложенного grid с `min-height:100px` в обёртке 50×50 страница короче референса на 50 px — 91,72 против 141,72). `layout-algorithm/grid-track-ignores-max-size-002.html` и `grid-intrinsic-track-sizes-min-size-001.html` попали в кластер по тексту теста (в нём `min-*`/`max-*`), пробой не проверены. Кластер «`min/max-height` контейнера flex/grid игнорируется» в `docs/wpt-vendor-notes/css.md` §css-grid, часть 2. Для flex причина та же и описана в [BUG-1253](BUG-1253-FIXED.md) только частично (там — автоматический минимум *элемента*, а не ограничение контейнера).
 
 ## Что делать
 

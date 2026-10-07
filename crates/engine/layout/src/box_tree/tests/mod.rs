@@ -482,6 +482,7 @@ mod grid_subgrid_line_names;
 mod grid_track_limit;
 mod grid_item_percent_height;
 mod flex_column_percent_height;
+mod flex_auto_min_size;
 mod table_trampoline;
 mod table_caption_layout;
 mod table_height;
