@@ -67,7 +67,7 @@ git status --short          # свежий worktree может нести всё
 |---|---|
 | Указатель протух | на строке не задача (сосед, заголовок, пусто); найти правильный номер по ID |
 | Задача закрыта | статус в ROADMAP/CSS-SPECS, строка в `BUGS-FIXED.md`, `git log --oneline --grep=<ID>` |
-| Задача взята | `git branch -a \| grep -i <id>` |
+| Задача взята | `bash scripts/task-claim.sh --check <N> <id>` (fetch + невлитые ветки с этим id на origin; `git branch -a` без fetch показывает устаревший origin) |
 | Двойная очередь | ID в другом `STATUS-P*.md` |
 | Чужая роль | баги → только P3, CSS → только P4, `OPEN (ДОРАБОТКА → X)` — не P3 |
 | Осиротевшая ДОРАБОТКА | `ДОРАБОТКА → X`, а X уже done — сверить баг с кодом |

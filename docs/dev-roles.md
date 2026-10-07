@@ -206,7 +206,11 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 
 ## Reserving a task
 
-Create the feature branch and worktree (`p<N>-<id>`). **The branch's existence is the reservation
-signal** — a parallel session sees it via `git branch` and skips that task. The `STATUS-PN.md` pointer
+Create the feature branch and worktree (`p<N>-<id>`) and **push it before the first code edit** —
+`bash scripts/task-claim.sh <N> <id>` does the check, the slot and the push in one step. **The
+branch's existence on `origin` is the reservation signal**: a parallel session (possibly on another
+machine) sees it only after `git fetch`, and matches it by task id, not by exact branch name
+([`git-workflow.md`](git-workflow.md) §Parallel session coordination). A local-only branch reserves
+nothing. The `STATUS-PN.md` pointer
 line stays put (it is deleted only on completion); there is no "In progress"/"Next" section to move it
 between. Keep the working details at hand in `docs/tasks/<id>.md`.
