@@ -715,7 +715,26 @@ pub(crate) fn build_flex_init(
                         } else {
                             None
                         };
-                        let w = if let Some(t) = transferred {
+                        // BUG-1256: an authored definite `height` with `width:
+                        // auto` on a replaced item with an intrinsic ratio —
+                        // the flex base size is that height transferred
+                        // through the ratio (Flexbox §9.2, Sizing L4 §4.1),
+                        // not the raw intrinsic width.
+                        let transferred_from_height = if transferred.is_none()
+                            && (is.width.is_none() || is.width_is_intrinsic_hint)
+                            && !is.height_is_intrinsic_hint
+                            && is.box_sizing == BoxSizing::ContentBox
+                        {
+                            match (&is.height, is.aspect_ratio) {
+                                (Some(Length::Px(h)), Some((aw, ah))) if ah > 0.0 => {
+                                    Some(h.max(0.0) * aw / ah)
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        let w = if let Some(t) = transferred.or(transferred_from_height) {
                             t
                         } else if let Some(bw) = block_axis_width[k] {
                             flex_auto_base_main_width_from(item, bw, cb, measurer, viewport)
