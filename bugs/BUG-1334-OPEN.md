@@ -34,3 +34,7 @@ WPT-RUN-14 срез 11: почти каждый тест `css/CSS2` начина
 ## Как проверить
 
 Страница `<!DOCTYPE html><body style="margin:0"><p>a</p><p>b</p>` — `y` второго `<p>` в `--dump-layout` должен стать 33.72 (`17.72 + 16`). `css/CSS2/backgrounds/background-attachment-applies-to-001.xht`, `css/CSS2/borders/border-width-005.xht` — `reftest_pixdiff.py --viewport 800x600 --ahem` даёт `identical`.
+
+## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
+
+A/B с `p,ul,ol,dl,blockquote,pre,figure,menu{display:block;margin:1em 0}` на 647 thick/identical id срезов 13: 33 → `identical`/`thin-only`, из них 18 в кластере «У `<p>`… нет UA-полей» (`floats-clear/clear-clearance-calculation-001.xht`, `-002.xht`, `-004.xht`), ещё 15 — раскиданы по другим кластерам (первое совпавшее правило). Новых провалов нет.

@@ -35,3 +35,7 @@ WPT-RUN-14 срез 1: 710 упавших reftest `css-flexbox` отрендер
 ## Дополнение: WPT-RUN-14 срез 11 (2026-10-06, `css/CSS2`: backgrounds + borders)
 
 Ещё два id с тем же швом на дробной границе, не связанных с `<img>`: `borders/border-bottom-width-003.xht`, `border-top-width-003.xht` (`border-bottom-width: 1px` на `y = 25.72`: строки `(71,71,71)` и `(183,183,183)` вместо чёрной линии). Соседний дефект с другой командой — `DrawImage` — заведён отдельно: [BUG-1337](BUG-1337-OPEN.md) (249 id в этих двух каталогах).
+
+## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
+
+Кандидат: 18 id `thin-only`, эталон — не `<img>` (`abspos/static-inside-inline-001.html`, `-003.html`, `floats-clear/clear-on-child-with-margins-2.html`). Механизм по аналогии (AA-кромка на дробной границе), A/B не делался.

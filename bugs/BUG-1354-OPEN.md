@@ -19,3 +19,7 @@ WPT-RUN-14 срез 12: 13 id `normal-flow/{block-replaced-height-006,inline-blo
 ## Как проверить
 
 `css/CSS2/normal-flow/inline-replaced-width-002.xht`.
+
+## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
+
+15 id в `floats-clear/float-replaced-height-006.xht`, `float-replaced-width-007.xht`, `-008.xht` и `positioning/absolute-replaced-*` — `<svg>`/`<object>` как replaced-элемент (float/abspos). По правилу отнесения (`<svg|<object` в тесте, thick), пробой не разделено с BUG-1337/1356.

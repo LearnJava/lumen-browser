@@ -23,3 +23,7 @@ WPT-RUN-14 срез 11: 249 из 484 упавших reftest `css/CSS2/{backgroun
 ## Дополнение (P2, WPT-RUN-14 срез 12, `css/CSS2/normal-flow` + `margin-padding-clear`, 2026-10-07)
 
 Тот же дефект в этих каталогах: 215 id `thin-only` с `<img>` в эталоне (`normal-flow/height-003.xht`, `block-formatting-context-height-001.xht`, `block-formatting-contexts-008.xht`) и ещё 21 `thick` с `<img>` в эталоне. На `width-036.xht` (1 cm) — `FillRect (8, 26, 38, 96)` у теста и `DrawImage (8, 25.72, 37.8, 96)` у эталона: дробные и ширина, и `y`. Закрытие обещает до 215 + 21 id только в этих двух каталогах (`docs/wpt-vendor-notes/css.md` §срез 12).
+
+## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
+
+Тот же дефект: 138 id `thin-only` с `<img>` в эталоне — `floats-clear/adjacent-floats-001.xht`, `clear-001.xht`, `clear-002.xht` (в основном `floats-clear`, `positioning/absolute-replaced-width-*`). Закрытие даёт до 138 id в этих каталогах; вместе со срезами 11–12 — `css/CSS2` целиком (`docs/wpt-vendor-notes/css.md` §срез 13).
