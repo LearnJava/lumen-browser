@@ -1,6 +1,6 @@
 # BUG-1217 — `repeat(N, minmax(0, 1fr))` даёт нулевые треки: `grid-column: span K` схлопывается до K−1 промежутков
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Компонент:** layout (grid track sizing — разбор/резолв `minmax(0, 1fr)` внутри `repeat()`)
 **Найден:** 2026-09-29, живая проверка локального стенда bankruptcy-platform (Next.js + Tailwind), сборка `main` 22a782d55
 
@@ -35,3 +35,7 @@ Tailwind пишет `grid-cols-N` как `grid-template-columns: repeat(N, minma
 
 `getComputedStyle(grid)` в живой странице отдаёт пустые `gap` и `gridTemplateColumns` — отдельная проблема рядом:
 при починке проверить, что резолвленные значения возвращаются.
+
+## Исправление
+
+В `grid.rs` колонки `minmax(<min>, Nfr)` не считались flex-треками (размер = min = 0). Добавлен `GridTrackSize::flex_factor()` и `find_fr_size` (CSS Grid L1 §12.7.1): flex-треки делят остаток, трек с долей ниже базы замораживается. Строки (rows) не затронуты. Остаток: `getComputedStyle(grid).gap/gridTemplateColumns` пустые — отдельно проверить.

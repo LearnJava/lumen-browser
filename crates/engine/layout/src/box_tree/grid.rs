@@ -651,15 +651,19 @@ pub(crate) fn build_grid_init(
         let free_col = (content_width - fixed_col_total).max(0.0);
 
         // Distribute fr among column tracks.
-        let total_fr: f32 = (0..n_cols)
-            .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).fr().unwrap_or(0.0))
-            .sum();
+        // Flexible tracks are `Nfr` and `minmax(<min>, Nfr)` (BUG-1217): the latter keeps its
+        // fixed minimum as a floor and takes its share of what the other tracks leave.
+        let flex: Vec<Option<f32>> = (0..n_cols)
+            .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).flex_factor())
+            .collect();
+        let total_fr: f32 = flex.iter().map(|f| f.unwrap_or(0.0)).sum();
+        let (flex_fr, frozen) = find_fr_size(&flex, &col_widths, content_width, total_col_gap);
         let auto_col_count = (0..n_cols)
             .filter(|&c| matches!(grid_track(c, eff_col_template, &s.grid_auto_columns), GridTrackSize::Auto))
             .count();
 
         // For auto columns, divide remaining free space equally (after fr).
-        let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
+        let fr_width = flex_fr;
         let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
             free_col / auto_col_count as f32
         } else {
@@ -669,6 +673,11 @@ pub(crate) fn build_grid_init(
         for c in 0..n_cols {
             match grid_track(c, eff_col_template, &s.grid_auto_columns) {
                 GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
+                GridTrackSize::Minmax(..) if flex[c as usize].is_some() => {
+                    if !frozen[c as usize] {
+                        col_widths[c as usize] = (flex[c as usize].unwrap_or(0.0) * fr_width).max(col_widths[c as usize]);
+                    }
+                }
                 GridTrackSize::Auto => {
                     col_widths[c as usize] = auto_col_width;
                 }
@@ -1026,4 +1035,38 @@ fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32,
         (Edge::Auto, Edge::Auto) => (0, 0),
         (Edge::Span(..), Edge::Span(..)) => unreachable!("end span dropped above"),
     }
+}
+
+/// CSS Grid L1 §12.7.1 "find the size of an fr": the fr size left once the non-flexible tracks
+/// and gaps are taken out, freezing flexible tracks whose share falls below their base size
+/// (`minmax(<min>, Nfr)`) and redistributing until stable. Returns the size and the frozen set.
+/// Kept out of line: inlined into `lay_out_grid` it deepens the frame of a deep grid chain.
+#[inline(never)]
+fn find_fr_size(flex: &[Option<f32>], base: &[f32], content_width: f32, total_gap: f32) -> (f32, Vec<bool>) {
+    let mut frozen = vec![false; flex.len()];
+    let nonflex_total: f32 =
+        base.iter().zip(flex).filter(|(_, f)| f.is_none()).map(|(w, _)| *w).sum::<f32>() + total_gap;
+    let mut fr = 0.0_f32;
+    loop {
+        let frozen_total: f32 = (0..flex.len()).filter(|&c| frozen[c]).map(|c| base[c]).sum();
+        let live_fr: f32 = (0..flex.len()).filter(|&c| !frozen[c]).map(|c| flex[c].unwrap_or(0.0)).sum();
+        if live_fr <= 0.0 {
+            break;
+        }
+        fr = (content_width - nonflex_total - frozen_total).max(0.0) / live_fr;
+        let mut changed = false;
+        for c in 0..flex.len() {
+            if let Some(f) = flex[c]
+                && !frozen[c]
+                && f * fr < base[c]
+            {
+                frozen[c] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (fr, frozen)
 }

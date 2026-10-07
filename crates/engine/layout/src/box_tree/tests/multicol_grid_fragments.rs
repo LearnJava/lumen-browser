@@ -452,3 +452,37 @@ fn an_empty_child_of_an_item_that_a_break_runs_through_is_cut_with_the_item() {
         .collect();
     assert!((parts[0] - 100.0).abs() < 0.01 && (parts[1] - 50.0).abs() < 0.01, "{parts:?}");
 }
+
+#[test]
+fn minmax_zero_fr_tracks_share_the_free_space_like_plain_fr() {
+    // BUG-1217: Tailwind's `grid-cols-12` is `repeat(12, minmax(0, 1fr))`; the tracks collapsed to 0
+    // and `span 7` was 6 gaps wide. 12 tracks in 1612px with 24px gaps → 7 spans ≈ 930px.
+    let root = lay(
+        "<div id=\"g\"><div id=\"p\"></div></div>",
+        "body{margin:0} #g{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:24px;width:1612px} \
+         #p{grid-column:span 7}",
+    );
+    let g = by_width(&root, 1612.0).expect("grid");
+    let w = g.children[0].rect.width;
+    assert!((w - 930.33).abs() < 0.5, "span 7 width {w}");
+}
+
+#[test]
+fn minmax_fixed_min_fr_track_keeps_its_floor() {
+    // `minmax(300px, 1fr) 1fr` in 400px: the first track's share (200) is under its floor, so it
+    // freezes at 300 and the second takes the remaining 100.
+    let root = lay(
+        "<div id=\"g\"><div id=\"a\"></div><div id=\"b\"></div></div>",
+        "body{margin:0} #g{display:grid;grid-template-columns:minmax(300px,1fr) 1fr;width:400px}",
+    );
+    let g = by_width(&root, 400.0).expect("grid");
+    assert!((g.children[0].rect.width - 300.0).abs() < 0.5, "{}", g.children[0].rect.width);
+    assert!((g.children[1].rect.width - 100.0).abs() < 0.5, "{}", g.children[1].rect.width);
+}
+
+fn by_width(b: &LayoutBox, w: f32) -> Option<&LayoutBox> {
+    if (b.rect.width - w).abs() < 0.01 && !b.children.is_empty() {
+        return Some(b);
+    }
+    b.children.iter().find_map(|c| by_width(c, w))
+}
