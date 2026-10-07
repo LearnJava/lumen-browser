@@ -42,7 +42,7 @@ height:20px` + одно поле):
 для чистого поддерева делает `translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y)`
 (`layout_dispatch.rs:596`): он переносит `rect` в `start_*`, то есть «съедает» то, что нормальный путь
 прибавляет сверху — левое/верхнее поле, `auto`-центрирование (`:928`), `justify-self` (`:998`) и
-смещение `position: relative` (то же, что симптом 2 [BUG-1240](BUG-1240-OPEN.md)). `margin-bottom`
+смещение `position: relative` (то же, что симптом 2 [BUG-1240](BUG-1240-FIXED.md)). `margin-bottom`
 не теряется, потому что курсор потока родителя считает по высоте, а не по `rect`.
 
 Не сходится: проба на уровне крейта layout (`layout_measured_hyp_with_counters` →
@@ -82,5 +82,5 @@ CSSOM или `:has()` такие флаши стали инкременталь�
 
 Тесты: `clean_boxes_keep_their_margins_centering_and_relative_offsets` (layout, поля/`auto`/`relative`/
 `justify-self`) и `a_flush_after_an_unrelated_write_keeps_the_margins` (JS, проба из «Симптома»; падает на
-старом быстром пути — проверено). Симптом 2 [BUG-1240](BUG-1240-OPEN.md) (смещение `relative` у чистого
+старом быстром пути — проверено). Симптом 2 [BUG-1240](BUG-1240-FIXED.md) (смещение `relative` у чистого
 поддерева пропадает) этим тоже снят; симптом 1 (смещение утекает в поток при полной раскладке) — нет.
