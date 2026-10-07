@@ -9061,7 +9061,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 (r[1] - smTop) + _lumen_get_page_scroll_y(), mh,
                 _lumen_get_viewport_size()[1], _lumen_get_page_scroll_y(), opts.block);
             _lumen_request_page_scroll(pageY, opts.behavior === 'smooth' ? 1 : 0);
-            return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
+            return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
         },
         // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
         // `tabIndex` reflects the `tabindex` content attribute; with the

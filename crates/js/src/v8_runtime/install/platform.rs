@@ -823,8 +823,23 @@ pub(crate) fn install_scroll_state(
     }
     // Returns current page scroll Y for window.scrollY / window.pageYOffset.
     {
+        // BUG-949: CSSOM View — a read right after `scrollTo()` sees the new
+        // position. The shell only applies the queue on its next pass, so an
+        // instant request still waiting there is reflected here (the last
+        // request wins; a trailing smooth one is animated, so the committed
+        // value stays until the shell moves it).
         let psy = Arc::clone(&page_scroll_y);
+        let pps = Arc::clone(&pending_page_scrolls);
         reg!(scope, ctx, store, "_lumen_get_page_scroll_y", move || -> f64 {
+            match pps.lock().unwrap().last() {
+                Some(&(y, false)) => f64::from(y.max(0.0)),
+                _ => f64::from(*psy.lock().unwrap()),
+            }
+        });
+        // The position the shell has actually applied — for the scroll
+        // promise's "did anything move" check, which must not see the queue.
+        let psy = Arc::clone(&page_scroll_y);
+        reg!(scope, ctx, store, "_lumen_get_committed_page_scroll_y", move || -> f64 {
             f64::from(*psy.lock().unwrap())
         });
     }

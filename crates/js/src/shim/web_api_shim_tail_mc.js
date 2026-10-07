@@ -117,7 +117,7 @@ window.scrollTo = function(x, y) {
     if (typeof x === 'object' && x !== null) { top = +(x.top || 0); smooth = x.behavior === 'smooth' ? 1 : 0; }
     else { top = +(y || 0); smooth = 0; }
     _lumen_request_page_scroll(top, smooth);
-    return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
+    return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
 };
 window.scroll = window.scrollTo;
 window.scrollBy = function(x, y) {
@@ -125,7 +125,7 @@ window.scrollBy = function(x, y) {
     if (typeof x === 'object' && x !== null) { dy = +(x.top || 0); smooth = x.behavior === 'smooth' ? 1 : 0; }
     else { dy = +(y || 0); smooth = 0; }
     _lumen_request_page_scroll(_lumen_get_page_scroll_y() + dy, smooth);
-    return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
+    return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
 };
 
 // ── window.visualViewport (Visual Viewport API) ─────────────────────────────

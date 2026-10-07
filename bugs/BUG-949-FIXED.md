@@ -1,6 +1,6 @@
 # BUG-949 — `scrollY` читает старое значение до следующего прохода шелла: `scrollTo()` не синхронный
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P3). `_lumen_get_page_scroll_y` отражает последний неисполненный instant-запрос из `pending_page_scrolls` (smooth оставляет committed-значение); promise-сэмплер читает новый `_lumen_get_committed_page_scroll_y`. Тесты: `crates/js/tests/cases/bug949_scroll_read.rs`.
 **Тип:** дефект реализованного кода — очередь заведена намеренно (комментарий `runtime.rs:93` про coalescing), но CSSOM View требует, чтобы чтение форсировало применение отложенной прокрутки.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 31, живая проба `verify_scroll_view_transition_gaps.py --variant scroll-anchor-read`)
 **Область:** js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `crates/js/src/v8_runtime/install/platform.rs:349` — `_lumen_request_page_scroll`)
