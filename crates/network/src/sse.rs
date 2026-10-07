@@ -272,6 +272,16 @@ pub(crate) struct EventSource {
     cancel: lumen_core::ext::SseCancel,
     /// True once the terminal SseClosed has been emitted; makes close() idempotent.
     closed: bool,
+    /// Cookie jar of the owning document (BUG-1222): same-origin `EventSource`
+    /// carries cookies by default (HTML LS §9.2.2).
+    cookies: Option<SseCookies>,
+}
+
+/// Cookie context of the document that opened the `EventSource`.
+pub(crate) struct SseCookies {
+    pub(crate) jar: Arc<dyn lumen_core::ext::CookieProvider>,
+    pub(crate) top_level_site: Option<String>,
+    pub(crate) document_host: Option<String>,
 }
 
 /// Read the HTTP status line and headers off `reader` (up to the blank line
@@ -312,6 +322,7 @@ impl EventSource {
         resolver: Arc<dyn DnsResolver>,
         sink: Arc<dyn EventSink>,
         tab_id: TabId,
+        cookies: Option<SseCookies>,
     ) -> Result<Self> {
         let mut es = Self {
             url: url.clone(),
@@ -326,9 +337,22 @@ impl EventSource {
             retry_ms: DEFAULT_RETRY_MS,
             cancel: lumen_core::ext::SseCancel::new(),
             closed: false,
+            cookies,
         };
         es.open_connection()?;
         Ok(es)
+    }
+
+    /// `Cookie:` header line for the request (empty when no jar / no cookies).
+    /// Sent when the target host is the document's own host.
+    fn cookie_header(&self, host: &str, is_tls: bool) -> String {
+        let Some(c) = &self.cookies else { return String::new() };
+        let host = host.to_ascii_lowercase();
+        if c.document_host.as_deref().is_some_and(|d| d != host) {
+            return String::new();
+        }
+        let val = c.jar.get_for_request(&host, &self.url.path_and_query(), is_tls, c.top_level_site.as_deref(), false);
+        if val.is_empty() { String::new() } else { format!("Cookie: {val}\r\n") }
     }
 
     /// Establish (or re-establish) the HTTP connection.
@@ -356,6 +380,7 @@ impl EventSource {
         };
 
         let path = self.url.path_and_query();
+        let cookie_header = self.cookie_header(&host, is_tls);
         let ua = crate::http::DEFAULT_USER_AGENT;
         let request = format!(
             "GET {path} HTTP/1.1\r\n\
@@ -364,7 +389,7 @@ impl EventSource {
              Accept: text/event-stream\r\n\
              Cache-Control: no-store\r\n\
              Connection: keep-alive\r\n\
-             {last_id_header}\r\n"
+             {cookie_header}{last_id_header}\r\n"
         );
 
         // Write request onto raw stream (bypass Connection's write_request to
@@ -383,6 +408,15 @@ impl EventSource {
         // Handshake done — release the read timeout before the stream becomes
         // the long-lived idle body reader stored in `self.stream`.
         let _ = reader.get_ref().set_read_timeout(None);
+
+        if let Some(c) = &self.cookies {
+            let request_path = self.url.path_and_query();
+            for (k, v) in &headers {
+                if k.eq_ignore_ascii_case("set-cookie") {
+                    c.jar.process_set_cookie(v, &host, &request_path, is_tls, c.top_level_site.as_deref());
+                }
+            }
+        }
 
         if status != 200 {
             return Err(Error::Network(format!("sse: server returned {status}")));
@@ -1032,6 +1066,7 @@ mod tests {
             Arc::new(LoopbackDns),
             Arc::new(lumen_core::ext::NoopEventSink),
             TabId(0),
+            None,
         ) else {
             panic!("connect")
         };
@@ -1120,5 +1155,47 @@ mod tests {
             BODY,
         );
         expect_three_reconnects(&rx, &conns, "chunked+content-length");
+    }
+
+    struct FixedJar;
+    impl lumen_core::ext::CookieProvider for FixedJar {
+        fn get_for_request(&self, _h: &str, _p: &str, _s: bool, _t: Option<&str>, _x: bool) -> String {
+            "sid=abc".to_owned()
+        }
+        fn process_set_cookie(&self, _h: &str, _host: &str, _p: &str, _s: bool, _t: Option<&str>) {}
+    }
+
+    /// BUG-1222: same-origin EventSource шлёт cookie документа.
+    #[test]
+    fn request_carries_document_cookies() {
+        use std::io::Write as _;
+        let listener = good_listener();
+        let Ok(addr) = listener.local_addr() else { panic!("local_addr") };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else { return };
+            let mut byte = [0u8; 1];
+            let mut seen = Vec::new();
+            while std::io::Read::read(&mut sock, &mut byte).unwrap_or(0) == 1 {
+                seen.push(byte[0]);
+                if seen.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&seen).into_owned());
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: x\n\n");
+            let _ = sock.flush();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        });
+        let Ok(url) = Url::parse(&format!("http://127.0.0.1:{}/sse", addr.port())) else { panic!("url") };
+        let cookies = SseCookies {
+            jar: Arc::new(FixedJar),
+            top_level_site: None,
+            document_host: Some("127.0.0.1".to_owned()),
+        };
+        let es = EventSource::connect(&url, Arc::new(LoopbackDns), Arc::new(lumen_core::ext::NoopEventSink), TabId(0), Some(cookies));
+        if let Err(e) = &es { panic!("connect: {e}") }
+        let req = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or_default();
+        assert!(req.contains("Cookie: sid=abc\r\n"),"request: {req}");
     }
 }

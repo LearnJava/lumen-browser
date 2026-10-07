@@ -5942,7 +5942,12 @@ impl SseProvider for HttpClient {
         tab_id: TabId,
         sink: Arc<dyn EventSink>,
     ) -> Result<Box<dyn SseSession>> {
-        let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id)?;
+        let cookies = self.cookie_jar.as_ref().map(|jar| sse::SseCookies {
+            jar: Arc::clone(jar),
+            top_level_site: self.top_level_site.clone(),
+            document_host: self.document_host().map(str::to_owned),
+        });
+        let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id, cookies)?;
         Ok(Box::new(es))
     }
 }
