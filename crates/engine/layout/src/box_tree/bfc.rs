@@ -14,6 +14,12 @@ pub(crate) fn establishes_bfc(b: &LayoutBox) -> bool {
         || b.style.overflow_y != Overflow::Visible
         || b.style.float_side != FloatSide::None
         || matches!(b.style.position, Position::Absolute | Position::Fixed)
+        // Flexbox §3 / Grid §3: a flex/grid container is an independent
+        // formatting context, so its items' margins never reach its ancestors.
+        || matches!(
+            b.style.display,
+            Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+        )
 }
 
 /// True if the box has any in-flow child that produces content (i.e. a child
