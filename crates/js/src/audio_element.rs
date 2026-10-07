@@ -755,11 +755,20 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
   // ── new Audio(src?) ───────────────────────────────────────────────────────────
 
   if (typeof document !== 'undefined') {
-    globalThis.Audio = function AudioConstructor(src) {
+    // HTML LS §4.8.11: `preload` is set to "auto" before `src`.
+    var buildAudio = function(src) {
       var el = document.createElement('audio');
+      el.setAttribute('preload', 'auto');
       if (src !== undefined) el.src = String(src);
       return el;
     };
+    // BUG-923: a legacy factory function needs the full shim's helper and
+    // interface; this module's isolated test runtimes have neither.
+    if (typeof _lumen_define_legacy_factory === 'function' && typeof HTMLAudioElement === 'function') {
+      _lumen_define_legacy_factory('Audio', HTMLAudioElement.prototype, buildAudio);
+    } else {
+      globalThis.Audio = function Audio(src) { return buildAudio(src); };
+    }
   }
 })();
 "#;

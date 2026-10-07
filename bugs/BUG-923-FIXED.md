@@ -1,6 +1,6 @@
 # BUG-923 — `Audio`/`Image`/`Option` — обычные JS-функции, а не legacy factory functions; и прототип элемента не равен `Interface.prototype` ни у одного тега
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
 **Заведён:** 2026-08-25 (P1, попутно к [BUG-799](BUG-799-FIXED.md))
 **Область:** js (`crates/js/src/audio_element.rs:585-593` — `globalThis.Audio`; `crates/js/src/dom.rs` — `Image`/`Option`; `_lumen_build_element`/`_lumen_element_prototype_for` — цепочка прототипов обёртки)
 **Владелец:** P1/P3
@@ -90,3 +90,15 @@ Object]"`), потому что обе стороны сериализуются
 `Object.getPrototypeOf(document.createElement('div')) === HTMLDivElement.prototype`
 (и то же для `img`/`audio`) — при сохранении `instanceof` и всех членов
 обёртки.
+
+## Исправление (2026-10-07, P1)
+
+Дефект 2 к моменту правки уже не воспроизводился: BUG-1122 поставил члены
+обёртки на интерфейсные прототипы, `Object.getPrototypeOf(el) ===
+Interface.prototype` для `div`/`img`/`audio` и для `new Audio/Image/Option()`.
+Дефект 1: `_lumen_define_legacy_factory(name, ifaceProto, build)`
+(`web_api_shim_mid.js`) публикует `Image`, `Option` и `Audio` как конструкторы
+без вызова без `new` (`TypeError`), `.name` = имя, `.length` = 0,
+`.prototype` = интерфейсный прототип (read-only), глобал
+{writable, configurable, не enumerable}. `new Audio()` ставит `preload="auto"`.
+Тесты — `crates/js/src/dom/tests/v8_core/bug923_factory_functions.rs`.
