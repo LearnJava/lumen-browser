@@ -41,3 +41,7 @@ DOM даёт у карточки с `rel` координаты со смещен
 Вариант `relative_offsets` в `crates/js/src/dom/tests/v8_bug1238_scoped_collectors.rs` (см. git
 history коммита BUG-1238: сценарий был убран, потому что расхождение — в раскладке, а не в
 коллекторах) и `layout()`-проба из симптома 1.
+
+## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
+
+Симптом 1 (смещение попадает в поток) подтверждён ещё раз: 15 id `positioning/{top,bottom,left,right}-*` и `position-relative-*` (`position:relative; top/bottom` у ребёнка, без отрицательных полей). Проба: `<div style="position:relative"><div style="position:relative;top:50px;height:30px"></div></div>` → родитель `h=80` вместо `30`, ребёнок `y=50`. Класс по правилу отнесения (`position:relative` + имя `top|bottom|left|right|position-relative|relpos`, без отрицательного поля), A/B правкой не делался. Ещё 28 id с `position:relative` и отрицательным `margin-top` — отдельный дефект, [BUG-1365](BUG-1365-OPEN.md).

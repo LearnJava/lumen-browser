@@ -633,3 +633,85 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 - **Тесты с JS в `onload`** (`block-in-inline-insert-*`, `-remove-*`): `--dump-display-list` и `--screenshot` снимают страницу до `onload`, поэтому проба «до/после JS» через CLI невозможна. Проверено только, что `insertBefore` без `onload` (скрипт после разметки) даёт верный результат (`DrawText "One"` выше `"Two"`), а с `onload` — нет: `onload`-handler при `--dump-display-list` не успевает до снимка (то же, что в S11: `setTimeout` после `onload`).
 - Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в `wptrunner` против 800×600 в пиксельном разборе.
 - Срез закрывает `normal-flow` и `margin-padding-clear` из `css/CSS2` (1 496 id из 6 357 автоматизируемых). Остальные каталоги `CSS2` — срезы S13…S15 (`docs/tasks/WPT-RUN-14-slices.md`).
+
+
+## css/CSS2: tables + positioning + floats + floats-clear + abspos + stacking-context + zindex + zorder — вердикт и кластеры (WPT-RUN-14 срез 13, 2026-10-07)
+
+Прогон: `run_corpus.py --prefixes css/CSS2/tables,css/CSS2/positioning,css/CSS2/floats,css/CSS2/floats-clear,css/CSS2/abspos,css/CSS2/stacking-context,css/CSS2/zindex,css/CSS2/zorder --out-dir .tmp/wpt-run14/css2-3 --processes 7`, сборка `dev-release` от `main` 7f6ce708c (движок не менялся), 148 с суммарно по 8 шардам (`tables` 28 с, `positioning` 34 с). `score_audit.py`: «no leak», вердикт есть у всех 1 335 автоматизируемых id (шарды вместе — 2 203 id манифеста, остальные 868 — `visual`/`manual`).
+
+| Каталог | id | зелёных | не зелёных |
+|---|---|---|---|
+| `positioning` | 528 | 171 | 357 |
+| `tables` | 374 | 118 | 256 |
+| `floats-clear` | 217 | 33 | 184 |
+| `floats` | 146 | 62 | 84 |
+| `abspos` | 31 | 17 | 14 |
+| `zindex` | 31 | 25 | 6 |
+| `stacking-context` | 7 | 3 | 4 |
+| `zorder` | 1 | 0 | 1 |
+| **итого** | **1 335** | **429** | **906** |
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 1 284 | 390.00 | 30.4 % |
+| crashtest | 21 | 21.00 | 100 % |
+| testharness | 30 | 19.78 (сабтесты 170 из 227) | 65.9 % |
+| **итого** | **1 335** | **430.78 = 32.27 %** | |
+
+906 не зелёных: 894 reftest FAIL и 12 testharness с не-PASS сабтестами (`float-no-interpolation.html` — 32 из 66, `clear-no-interpolation.html` — 10 из 42, `hit-test-floats-001/003/005.html`, `computed-float-position-absolute.html`, `relpos-percentage-*-in-scrollable*.html` — `123456` вместо 0/100, `inline-static-position-001.html`, `line-break-after-leading-float.html`, `abspos-in-block-in-inline-in-relpos-inline.html`). Crashtest'ы (21) — все PASS. Пиксельный разбор 894 reftest (`reftest_pixdiff.py --viewport 800x600 --ahem`): **156 thin-only**, **720 thick**, **17 identical**, 1 `no-match-ref`. Для сравнения: срез 12 (`normal-flow` + `margin-padding-clear`) дал 62.17 %; здесь 32.27 %: основной приём каталогов — «тест строит фигуру из `position`/`float`/`display:table-*`, эталон — `<img>` и `text-align`».
+
+### Главное: один пробел в построении боксов и один — в выравнивании
+
+1. **Анонимных табличных боксов нет вообще** ([BUG-1362](../../bugs/BUG-1362-OPEN.md), ДОРАБОТКА → TABLE-ANON): 153 id — 17 % всех не зелёных. `grep -i anonymous table*.rs` пуст; работает только полное дерево `table > row > cell`.
+2. **`text-align: right|center` не двигает `<img>` и `inline-block`** ([BUG-1356](../../bugs/BUG-1356-OPEN.md)): 63 id, где эталон — `<div style="text-align:right"><img><img></div>`. Lumen рисует тест верно, а эталон — неверно (как BUG-1338 в срезе 11).
+3. **`float`/`position:absolute` на `table-*` не блокифицируются** ([BUG-1357](../../bugs/BUG-1357-OPEN.md)): 60 id серий `*-applies-to-*`.
+4. **`position: relative` сдвигает родителя и поток** ([BUG-1240](../../bugs/BUG-1240-OPEN.md), дополнен) и **отрицательное поле блока с блочными детьми теряется** ([BUG-1365](../../bugs/BUG-1365-OPEN.md), новый): 15 + 28 id в `positioning`.
+5. **138 id — 1-px AA-кромка у растянутой `<img>` в эталоне** (BUG-1337, как в срезах 11/12): закрытие даёт до 138 id только в этих каталогах.
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** (порядок как в таблице; `.tmp/p13/cls2.py` → `.tmp/s13-cls.json`, один id — один кластер). Причина у кластеров с пометкой «проба» подтверждена `--dump-layout`/`--dump-display-list`/`--screenshot` на минимальной странице; «A/B» — одним бинарём на копии разметки; «по правилу» — отнесено по имени/тексту теста без пробы. Числа — по правилу, не по причине: id может страдать от нескольких дефектов сразу.
+
+| Кластер | id | пиксели | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|
+| анонимные табличные боксы (CSS 2.1 §17.2.1) | 153 | 153 thick | `tables/table-anonymous-objects-009.xht`, `-017.xht`, `-059.xht` | осиротевшие `display:table-cell`/`table-row` не оборачиваются в таблицу (ячейки блоками друг под другом: `y=0` и `y=24.2`), текст непосредственно в `display:table`/`table-row` пропадает, ячейки без строки получают `w=0`; полное `table > row > cell` работает (проба). A/B `table{width:fit-content}` закрывает 16 из 153 | P1 (TABLE-ANON) | [BUG-1362](../../bugs/BUG-1362-OPEN.md) (ДОРАБОТКА), `ROADMAP.md` TABLE-ANON |
+| thin-only: AA-кромка растянутой `<img>` в эталоне | 138 | 138 thin-only | `floats-clear/adjacent-floats-001.xht`, `clear-001.xht`, `positioning/absolute-replaced-width-004.xht` | как в срезах 11/12: эталон рисует прямоугольник растянутой `<img>` | P3 | [BUG-1337](../../bugs/BUG-1337-OPEN.md) (дополнен) |
+| `text-align: right|center` не выравнивает atomic inline | 63 | 63 thick | `floats-clear/float-applies-to-008a.xht`, `positioning/right-004.xht`, `left-applies-to-001.xht` | в `InlineBlockRow` `align_lines` видит только `InlineRun`: `<img>`/`inline-block` остаются в `x=0` (проба: `x=0` вместо `x=460` в контейнере 500 px). Lumen неверно рисует эталон; тест (настоящая рамка) верен | P3 | [BUG-1356](../../bugs/BUG-1356-OPEN.md) |
+| `float`/`position:absolute` на `table-*` без блокификации | 60 | 60 thick | `floats-clear/clear-applies-to-001.xht`, `float-applies-to-001.xht`, `positioning/bottom-applies-to-001.xht` | `table-row-group` с `position:absolute` получает размер таблицы (`50×50`, а не `40×20`), `table-cell` — `0×0`, `float:right` row-group — на всю ширину таблицы (проба); `position:absolute` прямой ребёнок `display:table`/`table-row-group` не рисуется вовсе (проба). Часть id пересекается с BUG-1334 (UA-поля `<p>` в эталоне) | P3 | [BUG-1357](../../bugs/BUG-1357-OPEN.md) |
+| `positioning`: не разобрано | 59 | 59 thick | `positioning/absolute-non-replaced-height-003.xht`, `absolute-replaced-width-001.xht`, `abspos-inline-*` | в основном `absolute-replaced-*` (в `-002`: `<svg:svg position:absolute>` и следующий за ним `div` оба на `y=93.44`, оранжевый закрывает синий; у эталона — друг под другом, `y=44…92` и `94…142`), `absolute-non-replaced-max-height-*`, `abspos-*`. Причина не отделена | — | без записи |
+| `tables`: не разобрано | 44 | 44 thick | `tables/border-collapse-006.html`, `empty-cells-applies-to-*`, `border-conflict-element-*` | `empty-cells` (7), `border-conflict-element` (5), `border-collapse-dynamic-*`, `table-backgrounds-*`, `visibility:collapse` — по одному-трём id на причину | — | без записи |
+| `position:relative` сдвигает поток и высоту родителя | 15 | 15 thick | `positioning/bottom-103.xht`, `top-019.xht`, `position-relative-001.xht` | смещение `relative` применяется до подсчёта высоты родителя: `<div position:relative><div position:relative;top:50px;height:30px>` → родитель `h=80` вместо `30` (проба). Остальные 28 id с `relative` и отрицательным полем — BUG-1365 | P3 | [BUG-1240](../../bugs/BUG-1240-OPEN.md) (дополнен) |
+| `border-collapse`: ячейки смещены на полную ширину рамки | 38 | 38 thick | `tables/fixed-table-layout-003e01.xht`, `collapsing-border-model-003.xht` | `collapse` + `table-layout:fixed`: ячейка с `border: 36px` — `x=64` вместо `100` (проба на `fixed-table-layout-003e01`; в `separate` `x=100`). Остальные 26 id — по имени, без пробы | P3 | [BUG-1358](../../bugs/BUG-1358-OPEN.md) |
+| BFC-бокс рядом с float | 36 | 36 thick | `floats/floats-wrap-top-below-bfc-001l.xht`, `floats-wrap-bfc-004.xht`, `float-nowrap-5.html` | блок `overflow:hidden` сдвигается на ширину float'а, не пересекающегося с ним по вертикали (`x=100` вместо `50`, проба на минимальной странице). На самих тестах — снимок: `y` сдвинут на высоту первого float'а | P3 | [BUG-1359](../../bugs/BUG-1359-OPEN.md) |
+| `floats`: не разобрано | 33 | 33 thick | `floats/floats-placement-001.html`, `new-fc-separates-from-float-001.html`, `float-in-inline-001.html` | `floats-placement-*` (8, `inline-block` с `line-height:0`), `new-fc-*`, `float-in-inline-*` | — | без записи |
+| `floats-clear`: схлопывание полей и clearance | 31 | 31 thick | `floats-clear/adjoining-float-before-clearance.html`, `margin-collapse-018.xht`, `clear-clearance-calculation-003.xht` | по правилу (имя `margin-collapse`/`clearance`/`clear-on`/`adjoining`); проба `cl1`/`cl2` (clearance после float, `margin-bottom: 20px`) — результат `y=80` в обоих вариантах, расхождение с эталоном не воспроизвелось в минимальной разметке | — | без записи |
+| `floats-clear`: не разобрано | 31 | 31 thick | `floats-clear/clear-004.xht`, `floats-111.xht`, `float-non-replaced-width-006.xht` | `floats-*` (19), `float-non-replaced-width-*`, `clear-default-inheritance`, `clear-initial`… | — | без записи |
+| `rtl`: статическая позиция abspos | 19 | 19 thick | `positioning/absolute-non-replaced-width-002.xht`, `-005.xht`, `-007.xht` | `direction:rtl`, `position:absolute; left:auto; right:auto` — бокс у левого края (`x=0` вместо `180`, проба) | P3 | [BUG-1360](../../bugs/BUG-1360-OPEN.md) |
+| thin-only: прочее | 18 | 18 thin-only | `abspos/static-inside-inline-001.html`, `floats-clear/clear-on-child-with-margins-2.html` | эталон — не `<img>`; AA-шов на дробной границе, A/B не делался | P3 | [BUG-1249](../../bugs/BUG-1249-OPEN.md) (кандидат, дополнен) |
+| У `<p>`/`<ul>`/`<blockquote>` нет UA-полей | 18 | 18 thick | `floats-clear/clear-clearance-calculation-001.xht`, `-002.xht`, `-004.xht` | A/B с `p,ul,…{margin:1em 0}` на 647 id: 33 → `identical`/`thin-only`, 18 из них в этом кластере | P3 | [BUG-1334](../../bugs/BUG-1334-OPEN.md) (дополнен) |
+| identical при 800×600, FAIL под `wptrunner` | 17 | 17 identical | `floats-clear/float-non-replaced-width-010.xht`, `floats-111.xht`, `positioning/absolute-non-replaced-height-006.xht` | снимок 800×600 совпал с эталоном; `wptrunner` снимает 1024×720 (см. срез 1/12), либо дробная граница | — | без записи |
+| встроенный `<svg>`/`<object>` в потоке | 15 | 15 thick | `floats-clear/float-replaced-height-006.xht`, `float-replaced-width-007.xht` | как в срезе 12: `<svg>` в потоке раскладывается как блок; здесь — как float/abspos replaced. По правилу, отдельно не пробовалось | P3 | [BUG-1354](../../bugs/BUG-1354-OPEN.md) (дополнен) |
+| `floats-clear`: эталон с `<img>`, thick | 13 | 13 thick | `floats-clear/clear-applies-to-012.xht`, `clear-inline-001.xht`, `float-005.xht` | эталон — `<img>`, но тест ещё и не совпадает по геометрии; не разобрано | — | без записи |
+| единицы `ex` и `ch` — константы | 11 | 11 thick | `floats/float-nowrap-2.html`, `positioning/bottom-091.xht`, `left-092.xht` | A/B `Nex` → `N×16px` на 11 id с `ex`: 4 → `identical`/`thin-only`, 7 остались `thick` (там другая причина); `ch` (`float-nowrap-*`, 7 id) — по правилу | P3 | [BUG-1340](../../bugs/BUG-1340-OPEN.md) (дополнен) |
+| фон `table` закрашивает и `caption` | 11 | 11 thick | `tables/caption-side-applies-to-006.xht`, `-007.xht` | `FillRect (0,0,100,70)` вместо сетки 100×50: фон таблицы включает подпись (проба на `display:table` и `<table>`; `caption-side-applies-to-006`: на 20 px больше по высоте) | P3 | [BUG-1364](../../bugs/BUG-1364-OPEN.md) |
+| таблица без `width` — на всю ширину контейнера | 10 | 10 thick | `floats-clear/margin-collapse-165.xht`, `tables/anonymous-table-box-width-001.xht` | A/B `table{width:fit-content}` — 10 из 10 | P3 | [BUG-1335](../../bugs/BUG-1335-OPEN.md) (дополнен) |
+| `abspos` вне containing block клипуется overflow предка | 10 | 10 thick | `positioning/abspos-overflow-001.xht` … `-010.xht` | `PushScrollLayer clip=(0,60,100,100)` охватывает `position:absolute` с containing block снаружи (проба: зелёный `FillRect (0,0,200,20)` внутри клипа; с `position:relative` на контейнере клип корректен) | P3 | [BUG-1361](../../bugs/BUG-1361-OPEN.md) |
+| фон корневого `html` не уходит на canvas | 8 | 8 thick | `abspos/abspos-containing-block-initial-004c.xht` … `-005d.xht` | `<html style="position:absolute; … background:yellow">`: `FillRect (100,100,120,120)` вместо всего canvas (проба) | P3 | [BUG-1363](../../bugs/BUG-1363-OPEN.md) |
+| float/clear в multicol | 8 | 8 thick | `floats-clear/floats-clear-multicol-000.html` | multicol-фрагментация (`MULTICOL-FRAG`) | P1 | `ROADMAP.md` MULTICOL-FRAG (существует) |
+| `zindex`: не разобрано | 6 | 6 thick | `zindex/stack-floats-001.xht`, `z-index-001.xht` | порядок наложения float/позиционированных; не пробовалось | — | без записи |
+| `abspos`: не разобрано | 3 | 3 thick | `abspos/between-float-and-text.html`, `static-inside-inline-002.html` | статическая позиция abspos в inline | — | без записи |
+| `stacking-context`: не разобрано | 2 | 2 thick | `stacking-context/opacity-affects-block-in-inline.html` | `block-in-inline` (BUG-1353) | P3 | BUG-1353 (по аналогии, без пробы) |
+| без `rel=match` (одна страница) | 1 | no-match-ref | `floats/table-sizing-with-adjacent-floats.html` | reftest без `rel=match` в первой ссылке | — | без записи |
+
+Сумма по таблице: 894 id reftest (+ 12 testharness, + 0 crash).
+
+### Что остаётся неизвестным
+
+- **«Не разобрано»** — 59 + 44 + 33 + 31 + 31 + 13 + 6 + 3 + 2 + 1 = **223 id** (17 % среза): кластеры по 1–8 id, отдельных проб нет. Крупнейшие подпорядки: `absolute-replaced-*` (с `<svg:svg>`), `floats-placement-*`, `empty-cells-applies-to-*`.
+- **BUG-1358 и BUG-1359 пробованы на одном–двух id**: числа 38 и 36 — по имени (`collapsing-border-model-*`, `floats-wrap-*`); верхняя граница.
+- **BUG-1362: A/B с `table{width:fit-content}` закрывает только 16 из 153**, но не доказывает, что остальные 137 — только отсутствие анонимных боксов: id перестраивают DOM в `onload` (78), а `--dump-layout`/`--screenshot` снимают страницу до `onload`.
+- **Кластеры пересекаются**: BUG-1334, BUG-1335, BUG-1337, BUG-1340, BUG-1356, BUG-1357 и BUG-1362 делят id; после закрытия любого разбивка изменится. A/B подтвердил только 4 `ex`, 26 `table`-width и 33 `p`-поля id; остальное — «по правилу».
+- **17 identical** — не пробовались при 1024×720, как в срезах 11/12.
+- **testharness (12 id с не-PASS сабтестами)** — не разбирались; `float-no-interpolation.html`/`clear-no-interpolation.html` (42 сабтеста) — отсутствие анимации `float`/`clear` (дискретная интерполяция), `hit-test-floats-*` — `elementsFromPoint` на float'ах.
+- Живое окно (wgpu) не проверялось; снимки — CPU-растр, 1024×720 в `wptrunner` против 800×600 в пиксельном разборе.
+- Срез закрывает `tables`, `positioning`, `floats`, `floats-clear`, `abspos`, `stacking-context`, `zindex`, `zorder` из `css/CSS2` (1 335 id из 6 357 автоматизируемых; остальные каталоги — срезы S14–S15).

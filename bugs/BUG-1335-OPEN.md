@@ -32,3 +32,7 @@ WPT-RUN-14 срез 11, `css/CSS2/{backgrounds,borders}/*-applies-to-*.xht`: 34 
 ## Дополнение (P2, WPT-RUN-14 срез 12, `css/CSS2/margin-padding-clear`, 2026-10-07)
 
 `margin-padding-clear/padding-applies-to-*.xht` (`#table { display: table }` без `width`) — 10 id, у которых этот дефект единственный: A/B (`table,#table{width:fit-content}` в копиях пар) → 10 из 10 `identical`/`thin-only`, всего по двум каталогам 22 id. Проба: `<table style="border-spacing:0"><tr><td style="padding:0 50px;border:5px solid green"></td></tr></table>` → ширина 1024; с `width:fit-content` — 110.
+
+## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
+
+A/B с `table{width:fit-content}` на 356 id с таблицей: 26 → `identical`/`thin-only`; 10 из них в кластере «таблица без `width`» (`floats-clear/margin-collapse-165.xht`, `-166.xht`, `tables/anonymous-table-box-width-001.xht`), 16 — в `table-anonymous-objects-*` (BUG-1362, там эта правка закрывает только часть).

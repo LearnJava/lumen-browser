@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-07",
  "counts": {
-  "open": 223,
-  "fixed": 1071,
+  "open": 232,
+  "fixed": 1072,
   "inprogress": 0,
   "wontfix": 2
  },
- "total_bugs": 1296,
+ "total_bugs": 1306,
  "phases": [
   {
    "id": "P0",
@@ -646,6 +646,16 @@
      "status": "planned",
      "size": "L",
      "note": "`text-align: justify`/`justify-all`/`match-parent` и `text-align-last: justify`, `text-justify`. `TextAlign` (`style/values/typography.rs:69`) знает только start/end/left/center/right; разбор `text.rs:102` на неизвестное значение оставляет прежнее (`getComputedStyle` отдаёт `center` вместо `justify`), `TextAlignLast::Justify` в `align_one_line` приравнен к `start` (`inline_wrap.rs:1108`), раскладка с растяжением межсловных промежутков отсутствует: проба `text-align:justify` в 25ch — строки по `x=0` с естественной шириной. Нужно: режим justify в выравнивании строки (растяжение пробелов, `text-justify: inter-word|inter-character|none|auto`, последняя строка и строка перед `<br>` — по `text-align-last`), `justify-all`, `match-parent` (CSS Text L3 §7.1–7.3). Замер WPT-RUN-14 S9 (2026-10-06): `text-align/text-align-justify-*`, `-justifyall-*`, `-last-justify*`, `-match-parent-*` — 23 reftest; `text-justify` — 3 id / 8 сабтестов parsing (разбор свойства — P4, `CSS-SPECS.md:76`). Критерий готовности: reftest перечисленных семейств совпадают с эталоном"
+    },
+    {
+     "id": "TABLE-ANON",
+     "title": "TABLE-ANON: анонимные табличные боксы",
+     "status": "planned",
+     "size": "M",
+     "note": "Анонимные табличные боксы (CSS 2.1 §17.2.1): сейчас не строятся вовсе — `grep -i anonymous crates/engine/layout/src/box_tree/table*.rs` пуст, в `build.rs:1011` лишь комментарий «Tables keep their own anonymous-box rules (text → anonymous cell)» без кода. Проба (`--dump-layout`): осиротевшие `display:table-cell` в `<div>` раскладываются блоками друг под другом (нужна анонимная таблица и строка), `display:table` с прямым текстом и `table-row` с прямым текстом — текст пропадает (`DrawText` нет), `table-cell` без строки внутри `display:table` — ячейки `w=0`; работает только полный `table > row > cell`. Нужно три стадии §17.2.1 в построении боксов: (1) удалить игнорируемые боксы (пробельный текст между табличными), (2) обернуть детей `table`/`row-group`/`row`, не подходящих по типу, в анонимные `row`/`cell`, (3) обернуть осиротевшие `table-cell`/`table-row`/`table-row-group`/`table-caption` и их соседей-табличные в одну анонимную таблицу (inline-вариант, если родитель строчный). Раскладка таблицы из корректного дерева уже есть. Найдено WPT-RUN-14 S13 (2026-10-07): 153 id `css/CSS2/tables/table-anonymous-objects-*` (все `thick`), 60 из них перестраивают DOM в `onload` — проверять отдельно; кластер в `docs/wpt-vendor-notes/css.md` §css/CSS2 tables/positioning/floats.",
+     "bugs": [
+      "BUG-1362"
+     ]
     }
    ],
    "date": "2026-06"
@@ -6021,7 +6031,7 @@
       {
        "id": "WPT-RUN-14-S13",
        "title": "WPT-RUN-14-S13: CSS2 tables, positioning, floats",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Прогон `css/CSS2/{tables,positioning,floats,floats-clear,abspos,stacking-context,zindex,zorder}` (около 1 340 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
       },
@@ -8643,13 +8653,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1204": {
-   "status": "open",
-   "title": "`ReadableStreamDefaultController`/`ReadableByteStreamController`/`ReadableStreamBYOBRequest`/`WritableStreamDefaultController`/`TransformStreamDefaultController…",
-   "component": "js (`crates/js/src/shim/streams_shim.js`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1205": {
    "status": "open",
    "title": "Замолчавшее без FIN/RST HTTP/2-соединение (cnbc, VPN, 1 из 3): 34 запроса к `static-redesign.cnbcfm.com` по 60 с ждут `stream timed out`, новые запросы садятся…",
@@ -9515,6 +9518,76 @@
    "status": "open",
    "title": "Краштест `block-in-inline-ax-crash.html` под `wptrunner` растит память `lumen.exe` до 5 ГБ и убивается лимитом `--max-browser-gb 4.0` (CRASH)",
    "component": "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1356": {
+   "status": "open",
+   "title": "`text-align: right",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — ветка `BoxKind::InlineBlockRow`; `align_lines` видит только `InlineRun`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1357": {
+   "status": "open",
+   "title": "`float` и `position:absolute",
+   "component": "layout (`crates/engine/layout/src/box_tree/` — вычисление `display` при `float`/`position:absolute`; `table.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1358": {
+   "status": "open",
+   "title": "`border-collapse: collapse` + `table-layout: fixed`: ячейка с широкой боковой рамкой смещена влево на всю ширину рамки (`x=64` вместо `100`), третья — на удвоен…",
+   "component": "layout (`crates/engine/layout/src/box_tree/table.rs` — геометрия ячеек collapsed-модели при `table-layout: fixed`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1359": {
+   "status": "open",
+   "title": "Блок с `overflow:hidden` (BFC) рядом с float сдвигается вправо на ширину float, не пересекающегося с ним по вертикали; в сценарии «float A + float B ниже + BFC-…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — подбор позиции BFC-бокса среди float)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1360": {
+   "status": "open",
+   "title": "`position:absolute` с `left/right:auto` в контейнере `direction: rtl`: статическая позиция у левого края (`x=0`), а не у правого (`x=180` в контейнере 200 px, ш…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1361": {
+   "status": "open",
+   "title": "`position:absolute` внутри непозиционированного `overflow:scroll",
+   "component": "paint/layout (`crates/engine/layout/src/box_tree/`, `crates/engine/paint/src/display_list/` — `PushScrollLayer` охватывает abspos-потомка с containing block снаружи)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1362": {
+   "status": "open",
+   "title": "Анонимные табличные боксы (CSS 2.1 §17.2.1) не строятся: осиротевшие `table-cell`/`table-row` не получают таблицу-обёртку, текст непосредственно в `table`/`tabl…",
+   "component": "layout (`crates/engine/layout/src/box_tree/build.rs`, `table.rs` — анонимных табличных боксов нет: `grep -i anonymous table.rs` пуст)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1363": {
+   "status": "open",
+   "title": "Фон корневого `<html>` не распространяется на canvas, если у `<html>` `position:absolute`/`display:table`: закрашивается только его бокс (`FillRect (100,100,120…",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/entry.rs:801` `canvas_background_color`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1364": {
+   "status": "open",
+   "title": "Фон `display:table`/`<table>` закрашивает и `table-caption`: `FillRect (0,0,100,70)` вместо сетки 100×50, подпись внутри фона (CSS 2.1 §17.4). 11 id `caption-si…",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/table.rs` — рамка/фон таблицы включает подпись)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1365": {
+   "status": "open",
+   "title": "Отрицательный `margin-top`/`margin-bottom` блока с блочными детьми теряется при схлопывании: `margin-top:-60px` обёртка → ребёнок `y=100` вместо `40`; лист и BF…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`)",
    "date": null,
    "debtor": false
   },
@@ -17021,6 +17094,13 @@
    "component": "network (`crates/network/tests/all.rs`)",
    "date": "2026-10-07",
    "debtor": false
+  },
+  "BUG-1204": {
+   "status": "fixed",
+   "title": "`ReadableStreamDefaultController`/`ReadableByteStreamController`/`ReadableStreamBYOBRequest`/`WritableStreamDefaultController`/`TransformStreamDefaultController…",
+   "component": "js (`crates/js/src/shim/streams_shim.js`)",
+   "date": "2026-10-07",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -18292,6 +18372,9 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738"
   ],
+  "layout (`crates/engine/layout/src/box_tree/` — вычисление `display` при `float`/`position:absolute`; `table.rs`)": [
+   "BUG-1357"
+  ],
   "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)": [
    "BUG-1291"
   ],
@@ -18300,11 +18383,17 @@
    "BUG-1341",
    "BUG-1345"
   ],
+  "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`)": [
+   "BUG-1365"
+  ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`, `collapsed_bottom_margin`; `block_flow_trampoline.rs`; `box_tree/types.rs` — `BoxRole`/`PseudoKind`)": [
    "BUG-1026"
   ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`, `collapsed_top_margin`)": [
    "BUG-1262"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/bfc.rs` — подбор позиции BFC-бокса среди float)": [
+   "BUG-1359"
   ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs`, `block_flow_trampoline.rs` — схлопывание полей пустого блока)": [
    "BUG-1350"
@@ -18402,6 +18491,9 @@
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — быстрый путь `lay_out` для чистого поддерева, `translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y)`; same-tick флаш `crates/js/src/v8_runtime/style_flush.rs`)": [
    "BUG-1242"
   ],
+  "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — ветка `BoxKind::InlineBlockRow`; `align_lines` видит только `InlineRun`)": [
+   "BUG-1356"
+  ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — ветка `InlineRun`, высота = `line_count × used_line_height`)": [
    "BUG-1281"
   ],
@@ -18410,6 +18502,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — смещение `position: relative` через `shift_tree` после раскладки блока; инкрементальный путь `lay_out` для чистых поддеревьев)": [
    "BUG-1240"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)": [
+   "BUG-1360"
   ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
    "BUG-1348",
@@ -18438,6 +18533,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/table.rs` — внутренние табличные боксы)": [
    "BUG-1352"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/table.rs` — геометрия ячеек collapsed-модели при `table-layout: fixed`)": [
+   "BUG-1358"
   ],
   "layout (`crates/engine/layout/src/box_tree/table.rs`)": [
    "BUG-1346"
@@ -18629,8 +18727,14 @@
    "BUG-230",
    "BUG-239"
   ],
+  "layout/paint (`crates/engine/layout/src/box_tree/entry.rs:801` `canvas_background_color`)": [
+   "BUG-1363"
+  ],
   "layout/paint (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs` — строчный бокс, разрезанный блоком)": [
    "BUG-1353"
+  ],
+  "layout/paint (`crates/engine/layout/src/box_tree/table.rs` — рамка/фон таблицы включает подпись)": [
+   "BUG-1364"
   ],
   "layout/paint (`crates/engine/layout/src/box_tree/table.rs`)": [
    "BUG-1336"
@@ -18951,6 +19055,9 @@
   "paint/layout": [
    "BUG-096",
    "BUG-156"
+  ],
+  "paint/layout (`crates/engine/layout/src/box_tree/`, `crates/engine/paint/src/display_list/` — `PushScrollLayer` охватывает abspos-потомка с containing block снаружи)": [
+   "BUG-1361"
   ],
   "paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`)": [
    "BUG-1339"
