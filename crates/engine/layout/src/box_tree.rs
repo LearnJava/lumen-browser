@@ -62,6 +62,7 @@ use inline_wrap::{
 use inline_wrap::{caps_synthesis, char_break_offset, try_hyp_break, SMALL_CAPS_SCALE};
 
 mod grid;
+mod grid_auto_cols;
 pub use grid::resolve_auto_fill_fit_count;
 
 mod baseline;
