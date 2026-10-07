@@ -528,7 +528,16 @@ pub(crate) fn build_flex_init(
             // the container's — two column containers of different widths, or
             // one item aligned and one stretched, must not collide.
             let probe_width = if is_column { probe_cross[k] } else { content_width };
-            let memoized = if memo_usable && cacheable_for_layout_result_cache(&children[i]) {
+            // BUG-1255: a percentage block size resolves against the column's
+            // definite main size (CSS Sizing L3 §5.2.1); the probe's height is
+            // then a function of the container's height, which the memo key
+            // (node, width) does not carry.
+            let pct_probe_h = if is_column && matches!(children[i].style.height, Some(Length::Percent(_) | Length::Calc(_))) {
+                explicit_main
+            } else {
+                None
+            };
+            let memoized = if memo_usable && pct_probe_h.is_none() && cacheable_for_layout_result_cache(&children[i]) {
                 let key: FlexProbeKey = (children[i].node, probe_width.to_bits());
                 FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
                     m.borrow().get(&key).and_then(|(style, h)| {
@@ -578,7 +587,7 @@ pub(crate) fn build_flex_init(
                         },
                     );
                 } else {
-                    lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, children_pcb, hp, false);
+                    lay_out(&mut children[i], content_x, content_y, probe_width, pct_probe_h, measurer, viewport, children_pcb, hp, false);
                 }
                 let cv_here = CV_AUTO_TOUCHED.with(|c| c.get());
                 let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
@@ -596,7 +605,7 @@ pub(crate) fn build_flex_init(
                 // probe and the one being served pass `available_height: None`,
                 // so whatever a percentage block size resolved to is the same
                 // for each.
-                if !cv_here && memo_usable && cacheable_for_layout_result_cache(&children[i]) {
+                if !cv_here && memo_usable && pct_probe_h.is_none() && cacheable_for_layout_result_cache(&children[i]) {
                     let key: FlexProbeKey = (children[i].node, probe_width.to_bits());
                     let entry = (Arc::clone(&children[i].style), children[i].rect.height);
                     FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
