@@ -127,11 +127,65 @@
         assert!(!index.is_conservative(), "`:has()` has its own reach analysis");
         assert!(index.has_has_dependency(), ":has() anywhere must set the has-dependency flag");
         let a = doc.find_by_id("a").expect("#a");
-        let got = roots(&doc, &sheet, a, "data-x");
+        let got = roots(&doc, &sheet, a, "class");
         assert!(got.contains(&a));
         assert!(!got.contains(&doc.root()), "the document must not be the root: {got:?}");
         let uls: Vec<_> = got.iter().filter(|&&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")).collect();
         assert_eq!(uls.len(), 1, "the `ul` ancestor that could match `ul:has(.item)` is a root: {got:?}");
+    }
+
+    #[test]
+    fn a_write_no_has_argument_reads_does_not_reach_the_has_subject() {
+        // BUG-1211: `data-*`/`aria-*`/`style` writes and class tokens that no `:has()` argument names
+        // cannot flip `ul:has(.item)`; the ancestor is not a root (cnn.com's script writes ~30
+        // `data-zjs-*` attributes per link and read `innerText` after each).
+        let doc = fixture();
+        let sheet = parse_css("ul:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        let a = doc.find_by_id("a").expect("#a");
+        let has_ul = |got: &HashSet<NodeId>| got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul"));
+        for attr in ["data-x", "aria-label", "style"] {
+            let got = roots(&doc, &sheet, a, attr);
+            assert!(!has_ul(&got), "`{attr}` write must not make the `ul` a root: {got:?}");
+        }
+        let from = |name: &'static str, old: &'static str| {
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::AttrFrom { name, old })], &index)
+        };
+        // `#a` keeps `item`; only `foo` came off, which no `:has()` argument names.
+        assert!(!has_ul(&from("class", "item foo")), "an unrelated class token write must not reach the `ul`");
+        assert!(has_ul(&from("class", "")), "gaining `item` can flip `ul:has(.item)`");
+        // A plain `class` write without the old value, and attributes read through pseudo-classes, stay wide.
+        assert!(has_ul(&roots(&doc, &sheet, a, "class")));
+        assert!(has_ul(&roots(&doc, &sheet, a, "disabled")));
+    }
+
+    #[test]
+    fn an_attribute_a_has_argument_names_still_reaches_the_has_subject() {
+        let doc = fixture();
+        let sheet = parse_css("ul:has([data-x]) { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let got = roots(&doc, &sheet, a, "data-x");
+        assert!(got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")), "{got:?}");
+        let got = roots(&doc, &sheet, a, "data-y");
+        assert!(!got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")), "{got:?}");
+    }
+
+    #[test]
+    fn a_class_attribute_selector_in_has_flips_only_when_its_match_changes() {
+        // BUG-1211: `:has([class*="video"])` reads the whole `class` value, but a write that leaves its
+        // match as it was (`foo` -> `foo bar`) cannot flip the `ul`.
+        let doc = fixture();
+        let sheet = parse_css(r#"ul:has([class*="video"]) { color: green; }"#);
+        let index = restyle_node_index(&doc, &sheet);
+        let a = doc.find_by_id("a").expect("#a");
+        let has_ul = |got: &HashSet<NodeId>| got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul"));
+        let from = |old: &'static str| {
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::AttrFrom { name: "class", old })], &index)
+        };
+        // `#a` is now `item`: neither it nor `item foo` contains `video`.
+        assert!(!has_ul(&from("item foo")), "match stays false on both sides");
+        assert!(has_ul(&from("item video")), "`video` came off: the match flipped");
+        assert!(has_ul(&roots(&doc, &sheet, a, "class")), "old value unknown: stay wide");
     }
 
     #[test]
@@ -193,14 +247,35 @@
     }
 
     #[test]
-    fn nth_child_of_selector_disables_narrowing() {
+    fn nth_child_of_selector_it_cannot_model_disables_narrowing() {
         // `:nth-child(2 of .item)` makes one element's match depend on which of
         // its *siblings* carry `.item` — sibling reach with no combinator to
-        // see it.
+        // see it. An `S` that reads more than the sibling's own attributes (a
+        // pseudo-class, a combinator) is not modelled: the whole sheet widens.
+        let doc = fixture();
+        for css in ["li:nth-child(2 of .item:checked) { color: green; }", "li:nth-child(2 of ul .item) { color: green; }"] {
+            let sheet = parse_css(css);
+            let index = restyle_node_index(&doc, &sheet);
+            assert!(index.is_conservative(), "{css}: must force the conservative path");
+        }
+    }
+
+    #[test]
+    fn nth_child_of_a_simple_selector_sends_a_flipping_write_to_the_parent() {
+        // BUG-1211: `S` = `.item` is decided by the sibling's own `class`, so only a write that can
+        // flip it reaches the siblings (the parent is the root); anything else narrows to the node.
         let doc = fixture();
         let sheet = parse_css("li:nth-child(2 of .item) { color: green; }");
         let index = restyle_node_index(&doc, &sheet);
-        assert!(index.is_conservative(), ":nth-child(… of …) must force the conservative path");
+        assert!(!index.is_conservative());
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        let one = |change| restyle_root_set_for_node_change(&doc, [(a, change)], &index);
+        let only = |n: NodeId| [n].into_iter().collect::<HashSet<_>>();
+        assert_eq!(one(NodeChange::Attr("data-x")), only(a));
+        assert_eq!(one(NodeChange::AttrFrom { name: "class", old: "item loaded" }), only(a));
+        assert_eq!(one(NodeChange::AttrFrom { name: "class", old: "loaded" }), only(menu));
+        assert_eq!(one(NodeChange::Attr("class")), only(menu));
     }
 
     #[test]

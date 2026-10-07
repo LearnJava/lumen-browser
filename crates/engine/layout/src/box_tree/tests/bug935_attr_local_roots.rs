@@ -658,3 +658,121 @@ fn an_inherited_change_stops_where_a_descendant_overrides_it() {
         ],
     );
 }
+
+/// BUG-1211: an attribute selector on `class` read from an ancestor position (`[class*="open"] p`)
+/// reaches the descendants only when a write flips its match, not on every `class` write.
+#[test]
+fn a_class_attribute_selector_reaches_down_only_when_its_match_flips() {
+    let r = drive(
+        &wrapped(20),
+        "p { color: blue } [class*=\"open\"] p { margin: 3px } [class^=\"zz\"] { zzz-unknown: 1 }",
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy loaded");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy loaded open");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy loaded open2");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap lazy");
+            }),
+        ],
+    );
+    assert_narrow(&r[0], "`[class*=open]` matches neither value");
+    assert_reaches(&r[1], "`open` made `[class*=open]` match");
+    assert_narrow(&r[2], "`open` -> `open2` leaves the substring match true");
+    assert_reaches(&r[3], "`open` is gone: the match flipped back");
+}
+
+/// BUG-1211: the same for `:has()` — an ancestor's `:has([class*=…])` is a root only when the write
+/// flips the match of the attribute selector in its argument; an attribute no argument names never is.
+#[test]
+fn a_has_argument_on_class_makes_the_ancestor_a_root_only_when_the_match_flips() {
+    let html = "<div id=\"top\"><div id=\"w\" class=\"wrap\"><p>x</p></div><p>other</p></div>";
+    let r = drive(
+        html,
+        "#top:has([class*=\"open\"]) { color: red; margin: 2px } p { color: blue }",
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap loaded");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "data-zjs-card", "1");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap open");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap");
+            }),
+        ],
+    );
+    assert!(r[0].deep == 0 && r[1].deep == 0, "no `:has()` result moved: deep={} {}", r[0].deep, r[1].deep);
+    assert!(r[2].deep >= 1 && r[3].deep >= 1, "`open` came and went: `#top` is a root");
+}
+
+/// BUG-1211: `:nth-child(… of S)` no longer turns the narrowing off for the whole sheet. A write that
+/// cannot flip `S` on the node narrows as usual; one that can takes the parent, because the siblings
+/// before and after the node change position (`drive` checks the result against a full cascade).
+#[test]
+fn nth_child_of_s_widens_only_the_writes_that_can_flip_s() {
+    let item = |id: &str, class: &str| {
+        let ps: String = (0..10).map(|i| format!("<p>{id} para {i} <b>bold</b></p>")).collect();
+        format!("<li id=\"{id}\" class=\"{class}\">{ps}</li>")
+    };
+    let html = format!(
+        "<ul id=\"u\">{}{}{}{}{}</ul>",
+        item("i1", "card zone"),
+        item("i2", "card"),
+        item("i3", "card zone"),
+        item("i4", "card"),
+        item("i5", "card zone"),
+    );
+    let css = "p { color: blue } li:nth-child(2 of .zone) { margin: 3px } li:nth-last-child(1 of .zone, .flex) { padding: 2px }";
+    let r = drive(
+        &html,
+        css,
+        vec![
+            // `loaded` is no `S`: narrowed, the other items stay put.
+            Box::new(|d| {
+                let n = by_id(d, "i2");
+                set(d, n, "class", "card loaded");
+            }),
+            Box::new(|d| {
+                let n = by_id(d, "i2");
+                set(d, n, "data-zjs", "1");
+            }),
+            // `zone` appears on `i2`: the 2nd `.zone` is now `i2`, and `i3` is the 3rd.
+            Box::new(|d| {
+                let n = by_id(d, "i2");
+                set(d, n, "class", "card loaded zone");
+            }),
+            // `zone` leaves `i1`: positions before it do not exist, the ones after shift.
+            Box::new(|d| {
+                let n = by_id(d, "i1");
+                set(d, n, "class", "card");
+            }),
+            // The last `.zone` item gains `flex`, which is the other `S` of the list.
+            Box::new(|d| {
+                let n = by_id(d, "i4");
+                set(d, n, "class", "card flex");
+            }),
+        ],
+    );
+    assert_narrow(&r[0], "`loaded` is in no `S`");
+    assert_narrow(&r[1], "`data-zjs` is in no `S`");
+    for (i, what) in [(2, "`zone` appeared"), (3, "`zone` left"), (4, "`flex` appeared")] {
+        assert!(r[i].deep >= 1, "{what}: expected the parent as a deep root, got deep={}", r[i].deep);
+    }
+}
