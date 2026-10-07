@@ -1334,6 +1334,8 @@ fn apply_css_wide_keyword_with(
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_template_col_line_names = init.grid_template_col_line_names.clone();
                 style.grid_template_row_line_names = init.grid_template_row_line_names.clone();
+                style.grid_template_col_subgrid_fill = init.grid_template_col_subgrid_fill;
+                style.grid_template_row_subgrid_fill = init.grid_template_row_subgrid_fill;
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
                 style.grid_auto_rows = init.grid_auto_rows.clone();
@@ -1349,6 +1351,8 @@ fn apply_css_wide_keyword_with(
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_template_col_line_names = init.grid_template_col_line_names.clone();
                 style.grid_template_row_line_names = init.grid_template_row_line_names.clone();
+                style.grid_template_col_subgrid_fill = init.grid_template_col_subgrid_fill;
+                style.grid_template_row_subgrid_fill = init.grid_template_row_subgrid_fill;
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
                 style.grid_auto_rows = init.grid_auto_rows.clone();

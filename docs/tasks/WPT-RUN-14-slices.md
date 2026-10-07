@@ -63,7 +63,7 @@
 | S14 | CSS2: text, linebox, fonts, lists | `css/CSS2/text,css/CSS2/linebox,css/CSS2/fonts,css/CSS2/generated-content,css/CSS2/lists,css/CSS2/bidi-text` | ~1260 | `.tmp/wpt-run14/css2-4` |
 | S15 | CSS2: остальное | `css/CSS2 --exclude-prefixes <все префиксы S11…S14>`: box, box-display, cascade, cascade-import, colors, css1, css21-errata, csswg-issues, media, other-formats, pagination, sec5, selectors, syntax, ui, values, visudet, visufx, visuren и файлы в корне | ~1420 | `.tmp/wpt-run14/css2-5` |
 | S16 | css-overflow + css-sizing | `css/css-overflow,css/css-sizing` | 1 498 | `.tmp/wpt-run14/overflow-sizing` |
-| S17 | css-multicol + css-contain | `css/css-multicol,css/css-contain` | ~1 297 | `.tmp/wpt-run14/multicol-contain` |
+| S17 | css-multicol + css-contain | `css/css-multicol,css/css-contain` | 1 297 | `.tmp/wpt-run14/multicol-contain` |
 | S18 | css-fonts + css-masking + WOFF2 | `css/css-fonts,css/css-masking,css/WOFF2` | ~1 392 | `.tmp/wpt-run14/fonts-masking` |
 | S19 | css-images + css-values + css-color | `css/css-images,css/css-values,css/css-color` | ~1 371 | `.tmp/wpt-run14/images-values-color` |
 | S20 | selectors + css-pseudo + css-nesting + css-namespaces + css-cascade | `css/selectors,css/css-pseudo,css/css-nesting,css/css-namespaces,css/css-cascade` | ~1 371 | `.tmp/wpt-run14/selectors-pseudo` |

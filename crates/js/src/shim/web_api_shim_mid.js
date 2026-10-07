@@ -8103,7 +8103,9 @@ function _lumen_offset_parent_nid(nid) {
 // published in computed-style px, so a plain `parseFloat` resolves them.
 function _lumen_offset_origin(nid) {
     var parent = _lumen_offset_parent_nid(nid);
-    if (parent === null) return [0, 0];
+    // BUG-1252: CSSOM View §5 measures from the initial containing block when
+    // the offsetParent is <body>, not from the body's (margin-shifted) box.
+    if (parent === null || _lumen_is_body(parent)) return [0, 0];
     var r = _lumen_get_bounding_rect(parent);
     if (!r) return [0, 0];
     var bl = parseFloat(_lumen_get_computed_style(parent, 'border-left-width')) || 0;

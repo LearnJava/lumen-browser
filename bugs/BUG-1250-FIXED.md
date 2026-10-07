@@ -1,6 +1,8 @@
 # BUG-1250 — `position:absolute; height:N%` внутри `position:relative` предка с определённой `height` разрешается в 0 (или в высоту содержимого), а не в N% высоты 
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07
+
+**Исправление:** уже устранён LAYOUT-FIXED-CB-2 (75e954557, `height:%` у absolute не резолвился вовсе); проверено `--dump-layout`: `width:100%;height:100%` → 100×100, `height:50%` → 50.
 **Заведён:** 2026-10-03 (P2, WPT-RUN-14 срез 1, `css/css-flexbox`)
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — разрешение процентных `height` у `position:absolute`)
 

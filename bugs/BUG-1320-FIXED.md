@@ -1,6 +1,6 @@
 # BUG-1320 — `repeat(1000, …)` в 100 000 экземплярах: 100 млн дорожек, 12 ГБ памяти и 20 секунд
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 8, `css/css-grid`, вторая половина)
 **Область:** css-parser/layout — `crates/engine/layout/src/style/values/flexgrid.rs` (разбор `grid-template-columns`/`rows`) и `box_tree/grid.rs` (раскладка): число дорожек, получающихся из `repeat(<integer>, …)`, ничем не ограничено.
 
@@ -36,3 +36,9 @@ WPT-RUN-14 срез 8: единственный `ERROR` в `css/css-grid` (1222 
 ## Как проверить
 
 `css/css-grid/parsing/grid-template-columns-crash.html` (ожидается `PASS`, без срабатывания RSS-капа).
+
+## Исправление
+
+`crates/engine/layout/src/style/values/flexgrid.rs`: константа `MAX_EXPLICIT_TRACKS` = 10 000 и `clamp_repeat()` — `repeat(<integer>, …)` раскрывается целыми итерациями, пока список не достиг предела (так же, как в Chrome, где предел 10 000). Тот же предел применяется в `collect_line_names` и `parse_subgrid_names`, поэтому имена линий остаются в такт с дорожками. Тело `repeat()` без дорожек (`repeat(18446744073709551615, [a])`) даёт не больше одной итерации — раньше это был почти бесконечный цикл.
+
+Проверка: `style::tests::cascade::grid_template_columns_repeat_track_limit`, `box_tree::tests::grid_track_limit` (раскладка страницы из симптома — 0,3 с).
