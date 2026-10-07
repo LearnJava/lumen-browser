@@ -579,6 +579,9 @@ pub(crate) fn wrap_inline_run(
     // A segment boundary with no whitespace on either side joins tightly (e.g.
     // `<q>` `::before` open-quote glued to the quoted text, `<a>link</a>!`).
     let mut prev_trailing_ws = false;
+    // pre-wrap / break-spaces: the previous segment ended with a preserved
+    // space, i.e. a line may break before this segment's first word.
+    let mut pre_wrap_space_before = false;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         // Перенос перед первым словом запрещён, когда сегмент — «хвост»
@@ -589,6 +592,7 @@ pub(crate) fn wrap_inline_run(
             result.push(std::mem::take(&mut current_line));
             current_x = 0.0;
             prev_trailing_ws = false;
+            pre_wrap_space_before = false;
             continue;
         }
 
@@ -603,6 +607,22 @@ pub(crate) fn wrap_inline_run(
                 continue;
             }
             prev_trailing_ws = false;
+            // BUG-1322: pre-wrap / break-spaces keep the spaces but still wrap
+            // after them; only `pre` is a single unbreakable fragment.
+            if !white_space.is_nowrap() {
+                let starts_space = seg.text.starts_with([' ', '\t']);
+                let params = super::inline_wrap_preserved::PreservedWrap {
+                    max_width, viewport, m, white_space, word_break, overflow_wrap, line_break,
+                    break_before: !no_break_before
+                        && pre_wrap_space_before
+                        && (white_space == crate::style::WhiteSpace::BreakSpaces || !starts_space),
+                };
+                super::inline_wrap_preserved::wrap_preserved_segment(
+                    seg, &params, &mut result, &mut current_line, &mut current_x,
+                );
+                pre_wrap_space_before = seg.text.ends_with([' ', '\t']);
+                continue;
+            }
             let style = &seg.style;
             let em = style.font_size;
             let ls = style.letter_spacing;
