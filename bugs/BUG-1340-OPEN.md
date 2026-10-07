@@ -27,3 +27,7 @@ WPT-RUN-14 срез 11: 14 id (`borders/border-{top,right,bottom,left}-width-{08
 ## Как проверить
 
 `css/CSS2/borders/border-bottom-width-080.xht`.
+
+## Дополнение (P2, WPT-RUN-14 срез 12, `css/CSS2/normal-flow` + `margin-padding-clear`, 2026-10-07)
+
+38 id в этих каталогах (серии `width-08*`, `height-08*`, `margin-*-09*`, `padding-*-07*`, `min-/max-*-08*`): `Nex` — основная единица теста. A/B одним бинарём: в копиях пар «тест + эталон» `Nex` заменено на `N×16px` (шрифт Ahem 20 px, ex = 0,8 em) — 38 из 38 → `identical`/`thin-only`, новых провалов нет. Пример: `normal-flow/width-083.xht` — `FillRect (8, 26, 66, 96)` вместо 96 px шириной.
