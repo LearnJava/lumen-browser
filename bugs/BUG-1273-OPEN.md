@@ -46,3 +46,7 @@ Ahem-reftest-ов не должна быть ниже, чем у остальн�
 ## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
 
 20 reftest второй половины `css-text` падают в wptrunner, но с локальным Ahem pixel-identical с эталоном: `white-space/` 13 (`pre-wrap-leading-spaces-004…010`, `pre-wrap-017`, `hanging-whitespace-003/004`, `white-space-intrinsic-size-003`, …), `word-break/` 4, `text-transform/` 2 (`fullwidth-006/008`), `word-spacing/` 1.
+
+## Срез 14 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` text/linebox/fonts/…): прогон под `wptrunner` нестабилен на холодном старте
+
+Первый прогон `run_corpus.py --prefixes css/CSS2/{text,linebox,fonts,generated-content,lists,bidi-text}` сразу после сборки и обновления манифеста дал 436 зелёных из 1 259 (34.76 %); два повторных прогона на той же сборке — по 506 (40.32 %), побайтно одинаковый вердикт. Разошлись 74 id: 72 из них (`fonts/font-0*`, `linebox/*`, `text/*` — все с `Ahem`) в первом прогоне FAIL, а в повторных PASS, и все 72 — `identical` по `reftest_pixdiff.py` при 800×600, 2 наоборот: `fonts/font-family-013.xht`, `fonts/fonts-013.xht` (в первом прогоне прошли, потому что Ahem не подгрузился и обе стороны отрисовались запасным шрифтом). Причина «холодного» состояния не установлена (гипотеза — первый `@font-face url()` по `localhost:18300/fonts/ahem.css` не успевает до снимка; HTTP-кэш не проверялся). Вывод: один прогон `run_corpus.py` после сборки не воспроизводим на ~6 % срезa с Ahem; числа срезов 1–13 такой проверки (повтор на той же сборке) не проходили.
