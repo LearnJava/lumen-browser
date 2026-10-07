@@ -54,11 +54,12 @@ Multiple Claude Code sessions may work simultaneously. Full workflow for task li
 3. If `pull` reports real conflicts (diverged history, `<<<<<<<` markers): resolve **file-by-file**, reading enough context on both sides to understand intent — do not run `git checkout --ours/--theirs` blindly across many files, and do not let an agent resolve a whole batch without spot-checking cross-file consistency (shared globals, renamed identifiers, feature-flag names). After resolving, re-verify: `cargo check`/`cargo clippy -- -D warnings` for every touched crate, plus scoped `cargo test` for crates with real logic conflicts (not just doc/config files) — a clean compile does not prove a merge is behaviorally correct. Only then commit the merge.
 4. Push the resolved `main` immediately (`git push origin main`) so other sessions see it before it can drift again.
 
-**Step 1: Task startup (BEFORE coding)**
-1. Read `STATUS-PN.md` + `git branch` — check which tasks already have a `p<N>-…` branch
-2. If a `p<N>-…` branch already exists for the task — it's taken, pick the next pointer line instead
-3. Occupy your pool slot with the task branch: `cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"` — see "Worktree isolation" below
-4. Push the branch: `git push origin p<N>-task-name` — its existence reserves the task (the STATUS pointer line stays in place)
+**Step 1: Task startup (BEFORE coding)** — one command does all four steps:
+`cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` (exit 1 — taken, 2 — race; read the message).
+1. `git fetch origin --prune`, then look for **any** unmerged branch, local or on `origin`, whose name contains the task id (`1240`, `perf-10`) — not just the exact `p<N>-<task>` name: another machine may have named it `p1-bug1240-relative`. `git pull origin main` does **not** refresh `origin/*` refs, so `git branch -a` after it shows `origin` as of the last full fetch — that is how BUG-1240 was taken twice on 2026-10-07
+2. If such a branch exists — the task is taken, pick the next pointer line instead (or ask, per the top-down rule)
+3. Occupy your pool slot with the task branch: `bash scripts/worktree-pool.sh p<N>-work p<N>-task-name` — see "Worktree isolation" below
+4. Push the branch **before the first code edit**: `git push origin p<N>-task-name` — its existence on `origin` reserves the task (the STATUS pointer line stays in place); a local-only branch reserves nothing for other machines. Then fetch again and re-check step 1: if another branch with the same id appeared in between, stop and ask the user
 
 **Step 2: During work** — see "Worktree isolation" section below
 

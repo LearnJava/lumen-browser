@@ -70,7 +70,7 @@ Never rewrite test pages to work around engine limitations — fix the engine.
 
 ### Git Workflow
 Protocol — `docs/git-workflow.md`; closing — `/lumen-task-finish`. In short:
-- Branch `p4-<task-name>` in the pool slot: `cd "$(bash scripts/worktree-pool.sh p4-work p4-<task-name> | tail -1)"`; the branch reserves the task, the `STATUS-P4.md` pointer stays until completion
+- Branch `p4-<task-name>` in the pool slot, taken with `cd "$(bash scripts/task-claim.sh 4 <task-id> p4-<task-name> | tail -1)"` (checks origin for the task id, occupies the slot, pushes the branch); the branch on origin reserves the task, the `STATUS-P4.md` pointer stays until completion
 - Every commit: clippy gate → commit → `merge --no-ff` onto `origin/main` → push (not only at the end of the task)
 - Commit messages in **Russian**, subject under 80 chars, body explains *why*; stage explicit paths, never `git add -A`
 - Trailer: `Co-Authored-By: Claude <the model that actually authored the commit> <noreply@anthropic.com>`
