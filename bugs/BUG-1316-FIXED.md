@@ -1,6 +1,6 @@
 # BUG-1316 — у живого `document` нет `children`/`childElementCount`/`firstElementChild`/`lastElementChild`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-07 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 8, `css/css-grid`, вторая половина)
 **Область:** js — `crates/js/src/shim/web_api_shim_mid.js`. У отсоединённого документа (`_lumen_build_detached_document`, `:5211-5240`) аксессоры `children`/`childElementCount`/`firstElementChild`/`lastElementChild` определены (BUG-1161), у живого `document` — нет, и в `Document.prototype` их нет (DOM LS §4.2.6: `Document` реализует `ParentNode`).
 
@@ -32,3 +32,11 @@ WPT-RUN-14 срез 8, `css/css-grid/parsing/`: `grid-template-areas-one-cell.ht
 ## Как проверить
 
 `css/css-grid/parsing/grid-template-areas-one-cell.html`; одной строкой `document.children.length === 1` на странице с одним `<html>`.
+
+## Решение (2026-10-07, P6)
+
+Четыре аксессора добавлены в объектный литерал живого `document` (`web_api_shim_mid.js`, рядом с `firstChild`/`lastChild`): `children` — `_lumen_make_html_collection(_lumen_root_nid)`, `childElementCount`/`firstElementChild`/`lastElementChild` — через `_lumen_element_child_nids`. Литерал не наследует `Document.prototype`, поэтому свойства собственные (как `firstChild`, `hasChildNodes`). Глобал `ParentNode` не заводился — в WPT-кластере он не нужен.
+
+Побочный дефект, вскрытый реальным прогоном: `_lumen_is_element_nid` считал doctype элементом (его `tagName` — `html`, без `#`), и на странице с `<!DOCTYPE html>` `document.children[0]` оказывался doctype'ом — `style` на нём пуст, `=== document.documentElement` ложно. Юнит-фикстура `make_doc()` doctype не содержит, поэтому первый тест это не ловил; добавлен второй, с doctype. Исправление — `_lumen_is_doctype` в `_lumen_is_element_nid` (затрагивает и `ParentNode`-обход у остальных узлов, где doctype раньше мог попасть в `children`).
+
+Тесты: `crates/js/src/dom/tests/v8_bug1316_document_parentnode.rs`. WPT: `grid-template-areas-one-cell.html` 6/6; `grid-template-shorthand-composition.html` и `grid-template-shorthand-areas-valid.html` перестали падать на `Cannot read properties of undefined`, часть сабтестов остаётся FAIL по другим причинам (ожидания в `.ini` обновлены).

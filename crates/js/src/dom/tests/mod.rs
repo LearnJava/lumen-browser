@@ -305,6 +305,8 @@ mod v8_bug935_s94_shell_attr_writes;
 mod v8_bug1245_inline_restyle;
 mod v8_bug1315_grid_cssom;
 #[cfg(feature = "v8-backend")]
+mod v8_bug1316_document_parentnode;
+#[cfg(feature = "v8-backend")]
 mod v8_gap_rule_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_gap_rule_interp;
