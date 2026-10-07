@@ -14,7 +14,8 @@ use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::style::{
     apply_declaration, named_color, parse_font_family, BackgroundImage, BackgroundLayer,
-    BorderStyle, Color, ComputedStyle, CssColor, FontWeight, Length, LengthOrAuto, TextAlign,
+    BorderStyle, Color, ComputedStyle, CssColor, Direction, FontWeight, Length, LengthOrAuto,
+    TextAlign, UnicodeBidi,
 };
 
 /// Применяет HTML presentational hints для `<img>`, `<video>`, `<iframe>`,
@@ -348,6 +349,66 @@ pub(in crate::style) fn apply_font_element_presentational_hints(
             style.font_family = families;
         }
     }
+}
+/// HTML LS §15.3.6 «Bidirectional text»: атрибут `dir` → `direction` и
+/// `unicode-bidi`. `[dir=ltr|rtl]` → `direction` + `unicode-bidi: isolate`;
+/// `<bdo dir>` → `unicode-bidi: isolate-override`; `[dir=auto]` →
+/// направление по первому сильному символу текста элемента (UAX #9 P2/P3,
+/// пусто → `ltr`) + `isolate`. Hint применяется ДО CSS-каскада — author
+/// `direction`/`unicode-bidi` перекроет. Неизвестное значение `dir` игнорируется.
+pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let Some(val) = doc.get(node).get_attr("dir") else {
+        return;
+    };
+    let dir = match val.trim().to_ascii_lowercase().as_str() {
+        "ltr" => Direction::Ltr,
+        "rtl" => Direction::Rtl,
+        "auto" => first_strong_direction(doc, node).unwrap_or(Direction::Ltr),
+        _ => return,
+    };
+    style.direction = dir;
+    style.unicode_bidi = if name.local == "bdo" { UnicodeBidi::IsolateOverride } else { UnicodeBidi::Isolate };
+}
+
+/// HTML LS §3.2.6.1 «auto directionality»: направление первого символа с
+/// сильным bidi-классом (L → `ltr`, R/AL → `rtl`) в тексте поддерева.
+/// Пропускаются `script`/`style`/`textarea`/`bdi` и потомки с явным валидным
+/// `dir` (`ltr`/`rtl`/`auto`) — их содержимое изолировано от родителя.
+fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
+    use unicode_bidi::{bidi_class, BidiClass};
+    fn walk(doc: &Document, node: NodeId, is_root: bool) -> Option<Direction> {
+        let node_ref = doc.get(node);
+        match &node_ref.data {
+            NodeData::Text(t) => {
+                for ch in t.chars() {
+                    match bidi_class(ch) {
+                        BidiClass::L => return Some(Direction::Ltr),
+                        BidiClass::R | BidiClass::AL => return Some(Direction::Rtl),
+                        _ => {}
+                    }
+                }
+                None
+            }
+            NodeData::Element { name, .. } => {
+                if !is_root {
+                    if matches!(name.local.as_str(), "script" | "style" | "textarea" | "bdi") {
+                        return None;
+                    }
+                    if let Some(d) = node_ref.get_attr("dir")
+                        && matches!(d.trim().to_ascii_lowercase().as_str(), "ltr" | "rtl" | "auto")
+                    {
+                        return None;
+                    }
+                }
+                node_ref.children.iter().find_map(|&c| walk(doc, c, false))
+            }
+            _ => None,
+        }
+    }
+    walk(doc, root, true)
 }
 /// HTML5 §15.3.3: атрибут `align` на блочных элементах → CSS `text-align`.
 ///

@@ -1503,3 +1503,83 @@ use super::*;
         assert_eq!(style.overflow_x, Overflow::Visible);
         assert_eq!(style.overflow_y, Overflow::Visible);
     }
+
+    // ── HTML LS §15.3.6: атрибут `dir` (BUG-1321) ────────────────────────────
+
+    /// Стиль первого ребёнка `<body>` для `html` (с `css` как author-листом).
+    fn dir_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let el = doc.get(doc.body().unwrap()).children[0];
+        compute_style(&doc, el, &sheet, &root, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn dir_attr_rtl_sets_direction_and_isolate() {
+        let s = dir_style("<div dir=rtl>abc</div>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Isolate);
+    }
+
+    #[test]
+    fn dir_attr_ltr_and_case_insensitive() {
+        let s = dir_style("<p dir=LTR>x</p>", "");
+        assert_eq!(s.direction, Direction::Ltr);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Isolate);
+        assert_eq!(dir_style("<p dir=RtL>x</p>", "").direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn dir_attr_invalid_is_ignored() {
+        let s = dir_style("<div dir=sideways>abc</div>", "");
+        assert_eq!(s.direction, Direction::Ltr);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn dir_attr_bdo_is_isolate_override() {
+        let s = dir_style("<bdo dir=rtl>abc</bdo>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::IsolateOverride);
+    }
+
+    #[test]
+    fn dir_attr_auto_follows_first_strong_character() {
+        // Иврит — R; латиница — L; цифры/пробелы — слабые, пропускаются.
+        assert_eq!(dir_style("<div dir=auto>\u{5d0}\u{5d1}\u{5d2}</div>", "").direction, Direction::Rtl);
+        assert_eq!(dir_style("<div dir=auto> 123 \u{5d0}b</div>", "").direction, Direction::Rtl);
+        assert_eq!(dir_style("<div dir=auto>abc \u{5d0}</div>", "").direction, Direction::Ltr);
+        // Без сильных символов — ltr.
+        assert_eq!(dir_style("<div dir=auto>123</div>", "").direction, Direction::Ltr);
+        // Сильный символ во вложенном элементе тоже считается.
+        assert_eq!(dir_style("<div dir=auto><b>\u{5d0}</b></div>", "").direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn dir_attr_auto_skips_isolated_descendants() {
+        // Потомок с собственным `dir` и `<bdi>` изолированы от родителя.
+        let s = dir_style("<div dir=auto><span dir=ltr>\u{5d0}</span>abc</div>", "");
+        assert_eq!(s.direction, Direction::Ltr);
+        let s = dir_style("<div dir=auto><bdi>abc</bdi>\u{5d0}</div>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+        let s = dir_style("<div dir=auto><script>var a</script>\u{5d0}</div>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn dir_attr_author_css_wins_and_child_inherits() {
+        let s = dir_style("<div dir=rtl>abc</div>", "div { direction: ltr; unicode-bidi: normal; }");
+        assert_eq!(s.direction, Direction::Ltr);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Normal);
+
+        let doc = lumen_html_parser::parse("<div dir=rtl><span>x</span></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.direction, Direction::Rtl, "direction inherits");
+        assert_eq!(span_style.unicode_bidi, UnicodeBidi::Normal, "unicode-bidi does not");
+    }
