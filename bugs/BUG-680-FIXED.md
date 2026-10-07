@@ -132,4 +132,4 @@ object length/name, prototype, `constructor`, `@@unscopables` у обоих ин
 по-прежнему падает раньше, на `test_driver.bless()` с `element click intercepted error`.
 Это уже не BUG-574 (закрыт): `testdriver.js::click` ищет свежевставленную кнопку через
 `document.elementsFromPoint`, а тот отвечает по дереву хит-теста прошлого кадра и её не
-находит — заведено как [BUG-1202](BUG-1202-OPEN.md).
+находит — заведено как [BUG-1202](BUG-1202-FIXED.md).

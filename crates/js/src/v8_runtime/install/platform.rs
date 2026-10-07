@@ -380,20 +380,39 @@ pub(crate) fn install_point_hit_test(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
+    flush: FlushHandles,
 ) -> JsResult<()> {
+    // BUG-1202: flush first (as `getClientRects` does), then hit-test the flush's own tree when it
+    // is newer than the embedder-pushed snapshot — a node inserted this tick must be found.
     {
         let tree = Arc::clone(&hit_test_tree);
+        let flush = flush.clone();
         reg!(scope, ctx, store, "_lumen_element_from_point", move |x: f64, y: f64| -> Option<u32> {
+            flush.maybe_flush();
+            let p = lumen_core::geom::Point::new(x as f32, y as f32);
+            if flush.hit_tree_stale.load(Ordering::Relaxed) {
+                let basis = flush.incr_basis.lock().unwrap();
+                if let Some(b) = basis.as_ref() {
+                    return lumen_paint::hit_test(p, &b.layout).map(|r| r.node.raw());
+                }
+            }
             let root = tree.lock().unwrap().clone()?;
-            lumen_paint::hit_test(lumen_core::geom::Point::new(x as f32, y as f32), &root)
-                .map(|r| r.node.raw())
+            lumen_paint::hit_test(p, &root).map(|r| r.node.raw())
         });
     }
     {
         let tree = Arc::clone(&hit_test_tree);
         reg!(scope, ctx, store, "_lumen_elements_from_point", move |x: f64, y: f64| -> Vec<u32> {
-            let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
-            let hits = lumen_paint::hit_test_all(lumen_core::geom::Point::new(x as f32, y as f32), &root);
+            flush.maybe_flush();
+            let p = lumen_core::geom::Point::new(x as f32, y as f32);
+            let hits = if flush.hit_tree_stale.load(Ordering::Relaxed)
+                && let Some(b) = flush.incr_basis.lock().unwrap().as_ref()
+            {
+                lumen_paint::hit_test_all(p, &b.layout)
+            } else {
+                let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
+                lumen_paint::hit_test_all(p, &root)
+            };
             let mut seen = std::collections::HashSet::new();
             hits.into_iter()
                 .filter_map(|r| {
