@@ -1488,12 +1488,21 @@ pub(crate) fn parse_and_layout(
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
+    let mut intrinsic_written: Vec<u32> = Vec::new();
     let (images, animated_gifs, lazy_pairs, blocked_by_img_src, cross_origin_img_urls) = {
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
-        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target)
+        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target, &mut intrinsic_written)
     };
+    // BUG-935 срез 94: скрипты уже могли взять базис инкрементального каскада (флаш на
+    // `getComputedStyle`/`offsetWidth`) — дописанные только что `width`/`height` в нём не видны.
+    #[cfg(feature = "v8")]
+    if !intrinsic_written.is_empty()
+        && let Some(js) = &js_ctx
+    {
+        js.note_shell_attr_writes(&intrinsic_written);
+    }
     // GAP-CSPENF срез 4: `securitypolicyviolation` for every `img-src`-blocked
     // URL. `blocked_by_img_src` came back from a fetch pass that ran before
     // this runtime existed (parallel, off-thread), so this is the first point

@@ -288,6 +288,7 @@ mod v8_bug935_s70_scope_prune;
 mod v8_bug935_s74_node_index_cache;
 mod v8_bug935_s77_scroll_rollup_cache;
 mod v8_bug935_s64_sheet_delta;
+mod v8_bug935_s94_shell_attr_writes;
 mod v8_bug1245_inline_restyle;
 mod v8_gap_rule_cssom;
 mod v8_gap_rule_interp;
