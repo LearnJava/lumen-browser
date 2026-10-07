@@ -9326,8 +9326,18 @@ var _LUMEN_WRAPPER_MEMBERS = {
             _lumen_adopt_detached(newNode);
             _lumen_adopt_detached(refNode);
             if (!newNode || newNode.__nid__ === undefined) return newNode;
-            if (!refNode || refNode.__nid__ === undefined) {
+            if (refNode === null || refNode === undefined) {
                 return this.appendChild(newNode);
+            }
+            // DOM LS §4.2.3 pre-insert: a non-node reference is a WebIDL TypeError,
+            // a node that is not a child of this parent is NotFoundError (BUG-894).
+            if (refNode.__nid__ === undefined) {
+                throw new TypeError("Failed to execute 'insertBefore' on 'Node': parameter 2 is not of type 'Node'.");
+            }
+            if (_lumen_get_children(nid).indexOf(refNode.__nid__) < 0) {
+                throw new DOMException(
+                    "Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.",
+                    'NotFoundError');
             }
             // BUG-954: see appendChild.
             if (_lumen_node_contains(newNode, this)) {
