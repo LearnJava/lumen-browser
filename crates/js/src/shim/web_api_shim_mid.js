@@ -8563,6 +8563,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
             }
             _lumen_adopt_detached(c);
             if (!c || c.__nid__ === undefined) return c;
+            // BUG-954: DOM §4.2.3 — a host-including ancestor of the parent can't be inserted.
+            if (_lumen_node_contains(c, this)) {
+                throw new DOMException('The new child element contains the parent.', 'HierarchyRequestError');
+            }
             _lumen_ce_push_element_queue();
             try {
                 if (c.__isDocumentFragment__) {
@@ -9271,6 +9275,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (!newNode || newNode.__nid__ === undefined) return newNode;
             if (!refNode || refNode.__nid__ === undefined) {
                 return this.appendChild(newNode);
+            }
+            // BUG-954: see appendChild.
+            if (_lumen_node_contains(newNode, this)) {
+                throw new DOMException('The new child element contains the parent.', 'HierarchyRequestError');
             }
             _lumen_ce_push_element_queue();
             try {
