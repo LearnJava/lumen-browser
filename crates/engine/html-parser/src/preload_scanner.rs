@@ -78,6 +78,11 @@ pub enum PreloadHint {
         /// `None` — атрибут отсутствует, `"auto"` или невалиден, caller
         /// должен упасть на эвристику `FetchPriority::for_kind`.
         fetch_priority: Option<String>,
+        /// Атрибут `nonce` как есть, `None` — атрибута нет. CSP
+        /// (`style-src-elem 'nonce-…'`) пропускает по нему запрос раньше,
+        /// чем смотрит на URL: без него ранний прогрев листа под
+        /// nonce-политикой был бы невозможен (BUG-1185).
+        nonce: Option<String>,
     },
     /// `<script src="...">`. Без `type="module"` и атрибутов defer/async —
     /// caller-у достаточно URL.
@@ -85,6 +90,11 @@ pub enum PreloadHint {
         url: String,
         /// См. `Stylesheet::fetch_priority`.
         fetch_priority: Option<String>,
+        /// См. `Stylesheet::nonce` (`script-src-elem 'nonce-…'`).
+        nonce: Option<String>,
+        /// Атрибут `integrity` как есть (SRI-метаданные): хэш-источники
+        /// `script-src-elem` пропускают запрос по нему (CSP3 §6.7.1.1).
+        integrity: Option<String>,
     },
     /// `<img src="...">` или fallback-fetch одиночного `<img>`. `srcset`
     /// и `sizes` отделены для удобства caller-а; при отсутствии срабатывает
@@ -173,6 +183,7 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
                 url: href.to_string(),
                 media: media.clone(),
                 fetch_priority: fetch_priority.clone(),
+                nonce: find_attr(attrs, "nonce").map(str::to_string),
             }),
             "preload" => out.push(PreloadHint::Preload {
                 url: href.to_string(),
@@ -208,6 +219,8 @@ fn collect_script_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
         out.push(PreloadHint::Script {
             url: src.to_string(),
             fetch_priority: normalize_fetch_priority(attrs),
+            nonce: find_attr(attrs, "nonce").map(str::to_string),
+            integrity: find_attr(attrs, "integrity").map(str::to_string),
         });
     }
 }
@@ -293,12 +306,13 @@ fn collect_source_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
 /// ```
 pub struct PreloadScanner {
     push: PushTokenizer,
+    meta_csp: Vec<String>,
 }
 
 impl PreloadScanner {
     /// Создаёт новый инкрементальный сканер.
     pub fn new() -> Self {
-        Self { push: PushTokenizer::new() }
+        Self { push: PushTokenizer::new(), meta_csp: Vec::new() }
     }
 
     /// Скармливает очередной chunk сырых байт и возвращает все hint-ы,
@@ -308,6 +322,7 @@ impl PreloadScanner {
     /// и обрабатываются при следующем `feed_bytes` или `end`.
     pub fn feed_bytes(&mut self, chunk: &[u8]) -> Vec<PreloadHint> {
         let tokens = self.push.feed_bytes(chunk);
+        collect_meta_csp(&tokens, &mut self.meta_csp);
         collect_hints_from_tokens(&tokens)
     }
 
@@ -316,7 +331,33 @@ impl PreloadScanner {
     /// После вызова `end` объект нельзя использовать для дальнейшего `feed_bytes`.
     pub fn end(&mut self) -> Vec<PreloadHint> {
         let tokens = self.push.end();
+        collect_meta_csp(&tokens, &mut self.meta_csp);
         collect_hints_from_tokens(&tokens)
+    }
+
+    /// Текст каждой `<meta http-equiv="Content-Security-Policy" content>`,
+    /// встреченной до сих пор, в порядке документа — включая встреченные в
+    /// том же chunk-е, что и последние hint-ы (BUG-1185). Caller обязан
+    /// проверить ими ранний прогрев так же, как CSP заголовка ответа: DOM
+    /// ещё не построен, и окончательный гейт этих политик пока не видит.
+    /// Политика из того же chunk-а применяется и к hint-ам до неё — строже
+    /// спецификации, но цена ошибки — лишь пропущенный прогрев.
+    pub fn meta_csp(&self) -> &[String] {
+        &self.meta_csp
+    }
+}
+
+/// Дописать в `out` `content` каждого `<meta http-equiv="Content-Security-Policy">`
+/// из `tokens` — тот же отбор, что у shell-ового `collect_meta_csp` по DOM.
+fn collect_meta_csp(tokens: &[Token], out: &mut Vec<String>) {
+    for tok in tokens {
+        if let Token::StartTag { name, attrs, .. } = tok
+            && name == "meta"
+            && find_attr(attrs, "http-equiv").is_some_and(|v| v.eq_ignore_ascii_case("content-security-policy"))
+            && let Some(content) = find_attr(attrs, "content")
+        {
+            out.push(content.to_string());
+        }
     }
 }
 
@@ -389,7 +430,7 @@ pub fn parse_link_header(header: &str) -> Vec<PreloadHint> {
                 // RFC 8288 не определяет параметр `fetchpriority` — только
                 // HTML-атрибут несёт author-override (срез 4); заголовочные
                 // hint-ы всегда падают на эвристику `FetchPriority::for_kind`.
-                "stylesheet" => out.push(PreloadHint::Stylesheet { url: url.clone(), media: None, fetch_priority: None }),
+                "stylesheet" => out.push(PreloadHint::Stylesheet { url: url.clone(), media: None, fetch_priority: None, nonce: None }),
                 "preload" => out.push(PreloadHint::Preload { url: url.clone(), as_kind: as_kind.clone(), fetch_priority: None }),
                 "modulepreload" => out.push(PreloadHint::ModulePreload { url: url.clone() }),
                 "prefetch" => out.push(PreloadHint::Prefetch { url: url.clone() }),
@@ -482,7 +523,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "theme.css".into(),
-                media: None, fetch_priority: None }]
+                media: None, fetch_priority: None, nonce: None }]
         );
     }
 
@@ -495,13 +536,13 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "print.css".into(),
-                media: Some("print".into()), fetch_priority: None }]
+                media: Some("print".into()), fetch_priority: None, nonce: None }]
         );
         // Пустой/whitespace-only media эквивалентен отсутствию атрибута.
         let hints = scan_preload_hints(r#"<link rel="stylesheet" media="  " href="a.css">"#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "a.css".into(), media: None , fetch_priority: None }]
+            vec![PreloadHint::Stylesheet { url: "a.css".into(), media: None , fetch_priority: None, nonce: None }]
         );
     }
 
@@ -514,7 +555,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "theme.css".into(),
-                media: None, fetch_priority: None }]
+                media: None, fetch_priority: None, nonce: None }]
         );
     }
 
@@ -583,7 +624,7 @@ mod tests {
                     as_kind: Some("style".into()), fetch_priority: None },
                 PreloadHint::Stylesheet {
                     url: "hero.css".into(),
-                    media: None, fetch_priority: None },
+                    media: None, fetch_priority: None, nonce: None },
             ]
         );
     }
@@ -641,7 +682,7 @@ mod tests {
             hints,
             vec![PreloadHint::Script {
                 url: "app.js".into()
-            , fetch_priority: None }]
+            , fetch_priority: None, nonce: None, integrity: None }]
         );
     }
 
@@ -814,7 +855,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "/тема.css".into(),
-                media: None, fetch_priority: None }]
+                media: None, fetch_priority: None, nonce: None }]
         );
     }
 
@@ -828,7 +869,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "theme.css".into(),
-                media: None, fetch_priority: None }]
+                media: None, fetch_priority: None, nonce: None }]
         );
     }
 
@@ -887,7 +928,7 @@ mod tests {
             hints,
             vec![
                 PreloadHint::Preload { url: "/hero.css".into(), as_kind: Some("style".into()) , fetch_priority: None },
-                PreloadHint::Stylesheet { url: "/hero.css".into(), media: None , fetch_priority: None },
+                PreloadHint::Stylesheet { url: "/hero.css".into(), media: None , fetch_priority: None, nonce: None },
             ]
         );
     }
@@ -984,6 +1025,7 @@ mod tests {
                     url: "a.css".into(),
                     media: None,
                     fetch_priority: Some("high".into()),
+                    nonce: None,
                 },
                 PreloadHint::Preload {
                     url: "b.woff2".into(),
@@ -1026,6 +1068,7 @@ mod tests {
                     url: "hero.css".into(),
                     media: None,
                     fetch_priority: Some("high".into()),
+                    nonce: None,
                 },
             ]
         );
@@ -1053,6 +1096,8 @@ mod tests {
             vec![PreloadHint::Script {
                 url: "ads.js".into(),
                 fetch_priority: Some("low".into()),
+                nonce: None,
+                integrity: None,
             }]
         );
     }
@@ -1105,6 +1150,47 @@ mod streaming_tests {
         out
     }
 
+    /// BUG-1185: `nonce`/`integrity` доезжают до caller-а — по ним CSP
+    /// пропускает ранний прогрев под nonce- и хэш-политиками.
+    #[test]
+    fn script_and_stylesheet_carry_nonce_and_integrity() {
+        let hints = scan_preload_hints(
+            r#"<link rel=stylesheet href=a.css nonce=n1><script src=b.js nonce=n2 integrity="sha256-x"></script>"#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Stylesheet {
+                    url: "a.css".into(),
+                    media: None,
+                    fetch_priority: None,
+                    nonce: Some("n1".into()),
+                },
+                PreloadHint::Script {
+                    url: "b.js".into(),
+                    fetch_priority: None,
+                    nonce: Some("n2".into()),
+                    integrity: Some("sha256-x".into()),
+                },
+            ]
+        );
+    }
+
+    /// BUG-1185: сканер копит `<meta http-equiv=Content-Security-Policy>`
+    /// через границы chunk-ов; прочие `http-equiv` и `<meta>` без `content`
+    /// не в счёт.
+    #[test]
+    fn scanner_collects_meta_csp_across_chunks() {
+        let html = r#"<meta http-equiv="refresh" content="5"><meta http-equiv="Content-Security-Policy" content="script-src 'none'"><meta http-equiv=content-security-policy><META HTTP-EQUIV="content-security-policy" CONTENT="style-src 'self'">"#;
+        let mut scanner = PreloadScanner::new();
+        assert!(scanner.meta_csp().is_empty());
+        for b in html.as_bytes() {
+            scanner.feed_bytes(std::slice::from_ref(b));
+        }
+        scanner.end();
+        assert_eq!(scanner.meta_csp(), ["script-src 'none'", "style-src 'self'"]);
+    }
+
     #[test]
     fn streaming_matches_batch_simple() {
         let html = r#"<link rel="stylesheet" href="theme.css"><img src="hero.png">"#;
@@ -1149,7 +1235,7 @@ mod streaming_tests {
         hints.extend(scanner.end());
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "styles.css".into(), media: None , fetch_priority: None }]
+            vec![PreloadHint::Stylesheet { url: "styles.css".into(), media: None , fetch_priority: None, nonce: None }]
         );
     }
 
@@ -1164,7 +1250,7 @@ mod streaming_tests {
         assert_eq!(batch, streaming);
         assert_eq!(
             streaming,
-            vec![PreloadHint::Stylesheet { url: "late.css".into(), media: None , fetch_priority: None }]
+            vec![PreloadHint::Stylesheet { url: "late.css".into(), media: None , fetch_priority: None, nonce: None }]
         );
     }
 
@@ -1181,7 +1267,7 @@ mod streaming_tests {
         let hints = scan_byte_by_byte(html);
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "/тема.css".into(), media: None , fetch_priority: None }]
+            vec![PreloadHint::Stylesheet { url: "/тема.css".into(), media: None , fetch_priority: None, nonce: None }]
         );
     }
 

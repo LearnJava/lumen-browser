@@ -367,7 +367,7 @@ impl RequestDispatch {
             if chunk.is_empty() && !finished {
                 return Ok(None);
             }
-            let sink_ref = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+            let sink_ref = sink.as_mut().map(|f| &mut **f as BodySink<'_>);
             match self.mux.on_recv_with_sink(stream_id, &chunk, finished, sink_ref)? {
                 Some(response) => return Ok(Some(response)),
                 None => {

@@ -360,11 +360,14 @@ impl PageSource {
     /// Второй аргумент `on_chunk` — URL, с которого течёт тело: после
     /// редиректа он отличается от запрошенного, и относительные ссылки в
     /// потоке (preload-хинты) обязаны резолвиться именно от него (BUG-757).
+    /// Третий — заголовки того же ответа: ранний прогрев подресурсов обязан
+    /// уважать их `Content-Security-Policy` ещё до `RawPage::csp_header`
+    /// (BUG-1185).
     pub(crate) fn load_bytes_streaming(
         &self,
         sink: Arc<dyn EventSink>,
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-        on_chunk: &mut dyn FnMut(&[u8], &lumen_core::url::Url),
+        on_chunk: lumen_network::PageChunkSink<'_>,
     ) -> Result<RawPage, Box<dyn Error>> {
         let PageSource::Url { url, body, upgrade_insecure_requests, referrer } = self else {
             return self.load_bytes(sink, cookie_jar);

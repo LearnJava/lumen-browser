@@ -497,7 +497,7 @@ mod tests {
         let mut chunks: Vec<Vec<u8>> = Vec::new();
         // No FIN yet: chunks are forwarded, no response returned.
         let result = exchange
-            .on_recv_with_sink(&head_stream, false, Some(&mut |c: &[u8]| chunks.push(c.to_vec())))
+            .on_recv_with_sink(&head_stream, false, Some(&mut |c: &[u8], _: &[(Vec<u8>, Vec<u8>)]| chunks.push(c.to_vec())))
             .unwrap();
         assert_eq!(result, None);
         assert_eq!(chunks, vec![b"part1".to_vec()]);
@@ -518,7 +518,7 @@ mod tests {
         stream.extend(data_frame(b"c"));
         let mut chunks: Vec<Vec<u8>> = Vec::new();
         let resp = exchange
-            .on_recv_with_sink(&stream, true, Some(&mut |c: &[u8]| chunks.push(c.to_vec())))
+            .on_recv_with_sink(&stream, true, Some(&mut |c: &[u8], _: &[(Vec<u8>, Vec<u8>)]| chunks.push(c.to_vec())))
             .unwrap()
             .unwrap();
         assert_eq!(chunks, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);

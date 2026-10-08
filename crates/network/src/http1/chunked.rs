@@ -343,7 +343,7 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
                 Ok(0) => break,
                 Ok(n) => {
                     raw.extend_from_slice(&buf[..n]);
-                    sink(&buf[..n]);
+                    sink(&buf[..n], &headers);
                 }
                 Err(e) => {
                     err = Some(Error::Network(format!("read body: {e}")));
@@ -373,7 +373,7 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
             loop {
                 match dec.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => sink(&buf[..n]),
+                    Ok(n) => sink(&buf[..n], &headers),
                     Err(e) => {
                         err = Some(Error::Network(format!("decode body: {e}")));
                         break;

@@ -449,7 +449,7 @@ impl<T: DatagramTransport> RequestTurn<T> {
         let mut residual = Vec::new();
         for frame in deferred {
             if is_request_frame(frame) {
-                let s = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+                let s = sink.as_mut().map(|f| &mut **f as BodySink<'_>);
                 events.push(self.pump.on_frame_with_sink(frame, s)?);
             } else {
                 residual.push(frame.clone());

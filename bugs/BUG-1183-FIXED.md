@@ -79,4 +79,4 @@ headless и Lumen dev-release `--maximized`, `LUMEN_NO_ADBLOCK=1`, чтение 
 Побочные находки той же пробы, не связанные с правкой (воспроизводятся и с обычными
 `style-src 'none'`/`script-src 'none'`): `getComputedStyle` видит заблокированный `<style>`
 ([BUG-1184](BUG-1184-OPEN.md)); предзагрузка при потоковом разборе запрашивает
-заблокированные `<script src>`/`<link>` ([BUG-1185](BUG-1185-OPEN.md)).
+заблокированные `<script src>`/`<link>` ([BUG-1185](BUG-1185-FIXED.md)).

@@ -785,6 +785,39 @@ pub(crate) fn violating_script_element_policy<'a>(
         .collect()
 }
 
+/// `true` if any of `policies` forbids the speculative warm-up of the
+/// `<script src>`/`<link rel=stylesheet>` the streaming preload scanner found
+/// at `url` (BUG-1185) — the same element pre-request checks the final gates
+/// ask ([`violating_script_element_policy`], [`style_src_blocked`]), fed from
+/// the hint's own `nonce`/`integrity` since the element does not exist yet.
+/// Any other hint is not this gate's business, and a `url` that fails to parse
+/// is never fetched anyway, so both are `false`.
+pub(crate) fn speculative_fetch_blocked(
+    policies: &[CspPolicy],
+    hint: &lumen_html_parser::PreloadHint,
+    url: &str,
+    self_origin: Option<&Origin>,
+) -> bool {
+    use lumen_html_parser::PreloadHint;
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    match hint {
+        PreloadHint::Script { nonce, integrity, .. } => {
+            let request = lumen_network::csp::ScriptRequestMetadata {
+                nonce: nonce.as_deref(),
+                integrity: integrity.as_deref(),
+                parser_inserted: true,
+            };
+            policies.iter().any(|policy| !policy.script_element_fetch_allows(&parsed, self_origin, &request))
+        }
+        PreloadHint::Stylesheet { nonce, .. } => policies
+            .iter()
+            .any(|policy| !policy.style_element_fetch_allows(&parsed, self_origin, nonce.as_deref())),
+        _ => false,
+    }
+}
+
 /// Inline counterpart of [`violating_fetch_policy`]: text of every policy
 /// whose inline check (`'unsafe-inline'`/nonce/hash) forbids `body` for
 /// `directive` — same predicate `inline_script_blocked`/
@@ -1652,5 +1685,54 @@ mod tests {
         ];
         let violated = violating_style_attr_policy(&policies, "color:red");
         assert_eq!(violated, vec!["style-src-attr 'none'"]);
+    }
+
+    fn script_hint(nonce: Option<&str>) -> lumen_html_parser::PreloadHint {
+        lumen_html_parser::PreloadHint::Script {
+            url: "/s.js".into(),
+            fetch_priority: None,
+            nonce: nonce.map(str::to_owned),
+            integrity: None,
+        }
+    }
+
+    fn style_hint(nonce: Option<&str>) -> lumen_html_parser::PreloadHint {
+        lumen_html_parser::PreloadHint::Stylesheet {
+            url: "/a.css".into(),
+            media: None,
+            fetch_priority: None,
+            nonce: nonce.map(str::to_owned),
+        }
+    }
+
+    /// BUG-1185: ранний прогрев спрашивает те же элементные директивы, что
+    /// окончательные гейты, — `'none'` его запрещает, `'self'` пропускает
+    /// свой источник, отсутствие политики не ограничивает ничего.
+    #[test]
+    fn speculative_fetch_blocked_follows_element_directives() {
+        let origin = lumen_network::Origin::from_url(&lumen_core::url::Url::parse("http://a.test/").unwrap()).ok();
+        let own = "http://a.test/s.js";
+        let none = [lumen_network::csp::parse_csp_header("script-src 'none'; style-src-elem 'none'")];
+        assert!(speculative_fetch_blocked(&none, &script_hint(None), own, origin.as_ref()));
+        assert!(speculative_fetch_blocked(&none, &style_hint(None), own, origin.as_ref()));
+        let self_only = [lumen_network::csp::parse_csp_header("default-src 'self'")];
+        assert!(!speculative_fetch_blocked(&self_only, &script_hint(None), own, origin.as_ref()));
+        assert!(speculative_fetch_blocked(&self_only, &script_hint(None), "http://b.test/s.js", origin.as_ref()));
+        assert!(!speculative_fetch_blocked(&[], &script_hint(None), own, origin.as_ref()));
+        // Картинки и прочие hint-ы — не дело этого гейта.
+        let img = lumen_html_parser::PreloadHint::Image { url: Some("/i.png".into()), srcset: None, sizes: None, fetch_priority: None };
+        assert!(!speculative_fetch_blocked(&none, &img, own, origin.as_ref()));
+    }
+
+    /// BUG-1185: nonce из hint-а пропускает прогрев под nonce-политикой —
+    /// иначе на nonce-сайтах ранний прогрев выключился бы целиком.
+    #[test]
+    fn speculative_fetch_blocked_honours_hint_nonce() {
+        let policies = [lumen_network::csp::parse_csp_header("script-src 'nonce-abc'; style-src 'nonce-abc'")];
+        let url = "https://cdn.test/x";
+        assert!(!speculative_fetch_blocked(&policies, &script_hint(Some("abc")), url, None));
+        assert!(!speculative_fetch_blocked(&policies, &style_hint(Some("abc")), url, None));
+        assert!(speculative_fetch_blocked(&policies, &script_hint(Some("zzz")), url, None));
+        assert!(speculative_fetch_blocked(&policies, &style_hint(None), url, None));
     }
 }

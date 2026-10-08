@@ -21,8 +21,8 @@ fn dispatch_preload_hints_emits_events() {
         Arc::new(CollectingSink(Mutex::new(Vec::new())));
     let base = ResourceBase::Url("https://example.com/".to_owned());
     let hints = vec![
-        PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None },
-        PreloadHint::Script { url: "https://cdn.example.com/lib.js".into(), fetch_priority: None },
+        PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None, nonce: None },
+        PreloadHint::Script { url: "https://cdn.example.com/lib.js".into(), fetch_priority: None, nonce: None, integrity: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -66,8 +66,8 @@ fn dispatch_preload_hints_deduplicates_same_url() {
     // rel="preload stylesheet" создаёт два хинта на один href
     let hints = vec![
         PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()), fetch_priority: None },
-        PreloadHint::Stylesheet { url: "style.css".into(), media: None, fetch_priority: None },
-        PreloadHint::Stylesheet { url: "other.css".into(), media: None, fetch_priority: None },
+        PreloadHint::Stylesheet { url: "style.css".into(), media: None, fetch_priority: None, nonce: None },
+        PreloadHint::Stylesheet { url: "other.css".into(), media: None, fetch_priority: None, nonce: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -105,12 +105,12 @@ fn dispatch_preload_hints_cross_call_dedup() {
     let mut seen = std::collections::HashSet::new();
 
     // Первый вызов — ранний скан (streaming chunk)
-    let early = vec![PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None }];
+    let early = vec![PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None, nonce: None }];
     dispatch_preload_hints(&early, &base, &sink, &mut seen);
 
     // Второй вызов — финальный pipeline: те же хинты + новый
     let full = vec![
-        PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None },
+        PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None, nonce: None },
         PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
     ];
     dispatch_preload_hints(&full, &base, &sink, &mut seen);
@@ -147,8 +147,8 @@ fn dispatch_preload_hints_sorts_by_priority() {
     // Source-order: img (Low) → script (Medium) → css (High)
     let hints = vec![
         PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
-        PreloadHint::Script { url: "app.js".into(), fetch_priority: None },
-        PreloadHint::Stylesheet { url: "main.css".into(), media: None, fetch_priority: None },
+        PreloadHint::Script { url: "app.js".into(), fetch_priority: None, nonce: None, integrity: None },
+        PreloadHint::Stylesheet { url: "main.css".into(), media: None, fetch_priority: None, nonce: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -194,7 +194,7 @@ fn dispatch_preload_hints_fetchpriority_overrides_heuristic() {
             sizes: None,
             fetch_priority: Some("high".into()),
         },
-        PreloadHint::Script { url: "app.js".into(), fetch_priority: Some("low".into()) },
+        PreloadHint::Script { url: "app.js".into(), fetch_priority: Some("low".into()), nonce: None, integrity: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
