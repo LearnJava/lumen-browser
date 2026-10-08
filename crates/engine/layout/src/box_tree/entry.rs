@@ -949,6 +949,22 @@ pub(crate) fn is_collapsible_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0c}')
 }
 
+/// A text node that generates no inline content under `white_space`: made only of
+/// invisible controls and of white space the property collapses away (CSS 2.1
+/// §9.2.2.1 — "white space content that would subsequently be collapsed away does
+/// not generate any anonymous inline boxes"). `pre`/`pre-wrap`/`break-spaces` keep
+/// every space and tab, `pre-line` keeps the newline; characters outside the
+/// document white space (U+3000…, see [`is_collapsible_whitespace`]) are content
+/// in every mode (BUG-1327).
+pub(crate) fn is_discardable_text(s: &str, white_space: crate::WhiteSpace) -> bool {
+    s.chars().all(|c| {
+        is_invisible_control(c)
+            || (is_collapsible_whitespace(c)
+                && !white_space.preserves_whitespace()
+                && !(c == '\n' && white_space.preserves_newlines()))
+    })
+}
+
 /// Word separators for line breaking: Unicode white space except the
 /// no-break spaces U+00A0, U+202F, U+2007 (UAX #14 class GL), which are not CSS
 /// document white space (CSS Text L3 §4.1.1) and must stay inside the word
