@@ -1,6 +1,6 @@
 # BUG-1267 — `/acid/acid3/numbered-tests.html` раздувает один процесс `lumen` до ~25 ГБ
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-04 (P2, найден при замере WPT-RUN-9: `--parallel-shards`/`--batch-small`)
 **Область:** js / dom — не локализовано, см. «Чего не знаем»
 
@@ -63,3 +63,14 @@ TIMEOUT с 0 сабтестов), для соседних полос снима�
 `storage_*_quota_independent_from_*`: до 15–20 ГБ на браузер, квота
 `localStorage` не срабатывает, [BUG-870](BUG-870-OPEN.md)) — замер в
 `docs/tasks/p2-wpt-runner-throughput.md` §ограничитель памяти.
+
+## Корень и исправление (2026-10-08, P3)
+
+Рост памяти — acid3 test 19: `document.body.appendChild(document.documentElement)`
+(должно бросить `HierarchyRequestError`). До BUG-954 вставка предка в потомка
+строила цикл в дереве, обход которого рос до OOM (`memory allocation of
+17179869184 bytes failed`). Локализовано печатью индекса теста в копии
+`test.html`; на сборке с 0e8b9215a (BUG-954, 2026-10-07) RSS держится ~480 МБ,
+тест проходит. Регрессия: `document_element_into_body_throws` в
+`crates/js/tests/cases/bug954_insert_cycle.rs` (на разобранном документе).
+Обход в раннере (`--max-browser-gb`) оставлен как страховка.

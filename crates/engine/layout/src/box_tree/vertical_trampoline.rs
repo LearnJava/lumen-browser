@@ -13,6 +13,10 @@ struct Frame {
     b: LayoutBox,
     init: Box<VerticalInit>,
     next_child_idx: usize,
+    /// CSS Position L3 §4 — `absolute`/`fixed` children, placed against the
+    /// containing block once this box's size is final (`finish_frame`):
+    /// `(child index, static margin-box x, static margin-box y)`.
+    abs_deferred: Vec<(usize, f32, f32)>,
 }
 
 /// Drives a vertical writing-mode Block/FlowRoot container's per-child
@@ -34,13 +38,13 @@ pub(super) fn run(
     let mut init = init;
     let mut first = block_flow_trampoline::take_box(b);
     super::fieldset::place_rendered_legend_vertical(&mut first, &mut init, measurer, viewport, hp);
-    let mut current = Frame { b: first, init, next_child_idx: 0 };
+    let mut current = Frame { b: first, init, next_child_idx: 0, abs_deferred: Vec::new() };
     let mut stack: Vec<Frame> = Vec::new();
     let mut caches = MarginCaches::default();
 
     loop {
         if current.next_child_idx >= current.b.children.len() {
-            finish_frame(&mut current);
+            finish_frame(&mut current, measurer, viewport, hp);
             match stack.pop() {
                 None => {
                     *b = current.b;
@@ -67,7 +71,7 @@ pub(super) fn run(
                 super::fieldset::place_rendered_legend_vertical(
                     &mut child_box, &mut child_init, measurer, viewport, hp,
                 );
-                let child_frame = Frame { b: child_box, init: child_init, next_child_idx: 0 };
+                let child_frame = Frame { b: child_box, init: child_init, next_child_idx: 0, abs_deferred: Vec::new() };
                 stack.push(current);
                 current = child_frame;
             }
@@ -214,9 +218,25 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     // child.rect.width is the child's physical width = block-size consumed.
     let child_block = frame.b.children[i].rect.width.max(0.0);
     let cem = frame.b.children[i].style.font_size;
+    let out_of_flow = matches!(frame.b.children[i].style.position, Position::Absolute | Position::Fixed);
     // Adjacent block-axis margins of siblings collapse (§8.3.1): the larger
     // positive and the most negative one are combined.
     let (mut gap, m_end) = vfloat::block_gap(&frame.init, &frame.b.children[i], viewport, caches);
+    // An out-of-flow box takes no room: it is placed once the container is final,
+    // from this static position (its margin box, flush with where it would sit).
+    if out_of_flow {
+        frame.init.pending_clear = None;
+        let cursor_block_consumed = frame.init.cursor_block_consumed + gap;
+        let child = &frame.b.children[i];
+        let ml = child.style.margin_left.resolve_or_zero(cem, content_inline, viewport);
+        let static_x = if is_rtl {
+            content_x_left + content_block_avail - cursor_block_consumed - child_block - ml
+        } else {
+            content_x_left + cursor_block_consumed - ml
+        };
+        frame.abs_deferred.push((i, static_x, frame.init.content_y));
+        return;
+    }
     // CSS 2.1 §8.3.1: an empty block's margins collapse through it, joining those
     // already pending and the next sibling's.
     let through = collapses_through(&frame.b.children[i]);
@@ -235,7 +255,12 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     }
     let cursor_block_consumed = frame.init.cursor_block_consumed + if through { gap } else { 0.0 };
     let child = &mut frame.b.children[i];
-    let placed_x = if is_rtl {
+    // `position: relative` was applied by the child's own layout; re-placing the
+    // child on the block axis must carry the offset, the cursor does not (§9.4.3).
+    let (rel_x, rel_y) = super::layout_dispatch::relative_offset(
+        &child.style, cem, content_block_avail, viewport,
+    );
+    let placed_x = rel_x + if is_rtl {
         // vertical-rl: rightmost cursor minus consumed-so-far minus this child's width.
         let right_edge = content_x_left + content_block_avail;
         right_edge - cursor_block_consumed - child_block
@@ -259,7 +284,7 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
         && !child.style.margin_bottom.is_auto()
     {
         let mb = child.style.margin_bottom.resolve_or_zero(cem, content_inline, viewport);
-        let dy = frame.init.content_y + content_inline - mb - child.rect.height - child.rect.y;
+        let dy = frame.init.content_y + content_inline - mb - child.rect.height + rel_y - child.rect.y;
         if dy.abs() > 0.01 {
             shift_tree(child, 0.0, dy);
         }
@@ -274,7 +299,12 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
 /// width (explicit CSS width wins; otherwise shrink-to-fit the summed child
 /// widths plus padding+border), copied from the removed loop's post-loop
 /// epilogue.
-fn finish_frame(frame: &mut Frame) {
+fn finish_frame(
+    frame: &mut Frame,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
     // The last child's block-end margin closes the box — unless it collapses with
     // the box's own (§8.3.1): then it escapes to the parent, which reads it off the
     // box (`collapsed_margin`). A float reaching past the last child keeps it inside.
@@ -306,4 +336,18 @@ fn finish_frame(frame: &mut Frame) {
             }
         }
     }
+    // CSS Position L3 §4 / §9.4.3: out-of-flow children against the final box, then
+    // this box's own `position: relative` offset.
+    for d in &mut frame.abs_deferred {
+        if frame.init.is_rtl {
+            d.1 += (frame.b.rect.width - frame.init.frame_horiz).max(0.0) - frame.init.content_block_avail;
+        }
+    }
+    let style = frame.b.style.clone();
+    let cb = frame.init.content_block_avail + frame.init.frame_horiz;
+    let is_positioned = super::multicol_abspos::establishes_abs_cb(&style);
+    super::layout_dispatch::finish_after_match(
+        &mut frame.b, &style, style.font_size, cb, is_positioned, frame.init.pcb,
+        &frame.abs_deferred, measurer, viewport, hp,
+    );
 }

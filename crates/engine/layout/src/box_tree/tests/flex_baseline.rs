@@ -93,9 +93,20 @@ fn flex_line_cross_size_includes_item_margins() {
         &["c", "a"],
     );
     assert_eq!(r[0].height, 60.0, "контейнер: {:?}", r[0]);
-    // Относительно контейнера: его собственный `y` двигает схлопывание поля
-    // первого flex-элемента с предком (отдельный дефект `establishes_bfc`).
-    assert_eq!(r[1].y - r[0].y, 20.0, "элемент: {:?}", r[1]);
+    // BUG-1262: flex-контейнер — независимый контекст, поле элемента не выходит наружу.
+    assert_eq!(r[0].y, 0.0, "контейнер: {:?}", r[0]);
+    assert_eq!(r[1].y, 20.0, "элемент: {:?}", r[1]);
+}
+
+#[test]
+fn grid_item_margin_top_does_not_collapse_through_container() {
+    let r = rects(
+        r#"<div id="c"><div id="a"></div></div>"#,
+        "#c{display:grid;width:300px} #a{height:10px;margin-top:20px}",
+        &["c", "a"],
+    );
+    assert_eq!(r[0].y, 0.0, "контейнер: {:?}", r[0]);
+    assert_eq!(r[1].y, 20.0, "элемент: {:?}", r[1]);
 }
 
 #[test]

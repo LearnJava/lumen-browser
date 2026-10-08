@@ -1,6 +1,6 @@
 # BUG-1262 — `margin-top` первого flex-/grid-элемента схлопывается с полями предков контейнера
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-04 (P1, FLEX-BASELINE)
 **Область:** layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`, `collapsed_top_margin`)
 
@@ -30,3 +30,7 @@ FLEX-BASELINE: юнит-тест с `margin-top` у первого элемен�
 
 Проба выше; тест — абсолютный `y` контейнера и элемента в `crates/engine/layout/src/box_tree/tests/flex_baseline.rs` (сейчас позиции считаются относительно контейнера из-за этого дефекта).
 Правка двигает пиксели у любой страницы, где у первого flex-/grid-элемента есть `margin-top`: полный графтест + регенерация эталонов в том же коммите.
+
+## Исправление
+
+`establishes_bfc` (`bfc.rs`) учитывает `display: flex|inline-flex|grid|inline-grid` — цепочка первых/последних детей в `collapsed_top_margin`/`collapsed_bottom_margin` обрывается на таком контейнере. Тесты: `flex_baseline.rs` (абсолютный `y` контейнера и элемента для flex и grid). A/B `--dump-layout` по graphic_tests и samples (186 страниц) — без отличий, эталоны не менялись. `inline-block`, `table-cell`, `contain` не проверялись — отдельная проба при появлении жалобы.
