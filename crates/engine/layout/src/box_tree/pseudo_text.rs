@@ -415,12 +415,12 @@ fn apply_first_line_pseudo_styles_inner(
 }
 
 /// Byte offsets of each whitespace-separated word start in `text`
-/// (same word boundaries as `str::split_whitespace`).
+/// (same word boundaries as `split_css_whitespace`).
 fn word_start_offsets(text: &str) -> Vec<usize> {
     let mut starts = Vec::new();
     let mut in_word = false;
     for (i, c) in text.char_indices() {
-        if c.is_whitespace() {
+        if is_wrap_whitespace(c) {
             in_word = false;
         } else if !in_word {
             starts.push(i);
@@ -435,7 +435,7 @@ fn word_start_offsets(text: &str) -> Vec<usize> {
 ///
 /// `line0` is the first line produced by the ::first-line wrap pass; its frags
 /// appear in segment order and never span segments, so consumption is counted
-/// word-by-word with the same boundaries as `str::split_whitespace` (matching
+/// word-by-word with the same boundaries as `split_css_whitespace` (matching
 /// `wrap_inline_run`). A partially consumed segment is split at the word
 /// boundary: the head keeps the segment's `pre_space` (its inline box opened on
 /// line 0, `post_space` → 0), the tail keeps `post_space` (`pre_space` → 0,
@@ -492,7 +492,7 @@ pub(crate) fn split_segments_at_first_line(
             }
             continue;
         }
-        let mut need = frag.text.split_whitespace().count();
+        let mut need = split_css_whitespace(&frag.text).count();
         while need > 0 && idx < segments.len() {
             let seg = &segments[idx];
             if seg.img_src.is_some() || seg.forced_break {
@@ -501,7 +501,7 @@ pub(crate) fn split_segments_at_first_line(
                 words_taken = 0;
                 continue;
             }
-            let total = seg.text.split_whitespace().count();
+            let total = split_css_whitespace(&seg.text).count();
             let avail = total.saturating_sub(words_taken);
             if avail <= need {
                 need -= avail;

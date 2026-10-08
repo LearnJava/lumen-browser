@@ -810,7 +810,7 @@ pub(crate) fn min_content_outer_width_of_contents(
                         // extend the previous stretch — deliberately not modelled,
                         // as before).
                         run = 0.0;
-                        for word in seg.text.split_whitespace() {
+                        for word in split_css_whitespace(&seg.text) {
                             best = best.max(piece(word));
                         }
                     }
