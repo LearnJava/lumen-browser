@@ -1367,32 +1367,21 @@ fn truncate_frag_with_ellipsis(
 
 /// CSS Overflow L4 §3.2 / CSS Display L3 §7.2 — `-webkit-line-clamp` / `line-clamp`.
 ///
-/// Truncates `lines` to at most `max_lines` entries. If truncation occurred, forces
-/// an ellipsis (U+2026) onto the *last* visible line to signal omitted content.
+/// Forces an ellipsis (U+2026) onto the *last* visible line of a clamped container to
+/// signal omitted content (the container itself cuts the lines, see `line_clamp_flow`).
 /// The ellipsis is appended to the last fragment if the line fits within `max_width`,
 /// or replaces overflowing text if the line is already too wide.
 ///
 /// Called only when a text measurer is available (same guard as `text-overflow: ellipsis`).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-pub(crate) fn apply_line_clamp(
-    lines: &mut Vec<Vec<InlineFrag>>,
-    max_lines: u32,
+pub(crate) fn ellipsize_last_line(
+    last: &mut Vec<InlineFrag>,
     max_width: f32,
     font_size: f32,
     m: &dyn TextMeasurer,
 ) {
-    let n = max_lines as usize;
-    if lines.len() <= n {
-        return;
-    }
-    lines.truncate(n);
-
     let ellipsis = '\u{2026}';
     let ellipsis_w = m.char_width(ellipsis, font_size);
-    let last = match lines.last_mut() {
-        Some(l) => l,
-        None => return,
-    };
     if last.is_empty() {
         return;
     }

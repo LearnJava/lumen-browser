@@ -853,6 +853,8 @@ fn apply_css_wide_keyword_with(
         }
         "-webkit-line-clamp" | "line-clamp" => {
             style.line_clamp = if inh_only_inherit { inherited.line_clamp } else { init.line_clamp };
+            style.line_clamp_auto = if inh_only_inherit { inherited.line_clamp_auto } else { init.line_clamp_auto };
+            style.line_clamp_legacy = if inh_only_inherit { inherited.line_clamp_legacy } else { init.line_clamp_legacy };
         }
         "box-shadow" => {
             style.box_shadow = if inh_only_inherit {

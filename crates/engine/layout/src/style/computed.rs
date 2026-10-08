@@ -889,6 +889,12 @@ pub struct ComputedStyle {
     /// наследуется. Phase 0: parsing + storage; реальное применение (truncate
     /// inline-flow после N-й строки и добавить ellipsis) — отдельная задача.
     pub line_clamp: Option<u32>,
+    /// CSS Overflow L4 §line-clamp: `line-clamp: auto` — число строк задаёт высота (`height`/
+    /// `max-height`), а не целое. Не наследуется; `line_clamp` при этом `None`.
+    pub line_clamp_auto: bool,
+    /// Значение записано через `-webkit-line-clamp`: усечение действует только на
+    /// `display: -webkit-box` с `-webkit-box-orient: vertical` (WPT `webkit-line-clamp-001/002`).
+    pub line_clamp_legacy: bool,
     /// WHATWG Compat §2.1 — `-webkit-box-orient`. Не наследуется. Initial
     /// `Horizontal`. Phase 0: используется только для computed-value quirk
     /// `display: -webkit-box`/`-webkit-inline-box` (см. `webkit_box_computed_
@@ -1487,6 +1493,8 @@ impl ComputedStyle {
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
             line_clamp: None,
+            line_clamp_auto: false,
+            line_clamp_legacy: false,
             box_orient: WebkitBoxOrient::Horizontal,
             legacy_box_display: None,
             continue_value: CssContinue::Normal,
@@ -1896,6 +1904,8 @@ impl ComputedStyle {
             text_wrap_style: inherited.text_wrap_style,
             // CSS Overflow L4 — line-clamp не наследуется. Initial = none.
             line_clamp: None,
+            line_clamp_auto: false,
+            line_clamp_legacy: false,
             // WHATWG Compat / CSS Overflow L4 §continue — оба не наследуются.
             box_orient: WebkitBoxOrient::Horizontal,
             legacy_box_display: None,

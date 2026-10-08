@@ -55,7 +55,7 @@ mod inline_wrap_preserved;
 pub use inline_wrap::{measure_text_w, measure_text_w_families, measure_text_w_varied};
 pub(crate) use inline_wrap::strip_soft_hyphens;
 use inline_wrap::{
-    align_lines, align_one_line, apply_inline_vertical_align, apply_line_clamp,
+    align_lines, align_one_line, apply_inline_vertical_align, ellipsize_last_line,
     apply_text_overflow_ellipsis, balance_wrap, one_line_fallback, pretty_wrap, step_line_height, wrap_inline_run,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's own non-test code.
@@ -225,6 +225,7 @@ use shapes_floats::{
 use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_edge_at_y};
 
 mod bfc;
+mod line_clamp_flow;
 mod layout_cache;
 mod layout_dispatch;
 mod block_flow_trampoline;
