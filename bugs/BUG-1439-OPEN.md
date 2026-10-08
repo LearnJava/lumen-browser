@@ -31,3 +31,7 @@ WPT-RUN-14 срез 20: 358 сабтестов `Failed to execute 'insertRule' o
 ## Как проверить
 
 Проба из таблицы; `css/selectors/parsing/parse-not.html`, `css/selectors/focus-visible-017-2.html`, `css/css-cascade/parsing/layer.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+`css-view-transitions/parsing/pseudo-elements-{valid,valid-with-classes,invalid,invalid-with-classes}.html` — 100 + 164 + 675 + 20 сабтестов с этой же причиной (`insertRule` на листе отсоединённого `<style>` — `IndexSizeError`; пробы `.tmp/s22/p10.py`, `p11.py`): тест ждёт `SyntaxError` на невалидный селектор, получает `IndexSizeError`.
