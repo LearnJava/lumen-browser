@@ -2430,7 +2430,7 @@ touch*` дали TIMEOUT только в одном из двух паралле
 **Узкое место — память, и оно в одном тесте.** «Пик 18–21 ГБ» из PERF-10
 среза 2 оказался не свойством `--processes 7`, а одним тестом:
 `/acid/acid3/numbered-tests.html` раздувает свой `lumen` до 25.3 ГБ
-(свободно 0.03 ГБ), остальные держат 0.6–1.0 ГБ — [BUG-1267](../../bugs/BUG-1267-OPEN.md).
+(свободно 0.03 ГБ), остальные держат 0.6–1.0 ГБ — [BUG-1267](../../bugs/BUG-1267-FIXED.md).
 Аналогичный, но меньший всплеск даёт `dom` (один `lumen` до 9–21 ГБ на
 `Node-insertBefore`/`Range-mutations-insertBefore`/`characterSet-normalization`,
 в `d1-3-parbatch` — `CRASH` на `Node-insertBefore`). Гейт `--min-free-gb`

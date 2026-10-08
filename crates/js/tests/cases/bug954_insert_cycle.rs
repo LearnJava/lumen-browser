@@ -51,3 +51,21 @@ n1 === 'HierarchyRequestError' && n2 === 'HierarchyRequestError' && sel.parentNo
 "#
     ));
 }
+
+#[test]
+fn document_element_into_body_throws() {
+    let rt = V8JsRuntime::new().unwrap();
+    let doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+        "<!DOCTYPE html><html><head></head><body><p>x</p></body></html>",
+    )));
+    rt.install_dom(doc, "https://example.com/doc", None, None, None, None, None, None, None, None, None, false, None)
+        .unwrap();
+    let r = rt.eval(
+        r#"
+var e = null, h = document.documentElement;
+try { document.body.appendChild(h); } catch (err) { e = err; }
+e !== null && e.code === 3 && e.HIERARCHY_REQUEST_ERR == 3 && document.documentElement === h && h.parentNode === document
+"#,
+    );
+    assert!(matches!(r, Ok(lumen_core::JsValue::Bool(true))), "{r:?}");
+}
