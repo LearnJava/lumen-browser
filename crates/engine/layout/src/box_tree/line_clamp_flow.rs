@@ -38,6 +38,8 @@ struct Line {
 enum Mode {
     Count(usize),
     Auto,
+    /// `line-clamp: <n> auto` — `n` lines, or fewer if the height holds fewer.
+    CountOrAuto(usize),
 }
 
 /// Контейнер, чьи строки считает `line-clamp`: блочный бокс самого элемента с
@@ -55,6 +57,7 @@ fn clamp_mode(b: &LayoutBox) -> Option<Mode> {
         return None;
     }
     match b.style.line_clamp.filter(|&n| n > 0) {
+        Some(n) if b.style.line_clamp_auto => Some(Mode::CountOrAuto(n as usize)),
         Some(n) => Some(Mode::Count(n as usize)),
         None => b.style.line_clamp_auto.then_some(Mode::Auto),
     }
@@ -112,13 +115,57 @@ fn collect_lines(b: &LayoutBox, viewport: Size, limit: usize, frame: f32, out: &
                     out.push(Line { bottom: c.rect.y + c.rect.height * (k + 1) as f32 / n as f32, frame });
                 }
             }
-            BoxKind::InlineBlockRow => out.push(Line { bottom: c.rect.y + c.rect.height, frame }),
+            BoxKind::InlineBlockRow => {
+                for bottom in row_line_bottoms(c).into_iter().take(limit - out.len()) {
+                    out.push(Line { bottom, frame });
+                }
+            }
             _ if is_transparent_block(c) => {
                 collect_lines(c, viewport, limit, frame + bottom_frame(c, b.rect.width, viewport), out);
             }
             _ => {}
         }
     }
+}
+
+/// Нижние кромки визуальных строк ряда atomic inline: `InlineBlockRow` переносит детей
+/// на новые строки, а считается одной строкой только пока все они лежат в одной. Дети,
+/// чьи вертикальные отрезки пересекаются, — одна строка; последняя строка кончается там
+/// же, где ряд (под ней ещё распорка и спуск).
+fn row_line_bottoms(row: &LayoutBox) -> Vec<f32> {
+    let mut spans: Vec<(f32, f32)> = Vec::new();
+    for c in row.children.iter().filter(|c| is_in_flow_baseline_source(c)) {
+        match &c.kind {
+            // A text line stays a line at `line-height: 0`.
+            BoxKind::InlineRun { lines, .. } if !lines.is_empty() => {
+                let n = lines.len();
+                let h = c.rect.height / n as f32;
+                spans.extend((0..n).map(|k| (c.rect.y + h * k as f32, c.rect.y + h * (k + 1) as f32)));
+            }
+            _ if c.rect.height > EPS => spans.push((c.rect.y, c.rect.y + c.rect.height)),
+            _ => {}
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut bottoms: Vec<f32> = Vec::new();
+    let mut open: Option<f32> = None;
+    for (top, bottom) in spans {
+        match open {
+            Some(cur) if top < cur - EPS => open = Some(cur.max(bottom)),
+            Some(cur) => {
+                bottoms.push(cur);
+                open = Some(bottom);
+            }
+            None => open = Some(bottom),
+        }
+    }
+    bottoms.extend(open);
+    let row_bottom = row.rect.y + row.rect.height;
+    match bottoms.last_mut() {
+        Some(last) => *last = last.max(row_bottom),
+        None => bottoms.push(row_bottom),
+    }
+    bottoms
 }
 
 /// Есть ли в потоке `b` ниже `after` бокс с высотой — пусть и без строк (блок без
@@ -184,6 +231,23 @@ pub(super) fn find_cut(b: &LayoutBox, viewport: Size, auto_bound: Option<f32>) -
             collect_lines(b, viewport, usize::MAX, 0.0, &mut lines);
             let fit = lines.iter().take_while(|l| l.bottom + l.frame <= bound + EPS).count();
             (fit.max(1), false)
+        }
+        Mode::CountOrAuto(n) => {
+            // Without a definite height only the count limits.
+            let fit = match auto_bound {
+                Some(bound) => {
+                    collect_lines(b, viewport, usize::MAX, 0.0, &mut lines);
+                    lines.iter().take_while(|l| l.bottom + l.frame <= bound + EPS).count().max(1)
+                }
+                None => {
+                    collect_lines(b, viewport, n + 1, 0.0, &mut lines);
+                    usize::MAX
+                }
+            };
+            if lines.len() < n.min(fit) {
+                return None;
+            }
+            (n.min(fit), true)
         }
     };
     let last = lines.get(keep - 1)?;
@@ -264,6 +328,13 @@ fn truncate_flow(b: &mut LayoutBox, cut_abs: f32, viewport: Size, measurer: Opti
             truncate_flow(c, cut_abs, viewport, measurer);
             let kept = (cut_abs - c.rect.y).max(0.0) + bottom_frame(c, width, viewport);
             c.rect.height = kept.min(c.rect.height);
+        } else if matches!(c.kind, BoxKind::InlineBlockRow) {
+            // A wrapped row of atomic inlines crossed by the cut: the items on the lines below
+            // it go, and the row ends at the cut.
+            c.children.retain(|g| {
+                !(is_in_flow_baseline_source(g) && g.rect.y >= cut_abs - EPS && g.rect.height > EPS)
+            });
+            c.rect.height = (cut_abs - c.rect.y).max(0.0).min(c.rect.height);
         } else if let BoxKind::InlineRun { lines, .. } = &mut c.kind
             && !lines.is_empty()
         {

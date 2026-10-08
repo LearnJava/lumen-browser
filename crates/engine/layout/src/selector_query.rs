@@ -1594,6 +1594,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     let line_clamp = match style.line_clamp {
         None if style.line_clamp_auto => "auto".to_string(),
         None => "none".to_string(),
+        Some(n) if style.line_clamp_auto => format!("{n} auto"),
         Some(n) => n.to_string(),
     };
     m.insert("-webkit-line-clamp".into(), line_clamp.clone());
