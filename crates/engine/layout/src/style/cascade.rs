@@ -34,7 +34,8 @@ use crate::style::{
     expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
     matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
     resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
-    strip_ua_appearance_box_styling, ua_font_family,
+    is_appearance_disabling_property, is_disableable_widget, strip_ua_appearance_box_styling,
+    ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
     ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, WebkitBoxOrient,
@@ -1119,7 +1120,20 @@ pub(crate) fn compute_style_shareable(
             _ => {}
         }
     }
-    if appearance_none {
+    // CSS UI L4 §appearance-disabling-properties / HTML LS §15.5: an author
+    // `background-*`/`border-*`/`padding-*` on a widget with `appearance: auto`
+    // switches it to used `none`. UA defaults are programmatic (not in
+    // `matched`), so any such declaration here is the author's.
+    let mut appearance_auto = true;
+    for (_, _, _, _, _, _, decl, _) in &matched {
+        if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance" | "-moz-appearance") {
+            appearance_auto = decl.value.trim().eq_ignore_ascii_case("auto");
+        }
+    }
+    let disabled_by_author = appearance_auto
+        && matched.iter().any(|(_, _, _, _, _, _, decl, _)| is_appearance_disabling_property(&decl.property))
+        && is_disableable_widget(doc, node);
+    if appearance_none || disabled_by_author {
         strip_ua_appearance_box_styling(doc, node, &mut style);
     }
 
@@ -1353,6 +1367,9 @@ pub(crate) fn compute_style_shareable(
     // already resolved inline in the `"color"` branch of apply_declaration.
     drop(prof_apply);
     let _prof_post = lumen_core::profile::scope_detail("cs_post");
+    if disabled_by_author {
+        style.appearance = crate::Appearance::None;
+    }
     resolve_system_colors_in_style(&mut style, dark_mode);
 
     // CSS Color Adjustment L1 §3 — Forced Colors Mode: when the user preference
