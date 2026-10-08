@@ -379,7 +379,14 @@ fn grid_col_sum_by_tracks(
     }
     let item_idxs = grid_item_indices(&b.children);
     let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+    // `minmax(auto, <length>)` (BUG-1313): the track is as wide as its items' minimum
+    // contribution when that exceeds the length, which only the track pass knows.
+    let has_bounded_track = template.iter().any(|t| {
+        matches!(t, GridTrackSize::Minmax(min, max)
+            if matches!(**min, GridTrackSize::Auto) && matches!(**max, GridTrackSize::Length(_)))
+    });
     let needs_tracks = column_flow
+        || has_bounded_track
         || item_idxs.iter().any(|&i| {
             let st = &b.children[i].style;
             gac::is_col_subgrid(&b.children[i])

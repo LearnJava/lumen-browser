@@ -17,27 +17,26 @@ use crate::style::{GridRepeat, NameFill, RepeatCount};
 /// * `align` — the used `align-content` / `justify-content` value.
 /// * `free` — leftover space after all tracks and their gaps.
 /// * `n` — number of tracks on the axis.
+/// * `safe` — the `safe` overflow keyword was written (`safe center` / `safe end`).
 ///
 /// With non-positive free space the axis overflows, and §5.3 replaces the
 /// distribution with its fallback alignment — `space-between` → `start`,
-/// `space-around` / `space-evenly` → `center` — after which the alignment is
-/// resolved *unsafely*: `center` / `end` still shift the tracks back past the
-/// content-box start edge (a negative offset), matching Edge. `safe` / `unsafe`
-/// are not parsed, so the unsafe behaviour is unconditional.
+/// `space-around` / `space-evenly` → `safe center` (so they start-align on overflow
+/// rather than spilling out of the start edge). Plain `center` / `end` without an
+/// overflow keyword are resolved *unsafely*: the tracks still shift back past the
+/// content-box start edge (a negative offset), matching Edge; `safe` clamps that to `0`.
 ///
 /// `normal` / `stretch` always return `(0, 0)` — that pair is handled by the track
 /// sizing pass, which hands the free space to the auto-sized tracks instead.
-pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f32) {
+pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize, safe: bool) -> (f32, f32) {
     if n == 0 {
         return (0.0, 0.0);
     }
     if free <= 0.0 {
         return match align {
-            AlignValue::End => (free, 0.0),
-            // `center` directly, plus the two distributions that fall back to it.
-            AlignValue::Center | AlignValue::SpaceAround | AlignValue::SpaceEvenly => {
-                (free / 2.0, 0.0)
-            }
+            AlignValue::End if !safe => (free, 0.0),
+            AlignValue::Center if !safe => (free / 2.0, 0.0),
+            // `safe` clamps to `start`; the `space-*` fallback is `safe center`, i.e. also `start`;
             // `start`, `space-between` (falls back to `start`), `normal`, `stretch`.
             _ => (0.0, 0.0),
         };
@@ -572,6 +571,7 @@ pub(crate) fn build_grid_init(
             s.justify_content,
             content_width - used_col_total,
             col_gutters + 1,
+            s.content_align_extra.justify_safe,
         );
 
         // Column start offsets (a collapsed track takes no gutter).

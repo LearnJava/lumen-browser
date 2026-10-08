@@ -607,6 +607,7 @@ fn finish_probe_pass(init: &mut GridInit) {
             init.s.align_content,
             init.definite_content_height.map(|h| h - used_row_total).unwrap_or(0.0),
             super::grid::gutter_count(&init.row_collapsed, n_rows as usize) + 1,
+            init.s.content_align_extra.align_safe,
         );
         let row_offsets =
             super::grid::track_offsets(&init.row_heights, &init.row_collapsed, row_gap, ac_extra, ac_start);
