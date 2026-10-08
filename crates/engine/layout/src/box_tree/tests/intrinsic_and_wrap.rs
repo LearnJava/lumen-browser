@@ -1513,6 +1513,97 @@ fn word_break_break_all_breaks_at_current_position() {
 }
 
 
+// ── BUG-1324: слово, начинающее строку, режется как и слово в середине ────
+
+/// Прогоняет `text` через `wrap_inline_run` при ширине `max_width` (Glyph8 —
+/// 8px на символ) и возвращает склеенный текст каждой строки.
+fn wrap_lines_glyph8(
+    text: &str,
+    max_width: f32,
+    hyphens: crate::style::Hyphens,
+    word_break: crate::style::WordBreak,
+) -> Vec<String> {
+    use lumen_core::ext::NullHyphenationProvider;
+    use super::super::{InlineSegment, PseudoKind, wrap_inline_run};
+    use crate::style::ComputedStyle;
+    use lumen_core::geom::Size;
+    use lumen_dom::NodeId;
+
+    let seg = InlineSegment {
+        text: text.to_string(),
+        style: std::sync::Arc::new(ComputedStyle::root()),
+        pre_space: 0.0,
+        post_space: 0.0,
+        is_element_box: false,
+        img_src: None,
+        img_is_lazy: false,
+        img_width: 0.0,
+        forced_break: false,
+        pseudo_kind: PseudoKind::None,
+        source_node: NodeId::from_index(0),
+        source_char_offset: 0,
+        bidi_level: 0,
+    };
+    let lines = wrap_inline_run(
+        &[seg], max_width, 16.0, 0.0,
+        Size::new(800.0, 600.0),
+        &Glyph8, hyphens, &NullHyphenationProvider,
+        crate::style::WhiteSpace::Normal,
+        word_break,
+        crate::style::OverflowWrap::Normal,
+        crate::style::LineBreak::Auto,
+    );
+    lines
+        .iter()
+        .map(|l| l.iter().map(|f| f.text.as_str()).collect::<String>())
+        .collect()
+}
+
+#[test]
+fn break_all_splits_word_that_starts_the_line() {
+    use crate::style::{Hyphens, WordBreak};
+    // 29 букв, ширина 8 символов: 8 + 8 + 8 + 5.
+    let word = "a".repeat(29);
+    let lines = wrap_lines_glyph8(&word, 64.0, Hyphens::Manual, WordBreak::BreakAll);
+    assert_eq!(lines, vec!["a".repeat(8), "a".repeat(8), "a".repeat(8), "a".repeat(5)]);
+}
+
+#[test]
+fn break_all_keeps_fitting_word_on_one_line() {
+    use crate::style::{Hyphens, WordBreak};
+    let lines = wrap_lines_glyph8("aaaaaaaa", 64.0, Hyphens::Manual, WordBreak::BreakAll);
+    assert_eq!(lines, vec!["aaaaaaaa"]);
+}
+
+#[test]
+fn soft_hyphen_breaks_word_that_starts_the_line() {
+    use crate::style::{Hyphens, WordBreak};
+    // `aaaa<shy>bbbbbbbbbbbbb`, ширина 8 символов: «aaaa-» влезает, остаток нет.
+    let lines = wrap_lines_glyph8(
+        "aaaa\u{00AD}bbbbbbbbbbbbb", 64.0, Hyphens::Manual, WordBreak::Normal,
+    );
+    assert_eq!(lines, vec!["aaaa-".to_string(), "b".repeat(13)]);
+}
+
+#[test]
+fn soft_hyphen_ignored_for_line_start_word_when_hyphens_none() {
+    use crate::style::{Hyphens, WordBreak};
+    let lines = wrap_lines_glyph8(
+        "aaaa\u{00AD}bbbbbbbbbbbbb", 64.0, Hyphens::None, WordBreak::Normal,
+    );
+    assert_eq!(lines, vec![format!("aaaa{}", "b".repeat(13))]);
+}
+
+#[test]
+fn unbreakable_line_start_word_overflows_without_empty_line() {
+    use crate::style::{Hyphens, WordBreak};
+    // Нет ни одной возможности переноса: слово остаётся одно на строке,
+    // пустой строки перед ним не появляется.
+    let lines = wrap_lines_glyph8(&"a".repeat(13), 64.0, Hyphens::Manual, WordBreak::Normal);
+    assert_eq!(lines, vec!["a".repeat(13)]);
+}
+
+
 // ── BUG-926: `<button>`/`<select>` without a CSS width collapsed to 0 ──────
 
 /// Fixed 8px-per-glyph measurer, so every width below is hand-computable.

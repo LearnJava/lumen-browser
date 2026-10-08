@@ -1,6 +1,6 @@
 # BUG-1324 — слово, начинающее строку, не режется: `word-break: break-all` и `hyphens: manual|auto` не срабатывают на первом слове
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 9, `css/css-text`, первая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — ветка `word_break == BreakAll` (:880) стоит внутри `if needs_wrap`, а `needs_wrap` требует `!current_line.is_empty()` (:735); `try_hyp_break` (:816) вызывается там же)
 
@@ -26,6 +26,14 @@ WPT-RUN-14 срез 9: `css/css-text/hyphens/` (48 не зелёных id из 5
 ## Что делать
 
 Ветки `break-all`, мягкого и автоматического переноса вызывать и для слова, начинающего строку: условие — «слово шире доступной ширины», а не «`needs_wrap` и непустая строка» (CSS Text L3 §5.2, §6.1). Для `hyphens: auto` словарь подключён (`hp.hyphenate`) — отдельно выяснить, почему он молчит.
+
+## Причина и исправление
+
+В `wrap_inline_run` ветки мягкого переноса (`&shy;`, `hyphens: auto`) и `word-break: break-all` стояли за `needs_wrap`, а он включал `!current_line.is_empty()`. Введено условие `overflows` (слово не влезает в остаток строки и перенос в этой точке разрешён); ветки переноса идут по нему, а `needs_wrap = !current_line.is_empty() && overflows` теперь управляет только обычным переносом слова на новую строку — слову, начинающему строку, переноситься некуда, оно остаётся и переполняет. После правки проба из таблицы выше даёт `aaaaaaaa`×3 + `aaaaa` и `aaaa-` / `bbbbbbbbbbbbb`.
+
+**`hyphens: auto` в пробе не показателен.** `--dump-layout` собирается с `NullHyphenationProvider` (`crates/shell/src/dump_mode.rs`), поэтому словарь Кнута–Лианга в нём молчит всегда, а не только на первом слове строки. Строка таблицы про `internationalization` — артефакт пробы, не дефект раскладки; проверять `auto` нужно в живом окне (там подключён `KnuthLiangHyphenation`). Остаток после мягкого переноса, всё ещё шире строки, по-прежнему не режется повторно (`bbbbbbbbbbbbb` выше) — отдельная доработка.
+
+Тесты: `break_all_splits_word_that_starts_the_line`, `soft_hyphen_breaks_word_that_starts_the_line` и ещё три в `box_tree/tests/intrinsic_and_wrap.rs`.
 
 ## Как проверить
 
