@@ -1,6 +1,6 @@
 # BUG-1275 — `text-indent` в вертикальном `writing-mode` игнорируется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 2 — `css/css-writing-modes/text-indent-*`)
 **Область:** layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)
 
@@ -24,3 +24,10 @@
 
 WPT `css/css-writing-modes/text-indent-v{lr,rl}-*` (16 reftest), например `text-indent-vlr-003.xht`: зелёный квадрат,
 без красного.
+
+## Исправление
+
+`wrap_inline_run_vertical` принимает `text_indent` (процент — от inline-размера контейнера, его высоты) и стартует
+первую колонку со сдвигом `line_start + text_indent`; последующие колонки и колонки после `\n` — без отступа.
+Тест `vertical::tests::vertical_text_indent_shifts_first_column_only`. Остаток: `each-line`/`hanging` в вертикальном
+пути по-прежнему не читаются.
