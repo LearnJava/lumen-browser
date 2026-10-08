@@ -1,6 +1,7 @@
 # BUG-1277 — авторские border/background/padding не отключают нативный вид контрола (appearance-disabling properties, CSS UI L4)
 
-**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Статус:** FIXED 2026-10-08
+**Исправление:** `cascade.rs` — авторское `background-*`/`border-*`/`padding-*` у виджета с `appearance: auto` (кроме checkbox/radio/range/hidden и dropdown select) снимает UA-стиль и ставит used `appearance: none`; `ua.rs::is_appearance_disabling_property`/`is_disableable_widget`.
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 3 — `css/css-ui`, крупнейший кластер среза)
 **Область:** layout (`crates/engine/layout/src/style/ua.rs::strip_ua_appearance_box_styling` — срабатывает только при `appearance: none`), paint (`display_list/form_controls.rs`)
 

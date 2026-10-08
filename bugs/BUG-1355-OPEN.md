@@ -19,3 +19,12 @@ WPT-RUN-14 срез 12: единственный CRASH среза (crashtest 1 �
 ## Как проверить
 
 `run_corpus.py --prefixes css/CSS2/normal-flow/crashtests` — `rss-cap-kills.jsonl` пуст.
+
+## Дополнение WPT-RUN-14 срез 19 (2026-10-08)
+
+Тот же лимит `--max-browser-gb 4.0` сработал в шарде `css/css-images` (508 id) — в **двух** независимых прогонах на одной сборке, и каждый раз на другом
+id: `rss-cap-kills.jsonl` — `4.08 GB` (убит тест `object-fit-none-svg-004o.html`, CRASH) и `4.02 GB` (`object-fit-fill-svg-003e.html`, CRASH).
+Прогон `css/css-images` целиком с `--max-browser-gb 100` — 504 id без единого CRASH (FAIL 210, OK 41, PASS 253), то есть память набирается к
+концу последовательности и вышибает случайную страницу, а не одну конкретную. Одиночный `--screenshot` обоих файлов — 3,5 с без роста памяти.
+Общее с этим багом: рост RSS `lumen --ipc-server` под `wptrunner`, воспроизводится только в многотестовом шарде. Измерить пик RSS по ходу шарда
+не удалось (`Get-CimInstance Win32_Process` через PowerShell видит `WorkingSetSize` 0 у большинства процессов).
