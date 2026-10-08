@@ -8037,18 +8037,27 @@ var _LUMEN_RT_BLOCK_LEVEL = {
     'table-footer-group': 1, 'flex': 1, 'grid': 1,
 };
 
-// `text-transform` over a whole text-node string. `capitalize` is approximated
-// on ASCII word starts: the real rule is per typographic unit and spans text
-// nodes, which this getter's per-node view cannot see.
-function _lumen_rt_transform(s, tt) {
-    if (tt === 'uppercase') { return s.toUpperCase(); }
-    if (tt === 'lowercase') { return s.toLowerCase(); }
-    if (tt === 'capitalize') {
-        return s.replace(/(^|[^A-Za-z0-9])([a-z])/g, function(_m, sep, ch) {
-            return sep + ch.toUpperCase();
-        });
+// `text-transform` over a whole text-node string, by the layout's own function
+// (`_lumen_text_transform`), so `innerText` agrees with the painted text —
+// `capitalize` word starts, `full-width`, and the `lang`-tailored casing
+// (Turkish `i`, Lithuanian dots, Dutch `ij`). The language is the nearest
+// `lang`/`xml:lang` on the text node's ancestors; an empty one ends the search.
+function _lumen_rt_lang(n) {
+    var cur = _lumen_u2n(_lumen_get_parent(n));
+    while (cur !== null) {
+        if (!_lumen_is_text_node(cur)) {
+            var l = _lumen_u2n(_lumen_get_attr(cur, 'lang'));
+            if (l === null) { l = _lumen_u2n(_lumen_get_attr(cur, 'xml:lang')); }
+            if (l !== null) { return l; }
+        }
+        cur = _lumen_u2n(_lumen_get_parent(cur));
     }
-    return s;
+    return '';
+}
+
+function _lumen_rt_transform(n, s, tt) {
+    if (tt === '' || tt === 'none') { return s; }
+    return _lumen_text_transform(s, tt, _lumen_rt_lang(n));
 }
 
 // Step 4: the text of the boxes `n` produces, after `white-space` collapsing and
@@ -8069,7 +8078,7 @@ function _lumen_rt_text_item(n) {
         s = raw.replace(/[ \t\n\f]+/g, ' ');
     }
     return {
-        s: _lumen_rt_transform(s, _lumen_get_computed_style(n, 'text-transform')),
+        s: _lumen_rt_transform(n, s, _lumen_get_computed_style(n, 'text-transform')),
         pre: preserveSpaces,
     };
 }
@@ -12447,6 +12456,46 @@ function _lumen_set_adopted_style_sheets_validated(scopeId, value) {
 // WebIDL attributes/operations (brand-checked, spec `length`), and the one
 // selection of this document is an instance of it (BUG-671 — it used to be a
 // plain object literal, so `window.Selection` did not exist at all).
+// `Selection.toString()` is the selected text as rendered: `text-transform` applies
+// (`ß` under `uppercase` selects as `SS`, BUG-1329). The DOM-side `range_text` knows no
+// styles, so when no covered text node is transformed its answer is returned as is;
+// otherwise the covered pieces are re-collected here and run through `_lumen_rt_transform`.
+function _lumen_selection_string() {
+    var base = _lumen_get_selection_text();
+    if (base === '' || _lumen_selection.rangeCount === 0) { return base; }
+    var r = _lumen_selection.getRangeAt(0);
+    var sc = r.startContainer, so = r.startOffset, ec = r.endContainer, eo = r.endOffset;
+    var st = { on: false, done: false, any: false, out: '' };
+    function walk(n) {
+        if (st.done) { return; }
+        if (n.nodeType === 3) {
+            var d = n.data, from = 0, to = d.length;
+            if (n === sc) { st.on = true; from = so; }
+            if (!st.on) { return; }
+            if (n === ec) { to = eo; st.done = true; }
+            var piece = d.slice(from, to);
+            var tt = _lumen_get_computed_style(n.__nid__, 'text-transform');
+            if (tt !== '' && tt !== 'none') {
+                st.any = true;
+                piece = _lumen_rt_transform(n.__nid__, piece, tt);
+            }
+            st.out += piece;
+            return;
+        }
+        var kids = n.childNodes;
+        for (var i = 0; i < kids.length; i++) {
+            if (n === sc && i === so) { st.on = true; }
+            if (n === ec && i === eo) { st.done = true; return; }
+            walk(kids[i]);
+            if (st.done) { return; }
+        }
+        if (n === sc && so === kids.length) { st.on = true; }
+        if (n === ec && eo === kids.length) { st.done = true; }
+    }
+    walk(r.commonAncestorContainer);
+    return st.any ? st.out : base;
+}
+
 function Selection() { throw new TypeError('Illegal constructor'); }
 var _lumen_selection = Object.create(Selection.prototype);
 
@@ -12521,7 +12570,7 @@ var _lumen_selection = Object.create(Selection.prototype);
         containsNode:    function() { return false; },
         getComposedRanges: function() { return []; },
         modify:          function() {},
-        toString: function() { return _lumen_get_selection_text(); },
+        toString: function() { return _lumen_selection_string(); },
     };
     members.setPosition = members.collapse; // §3: `setPosition` is an alias of `collapse`
     // Required-argument counts from the Selection IDL (`Function.length`).

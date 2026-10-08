@@ -777,7 +777,7 @@ pub(crate) fn control_value_segments(
         });
     };
     if !style.white_space.preserves_newlines() {
-        let text = style.text_extra.transform.apply(style.text_transform, &strip_invisible_controls(value_text));
+        let text = style.text_extra.transform_text(style.text_transform, &strip_invisible_controls(value_text));
         if !text.is_empty() {
             push(text, false, 0);
         }
@@ -790,7 +790,7 @@ pub(crate) fn control_value_segments(
             byte_offset += 1; // the \n character
         }
         // BUG-120: invisible controls must not occupy advance width.
-        let text = style.text_extra.transform.apply(style.text_transform, &strip_invisible_controls(line));
+        let text = style.text_extra.transform_text(style.text_transform, &strip_invisible_controls(line));
         if !text.is_empty() {
             push(text, false, byte_offset);
         }
@@ -874,7 +874,7 @@ pub(crate) fn collect_inline_segments(
                 // not occupy advance width even in white-space: pre.
                 // text-transform действует и в `pre`/`pre-wrap` (там же U+0020 → U+3000
                 // для `full-width`).
-                let text = style.text_extra.transform.apply(style.text_transform, &strip_invisible_controls(line));
+                let text = style.text_extra.transform_text(style.text_transform, &strip_invisible_controls(line));
                 if !text.is_empty() {
                     out.push(InlineSegment {
                         text,
@@ -926,7 +926,7 @@ pub(crate) fn collect_inline_segments(
                 }
                 let stripped = strip_invisible_controls(line);
                 if !stripped.chars().all(is_collapsible_whitespace) {
-                    let text = inherited.text_extra.transform.apply(inherited.text_transform, &stripped);
+                    let text = inherited.text_extra.transform_text(inherited.text_transform, &stripped);
                     let kind = if *need_first_letter && !text.trim().is_empty() {
                         *need_first_letter = false;
                         PseudoKind::FirstLetter
@@ -958,7 +958,7 @@ pub(crate) fn collect_inline_segments(
             let s = strip_invisible_controls(s);
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
-            let text = inherited.text_extra.transform.apply(inherited.text_transform, &s);
+            let text = inherited.text_extra.transform_text(inherited.text_transform, &s);
             // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
             // is the candidate for ::first-letter. Mark the whole first non-whitespace
             // segment; `apply_first_letter_pseudo` later looks up the ::first-letter rule

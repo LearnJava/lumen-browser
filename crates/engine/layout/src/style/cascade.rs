@@ -17,6 +17,7 @@ use lumen_css_parser::{
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::font_palette::resolve_font_palette_overrides;
+use crate::style::CaseLang;
 use crate::style::presentational::is_svg_presentational_element;
 use crate::style::share_safety::selector_is_share_safe;
 use crate::style::{
@@ -293,6 +294,15 @@ pub(crate) fn compute_style_shareable(
     if let Some(ws) = ua_white_space(doc, node) {
         style.white_space = ws;
         style.white_space_collapse = ws.collapse_component();
+    }
+    // CSS Text L3 §2.1 — регистр `text-transform` зависит от языка. Собственный
+    // `lang`/`xml:lang` элемента перекрывает унаследованный (в том числе пустой —
+    // «язык неизвестен»); без атрибута остаётся язык родителя.
+    if let NodeData::Element { .. } = &doc.get(node).data {
+        let nr = doc.get(node);
+        if let Some(tag) = nr.get_attr("lang").or_else(|| nr.get_attr("xml:lang")) {
+            style.text_extra.case_lang = CaseLang::from_tag(tag);
+        }
     }
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
