@@ -1,6 +1,7 @@
 # BUG-1282 — `position: absolute` с обеими инсетами по оси: `auto`-поля не распределяются, бокс прижат к началу
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
+**Исправление:** `place_abs_child` — при обеих инсетах и заданном размере по оси свободное место уходит в `auto`-поля (`auto_margin_shift`: оба `auto` — поровну без отрицательных, одно — остаток); тесты `box_tree/tests/abs_auto_margins.rs`.
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 3, `css/css-ui`)
 **Область:** layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child`)
 
