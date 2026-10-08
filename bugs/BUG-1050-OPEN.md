@@ -55,3 +55,7 @@
 `width`/`height`/`min-*`/`max-*` на SVG (см. `.ini`). Метаданные
 `svg-computed-style.html.ini` не пересматривались — WPT-прогон не делался
 (нужна сборка dev-release), снимать ожидания FAIL только по замеру.
+
+## Повторное измерение: WPT-RUN-14 срез 23 (2026-10-08)
+
+`text-decoration-thickness` и `text-underline-offset` теперь **есть** в карте `getComputedStyle`, но значение неверное: `text-underline-offset: 1em` при `font-size:40px` — `16px` (разрешено от 16 px, не от размера элемента), `calc(10px - 8px)` — `auto`, `text-decoration-thickness: 200%` — `2%`. Остальное перечисленное здесь и ещё `shape-outside`/`shape-margin`/`shape-image-threshold`/`text-decoration`/`text-emphasis*`/`text-underline-position` — BUG-1515.
