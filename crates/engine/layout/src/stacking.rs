@@ -305,6 +305,30 @@ pub fn owns_paint_layer(b: &LayoutBox) -> bool {
         && (creates_stacking_context(&b.style) || is_positioned_layer_auto(&b.style))
 }
 
+/// Order-modified document order дочерних боксов flex/grid-контейнера
+/// (CSS Flexbox L1 §5.4, CSS Grid L1 §6.3: `order` меняет и порядок
+/// отрисовки, и порядок hit-теста, не только раскладку).
+///
+/// `Some(idx)` — индексы `b.children` в порядке отрисовки (стабильная
+/// сортировка по `order`, ничья — порядок DOM). `None` — порядок DOM уже
+/// верен: `b` не flex/grid-контейнер либо у всех детей одинаковый `order`.
+/// Дерево боксов остаётся в порядке DOM (на нём держатся graft и
+/// инкрементальный layout), поэтому потребители paint-порядка — stacking-дерево,
+/// display-list builder, hit-test — обязаны ходить по детям через этот helper.
+pub fn paint_child_order(b: &LayoutBox) -> Option<Vec<usize>> {
+    use crate::style::Display;
+    if !matches!(b.style.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid) {
+        return None;
+    }
+    let first = b.children.first()?.style.order;
+    if b.children.iter().all(|c| c.style.order == first) {
+        return None;
+    }
+    let mut idx: Vec<usize> = (0..b.children.len()).collect();
+    idx.sort_by_key(|&i| b.children[i].style.order);
+    Some(idx)
+}
+
 /// Pre-order обход layout-дерева с накоплением stacking-контекстов —
 /// explicit heap-stack (LAYOUT-2 срез 2), not native recursion: nothing after
 /// the loop over `children` reads a value the walk produced, so this is the
@@ -330,8 +354,17 @@ fn walk(root: &LayoutBox, root_sc: StackingContextId, tree: &mut StackingTree) {
         } else {
             parent_sc
         };
-        for child in b.children.iter().rev() {
-            stack.push((child, current_sc));
+        match paint_child_order(b) {
+            Some(order) => {
+                for &i in order.iter().rev() {
+                    stack.push((&b.children[i], current_sc));
+                }
+            }
+            None => {
+                for child in b.children.iter().rev() {
+                    stack.push((child, current_sc));
+                }
+            }
         }
     }
 }

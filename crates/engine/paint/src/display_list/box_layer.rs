@@ -322,6 +322,9 @@ struct ContinueFrame<'a> {
     current_sc: StackingContextId,
     is_sc_root: bool,
     next_idx: usize,
+    /// Order-modified child order of a flex/grid `b` ([`lumen_layout::paint_child_order`]),
+    /// computed once per box when its frame is first built; `None` — DOM order.
+    child_order: Option<std::rc::Rc<Vec<usize>>>,
     /// Clips to offer to non-fixed/non-sticky children (BUG-131/BUG-159).
     /// Empty for a real stacking-context root (its root_bg/post wrap the child
     /// contexts); a positioned `z-index: auto` layer root carries its own and
@@ -560,6 +563,7 @@ fn enter_fill<'a>(
             current_sc,
             is_sc_root: true,
             next_idx: 0,
+            child_order: lumen_layout::paint_child_order(b).map(std::rc::Rc::new),
             // A real stacking context nests its child contexts inside its own
             // bracket (so every wrapper applies to them), the chain restarts.
             fixed_cb_clips: if pseudo {
@@ -620,6 +624,7 @@ fn enter_fill<'a>(
             current_sc,
             is_sc_root: false,
             next_idx: 0,
+            child_order: lumen_layout::paint_child_order(b).map(std::rc::Rc::new),
             fixed_cb_clips: if own_fixed_cb { Some(child_clips.len()) } else { fixed_cb_clips },
             child_clips,
             leave_payload: LeavePayload::NonSc {
@@ -645,12 +650,12 @@ fn continue_fill<'a>(
     cache: Option<&mut SubtreeEmitCache>,
     stack: &mut Vec<FillFrame<'a>>,
 ) {
-    let ContinueFrame { b, current_sc, is_sc_root, next_idx, child_clips, fixed_cb_clips, leave_payload } = cf;
+    let ContinueFrame { b, current_sc, is_sc_root, next_idx, child_order, child_clips, fixed_cb_clips, leave_payload } = cf;
     if next_idx >= b.children.len() {
         stack.push(FillFrame::Leave(LeaveFill { b, current_sc, payload: leave_payload }));
         return;
     }
-    let child = &b.children[next_idx];
+    let child = &b.children[child_order.as_ref().map_or(next_idx, |o| o[next_idx])];
     let child_creates_sc = owns_paint_layer(child);
     let (child_sc, child_is_sc_root, child_inherited) = if child_creates_sc {
         let id = StackingContextId(*next_sc_id);
@@ -709,6 +714,7 @@ fn continue_fill<'a>(
         current_sc,
         is_sc_root,
         next_idx: next_idx + 1,
+        child_order,
         child_clips,
         fixed_cb_clips,
         leave_payload,

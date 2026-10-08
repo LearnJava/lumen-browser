@@ -1326,6 +1326,8 @@ fn dispatch<'a>(
             } else {
                 let children: Vec<&LayoutBox> = if establishes_3d_rendering_context(b) {
                     depth_sorted_child_order(&b.children).into_iter().map(|i| &b.children[i]).collect()
+                } else if let Some(order) = lumen_layout::paint_child_order(b) {
+                    order.into_iter().map(|i| &b.children[i]).collect()
                 } else {
                     b.children.iter().collect()
                 };

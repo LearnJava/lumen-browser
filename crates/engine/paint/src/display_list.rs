@@ -343,6 +343,10 @@ mod chrome_overlays_print;
 mod flex_gap_rules;
 
 #[cfg(test)]
+#[path = "display_list/tests/flex_grid_order_paint.rs"]
+mod flex_grid_order_paint;
+
+#[cfg(test)]
 #[path = "display_list/tests/fieldset_legend.rs"]
 mod fieldset_legend;
 

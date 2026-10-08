@@ -1051,6 +1051,10 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
                 for i in depth_sorted_child_order(&b.children) {
                     walk_with_anim(&b.children[i], anim, out, dpr);
                 }
+            } else if let Some(order) = lumen_layout::paint_child_order(b) {
+                for i in order {
+                    walk_with_anim(&b.children[i], anim, out, dpr);
+                }
             } else {
                 for child in &b.children {
                     walk_with_anim(child, anim, out, dpr);
