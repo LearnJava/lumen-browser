@@ -17,7 +17,7 @@ DrawText … "R" #ff0000ff   (вторым — поверх)
 
 ## Как найдено
 
-WPT-RUN-14 срез 7: `grid-items/grid-order-property-painting-001…005.html`, `grid-inline-order-property-painting-001…005.html` — 10 reftest, все thick. Родственные `grid-z-axis-ordering-*` (21 reftest) в снимке `identical`: там падает только Ahem без `@font-face` ([BUG-1273](BUG-1273-OPEN.md)), порядок z верен.
+WPT-RUN-14 срез 7: `grid-items/grid-order-property-painting-001…005.html`, `grid-inline-order-property-painting-001…005.html` — 10 reftest, все thick. Родственные `grid-z-axis-ordering-*` (21 reftest) в снимке `identical`: там падает только Ahem без `@font-face` ([BUG-1273](BUG-1273-FIXED.md)), порядок z верен.
 
 ## Что делать
 

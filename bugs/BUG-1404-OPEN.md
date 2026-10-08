@@ -27,7 +27,7 @@
 Остальные 11 FAIL (`blocks-extraneous-data-001/002`, `directory-mismatched-tables-001`, `header-numTables-001`,
 `header-signature-001`, `datatypes-invalid-base128-001/003`, `tabledata-brotli-001`,
 `tabledata-decompressed-length-001/003/004`) декодер отвергает верно — они красные по другой причине
-([BUG-1273](BUG-1273-OPEN.md): веб-шрифт не доходит до снимка).
+([BUG-1273](BUG-1273-FIXED.md): веб-шрифт не доходит до снимка).
 
 ## Как найдено
 

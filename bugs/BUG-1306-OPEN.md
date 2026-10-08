@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 7, `css/css-grid`)
-**Область:** shell/js (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для `_lumen_get_bounding_rect`; связано с [BUG-1273](BUG-1273-OPEN.md) — тот же дефект для `--screenshot`; архитектурный корень — путь relayout/rAF, ADR-016, BUG-935/BUG-286 в `BUGS.md`)
+**Область:** shell/js (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для `_lumen_get_bounding_rect`; связано с [BUG-1273](BUG-1273-FIXED.md) — тот же дефект для `--screenshot`; архитектурный корень — путь relayout/rAF, ADR-016, BUG-935/BUG-286 в `BUGS.md`)
 
 ## Симптом
 

@@ -29,5 +29,5 @@
 ## Как проверить
 
 WPT `css/css-ui/text-overflow-001…004.html`, `text-overflow.html` (Ahem 30px внутри блока 10px — 5 reftest; их
-дополнительно держит [BUG-1273](BUG-1273-OPEN.md), Ahem в reftest не грузится). Форма общая — `css/CSS2/linebox`,
+дополнительно держит [BUG-1273](BUG-1273-FIXED.md), Ahem в reftest не грузится). Форма общая — `css/CSS2/linebox`,
 `css/css-inline` не прогонялись.

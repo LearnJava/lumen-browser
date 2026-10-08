@@ -20,6 +20,7 @@ mod css_url_rebase;
 mod form_post_nav;
 mod page_pipeline;
 mod page_resources;
+mod screenshot_web_fonts;
 mod scripts_and_frames;
 mod subdocument_frames;
 
