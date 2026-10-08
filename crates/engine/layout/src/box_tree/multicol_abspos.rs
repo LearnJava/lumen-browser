@@ -519,11 +519,25 @@ fn place_abs_child(
     } else {
         // Normal abs-pos: resolve from left/right/top/bottom insets.
         let nx = match (left, right) {
+            (Some(l), Some(r)) if w_fixed => {
+                cb.x + l + c_ml + auto_margin_shift(
+                    cb.width - l - r - c_ml - c_mr - child.rect.width,
+                    cs.margin_left.is_auto(),
+                    cs.margin_right.is_auto(),
+                )
+            }
             (Some(l), _)    => cb.x + l + c_ml,
             (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
             (None, None)    => static_x + c_ml,
         };
         let ny = match (top, bottom) {
+            (Some(t), Some(bv)) if h_fixed => {
+                cb.y + t + c_mt + auto_margin_shift(
+                    cb.height - t - bv - c_mt - c_mb - child.rect.height,
+                    cs.margin_top.is_auto(),
+                    cs.margin_bottom.is_auto(),
+                )
+            }
             (Some(t), _)     => cb.y + t + c_mt,
             (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
             (None, None)     => static_y + c_mt,
@@ -534,6 +548,19 @@ fn place_abs_child(
     let dx = new_x - child.rect.x;
     let dy = new_y - child.rect.y;
     shift_tree(child, dx, dy);
+}
+
+/// Offset of an abs-pos box inside the gap between its two insets when the axis
+/// is over-determined (CSS 2.1 §10.3.7 / §10.6.4): `free` is the leftover space;
+/// it goes to `auto` margins — split evenly when both are `auto` (never
+/// negative, the start margin is then 0), all of it to the start margin when only
+/// that one is `auto`; otherwise the end margin absorbs it and nothing shifts.
+fn auto_margin_shift(free: f32, start_auto: bool, end_auto: bool) -> f32 {
+    match (start_auto, end_auto) {
+        (true, true) => free.max(0.0) / 2.0,
+        (true, false) => free,
+        _ => 0.0,
+    }
 }
 
 /// Padding box of `b` — the containing block it provides to positioned descendants.
