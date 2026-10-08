@@ -13,7 +13,7 @@
 //! parent folds, one level down — so each box's descendants are folded once, into an
 //! [`OverflowRollup`] its parent merges, instead of once per ancestor. What cannot be merged
 //! blindly is the one member kind whose contribution depends on the container being asked: an
-//! absolutely positioned or fixed box counts only if it overlaps the container's padding box
+//! absolutely positioned or fixed box counts only if it is not wholly beyond an unreachable side of the container's padding box
 //! ([`crate::contributes_to_scrollable_overflow`]). Those are kept as a list and filtered against
 //! each container's own padding box; everything else is four running min/max values.
 //!
@@ -33,7 +33,7 @@ use lumen_dom::NodeId;
 
 use crate::style::{Overflow, Position};
 use crate::{
-    box_clips_own_overflow, child_scrollable_bounds, padding_box, rects_overlap, LayoutBox, ScrollContainer,
+    box_clips_own_overflow, child_scrollable_bounds, padding_box, LayoutBox, ScrollContainer, UnreachableSides,
 };
 
 /// What the descendants of a box (reached through boxes that do not clip) add to the
@@ -47,7 +47,7 @@ pub(crate) struct OverflowRollup {
     min_y: f32,
     max_y: f32,
     /// Border boxes (transform-expanded) of the `position: absolute|fixed` members, which count
-    /// only for a container whose padding box they overlap.
+    /// unless they lie wholly beyond an unreachable side of the container's padding box.
     positioned: Vec<Rect>,
 }
 
@@ -90,7 +90,7 @@ impl OverflowRollup {
 
     /// `(scrollWidth, scrollHeight)` magnitudes for a box whose padding box is `pb`: what
     /// [`crate::content_width`] / [`crate::content_height`] return, without a walk.
-    fn content_size(&self, pb: &Rect) -> (f32, f32) {
+    fn content_size(&self, pb: &Rect, u: UnreachableSides) -> (f32, f32) {
         let (mut min_x, mut max_x) = (0.0_f32, pb.width);
         let (mut min_y, mut max_y) = (0.0_f32, pb.height);
         min_x = min_x.min(self.min_x - pb.x);
@@ -98,7 +98,7 @@ impl OverflowRollup {
         min_y = min_y.min(self.min_y - pb.y);
         max_y = max_y.max(self.max_y - pb.y);
         for bounds in &self.positioned {
-            if rects_overlap(bounds, pb) {
+            if !u.hides(bounds, pb) {
                 min_x = min_x.min(bounds.x - pb.x);
                 max_x = max_x.max(bounds.x + bounds.width - pb.x);
                 min_y = min_y.min(bounds.y - pb.y);
@@ -115,7 +115,7 @@ fn publish(b: &LayoutBox, r: &OverflowRollup, out: &mut Vec<ScrollContainer>) {
     let scrolls = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden | Overflow::Clip);
     if scrolls(s.overflow_x) || scrolls(s.overflow_y) {
         let clip = padding_box(b);
-        let (scroll_width, scroll_height) = r.content_size(&clip);
+        let (scroll_width, scroll_height) = r.content_size(&clip, UnreachableSides::of(s));
         out.push(ScrollContainer {
             node: b.node,
             clip_rect: clip,
@@ -128,7 +128,7 @@ fn publish(b: &LayoutBox, r: &OverflowRollup, out: &mut Vec<ScrollContainer>) {
         });
     } else if matches!(s.overflow_x, Overflow::Visible) && matches!(s.overflow_y, Overflow::Visible) {
         let clip = padding_box(b);
-        let (scroll_width, scroll_height) = r.content_size(&clip);
+        let (scroll_width, scroll_height) = r.content_size(&clip, UnreachableSides::of(s));
         if scroll_width > clip.width + 0.01 || scroll_height > clip.height + 0.01 {
             out.push(ScrollContainer {
                 node: b.node,

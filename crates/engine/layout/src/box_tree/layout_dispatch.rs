@@ -990,8 +990,24 @@ pub(super) fn dispatch_box(
                 let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
                 // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
                 // wrapping is active (wrap_width is finite) and text actually wraps.
+                let clamp_balance = line_clamp_flow::balance_limit(&s, raw_lines.len());
                 if wrap_width.is_finite() {
                     match s.text_wrap_style {
+                        // CSS Overflow L4 §line-clamp: balancing happens after clamping, so only
+                        // the lines that stay visible are balanced and the rest follows greedily.
+                        TextWrapStyle::Balance if clamp_balance.is_some() => {
+                            let n = clamp_balance.unwrap_or(0);
+                            let kept: Vec<InlineFrag> = raw_lines[..n].iter().flatten().cloned().collect();
+                            let (head, _) = split_segments_at_first_line(
+                                segments, &kept, s.white_space.preserves_whitespace(),
+                            );
+                            let mut lines = balance_wrap(
+                                &head, wrap_width, raw_lines[..n].to_vec(), s.font_size, text_indent_px,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
+                            );
+                            lines.extend_from_slice(&raw_lines[n..]);
+                            lines
+                        }
                         TextWrapStyle::Balance => balance_wrap(
                             segments, wrap_width, raw_lines, s.font_size, text_indent_px,
                             viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,

@@ -1379,11 +1379,32 @@ pub(crate) fn ellipsize_last_line(
     max_width: f32,
     font_size: f32,
     m: &dyn TextMeasurer,
+    rtl: bool,
 ) {
     let ellipsis = '\u{2026}';
     let ellipsis_w = m.char_width(ellipsis, font_size);
     if last.is_empty() {
         return;
+    }
+    // A right-to-left line ends on its left: the ellipsis is a frag of its own (paragraph
+    // level, so bidi keeps it left of the text) in the room the right-aligned text leaves.
+    if rtl {
+        let first = last.iter().min_by(|a, b| a.x.total_cmp(&b.x)).unwrap();
+        if first.x + 0.01 >= ellipsis_w {
+            let mut e = first.clone();
+            e.x = first.x - ellipsis_w;
+            e.width = ellipsis_w;
+            e.text = ellipsis.to_string();
+            e.padding_left = 0.0;
+            e.padding_right = 0.0;
+            e.is_element_box = false;
+            e.img_src = None;
+            e.img_is_lazy = false;
+            e.bidi_level = 1;
+            e.merged_sources.clear();
+            last.push(e);
+            return;
+        }
     }
 
     let line_end = last.last().map(|f| f.x + f.width).unwrap_or(0.0);

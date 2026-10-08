@@ -1486,34 +1486,62 @@ fn padding_box(b: &LayoutBox) -> lumen_core::geom::Rect {
     )
 }
 
-/// Whether two axis-aligned rectangles share any positive-area overlap.
-/// Strict inequalities: rectangles that only touch along an edge (zero-area
-/// intersection) count as non-overlapping.
-fn rects_overlap(a: &lumen_core::geom::Rect, b: &lumen_core::geom::Rect) -> bool {
-    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+/// Sides of a scroll container's padding box beyond which overflow is *unreachable*: the start
+/// sides of its inline and block axes (CSS Overflow L3 §3.3 — content there can never be scrolled
+/// into view, so it adds nothing to the scrollable area). The mirror sides are reachable.
+#[derive(Clone, Copy)]
+pub(crate) struct UnreachableSides {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+impl UnreachableSides {
+    pub(crate) fn of(s: &style::ComputedStyle) -> Self {
+        use style::{Direction, WritingMode};
+        let rtl = s.direction == Direction::Rtl;
+        match s.writing_mode {
+            WritingMode::HorizontalTb => Self { left: !rtl, right: rtl, top: true, bottom: false },
+            WritingMode::VerticalRl | WritingMode::SidewaysRl => Self { left: false, right: true, top: !rtl, bottom: rtl },
+            WritingMode::VerticalLr => Self { left: true, right: false, top: !rtl, bottom: rtl },
+            WritingMode::SidewaysLr => Self { left: true, right: false, top: rtl, bottom: !rtl },
+        }
+    }
+
+    /// Whether `bounds` lies wholly beyond an unreachable side of padding box `pb`.
+    pub(crate) fn hides(self, bounds: &lumen_core::geom::Rect, pb: &lumen_core::geom::Rect) -> bool {
+        (self.left && bounds.x + bounds.width <= pb.x)
+            || (self.right && bounds.x >= pb.x + pb.width)
+            || (self.top && bounds.y + bounds.height <= pb.y)
+            || (self.bottom && bounds.y >= pb.y + pb.height)
+    }
 }
 
 /// Whether a child must be folded into its container's scrollable-overflow
 /// computation.
 ///
 /// CSS Overflow L3 §3.3: an absolutely/fixed positioned descendant whose
-/// border box does not overlap the containing block's padding box on *both*
-/// axes ("wholly outside the padding edges") contributes nothing at all —
-/// not even on the axis where it does overlap (BUG-504,
-/// `overflow-outside-padding.html`). This exclusion is specific to
-/// out-of-flow boxes placed via `top`/`right`/`bottom`/`left`: an in-flow
-/// box pushed outside by `transform` must still count in full (§3.4,
-/// already covered by [`child_scrollable_bounds`]) — that provision is
-/// unconditional, so only abspos/fixed children are ever excluded here.
+/// border box lies wholly in the *unreachable* scrollable-overflow region of
+/// the containing block's padding box ([`UnreachableSides`]) contributes
+/// nothing at all — not even on the axis where it does overlap (BUG-504,
+/// `overflow-outside-padding.html`). A box wholly beyond the *reachable* side
+/// (a dropdown below the padding box, `line-clamp-with-abspos-019`) counts in
+/// full. This exclusion is specific to out-of-flow boxes placed via
+/// `top`/`right`/`bottom`/`left`: an in-flow box pushed outside by `transform`
+/// must still count in full (§3.4, already covered by
+/// [`child_scrollable_bounds`]) — that provision is unconditional, so only
+/// abspos/fixed children are ever excluded here.
 fn contributes_to_scrollable_overflow(
     c: &LayoutBox,
     bounds: &lumen_core::geom::Rect,
     padding_box: &lumen_core::geom::Rect,
+    unreachable: UnreachableSides,
 ) -> bool {
     if !matches!(c.style.position, style::Position::Absolute | style::Position::Fixed) {
         return true;
     }
-    rects_overlap(bounds, padding_box)
+    !unreachable.hides(bounds, padding_box)
 }
 
 /// Axis-aligned bounding box of `rect`'s four corners after applying `m`.
@@ -1585,7 +1613,7 @@ fn box_clips_own_overflow(b: &LayoutBox) -> bool {
 fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_x, mut max_x) = (0.0_f32, pb.width);
-    scrollable_extent_x_rec(b, &pb, &mut min_x, &mut max_x);
+    scrollable_extent_x_rec(b, &pb, UnreachableSides::of(&b.style), &mut min_x, &mut max_x);
     (min_x, max_x)
 }
 
@@ -1594,15 +1622,21 @@ fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
 /// [`box_clips_own_overflow`]), not just direct children, so overflow from
 /// e.g. a doubly-nested negative-margin box still reaches the outer scroll
 /// container's `scrollWidth`.
-fn scrollable_extent_x_rec(b: &LayoutBox, pb: &lumen_core::geom::Rect, min_x: &mut f32, max_x: &mut f32) {
+fn scrollable_extent_x_rec(
+    b: &LayoutBox,
+    pb: &lumen_core::geom::Rect,
+    u: UnreachableSides,
+    min_x: &mut f32,
+    max_x: &mut f32,
+) {
     for c in &b.children {
         let bounds = child_scrollable_bounds(c);
-        if contributes_to_scrollable_overflow(c, &bounds, pb) {
+        if contributes_to_scrollable_overflow(c, &bounds, pb, u) {
             *min_x = min_x.min(bounds.x - pb.x);
             *max_x = max_x.max(bounds.x + bounds.width - pb.x);
         }
         if !box_clips_own_overflow(c) {
-            scrollable_extent_x_rec(c, pb, min_x, max_x);
+            scrollable_extent_x_rec(c, pb, u, min_x, max_x);
         }
     }
 }
@@ -1612,21 +1646,27 @@ fn scrollable_extent_x_rec(b: &LayoutBox, pb: &lumen_core::geom::Rect, min_x: &m
 fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_y, mut max_y) = (0.0_f32, pb.height);
-    scrollable_extent_y_rec(b, &pb, &mut min_y, &mut max_y);
+    scrollable_extent_y_rec(b, &pb, UnreachableSides::of(&b.style), &mut min_y, &mut max_y);
     (min_y, max_y)
 }
 
 /// Recursive worker for [`scrollable_extent_y`] — vertical counterpart of
 /// [`scrollable_extent_x_rec`] (BUG-960).
-fn scrollable_extent_y_rec(b: &LayoutBox, pb: &lumen_core::geom::Rect, min_y: &mut f32, max_y: &mut f32) {
+fn scrollable_extent_y_rec(
+    b: &LayoutBox,
+    pb: &lumen_core::geom::Rect,
+    u: UnreachableSides,
+    min_y: &mut f32,
+    max_y: &mut f32,
+) {
     for c in &b.children {
         let bounds = child_scrollable_bounds(c);
-        if contributes_to_scrollable_overflow(c, &bounds, pb) {
+        if contributes_to_scrollable_overflow(c, &bounds, pb, u) {
             *min_y = min_y.min(bounds.y - pb.y);
             *max_y = max_y.max(bounds.y + bounds.height - pb.y);
         }
         if !box_clips_own_overflow(c) {
-            scrollable_extent_y_rec(c, pb, min_y, max_y);
+            scrollable_extent_y_rec(c, pb, u, min_y, max_y);
         }
     }
 }
