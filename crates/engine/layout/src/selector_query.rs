@@ -33,7 +33,8 @@ use crate::style::{
     OutlineColor, OverscrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
-    TextDecorationLine, TextDecorationStyle,
+    TextAlignLast, TextDecorationLine, TextDecorationStyle, TextWrapMode, TextWrapStyle,
+    Hyphens, LineBreak, OverflowWrap, WordBreak,
     TextEmphasisStyle, TextOrientation, TextOverflow, TextShadow, TextTransform, TimingFunction,
     TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
@@ -498,7 +499,7 @@ pub(crate) fn px_str(v: f32) -> String {
 /// Serialises one `aspect-ratio` ratio component as a bare CSS `<number>`
 /// (no unit) — omits the decimal point for whole-number values, matching
 /// `test_computed_value("aspect-ratio", …)`'s expected `"auto W / H"` form.
-fn aspect_ratio_num(v: f32) -> String {
+fn number_str(v: f32) -> String {
     if v.fract() == 0.0 {
         format!("{}", v as i64)
     } else {
@@ -658,6 +659,35 @@ fn background_position_axis_to_css(
 /// `pub(crate)`: also reused by `style::values::length::canonical_specified_length`
 /// (CSSOM-2/BUG-484) for inline-`style` `<length-percentage>` reflection —
 /// same canonical serialization as `getComputedStyle()`, one source of truth.
+/// Computed-значение `<length-percentage>`: `em` и `calc()` без процентов сворачиваются в px
+/// по `font_size`, остальное — как [`length_to_css`] (BUG-1325, `text-indent`).
+fn absolute_length_css(l: &Length, font_size: f32) -> String {
+    match l {
+        Length::Em(v) => px_str(v * font_size),
+        Length::Calc(node) => match node.resolve(font_size, None, Size::ZERO) {
+            Some(px) => px_str(px),
+            None => length_to_css(l),
+        },
+        other => length_to_css(other),
+    }
+}
+
+fn text_wrap_mode_css(v: TextWrapMode) -> &'static str {
+    match v {
+        TextWrapMode::Wrap => "wrap",
+        TextWrapMode::Nowrap => "nowrap",
+    }
+}
+
+fn text_wrap_style_css(v: TextWrapStyle) -> &'static str {
+    match v {
+        TextWrapStyle::Auto => "auto",
+        TextWrapStyle::Balance => "balance",
+        TextWrapStyle::Stable => "stable",
+        TextWrapStyle::Pretty => "pretty",
+    }
+}
+
 pub(crate) fn length_to_css(l: &Length) -> String {
     match l {
         Length::Px(v) => px_str(*v),
@@ -1321,7 +1351,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ImageRendering::Pixelated => "pixelated",
     }.into());
     m.insert("aspect-ratio".into(), match style.aspect_ratio {
-        Some((w, h)) => format!("auto {} / {}", aspect_ratio_num(w), aspect_ratio_num(h)),
+        Some((w, h)) => format!("auto {} / {}", number_str(w), number_str(h)),
         None => "auto".into(),
     });
 
@@ -1414,7 +1444,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             px_str(v * style.font_size / z)
         } else if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
     });
-    m.insert("letter-spacing".into(), px_str(style.letter_spacing));
+    // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
+    m.insert("letter-spacing".into(), if style.letter_spacing == 0.0 { "normal".into() } else { px_str(style.letter_spacing) });
     m.insert("word-spacing".into(), px_str(style.word_spacing));
     m.insert("text-align".into(), match style.text_align {
         TextAlign::Start => "start",
@@ -1422,6 +1453,59 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextAlign::Left => "left",
         TextAlign::Right => "right",
         TextAlign::Center => "center",
+        TextAlign::Justify => "justify",
+        // Не резолвлен каскадом (стиль собран в обход `compute_style`): ведёт себя как `start`.
+        TextAlign::MatchParent => "start",
+    }.into());
+    // BUG-1325: остальные свойства CSS Text, которых раньше не было в карте.
+    m.insert("text-align-last".into(), match style.text_align_last {
+        TextAlignLast::Auto => "auto",
+        TextAlignLast::Start => "start",
+        TextAlignLast::End => "end",
+        TextAlignLast::Left => "left",
+        TextAlignLast::Right => "right",
+        TextAlignLast::Center => "center",
+        TextAlignLast::Justify => "justify",
+        TextAlignLast::MatchParent => "match-parent",
+    }.into());
+    m.insert("tab-size".into(), match style.text_extra.tab_size_number {
+        Some(n) => number_str(n),
+        None => px_str(style.tab_size),
+    });
+    m.insert("text-wrap-mode".into(), text_wrap_mode_css(style.text_wrap_mode).into());
+    m.insert("text-wrap-style".into(), text_wrap_style_css(style.text_wrap_style).into());
+    m.insert("text-wrap".into(), match (style.text_wrap_mode, style.text_wrap_style) {
+        (TextWrapMode::Wrap, TextWrapStyle::Auto) => "wrap".into(),
+        (TextWrapMode::Wrap, st) => text_wrap_style_css(st).into(),
+        (TextWrapMode::Nowrap, TextWrapStyle::Auto) => "nowrap".into(),
+        (TextWrapMode::Nowrap, st) => format!("nowrap {}", text_wrap_style_css(st)),
+    });
+    m.insert("line-break".into(), match style.line_break {
+        LineBreak::Auto => "auto",
+        LineBreak::Loose => "loose",
+        LineBreak::Normal => "normal",
+        LineBreak::Strict => "strict",
+        LineBreak::Anywhere => "anywhere",
+    }.into());
+    m.insert("word-break".into(), match style.word_break {
+        WordBreak::Normal => "normal",
+        WordBreak::KeepAll => "keep-all",
+        WordBreak::BreakAll => "break-all",
+        WordBreak::BreakWord => "break-word",
+        WordBreak::AutoPhrase => "auto-phrase",
+    }.into());
+    let overflow_wrap = match style.overflow_wrap {
+        OverflowWrap::Normal => "normal",
+        OverflowWrap::BreakWord => "break-word",
+        OverflowWrap::Anywhere => "anywhere",
+    };
+    m.insert("overflow-wrap".into(), overflow_wrap.into());
+    // `word-wrap` — унаследованный псевдоним `overflow-wrap` (CSS Text L3 §5.5).
+    m.insert("word-wrap".into(), overflow_wrap.into());
+    m.insert("hyphens".into(), match style.hyphens {
+        Hyphens::None => "none",
+        Hyphens::Manual => "manual",
+        Hyphens::Auto => "auto",
     }.into());
     // CSS Writing Modes L4 §2.1/§2.2/§3.1/§5.1 — computed value "as
     // specified" for all four. The fields were cascaded and consumed by
@@ -1453,20 +1537,19 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextOrientation::Upright => "upright",
         TextOrientation::Sideways => "sideways",
     }.into());
-    m.insert("text-transform".into(), match style.text_transform {
-        TextTransform::None => "none",
-        TextTransform::Uppercase => "uppercase",
-        TextTransform::Lowercase => "lowercase",
-        TextTransform::Capitalize => "capitalize",
-    }.into());
-    m.insert("white-space".into(), match style.white_space {
-        WhiteSpace::Normal => "normal",
-        WhiteSpace::Nowrap => "nowrap",
-        WhiteSpace::Pre => "pre",
-        WhiteSpace::PreWrap => "pre-wrap",
-        WhiteSpace::PreLine => "pre-line",
-        WhiteSpace::BreakSpaces => "break-spaces",
-    }.into());
+    m.insert("text-transform".into(), style.text_extra.transform.serialize(style.text_transform));
+    // CSS Text L4 §2.1: shorthand над `white-space-collapse` + `text-wrap-mode`. Пары без
+    // legacy-ключевого слова (`preserve-breaks nowrap`, `break-spaces nowrap`) пишутся длинно.
+    m.insert("white-space".into(), match (style.white_space_collapse, style.text_wrap_mode) {
+        (WhiteSpaceCollapse::Collapse, TextWrapMode::Wrap) => "normal".into(),
+        (WhiteSpaceCollapse::Collapse, TextWrapMode::Nowrap) => "nowrap".into(),
+        (WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::PreserveSpaces, TextWrapMode::Nowrap) => "pre".into(),
+        (WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::PreserveSpaces, TextWrapMode::Wrap) => "pre-wrap".into(),
+        (WhiteSpaceCollapse::PreserveBreaks, TextWrapMode::Wrap) => "pre-line".into(),
+        (WhiteSpaceCollapse::PreserveBreaks, TextWrapMode::Nowrap) => "preserve-breaks nowrap".into(),
+        (WhiteSpaceCollapse::BreakSpaces, TextWrapMode::Wrap) => "break-spaces".into(),
+        (WhiteSpaceCollapse::BreakSpaces, TextWrapMode::Nowrap) => "break-spaces nowrap".into(),
+    });
     m.insert("white-space-collapse".into(), match style.white_space_collapse {
         WhiteSpaceCollapse::Collapse => "collapse",
         WhiteSpaceCollapse::Preserve => "preserve",
@@ -1527,7 +1610,18 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         CssContinue::Collapse => "collapse",
         CssContinue::WebkitLegacy => "-webkit-legacy",
     }.into());
-    m.insert("text-indent".into(), length_to_css(&style.text_indent));
+    {
+        // CSS Text L3 §7.1: `<length-percentage> hanging? each-line?`; `em` и `calc()` без `%`
+        // сворачиваются в px (computed value — абсолютная длина).
+        let mut indent = absolute_length_css(&style.text_indent, style.font_size);
+        if style.text_extra.indent_hanging {
+            indent.push_str(" hanging");
+        }
+        if style.text_extra.indent_each_line {
+            indent.push_str(" each-line");
+        }
+        m.insert("text-indent".into(), indent);
+    }
     m.insert("vertical-align".into(), vertical_align_to_css(&style.vertical_align));
 
     // ── Overflow / stacking ───────────────────────────────────────
@@ -2311,6 +2405,55 @@ mod tests {
         assert_eq!(get("#v", "direction").as_deref(), Some("rtl"));
         assert_eq!(get("#v", "unicode-bidi").as_deref(), Some("isolate-override"));
         assert_eq!(get("#v", "text-orientation").as_deref(), Some("upright"));
+    }
+
+    /// BUG-1325: the CSS Text longhands that `getComputedStyle()` used to read back as `""`.
+    #[test]
+    fn css_text_longhands_are_serialised() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="d">x</div><div id="v"><p id="m">y</p><p id="r">z</p></div>"#,
+            "#v { tab-size: 4; text-wrap: nowrap balance; line-break: strict; word-break: auto-phrase;                word-wrap: anywhere; hyphens: auto; text-align: center; text-align-last: match-parent;                text-transform: full-width capitalize; white-space: preserve-breaks nowrap;                font-size: 20px; text-indent: each-line calc(10px + 0.5em) hanging }              #m { text-align: match-parent } #r { tab-size: 10px; letter-spacing: 0px }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#d", "tab-size").as_deref(), Some("8"));
+        assert_eq!(get("#d", "text-wrap").as_deref(), Some("wrap"));
+        assert_eq!(get("#d", "white-space").as_deref(), Some("normal"));
+        assert_eq!(get("#d", "letter-spacing").as_deref(), Some("normal"));
+        assert_eq!(get("#v", "tab-size").as_deref(), Some("4"));
+        assert_eq!(get("#v", "text-wrap").as_deref(), Some("nowrap balance"));
+        assert_eq!(get("#v", "text-wrap-mode").as_deref(), Some("nowrap"));
+        assert_eq!(get("#v", "text-wrap-style").as_deref(), Some("balance"));
+        assert_eq!(get("#v", "line-break").as_deref(), Some("strict"));
+        assert_eq!(get("#v", "word-break").as_deref(), Some("auto-phrase"));
+        assert_eq!(get("#v", "overflow-wrap").as_deref(), Some("anywhere"));
+        assert_eq!(get("#v", "word-wrap").as_deref(), Some("anywhere"));
+        assert_eq!(get("#v", "hyphens").as_deref(), Some("auto"));
+        assert_eq!(get("#v", "text-align-last").as_deref(), Some("match-parent"));
+        assert_eq!(get("#v", "text-transform").as_deref(), Some("capitalize full-width"));
+        assert_eq!(get("#v", "white-space").as_deref(), Some("preserve-breaks nowrap"));
+        assert_eq!(get("#v", "text-indent").as_deref(), Some("20px hanging each-line"));
+        // `match-parent` takes the parent's `center`; a length `tab-size` is an absolute length.
+        assert_eq!(get("#m", "text-align").as_deref(), Some("center"));
+        assert_eq!(get("#r", "tab-size").as_deref(), Some("10px"));
+        assert_eq!(get("#r", "letter-spacing").as_deref(), Some("normal"));
+    }
+
+    /// CSS Text L3 §7.1: `start` inherited from an RTL parent becomes `right` under
+    /// `match-parent` (the root-element case is covered by WPT `text-align-match-parent-002`).
+    #[test]
+    fn text_align_match_parent_resolution() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="p"><p id="c">x</p></div>"#,
+            "#p { direction: rtl } #c { text-align: match-parent }",
+        );
+        let get = |sel: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get("text-align").cloned()
+        };
+        assert_eq!(get("#c").as_deref(), Some("right"));
     }
 
     #[test]

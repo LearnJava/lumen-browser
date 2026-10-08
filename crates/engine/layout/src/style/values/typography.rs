@@ -76,6 +76,13 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// CSS Text L3 §7.1 `justify`. Хранится ради computed-значения и наследования;
+    /// межсловное выравнивание строк ещё не реализовано — layout ведёт себя как `start`.
+    Justify,
+    /// `match-parent`: промежуточное значение каскада. `compute_style` заменяет его значением
+    /// родителя (`start`/`end` пересчитываются по `direction` родителя) либо `start` для корня
+    /// (CSS Text L3 §7.1); до этого шага и в обход каскада layout ведёт себя как `start`.
+    MatchParent,
 }
 
 /// CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`.
@@ -91,6 +98,9 @@ pub enum TextAlignLast {
     Right,
     Center,
     Justify,
+    /// `match-parent`: `start`/`end` родителя пересчитываются по его `direction`.
+    /// Хранится как есть; layout ведёт себя как `start`.
+    MatchParent,
 }
 
 /// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
@@ -444,6 +454,104 @@ pub enum TextTransform {
     /// Unicode property Letter) в верхний регистр. Phase 0: упрощённо —
     /// первая буква каждого whitespace-разделённого токена.
     Capitalize,
+}
+
+/// CSS Text L3 §3.4 / Text L4 §3.4 — дополнительные компоненты `text-transform`:
+/// `full-width`, `full-size-kana` и самостоятельное `math-auto`. Хранятся ради
+/// computed-значения (CSSOM) и наследования; преобразование текста не применяют —
+/// `TextTransform::apply` их не читает.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextTransformExtra {
+    pub full_width: bool,
+    pub full_size_kana: bool,
+    pub math_auto: bool,
+}
+
+impl TextTransformExtra {
+    /// Разбор значения `text-transform`:
+    /// `none | math-auto | [capitalize | uppercase | lowercase] || full-width || full-size-kana`.
+    /// Токены в любом порядке, каждый не более одного раза; `none` и `math-auto` — только
+    /// поодиночке. `None` — значение невалидно.
+    pub fn parse(val: &str) -> Option<(TextTransform, TextTransformExtra)> {
+        let mut case: Option<TextTransform> = None;
+        let mut extra = TextTransformExtra::default();
+        let mut any = false;
+        let mut lone = false;
+        for tok in val.split_whitespace() {
+            let tok = tok.to_ascii_lowercase();
+            any = true;
+            match tok.as_str() {
+                "none" | "math-auto" => {
+                    if lone { return None; }
+                    lone = true;
+                    if tok == "math-auto" { extra.math_auto = true; }
+                }
+                "uppercase" | "lowercase" | "capitalize" => {
+                    if case.is_some() { return None; }
+                    case = Some(match tok.as_str() {
+                        "uppercase" => TextTransform::Uppercase,
+                        "lowercase" => TextTransform::Lowercase,
+                        _ => TextTransform::Capitalize,
+                    });
+                }
+                "full-width" => {
+                    if extra.full_width { return None; }
+                    extra.full_width = true;
+                }
+                "full-size-kana" => {
+                    if extra.full_size_kana { return None; }
+                    extra.full_size_kana = true;
+                }
+                _ => return None,
+            }
+        }
+        let count = val.split_whitespace().count();
+        if !any || (lone && count != 1) { return None; }
+        Some((case.unwrap_or(TextTransform::None), extra))
+    }
+
+    /// Каноническая запись computed-значения: `<case> full-width full-size-kana`
+    /// (CSSOM §serialize — порядок по грамматике), `none`, `math-auto`.
+    pub fn serialize(self, case: TextTransform) -> String {
+        if self.math_auto { return "math-auto".into(); }
+        let mut parts: Vec<&str> = Vec::new();
+        match case {
+            TextTransform::None => {}
+            TextTransform::Uppercase => parts.push("uppercase"),
+            TextTransform::Lowercase => parts.push("lowercase"),
+            TextTransform::Capitalize => parts.push("capitalize"),
+        }
+        if self.full_width { parts.push("full-width"); }
+        if self.full_size_kana { parts.push("full-size-kana"); }
+        if parts.is_empty() { "none".into() } else { parts.join(" ") }
+    }
+}
+
+/// CSS Text L3 §7.1 — `text-align: match-parent` у элемента с родителем: значение родителя, но
+/// унаследованные `start`/`end` пересчитываются в `left`/`right` по `direction` родителя.
+pub fn resolve_match_parent(parent: TextAlign, parent_direction: Direction) -> TextAlign {
+    match (parent, parent_direction) {
+        (TextAlign::Start, Direction::Ltr) | (TextAlign::End, Direction::Rtl) => TextAlign::Left,
+        (TextAlign::Start, Direction::Rtl) | (TextAlign::End, Direction::Ltr) => TextAlign::Right,
+        (TextAlign::MatchParent, _) => TextAlign::Start,
+        (other, _) => other,
+    }
+}
+
+/// Компоненты наследуемых свойств CSS Text, которые движок хранит только ради
+/// computed-значения (CSSOM, BUG-1325): layout их не читает. Всё поле наследуется целиком —
+/// `text-transform`, `text-indent` и `tab-size` наследуются все.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TextCssomExtra {
+    /// `full-width` / `full-size-kana` / `math-auto` из `text-transform`.
+    pub transform: TextTransformExtra,
+    /// `hanging` из `text-indent` (CSS Text L3 §7.1).
+    pub indent_hanging: bool,
+    /// `each-line` из `text-indent`.
+    pub indent_each_line: bool,
+    /// `tab-size: <number>` — число пробелов, как записано. `None` — задана `<length>`
+    /// (тогда ширина табуляции — `ComputedStyle::tab_size` в px).
+    pub tab_size_number: Option<f32>,
 }
 
 impl TextTransform {

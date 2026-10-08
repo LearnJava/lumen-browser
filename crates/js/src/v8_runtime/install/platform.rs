@@ -664,6 +664,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Grammar + canonical form of the CSS Text longhands with length / compound values in
+    // inline-`style` (`tab-size`, `letter-spacing`, `word-spacing`, `text-indent`,
+    // `text-transform`; BUG-1325). `None` — the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_text",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_text(&prop, &value)
+        }
+    );
+
     // Canonical sizing serialization for inline-`style` `width`/`height`
     // (CSS Sizing L3 §4, CSSOM-2/BUG-484 third slice) — same role as
     // `_lumen_css_canonical_length` above, but the grammar additionally

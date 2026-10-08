@@ -1958,6 +1958,7 @@ function _lumen_parse_style(s) {
         var prop = decl.slice(0, idx).trim();
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
+        if (prop === 'word-wrap') prop = 'overflow-wrap';
         if (_lumen_gap_rule_key_re.test(prop)) {
             // `!important` is not part of the value (the priority is not tracked here).
             var gapVal = _lumen_close_open_parens(val.replace(/\s*!\s*important\s*$/i, ''));
@@ -2007,6 +2008,12 @@ function _lumen_parse_style(s) {
                 obj[longhands2v[1]] = expanded2v.end;
                 return;
             }
+        }
+        if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(prop)) {
+            var txtLonghands = _lumen_expand_text_shorthand(prop, val);
+            if (txtLonghands === null) return; // invalid declaration: dropped, not stored
+            Object.keys(txtLonghands).forEach(function(k) { obj[k] = txtLonghands[k]; });
+            return;
         }
         var canon = _lumen_canonicalize_longhand(prop, val);
         if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
@@ -2359,6 +2366,15 @@ function _lumen_serialize_style(obj) {
         shorthandOf[lh[0]] = sh;
         shorthandOf[lh[1]] = sh;
     });
+    ['white-space', 'text-wrap'].forEach(function(sh) {
+        var lh = _LUMEN_TEXT_SHORTHANDS[sh];
+        if (shorthandOf[lh[0]] || shorthandOf[lh[1]]) return;
+        var v = _lumen_text_shorthand_value(obj, sh);
+        if (v === undefined) return;
+        shorthandVal[sh] = v;
+        shorthandOf[lh[0]] = sh;
+        shorthandOf[lh[1]] = sh;
+    });
     var emittedShorthand = {};
     var parts = [];
     keys.forEach(function(k) {
@@ -2374,7 +2390,106 @@ function _lumen_serialize_style(obj) {
     return parts.length ? parts.join('; ') + ';' : '';
 }
 function _lumen_camel_to_kebab(prop) {
-    return prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+    var key = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+    // CSS Text L3 §5.5: `word-wrap` is a legacy alias of `overflow-wrap` (BUG-1325).
+    return key === 'word-wrap' ? 'overflow-wrap' : key;
+}
+
+// CSS Text L3/L4 longhands with a length or multi-component grammar: the native
+// `_lumen_css_canonical_text` (engine `style::values::text_cssom`) validates the value and
+// returns its canonical serialization (BUG-1325).
+var _LUMEN_TEXT_PROPERTIES = {
+    'tab-size': 1, 'letter-spacing': 1, 'word-spacing': 1, 'text-indent': 1, 'text-transform': 1,
+};
+
+// CSS Text L4 §2.1 / §6.4.3: `white-space` and `text-wrap` are shorthands; the inline-style
+// object keeps only their longhands (`text-wrap-mode` is shared). Order matters for cssText:
+// `white-space` claims the shared `text-wrap-mode` first.
+var _LUMEN_TEXT_SHORTHANDS = {
+    'white-space': ['white-space-collapse', 'text-wrap-mode'],
+    'text-wrap':   ['text-wrap-mode', 'text-wrap-style'],
+};
+var _LUMEN_WHITE_SPACE_LEGACY = {
+    'normal':       ['collapse', 'wrap'],
+    'nowrap':       ['collapse', 'nowrap'],
+    'pre':          ['preserve', 'nowrap'],
+    'pre-wrap':     ['preserve', 'wrap'],
+    'pre-line':     ['preserve-breaks', 'wrap'],
+    'break-spaces': ['break-spaces', 'wrap'],
+};
+// Longhand name → value map of the shorthand `name` set to `strVal`, or `null` when the value
+// is invalid for its grammar.
+function _lumen_expand_text_shorthand(name, strVal) {
+    var lh = _LUMEN_TEXT_SHORTHANDS[name];
+    var lower = strVal.trim().toLowerCase();
+    var out = {};
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lower) !== -1) {
+        out[lh[0]] = lower;
+        out[lh[1]] = lower;
+        return out;
+    }
+    var tokens = lower.split(/\s+/).filter(function(t) { return t !== ''; });
+    if (tokens.length < 1 || tokens.length > 2) return null;
+    if (name === 'white-space') {
+        if (tokens.length === 1 && _LUMEN_WHITE_SPACE_LEGACY.hasOwnProperty(tokens[0])) {
+            out[lh[0]] = _LUMEN_WHITE_SPACE_LEGACY[tokens[0]][0];
+            out[lh[1]] = _LUMEN_WHITE_SPACE_LEGACY[tokens[0]][1];
+            return out;
+        }
+        var collapse = null, mode = null;
+        for (var i = 0; i < tokens.length; i++) {
+            var t = tokens[i];
+            if (_LUMEN_KEYWORD_PROPERTIES['white-space-collapse'].indexOf(t) !== -1) {
+                if (collapse !== null) return null;
+                collapse = t;
+            } else if (_LUMEN_KEYWORD_PROPERTIES['text-wrap-mode'].indexOf(t) !== -1) {
+                if (mode !== null) return null;
+                mode = t;
+            } else {
+                return null;
+            }
+        }
+        out[lh[0]] = collapse === null ? 'collapse' : collapse;
+        out[lh[1]] = mode === null ? 'wrap' : mode;
+        return out;
+    }
+    // text-wrap: <'text-wrap-mode'> || <'text-wrap-style'>
+    var wmode = null, wstyle = null;
+    for (var j = 0; j < tokens.length; j++) {
+        var u = tokens[j];
+        if (_LUMEN_KEYWORD_PROPERTIES['text-wrap-mode'].indexOf(u) !== -1) {
+            if (wmode !== null) return null;
+            wmode = u;
+        } else if (_LUMEN_KEYWORD_PROPERTIES['text-wrap-style'].indexOf(u) !== -1) {
+            if (wstyle !== null) return null;
+            wstyle = u;
+        } else {
+            return null;
+        }
+    }
+    out[lh[0]] = wmode === null ? 'wrap' : wmode;
+    out[lh[1]] = wstyle === null ? 'auto' : wstyle;
+    return out;
+}
+// Shorthand value composed from the longhands in `obj`, or `undefined` when one is missing.
+function _lumen_text_shorthand_value(obj, name) {
+    var lh = _LUMEN_TEXT_SHORTHANDS[name];
+    if (!lh) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(obj, lh[0]) ||
+        !Object.prototype.hasOwnProperty.call(obj, lh[1])) return undefined;
+    var a = obj[lh[0]], b = obj[lh[1]];
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(a) !== -1 || _LUMEN_CSS_WIDE_KEYWORDS.indexOf(b) !== -1) {
+        return a === b ? a : undefined;
+    }
+    if (name === 'white-space') {
+        for (var k in _LUMEN_WHITE_SPACE_LEGACY) {
+            if (_LUMEN_WHITE_SPACE_LEGACY[k][0] === a && _LUMEN_WHITE_SPACE_LEGACY[k][1] === b) return k;
+        }
+        return a + ' ' + b;
+    }
+    // text-wrap: omit components at their initial value, but never the whole value.
+    if (b === 'auto') return a;
+    return a === 'wrap' ? b : a + ' ' + b;
 }
 
 // CSS Color L4 / CSSOM §6.7.3 (BUG-465): these longhands take a bare
@@ -2579,9 +2694,22 @@ var _LUMEN_KEYWORD_PROPERTIES = {
         'auto', 'none', 'visible', 'visiblepainted', 'visiblefill',
         'visiblestroke', 'painted', 'fill', 'stroke', 'all',
     ],
-    'text-align':     ['start', 'end', 'left', 'center', 'right'],
+    // CSS Text L3 §7.1/§7.2 (BUG-1325): `justify`, `match-parent` and the legacy `justify-all`
+    // are values of `text-align`; `text-align-last` takes the same set minus `justify-all`.
+    'text-align':     ['start', 'end', 'left', 'center', 'right', 'justify', 'match-parent', 'justify-all'],
+    'text-align-last': ['auto', 'start', 'end', 'left', 'right', 'center', 'justify', 'match-parent'],
     'direction':      ['ltr', 'rtl'],
-    'text-transform': ['none', 'uppercase', 'lowercase', 'capitalize'],
+    // CSS Text L3/L4 line-breaking and wrapping keywords (BUG-1325). `word-wrap` is an alias of
+    // `overflow-wrap` and is folded into it by `_lumen_camel_to_kebab`. `text-transform`,
+    // `tab-size`, `letter-spacing`, `word-spacing` and `text-indent` take lengths or several
+    // components — they go through `_LUMEN_TEXT_PROPERTIES` below.
+    'word-break':     ['normal', 'break-all', 'keep-all', 'manual', 'auto-phrase', 'break-word'],
+    'overflow-wrap':  ['normal', 'break-word', 'anywhere'],
+    'hyphens':        ['none', 'manual', 'auto'],
+    'line-break':     ['auto', 'loose', 'normal', 'strict', 'anywhere'],
+    'text-wrap-mode': ['wrap', 'nowrap'],
+    'text-wrap-style': ['auto', 'balance', 'stable', 'pretty'],
+    'white-space-collapse': ['collapse', 'preserve', 'preserve-breaks', 'break-spaces'],
     'user-select':    ['auto', 'text', 'none', 'contain', 'all'],
     // Срез 11: `scrollbar-width` (CSS Scrollbars L1 §3, `ScrollbarWidth::parse`
     // in `style/values/misc.rs` — exact `auto|thin|none` match, no extra
@@ -3168,6 +3296,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
         var scrollGrammar = _LUMEN_SCROLL_OFFSET_PROPERTIES[key];
         return _lumen_css_canonical_scroll_offset(strVal, scrollGrammar.allowAuto, scrollGrammar.nonNegative);
     }
+    if (_LUMEN_TEXT_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_text(key, strVal);
+    }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
     }
@@ -3291,6 +3422,10 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
         var v2v = _lumen_2v_shorthand_value(obj, key);
         if (v2v !== undefined) return v2v;
     }
+    if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+        var txtSh = _lumen_text_shorthand_value(obj, key);
+        if (txtSh !== undefined) return txtSh;
+    }
     if (_lumen_gap_rule_key_re.test(key)) {
         var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
         if (gapSh !== null && gapSh !== undefined) return gapSh;
@@ -3345,6 +3480,9 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     var obj = _lumen_style_get_parsed(nid);
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property.
+        if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+            _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+        }
         _lumen_gap_rule_delete(obj, key);
         _lumen_style_set_parsed(nid, obj);
         return;
@@ -3405,6 +3543,13 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _lumen_style_set_parsed(nid, obj);
         return;
     }
+    if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+        var txtExpanded = _lumen_expand_text_shorthand(key, strVal);
+        if (txtExpanded === null) return; // invalid shorthand value: whole declaration dropped
+        Object.keys(txtExpanded).forEach(function(k) { obj[k] = txtExpanded[k]; });
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
     // Срез 10: color/length/line-width/sizing/keyword grammars all
     // go through the shared `_lumen_canonicalize_longhand` dispatch
     // (also used by `_lumen_parse_style` above) instead of one
@@ -3415,6 +3560,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_GRID_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_TEXT_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
         key === 'scrollbar-color' ||
         key === 'scroll-snap-type' ||
@@ -3460,6 +3606,10 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
     var key = _lumen_camel_to_kebab(String(prop));
     var old = Object.prototype.hasOwnProperty.call(obj, key) ? obj[key]
         : (_lumen_gap_rule_key_re.test(key) ? (this.getPropertyValue(key) || '') : '');
+    if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+        old = _lumen_text_shorthand_value(obj, key) || '';
+        _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+    }
     _lumen_gap_rule_delete(obj, key); _lumen_style_set_parsed(nid, obj); return old;
 };
 Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
