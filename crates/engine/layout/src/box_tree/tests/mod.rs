@@ -490,6 +490,7 @@ mod table_height;
 mod table_valign;
 mod baseline_containers;
 mod grid_baseline2;
+mod line_clamp_flow;
 mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;

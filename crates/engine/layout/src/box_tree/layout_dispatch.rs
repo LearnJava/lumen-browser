@@ -1055,11 +1055,11 @@ pub(super) fn dispatch_box(
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
             let line_h = step_line_height(b.used_line_height, s.line_height_step);
             apply_inline_vertical_align(lines, line_h);
-            // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
-            // Takes priority over text-overflow:ellipsis (both cannot apply simultaneously).
-            if let Some(n) = s.line_clamp.filter(|&n| n > 0) {
-                apply_line_clamp(lines, n, content_width, s.font_size, m);
-            } else if s.text_overflow == TextOverflow::Ellipsis
+            // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
+            // container flow (`line_clamp_flow`), not run by run; here it only takes priority
+            // over text-overflow:ellipsis (both cannot apply simultaneously).
+            if !s.line_clamp.is_some_and(|n| n > 0)
+                && s.text_overflow == TextOverflow::Ellipsis
                 && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
             {
                 // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.

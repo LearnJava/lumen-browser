@@ -1169,7 +1169,7 @@ pub fn inline_segment_style_map(style: &ComputedStyle) -> HashMap<String, String
 /// never reach this function as a `WebkitBox`/`WebkitInlineBox` variant.
 fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
     let is_clamping = style.box_orient == WebkitBoxOrient::Vertical
-        && (style.line_clamp.is_some() || style.continue_value == CssContinue::Discard);
+        && (style.line_clamp.is_some() || style.line_clamp_auto || style.continue_value == CssContinue::Discard);
     match style.legacy_box_display.unwrap_or(style.display) {
         Display::Block => "block",
         Display::Inline => "inline",
@@ -1508,14 +1508,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // reduced `none | <integer>` grammar, not the full `line-clamp`
     // shorthand (`max-lines`/`block-ellipsis`/`continue`/`-webkit-legacy`
     // longhands are unimplemented, see BUG-505).
-    m.insert("-webkit-line-clamp".into(), match style.line_clamp {
+    let line_clamp = match style.line_clamp {
+        None if style.line_clamp_auto => "auto".to_string(),
         None => "none".to_string(),
         Some(n) => n.to_string(),
-    });
-    m.insert("line-clamp".into(), match style.line_clamp {
-        None => "none".to_string(),
-        Some(n) => n.to_string(),
-    });
+    };
+    m.insert("-webkit-line-clamp".into(), line_clamp.clone());
+    m.insert("line-clamp".into(), line_clamp);
     // WHATWG Compat §2.1 / CSS Overflow L4 §continue (BUG-505 срез 5) — feed
     // `webkit_box_computed_display`'s condition, plus their own round-trip.
     m.insert("-webkit-box-orient".into(), match style.box_orient {

@@ -74,7 +74,7 @@ fn synth_baseline(b: &LayoutBox) -> f32 {
 
 /// Участвует ли бокс в нормальном потоке своего родителя — плавающие,
 /// абсолютно позиционированные и служебные дети базовую линию родителю не дают.
-fn is_in_flow_baseline_source(c: &LayoutBox) -> bool {
+pub(super) fn is_in_flow_baseline_source(c: &LayoutBox) -> bool {
     c.style.float_side == FloatSide::None
         && !matches!(c.style.position, Position::Absolute | Position::Fixed)
         && !matches!(c.kind, BoxKind::Skip | BoxKind::InlineSpace | BoxKind::Marker { .. })

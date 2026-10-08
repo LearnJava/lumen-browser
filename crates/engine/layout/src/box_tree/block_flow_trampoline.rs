@@ -1,5 +1,6 @@
 use super::*;
 use super::layout_cache::finalize_block_height;
+use super::line_clamp_flow;
 use super::layout_dispatch::{dispatch_box, finish_after_match, FontContext};
 
 /// LAYOUT-2 срез 1 — see `dispatch_box`'s doc comment (`layout_dispatch.rs`)
@@ -830,6 +831,15 @@ fn finish_frame(
     } else {
         base
     };
+    // CSS Overflow L4 §line-clamp: the content ends at the bottom of the n-th line of the flow.
+    let auto_bound = line_clamp_flow::auto_bound(
+        &frame.init.s, frame.init.em, frame.init.available_height, viewport,
+        frame.init.padding_top, frame.init.padding_bottom, frame.init.content_y,
+    );
+    let clamp_cut = line_clamp_flow::find_cut(&frame.b, viewport, auto_bound);
+    let content_height = clamp_cut.map_or(content_height, |cut| {
+        (frame.b.rect.y + cut.line_bottom + cut.extra - frame.init.content_y).clamp(0.0, content_height)
+    });
 
     finalize_block_height(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.available_height, viewport,
@@ -840,6 +850,9 @@ fn finish_frame(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
         frame.init.pcb, &frame.init.abs_deferred, measurer, viewport, hp,
     );
+    if let Some(cut) = clamp_cut {
+        line_clamp_flow::apply_cut(&mut frame.b, cut, viewport, measurer);
+    }
 }
 
 /// CSS 2.1 §10.3.3 — an over-constrained block-level box (a used width

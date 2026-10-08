@@ -426,14 +426,23 @@ pub(in crate::style) fn apply_decl_text(
         "-webkit-line-clamp" | "line-clamp" => {
             // CSS Overflow L4 §13.4 / compat -webkit-line-clamp.
             // Значения: `none` → None; <integer> > 0 → Some(n).
+            // `-webkit-line-clamp` — только `none | <integer>` и только на `display: -webkit-box`
+            // с вертикальной осью (`line_clamp_legacy`); `line-clamp` — любой блок-контейнер.
             let v = val.trim();
-            style.line_clamp = if v == "none" {
-                None
+            let legacy = prop == "-webkit-line-clamp";
+            if v == "none" {
+                style.line_clamp = None;
+                style.line_clamp_auto = false;
+                style.line_clamp_legacy = legacy;
+            } else if v == "auto" && !legacy {
+                style.line_clamp = None;
+                style.line_clamp_auto = true;
+                style.line_clamp_legacy = false;
             } else if let Ok(n) = v.parse::<u32>() {
-                if n > 0 { Some(n) } else { None }
-            } else {
-                style.line_clamp
-            };
+                style.line_clamp = if n > 0 { Some(n) } else { None };
+                style.line_clamp_auto = false;
+                style.line_clamp_legacy = legacy;
+            }
         }
         "-webkit-box-orient" => {
             // WHATWG Compat §2.1 — Phase 0: только для `display: -webkit-box`

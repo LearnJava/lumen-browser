@@ -1321,6 +1321,7 @@ pub(crate) fn compute_style_shareable(
     // arm does not build (`compat/webkit-box-fieldset`: the child must span the width).
     if matches!(style.display, Display::WebkitBox | Display::WebkitInlineBox)
         && style.line_clamp.is_none()
+        && !style.line_clamp_auto
         && style.continue_value != CssContinue::Discard
         && !matches!(&doc.get(node).data, NodeData::Element { name, .. } if name.local.as_str() == "fieldset")
     {
