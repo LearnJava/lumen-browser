@@ -70,7 +70,7 @@
 | S21 | css-anchor-position + css-position + css-display | `css/css-anchor-position,css/css-position,css/css-display` | 1 126 | `.tmp/wpt-run14/anchor-position-display` |
 | S22 | css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins | `css/css-view-transitions,css/css-conditional,css/css-variables,css/css-properties-values-api,css/css-mixins` | 1 350 | `.tmp/wpt-run14/view-transitions-variables` |
 | S23 | css-text-decor + css-gaps + css-shapes | `css/css-text-decor,css/css-gaps,css/css-shapes` | 1 143 | `.tmp/wpt-run14/text-decor-gaps-shapes` |
-| S24 | filter-effects + css-inline + css-tables + css-align | `css/filter-effects,css/css-inline,css/css-tables,css/css-align` | ~1 368 | `.tmp/wpt-run14/filter-inline-tables-align` |
+| S24 | filter-effects + css-inline + css-tables + css-align | `css/filter-effects,css/css-inline,css/css-tables,css/css-align` | 1 368 | `.tmp/wpt-run14/filter-inline-tables-align` |
 | S25 | css-typed-om + cssom-view + cssom + css-lists + css-counter-styles | `css/css-typed-om,css/cssom-view,css/cssom,css/css-lists,css/css-counter-styles` | ~1 282 | `.tmp/wpt-run14/typed-om-cssom-lists` |
 | S26 | css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap | `css/css-page,css/css-animations,css/css-transitions,css/css-shadow,css/css-borders,css/css-scroll-snap` | ~1 194 | `.tmp/wpt-run14/page-animations-borders` |
 | S27 | css-ruby + css-layout-api + css-box + motion + css-highlight-api + css-paint-api + css-viewport + mediaqueries | `css/css-ruby,css/css-layout-api,css/css-box,css/motion,css/css-highlight-api,css/css-paint-api,css/css-viewport,css/mediaqueries` | ~1 059 | `.tmp/wpt-run14/ruby-box-motion-mq` |

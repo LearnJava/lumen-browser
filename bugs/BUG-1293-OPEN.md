@@ -45,3 +45,7 @@ WPT-RUN-14 срез 5: `css/css-transforms/animation/*` — 15 файлов, 168
 
 Тот же механизм виден на reftest'ах: `background-color-animation.html`, `background-color-transition.html` и ещё 27 (`animations/background-color-*`, `two-background-color-animation-diff-length*`) — `thick`. `animation: bgc 1000000s cubic-bezier(0,1,1,0) -500000s` на `<div>` с `background-color:green`: `--dump-display-list` отдаёт `FillRect … #008000ff` (значение не из ключевых кадров, а из стиля элемента), `document.getAnimations().length` = 0 в той же задаче; тест ждёт `getAnimations()[0].ready` и снимает экран. Режимы `CSS Animations`/`CSS Transitions`/`CSS Transitions with transition: all` у `background-*`/`border-*` в этом срезе — 1 280 упавших сабтестов; часть из них — [BUG-1305](BUG-1305-OPEN.md) (неявный кадр, шорткоды, `background-size`/`box-shadow`) и `animation-composition` (`CSS-SPECS.md`).
 
+
+## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
+
+Тот же механизм виден в reftest с `animation-play-state: paused` и отрицательной задержкой (`css-filters-animation-*`, `css-backdrop-filters-animation-*` — 20 id): `@keyframes{opacity:0→1}` с `animation: a 4s linear -2s paused` в `--screenshot` рисуется с `opacity:1` (конец), `getComputedStyle().opacity` — `1`; для `0s paused` — тоже `1` (начало не применено).
