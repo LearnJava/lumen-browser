@@ -1,4 +1,4 @@
-# BUG-1487 — прогрев `preload`/`modulepreload`/`prefetch` идёт в обход CSP
+# BUG-1491 — прогрев `preload`/`modulepreload`/`prefetch` идёт в обход CSP
 
 **Статус:** OPEN
 **Заведён:** 2026-09-26 (P3, по ходу [BUG-1185](BUG-1185-FIXED.md); по коду, живьём не снят).

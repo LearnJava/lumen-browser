@@ -55,3 +55,66 @@
             assert!(canon("text-transform", bad).is_none(), "{bad:?} должно быть отклонено");
         }
     }
+
+/// BUG-1329 — языковые правила регистра `text-transform` (CSS Text L3 §2.1).
+mod case_lang {
+    use crate::style::{transform_text_by_value as t, CaseLang, TextTransform};
+
+    #[test]
+    fn lang_tags_are_classified_by_primary_subtag() {
+        assert_eq!(CaseLang::from_tag("tr"), CaseLang::Turkic);
+        assert_eq!(CaseLang::from_tag("AZ-Latn"), CaseLang::Turkic);
+        assert_eq!(CaseLang::from_tag("nl_BE"), CaseLang::Dutch);
+        assert_eq!(CaseLang::from_tag("lt"), CaseLang::Lithuanian);
+        assert_eq!(CaseLang::from_tag("ga-IE"), CaseLang::Irish);
+        assert_eq!(CaseLang::from_tag("en"), CaseLang::Other);
+        assert_eq!(CaseLang::from_tag(""), CaseLang::Other);
+        assert_eq!(CaseLang::from_tag("trx"), CaseLang::Other);
+    }
+
+    #[test]
+    fn turkic_upper_and_lower() {
+        assert_eq!(t("uppercase", "tr", "i\u{131}I"), "\u{130}II");
+        assert_eq!(t("lowercase", "az", "\u{130}I"), "i\u{131}");
+        assert_eq!(t("lowercase", "tr", "I\u{307}"), "i");
+        assert_eq!(t("capitalize", "tr", "istanbul"), "\u{130}stanbul");
+        assert_eq!(t("uppercase", "en", "i\u{131}"), "II");
+        assert_eq!(t("lowercase", "en", "\u{130}"), "i\u{307}");
+    }
+
+    #[test]
+    fn lithuanian_dots() {
+        assert_eq!(t("uppercase", "lt", "i\u{307}\u{300}"), "I\u{300}");
+        assert_eq!(t("uppercase", "lt", "\u{12F}\u{307}"), "\u{12E}");
+        assert_eq!(t("uppercase", "lt", "x\u{307}"), "X\u{307}");
+        assert_eq!(t("lowercase", "lt", "\u{CC}"), "i\u{307}\u{300}");
+        assert_eq!(t("lowercase", "lt", "J\u{301}"), "j\u{307}\u{301}");
+        assert_eq!(t("lowercase", "lt", "I"), "i");
+    }
+
+    #[test]
+    fn dutch_ij_and_irish_prefixes() {
+        assert_eq!(t("capitalize", "nl", "ijsland ijs"), "IJsland IJs");
+        assert_eq!(t("capitalize", "nl", "Ijsland"), "IJsland");
+        assert_eq!(t("capitalize", "en", "ijsland"), "Ijsland");
+        assert_eq!(t("uppercase", "ga", "tAthair nAthair na"), "tATHAIR nATHAIR NA");
+        assert_eq!(t("capitalize", "ga", "tAthair tathair"), "tAthair Tathair");
+    }
+
+    #[test]
+    fn capitalize_word_boundaries_follow_uax29() {
+        assert_eq!(t("capitalize", "en", "john's apple foo_bar"), "John's Apple Foo_bar");
+        assert_eq!(t("capitalize", "en", "foo-bar"), "Foo-Bar");
+        assert_eq!(t("capitalize", "en", "(hello) \"world\""), "(Hello) \"World\"");
+        assert_eq!(t("capitalize", "en", "3.14 a.b l\u{2019}eau"), "3.14 A.b L\u{2019}eau");
+        assert_eq!(t("capitalize", "en", "1st ab12 x"), "1st Ab12 X");
+        assert_eq!(t("capitalize", "en", ""), "");
+    }
+
+    #[test]
+    fn combined_with_full_width_and_invalid_value() {
+        assert_eq!(t("uppercase full-width", "en", "ab"), "\u{FF21}\u{FF22}");
+        assert_eq!(t("bogus", "tr", "i"), "i");
+        assert_eq!(TextTransform::Uppercase.apply("i"), "I");
+    }
+}

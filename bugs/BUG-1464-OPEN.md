@@ -16,3 +16,7 @@ WPT-RUN-14 срез 10, `css/css-text/text-transform/text-transform-full-size-ka
 ## Что делать
 
 Перевести смещения в `range_text_filtered` (и соседние места, где Range режет текстовый узел) на UTF-16 → байты; для `toString()` передавать из layout функцию «преобразованный текст узла» (`TextTransformExtra::apply` + регистр) и применять её к вырезанному фрагменту. Затем снять `FAIL` в `tests/wpt/metadata/css/css-text/text-transform/text-transform-full-size-kana-009.html.ini` и `math/text-transform-math-auto-003.html.ini`.
+
+## Обновление (BUG-1329)
+
+[BUG-1329](BUG-1329-FIXED.md) добавил в шим `Selection.toString()` обход покрытых текстовых узлов: если у одного из них `text-transform` не `none`, фрагменты режутся по UTF-16 и преобразуются тем же кодом, что раскладка (WPT `upperlower-107`). Остаётся: путь без `text-transform` (`range_text_filtered` — байты UTF-8), выделение в `kana-009`/`math-auto-003` не проверялось.

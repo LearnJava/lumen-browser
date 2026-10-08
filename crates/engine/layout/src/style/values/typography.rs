@@ -451,9 +451,9 @@ pub enum TextTransform {
     None,
     Uppercase,
     Lowercase,
-    /// `capitalize`: первая буква каждого «слова» (по spec — character с
-    /// Unicode property Letter) в верхний регистр. Phase 0: упрощённо —
-    /// первая буква каждого whitespace-разделённого токена.
+    /// `capitalize`: первая буква каждого слова в верхний регистр. Слово — по упрощённому
+    /// UAX #29 (`is_word_start`): `john's`, `foo_bar` — одно слово, `foo-bar` — два.
+    /// Состояние не переходит через границу текстового узла.
     Capitalize,
 }
 
@@ -514,7 +514,7 @@ impl TextTransformExtra {
     /// Применяет `text-transform` целиком: регистр (`case`), затем `full-width` и
     /// `full-size-kana`; `math-auto` — курсив только для текста из одного символа
     /// (CSS Text L4: значение рассчитано на содержимое `<mi>`).
-    pub fn apply(self, case: TextTransform, s: &str) -> String {
+    pub fn apply(self, case: TextTransform, lang: CaseLang, s: &str) -> String {
         if self.math_auto {
             let mut chars = s.chars();
             return match (chars.next(), chars.next()) {
@@ -522,7 +522,7 @@ impl TextTransformExtra {
                 _ => s.to_string(),
             };
         }
-        let cased = case.apply(s);
+        let cased = case.apply_lang(s, lang);
         if !self.full_width && !self.full_size_kana {
             return cased;
         }
@@ -574,35 +574,220 @@ pub struct TextCssomExtra {
     pub indent_hanging: bool,
     /// `each-line` из `text-indent`.
     pub indent_each_line: bool,
+    /// Язык элемента для регистра `text-transform` (`lang`/`xml:lang`, наследуется).
+    pub case_lang: CaseLang,
     /// `tab-size: <number>` — число пробелов, как записано. `None` — задана `<length>`
     /// (тогда ширина табуляции — `ComputedStyle::tab_size` в px).
     pub tab_size_number: Option<f32>,
 }
 
+impl TextCssomExtra {
+    /// `text-transform` над текстом элемента: регистр, `full-width`, `full-size-kana`
+    /// и язык одним вызовом — единая точка для раскладки.
+    pub fn transform_text(&self, case: TextTransform, s: &str) -> String {
+        self.transform.apply(case, self.case_lang, s)
+    }
+}
+
 impl TextTransform {
-    /// Применяет преобразование к строке. Не аллоцирует, если transform = None.
+    /// Применяет преобразование к строке без языковой настройки.
     pub fn apply(self, s: &str) -> String {
+        self.apply_lang(s, CaseLang::Other)
+    }
+
+    /// Применяет преобразование с учётом языка элемента (CSS Text L3 §2.1,
+    /// Unicode SpecialCasing.txt): турецкий/азербайджанский `i`, литовские
+    /// точки над `i`/`j`/`į`, ирландские `n`/`t`-приставки, нидерландское `ij`.
+    pub fn apply_lang(self, s: &str, lang: CaseLang) -> String {
         match self {
             TextTransform::None => s.to_string(),
-            TextTransform::Uppercase => s.to_uppercase(),
-            TextTransform::Lowercase => s.to_lowercase(),
+            TextTransform::Uppercase => case_upper(s, lang),
+            TextTransform::Lowercase => case_lower(s, lang),
             TextTransform::Capitalize => {
+                let chars: Vec<char> = s.chars().collect();
                 let mut out = String::with_capacity(s.len());
-                let mut at_word_start = true;
-                for ch in s.chars() {
-                    if ch.is_whitespace() {
+                let mut i = 0;
+                while i < chars.len() {
+                    let ch = chars[i];
+                    let next = chars.get(i + 1).copied();
+                    if !is_word_start(&chars, i) {
                         out.push(ch);
-                        at_word_start = true;
-                    } else if at_word_start {
-                        out.extend(ch.to_uppercase());
-                        at_word_start = false;
+                    } else if lang == CaseLang::Dutch
+                        && matches!(ch, 'i' | 'I')
+                        && matches!(next, Some('j' | 'J'))
+                    {
+                        // Нидерландский «ij» в начале слова — единая лигатура: `IJ`.
+                        out.push_str("IJ");
+                        i += 1;
+                    } else if lang == CaseLang::Irish
+                        && matches!(ch, 'n' | 't')
+                        && next.is_some_and(is_irish_upper_vowel)
+                    {
+                        // `tAthair`-подобные приставки остаются строчными.
+                        out.push(ch);
                     } else {
-                        out.push(ch);
+                        push_upper(&mut out, ch, lang);
                     }
+                    i += 1;
                 }
                 out
             }
         }
+    }
+}
+
+/// Буква или цифра, начинающая слово для `capitalize` (UAX #29, упрощённо): предыдущий символ —
+/// не часть слова (буква, цифра, `_`), и это не «серединный» знак между двумя символами слова
+/// (`'`, `’`, `.`, `:`, `·` — `john's`, `3.14`). Дефис слово прерывает: `foo-bar` → `Foo-Bar`.
+fn is_word_start(chars: &[char], i: usize) -> bool {
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+    if !chars[i].is_alphanumeric() {
+        return false;
+    }
+    let Some(prev) = i.checked_sub(1).map(|p| chars[p]) else {
+        return true;
+    };
+    if is_word_char(prev) {
+        return false;
+    }
+    let mid = matches!(prev, '\'' | '\u{2019}' | '.' | ':' | '\u{B7}');
+    !(mid && i >= 2 && is_word_char(chars[i - 2]))
+}
+
+/// Язык, от которого зависят правила регистра `text-transform` (CSS Text L3 §2.1).
+/// Остальные языки используют обычное Unicode-преобразование.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CaseLang {
+    #[default]
+    Other,
+    /// `tr`, `az`: `i`↔`İ`, `ı`↔`I`.
+    Turkic,
+    /// `lt`: точка над `i`/`j`/`į` сохраняется при lowercase под акцентом и снимается при uppercase.
+    Lithuanian,
+    /// `ga`: строчные `n`/`t` перед заглавной гласной остаются строчными.
+    Irish,
+    /// `nl`: `ij` в начале слова при `capitalize` даёт `IJ`.
+    Dutch,
+}
+
+impl CaseLang {
+    /// Классифицирует BCP 47 тег (`lang`/`xml:lang`) по первому подтегу, без учёта регистра.
+    /// Пустой тег («язык явно неизвестен») — `Other`.
+    pub fn from_tag(tag: &str) -> Self {
+        let primary = tag.split(['-', '_']).next().unwrap_or("");
+        if primary.eq_ignore_ascii_case("tr") || primary.eq_ignore_ascii_case("az") {
+            CaseLang::Turkic
+        } else if primary.eq_ignore_ascii_case("lt") {
+            CaseLang::Lithuanian
+        } else if primary.eq_ignore_ascii_case("ga") {
+            CaseLang::Irish
+        } else if primary.eq_ignore_ascii_case("nl") {
+            CaseLang::Dutch
+        } else {
+            CaseLang::Other
+        }
+    }
+}
+
+fn is_irish_upper_vowel(c: char) -> bool {
+    matches!(c, 'A' | 'E' | 'I' | 'O' | 'U' | '\u{C1}' | '\u{C9}' | '\u{CD}' | '\u{D3}' | '\u{DA}')
+}
+
+/// Буква с «мягкой точкой» (Unicode `Soft_Dotted`, подмножество, нужное для `lt`).
+fn is_soft_dotted(c: char) -> bool {
+    matches!(c, 'i' | 'j' | '\u{12F}' | '\u{268}' | '\u{249}')
+}
+
+fn push_upper(out: &mut String, ch: char, lang: CaseLang) {
+    if lang == CaseLang::Turkic && ch == 'i' {
+        out.push('\u{130}');
+    } else {
+        out.extend(ch.to_uppercase());
+    }
+}
+
+fn case_upper(s: &str, lang: CaseLang) -> String {
+    match lang {
+        CaseLang::Other | CaseLang::Dutch => s.to_uppercase(),
+        CaseLang::Turkic => {
+            let mut out = String::with_capacity(s.len());
+            for ch in s.chars() {
+                push_upper(&mut out, ch, lang);
+            }
+            out
+        }
+        CaseLang::Lithuanian => {
+            // SpecialCasing: U+0307 после `Soft_Dotted` при uppercase удаляется.
+            let mut out = String::with_capacity(s.len());
+            let mut prev_soft_dotted = false;
+            for ch in s.chars() {
+                if ch == '\u{307}' && prev_soft_dotted {
+                    continue;
+                }
+                prev_soft_dotted = is_soft_dotted(ch);
+                out.extend(ch.to_uppercase());
+            }
+            out
+        }
+        CaseLang::Irish => {
+            let mut out = String::with_capacity(s.len());
+            let mut at_word_start = true;
+            let mut chars = s.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if at_word_start
+                    && matches!(ch, 'n' | 't')
+                    && chars.peek().copied().is_some_and(is_irish_upper_vowel)
+                {
+                    out.push(ch);
+                } else {
+                    out.extend(ch.to_uppercase());
+                }
+                at_word_start = !ch.is_alphanumeric();
+            }
+            out
+        }
+    }
+}
+
+fn case_lower(s: &str, lang: CaseLang) -> String {
+    match lang {
+        CaseLang::Turkic => {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.chars().peekable();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    // `I` + U+0307 → `i` (точка поглощается); одиночная `I` → `ı`.
+                    'I' if chars.peek() == Some(&'\u{307}') => {
+                        chars.next();
+                        out.push('i');
+                    }
+                    'I' => out.push('\u{131}'),
+                    '\u{130}' => out.push('i'),
+                    _ => out.extend(ch.to_lowercase()),
+                }
+            }
+            out
+        }
+        CaseLang::Lithuanian => {
+            // SpecialCasing: `I`/`J`/`Į` под акцентом сохраняют точку над собой.
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.chars().peekable();
+            while let Some(ch) = chars.next() {
+                let accent_next = matches!(chars.peek(), Some('\u{300}' | '\u{301}' | '\u{303}'));
+                match ch {
+                    'I' | 'J' | '\u{12E}' if accent_next => {
+                        out.extend(ch.to_lowercase());
+                        out.push('\u{307}');
+                    }
+                    '\u{CC}' => out.push_str("i\u{307}\u{300}"),
+                    '\u{CD}' => out.push_str("i\u{307}\u{301}"),
+                    '\u{128}' => out.push_str("i\u{307}\u{303}"),
+                    _ => out.extend(ch.to_lowercase()),
+                }
+            }
+            out
+        }
+        _ => s.to_lowercase(),
     }
 }
 

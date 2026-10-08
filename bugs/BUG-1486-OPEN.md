@@ -1,33 +1,15 @@
-# BUG-1486 — `<link rel=stylesheet nonce>` блокируется под `style-src 'nonce-…'`
+# BUG-1486 — `text-transform`: греческая огласовка (`lang=el`) и контекст `capitalize` между текстовыми узлами
 
 **Статус:** OPEN
-**Заведён:** 2026-09-26 (P3, по ходу [BUG-1185](BUG-1185-FIXED.md); свидетель — свой сервер).
-**Область:** shell (`crates/shell/src/stylesheets.rs:141` — гейт `<link rel=stylesheet>` зовёт
-`csp_enforce::style_src_blocked`, а тот спрашивает URL-only `fetch_directive_allows`; то же на
-`:400`, `:535` и в событиях `page_pipeline.rs:1682`, `frames.rs:2561`).
+**Заведён:** 2026-10-08 (P6, остаток [BUG-1329](BUG-1329-FIXED.md))
+**Область:** layout/js (`crates/engine/layout/src/style/values/typography.rs` — `case_upper`, `TextTransform::apply_lang`; `crates/engine/layout/src/box_tree/inline_build.rs` — каждый текстовый узел преобразуется отдельно)
 
 ## Симптом
 
-`Content-Security-Policy: script-src 'nonce-k'; style-src 'nonce-k'`,
-`<link nonce=k rel=stylesheet href=/red4.css><div id=a>A</div>`, лист `#a{color:rgb(255,0,0)}`.
+1. `lang=el`, `uppercase`: слова, целиком переведённые в верхний регистр, теряют тонос (`καλημέρα αύριο` → `ΚΑΛΗΜΕΡΑ ΑΥΡΙΟ`), `ΰ`/`ΐ` теряют тонос и сохраняют диалитику, дифтонг с тоносом на первом символе даёт диалитику на втором (`ευφυΐα Νεράιδα` → `ΕΥΦΥΪΑ ΝΕΡΑΪΔΑ`); дизъюнктивная `ή` сохраняет тонос (`ήσουν ή εγώ` → `ΗΣΟΥΝ Ή ΕΓΩ`). `capitalize`: ударный гласный первого слога сохраняет тонос (`όμηρος` → `Όμηρος`). Сейчас греческий идёт по обычному Unicode: тонос остаётся (`ΚΑΛΗΜΈΡΑ`). WPT `text-transform-tailoring-002/002a/003/004/005`.
+2. `capitalize` не видит символ до границы текстового узла: `a<span style="text-transform:capitalize">b</span>c` даёт `B`, ожидается `b` (слово началось в предыдущем узле). Состояние `is_word_start` живёт внутри одного вызова. Нужен контекст «предыдущий символ» из соседнего сегмента — но пробельный узел между inline-элементами (`<b>a</b> <i>b</i>`) в `collect_inline_segments` пропускается и контекста не оставляет, так что простое «последний символ предыдущего сегмента» ломает обычный случай. WPT `text-transform-capitalize-036` («not starting at word boundary»); `innerText` повторяет раскладку.
+3. Не разобрано: `capitalize-*` reftest'ы `thick` (6 из 7 id), остальные `text-transform-upperlower-*` (кроме `-039…-044`, `-107`) — см. [`docs/wpt-vendor-notes/css.md`](../docs/wpt-vendor-notes/css.md). Ирландское правило `ga` (`tAthair`) реализовано по тексту CSS Text L3 §2.1, WPT-теста на него в наборе нет.
 
-| | Lumen dev-release | Chrome 153 |
-|---|---|---|
-| `getComputedStyle(a).color` | `rgb(0, 0, 0)` | `rgb(255, 0, 0)` |
+## Что делать
 
-Скрипт с тем же nonce (`<script nonce=k src=/s4.js>`) исполняется: гейт скриптов с BUG-1124 идёт
-через `script_element_fetch_allows`. Для `<link>` nonce элемента не передаётся вовсе, и
-nonce-only список читается как «ни один источник не подходит». Проверка с nonce уже есть —
-`CspPolicy::style_element_fetch_allows` (BUG-1175, пока зовётся только из JS-гейта
-`element_src_gate` и раннего прогрева BUG-1185).
-
-## Репро
-
-Сервер `target/bug1183/server.py` (worktree `p3-work`), страница `/p11.html`; проба
-`target/bug1183/lumen_probe.py`.
-
-## Что сделать
-
-В окончательном гейте `<link rel=stylesheet>` читать `nonce` элемента и спрашивать
-`style_element_fetch_allows`; события `securitypolicyviolation` — тем же предикатом.
-Критерий: на `/p11.html` `a` красный, события нет; без nonce — чёрный и одно событие.
+Греческая таблица: тонос/диалитика по правилам «Modern Greek uppercase» (CLDR `el-Upper`), с признаком слова целиком в верхнем регистре и исключением для `ή`; передавать в `case_upper` соседей слова. Для п. 2 — «предыдущий символ» с учётом схлопнутого пробела между сегментами (в раскладке и в `_lumen_rt_*`).

@@ -8,7 +8,7 @@
 //! (`_lumen_css_canonical_text`), каскад ими не пользуется.
 
 use super::length::{canonical_specified_length as canonical_length, split_top_level_ws};
-use super::typography::TextTransformExtra;
+use super::typography::{CaseLang, TextTransformExtra};
 
 /// Каноническая запись значения `value` свойства `prop` либо `None`, если оно не соответствует
 /// грамматике (присваивание тогда игнорируется). `None` и для свойства, которого здесь нет.
@@ -33,6 +33,17 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
             Some(extra.serialize(case))
         }
         _ => None,
+    }
+}
+
+/// `text-transform` над `text` по тому же коду, что и раскладка: `value` — computed-запись
+/// свойства (`capitalize`, `uppercase full-width`, …), `lang` — `lang`/`xml:lang` элемента.
+/// Недопустимое `value` оставляет текст как есть. Нужна `innerText`/выделению, чтобы они
+/// совпадали с нарисованным текстом (BUG-1329).
+pub fn transform_text_by_value(value: &str, lang: &str, text: &str) -> String {
+    match TextTransformExtra::parse(value.trim()) {
+        Some((case, extra)) => extra.apply(case, CaseLang::from_tag(lang), text),
+        None => text.to_string(),
     }
 }
 

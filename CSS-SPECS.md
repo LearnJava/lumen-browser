@@ -260,7 +260,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `text-align` | ✅ | start/end/left/center/right; LTR/RTL |
 | `text-indent` | ✅ | |
-| `text-transform` | ✅ | none/uppercase/lowercase/capitalize |
+| `text-transform` | ✅ | none/uppercase/lowercase/capitalize, full-width, full-size-kana, math-auto; регистр по `lang` (tr/az, lt, nl, ga); capitalize — слова по UAX #29 (греческий `el` — BUG-1486) |
 | `white-space` | ✅ | normal/nowrap/pre/pre-wrap/pre-line/break-spaces — UA default for &lt;pre&gt;; L4 shorthand над white-space-collapse + text-wrap-mode (p4-white-space-collapse 2026-07-04) |
 | `white-space-collapse` | ✅ | collapse/preserve/preserve-breaks/preserve-spaces/break-spaces (CSS Text L4 §3.1); longhand; пересчитывает эффективный white-space через WhiteSpace::combine (preserve-spaces ≈ preserve, Phase 0) (p4-white-space-collapse 2026-07-04) |
 | `word-spacing` / `letter-spacing` | ✅ | |

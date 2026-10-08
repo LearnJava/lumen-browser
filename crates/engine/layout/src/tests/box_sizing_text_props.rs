@@ -1324,6 +1324,31 @@ use super::*;
         assert_eq!(first_inline_text(&root), "Привет Мир");
     }
 
+    // BUG-1329: язык элемента (`lang`, `xml:lang`, унаследованный) выбирает правила регистра.
+    #[test]
+    fn text_transform_lang_tailors_layout_segment() {
+        let css = "p { text-transform: uppercase; }";
+        let root = lay("<p lang=\"tr\">istanbul</p>", css);
+        assert_eq!(first_inline_text(&root), "\u{130}STANBUL");
+        let root = lay("<p lang=\"en\">istanbul</p>", css);
+        assert_eq!(first_inline_text(&root), "ISTANBUL");
+        let root = lay("<p xml:lang=\"az\">i</p>", css);
+        assert_eq!(first_inline_text(&root), "\u{130}");
+        let root = lay("<p lang=\"nl\">ijsland</p>", "p { text-transform: capitalize; }");
+        assert_eq!(first_inline_text(&root), "IJsland");
+    }
+
+    #[test]
+    fn text_transform_lang_inherits_from_ancestor_and_resets() {
+        let css = "p { text-transform: uppercase; }";
+        let root = lay("<div lang=\"tr\"><p>i</p></div>", css);
+        let p = first_element_child(first_element_child(&root));
+        assert_eq!(p.style.text_extra.case_lang, crate::style::CaseLang::Turkic);
+        let root = lay("<div lang=\"tr\"><p lang=\"\">i</p></div>", css);
+        let p = first_element_child(first_element_child(&root));
+        assert_eq!(p.style.text_extra.case_lang, crate::style::CaseLang::Other);
+    }
+
     #[test]
     fn text_transform_none_default() {
         let root = lay("<p>Hello WORLD</p>", "");
