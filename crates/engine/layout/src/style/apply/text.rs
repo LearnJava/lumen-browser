@@ -449,13 +449,11 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "text-overflow" => {
-            // CSS UI L4: clip | ellipsis. <string> (custom marker) и
-            // two-value формы не поддерживаем в Phase 0.
-            style.text_overflow = match val.split_whitespace().next() {
-                Some("clip") => TextOverflow::Clip,
-                Some("ellipsis") => TextOverflow::Ellipsis,
-                _ => style.text_overflow,
-            };
+            // CSS UI L4 §6.1: [ clip | ellipsis | <string> ]{1,2}.
+            if let Some((left, right)) = TextOverflow::parse_pair(val) {
+                style.text_overflow = left;
+                style.text_overflow_right = right;
+            }
         }
         "text-size-adjust" | "-webkit-text-size-adjust" => {
             // CSS Text Size Adjustment L1 §2: auto | none | <percentage [0,∞]>. BUG-513.

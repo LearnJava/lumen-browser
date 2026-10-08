@@ -402,6 +402,8 @@ pub struct ComputedStyle {
     pub scroll_target_group: ScrollTargetGroup,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
+    /// Второе значение `text-overflow` (правая сторона строки); одно значение задаёт обе.
+    pub text_overflow_right: TextOverflow,
     /// CSS Text Size Adjustment L1 §2 — `text-size-adjust` / legacy alias
     /// `-webkit-text-size-adjust`. Наследуется. Initial `Auto`. BUG-513.
     /// Phase 0: parse + store + interpolate — нет мобильного пайплайна
@@ -1341,6 +1343,7 @@ impl ComputedStyle {
             scroll_marker_group: None,
             scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
+            text_overflow_right: TextOverflow::Clip,
             text_size_adjust: TextSizeAdjust::default(),
             opacity: 1.0,
             outline_width: 3.0,
@@ -1734,6 +1737,7 @@ impl ComputedStyle {
             scroll_marker_group: None,
             scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
+            text_overflow_right: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 3.0,
             outline_style: OutlineStyle::None,

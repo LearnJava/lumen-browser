@@ -251,11 +251,73 @@ pub enum Cursor {
 /// требует overflow != Visible (обычно `hidden`/`clip`) И отсутствие
 /// переноса (white-space: nowrap или overflow на oneline). Без этих
 /// условий не имеет эффекта.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum TextOverflow {
     #[default]
     Clip,
     Ellipsis,
+    /// `text-overflow: "<string>"` — своя метка вместо «…».
+    Str(std::sync::Arc<str>),
+}
+
+impl TextOverflow {
+    /// Метка, которой заменяется обрезанный конец строки: «…» для `ellipsis`,
+    /// строка для `<string>`, `None` для `clip`.
+    pub fn marker(&self) -> Option<&str> {
+        match self {
+            TextOverflow::Clip => None,
+            TextOverflow::Ellipsis => Some("\u{2026}"),
+            TextOverflow::Str(s) => Some(s),
+        }
+    }
+
+    /// CSS UI L4 §6.1: `[ clip | ellipsis | <string> ]{1,2}` — (левая, правая) сторона
+    /// строки; одно значение задаёт обе. `None` — значение не разобрано.
+    pub fn parse_pair(val: &str) -> Option<(TextOverflow, TextOverflow)> {
+        let mut items: Vec<TextOverflow> = Vec::new();
+        let mut rest = val.trim();
+        while !rest.is_empty() {
+            let tail = if let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                // Закрывающая кавычка — первая неэкранированная.
+                let mut escaped = false;
+                let close = rest.char_indices().skip(1).find_map(|(i, c)| {
+                    let hit = !escaped && c == quote;
+                    escaped = !escaped && c == '\\';
+                    hit.then_some(i)
+                })?;
+                let text = crate::style::parse::counters::parse_css_string_sequence(&rest[..=close]).pop()?;
+                items.push(TextOverflow::Str(text.into()));
+                &rest[close + 1..]
+            } else {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                items.push(match rest[..end].to_ascii_lowercase().as_str() {
+                    "clip" => TextOverflow::Clip,
+                    "ellipsis" => TextOverflow::Ellipsis,
+                    _ => return None,
+                });
+                &rest[end..]
+            };
+            rest = tail.trim_start();
+        }
+        let mut it = items.into_iter();
+        match (it.next()?, it.next(), it.next()) {
+            (a, None, None) => Some((a.clone(), a)),
+            (a, Some(b), None) => Some((a, b)),
+            _ => None,
+        }
+    }
+
+    /// Значение для `getComputedStyle`: `<string>` в двойных кавычках.
+    pub fn to_css(&self) -> String {
+        match self {
+            TextOverflow::Clip => "clip".into(),
+            TextOverflow::Ellipsis => "ellipsis".into(),
+            TextOverflow::Str(s) => {
+                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("\"{escaped}\"")
+            }
+        }
+    }
 }
 
 /// WHATWG Compat §2.1 — `-webkit-box-orient`. Legacy flexbox axis, needed

@@ -45,7 +45,7 @@ pub(crate) fn eligible(
         && s.text_wrap_mode != TextWrapMode::Nowrap
         && matches!(s.text_wrap_style, TextWrapStyle::Auto | TextWrapStyle::Stable)
         && s.line_clamp.is_none_or(|n| n == 0)
-        && s.text_overflow != TextOverflow::Ellipsis
+        && s.text_overflow_right.marker().is_none()
 }
 
 /// Right extent of a wrapped line (frags ascend in x).

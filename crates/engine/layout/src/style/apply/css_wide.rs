@@ -840,7 +840,9 @@ fn apply_css_wide_keyword_with(
             style.overflow_inline = if inh_only_inherit { inherited.overflow_inline } else { init.overflow_inline };
         }
         "text-overflow" => {
-            style.text_overflow = if inh_only_inherit { inherited.text_overflow } else { init.text_overflow };
+            let src = if inh_only_inherit { inherited } else { init };
+            style.text_overflow = src.text_overflow.clone();
+            style.text_overflow_right = src.text_overflow_right.clone();
         }
         "scroll-marker-group" => {
             style.scroll_marker_group = if inh_only_inherit { inherited.scroll_marker_group } else { init.scroll_marker_group };
