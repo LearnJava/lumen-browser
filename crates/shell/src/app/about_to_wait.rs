@@ -1426,7 +1426,17 @@ impl Lumen {
         // stays visible while the new tab loads.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
-            let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
+            // BUG-1268: while an automation-driven navigation is in flight the
+            // popup requests are left in the runtime: the document that queued
+            // them is either about to be replaced (its requests die with it) or
+            // still loading, and a popup opened now takes the foreground, so the
+            // pending `wait` would report the popup's load error (or its
+            // readiness) as the verdict of the navigation it was waiting for.
+            let popups = if self.automation_tab.is_some() && self.nav_start.is_some() {
+                Vec::new()
+            } else {
+                self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default()
+            };
             // BUG-1212: read ONCE, before the loop below can switch tabs.
             // Every popup drained here was queued by the SAME synchronous
             // script tick on the SAME calling tab — two `window.open()`
@@ -1454,7 +1464,7 @@ impl Lumen {
                         None => PageSource::AboutBlank,
                     })
                 } else if url.is_empty() {
-                    Ok(PageSource::url("about:blank"))
+                    Ok(PageSource::AboutBlank)
                 } else if let Some((upgraded, uir)) = self.window_open_navigate_to_gate(&url) {
                     resolve_js_navigation(&upgraded, &self.source).map(|s| s.with_uir_header(uir))
                 } else {
