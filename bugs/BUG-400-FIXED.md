@@ -46,7 +46,7 @@ interface Performance : EventTarget {
 Timing L2 §4.4), ни `instanceof Performance`, ни самого интерфейсного
 объекта `window.Performance`. Тот же класс дефекта, что
 [BUG-367](BUG-367-FIXED.md) / [BUG-386](BUG-386-FIXED.md) /
-[BUG-394](BUG-394-FIXED.md) / [BUG-664](BUG-664-OPEN.md) /
+[BUG-394](BUG-394-FIXED.md) / [BUG-664](BUG-664-FIXED.md) /
 [BUG-668](BUG-668-FIXED.md) — «WebIDL-форма объекта собрана присваиваниями
 вместо интерфейса».
 
@@ -143,12 +143,12 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
   scope целиком: тот же API, другой файл (`worker.rs`). Теперь у него
   появился готовый образец — прототип `Performance` можно поднять в
   воркер-глобал целиком, а не переписывать литерал второй раз.
-* [BUG-696](BUG-696-OPEN.md) — `mark()`/`measure()` не валидируют
+* [BUG-696](BUG-696-FIXED.md) — `mark()`/`measure()` не валидируют
   аргументы (User Timing L3 §3.1/§3.3). Соседний дефект тех же методов,
   которых этот фикс коснулся только переносом на прототип; поведение
   сохранено дословно.
 * `PerformanceObserver` (соседний класс той же секции) — по спеке
   `EventTarget` не требует, не путать.
-* Тот же класс «не-`EventTarget`»: [BUG-664](BUG-664-OPEN.md)
+* Тот же класс «не-`EventTarget`»: [BUG-664](BUG-664-FIXED.md)
   (`navigator.connection`), [BUG-668](BUG-668-FIXED.md)
   (`screen.orientation`).

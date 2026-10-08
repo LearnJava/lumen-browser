@@ -23,6 +23,10 @@ fn fmt_len(l: &Length) -> String {
         Length::Rem(v) => format!("{v:.2}rem"),
         Length::Ch(v) => format!("{v:.2}ch"),
         Length::Ex(v) => format!("{v:.2}ex"),
+        Length::Lh(v) => format!("{v:.2}lh"),
+        Length::Rlh(v) => format!("{v:.2}rlh"),
+        Length::Rex(v) => format!("{v:.2}rex"),
+        Length::Rch(v) => format!("{v:.2}rch"),
         Length::Percent(v) => format!("{v:.2}%"),
         Length::Vh(v) => format!("{v:.2}vh"),
         Length::Vw(v) => format!("{v:.2}vw"),
@@ -39,6 +43,7 @@ fn fmt_len(l: &Length) -> String {
         Length::MaxContent => "max-content".to_string(),
         Length::FitContent(None) => "fit-content".to_string(),
         Length::FitContent(Some(inner)) => format!("fit-content({})", fmt_len(inner)),
+        Length::Stretch => "stretch".to_string(),
     }
 }
 
@@ -181,7 +186,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Position::Fixed => out.push_str(" position=fixed"),
         Position::Sticky => out.push_str(" position=sticky"),
     }
-    match s.display {
+    match s.legacy_box_display.unwrap_or(s.display) {
         Display::Block => {}
         Display::Inline => out.push_str(" display=inline"),
         Display::None => out.push_str(" display=none"),
@@ -258,10 +263,11 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     match s.text_align {
         TextAlign::Left => {}
-        TextAlign::Start => {}
+        TextAlign::Start | TextAlign::MatchParent => {}
         TextAlign::End => out.push_str(" text-align=end"),
         TextAlign::Center => out.push_str(" text-align=center"),
         TextAlign::Right => out.push_str(" text-align=right"),
+        TextAlign::Justify => out.push_str(" text-align=justify"),
     }
     if matches!(s.direction, Direction::Rtl) {
         out.push_str(" direction=rtl");
@@ -281,6 +287,11 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
             BorderStyle::Dashed => "dashed",
             BorderStyle::Dotted => "dotted",
             BorderStyle::Double => "double",
+            BorderStyle::Hidden => "hidden",
+            BorderStyle::Groove => "groove",
+            BorderStyle::Ridge => "ridge",
+            BorderStyle::Inset => "inset",
+            BorderStyle::Outset => "outset",
         };
         let _ = write!(
             out,

@@ -41,7 +41,7 @@ impl Lumen {
     /// Used by the wheel handler to route scroll events to overflow containers.
     pub(crate) fn update_scroll_containers(&mut self) {
         match &self.layout_box {
-            Some(lb) => self.scroll_containers = collect_scroll_containers(lb),
+            Some(lb) => self.scroll_containers = lumen_layout::collect_page_scroll_containers(lb),
             None => self.scroll_containers.clear(),
         }
     }
@@ -62,37 +62,36 @@ impl Lumen {
         let x_css = (cursor.x as f32) / dpr + self.scroll_x;
         let y_css = (cursor.y as f32) / dpr + self.scroll_y;
 
-        let Some(target) = find_scroll_container_at(&self.scroll_containers, x_css, y_css) else {
+        // CSS Overscroll Behavior L1 §3 — ход по цепочке скролла от самого
+        // глубокого контейнера наружу: на границе с `auto` дельта уходит к
+        // охватывающему контейнеру, `contain`/`none` глушат жест на месте,
+        // а если цепочка исчерпана — вызывающий крутит фрейм/страницу.
+        let Some(chain) = lumen_layout::resolve_scroll_chain_target(
+            &self.scroll_containers, x_css, y_css, dx, dy,
+        ) else {
             return false;
         };
-        let target_nid = target.index() as u32;
-
-        // Find current position and compute new target.
-        let current = self.scroll_containers.iter()
-            .find(|c| c.node == target)
-            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
-                      c.clip_rect.width, c.clip_rect.height,
-                      c.overscroll_behavior_x, c.overscroll_behavior_y));
-        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
-
-        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
-        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
-
-        // CSS Overscroll Behavior L1 §3 — scroll-chain stop. If the container is
-        // at its boundary on every axis and `overscroll-behavior` permits it, let
-        // the residual delta propagate to the page; otherwise the chain stops
-        // here (event consumed even if the container did not move).
-        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
-        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
-        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
-            return false;
-        }
-        if !moved_x && !moved_y {
-            // Boundary reached but propagation is blocked (contain/none) — consume
-            // the gesture without a relayout/redraw.
+        if !chain.moved {
+            // Граница достигнута, но распространение запрещено (contain/none) —
+            // гасим жест без relayout/redraw.
             return true;
         }
+        self.apply_container_scroll(chain.node, chain.new_x, chain.new_y)
+    }
 
+    /// Ставит контейнеру `target` смещение `(new_x, new_y)`: правит раскладку и
+    /// готовый display list на месте и сообщает странице (`scroll`/`scrollend`).
+    /// Общий хвост колеса потока браузера и усыновления смещения, которое вело
+    /// колесо на рендер-потоке (ADR-032, срез 4). `false` — смещение не
+    /// изменилось или контейнера в раскладке нет.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn apply_container_scroll(
+        &mut self,
+        target: lumen_dom::NodeId,
+        new_x: f32,
+        new_y: f32,
+    ) -> bool {
+        let target_nid = target.index() as u32;
         // Borrow layout_box mutably after releasing the immutable scroll_containers borrow.
         let scrolled = if let Some(lb) = self.layout_box.as_mut() {
             set_scroll_position(lb, target, new_x, new_y)
@@ -121,7 +120,10 @@ impl Lumen {
                 }
             } else {
                 // Fallback: полная пересборка при любой нестандартной структуре DL.
-                let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
+                let new_dl = match self.relayout_viewport() {
+                    Some(vp) => crate::display_list_metrics::paint_ordered_in(self.layout_box.as_ref().unwrap(), vp),
+                    None => paint_ordered(self.layout_box.as_ref().unwrap()),
+                };
                 self.tile_grid.update_from_diff(&self.display_list, &new_dl);
                 self.set_display_list(new_dl);
             }
@@ -189,31 +191,17 @@ impl Lumen {
         let x_css = hit.client.x + self.frames[idx].scroll_x;
         let y_css = hit.client.y + self.frames[idx].scroll_y;
 
-        let Some(target_node) =
-            find_scroll_container_at(&self.frames[idx].scroll_containers, x_css, y_css)
-        else {
+        // CSS Overscroll Behavior L1 §3 — та же chain-семантика, что у
+        // страничных контейнеров (`resolve_scroll_chain_target`): на границе с
+        // `auto` жест уходит к внешнему контейнеру фрейма, а когда цепочка
+        // исчерпана — к прокрутке всего фрейма; `contain`/`none` глушат его.
+        let Some(chain) = lumen_layout::resolve_scroll_chain_target(
+            &self.frames[idx].scroll_containers, x_css, y_css, dx, dy,
+        ) else {
             return false;
         };
-
-        let current = self.frames[idx].scroll_containers.iter()
-            .find(|c| c.node == target_node)
-            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
-                      c.clip_rect.width, c.clip_rect.height,
-                      c.overscroll_behavior_x, c.overscroll_behavior_y));
-        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
-
-        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
-        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
-
-        // CSS Overscroll Behavior L1 §3 — та же chain-семантика, что у
-        // страничных контейнеров: на границе с `auto` жест уходит дальше
-        // (к прокрутке всего фрейма), `contain`/`none` его глушит на месте.
-        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
-        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
-        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
-            return false;
-        }
-        if !moved_x && !moved_y {
+        let (target_node, new_x, new_y) = (chain.node, chain.new_x, chain.new_y);
+        if !chain.moved {
             return true;
         }
 
@@ -227,7 +215,7 @@ impl Lumen {
         }
 
         self.frames[idx].scroll_containers =
-            lumen_layout::collect_scroll_containers(self.frames[idx].layout.as_ref().unwrap());
+            lumen_layout::collect_page_scroll_containers(self.frames[idx].layout.as_ref().unwrap());
         // Точечного патча (как `patch_scroll_layer` у страницы) для фрейма
         // нет — тот же грубый грануляр, что уже принят у [`Self::apply_frame_scroll`]:
         // пересобрать content_dl фрейма (и его предков — функция сама
@@ -503,6 +491,7 @@ impl Lumen {
     pub(crate) fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
         let Some(src) = self.layout_source.as_ref() else { return };
         let mut ancestor = src.document.lock().unwrap().get(node).parent;
+        let mut moved: Vec<u32> = Vec::new();
         while let Some(n) = ancestor {
             let Some(c) = self.scroll_containers.iter().find(|c| c.node == n) else {
                 ancestor = src.document.lock().unwrap().get(n).parent;
@@ -521,10 +510,14 @@ impl Lumen {
                 && let Some(lb) = self.layout_box.as_mut()
             {
                 set_scroll_position(lb, n, c.scroll_x, new_scroll_y);
+                moved.push(n.index() as u32);
             }
             ancestor = src.document.lock().unwrap().get(n).parent;
         }
         self.update_scroll_containers();
+        if !moved.is_empty() {
+            self.issue_container_scroll_command(&moved);
+        }
     }
 
     /// Apply CSS Scroll Snap L1 to a proposed page-level Y scroll offset.
@@ -601,6 +594,7 @@ impl Lumen {
             self.scroll_x = snapped;
             self.request_redraw();
         }
+        self.issue_scroll_command();
     }
 
     /// Установить scroll_y в абсолютное значение (после clamping-а). `f32::INFINITY`
@@ -614,11 +608,15 @@ impl Lumen {
         // Инстант-путь cancel-ит активную анимацию — мы только что
         // *приказали* быть в конкретной точке.
         self.scroll_anim = None;
+        self.forward_momentum_stop();
         let clamped = clamp_scroll(target, self.max_scroll());
         if (clamped - self.scroll_y).abs() > f32::EPSILON {
             self.scroll_y = clamped;
             self.request_redraw();
         }
+        // Даже при том же значении: устаревшую обратную связь рендер-потока
+        // команда отсекает (ADR-032, правило 7).
+        self.issue_scroll_command();
     }
 
     /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
@@ -631,16 +629,26 @@ impl Lumen {
         // Apply page-level CSS Scroll Snap L1: snap to the nearest declared
         // snap point before starting the animation.
         let target_clamped = self.apply_page_y_snap(target_clamped);
+        self.issue_scroll_command();
         if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
             self.scroll_anim = None;
+            self.forward_momentum_stop();
             return;
         }
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        // THREAD-6: пока UI занят, `scroll_y` устарел, а идущая кривая уже
+        // продвинулась (её ведёт рендер-поток) — новая стартует из её текущей
+        // точки, иначе серия щелчков откатывала бы страницу назад.
+        let start_y = self.scroll_anim.as_ref().map_or(self.scroll_y, |a| a.sample(now_ms).0);
         self.scroll_anim = Some(scroll_anim::ScrollAnim {
-            start_y: self.scroll_y,
+            start_y,
             target_y: target_clamped,
             start_time_ms: now_ms,
         });
+        // THREAD-6: кривую ведёт и рендер-поток — кадры не пропадут, пока UI занят.
+        if let Some(r) = self.renderer.as_mut() {
+            r.start_render_scroll_anim(start_y, target_clamped);
+        }
         self.request_redraw();
     }
 

@@ -29,6 +29,7 @@ pub mod content_visibility;
 pub mod field_sizing;
 pub mod hyphenation;
 pub mod counters;
+mod custom_flow;
 mod invariants;
 pub mod font_palette;
 pub mod image_gating;
@@ -44,6 +45,14 @@ pub mod rule_index;
 mod resolved_geometry;
 pub mod selection;
 pub mod selector_query;
+pub mod style_map;
+pub use style_map::StyleMap;
+pub mod scoped_collect;
+mod scroll_rollup;
+pub use scroll_rollup::RollupCache;
+pub mod paint_eq;
+pub use paint_eq::subtree_paint_eq;
+pub mod scroll_initial_target;
 pub mod scroll_timeline;
 pub mod snapshot;
 pub mod inert;
@@ -56,6 +65,12 @@ pub mod table;
 pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
+
+pub use scoped_collect::{
+    ChainBreaks, ChangedNodes, CustomPropMaps, PlanOptions, PseudoMaps, Reasons, ScopedCollection, StyleCollectStats,
+};
+
+pub use scroll_initial_target::{apply_scroll_initial_targets, InitialScroll};
 
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
@@ -75,9 +90,13 @@ pub use mathml::{
     MATH_SCRIPT_SCALE, MathStyle, MathmlBox, MathmlElementKind, collect_mathml_structure,
     lay_out_mathml, math_depth_scale,
 };
-pub use ruby::{RubyAlign, RubyBox, RubyMerge, RubyPosition, lay_out_ruby};
+pub use ruby::{
+    RubyAlign, RubyBox, RubyLevel, RubyLevelShape, RubyMerge, RubyPosition, RubySegment,
+    RubySegmentShape, RubyShape, RubySide, lay_out_ruby, lay_out_ruby_segments,
+    resolve_level_sides,
+};
 pub use animation::{
-    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
+    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator, interpolate_gap_rules,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
     CompositorAnimFrame, CompositorOverride,
     AnimationScheduler, TransitionScheduler, TransitionEventInfo, TransitionEventKind,
@@ -85,25 +104,32 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles, apply_intrinsic_size, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_cascade_background_image_requests, collect_image_requests,
+    pick_image_request_url,
     is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_mutation_incremental_with_counters, layout_streaming_incremental,
     lay_out_incremental, select_widget_arrow_width, select_widget_font_size, BoxKind, BoxOrigin,
-    BoxRole, CrossOriginMode, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
+    BoxRole, CrossOriginMode, FieldsetLegend, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
 };
-pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
+pub use incremental::{ReleasedIds, DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
-    compute_local_transform, forward_box_transform, transform_fns_to_matrix,
+    compute_local_transform, forward_box_transform, perspective_matrix, transform_fns_to_matrix,
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
-pub use selection::{caret_at_point, selection_rects};
+pub use selection::{
+    caret_at_point, clamp_to_range, node_between, select_scope_at_point, selection_rects,
+    user_select_none_text_nodes, SelectScope,
+};
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
-pub use style::{compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style};
+pub use style::{
+    compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
+    compute_view_transition_pseudo_style, ViewTransitionPart,
+};
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
     computed_style_to_map, find_all_by_selector, find_box_by_selector, find_first_dom_node_by_selector,
@@ -122,16 +148,18 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
-pub use resolved_geometry::COMPUTED_VALUE_KEY_PREFIX;
+pub use resolved_geometry::{contains_fixed_descendants, BOXLESS_KEY, COMPUTED_VALUE_KEY_PREFIX};
 pub use inert::{collect_inert_regions, is_inert, InertRegion};
 pub use starting_style::{resolve_starting_style, StartingStyleTracker};
-pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
+pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem, SubgridTracks};
 pub use content_visibility::{
-    cv_is_skipped, set_cv_scroll, set_cv_relevant, take_cv_skipped, CV_SLACK_FACTOR,
+    cv_bottom_estimate, cv_is_skipped, set_cv_scroll, set_cv_relevant, take_cv_skipped, CV_SLACK_FACTOR,
 };
 pub use invariants::{count_geometry_violations, GeometryViolationCounts};
 pub use stacking::{
-    box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
+    box_can_own_stacking_context, creates_stacking_context, is_positioned_layer_auto, owns_paint_layer,
+    paint_child_order,
+    PaintOrder, PaintPhase,
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
@@ -143,15 +171,16 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, AnimationDirection, Appearance, ContainerContext,
-    AnimationFillMode, AnimationPlayState,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
+    RuleOverlap, RuleVisibilityItems,
+    AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, CaptionSide, TableLayout, FilterFn, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
     FontStyle,
-    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
@@ -1251,6 +1280,7 @@ pub fn find_snapped_nodes(container: &SnapContainer, scroll: (f32, f32)) -> Snap
 
 /// A scrollable overflow container collected from the layout tree.
 /// Shell uses this to route wheel events and update scroll offsets.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScrollContainer {
     /// The DOM node that owns this scroll region.
     pub node: lumen_dom::NodeId,
@@ -1307,12 +1337,51 @@ pub fn collect_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> {
 /// this function at every call site that feeds `update_scroll_states`;
 /// wheel/hit-test call sites must keep using [`collect_scroll_containers`].
 pub fn collect_scroll_containers_for_js_state(root: &LayoutBox) -> Vec<ScrollContainer> {
-    let mut out = Vec::new();
-    collect_scroll_containers_inner(root, &mut out, true);
+    scroll_rollup::collect_for_js_state(&[root])
+}
+
+/// BUG-1211 (post-collectors): [`collect_scroll_containers_for_js_state`],
+/// scoped to a handful of subtrees. Self-contained per box (no ancestor
+/// dependency), so a plain per-root re-walk is correct without threading any
+/// context down, unlike [`collect_computed_styles_scoped`].
+pub fn collect_scroll_containers_for_js_state_scoped(roots: &[&LayoutBox]) -> Vec<ScrollContainer> {
+    scroll_rollup::collect_for_js_state(roots)
+}
+
+/// [`collect_scroll_containers`] для корня страницы (`html`-бокс): без
+/// контейнеров, чей `overflow` ушёл во вьюпорт.
+///
+/// CSS Overflow L3 §3.5 — `overflow` корня (а при `visible` у корня — `body`)
+/// относится к вьюпорту и самостоятельным контейнером не остаётся. Без этой
+/// фильтрации `body{overflow-y:scroll}` (lenta.ru) делался «контейнером» размером
+/// с документ, перехватывал каждый щелчок колеса и не отдавал его странице.
+pub fn collect_page_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> {
+    // `root` — бокс документа, его единственный не-Skip ребёнок — `html`,
+    // у `html` — `body`.
+    fn first_box(b: &LayoutBox) -> Option<&LayoutBox> {
+        b.children.iter().find(|c| !matches!(c.kind, box_tree::BoxKind::Skip))
+    }
+    let mut out = collect_scroll_containers(root);
+    out.retain(|c| c.node != root.node);
+    if let Some(html) = first_box(root) {
+        out.retain(|c| c.node != html.node);
+        let html_visible = matches!(html.style.overflow_x, style::Overflow::Visible)
+            && matches!(html.style.overflow_y, style::Overflow::Visible);
+        if html_visible && let Some(body) = first_box(html) {
+            out.retain(|c| c.node != body.node);
+        }
+    }
     out
 }
 
 fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
+    scroll_container_into(b, out, include_non_wheel);
+    for child in &b.children {
+        collect_scroll_containers_inner(child, out, include_non_wheel);
+    }
+}
+
+fn scroll_container_into(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     use style::Overflow;
     let s = &b.style;
     let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto)
@@ -1333,9 +1402,33 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
             overscroll_behavior_x: s.overscroll_behavior_x,
             overscroll_behavior_y: s.overscroll_behavior_y,
         });
-    }
-    for child in &b.children {
-        collect_scroll_containers_inner(child, out, include_non_wheel);
+    } else if include_non_wheel
+        && matches!(s.overflow_x, Overflow::Visible)
+        && matches!(s.overflow_y, Overflow::Visible)
+    {
+        // BUG-960: `overflow: visible` doesn't clip and isn't a scroll
+        // container, but CSSOM View still defines `scrollWidth`/
+        // `scrollHeight` for it as the exact scrollable-overflow-area
+        // magnitude (not just "at least padding-box", the BUG-475 floor).
+        // Publish an entry only when the box actually overflows its own
+        // padding box on some axis — the common non-overflowing case stays
+        // off this list and keeps using the (identical, cheaper) border-box
+        // fallback in the JS shim.
+        let clip = padding_box(b);
+        let scroll_width = content_width(b);
+        let scroll_height = content_height(b);
+        if scroll_width > clip.width + 0.01 || scroll_height > clip.height + 0.01 {
+            out.push(ScrollContainer {
+                node: b.node,
+                clip_rect: clip,
+                scroll_width,
+                scroll_height,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                overscroll_behavior_x: s.overscroll_behavior_x,
+                overscroll_behavior_y: s.overscroll_behavior_y,
+            });
+        }
     }
 }
 
@@ -1394,34 +1487,62 @@ fn padding_box(b: &LayoutBox) -> lumen_core::geom::Rect {
     )
 }
 
-/// Whether two axis-aligned rectangles share any positive-area overlap.
-/// Strict inequalities: rectangles that only touch along an edge (zero-area
-/// intersection) count as non-overlapping.
-fn rects_overlap(a: &lumen_core::geom::Rect, b: &lumen_core::geom::Rect) -> bool {
-    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+/// Sides of a scroll container's padding box beyond which overflow is *unreachable*: the start
+/// sides of its inline and block axes (CSS Overflow L3 §3.3 — content there can never be scrolled
+/// into view, so it adds nothing to the scrollable area). The mirror sides are reachable.
+#[derive(Clone, Copy)]
+pub(crate) struct UnreachableSides {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+impl UnreachableSides {
+    pub(crate) fn of(s: &style::ComputedStyle) -> Self {
+        use style::{Direction, WritingMode};
+        let rtl = s.direction == Direction::Rtl;
+        match s.writing_mode {
+            WritingMode::HorizontalTb => Self { left: !rtl, right: rtl, top: true, bottom: false },
+            WritingMode::VerticalRl | WritingMode::SidewaysRl => Self { left: false, right: true, top: !rtl, bottom: rtl },
+            WritingMode::VerticalLr => Self { left: true, right: false, top: !rtl, bottom: rtl },
+            WritingMode::SidewaysLr => Self { left: true, right: false, top: rtl, bottom: !rtl },
+        }
+    }
+
+    /// Whether `bounds` lies wholly beyond an unreachable side of padding box `pb`.
+    pub(crate) fn hides(self, bounds: &lumen_core::geom::Rect, pb: &lumen_core::geom::Rect) -> bool {
+        (self.left && bounds.x + bounds.width <= pb.x)
+            || (self.right && bounds.x >= pb.x + pb.width)
+            || (self.top && bounds.y + bounds.height <= pb.y)
+            || (self.bottom && bounds.y >= pb.y + pb.height)
+    }
 }
 
 /// Whether a child must be folded into its container's scrollable-overflow
 /// computation.
 ///
 /// CSS Overflow L3 §3.3: an absolutely/fixed positioned descendant whose
-/// border box does not overlap the containing block's padding box on *both*
-/// axes ("wholly outside the padding edges") contributes nothing at all —
-/// not even on the axis where it does overlap (BUG-504,
-/// `overflow-outside-padding.html`). This exclusion is specific to
-/// out-of-flow boxes placed via `top`/`right`/`bottom`/`left`: an in-flow
-/// box pushed outside by `transform` must still count in full (§3.4,
-/// already covered by [`child_scrollable_bounds`]) — that provision is
-/// unconditional, so only abspos/fixed children are ever excluded here.
+/// border box lies wholly in the *unreachable* scrollable-overflow region of
+/// the containing block's padding box ([`UnreachableSides`]) contributes
+/// nothing at all — not even on the axis where it does overlap (BUG-504,
+/// `overflow-outside-padding.html`). A box wholly beyond the *reachable* side
+/// (a dropdown below the padding box, `line-clamp-with-abspos-019`) counts in
+/// full. This exclusion is specific to out-of-flow boxes placed via
+/// `top`/`right`/`bottom`/`left`: an in-flow box pushed outside by `transform`
+/// must still count in full (§3.4, already covered by
+/// [`child_scrollable_bounds`]) — that provision is unconditional, so only
+/// abspos/fixed children are ever excluded here.
 fn contributes_to_scrollable_overflow(
     c: &LayoutBox,
     bounds: &lumen_core::geom::Rect,
     padding_box: &lumen_core::geom::Rect,
+    unreachable: UnreachableSides,
 ) -> bool {
     if !matches!(c.style.position, style::Position::Absolute | style::Position::Fixed) {
         return true;
     }
-    rects_overlap(bounds, padding_box)
+    !unreachable.hides(bounds, padding_box)
 }
 
 /// Axis-aligned bounding box of `rect`'s four corners after applying `m`.
@@ -1461,6 +1582,19 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
     }
 }
 
+/// Whether a box establishes its own scroll/clip boundary for the purposes
+/// of scrollable-overflow rollup (CSS Overflow L3 §3.3/§3.4, BUG-960): any
+/// value of `overflow-x`/`overflow-y` other than `visible` clips its own
+/// content, so a box's *own* border box still contributes to its
+/// container's scrollable-overflow region, but that box's *descendants* do
+/// not — their overflow is contained (and separately reported by that box's
+/// own `scrollWidth`/`scrollHeight`), not folded further into the ancestor
+/// chain.
+fn box_clips_own_overflow(b: &LayoutBox) -> bool {
+    !matches!(b.style.overflow_x, style::Overflow::Visible)
+        || !matches!(b.style.overflow_y, style::Overflow::Visible)
+}
+
 /// The horizontal scrollable-overflow span of a box, as `(min_x, max_x)`
 /// relative to the padding edge (`pb.x` = 0).
 ///
@@ -1480,15 +1614,32 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
 fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_x, mut max_x) = (0.0_f32, pb.width);
+    scrollable_extent_x_rec(b, &pb, UnreachableSides::of(&b.style), &mut min_x, &mut max_x);
+    (min_x, max_x)
+}
+
+/// Recursive worker for [`scrollable_extent_x`] (BUG-960): folds in every
+/// descendant that isn't behind a clipping ancestor (per
+/// [`box_clips_own_overflow`]), not just direct children, so overflow from
+/// e.g. a doubly-nested negative-margin box still reaches the outer scroll
+/// container's `scrollWidth`.
+fn scrollable_extent_x_rec(
+    b: &LayoutBox,
+    pb: &lumen_core::geom::Rect,
+    u: UnreachableSides,
+    min_x: &mut f32,
+    max_x: &mut f32,
+) {
     for c in &b.children {
         let bounds = child_scrollable_bounds(c);
-        if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
-            continue;
+        if contributes_to_scrollable_overflow(c, &bounds, pb, u) {
+            *min_x = min_x.min(bounds.x - pb.x);
+            *max_x = max_x.max(bounds.x + bounds.width - pb.x);
         }
-        min_x = min_x.min(bounds.x - pb.x);
-        max_x = max_x.max(bounds.x + bounds.width - pb.x);
+        if !box_clips_own_overflow(c) {
+            scrollable_extent_x_rec(c, pb, u, min_x, max_x);
+        }
     }
-    (min_x, max_x)
 }
 
 /// The vertical counterpart of [`scrollable_extent_x`] — `(min_y, max_y)`
@@ -1496,15 +1647,29 @@ fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
 fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_y, mut max_y) = (0.0_f32, pb.height);
+    scrollable_extent_y_rec(b, &pb, UnreachableSides::of(&b.style), &mut min_y, &mut max_y);
+    (min_y, max_y)
+}
+
+/// Recursive worker for [`scrollable_extent_y`] — vertical counterpart of
+/// [`scrollable_extent_x_rec`] (BUG-960).
+fn scrollable_extent_y_rec(
+    b: &LayoutBox,
+    pb: &lumen_core::geom::Rect,
+    u: UnreachableSides,
+    min_y: &mut f32,
+    max_y: &mut f32,
+) {
     for c in &b.children {
         let bounds = child_scrollable_bounds(c);
-        if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
-            continue;
+        if contributes_to_scrollable_overflow(c, &bounds, pb, u) {
+            *min_y = min_y.min(bounds.y - pb.y);
+            *max_y = max_y.max(bounds.y + bounds.height - pb.y);
         }
-        min_y = min_y.min(bounds.y - pb.y);
-        max_y = max_y.max(bounds.y + bounds.height - pb.y);
+        if !box_clips_own_overflow(c) {
+            scrollable_extent_y_rec(c, pb, u, min_y, max_y);
+        }
     }
-    (min_y, max_y)
 }
 
 /// Compute the content scroll-width of a box (`scrollWidth`'s magnitude):
@@ -1568,9 +1733,9 @@ pub fn collect_computed_styles(
     doc: &lumen_dom::Document,
     counters: Option<&CounterMap>,
     viewport: lumen_core::geom::Size,
-) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
+) -> std::collections::HashMap<u32, StyleMap> {
     let mut out = std::collections::HashMap::new();
-    collect_computed_styles_rec(doc, root, viewport, &mut out);
+    collect_computed_styles_rec(doc, root, resolved_geometry::GeomCtx::root(viewport), viewport, &mut out);
     if let Some(counters) = counters {
         for i in 0..doc.len() {
             let idx = i as u32;
@@ -1578,10 +1743,15 @@ pub fn collect_computed_styles(
                 continue;
             }
             let id = lumen_dom::NodeId::from_index(i);
-            if let Some(style) = counters.style_arc(id)
-                && style.display == Display::Contents
-            {
-                out.insert(idx, computed_style_to_map(&style));
+            if let Some(style) = counters.style_arc(id) {
+                let mut m = StyleMap::of_style(&style);
+                // BUG-1191: no box (empty inline, `display: none` /
+                // `content-visibility: hidden` descendant) — publish the
+                // cascaded style, marked so «rendered» checks can skip it.
+                if style.display != Display::Contents {
+                    m.set(resolved_geometry::BOXLESS_KEY, "1".to_owned());
+                }
+                out.insert(idx, m);
             }
         }
     }
@@ -1614,39 +1784,71 @@ pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "
 fn collect_computed_styles_rec(
     doc: &lumen_dom::Document,
     root: &LayoutBox,
+    root_ctx: resolved_geometry::GeomCtx,
     viewport: lumen_core::geom::Size,
-    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
 ) {
-    let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> =
-        vec![(root, resolved_geometry::GeomCtx::root(viewport))];
+    let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> = vec![(root, root_ctx)];
     while let Some((b, ctx)) = stack.pop() {
-        // First box in tree order wins — see `collect_layout_rects_rec` for why
-        // several boxes can carry the same `NodeId`.
-        out.entry(b.node.index() as u32).or_insert_with(|| {
-            let mut m = computed_style_to_map(&b.style);
-            resolved_geometry::apply_used_geometry(&mut m, b, &ctx, viewport);
-            m
-        });
-        if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
-            for seg in segments {
-                // `NodeId(0)` is the document root, which `InlineSegment::source_node`
-                // uses for generated content with no DOM origin.
-                if seg.source_node.index() == 0 {
-                    continue;
-                }
-                out.entry(seg.source_node.index() as u32)
-                    .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
-                // BUG-488: publish the full property map for every plain inline
-                // element this segment is nested inside — see `collect_computed_styles`'s
-                // doc comment for the approximation this relies on.
-                for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
-                    out.entry(anc.index() as u32)
-                        .or_insert_with(|| computed_style_to_map(&seg.style));
-                }
-            }
-        }
+        collect_computed_styles_box(doc, b, &ctx, viewport, out);
         let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
         stack.extend(b.children.iter().rev().map(|c| (c, child_ctx)));
+    }
+}
+
+/// One box's contribution to [`collect_computed_styles`]: its own entry (first box
+/// in tree order wins) and the entries of the text and plain inline elements an
+/// `InlineRun` flattens. `ctx` is the geometry context `b` itself is resolved in.
+fn collect_computed_styles_box(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    ctx: &resolved_geometry::GeomCtx,
+    viewport: lumen_core::geom::Size,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
+) {
+    collect_computed_styles_parts(doc, b, ctx, viewport, true, true, out);
+}
+
+/// [`collect_computed_styles_box`] with either half optional (BUG-935 срез 59):
+/// `own` is the box's own entry, `segments` the entries of the text and inline
+/// elements an `InlineRun` flattens. The caller passes `false` for a half whose
+/// published entries it has proved unchanged.
+fn collect_computed_styles_parts(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    ctx: &resolved_geometry::GeomCtx,
+    viewport: lumen_core::geom::Size,
+    own: bool,
+    segments: bool,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
+) {
+    if own {
+        out.entry(b.node.index() as u32).or_insert_with(|| {
+            let mut m = StyleMap::of_style(&b.style);
+            resolved_geometry::apply_used_geometry(&mut m, b, ctx, viewport);
+            m
+        });
+    }
+    if !segments {
+        return;
+    }
+    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+        for seg in segments {
+            // `NodeId(0)` is the document root, which `InlineSegment::source_node`
+            // uses for generated content with no DOM origin.
+            if seg.source_node.index() == 0 {
+                continue;
+            }
+            out.entry(seg.source_node.index() as u32)
+                .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style).into());
+            // BUG-488: publish the full property map for every plain inline
+            // element this segment is nested inside — see `collect_computed_styles`'s
+            // doc comment for the approximation this relies on.
+            for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
+                out.entry(anc.index() as u32)
+                    .or_insert_with(|| StyleMap::of_style_copy(&seg.style));
+            }
+        }
     }
 }
 
@@ -1731,39 +1933,74 @@ fn collect_pseudo_computed_styles_rec(
 ) {
     let mut stack: Vec<(&LayoutBox, lumen_dom::NodeId)> = vec![(root, root_owner)];
     while let Some((b, container_owner)) = stack.pop() {
-        if let BoxRole::Pseudo(kind) = b.origin.role
-            && let Some(name) = pseudo_kind_name(kind)
-        {
-            let owner = if kind == PseudoKind::FirstLetter {
-                container_owner
-            } else {
-                b.origin.node.unwrap_or(b.node)
-            };
-            out.entry((owner.index() as u32, name.to_string()))
-                .or_insert_with(|| pseudo_style_map(&b.style, kind));
-        }
-        if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
-            for seg in segments {
-                // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
-                // uses for a pseudo-element whose sole content is `url(...)` — no owner
-                // to key on, so it is silently skipped (rare: image-only generated content).
-                if seg.source_node.index() == 0 {
-                    continue;
-                }
-                if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
-                    let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
-                        container_owner
-                    } else {
-                        seg.source_node
-                    };
-                    out.entry((owner.index() as u32, name.to_string()))
-                        .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
-                }
-            }
-        }
+        collect_pseudo_computed_styles_box(b, container_owner, None, out);
         for child in b.children.iter().rev() {
             stack.push((child, b.node));
         }
+    }
+}
+
+/// One box's contribution to [`collect_pseudo_computed_styles`]: its own entry when it is a
+/// pseudo-element box, and the entries of the pseudo-element segments an `InlineRun` flattens.
+/// `container_owner` is the node of the box whose `children` list `b` lives in. `held` — the
+/// entries already published, which are left as they are (BUG-935 срез 96: a box the flush did
+/// not restyle has the entry it had).
+pub(crate) fn collect_pseudo_computed_styles_box(
+    b: &LayoutBox,
+    container_owner: lumen_dom::NodeId,
+    held: Option<&scoped_collect::PseudoMaps>,
+    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+) {
+    if let BoxRole::Pseudo(kind) = b.origin.role
+        && let Some(name) = pseudo_kind_name(kind)
+    {
+        let owner = if kind == PseudoKind::FirstLetter {
+            container_owner
+        } else {
+            b.origin.node.unwrap_or(b.node)
+        };
+        let key = (owner.index() as u32, name.to_string());
+        if !held.is_some_and(|h| h.contains_key(&key)) {
+            out.entry(key).or_insert_with(|| pseudo_style_map(&b.style, kind));
+        }
+    }
+    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+        for seg in segments {
+            // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
+            // uses for a pseudo-element whose sole content is `url(...)` — no owner
+            // to key on, so it is silently skipped (rare: image-only generated content).
+            if seg.source_node.index() == 0 {
+                continue;
+            }
+            if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
+                let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
+                    container_owner
+                } else {
+                    seg.source_node
+                };
+                let key = (owner.index() as u32, name.to_string());
+                if !held.is_some_and(|h| h.contains_key(&key)) {
+                    out.entry(key).or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+                }
+            }
+        }
+    }
+}
+
+/// The pseudo-element names [`collect_pseudo_computed_styles`] keys by.
+const PSEUDO_NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
+
+/// Drops every pseudo-element entry owned by the node with `NodeId::index` `node`
+/// (BUG-935 срез 95: the scoped flush evicts the entries of what it rebuilds).
+pub fn forget_pseudo_computed_styles(
+    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+    node: u32,
+) {
+    if out.is_empty() {
+        return;
+    }
+    for name in PSEUDO_NAMES {
+        out.remove(&(node, name.to_string()));
     }
 }
 
@@ -1831,36 +2068,55 @@ fn collect_custom_properties_rec(
 ) {
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        // First box in tree order wins — see `collect_layout_rects_rec` for why
-        // several boxes can carry the same `NodeId`.
-        if !b.style.custom_props.is_empty() {
-            let key = b.style.custom_props.as_ptr() as usize;
-            let map = match resolved.get(&key) {
-                Some(m) => std::sync::Arc::clone(m),
-                None => {
-                    let raw = b.style.custom_props.shared();
-                    let em_basis = b.style.font_size;
-                    let m = std::sync::Arc::new(
-                        raw.iter()
-                            .map(|(name, value)| {
-                                let computed = crate::style::expand_vars_and_env(
-                                    value, &raw, em_basis, viewport,
-                                )
-                                .unwrap_or_default();
-                                (name.clone(), computed.trim().to_string())
-                            })
-                            .collect::<std::collections::HashMap<String, String>>(),
-                    );
-                    resolved.insert(key, std::sync::Arc::clone(&m));
-                    m
-                }
-            };
-            out.entry(b.node.index() as u32).or_insert(map);
-        }
+        collect_custom_properties_box(b, viewport, None, out, resolved);
         for child in b.children.iter().rev() {
             stack.push(child);
         }
     }
+}
+
+/// One box's contribution to [`collect_custom_properties`]. `held` — the entries already
+/// published, which are left as they are (BUG-935 срез 96).
+pub(crate) fn collect_custom_properties_box(
+    b: &LayoutBox,
+    viewport: lumen_core::geom::Size,
+    held: Option<&scoped_collect::CustomPropMaps>,
+    out: &mut std::collections::HashMap<
+        u32,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+    resolved: &mut std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+) {
+    // First box in tree order wins — see `collect_layout_rects_rec` for why
+    // several boxes can carry the same `NodeId`.
+    if b.style.custom_props.is_empty() || held.is_some_and(|h| h.contains_key(&(b.node.index() as u32))) {
+        return;
+    }
+    let key = b.style.custom_props.as_ptr() as usize;
+    let map = match resolved.get(&key) {
+        Some(m) => std::sync::Arc::clone(m),
+        None => {
+            let raw = b.style.custom_props.shared();
+            let em_basis = b.style.font_size;
+            let m = std::sync::Arc::new(
+                raw.iter()
+                    .map(|(name, value)| {
+                        let computed = crate::style::expand_vars_and_env(
+                            value, &raw, em_basis, viewport,
+                        )
+                        .unwrap_or_default();
+                        (name.clone(), computed.trim().to_string())
+                    })
+                    .collect::<std::collections::HashMap<String, String>>(),
+            );
+            resolved.insert(key, std::sync::Arc::clone(&m));
+            m
+        }
+    };
+    out.entry(b.node.index() as u32).or_insert(map);
 }
 
 // ──────────────── collect_layout_rects ────────────────
@@ -1950,19 +2206,27 @@ fn collect_layout_shift_rects_rec(
     ancestor_opacity_zero: bool,
     out: &mut std::collections::HashMap<u32, [f32; 4]>,
 ) {
-    let mut stack: Vec<(&LayoutBox, bool)> = vec![(root, ancestor_opacity_zero)];
-    while let Some((b, opacity_zero)) = stack.pop() {
+    // (box, an ancestor has opacity 0, an ancestor is the containing block of `fixed` boxes)
+    let mut stack: Vec<(&LayoutBox, bool, bool)> = vec![(root, ancestor_opacity_zero, false)];
+    while let Some((b, opacity_zero, in_fixed_cb)) = stack.pop() {
         let opacity_zero = opacity_zero || b.style.opacity <= 0.0;
         let not_rendered = !matches!(b.style.visibility, Visibility::Visible) || opacity_zero;
-        let scroll_pinned = matches!(b.style.position, Position::Fixed | Position::Sticky);
+        // A `fixed` box under a transformed/filtered ancestor scrolls with it
+        // (css-transforms-1 §2), so only a viewport-pinned one is skipped.
+        let scroll_pinned = match b.style.position {
+            Position::Fixed => !in_fixed_cb,
+            Position::Sticky => true,
+            _ => false,
+        };
+        let in_fixed_cb = in_fixed_cb || resolved_geometry::contains_fixed_descendants(&b.style);
         if not_rendered || scroll_pinned {
-            stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
+            stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero, in_fixed_cb)));
             continue;
         }
         let r = b.rect;
         out.entry(b.node.index() as u32)
             .or_insert([r.x, r.y, r.width, r.height]);
-        stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
+        stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero, in_fixed_cb)));
     }
 }
 
@@ -1977,59 +2241,82 @@ fn collect_layout_rects_rec(
 ) {
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        // A single `NodeId` can own more than one box: an element with inline content
-        // gets an anonymous block/line box for that content, and the box tree keeps the
-        // element's own `NodeId` on it. The traversal visits the principal box before
-        // its descendants, so `or_insert` keeps the element's own border box; plain
-        // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
-        // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
-        //
-        // BUG-540: `forward_box_transform` (own `transform`/individual transform
-        // properties/`offset-path`, same matrix paint composites) is applied here
-        // too — a real browser's `getBoundingClientRect()` reports the *transformed*
-        // box, not the flow-position `rect` paint starts from. Ancestor transforms
-        // are not accumulated (out of scope of the filed repro, which transforms the
-        // queried box itself, not a container above it).
-        let r = match forward_box_transform(b) {
-            Some(m) => transformed_aabb(&b.rect, &m),
-            None => b.rect,
-        };
-        out.entry(b.node.index() as u32)
-            .or_insert([r.x, r.y, r.width, r.height]);
-        // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
-        // their own — accumulate the union of every laid-out `InlineFrag` nested
-        // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
-        // y-position uses the same `font_size * line_height` uniform-line-height
-        // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
-        if let BoxKind::InlineRun { lines, .. } = &b.kind {
-            let line_h = b.used_line_height;
-            for (line_idx, line) in lines.iter().enumerate() {
-                let line_y = b.rect.y + line_idx as f32 * line_h;
-                // GAP-HLHITTEST: per source span, so an inline element whose
-                // words `wrap_inline_run` merged into its same-style
-                // neighbour's fragment still gets its own geometry.
-                for (frag, span) in line.iter().flat_map(|f| {
-                    text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
-                }) {
-                    let fx1 = b.rect.x + frag.x + span.x;
-                    let fy1 = line_y;
-                    let fx2 = fx1 + span.width;
-                    let fy2 = fy1 + line_h;
-                    for anc in inline_element_ancestors(doc, span.source_node, b.node) {
-                        out.entry(anc.index() as u32)
-                            .and_modify(|cur| {
-                                let cx1 = cur[0].min(fx1);
-                                let cy1 = cur[1].min(fy1);
-                                let cx2 = (cur[0] + cur[2]).max(fx2);
-                                let cy2 = (cur[1] + cur[3]).max(fy2);
-                                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                            })
-                            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
-                    }
+        collect_layout_rects_box(doc, b, out);
+        stack.extend(b.children.iter().rev());
+    }
+}
+
+/// The rect `getBoundingClientRect` publishes for `b` itself: its border box, a
+/// `<ruby>`'s base-level box, and the AABB of its own transform (BUG-540).
+fn box_published_rect(b: &LayoutBox) -> lumen_core::geom::Rect {
+    let own = match &b.kind {
+        BoxKind::Ruby { .. } => ruby::ruby_base_rect(b).unwrap_or(b.rect),
+        _ => b.rect,
+    };
+    match forward_box_transform(b) {
+        Some(m) => transformed_aabb(&own, &m),
+        None => own,
+    }
+}
+
+/// One box's contribution to [`collect_layout_rects`] — its own entry and, for an
+/// `InlineRun`, the union entries of the plain inline elements inside it. Shared
+/// by the whole-tree walk and the spine boxes of [`ScopedCollection`].
+fn collect_layout_rects_box(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    out: &mut std::collections::HashMap<u32, [f32; 4]>,
+) {
+    // A single `NodeId` can own more than one box: an element with inline content
+    // gets an anonymous block/line box for that content, and the box tree keeps the
+    // element's own `NodeId` on it. The traversal visits the principal box before
+    // its descendants, so `or_insert` keeps the element's own border box; plain
+    // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
+    // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
+    //
+    // BUG-540: `forward_box_transform` (own `transform`/individual transform
+    // properties/`offset-path`, same matrix paint composites) is applied here
+    // too — a real browser's `getBoundingClientRect()` reports the *transformed*
+    // box, not the flow-position `rect` paint starts from. Ancestor transforms
+    // are not accumulated (out of scope of the filed repro, which transforms the
+    // queried box itself, not a container above it).
+    // GAP-RUBYBOX-2: a `<ruby>` answers with its base-level box only — see
+    // `box_published_rect`.
+    let r = box_published_rect(b);
+    out.entry(b.node.index() as u32)
+        .or_insert([r.x, r.y, r.width, r.height]);
+    // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
+    // their own — accumulate the union of every laid-out `InlineFrag` nested
+    // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
+    // y-position uses the same `font_size * line_height` uniform-line-height
+    // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let line_h = b.used_line_height;
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_y = b.rect.y + line_idx as f32 * line_h;
+            // GAP-HLHITTEST: per source span, so an inline element whose
+            // words `wrap_inline_run` merged into its same-style
+            // neighbour's fragment still gets its own geometry.
+            for (frag, span) in line.iter().flat_map(|f| {
+                text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
+            }) {
+                let fx1 = b.rect.x + frag.x + span.x;
+                let fy1 = line_y;
+                let fx2 = fx1 + span.width;
+                let fy2 = fy1 + line_h;
+                for anc in inline_element_ancestors(doc, span.source_node, b.node) {
+                    out.entry(anc.index() as u32)
+                        .and_modify(|cur| {
+                            let cx1 = cur[0].min(fx1);
+                            let cy1 = cur[1].min(fy1);
+                            let cx2 = (cur[0] + cur[2]).max(fx2);
+                            let cy2 = (cur[1] + cur[3]).max(fy2);
+                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                        })
+                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
                 }
             }
         }
-        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -2090,54 +2377,68 @@ fn collect_client_rects_rec(
 ) {
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
-        // traversal visits a node's own box before descending into its children.
-        let r = &b.rect;
-        out.entry(b.node.index() as u32)
-            .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
-        if let BoxKind::InlineRun { lines, .. } = &b.kind {
-            let line_h = b.style.font_size * b.style.line_height;
-            for (line_idx, line) in lines.iter().enumerate() {
-                let line_y = b.rect.y + line_idx as f32 * line_h;
-                // Frags on the SAME line belonging to the same owner (a bidi split,
-                // an inline element reopening around a nested box, …) merge into
-                // one rect — one rect per CSS *fragment*, and a fragment is a
-                // line, not a frag.
-                let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
-                    std::collections::HashMap::new();
-                for (frag, span) in line.iter().flat_map(|f| {
-                    text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
-                }) {
-                    let fx1 = b.rect.x + frag.x + span.x;
-                    let fy1 = line_y;
-                    let fx2 = fx1 + span.width;
-                    let fy2 = fy1 + line_h;
-                    for anc in inline_element_ancestors(doc, span.source_node, b.node) {
-                        per_owner_this_line
-                            .entry(anc.index() as u32)
-                            .and_modify(|cur| {
-                                let cx1 = cur[0].min(fx1);
-                                let cy1 = cur[1].min(fy1);
-                                let cx2 = (cur[0] + cur[2]).max(fx2);
-                                let cy2 = (cur[1] + cur[3]).max(fy2);
-                                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                            })
-                            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
-                    }
+        collect_client_rects_box(doc, b, boxed, out);
+        stack.extend(b.children.iter().rev());
+    }
+}
+
+/// One box's contribution to [`collect_client_rects`]. `boxed` must cover every
+/// node owning a real box among `b`'s descendants (see [`collect_boxed_node_ids`]).
+fn collect_client_rects_box(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    boxed: &std::collections::HashSet<u32>,
+    out: &mut std::collections::HashMap<u32, Vec<[f32; 4]>>,
+) {
+    // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
+    // traversal visits a node's own box before descending into its children.
+    let r = match &b.kind {
+        BoxKind::Ruby { .. } => ruby::ruby_base_rect(b).unwrap_or(b.rect),
+        _ => b.rect,
+    };
+    out.entry(b.node.index() as u32)
+        .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let line_h = b.style.font_size * b.style.line_height;
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_y = b.rect.y + line_idx as f32 * line_h;
+            // Frags on the SAME line belonging to the same owner (a bidi split,
+            // an inline element reopening around a nested box, …) merge into
+            // one rect — one rect per CSS *fragment*, and a fragment is a
+            // line, not a frag.
+            let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
+                std::collections::HashMap::new();
+            for (frag, span) in line.iter().flat_map(|f| {
+                text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
+            }) {
+                let fx1 = b.rect.x + frag.x + span.x;
+                let fy1 = line_y;
+                let fx2 = fx1 + span.width;
+                let fy2 = fy1 + line_h;
+                for anc in inline_element_ancestors(doc, span.source_node, b.node) {
+                    per_owner_this_line
+                        .entry(anc.index() as u32)
+                        .and_modify(|cur| {
+                            let cx1 = cur[0].min(fx1);
+                            let cy1 = cur[1].min(fy1);
+                            let cx2 = (cur[0] + cur[2]).max(fx2);
+                            let cy2 = (cur[1] + cur[3]).max(fy2);
+                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                        })
+                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
                 }
-                for (owner, rect) in per_owner_this_line {
-                    // An owner with a real box of its own (an inline-block nested
-                    // in this line, still an `InlineFrag` here for line-height
-                    // purposes) already has its one true rect from that box — do
-                    // not also append this approximate line-derived rect on top
-                    // of it.
-                    if !boxed.contains(&owner) {
-                        out.entry(owner).or_default().push(rect);
-                    }
+            }
+            for (owner, rect) in per_owner_this_line {
+                // An owner with a real box of its own (an inline-block nested
+                // in this line, still an `InlineFrag` here for line-height
+                // purposes) already has its one true rect from that box — do
+                // not also append this approximate line-derived rect on top
+                // of it.
+                if !boxed.contains(&owner) {
+                    out.entry(owner).or_default().push(rect);
                 }
             }
         }
-        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -2176,6 +2477,70 @@ pub fn find_box_by_node(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&La
     root.children.iter().find_map(|c| find_box_by_node(c, node))
 }
 
+/// BUG-1211: locate every box in `root`'s tree whose `NodeId` is a member of
+/// `roots`, without descending further once one is found — its whole subtree
+/// is the caller's unit of work, same "stop at the topmost member" rule
+/// [`crate::incremental::extract_clean_subtrees`] already uses for the same
+/// reason. A single combined pass shared across every same-tick collector
+/// that needs to visit exactly the touched subtrees (`FlushHandles::
+/// maybe_flush`'s incremental branch) — cheaper than one [`find_box_by_node`]
+/// call per root (each of which independently re-walks from the document
+/// root), and, more importantly, the search cost is paid once instead of
+/// once per collector.
+///
+/// Same first-match-in-pre-order ambiguity as [`find_box_by_node`] when a
+/// `NodeId` labels more than one box (an anonymous wrapper and the element's
+/// own box) — pre-order visits the outer/element box first, matching
+/// `collect_layout_rects_rec`'s BUG-382 "first box in tree order wins" rule.
+pub fn find_dirty_root_boxes<'a, S: std::hash::BuildHasher>(
+    root: &'a LayoutBox,
+    roots: &std::collections::HashSet<lumen_dom::NodeId, S>,
+) -> Vec<&'a LayoutBox> {
+    let mut out = Vec::new();
+    if roots.is_empty() {
+        return out;
+    }
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if roots.contains(&b.node) {
+            out.push(b);
+            continue;
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
+}
+
+/// BUG-1211: every `NodeId` owning a box anywhere in the subtrees [`find_dirty_root_boxes`] finds
+/// for `roots`, as the sets the JS-visible caches evict by — the eviction-side twin of that search:
+/// taken against the *previous* flush's tree before an incremental restyle discards it, so a
+/// same-tick collector can remove exactly the entries a touched subtree owned (including ones for
+/// nodes since removed from the DOM, which own no box in the *fresh* tree and so would otherwise
+/// never be evicted) before re-inserting from the fresh subtree.
+///
+/// Returns `(indices, raw_ids)`: [`lumen_dom::NodeId::index`] for `layout_rects`/`client_rects`/
+/// `computed_styles`, [`lumen_dom::NodeId::raw`] (index + generation) for `scroll_states`. The
+/// asymmetry is pre-existing in those maps and the caller must match it exactly, not "fix" it: an
+/// `.index()`-keyed set against a `.raw()`-keyed map silently fails to evict a stale entry whenever
+/// a node's generation byte is nonzero (its arena slot was reused — GAP-P3GCJSDOM).
+///
+/// BUG-935 срез 74: one search and one walk of each subtree for both sets (they were built by four
+/// walks over the same boxes: 0,36 мс of a 5 мс flush on `lenta.ru`, where the dirty root is `body`).
+pub fn collect_dirty_subtree_ids<S: std::hash::BuildHasher>(
+    root: &LayoutBox,
+    roots: &std::collections::HashSet<lumen_dom::NodeId, S>,
+) -> (lumen_core::id_hash::IdSet<u32>, lumen_core::id_hash::IdSet<u32>) {
+    let mut indices = lumen_core::id_hash::IdSet::default();
+    let mut raws = lumen_core::id_hash::IdSet::default();
+    let mut stack: Vec<&LayoutBox> = find_dirty_root_boxes(root, roots);
+    while let Some(b) = stack.pop() {
+        indices.insert(b.node.index() as u32);
+        raws.insert(b.node.raw());
+        stack.extend(b.children.iter());
+    }
+    (indices, raws)
+}
+
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
     if root.node == node {
         let pb = padding_box(root);
@@ -2199,6 +2564,41 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
         }
     }
     false
+}
+
+/// Apply every `(node raw id → [scroll_x, scroll_y, ..])` of `states` to the
+/// tree in ONE walk — what a loop of [`set_scroll_position`] over the map did in
+/// `O(containers × boxes)` (a DFS per container, ~2 ms per flush on lenta.ru).
+///
+/// Same result as the loop: a node's *first* box in pre-order takes the offset
+/// (a node shared by several boxes is not applied twice), clamped by
+/// [`set_scroll_position`]'s own rule. The one shortcut: a request for `(0, 0)`
+/// on a box already at `(0, 0)` is skipped — the clamp range always contains 0
+/// (`min ≤ 0 ≤ max`, and `clip` yields 0), so it would write the same value, but
+/// computing the scrollable extent walks the container's whole subtree.
+pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections::HashMap<u32, [f32; 4]>) {
+    if states.is_empty() {
+        return;
+    }
+    let mut pending = states.len();
+    let mut applied = std::collections::HashSet::new();
+    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        let node = b.node;
+        if let Some(s) = states.get(&node.raw())
+            && applied.insert(node.raw())
+        {
+            pending -= 1;
+            let at_origin = b.scroll_x == 0.0 && b.scroll_y == 0.0;
+            if !(at_origin && s[0] == 0.0 && s[1] == 0.0) {
+                set_scroll_position(b, node, s[0], s[1]);
+            }
+            if pending == 0 {
+                return;
+            }
+        }
+        stack.extend(b.children.iter_mut().rev());
+    }
 }
 
 /// Find the innermost scroll container whose `clip_rect` contains `(x, y)`.
@@ -2256,11 +2656,10 @@ fn collect_vt_names_rec(root: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<
 /// collector returns every occurrence as-is (mirroring
 /// [`collect_view_transition_names`]); the shell deduplicates by name, keeping
 /// the first, when it pairs old↔new snapshots.
-// CSS: ::view-transition / ::view-transition-group(name) / -image-pair / -old / -new —
-// P4 to add PseudoElementKind variants + functional-pseudo parsing
-// (css-parser/src/parser.rs:345) so author animation-duration /
-// animation-timing-function on these pseudos can override the morph's hardcoded
-// 300 ms per group. Until then the shell uses the default duration for every group.
+// The `::view-transition-*` pseudo-elements are parsed and cascaded
+// ([`compute_view_transition_pseudo_style`]); the shell reads the whole-page
+// (`root`) `animation-duration`/`-timing-function` from them. Per-name group
+// morphing is not driven by this collector yet.
 pub fn collect_view_transition_groups(
     root: &LayoutBox,
 ) -> Vec<(lumen_dom::NodeId, Box<str>, lumen_core::geom::Rect)> {
@@ -2308,6 +2707,63 @@ pub fn find_scroll_container_at(
             None
         }
     })
+}
+
+/// Result of walking the scroll chain for one wheel delta
+/// ([`resolve_scroll_chain_target`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollChainTarget {
+    /// The container that takes the gesture.
+    pub node: lumen_dom::NodeId,
+    /// Its new horizontal offset (CSS px, clamped).
+    pub new_x: f32,
+    /// Its new vertical offset (CSS px, clamped).
+    pub new_y: f32,
+    /// `false` ⇒ the container is at its boundary and the gesture ends here
+    /// without moving anything (`overscroll-behavior: contain | none`).
+    pub moved: bool,
+}
+
+/// CSS Overscroll Behavior L1 §3 — walk the scroll chain under the point
+/// `(x, y)` (CSS px, document-relative) from the innermost scroll container
+/// outwards and pick the one that takes the gesture.
+///
+/// A container takes the gesture when it can move on a delta-bearing axis or
+/// when its `overscroll-behavior` stops propagation at its boundary
+/// ([`overscroll_should_propagate`]). A container at its boundary with `auto`
+/// hands the delta to the next enclosing container. `None` ⇒ no container in
+/// the chain takes it, the caller scrolls the viewport / frame.
+#[must_use]
+pub fn resolve_scroll_chain_target(
+    containers: &[ScrollContainer],
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+) -> Option<ScrollChainTarget> {
+    // Later entries are deeper in the tree, so reverse order is innermost-first.
+    for c in containers.iter().rev() {
+        let r = &c.clip_rect;
+        if !(x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+            continue;
+        }
+        let new_x = (c.scroll_x + dx).clamp(0.0, (c.scroll_width - r.width).max(0.0));
+        let new_y = (c.scroll_y + dy).clamp(0.0, (c.scroll_height - r.height).max(0.0));
+        let moved_x = (new_x - c.scroll_x).abs() > f32::EPSILON;
+        let moved_y = (new_y - c.scroll_y).abs() > f32::EPSILON;
+        if overscroll_should_propagate(
+            c.overscroll_behavior_x,
+            c.overscroll_behavior_y,
+            dx,
+            dy,
+            moved_x,
+            moved_y,
+        ) {
+            continue;
+        }
+        return Some(ScrollChainTarget { node: c.node, new_x, new_y, moved: moved_x || moved_y });
+    }
+    None
 }
 
 /// Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
@@ -2379,6 +2835,10 @@ mod filter_transform_snap_mask;
 pub(crate) use filter_transform_snap_mask::first_p_style;
 
 #[cfg(test)]
+#[path = "tests/scroll_snap_masking.rs"]
+mod scroll_snap_masking;
+
+#[cfg(test)]
 #[path = "tests/animation_gradient_quirks.rs"]
 mod animation_gradient_quirks;
 
@@ -2391,8 +2851,20 @@ mod table_grid_presentational;
 mod layout_generation_misc;
 
 #[cfg(test)]
+#[path = "tests/half_leading_columns_floats.rs"]
+mod half_leading_columns_floats;
+
+#[cfg(test)]
 #[path = "tests/scroll_interaction_misc.rs"]
 mod scroll_interaction_misc;
+
+#[cfg(test)]
+#[path = "tests/scroll_container.rs"]
+mod scroll_container;
+
+#[cfg(test)]
+#[path = "tests/scroll_initial_target.rs"]
+mod scroll_initial_target_tests;
 
 #[cfg(test)]
 #[path = "tests/deep_traversal_stress.rs"]

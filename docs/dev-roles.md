@@ -7,7 +7,7 @@ Crates — the full list with per-crate state is [`SUBSYSTEMS.md`](../SUBSYSTEMS
 
 | Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell), taken top-down off `STATUS-P1.md`. Finished tracks: DS (design system v3.3, DS-1…DS-19, `docs/design/lumen-v3_3.html`). Engine-root bugs that only the chrome exposes (BUG-333/433/431/343/288) were moved here from P3 on 2026-07-29 so one role owns the whole «engine roots → chrome visuals → chrome interaction» chain. BUG-341 (incremental restyle) is paused by user decision 2026-07-28 — resume only on explicit request. | All crates (coordinated with P2/P4) |
+| **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell), taken top-down off `STATUS-P1.md`. Finished tracks: DS (design system v3.3, DS-1…DS-19, `docs/design/lumen-v3_3.html`). Engine-root bugs that only the chrome exposes (BUG-333/433/431/343/288) were moved here from P3 on 2026-07-29 so one role owns the whole «engine roots → chrome visuals → chrome interaction» chain. BUG-935 and BUG-286 (ADR-016 relayout/rAF path, live hangs on heavy real pages) were moved here from P3 on 2026-10-01 by user decision — architectural, not point fixes (BUG-286 itself records «P3 scope exhausted, architectural trade-off for P1»). BUG-341 (incremental restyle) is paused by user decision 2026-07-28 — resume only on explicit request. | All crates (coordinated with P2/P4) |
 | **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT integration via `wptrunner` + WebDriver BiDi, [`wpt-status.md`](wpt-status.md)) and the DEVX dev-tooling track (`docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve 2026-06-18…2026-07-13 (tasks of that period inherited by P1, `STATUS-P1.md`). **Owns the CI track since 2026-08-19** (`docs/ci-offload.md`, ROADMAP.md `CI-5`/`CI-6`/`PERF-7`), handed over by P5 whose role forbids the behaviour changes the tail needs. | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4), `.github/workflows/*` |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions. **Skip a row marked `OPEN (ДОРАБОТКА → <task>)`** — that record describes functionality that was never implemented, not a defect in implemented code, and is owned by the named `ROADMAP.md` task instead (2026-08-28; see BUGS.md's own legend for why the file is not renamed). | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
@@ -206,7 +206,11 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 
 ## Reserving a task
 
-Create the feature branch and worktree (`p<N>-<id>`). **The branch's existence is the reservation
-signal** — a parallel session sees it via `git branch` and skips that task. The `STATUS-PN.md` pointer
+Create the feature branch and worktree (`p<N>-<id>`) and **push it before the first code edit** —
+`bash scripts/task-claim.sh <N> <id>` does the check, the slot and the push in one step. **The
+branch's existence on `origin` is the reservation signal**: a parallel session (possibly on another
+machine) sees it only after `git fetch`, and matches it by task id, not by exact branch name
+([`git-workflow.md`](git-workflow.md) §Parallel session coordination). A local-only branch reserves
+nothing. The `STATUS-PN.md` pointer
 line stays put (it is deleted only on completion); there is no "In progress"/"Next" section to move it
 between. Keep the working details at hand in `docs/tasks/<id>.md`.

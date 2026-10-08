@@ -135,7 +135,7 @@ lumen-layout --all-targets -- -D warnings`: clean. `graphic_tests/
 dump_golden.py --build`: same pre-existing 4/12 mismatches (`samples/
 page.html`, `65-flex-align-content.html`) as every other slice on the
 adjacent BUG-518 track this same day — confirmed byte-identical on a clean
-`main` checkout via `git stash` A/B (the [BUG-1008](BUG-1008-OPEN.md)-class
+`main` checkout via `git stash` A/B (the [BUG-1008](BUG-1008-FIXED.md)-class
 drift), unrelated to this change (declaration/value parsing only, no
 paint/layout-geometry code touched). No live WPT run (`tests/wpt/
 run_smoke.py` broken in this environment, unrelated to this bug).

@@ -71,7 +71,7 @@ pub(crate) struct PageSnapshot {
     pub(crate) animation_scheduler: animation_scheduler::AnimationScheduler,
     pub(crate) transition_scheduler: TransitionScheduler,
     pub(crate) starting_style_tracker: StartingStyleTracker,
-    pub(crate) prev_styles: HashMap<NodeId, ComputedStyle>,
+    pub(crate) prev_styles: crate::layout_walk::StyleMap,
     /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` — must travel
     /// with `layout_box` (same producer, same invalidation rule) so a tab
     /// switch back to this snapshot cannot resurrect a cache that no longer
@@ -181,4 +181,14 @@ pub(crate) struct PageSnapshot {
     /// Populated when a successful HTTPS connection is made; `None` for HTTP pages
     /// or when cert extraction is not yet wired (Phase 0 uses stubs).
     pub(crate) cert_info: Option<panels::cert_panel::PanelCertData>,
+    /// BUG-1214: mirrors [`Lumen::load_generation`] — the expected generation
+    /// of THIS tab's most recent navigation, carried along so a streaming
+    /// `LoadEvent` for a backgrounded tab can still be validated (and applied)
+    /// after `Lumen::apply_load_event_for_tab` impersonates it, the same way
+    /// the always-active-tab code path validates against `Lumen::load_generation`.
+    pub(crate) load_generation: u64,
+    /// BUG-1214: mirrors [`Lumen::document_base`] — see that field's doc
+    /// comment; travels with the tab for the same reason `load_generation`
+    /// does above.
+    pub(crate) document_base: Option<(ResourceBase, u64)>,
 }

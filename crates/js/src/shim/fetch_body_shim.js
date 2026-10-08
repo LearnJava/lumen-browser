@@ -72,7 +72,13 @@ function _rs_drain_to_bytes(stream) {
 //        — the unserialised body a Request/Response was built from. fetch()
 //          needs it because Request.body is now a ReadableStream (Body mixin),
 //          not the raw string/FormData the caller passed.
+//   _lumen_response_from_blob(blob, url)
+//        — Fetch §4.2 «scheme fetch», `blob` branch: a 200 whose body is a
+//          copy of the Blob's bytes, `Content-Type` = the Blob's type and
+//          `Content-Length` = its size (BUG-1126);
+//
 var _lumen_response_from_fetch_cache;
+var _lumen_response_from_blob;
 var _lumen_body_source;
 var Response;
 var Request;
@@ -443,6 +449,20 @@ var Request;
             return origGetReader(opts);
         };
         st.stream = stream;
+        return r;
+    };
+
+    // Blob path: the body is already in JS, so it is copied once (the Blob must
+    // stay immutable) and served from memory like a constructed Response.
+    _lumen_response_from_blob = function(blob, url) {
+        var bytes = new Uint8Array(blob._bytes);
+        var st = responseSlots(_lumen_headers_set_guard(new Headers([
+            ['Content-Length', String(bytes.length)], ['Content-Type', blob.type]]), 'response'));
+        st.statusText = 'OK';
+        st.url = url;
+        st.bytes = bytes;
+        var r = rawResponse(st);
+        st.stream = _rs_make_body_stream(st.bytes, st);
         return r;
     };
 

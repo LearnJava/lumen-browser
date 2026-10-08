@@ -190,7 +190,7 @@ maximum-scroll-limit) в кэше без живого layout посчитать 
 
 ## Смежное
 
-[BUG-965](bugs/BUG-965-OPEN.md) — не то же самое: там headless-драйвер
+[BUG-965](BUG-965-FIXED.md) — не то же самое: там headless-драйвер
 (`InProcessSession`, `--mcp-port`) вообще никогда не зовёт
 `update_scroll_states` ни на каком тике, поэтому `scrollLeft` там 0 всегда,
 даже спустя сколько угодно тиков. Здесь — живое окно (`--mcp-live-port`,

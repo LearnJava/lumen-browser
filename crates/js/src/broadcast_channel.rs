@@ -298,7 +298,7 @@ const BROADCAST_CHANNEL_SHIM: &str = r#"(function() {
 
   // Called by QuickJsRuntime::pump_broadcast_channels() with an array of
   // { id: u32, json: String } objects representing messages from the hub.
-  globalThis._lumen_deliver_broadcast_messages = function(msgs) {
+  __lumen_C._lumen_deliver_broadcast_messages = function(msgs) {
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
       var ch = _bcRegistry[m.id];
@@ -321,7 +321,7 @@ mod tests {
     fn runtime() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None).unwrap();
         rt
     }
 

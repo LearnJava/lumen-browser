@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -639,6 +639,18 @@ fn get_html_with_options_phase0() {
         )
         .unwrap();
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-1064: getHTML сериализует теневой корень как <template shadowrootmode>.
+#[test]
+fn get_html_serializes_shadow_roots() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var h = document.createElement('div');             document.body.appendChild(h);             var s = h.attachShadow({mode:'closed', delegatesFocus:true, clonable:true, serializable:true});             s.innerHTML = '<b>x</b>';             h.innerHTML = '<i>l</i>';             var t = '<template shadowrootmode=\"closed\" shadowrootdelegatesfocus=\"\" shadowrootserializable=\"\" shadowrootclonable=\"\"><b>x</b></template>';             [h.getHTML({serializableShadowRoots:true}) === t + '<i>l</i>',              h.getHTML({shadowRoots:[s]}) === t + '<i>l</i>',              h.getHTML() === '<i>l</i>'].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true,true,true".into()));
 }
 
 // ── BUG-368: innerHTML must parse/serialize real markup, not textContent ──

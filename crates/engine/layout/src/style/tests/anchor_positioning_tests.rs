@@ -119,6 +119,114 @@
         assert_eq!(f.fallback, Some(Length::Px(10.0)));
     }
 
+    // ── GAP-ANCHORCSSOM-S1: `&&` grammar, new sides, `anchor-size()` ──────────
+
+    #[test]
+    fn anchor_func_side_before_name_equals_name_before_side() {
+        let a = first_div_style("<div></div>", "div { position: absolute; top: anchor(--a top); }");
+        let b = first_div_style("<div></div>", "div { position: absolute; top: anchor(top --a); }");
+        assert_eq!(a.anchor_top, b.anchor_top);
+        let f = b.anchor_top.as_ref().expect("anchor(top --a) not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.side, crate::anchor::AnchorSide::Top);
+    }
+
+    #[test]
+    fn anchor_func_side_before_name_keeps_fallback() {
+        let s = first_div_style("<div></div>", "div { position: absolute; left: anchor(50% --a, 4px); }");
+        let f = s.anchor_left.as_ref().expect("anchor() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.side, crate::anchor::AnchorSide::Percentage(50.0));
+        assert_eq!(f.fallback, Some(Length::Px(4.0)));
+    }
+
+    #[test]
+    fn anchor_func_new_sides_parsed() {
+        use crate::anchor::AnchorSide;
+        for (kw, want) in [
+            ("inside", AnchorSide::Inside),
+            ("outside", AnchorSide::Outside),
+            ("self-start", AnchorSide::SelfStart),
+            ("self-end", AnchorSide::SelfEnd),
+            ("OUTSIDE", AnchorSide::Outside),
+        ] {
+            let s = first_div_style(
+                "<div></div>",
+                &format!("div {{ position: absolute; top: anchor({kw}); }}"),
+            );
+            let f = s.anchor_top.as_ref().unwrap_or_else(|| panic!("anchor({kw}) not parsed"));
+            assert_eq!(f.side, want, "{kw}");
+        }
+    }
+
+    #[test]
+    fn anchor_func_repeated_or_missing_component_is_invalid() {
+        for arg in ["--a --b top", "top left", "top bottom --a", "--a", "--a --b", "bogus", "top top"] {
+            let s = first_div_style(
+                "<div></div>",
+                &format!("div {{ position: absolute; top: anchor({arg}); }}"),
+            );
+            assert!(s.anchor_top.is_none(), "anchor({arg}) must not parse");
+            assert!(s.top.is_auto(), "anchor({arg}) must leave top auto");
+        }
+    }
+
+    #[test]
+    fn anchor_size_name_then_dimension_parsed() {
+        use crate::anchor::AnchorSizeDimension;
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(--a width); }");
+        let f = s.anchor_size_w.as_ref().expect("anchor-size() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.dimension, AnchorSizeDimension::Width);
+        assert!(f.fallback.is_none());
+        assert!(s.width.is_none(), "plain width must stay auto when anchor-size() is used");
+    }
+
+    #[test]
+    fn anchor_size_dimension_then_name_parsed() {
+        use crate::anchor::AnchorSizeDimension;
+        let s = first_div_style("<div></div>", "div { position: absolute; height: anchor-size(block --a); }");
+        let f = s.anchor_size_h.as_ref().expect("anchor-size() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.dimension, AnchorSizeDimension::Block);
+    }
+
+    #[test]
+    fn anchor_size_dimension_only_parsed() {
+        use crate::anchor::AnchorSizeDimension;
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(inline); }");
+        let f = s.anchor_size_w.as_ref().expect("anchor-size() not parsed");
+        assert!(f.anchor_name.is_none());
+        assert_eq!(f.dimension, AnchorSizeDimension::Inline);
+    }
+
+    #[test]
+    fn anchor_size_fallback_parsed() {
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(--a width, 10px); }");
+        let f = s.anchor_size_w.as_ref().expect("anchor-size() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--a"));
+        assert_eq!(f.fallback, Some(Length::Px(10.0)));
+    }
+
+    #[test]
+    fn anchor_size_legacy_comma_form_is_invalid() {
+        // `anchor-size(--a, width)`: after the comma the spec wants a
+        // `<length-percentage>` fallback, and `width` is not one.
+        let s = first_div_style("<div></div>", "div { position: absolute; width: anchor-size(--a, width); }");
+        assert!(s.anchor_size_w.is_none());
+    }
+
+    #[test]
+    fn anchor_size_repeated_component_is_invalid() {
+        for arg in ["--a --b width", "width height", "--a", ""] {
+            let s = first_div_style(
+                "<div></div>",
+                &format!("div {{ position: absolute; width: anchor-size({arg}); }}"),
+            );
+            assert!(s.anchor_size_w.is_none(), "anchor-size({arg}) must not parse");
+        }
+    }
+
     #[test]
     fn anchor_func_cleared_by_plain_length() {
         // A later declaration without anchor() must clear the previously
@@ -557,3 +665,65 @@
         assert!(!forced_colors_active(), "forced colors must be false");
     }
 
+
+    // GAP-ANCHORCSSOM-S2: канонизатор `element.style` для верхнеуровневых
+    // anchor()/anchor-size().
+
+    #[test]
+    fn canonical_anchor_puts_name_first_and_lowercases_side() {
+        assert_eq!(canonical_specified_anchor("anchor(--a top)", true).as_deref(), Some("anchor(--a top)"));
+        assert_eq!(canonical_specified_anchor("anchor(top --a)", true).as_deref(), Some("anchor(--a top)"));
+        assert_eq!(canonical_specified_anchor("ANCHOR( TOP )", true).as_deref(), Some("anchor(top)"));
+        assert_eq!(canonical_specified_anchor("anchor(--a 50%)", true).as_deref(), Some("anchor(--a 50%)"));
+        assert_eq!(canonical_specified_anchor("anchor(self-end)", true).as_deref(), Some("anchor(self-end)"));
+    }
+
+    #[test]
+    fn canonical_anchor_serializes_fallback_as_length() {
+        assert_eq!(canonical_specified_anchor("anchor(--a left, 0)", true).as_deref(), Some("anchor(--a left, 0px)"));
+        assert_eq!(canonical_specified_anchor("anchor(left --a,1px)", true).as_deref(), Some("anchor(--a left, 1px)"));
+        assert_eq!(
+            canonical_specified_anchor("anchor(top, calc(50% + 1px))", true).as_deref(),
+            Some("anchor(top, calc(50% + 1px))")
+        );
+    }
+
+    #[test]
+    fn canonical_anchor_rejects_invalid_forms() {
+        for bad in [
+            "anchor(--a, top)", "anchor(--a top,)", "anchor(--a top bottom)", "anchor(--a top, 10px 20%)",
+            "anchor(--a top, 10px, 20%)", "anchor(foo top)", "anchor(top foo)", "anchor(--a height)",
+            "anchor(--a 10em)", "anchor(--a top, 1)", "anchor(--a top, bottom)", "anchor(--a top, auto",
+            "anchor()", "anchor(--a)", "10px",
+        ] {
+            assert_eq!(canonical_specified_anchor(bad, true), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn canonical_anchor_size_orders_name_before_dimension() {
+        assert_eq!(canonical_specified_anchor("anchor-size(--a width)", false).as_deref(), Some("anchor-size(--a width)"));
+        assert_eq!(canonical_specified_anchor("anchor-size(width --a)", false).as_deref(), Some("anchor-size(--a width)"));
+        assert_eq!(canonical_specified_anchor("anchor-size(self-inline)", false).as_deref(), Some("anchor-size(self-inline)"));
+        assert_eq!(
+            canonical_specified_anchor("anchor-size(--a block, 0)", false).as_deref(),
+            Some("anchor-size(--a block, 0px)")
+        );
+    }
+
+    #[test]
+    fn canonical_anchor_size_rejects_invalid_forms() {
+        for bad in [
+            "anchor-size(--a, width)", "anchor-size(--a width,)", "anchor-size(--a width height)",
+            "anchor-size(--a width, 10px 20%)", "anchor-size(foo width)", "anchor-size(--a top)",
+            "anchor-size(--a 50%)", "anchor-size(--a width, 1)", "anchor-size(--a width, height)",
+        ] {
+            assert_eq!(canonical_specified_anchor(bad, false), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn canonical_anchor_not_allowed_for_anchor_only_in_size_properties() {
+        assert_eq!(canonical_specified_anchor("anchor(--a top)", false), None);
+        assert!(canonical_specified_anchor("anchor-size(--a width)", false).is_some());
+    }

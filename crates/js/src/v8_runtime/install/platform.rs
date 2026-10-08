@@ -380,20 +380,39 @@ pub(crate) fn install_point_hit_test(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
+    flush: FlushHandles,
 ) -> JsResult<()> {
+    // BUG-1202: flush first (as `getClientRects` does), then hit-test the flush's own tree when it
+    // is newer than the embedder-pushed snapshot — a node inserted this tick must be found.
     {
         let tree = Arc::clone(&hit_test_tree);
+        let flush = flush.clone();
         reg!(scope, ctx, store, "_lumen_element_from_point", move |x: f64, y: f64| -> Option<u32> {
+            flush.maybe_flush();
+            let p = lumen_core::geom::Point::new(x as f32, y as f32);
+            if flush.hit_tree_stale.load(Ordering::Relaxed) {
+                let basis = flush.incr_basis.lock().unwrap();
+                if let Some(b) = basis.as_ref() {
+                    return lumen_paint::hit_test(p, &b.layout).map(|r| r.node.raw());
+                }
+            }
             let root = tree.lock().unwrap().clone()?;
-            lumen_paint::hit_test(lumen_core::geom::Point::new(x as f32, y as f32), &root)
-                .map(|r| r.node.raw())
+            lumen_paint::hit_test(p, &root).map(|r| r.node.raw())
         });
     }
     {
         let tree = Arc::clone(&hit_test_tree);
         reg!(scope, ctx, store, "_lumen_elements_from_point", move |x: f64, y: f64| -> Vec<u32> {
-            let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
-            let hits = lumen_paint::hit_test_all(lumen_core::geom::Point::new(x as f32, y as f32), &root);
+            flush.maybe_flush();
+            let p = lumen_core::geom::Point::new(x as f32, y as f32);
+            let hits = if flush.hit_tree_stale.load(Ordering::Relaxed)
+                && let Some(b) = flush.incr_basis.lock().unwrap().as_ref()
+            {
+                lumen_paint::hit_test_all(p, &b.layout)
+            } else {
+                let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
+                lumen_paint::hit_test_all(p, &root)
+            };
             let mut seen = std::collections::HashSet::new();
             hits.into_iter()
                 .filter_map(|r| {
@@ -416,11 +435,11 @@ pub(crate) fn install_match_media(
     // ── window.matchMedia (CSS Media Queries L4 §4.2) ────────────────────────
     // Parses `query` as a media query and evaluates it against an ad-hoc
     // MediaContext built from the supplied viewport size + user-preference
-    // flags. Pure function — no captures: parse_media_query and MediaQuery::matches
+    // flags (dark, reduced-motion, forced-colors). Pure function — no captures: parse_media_query and MediaQuery::matches
     // are stateless. Returns `true` when the query currently matches.
     reg!(scope, ctx, store, 
         "_lumen_match_media",
-        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool| -> bool {
+        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool, forced_colors: bool| -> bool {
             let mq = lumen_css_parser::parse_media_query(&query);
             let ctx = lumen_css_parser::MediaContext {
                 media_type: "screen".to_owned(),
@@ -428,7 +447,7 @@ pub(crate) fn install_match_media(
                 height: h as f32,
                 prefers_dark: dark,
                 prefers_reduced_motion: reduced_motion,
-                forced_colors: false,
+                forced_colors,
                 ..Default::default()
             };
             mq.matches(&ctx)
@@ -551,6 +570,62 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Gap Decorations L1 §4.7 — interpolation of `*-rule-width`/`-color`/
+    // `-inset-*` between two specified values (Web Animations shim,
+    // `_wa_gap_compute`). `None` = the pair does not interpolate (the caller
+    // flips discretely at 50%).
+    reg!(scope, ctx, store,
+        "_lumen_css_interpolate_gap_rule",
+        |prop: String, from: String, to: String, t: f64| -> Option<String> {
+            lumen_layout::style::interpolate_gap_rule_value(&prop, &from, &to, t)
+        }
+    );
+
+    // CSS Gap Decorations L1 §4.7 — computed-form serialization of one specified
+    // value (`red` → `rgb(255, 0, 0)`, `thin` → `1px`, `repeat()` form kept), used
+    // where an animation/transition flips discretely and no arithmetic runs.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_gap_rule",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_gap_rule_value(&prop, &value)
+        }
+    );
+
+    // CSS Gap Decorations L1 §3–§4 in the inline-`style` CSSOM: one `rule*` /
+    // `{column,row}-rule*` declaration → canonical longhands. Returns JSON
+    // `{"k":"not"|"invalid"|"ok","l":[[longhand,value],…]}` (`not` = not a gap
+    // property, the shim takes its usual path; `invalid` = declaration dropped).
+    reg!(scope, ctx, store,
+        "_lumen_css_expand_gap_rule",
+        |prop: String, value: String| -> String {
+            use lumen_layout::style::{GapDecl, expand_gap_rule_declaration};
+            match expand_gap_rule_declaration(&prop, &value) {
+                GapDecl::NotGap => r#"{"k":"not"}"#.to_string(),
+                GapDecl::Invalid => r#"{"k":"invalid"}"#.to_string(),
+                GapDecl::Longhands(l) => serde_json::json!({ "k": "ok", "l": l }).to_string(),
+            }
+        }
+    );
+
+    // Longhand names a gap property sets (JSON array; `[]` = not a gap property).
+    reg!(scope, ctx, store,
+        "_lumen_css_gap_rule_longhands",
+        |prop: String| -> String {
+            serde_json::to_string(&lumen_layout::style::gap_rule_longhand_names(&prop))
+                .unwrap_or_else(|_| "[]".to_string())
+        }
+    );
+
+    // Shorthand value of a gap property from the stored longhands (`obj` is a JSON
+    // object of longhand → value); `None` when it cannot be composed.
+    reg!(scope, ctx, store,
+        "_lumen_css_gap_rule_shorthand",
+        |prop: String, obj: String| -> Option<String> {
+            let map: std::collections::HashMap<String, String> = serde_json::from_str(&obj).ok()?;
+            lumen_layout::style::gap_rule_shorthand_value(&prop, &|n| map.get(n).cloned())
+        }
+    );
+
     // Canonical `<length-percentage>` serialization for inline-`style`
     // margin-*/padding-* longhands (CSS Box §8, CSSOM-2/BUG-484) — same role
     // as `_lumen_css_canonical_color` above but for lengths: rejects a
@@ -578,6 +653,27 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Grammar check for the inline-`style` grid family (`grid-*`, `flex-grow`/
+    // `flex-shrink`, `flow-tolerance`; BUG-1315): the trimmed value when it parses,
+    // `None` when the assignment must be dropped. `web_api_shim_mid.js`
+    // `_LUMEN_GRID_PROPERTIES` lists the keys routed here.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_grid",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_grid(&prop, &value)
+        }
+    );
+
+    // Grammar + canonical form of the CSS Text longhands with length / compound values in
+    // inline-`style` (`tab-size`, `letter-spacing`, `word-spacing`, `text-indent`,
+    // `text-transform`; BUG-1325). `None` — the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_text",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_text(&prop, &value)
+        }
+    );
+
     // Canonical sizing serialization for inline-`style` `width`/`height`
     // (CSS Sizing L3 §4, CSSOM-2/BUG-484 third slice) — same role as
     // `_lumen_css_canonical_length` above, but the grammar additionally
@@ -586,6 +682,18 @@ pub(crate) fn install_css_supports_and_lazy_images(
         "_lumen_css_canonical_sizing_length",
         |value: String| -> Option<String> {
             lumen_layout::style::canonical_specified_sizing_length(&value)
+        }
+    );
+
+    // Canonical top-level `anchor()` / `anchor-size()` serialization for
+    // inline-`style` inset/margin/sizing properties (CSS Anchor Positioning L1
+    // §3.1/§4, BUG-563, GAP-ANCHORCSSOM-S2). `allow_anchor` — `anchor()` is
+    // valid only in the inset properties, `anchor-size()` also in margin and
+    // sizing ones. `None` = invalid, so the shim rejects the assignment.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_anchor",
+        |value: String, allow_anchor: bool| -> Option<String> {
+            lumen_layout::style::canonical_specified_anchor(&value, allow_anchor)
         }
     );
 
@@ -736,8 +844,23 @@ pub(crate) fn install_scroll_state(
     }
     // Returns current page scroll Y for window.scrollY / window.pageYOffset.
     {
+        // BUG-949: CSSOM View — a read right after `scrollTo()` sees the new
+        // position. The shell only applies the queue on its next pass, so an
+        // instant request still waiting there is reflected here (the last
+        // request wins; a trailing smooth one is animated, so the committed
+        // value stays until the shell moves it).
         let psy = Arc::clone(&page_scroll_y);
+        let pps = Arc::clone(&pending_page_scrolls);
         reg!(scope, ctx, store, "_lumen_get_page_scroll_y", move || -> f64 {
+            match pps.lock().unwrap().last() {
+                Some(&(y, false)) => f64::from(y.max(0.0)),
+                _ => f64::from(*psy.lock().unwrap()),
+            }
+        });
+        // The position the shell has actually applied — for the scroll
+        // promise's "did anything move" check, which must not see the queue.
+        let psy = Arc::clone(&page_scroll_y);
+        reg!(scope, ctx, store, "_lumen_get_committed_page_scroll_y", move || -> f64 {
             f64::from(*psy.lock().unwrap())
         });
     }
@@ -866,6 +989,15 @@ pub(crate) fn install_url_parse(
             crate::js_url::url_parse_native(href, base)
         }
     );
+    // GAP-ORIGIN: `Origin.from()` (`shim/origin_shim.js`) — same eval-time
+    // reason as `_lumen_url_parse` above.
+    reg!(
+        scope,
+        ctx,
+        store,
+        "_lumen_url_origin",
+        move |href: String| -> Option<JsValue> { crate::origin::url_origin_native(&href) }
+    );
     Ok(())
 }
 
@@ -902,7 +1034,7 @@ pub(crate) fn install_computed_styles(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
-    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
@@ -922,7 +1054,7 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
             needed.store(true, Ordering::Relaxed);
             // CSSOM-9: the snapshot's stashed computed values are not properties.
-            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) {
+            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) && prop != lumen_layout::BOXLESS_KEY {
                 return String::new();
             }
             flush.maybe_flush();
@@ -1024,7 +1156,7 @@ pub(crate) fn install_crypto_and_typed_om(
     dom_dirty: Arc<AtomicBool>,
     flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
-    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
     custom_props_needed: Arc<AtomicBool>,
@@ -1253,7 +1385,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 let css_text = _serialize_style_map(&parsed);
                 set_attribute(&mut doc, node_id, "style", &css_text);
                 if old_style.as_deref() != Some(css_text.as_str()) {
-                    record_dom_touch(&touched, node_id);
+                    record_dom_touch_attr(&touched, node_id, "style", None);
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
@@ -1285,7 +1417,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 }
                 let new_style = if css_text.is_empty() { None } else { Some(css_text.as_str()) };
                 if old_style.as_deref() != new_style {
-                    record_dom_touch(&touched, node_id);
+                    record_dom_touch_attr(&touched, node_id, "style", None);
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
@@ -1365,7 +1497,7 @@ pub(crate) fn install_crypto_and_typed_om(
                 let prefix = lumen_layout::COMPUTED_VALUE_KEY_PREFIX;
                 pairs.extend(m.iter().filter(|(k, _)| !k.starts_with(prefix)).map(|(k, v)| {
                     let v = if computed { m.get(&format!("{prefix}{k}")).unwrap_or(v) } else { v };
-                    (k.clone(), v.clone())
+                    (k.to_owned(), v.clone())
                 }));
             }
             if let Ok(map) = cp.lock()

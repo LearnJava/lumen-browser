@@ -51,7 +51,7 @@ HTML LS §3.1.2 «The document's referrer»: геттер возвращает U
 - Документ из `createHTMLDocument`/`createDocument` (`_lumen_build_detached_document`) и фасад
   документа `<iframe>` (`crates/js/src/frame_bridge.rs`) — тоже `''`, а не `undefined`.
 - Значение сейчас всегда `''`: навигация верхнего уровня `Referer` не шлёт — это не пробел шима,
-  а отдельный дефект сети/шелла, [BUG-1156](BUG-1156-OPEN.md). Переменная засевается в одном
+  а отдельный дефект сети/шелла, [BUG-1156](BUG-1156-FIXED.md). Переменная засевается в одном
   месте, когда он будет исправлен.
 
 Тесты: `crates/js/src/dom/tests/v8_bug1121_document_referrer.rs` (присутствие, тип, `.search`/
@@ -69,7 +69,7 @@ HTML LS §3.1.2 «The document's referrer»: геттер возвращает U
 
 | Сайт | Следующая ошибка | Заявка |
 |---|---|---|
-| imgur (106 узлов, Chrome 1231) | `transformPose`: `getComputedStyle().transform` не `matrix(…)` → `null[1]` | [BUG-1157](BUG-1157-OPEN.md) |
+| imgur (106 узлов, Chrome 1231) | `transformPose`: `getComputedStyle().transform` не `matrix(…)` → `null[1]` | [BUG-1157](BUG-1157-FIXED.md) |
 | fandom (3473 / 3448) | `JSON.parse(cookie Geo)` → `"undefined" is not valid JSON` | [BUG-1119](BUG-1119-FIXED.md) |
-| yahoo | `SyntaxError: Unexpected token ':'` в скрипте, вставленном `appendChild` | [BUG-1158](BUG-1158-OPEN.md) |
-| yahoo.co.jp | `eval` пробы через 8 с: `JS context not available` | [BUG-1145](BUG-1145-OPEN.md) |
+| yahoo | `SyntaxError: Unexpected token ':'` в скрипте, вставленном `appendChild` | [BUG-1158](BUG-1158-FIXED.md) |
+| yahoo.co.jp | `eval` пробы через 8 с: `JS context not available` | [BUG-1145](BUG-1145-FIXED.md) |

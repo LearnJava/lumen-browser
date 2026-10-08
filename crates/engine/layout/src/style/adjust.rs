@@ -9,8 +9,8 @@
 use crate::style::SCROLLBAR_PSEUDO_CASCADES;
 use crate::style::{
     compute_pseudo_element_style, with_cascade_index, BackgroundImage, ComputedStyle, CssColor,
-    FontVariantEmoji, ForcedColorAdjust, OutlineColor, Overflow, ScrollbarWidth, SvgPaint,
-    SystemColor,
+    FontVariantEmoji, ForcedColorAdjust, OutlineColor, Overflow, RuleList, ScrollbarWidth,
+    SvgPaint, SystemColor,
 };
 use lumen_core::geom::Size;
 use lumen_css_parser::Stylesheet;
@@ -142,14 +142,16 @@ pub(in crate::style) fn resolve_system_colors_in_style(style: &mut ComputedStyle
     }
 
     resolve_opt!(&mut style.background_color);
+    resolve_opt!(&mut style.caret_color);
     resolve!(&mut style.text_decoration_color);
     resolve!(&mut style.text_emphasis_color);
     resolve!(&mut style.border_top_color);
     resolve!(&mut style.border_right_color);
     resolve!(&mut style.border_bottom_color);
     resolve!(&mut style.border_left_color);
-    resolve!(&mut style.column_rule_color);
-    resolve!(&mut style.gap_rule_color);
+    for list in [&mut style.column_rule_color, &mut style.row_rule_color] {
+        list.for_each_mut(|c| resolve!(c));
+    }
 }
 
 /// CSS Color Adjustment L1 §3.1 — forces the element's colors to the system
@@ -244,8 +246,8 @@ pub(in crate::style) fn apply_forced_colors_mode(
     style.border_right_color = CssColor::Rgba(border);
     style.border_bottom_color = CssColor::Rgba(border);
     style.border_left_color = CssColor::Rgba(border);
-    style.column_rule_color = CssColor::Rgba(border);
-    style.gap_rule_color = CssColor::Rgba(border);
+    style.column_rule_color = RuleList::single(CssColor::Rgba(border));
+    style.row_rule_color = RuleList::single(CssColor::Rgba(border));
     if !matches!(style.outline_color, OutlineColor::Auto) {
         style.outline_color = OutlineColor::Color(fg);
     }
@@ -253,7 +255,7 @@ pub(in crate::style) fn apply_forced_colors_mode(
     style.text_emphasis_color = CssColor::Rgba(fg);
     if style.caret_color.is_some() {
         // `auto` (None) already follows the forced `color`.
-        style.caret_color = Some(fg);
+        style.caret_color = Some(CssColor::Rgba(fg));
     }
 
     // SVG geometry is painted from `fill`/`stroke` (§3.1 lists both).

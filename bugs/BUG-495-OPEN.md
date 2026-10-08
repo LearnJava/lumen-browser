@@ -205,3 +205,23 @@ computed-value сигнал).
 `<position>`-синтаксис относится к CSS Values L4/L5 (уже 🟡-модуль).
 Статус переведён в `OPEN (ДОРАБОТКА → CSS-SPECS.md)`; строка снята с
 `STATUS-P3.md`.
+
+## Срез 2026-10-03 (P4, p4-position-edge-offset): edge-offset и `x-start`/`x-end` реализованы
+
+Остаток «Не покрыто» закрыт кодом: `PositionComponent::PercentPlusPx { percent, px }`
+(`style/values/flexgrid.rs`), `ObjectPosition::parse` принимает 3-/4-токенную форму
+для всех потребителей `<position>` (`background-position`, `object-position`,
+`mask-position`, `offset-anchor`, `transform-origin`, `perspective-origin`; `background`/`mask`
+shorthand собирают до 4 токенов), `parse_position_axis` — оси `background-position-x/-y`
+(`left|right|x-start|x-end` + смещение). Серализация `calc(100% + 10px)`/`calc(100% - 10px)`
+и `-20%` — `position_component_to_css` (`selector_query.rs`); paint-резолв — `.resolve(free)`
+в `geometry.rs`/`renderer.rs`. `x-start`/`x-end`/`y-start`/`y-end` трактуются как физические
+края: CSS Backgrounds L4 §2.6 помечен «still being worked out» и не задаёт привязки к
+`writing-mode`/`direction`. Юнит-тесты: `background_position_*edge*`, `*quad*`,
+`mask_position_and_shorthand_accept_quad_form`, `computed_map_background_position_x_edge_offset_serialization`.
+
+**Не проверено живым WPT:** `.ini` обоих `background-position-{x,y}-computed.html` не
+перепрогонялись (BUG-493 уже FIXED, поэтому их FAIL могут быть устаревшими) — перезапустить
+`css/css-backgrounds/parsing/background-position-*` и снять устаревшие `expected: FAIL`.
+Интерполяция `PercentPlusPx` (animation/transition к `right 10px`) в таблицу Phase-0
+не добавлялась. До этой проверки статус остаётся OPEN.

@@ -257,6 +257,52 @@ pub(crate) fn is_picture_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// `<fieldset>` — HTML Rendering §15.3.13: образует BFC и несёт rendered legend.
+pub(crate) fn is_fieldset_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "fieldset"
+    )
+}
+
+/// `<legend>`, прямой ребёнок `<fieldset>`.
+pub(crate) fn is_fieldset_legend(doc: &Document, id: NodeId) -> bool {
+    matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "legend")
+        && doc.get(id).parent.is_some_and(|p| is_fieldset_element(doc, p))
+}
+
+/// Блокификация `display` у legend внутри fieldset (HTML Rendering §15.3.13): inline-уровень и
+/// табличные значения становятся `block` (текст в таком legend и так ложится в анонимную ячейку,
+/// а `display: table` на обычных элементах движок раскладывает неверно), `inline-flex`/`inline-grid`
+/// — своими блочными парами. `None` — значение уже блочное.
+pub(crate) fn blockified_legend_display(d: Display) -> Option<Display> {
+    Some(match d {
+        Display::Inline | Display::InlineBlock | Display::TableRowGroup | Display::TableHeaderGroup
+        | Display::TableFooterGroup | Display::TableRow | Display::TableColumnGroup | Display::TableColumn
+        | Display::TableCell | Display::TableCaption | Display::WebkitInlineBox | Display::Table
+        | Display::InlineTable => Display::Block,
+        Display::InlineFlex => Display::Flex,
+        Display::InlineGrid => Display::Grid,
+        _ => return None,
+    })
+}
+
+/// Индекс rendered legend среди боксов-детей `<fieldset>` (HTML Rendering §15.3.13): первый
+/// `<legend>`-ребёнок, у которого есть бокс и который не плавает и не абсолютен. Стоит он в
+/// разметке где угодно — рисуется всегда на верхней границе.
+pub(crate) fn rendered_legend_index(doc: &Document, children: &[LayoutBox]) -> Option<usize> {
+    children.iter().position(|c| {
+        c.origin.role == BoxRole::Element
+            && !matches!(c.kind, BoxKind::Skip)
+            && c.style.float_side == FloatSide::None
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+            && matches!(
+                &doc.get(c.node).data,
+                NodeData::Element { name, .. } if name.local == "legend"
+            )
+    })
+}
+
 /// HTML-имя `<ruby>` для распознавания GAP-RUBYBOX box-tree интеграции.
 /// `<rb>`/`<rt>`/`<rp>`/`<rtc>` остаются простым UA `Display::Inline`
 /// (BUG-614 fallback, `style/ua.rs`) — только сам `<ruby>` элемент получает
@@ -269,11 +315,18 @@ pub(crate) fn is_ruby_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
-/// HTML-имя `<rt>` — ruby-text annotation child of `<ruby>` (GAP-RUBYBOX).
-/// `<rtc>` groups multiple `<rt>` under one ruby-text container; Phase 0
-/// scope treats each `<rt>` inside an `<rtc>` the same as a bare `<rt>` (the
-/// `<rtc>` wrapper itself contributes no extra grouping — see `build.rs`'s
-/// doc comment on `collect_ruby_groups` for the documented remainder).
+/// HTML-имя `<rb>` — отдельная база ruby-сегмента (GAP-RUBYBOX-2): каждая
+/// `<rb>` — своя колонка, с которой по индексу спариваются `<rt>` уровня.
+pub(crate) fn is_ruby_base_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "rb"
+    )
+}
+
+/// HTML-имя `<rt>` — ruby-text annotation child of `<ruby>` or `<rtc>`
+/// (GAP-RUBYBOX). Consecutive bare `<rt>`s form one anonymous annotation
+/// level; inside an `<rtc>` they are that container's annotations.
 pub(crate) fn is_ruby_text_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,
@@ -292,12 +345,9 @@ pub(crate) fn is_ruby_parenthesis_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
-/// HTML-имя `<rtc>` — ruby-text container grouping several `<rt>` (CSS Ruby
-/// L1 §4.2). GAP-RUBYBOX Phase 0 does not give `<rtc>` its own grouping
-/// semantics — each `<rt>` inside it is flattened into the same per-index
-/// pairing a bare `<rt>` gets (`build.rs`'s `collect_ruby_groups`); this
-/// predicate only lets the box-builder recognise the wrapper and recurse
-/// into it instead of treating it as base content.
+/// HTML-имя `<rtc>` — ruby-text container (CSS Ruby L1 §2.1): один уровень
+/// аннотаций со своим `ruby-position` (GAP-RUBYBOX-2, `build.rs`'s
+/// `build_ruby_box`).
 pub(crate) fn is_ruby_text_container_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,

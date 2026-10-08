@@ -7,16 +7,22 @@
 
 use super::*;
 
+mod automation_eval;
 mod automation_hit;
 mod bfcache_salvage;
 mod bug341_census;
+mod bug341_census_b;
 mod chrome_float;
 mod chrome_incremental;
+mod chrome_incremental_dl;
 mod cli;
+mod css_url_rebase;
 mod form_post_nav;
 mod page_pipeline;
 mod page_resources;
+mod screenshot_web_fonts;
 mod scripts_and_frames;
+mod subdocument_frames;
 
 // ── BUG-436: typed characters reach the JS dispatch intact ───────────────
 
@@ -190,6 +196,11 @@ struct Cc12IncrementalState {
     /// `prev` and honours it in O(1), which is the right production
     /// behaviour but leaves nothing for a per-box reject census to measure.
     box_reuse_off: bool,
+    /// PERF-16 срез 2: кэш emit по поддереву, как `Lumen::chrome_emit_cache` в проде
+    /// (`LUMEN_NO_EMIT_CACHE=1` выключает — для A/B).
+    emit_cache: lumen_paint::SubtreeEmitCache,
+    /// PERF-16 срез 4: индексы рестайла хрома, как `Lumen::chrome_restyle_indexes` в проде.
+    restyle_indexes: lumen_layout::style::RestyleIndexCache,
 }
 
 /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
@@ -230,29 +241,43 @@ fn cc12_bench_cycle(
     let (layout, counters) = match state.prev_pristine_layout.take() {
         Some(prev) => {
             let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
-            let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
-            let mut dirty_roots = std::collections::HashSet::new();
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, prev_hover, new_interactive.0, &state_index,
-            ));
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, prev_focus, new_interactive.1, &state_index,
-            ));
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, prev_active, new_interactive.2, &state_index,
-            ));
-            let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
-                doc,
-                chrome_node_changes(&touched),
-                &node_index,
-            ));
+            // PERF-16 срез 4: kept from cycle to cycle, as `Lumen::chrome_restyle_indexes` in prod.
+            // `LUMEN_NO_RESTYLE_INDEX_CACHE=1` scans the sheet on every cycle — the A/B arm.
+            let roots = |state_index: &lumen_layout::style::StateRestyleIndex<'_>,
+                         node_index: &lumen_layout::style::NodeRestyleIndex<'_>| {
+                let mut dirty_roots = std::collections::HashSet::new();
+                for (prev, new) in [
+                    (prev_hover, new_interactive.0),
+                    (prev_focus, new_interactive.1),
+                    (prev_active, new_interactive.2),
+                ] {
+                    dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                        doc, prev, new, state_index,
+                    ));
+                }
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                    doc,
+                    chrome_node_changes(&touched),
+                    node_index,
+                ));
+                dirty_roots
+            };
+            let dirty_roots = if std::env::var_os("LUMEN_NO_RESTYLE_INDEX_CACHE").is_some() {
+                roots(
+                    &lumen_layout::style::restyle_state_index(doc, sheet),
+                    &lumen_layout::style::restyle_node_index(doc, sheet),
+                )
+            } else {
+                let (state_index, node_index) = state.restyle_indexes.indexes(doc, sheet);
+                roots(state_index, node_index)
+            };
             let delta = lumen_layout::counters::RestyleDelta {
                 prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                 dirty_roots,
                 // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so
                 // the bench measures the production reuse decision.
                 content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                shallow_roots: Default::default(), point_roots: Default::default(),
             };
             lumen_layout::counters::set_incremental_restyle(true);
             lumen_layout::box_tree::set_incremental_box_build(!state.box_reuse_off);
@@ -275,8 +300,19 @@ fn cc12_bench_cycle(
     state.prev_cascade_styles = counters.into_styles();
     let t_clone_styles = t2.elapsed().as_secs_f64() * 1000.0;
     let t3 = std::time::Instant::now();
-    let _dl = paint_ordered(&layout);
+    // BUG-341 S43: paint split into its three stages (stacking tree, paint
+    // order, display-list emit) — `paint_ordered` inlined, same calls.
+    let tree = lumen_layout::StackingTree::build(&layout);
+    let t_pt = t3.elapsed().as_secs_f64() * 1000.0;
+    let order = lumen_layout::PaintOrder::from_tree(&tree);
+    let t_po = t3.elapsed().as_secs_f64() * 1000.0;
+    let _dl = if lumen_paint::emit_cache_enabled() {
+        lumen_paint::build_display_list_ordered_dpr_cached(&layout, &tree, &order, 1.0, &mut state.emit_cache).0
+    } else {
+        lumen_paint::build_display_list_ordered(&layout, &tree, &order).0
+    };
     let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("[s43-paint] tree={t_pt:.3} order={:.3} emit={:.3}", t_po - t_pt, t_paint - t_po);
     // BUG-341 S22: a **move**, not a `clone()`. Production stopped copying
     // the tree here too — `relayout_chrome_host` hands the next pass its
     // own live tree with `take_content_area`'s removals undone

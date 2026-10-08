@@ -191,9 +191,11 @@
 //!   новый объект Event, а не тот же инстанс, что у ребёнка.
 
 #[cfg(feature = "v8-backend")]
-use std::collections::HashSet;
+use std::collections::HashMap;
 #[cfg(feature = "v8-backend")]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "v8-backend")]
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// Псевдо-bid слота «окно родителя» в реестре ([`FrameDocSlots::parent`]).
 ///
@@ -237,6 +239,16 @@ pub(crate) struct FrameDocBinding {
     /// `false` — cross-origin или opaque sandbox: нативы чтения отдают пустые
     /// результаты, `.document` фасада окна — `null`.
     pub(crate) accessible: bool,
+    /// BUG-1198: `Some(id)` — у документа непрозрачное происхождение
+    /// (`sandbox` без `allow-same-origin`, HTML LS §7.1.1 «sandboxed origin
+    /// browsing context flag»): `event.origin` его сообщений — `"null"`, а
+    /// `id` — идентичность этого происхождения для `Origin.from(event)`.
+    /// Одна на документ (все сообщения одного документа same-origin друг с
+    /// другом) и новая у каждого нового документа того же хоста — перезагрузка
+    /// выдаёт другое непрозрачное происхождение ([`next_opaque_origin_id`],
+    /// перенос при повторной регистрации — [`upsert_binding`]). `None` —
+    /// tuple-origin по `url`.
+    pub(crate) opaque_id: Option<u64>,
     /// BUG-979: хэндл для синхронного кросс-изолятного чтения/вызова
     /// РЕАЛЬНЫХ глобалов этого под-документа (не только фиксированный
     /// IDL-набор `winFacade`) — `None` у тестовых биндингов без рантайма и
@@ -285,10 +297,20 @@ pub(crate) struct FrameDocSlots {
 /// `contentDocument`/`contentWindow` родителя вечно отдавали бы выброшенный
 /// документ; заодно `window.length` рос бы на каждую навигацию, а `window[i]`
 /// разъезжался бы с порядком документа.
+///
+/// BUG-1198: shell регистрирует один и тот же документ дважды — до его
+/// скриптов (без `peer`) и после; непрозрачное происхождение принадлежит
+/// документу, поэтому повторная регистрация ТОГО ЖЕ документа сохраняет
+/// прежний `opaque_id`, а новый документ хоста (навигация, перезагрузка)
+/// остаётся со свежим.
 #[cfg(feature = "v8-backend")]
-pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, binding: FrameDocBinding) -> usize {
+pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, mut binding: FrameDocBinding) -> usize {
     match slots.frames.iter().position(|b| b.host_nid == binding.host_nid) {
         Some(i) => {
+            let old = &slots.frames[i];
+            if binding.opaque_id.is_some() && Arc::ptr_eq(&old.doc, &binding.doc) {
+                binding.opaque_id = old.opaque_id.or(binding.opaque_id);
+            }
             slots.frames[i] = binding;
             i
         }
@@ -500,6 +522,16 @@ pub(crate) fn frame_transport_has_for(key: Option<usize>) -> bool {
     evs.iter().any(|e| Arc::as_ptr(&e.target_doc) as usize == key)
 }
 
+/// BUG-1198: выдать идентичность нового непрозрачного происхождения —
+/// монотонный счётчик процесса, а не адрес документа: адрес освобождённого
+/// документа может достаться его же перезагруженной копии, и два разных
+/// непрозрачных происхождения совпали бы.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn next_opaque_origin_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Нормализованный origin URL биндинга для `event.origin`/валидации
 /// `targetOrigin`. `about:*` наследует origin контекста-родителя — здесь это
 /// выражено тем, что вызывающая сторона подставляет `self_origin` получателя.
@@ -532,10 +564,24 @@ pub(crate) fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocB
 /// ребёнка ЕГО СОБСТВЕННЫМ скриптом идёт обычными нативами `dom.rs` в его же
 /// рантайме и уже поднимает штатный `dom_dirty` этого рантайма — реестр ей не
 /// нужен, шелл дренирует оба источника рядом (`about_to_wait.rs`).
+///
+/// BUG-1110: значение — `Weak` документа. Живой `Weak` удерживает выделение
+/// `Arc`, поэтому аллокатор не может выдать тот же адрес новому документу,
+/// пока запись в реестре есть; запись умершего документа `take` отбрасывает
+/// (флаг «наследует» только живой документ), а `mark` вычищает такие записи.
 #[cfg(feature = "v8-backend")]
-fn frame_dom_dirty() -> &'static Mutex<HashSet<usize>> {
-    static DIRTY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-    DIRTY.get_or_init(|| Mutex::new(HashSet::new()))
+fn frame_dom_dirty() -> &'static Mutex<HashMap<usize, Weak<Mutex<lumen_dom::Document>>>> {
+    static DIRTY: OnceLock<Mutex<HashMap<usize, Weak<Mutex<lumen_dom::Document>>>>> =
+        OnceLock::new();
+    DIRTY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Пометить документ мутированным мостом (см. [`frame_dom_dirty`]).
+#[cfg(feature = "v8-backend")]
+fn mark_frame_dom_dirty(doc: &Arc<Mutex<lumen_dom::Document>>) {
+    let mut map = frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, w| w.strong_count() > 0);
+    map.insert(Arc::as_ptr(doc) as usize, Arc::downgrade(doc));
 }
 
 /// Забрать (и сбросить) флаг «документ с этим ключом мутирован мостом».
@@ -543,7 +589,8 @@ fn frame_dom_dirty() -> &'static Mutex<HashSet<usize>> {
 /// со своим `self_doc_key`; `false`, если мутаций не было.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn take_frame_dom_dirty(key: usize) -> bool {
-    frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).remove(&key)
+    let entry = frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+    entry.is_some_and(|w| w.strong_count() > 0)
 }
 
 /// Захватить биндинг `bid` на чтение, если он существует и разрешён.
@@ -595,11 +642,11 @@ fn with_accessible_doc_mut<R>(
     if !binding.accessible {
         return empty;
     }
-    let key = Arc::as_ptr(&binding.doc) as usize;
-    let mut doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
+    let shared = Arc::clone(&binding.doc);
+    let mut doc = shared.lock().unwrap_or_else(|e| e.into_inner());
     let result = f(&mut doc);
     drop(doc);
-    frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+    mark_frame_dom_dirty(&shared);
     result
 }
 
@@ -991,8 +1038,11 @@ pub(crate) fn install_frame_bridge_v8(
                 // HTML LS §9.2.9 шаг 3: '*' доставляет всегда, '/' — только
                 // same-origin (у нас это уже вычисленный shell'ом accessible),
                 // явная строка — совпадение с origin адресата.
+                // BUG-1198: непрозрачное происхождение адресата не равно
+                // никакому сериализованному — доставляет только '*'.
                 let matches = match target_origin.as_str() {
                     "*" => true,
+                    _ if binding.opaque_id.is_some() => false,
                     "/" | "" => binding.accessible,
                     o => o.eq_ignore_ascii_case(&binding_origin(
                         &binding.url,
@@ -1055,15 +1105,23 @@ pub(crate) fn install_frame_bridge_v8(
                 // только реестр получателя знает свои слоты (source) и чем
                 // наследуется origin about:-детей (srcdoc/about:blank →
                 // origin получателя-родителя).
+                //
+                // BUG-1198: отправитель с непрозрачным происхождением даёт
+                // `origin === "null"` и идентичность этого происхождения
+                // (`opaque`) — по ней шим строит `Origin.from(event)`.
+                let sender_origin = |b: &FrameDocBinding| match b.opaque_id {
+                    Some(id) => ("null".to_owned(), Some(id)),
+                    None => (binding_origin(&b.url, &reg.self_origin), None),
+                };
                 let items: Vec<serde_json::Value> = taken
                     .into_iter()
                     .map(|m| {
-                        let (source_bid, origin) = match m.source {
+                        let (source_bid, (origin, opaque)) = match m.source {
                             SourceKind::Parent => (
                                 reg.parent.as_ref().map(|_| PARENT_BID),
                                 reg.parent
                                     .as_ref()
-                                    .map(|b| binding_origin(&b.url, &reg.self_origin))
+                                    .map(sender_origin)
                                     .unwrap_or_default(),
                             ),
                             SourceKind::ChildDoc(doc_key) => {
@@ -1072,22 +1130,17 @@ pub(crate) fn install_frame_bridge_v8(
                                     .iter()
                                     .position(|b| Arc::as_ptr(&b.doc) as usize == doc_key)
                                 {
-                                    Some(j) => {
-                                        let b = &reg.frames[j];
-                                        (
-                                            Some(j as u32),
-                                            binding_origin(&b.url, &reg.self_origin),
-                                        )
-                                    }
+                                    Some(j) => (Some(j as u32), sender_origin(&reg.frames[j])),
                                     // Отправителя нет в прямых слотах получателя
                                     // (внук → top): source = null, origin пустой.
-                                    None => (None, String::new()),
+                                    None => (None, (String::new(), None)),
                                 }
                             }
                         };
                         serde_json::json!({
                             "bid": source_bid,
                             "origin": origin,
+                            "opaque": opaque,
                             "data": serde_json::from_str::<serde_json::Value>(&m.data_json)
                                 .unwrap_or(serde_json::Value::Null),
                         })
@@ -1267,6 +1320,28 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_document_element",
             into_v8_fn1(move |bid: u32| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| d.document_element().map(|n| n.raw()), None)
+            }),
+        )?;
+    }
+    // OBJECT-1 срез 5: тип под-документа — по нему `getSVGDocument()`
+    // отличает SVG-документ (`image/svg+xml`) от HTML.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_content_type",
+            into_v8_fn1(move |bid: u32| -> String {
+                with_accessible_doc(&reg, bid, |d| d.content_type().to_owned(), String::new())
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_referrer",
+            into_v8_fn1(move |bid: u32| -> String {
+                with_accessible_doc(&reg, bid, |d| {
+                    d.document_referrer().unwrap_or_default().to_owned()
+                }, String::new())
             }),
         )?;
     }
@@ -1907,6 +1982,16 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     if (!cache) { cache = {}; elems[bid] = cache; }
     var cached = cache[nid];
     if (cached) return cached;
+    // BUG-1147: views over this node's `style`/`class`/`data-*` attributes,
+    // built on first read and kept for the facade's lifetime
+    // (`el.style === el.style`), like `_lumen_wrapper_slot` of the main shim.
+    var views = {};
+    function view(key, make) {
+      if (views[key] === undefined) {
+        views[key] = typeof make === 'function' ? make(nid, bid) : undefined;
+      }
+      return views[key];
+    }
     var el = {
       __bid__: bid,
       __nid__: nid,
@@ -1936,6 +2021,23 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       // cached (unlike the main document's `attributes`, BUG-732), the map
       // itself is a live Proxy so a fresh one is cheap and always current.
       get attributes() { return frameNamedNodeMap(bid, nid); },
+      // BUG-1147: the main shim's own `CSSStyleDeclaration`/`DOMTokenList`/
+      // `DOMStringMap`, bound to this sub-document through their `fbid`
+      // argument — every read and write goes through the `_lumen_f_*` attribute
+      // natives, so the child's cascade sees `style.cssText = …` and the
+      // parent sees the child's own later `setAttribute('style', …)`. The
+      // `typeof` guard in `view` covers minimal test isolates without the shim.
+      get style() {
+        return view('style', typeof _lumen_make_style === 'function' ? _lumen_make_style : undefined);
+      },
+      // Web IDL [PutForwards=cssText], same as the main shim (BUG-494).
+      set style(v) { var st = this.style; if (st) st.cssText = String(v); },
+      get classList() {
+        return view('classList', typeof _lumen_make_class_list === 'function' ? _lumen_make_class_list : undefined);
+      },
+      get dataset() {
+        return view('dataset', typeof _lumen_make_dataset === 'function' ? _lumen_make_dataset : undefined);
+      },
       get children() { return _lumen_f_children(bid, nid).map(function(c) { return frameElem(bid, c); }); },
       get childElementCount() { return _lumen_f_children(bid, nid).length; },
       get firstElementChild() { return frameElem(bid, _lumen_f_children(bid, nid)[0]); },
@@ -2037,6 +2139,21 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return el;
   }
 
+  // OBJECT-1 срез 4: компонент URL под-документа для фасада Location.
+  // Нераспознаваемый URL (пустой — документа ещё нет) даёт пустые компоненты
+  // и origin 'null', как у непрозрачного происхождения.
+  function locationPart(bid, part) {
+    if (!_lumen_f_accessible(bid)) {
+      throw (typeof DOMException === 'function')
+        ? new DOMException('Blocked a frame from accessing a cross-origin frame.', 'SecurityError')
+        : new TypeError('cross-origin frame location');
+    }
+    var u = null;
+    try { u = new URL(String(_lumen_f_url(bid) || '')); } catch (e) {}
+    if (u === null) return part === 'origin' ? 'null' : '';
+    return u[part];
+  }
+
   function docFacade(bid) {
     var cached = docs[bid];
     if (cached) return cached;
@@ -2070,13 +2187,17 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
     Object.defineProperty(d, 'URL',               { get: function() { return _lumen_f_url(bid); }, configurable: true });
     Object.defineProperty(d, 'documentURI',       { get: function() { return _lumen_f_url(bid); }, configurable: true });
-    // BUG-1121: строка, а не undefined. Реферер `<iframe src>` (GAP-REFERRER
-    // срез 4 шлёт его в запросе) в документ ребёнка не протянут — BUG-1156.
-    Object.defineProperty(d, 'referrer',          { get: function() { return ''; }, configurable: true });
+    Object.defineProperty(d, 'contentType',       { get: function() { return _lumen_f_content_type(bid); }, configurable: true });
+    // BUG-1121: строка, а не undefined. BUG-1231: значение — реферер запроса
+    // `<iframe src>`, выставленный shell'ом на документ ребёнка.
+    Object.defineProperty(d, 'referrer',          { get: function() { return _lumen_f_referrer(bid); }, configurable: true });
     // Ребёнок получил window load ещё в срезе 1 — readyState к моменту доступа
     // всегда «complete»; отдельного трекинга переходов срез 2 не ведёт.
     Object.defineProperty(d, 'readyState',        { get: function() { return 'complete'; }, configurable: true });
     Object.defineProperty(d, 'defaultView',       { get: function() { return winFacade(bid); }, configurable: true });
+    // OBJECT-1 срез 4: `document.location` — тот же Location, что у окна
+    // (HTML LS §3.1.1; документ под фасадом всегда активен в своём контексте).
+    Object.defineProperty(d, 'location',          { get: function() { return winFacade(bid).location; }, configurable: true });
     d.getElementById = function(id) { return el(_lumen_f_by_id(bid, String(id))); };
     d.querySelector = function(sel) { return el(_lumen_f_query(bid, String(sel))); };
     d.querySelectorAll = function(sel) {
@@ -2154,26 +2275,41 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       get: function() {
         if (hostNid === null) return '';
         // Аналогично frameElement: атрибут хоста предка читаем через бридж.
+        // Для дочернего фрейма — имя, запомненное при регистрации: правка
+        // атрибута хоста после создания контекста его не переименовывает
+        // (HTML LS §7.2.3; та же семантика, что у window.name ребёнка, BUG-921).
         var a = isAncestorBid(bid)
           ? _lumen_f_attr(bid, hostNid, 'name')
-          : _lumen_get_attr(hostNid, 'name');
+          : _lumen_f_name(bid);
         return (a === null || a === undefined) ? '' : a;
       },
       configurable: true,
     });
-    Object.defineProperty(w, 'location', {
-      get: function() {
-        var loc = {};
-        Object.defineProperty(loc, 'href', {
-          get: function() { return _lumen_f_url(bid); },
-          set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
+    // OBJECT-1 срез 4: один и тот же объект Location на окно (HTML LS §7.10.1:
+    // `w.location === w.location`, и `document.location` фасада документа —
+    // он же) с компонентами URL (origin/protocol/host/…). Компоненты читаются
+    // только same-origin: чужой фасад отвечает SecurityError, как настоящий
+    // cross-origin Location (§7.2.3.3); href на запись и assign/replace
+    // остаются доступны — навигация чужого фрейма разрешена.
+    var loc = {};
+    Object.defineProperty(loc, 'href', {
+      get: function() { return _lumen_f_url(bid); },
+      set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
+      configurable: true,
+    });
+    ['origin', 'protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash']
+      .forEach(function(part) {
+        Object.defineProperty(loc, part, {
+          get: function() { return locationPart(bid, part); },
           configurable: true,
         });
-        loc.toString = function() { return _lumen_f_url(bid); };
-        loc.assign = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
-        loc.replace = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
-        return loc;
-      },
+      });
+    loc.toString = function() { return _lumen_f_url(bid); };
+    loc.assign = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
+    loc.replace = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
+    loc.reload = function() {};
+    Object.defineProperty(w, 'location', {
+      get: function() { return loc; },
       set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
       configurable: true,
     });
@@ -2198,6 +2334,17 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       _lumen_f_post_message(bid, json, to);
     };
     var proxied = wrapWinFacadeGlobals(w, bid);
+    // GAP-ORIGIN: `Origin.from(contentWindow)` — only a same-origin window
+    // hands out its origin; a cross-origin or opaque-sandboxed one has none
+    // the caller may see (`TypeError`). An `about:` child inherits the origin
+    // of the context that reads it, which `accessible` already vouched for.
+    if (typeof _lumen_origin_register_source === 'function') {
+      _lumen_origin_register_source(proxied, function() {
+        if (!_lumen_f_accessible(bid)) return null;
+        var u = _lumen_f_url(bid);
+        return u.slice(0, 6) === 'about:' ? globalThis : u;
+      });
+    }
     wins[bid] = proxied;
     return proxied;
   }
@@ -2226,6 +2373,16 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         if (r.kind === 'function') {
           return function() {
             var args = Array.prototype.slice.call(arguments);
+            // BUG-1099: `new w.Ctor(...)` — объект пира через границу
+            // изолятов не передать (возвращается только сериализованное
+            // значение), поэтому конструкция идёт в этом контексте тем же
+            // именем (Worker/SharedWorker/… есть в каждом контексте шима).
+            if (new.target !== undefined) {
+              var local = globalThis[String(prop)];
+              if (typeof local === 'function') {
+                return Reflect.construct(local, args);
+              }
+            }
             var cr = _lumen_f_global_call(bid, String(prop), args);
             if (cr.kind === 'error') { throw new Error(cr.message); }
             return cr.value;
@@ -2236,12 +2393,12 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
   }
 
-  globalThis._lumen_frame_content_document = function(hostNid) {
+  __lumen_C._lumen_frame_content_document = function(hostNid) {
     var bid = bidOrNull(hostNid);
     if (bid === null || !_lumen_f_accessible(bid)) return null;
     return docFacade(bid);
   };
-  globalThis._lumen_frame_content_window = function(hostNid) {
+  __lumen_C._lumen_frame_content_window = function(hostNid) {
     var bid = bidOrNull(hostNid);
     if (bid === null) return null;
     return winFacade(bid);
@@ -2285,6 +2442,10 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         configurable: true,
       });
     } catch (e) {}
+    // BUG-1198: в полном шиме `top` — unforgeable (BUG-587), переопределить
+    // его нельзя; его геттер читает этот хук. Прямое определение остаётся для
+    // минимальных изолятов без шима, где `top` ещё настраиваемый.
+    __lumen_C._lumen_frame_top = topOfContext;
     try {
       Object.defineProperty(window, 'top', {
         get: function() { return topOfContext(); },
@@ -2325,7 +2486,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   }
 
   // Родитель зарегистрирован: включить parent/top/frameElement/name.
-  globalThis._lumen_frame_install_hierarchy = function() {
+  __lumen_C._lumen_frame_install_hierarchy = function() {
     if (typeof window === 'undefined') return;
     installHierarchyAccessors();
   };
@@ -2336,7 +2497,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // регистрации = порядок документа (спечный tree order). Именованный
   // доступ покрывает ТОЛЬКО iframe (embed/form/img/object — не бриджевая
   // территория).
-  globalThis._lumen_frame_install_index = function(idx) {
+  __lumen_C._lumen_frame_install_index = function(idx) {
     if (typeof window === 'undefined') return;
     installLengthAccessor();
     try {
@@ -2350,11 +2511,11 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       // false, even for a supported index) — this flag is this one call's
       // carve-out to still install the getter itself (see
       // `named_access.rs::indexed_define_trusted`).
-      globalThis._lumen_indexed_define_trusted = true;
+      __lumen_C._lumen_indexed_define_trusted = true;
       try {
         Object.defineProperty(window, String(idx), { get: mk(host), configurable: true });
       } finally {
-        globalThis._lumen_indexed_define_trusted = false;
+        __lumen_C._lumen_indexed_define_trusted = false;
       }
       var nm = _lumen_frame_name_at(idx);
       if (nm) {
@@ -2368,7 +2529,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // каждого фрейма. Натив отдаёт JSON-массив сообщений, адресованных ЭТОМУ
   // контексту; каждое разворачивается в MessageEvent и доставляется через
   // хук из WEB_API_SHIM (window.onmessage + addEventListener('message')).
-  globalThis._lumen_frame_pump_messages = function() {
+  __lumen_C._lumen_frame_pump_messages = function() {
     if (typeof window === 'undefined') return;
     if (typeof _lumen_deliver_frame_message === 'function') {
       var raw = _lumen_frame_take_messages();
@@ -2382,7 +2543,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             if (m.bid !== null && m.bid !== undefined) {
               source = winFacade(m.bid);
             }
-            _lumen_deliver_frame_message(m.data, m.origin, source);
+            _lumen_deliver_frame_message(m.data, m.origin, source, m.opaque);
           }
         }
       }
@@ -2469,7 +2630,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // (`_lumen_f_queue_parent_resource` читает слот parent): топ-страница
   // платит один пустой вызов натива на событие и не ставит конвертов.
   // Возврат — поставлен ли конверт (для тестов).
-  globalThis._lumen_frame_mirror_resource = function(nid, type) {
+  __lumen_C._lumen_frame_mirror_resource = function(nid, type) {
     if (typeof nid !== 'number' || nid < 0) return false;
     if (typeof type !== 'string' || !type || type.length > 128) return false;
     if (typeof _lumen_f_queue_parent_resource !== 'function') return false;
@@ -2507,6 +2668,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            opaque_id: None,
             peer: None,
         });
         f(&rt);
@@ -2552,6 +2714,7 @@ mod tests {
                 url: "https://parent.example/".to_owned(),
                 name: Some("hostframe".to_owned()),
                 accessible,
+                opaque_id: None,
                 peer: None,
             });
             if let Some(top) = top_html {
@@ -2561,6 +2724,7 @@ mod tests {
                     url: "https://top.example/".to_owned(),
                     name: None,
                     accessible,
+                    opaque_id: None,
                     peer: None,
                 });
             }
@@ -2574,6 +2738,29 @@ mod tests {
 
     fn eval_bool(rt: &V8JsRuntime, expr: &str) -> bool {
         matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    /// OBJECT-1 срез 3: `contentWindow.name` фасада — имя, запомненное при
+    /// регистрации фрейма, а не живой атрибут `name` хоста (HTML LS §7.2.3,
+    /// WPT `the-object-element/object-attributes.html`).
+    #[test]
+    fn content_window_name_is_registered_name_not_live_attribute() {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        registry.lock().unwrap().frames.push(FrameDocBinding {
+            host_nid: 7,
+            doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html><body></body></html>"))),
+            url: "about:blank".to_owned(),
+            name: Some("o".to_owned()),
+            accessible: true,
+            opaque_id: None,
+            peer: None,
+        });
+        // Атрибут хоста уже переименован — фасад его не читает.
+        rt.eval("__lumen_C._lumen_get_attr = function() { return 'o1'; };").unwrap();
+        assert!(eval_bool(&rt, "_lumen_frame_content_window(7).name === 'o'"));
     }
 
     #[test]
@@ -2862,7 +3049,7 @@ mod tests {
     /// Реестр строится вручную (не через `with_child_context`), чтобы
     /// получить `Arc` документа родителя и слить каждую мутацию через
     /// [`take_frame_dom_dirty`] сразу же — иначе висящий флаг в глобальном
-    /// `HashSet` (ключ — адрес `Arc`, срез 25) переживает эту функцию и
+    /// реестр (ключ — адрес `Arc`, срез 25) переживает эту функцию и
     /// после освобождения памяти может ложно сработать на чужом документе,
     /// которому аллокатор отдаст тот же адрес (гонка с параллельными
     /// тестами, ровно то, от чего `bridge_mutation_marks_frame_dirty_and_drains_once`
@@ -2882,6 +3069,7 @@ mod tests {
             url: "https://parent.example/".to_owned(),
             name: Some("hostframe".to_owned()),
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         rt.eval(
@@ -2940,6 +3128,7 @@ mod tests {
             url: "https://parent.example/".to_owned(),
             name: Some("hostframe".to_owned()),
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         rt.eval(
@@ -2949,7 +3138,7 @@ mod tests {
         let key = Arc::as_ptr(&parent_doc) as usize;
 
         rt.eval(
-            "globalThis._lumen_document_base_url = function() { return 'https://reader.example/sub/'; }; \
+            "__lumen_C._lumen_document_base_url = function() { return 'https://reader.example/sub/'; }; \
              globalThis._url_resolve = function(rel, base) { \
                  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rel)) return rel; \
                  return base + rel; \
@@ -2982,6 +3171,7 @@ mod tests {
                 url: "about:blank".to_owned(),
                 name,
                 accessible: true,
+                opaque_id: None,
                 peer: None,
             });
             rt.eval(&format!("_lumen_frame_install_index({i})")).unwrap();
@@ -3050,6 +3240,7 @@ mod tests {
                 url: "about:srcdoc".to_owned(),
                 name: None,
                 accessible: child_accessible_to_parent,
+                opaque_id: None,
                 peer: None,
             });
         }
@@ -3071,6 +3262,7 @@ mod tests {
                 url: "https://parent.example/".to_owned(),
                 name: Some("hostframe".to_owned()),
                 accessible: parent_accessible_to_child,
+                opaque_id: None,
                 peer: None,
             });
         }
@@ -3083,19 +3275,19 @@ mod tests {
                 "globalThis.__msgs = []; \
                  globalThis.__clicks = []; \
                  globalThis.__acts = []; \
-                 globalThis._lumen_deliver_frame_message = function(d, o, s) { \
+                 __lumen_C._lumen_deliver_frame_message = function(d, o, s) { \
                      __msgs.push({ d: d, o: o, s: s }); \
                  }; \
-                 globalThis._lumen_deliver_frame_click = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_click = function(nid) { \
                      __clicks.push(nid); \
                  }; \
-                 globalThis._lumen_deliver_frame_focus = function(nid, ps) { \
+                 __lumen_C._lumen_deliver_frame_focus = function(nid, ps) { \
                      __acts.push(['focus', nid, !!ps]); \
                  }; \
-                 globalThis._lumen_deliver_frame_blur = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_blur = function(nid) { \
                      __acts.push(['blur', nid]); \
                  }; \
-                 globalThis._lumen_deliver_frame_dom_event = function(nid, env) { \
+                 __lumen_C._lumen_deliver_frame_dom_event = function(nid, env) { \
                      __acts.push(['dom', nid, env.type, !!env.bubbles, \
                                   (env.detail === undefined) ? null : env.detail]); \
                  };",
@@ -3250,6 +3442,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            opaque_id: None,
             peer: None,
         });
         f(&rt, &doc);
@@ -3269,6 +3462,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         rt
@@ -3407,6 +3601,7 @@ mod tests {
             url: url.to_owned(),
             name: None,
             accessible: true,
+            opaque_id: None,
             peer: None,
         };
         let first = upsert_binding(
@@ -3449,6 +3644,7 @@ mod tests {
                 url: "about:srcdoc".to_owned(),
                 name: None,
                 accessible: true,
+                opaque_id: None,
                 peer: None,
             });
         }
@@ -3513,6 +3709,21 @@ mod tests {
                 assert!(!take_frame_dom_dirty(key));
             },
         );
+    }
+
+    /// BUG-1110: флаг умершего документа не достаётся новому документу,
+    /// которому аллокатор выдал бы тот же адрес.
+    #[test]
+    fn dirty_flag_of_dropped_document_is_not_inherited() {
+        let dead = Arc::new(Mutex::new(lumen_html_parser::parse("<p>a</p>")));
+        let key = Arc::as_ptr(&dead) as usize;
+        mark_frame_dom_dirty(&dead);
+        drop(dead);
+        assert!(!take_frame_dom_dirty(key));
+        let live = Arc::new(Mutex::new(lumen_html_parser::parse("<p>b</p>")));
+        let live_key = Arc::as_ptr(&live) as usize;
+        mark_frame_dom_dirty(&live);
+        assert!(take_frame_dom_dirty(live_key));
     }
 
     #[test]
@@ -3872,7 +4083,7 @@ mod tests {
         rt_child
             .eval(
                 "globalThis.__runs = []; \
-                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_run_script = function(nid) { \
                      __runs.push(nid); \
                  };",
             )
@@ -3914,7 +4125,7 @@ mod tests {
         rt_child
             .eval(
                 "globalThis.__runs = []; \
-                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_run_script = function(nid) { \
                      __runs.push(nid); \
                  };",
             )
@@ -3951,7 +4162,7 @@ mod tests {
         rt_child
             .eval(
                 "globalThis.__runs = []; \
-                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                 __lumen_C._lumen_deliver_frame_run_script = function(nid) { \
                      __runs.push(nid); \
                  };",
             )

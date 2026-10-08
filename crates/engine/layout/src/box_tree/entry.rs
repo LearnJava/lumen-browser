@@ -10,15 +10,7 @@ use super::*;
 /// shadow roots — so the two collections never overlap.
 pub(super) fn build_shadow_sheets(doc: &Document) -> std::collections::HashMap<NodeId, Stylesheet> {
     let mut map = std::collections::HashMap::new();
-    if doc.is_empty() {
-        return map;
-    }
-    for i in 0..doc.len() {
-        let host = NodeId::from_index(i);
-        if !doc.is_shadow_host(host) {
-            continue;
-        }
-        let Some(sr) = doc.shadow_root_of(host) else { continue };
+    for (host, sr) in doc.shadow_hosts() {
         let mut css = String::new();
         collect_shadow_style_css(doc, sr, &mut css);
         if !css.trim().is_empty() {
@@ -60,6 +52,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
+    propagate_body_writing_mode(doc, &mut root, viewport);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -165,6 +158,7 @@ pub fn layout_measured_hyp_with_counters(
         lumen_core::tracy_zone!("build_box");
         build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
     };
+    propagate_body_writing_mode(doc, &mut root, viewport);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     // GAP-CSSANIM срез 9: patch in this frame's animated `height` overrides
     // (CSS transition/`@keyframes`) before layout resolves box sizes, so a
@@ -449,18 +443,63 @@ pub fn layout_mutation_incremental_restyle(
         build_flat_tree(doc)
     };
     {
-        // BUG-341 S26: scoped because it is per-pass whole-document work that
-        // the delta cannot shrink — it walks every node asking `is_shadow_host`,
-        // with no `shadow_roots.is_empty()` fast path of its own (unlike
-        // `build_flat_tree`). Unscoped, it was invisible to every stage profile
-        // this track has taken.
+        // BUG-341 S26: scoped because it was per-pass whole-document work that the delta cannot
+        // shrink (it asked `is_shadow_host` of every node) and so invisible to every stage profile
+        // this track had taken. PERF-16 срез 5: it now walks the host map, so the cost is the
+        // number of shadow hosts.
         let _prof = lumen_core::profile::scope("build_shadow_sheets");
         crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     }
-    let counters = {
+    // BUG-935 срез 78: the flush's scope — what the JS-visible caches treat as changed — is taken
+    // before the delta is consumed; the ids the build releases from it are read off `prev` below.
+    let released_scope: lumen_core::id_hash::IdSet<lumen_dom::NodeId> =
+        delta.dirty_roots.iter().chain(delta.shallow_roots.iter()).copied().collect();
+    let mut counters = {
         let _prof = lumen_core::profile::scope("precompute_counters");
         crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
     };
+    if verify_incremental_cascade() {
+        // BUG-935 срез 92: `LUMEN_VERIFY_INCR_CASCADE=1` — самопроверка живого прогона. Каскад с нуля
+        // против того, что оставила инкрементальная дельта: расхождение = устаревший стиль на странице.
+        let full = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+        let stale: Vec<lumen_dom::NodeId> = full
+            .styles()
+            .iter()
+            // `!=` alone also fires on a style that holds a NaN (never equal to itself); the dump tells those apart.
+            .filter(|(id, style)| {
+                counters.styles().get(id).is_none_or(|got| got != *style && format!("{got:?}") != format!("{style:?}"))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let extra = counters.styles().keys().filter(|id| !full.styles().contains_key(id)).count();
+        if stale.is_empty() && extra == 0 {
+            eprintln!("[verify] incr cascade: {} styles, equal to a full cascade", full.styles().len());
+        } else {
+            let sample: Vec<String> = stale
+                .iter()
+                .take(8)
+                .map(|&id| format!("{}#{}", doc.get(id).element_name().map_or("?".to_string(), |q| q.local.to_string()), id.raw()))
+                .collect();
+            eprintln!(
+                "[verify] incr cascade: РАСХОЖДЕНИЕ — {} of {} styles differ, {extra} extra; first: {sample:?}",
+                stale.len(),
+                full.styles().len()
+            );
+            for &id in stale.iter().take(2) {
+                if let (Some(want), Some(got)) = (full.styles().get(&id), counters.styles().get(&id)) {
+                    let (want, got) = (format!("{want:#?}"), format!("{got:#?}"));
+                    let diff: Vec<String> = want
+                        .lines()
+                        .zip(got.lines())
+                        .filter(|(w, g)| w != g)
+                        .take(6)
+                        .map(|(w, g)| format!("full `{}` / incr `{}`", w.trim(), g.trim()))
+                        .collect();
+                    eprintln!("[verify]   #{} differs in: {diff:?}", id.raw());
+                }
+            }
+        }
+    }
     let registry = {
         // BUG-341 S26: likewise per-pass, sheet-wide and delta-independent.
         let _prof = lumen_core::profile::scope("counter_style_registry");
@@ -480,10 +519,14 @@ pub fn layout_mutation_incremental_restyle(
         // BUG-341 S19: this is where `prev` is consumed — the reusable subtrees
         // are moved into the tree being built, not copied out of it.
         if incremental_box_build_enabled() {
-            incremental_build_box(
+            let (built, unplaced) = super::build::incremental_build_box_unplaced(
                 doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, &mut prev,
-            )
+            );
+            let _prof = lumen_core::profile::scope("released_ids");
+            counters.set_released(crate::incremental::released_ids(&prev, &unplaced, &released_scope));
+            built
         } else {
+            counters.set_released(crate::incremental::released_ids(&prev, &[], &released_scope));
             build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
         }
     };
@@ -608,6 +651,12 @@ fn apply_animated_heights(b: &mut LayoutBox) {
 /// `frag.style.font_size`) pick up the scaled size from a single source. Inline
 /// text segments carry their own cloned style, so they are adjusted too.
 pub(crate) fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    // BUG-935 срез 76: a subtree moved out of `prev` (`REUSED_SUBTREE` on its root) went
+    // through this pass last cycle — descending again would not only re-walk every box
+    // of it but apply `font-size-adjust` a second time to an already adjusted size.
+    if b.dirty.contains(crate::incremental::DirtyBits::REUSED_SUBTREE) {
+        return;
+    }
     // BUG-341 S12: the `None` test lives here rather than only inside
     // `apply_font_size_adjust_to_style`, because reaching for `Arc::make_mut`
     // on a style shared with the cascade cache would deep-copy it — on every
@@ -617,7 +666,9 @@ pub(crate) fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
     }
     if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
-            apply_font_size_adjust_to_style(&mut seg.style, m);
+            if !matches!(seg.style.font_size_adjust, crate::style::FontSizeAdjust::None) {
+                apply_font_size_adjust_to_style(Arc::make_mut(&mut seg.style), m);
+            }
         }
     }
     for child in &mut b.children {
@@ -689,6 +740,11 @@ pub(crate) fn used_line_height_px(style: &ComputedStyle, m: &dyn TextMeasurer) -
 /// `normal` is the default `line-height` — writing into it would force
 /// `Arc::make_mut` to deep-copy nearly every box in the document).
 pub(crate) fn resolve_used_line_height(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    // BUG-935 срез 76: see `apply_font_size_adjust` — a reused subtree already carries the
+    // line height resolved from the very style it still has.
+    if b.dirty.contains(crate::incremental::DirtyBits::REUSED_SUBTREE) {
+        return;
+    }
     b.used_line_height = used_line_height_px(&b.style, m);
     for child in &mut b.children {
         resolve_used_line_height(child, m);
@@ -760,6 +816,41 @@ pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> 
     };
     let color = source.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
+}
+
+/// CSS Writing Modes L3 §8 (Principal Writing Mode): when `<html>` has a `<body>` child, the
+/// `writing-mode`/`direction`/`text-orientation` of that body — not of the root — set the mode of
+/// the root element and the initial containing block, whatever `<html>` itself declares
+/// (WPT `wm-propagation-body-032…055`). `<body>` keeps its own value. Like the gutter pass this
+/// runs only on the non-incremental entry points, and only touches `<html>`'s style `Arc` when
+/// the values actually differ, so the common horizontal page keeps its shared pointer.
+fn propagate_body_writing_mode(doc: &Document, root: &mut LayoutBox, viewport: Size) {
+    let Some(html_idx) = root.children.iter().position(|c| is_html_element_named(doc, c.node, "html")) else {
+        return;
+    };
+    let html_box = &mut root.children[html_idx];
+    let principal = html_box
+        .children
+        .iter()
+        .find(|c| is_html_element_named(doc, c.node, "body"))
+        .map_or(&html_box.style, |body| &body.style);
+    let (wm, dir, orient) = (principal.writing_mode, principal.direction, principal.text_orientation);
+    let set = |s: &mut ComputedStyle| {
+        s.writing_mode = wm;
+        s.direction = dir;
+        s.text_orientation = orient;
+    };
+    let hs = &html_box.style;
+    if hs.writing_mode != wm || hs.direction != dir || hs.text_orientation != orient {
+        set(Arc::make_mut(&mut html_box.style));
+    }
+    if wm != crate::style::WritingMode::HorizontalTb {
+        // The document box stands for the ICB: in the principal mode it is a same-mode parent of
+        // `<html>` (not an orthogonal flow) and, being the viewport, has a definite block size.
+        let rs = Arc::make_mut(&mut root.style);
+        set(rs);
+        rs.width = Some(Length::Px(viewport.width));
+    }
 }
 
 /// CSS Overflow L4 §"scrollbar-gutter propagation" — `scrollbar-gutter` on the
@@ -858,6 +949,36 @@ pub(crate) fn is_collapsible_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0c}')
 }
 
+/// A text node that generates no inline content under `white_space`: made only of
+/// invisible controls and of white space the property collapses away (CSS 2.1
+/// §9.2.2.1 — "white space content that would subsequently be collapsed away does
+/// not generate any anonymous inline boxes"). `pre`/`pre-wrap`/`break-spaces` keep
+/// every space and tab, `pre-line` keeps the newline; characters outside the
+/// document white space (U+3000…, see [`is_collapsible_whitespace`]) are content
+/// in every mode (BUG-1327).
+pub(crate) fn is_discardable_text(s: &str, white_space: crate::WhiteSpace) -> bool {
+    s.chars().all(|c| {
+        is_invisible_control(c)
+            || (is_collapsible_whitespace(c)
+                && !white_space.preserves_whitespace()
+                && !(c == '\n' && white_space.preserves_newlines()))
+    })
+}
+
+/// Word separators for line breaking: Unicode white space except the
+/// no-break spaces U+00A0, U+202F, U+2007 (UAX #14 class GL), which are not CSS
+/// document white space (CSS Text L3 §4.1.1) and must stay inside the word
+/// (BUG-1323). Other Unicode spaces (EN SPACE, IDEOGRAPHIC SPACE…) are class BA —
+/// they stay break opportunities.
+pub(crate) fn is_wrap_whitespace(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{202f}' | '\u{2007}')
+}
+
+/// `str::split_whitespace` over [`is_wrap_whitespace`].
+pub(crate) fn split_css_whitespace(s: &str) -> impl Iterator<Item = &str> {
+    s.split(is_wrap_whitespace).filter(|w| !w.is_empty())
+}
+
 /// Removes invisible control characters (see [`is_invisible_control`]) from `s`.
 /// Borrows the input unchanged when no such characters are present (common case).
 pub(crate) fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
@@ -868,3 +989,11 @@ pub(crate) fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+
+/// BUG-935 срез 92: `LUMEN_VERIFY_INCR_CASCADE=1` — после каждого инкрементального каскада пересчитать
+/// его с нуля и напечатать (`[verify] incr cascade: …`), совпали ли стили. Стоит полного каскада на флаш:
+/// только для проверки живой страницы, не для замеров времени. Читается один раз на процесс.
+fn verify_incremental_cascade() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LUMEN_VERIFY_INCR_CASCADE").is_some_and(|v| v != "0"))
+}

@@ -40,3 +40,18 @@
 сериализаторе `box-shadow`/`text-shadow`; (4) — резолв `drop-shadow()` в
 `filter`'s computed-value path; (5) — источник unitless `line-height`
 (возможно, инлайновый `<div>` без резолва против `font-size`).
+
+## Срез 1 (P6, 2026-09-30)
+
+Сделано в `computed_style_to_map`: (1) шортхенды `margin`/`padding`/`inset`/
+`scroll-margin`/`scroll-padding` (новые лонгхенды `scroll-padding-*`) и
+`border-width` в кратчайшей 1–4-значной форме, из уже un-zoom-нутых лонгхендов;
+(2) `text-decoration-thickness`, `text-underline-offset`; (3) цвет `box-shadow`/
+`text-shadow` первым; (5) абсолютный `line-height` — px (`ratio × font-size / zoom`).
+
+Остаток (не баг, а нереализованная функциональность — задачи ROADMAP):
+`filter: drop-shadow()` (нет варианта `FilterFn::DropShadow`, парсер тоже не знает),
+`-webkit-text-stroke-width` (нет поля в `ComputedStyle`). Плюс zoom-масштаб
+`width`/`height`/`min-*`/`max-*` на SVG (см. `.ini`). Метаданные
+`svg-computed-style.html.ini` не пересматривались — WPT-прогон не делался
+(нужна сборка dev-release), снимать ожидания FAIL только по замеру.

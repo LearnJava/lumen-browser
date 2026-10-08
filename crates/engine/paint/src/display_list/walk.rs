@@ -39,13 +39,17 @@ pub(crate) fn emit_box_self(
             if is_hidden_empty_cell(b) {
                 return;
             }
-            emit_box_shadows(b, out);
+            // HTML Rendering §15.3.13: у fieldset с rendered legend фон, тени и рамка начинаются
+            // с границы блока-начала, опущенной под legend, а не с верха border box.
+            let shifted = fieldset_decoration_box(b);
+            let db = shifted.as_ref().unwrap_or(b);
+            emit_box_shadows(db, out);
             let s = &b.style;
-            let radii = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
+            let radii = CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height);
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b, background_color_clip(b));
+                let clip = background_clip_rect(db, background_color_clip(db));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     if radii.all_zero() {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
@@ -54,36 +58,14 @@ pub(crate) fn emit_box_self(
                     }
                 }
             }
-            emit_background_image(out, b, dpr);
-            emit_inset_box_shadows(b, out);
+            emit_background_image(out, db, dpr);
+            emit_inset_box_shadows(db, out);
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
             if has_border {
-                let cur = s.color;
-                out.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
-                    widths: [
-                        s.border_top_width,
-                        s.border_right_width,
-                        s.border_bottom_width,
-                        s.border_left_width,
-                    ],
-                    colors: [
-                        s.border_top_color.resolve(cur),
-                        s.border_right_color.resolve(cur),
-                        s.border_bottom_color.resolve(cur),
-                        s.border_left_color.resolve(cur),
-                    ],
-                    styles: [
-                        s.border_top_style,
-                        s.border_right_style,
-                        s.border_bottom_style,
-                        s.border_left_style,
-                    ],
-                    radii,
-                });
+                emit_box_border(b, radii, out);
             }
             emit_column_rules(b, out);
             emit_outline(b, out);
@@ -484,6 +466,44 @@ fn apply_color_override(b: &LayoutBox, ov: &CompositorOverride, cmds: &mut [Disp
     }
 }
 
+/// CSS Transforms L2 §4 — open the `perspective` projection around a box's
+/// children: `PushTransform { perspective_matrix(b) }`. Returns `true` when a
+/// wrapper was pushed; the caller owes one `PopTransform` after the children.
+///
+/// Only boxes that can own a stacking context get it (`perspective` makes one,
+/// see `creates_stacking_context`); anonymous boxes that cloned the parent's
+/// style must not duplicate the wrapper.
+///
+/// The wrapper is also skipped unless some child actually leaves the z = 0
+/// plane ([`child_needs_perspective`]): on that plane the projection is the
+/// exact identity, while a non-affine accumulated matrix would push every
+/// descendant's rounded/path clip and sticky culling onto their conservative
+/// 3D fallbacks for no visible gain.
+pub(crate) fn emit_push_perspective(b: &LayoutBox, out: &mut DisplayList) -> bool {
+    if !box_can_own_stacking_context(b) || !b.children.iter().any(child_needs_perspective) {
+        return false;
+    }
+    match perspective_matrix(b) {
+        Some(matrix) => {
+            out.push(DisplayCommand::PushTransform { matrix });
+            true
+        }
+        None => false,
+    }
+}
+
+/// Does `child` of a `perspective` container render off the z = 0 plane —
+/// a 3D (non-2D-affine) own transform, or a `preserve-3d` context whose
+/// descendants may carry one? Anonymous wrappers (`InlineRun`, …) are looked
+/// through, since their children are the container's children in CSS terms.
+fn child_needs_perspective(child: &LayoutBox) -> bool {
+    if !box_can_own_stacking_context(child) {
+        return child.children.iter().any(child_needs_perspective);
+    }
+    establishes_3d_rendering_context(child)
+        || matches!(forward_box_transform(child), Some(m) if !m.is_2d_affine())
+}
+
 /// CSS Transforms L2 §6.1 — does this box establish a **3D rendering context**
 /// for its children? When `true`, the children share one 3D coordinate space
 /// and are painted in depth order (see [`depth_sorted_child_order`]) instead of
@@ -554,26 +574,36 @@ pub(crate) fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
     order
 }
 
-/// Collects `GapSegment`s for `gap-rule-*` rendering in flex/grid containers.
+/// Collects `GapSegment`s for `column-rule-*` / `row-rule-*` rendering (CSS Gap
+/// Decorations L1) in flex/grid containers.
 ///
 /// Scans child box right-edges and top-edges against the container's `column_gap`
 /// and `row_gap` values; emits one `GapSegment` per actual gap found. Works for
-/// both single-line and multi-line flex, and for grid containers.
+/// both single-line and multi-line flex, and for grid containers. Vertical
+/// segments (`horizontal == false`) are produced only when the column rule is
+/// visible (`column_rule_style` ≠ `None`, `column_rule_width` > 0); horizontal
+/// ones only when the row rule is.
 ///
-/// Returns an empty `Vec` when the container is not flex/grid, or when both gap
-/// values are zero, or when `gap_rule_style` is `None` / `gap_rule_width` ≤ 0.
-fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
-    let s = &b.style;
+/// Returns an empty `Vec` when the container is not flex/grid, when both gap
+/// values are zero, or when neither axis has a visible rule.
+fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
+    let none = || GridGapGeometry { segments: Vec::new(), col_total: 0, row_total: 0, column_reversed: false };
     // Only flex/grid containers produce gap rules.
     let is_flex_or_grid = matches!(
         s.display,
         Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
     );
     if !is_flex_or_grid {
-        return Vec::new();
+        return none();
     }
-    if !s.gap_rule_style.is_visible() || s.gap_rule_width <= 0.0 {
-        return Vec::new();
+    // Списки значений (CSS Gap Decorations L1 §4.5): ось видима, если хоть одна щель
+    // может получить видимое значение; точный выбор — по номеру щели в `gap_decoration_commands`.
+    let column_rule_visible = s.column_rule_style.iter().any(|st| st.is_visible())
+        && s.column_rule_width.iter().any(|w| *w > 0.0);
+    let row_rule_visible =
+        s.row_rule_style.iter().any(|st| st.is_visible()) && s.row_rule_width.iter().any(|w| *w > 0.0);
+    if !column_rule_visible && !row_rule_visible {
+        return none();
     }
 
     // Content area of the container (border-box minus border+padding).
@@ -607,53 +637,181 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
         })
         .collect();
 
-    if children.len() < 2 {
+    // Grid с фиксированным шаблоном дорожек имеет щели и без элементов в потоке (пустой
+    // контейнер, дети только `position: absolute`): дорожки берутся из шаблона, а если
+    // шаблон другой, `grid_gap_segments` не найдёт ни одной щели. С одним элементом щели
+    // не рисуются: `*-rule-visibility-items: around` для одиночного элемента ещё не разобран
+    // (collapsed-leading-auto-fit, repaint-on-item-position-change ухудшались).
+    let empty_grid = children.is_empty() && matches!(s.display, Display::Grid | Display::InlineGrid);
+    // Дорожки, унаследованные subgrid'ом, дают щели и при одном элементе (элемент-«мост»
+    // `subgrid-gap-decorations-013`); у обычного grid один элемент по-прежнему не рисует щели.
+    let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
+    let fragment = b.subgrid_tracks.as_ref().is_some_and(|t| t.fragment);
+    let known_tracks = matches!(s.display, Display::Grid | Display::InlineGrid)
+        && b.subgrid_tracks.is_some()
+        && (is_subgrid(&s.grid_template_columns) || is_subgrid(&s.grid_template_rows) || fragment);
+    if children.len() < 2 && !empty_grid && !known_tracks {
+        return none();
+    }
+
+    // Grid: дорожки и стыки известны, так что щели режутся по `*-rule-break` и скрываются
+    // по `*-rule-visibility-items` (CSS Gap Decorations L1 §3.2, §3.4).
+    if matches!(s.display, Display::Grid | Display::InlineGrid) {
+        // Ось `subgrid` живёт на дорожках и щелях родителя (Grid L2 §9): своё `*-gap` в раскладке
+        // не участвует, так что щель берётся из положения элементов.
+        let (mut col_gap_px, mut row_gap_px) = (col_gap_px, row_gap_px);
+        let (subgrid_cols, subgrid_rows) = (is_subgrid(&s.grid_template_columns), is_subgrid(&s.grid_template_rows));
+        // Дорожки родителя, которые раскладка оставила на боксе: по ним щели находятся и у пустого
+        // subgrid'а; иначе — восстановление по рёбрам элементов.
+        let inherited = |tracks: Option<&Vec<(f32, f32)>>, origin: f32| {
+            tracks.map(|t| t.iter().map(|&(a, b)| (origin + a, origin + b)).collect::<Vec<_>>())
+        };
+        let sub = b.subgrid_tracks.as_deref();
+        // Оси без `subgrid` несут собственные дорожки контейнера (`record_own_tracks`); при
+        // `direction: rtl` колонки зеркалятся, и они остаются на восстановлении по шаблону.
+        let rtl = s.direction == lumen_layout::Direction::Rtl;
+        let subgrid_col_tracks = if rtl && !subgrid_cols { None } else { inherited(sub.and_then(|t| t.cols.as_ref()), cx) };
+        let subgrid_row_tracks = inherited(sub.and_then(|t| t.rows.as_ref()), cy);
+        let seam = |t: &[(f32, f32)]| t.windows(2).map(|w| (w[1].0 - w[0].1).max(0.0)).next();
+        if subgrid_cols {
+            let xs: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.x, c.rect.x + c.rect.width)).collect();
+            col_gap_px = subgrid_col_tracks
+                .as_deref()
+                .and_then(seam)
+                .or_else(|| subgrid_axis_gap(&xs))
+                .unwrap_or(col_gap_px);
+        }
+        if subgrid_rows {
+            let ys: Vec<(f32, f32)> = children.iter().map(|c| (c.rect.y, c.rect.y + c.rect.height)).collect();
+            row_gap_px = subgrid_row_tracks
+                .as_deref()
+                .and_then(seam)
+                .or_else(|| subgrid_axis_gap(&ys))
+                .unwrap_or(row_gap_px);
+        }
+        return grid_gap_segments(
+            &children,
+            &GridGapParams {
+                content: (cx, cy, cw, ch),
+                col_gap: col_gap_px,
+                row_gap: row_gap_px,
+                column_visible: column_rule_visible,
+                row_visible: row_rule_visible,
+                subgrid_cols,
+                subgrid_rows,
+                subgrid_col_tracks,
+                subgrid_row_tracks,
+                fragment,
+                fragment_line_gaps: None,
+                style: s,
+            },
+        );
+    }
+
+    // Flex: щели главной оси — между элементами одной flex-строки, поперечной — между
+    // строками; режутся по `*-rule-break: intersection` и сдвигаются `*-rule-inset-*`.
+    flex_gap_segments(
+        &children,
+        &GridGapParams {
+            content: (cx, cy, cw, ch),
+            col_gap: col_gap_px,
+            row_gap: row_gap_px,
+            column_visible: column_rule_visible,
+            row_visible: row_rule_visible,
+            subgrid_cols: false,
+            subgrid_rows: false,
+            subgrid_col_tracks: None,
+            subgrid_row_tracks: fragment
+                .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.rows.as_ref()))
+                .flatten()
+                .map(|t| t.iter().map(|&(a, z)| (cy + a, cy + z)).collect()),
+            fragment,
+            fragment_line_gaps: fragment
+                .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.line_gaps.as_ref()))
+                .flatten()
+                .map(|g| g.iter().map(|l| l.iter().map(|&(a, z)| (b.rect.x + a, b.rect.x + z)).collect()).collect()),
+            style: s,
+        },
+    )
+}
+
+/// CSS Gap Decorations L1 — `DrawBorder` rules for the gaps of a flex/grid
+/// container. Two independent decoration styles: vertical segments take the
+/// column rule, horizontal ones the row rule. Empty for any other box.
+///
+/// Shared by `walk`'s epilogue and the ordered/stacking-context path
+/// (`box_layer_ops`); the caller owns the visibility check.
+///
+/// `gap_rules` — animated `*-rule-width` / `*-rule-color` (CSS Gap Decorations L1 §4.7),
+/// which replace the computed values for this paint without a relayout.
+pub(crate) fn gap_decoration_commands(
+    b: &LayoutBox,
+    gap_rules: Option<&lumen_layout::GapRuleOverride>,
+) -> Vec<DisplayCommand> {
+    let animated;
+    let s: &ComputedStyle = match gap_rules {
+        Some(o) if !o.is_empty() => {
+            let mut st = (*b.style).clone();
+            o.apply_to(&mut st);
+            animated = st;
+            &animated
+        }
+        _ => &b.style,
+    };
+    let geom = collect_gap_segments(b, s);
+    if geom.segments.is_empty() {
         return Vec::new();
     }
-
-    let mut segments: Vec<GapSegment> = Vec::new();
-    const EPS: f32 = 1.5; // tolerance for float layout rounding
-
-    if col_gap_px > 0.0 {
-        // Collect unique right-edges of children.
-        let mut rights: Vec<f32> =
-            children.iter().map(|c| c.rect.x + c.rect.width).collect();
-        rights.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
-        rights.dedup_by(|a, x| (*a - *x).abs() < EPS);
-
-        // For each right-edge, check if a child starts right_edge + col_gap away.
-        let lefts: Vec<f32> = children.iter().map(|c| c.rect.x).collect();
-        for right in &rights {
-            let expected = right + col_gap_px;
-            if lefts.iter().any(|l| (*l - expected).abs() < EPS) {
-                segments.push(GapSegment {
-                    rect: Rect::new(*right, cy, col_gap_px, ch),
-                    horizontal: false,
-                });
-            }
+    let (col_total, row_total, column_reversed) = (geom.col_total, geom.row_total, geom.column_reversed);
+    let gap_segs = geom.segments;
+    // Flex в вертикальном `writing-mode`: `column-rule` идёт по инлайновой оси, то есть физической
+    // вертикали, так что его щели — горизонтальные отрезки, а `row-rule` — вертикальные.
+    let swapped = matches!(
+        s.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    ) && s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb;
+    let (cols, rows): (Vec<GapSegment>, Vec<GapSegment>) =
+        gap_segs.into_iter().partition(|g| g.horizontal == swapped);
+    // CSS Gap Decorations L1 §4.6: значения списков раздаются щелям оси по порядку
+    // (сегменты собраны по возрастанию координаты — это порядок щелей).
+    let axis_cmds = |segs: &[GapSegment],
+                     widths: &lumen_layout::RuleList<f32>,
+                     styles: &lumen_layout::RuleList<BorderStyle>,
+                     colors: &lumen_layout::RuleList<lumen_layout::CssColor>,
+                     total: usize,
+                     reversed: bool,
+                     first: usize| {
+        let mut out = Vec::new();
+        for seg in segs {
+            // `reversed` — ось идёт справа налево (колонки при `direction: rtl`): первая щель правая.
+            // `first` — номер первой щели фрагмента среди щелей всего контейнера.
+            let idx = if reversed { total - 1 - seg.gap } else { first + seg.gap };
+            let ctx = GapDecorationContext {
+                rule_width: *widths.value_for_gap(idx, total),
+                rule_style: *styles.value_for_gap(idx, total),
+                rule_color: colors.value_for_gap(idx, total).resolve(s.color),
+            };
+            out.extend(emit_gap_rules(&b.children, std::slice::from_ref(seg), &ctx));
         }
-    }
-
-    if row_gap_px > 0.0 {
-        // Collect unique bottom-edges of children.
-        let mut bottoms: Vec<f32> =
-            children.iter().map(|c| c.rect.y + c.rect.height).collect();
-        bottoms.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
-        bottoms.dedup_by(|a, x| (*a - *x).abs() < EPS);
-
-        let tops: Vec<f32> = children.iter().map(|c| c.rect.y).collect();
-        for bottom in &bottoms {
-            let expected = bottom + row_gap_px;
-            if tops.iter().any(|t| (*t - expected).abs() < EPS) {
-                segments.push(GapSegment {
-                    rect: Rect::new(cx, *bottom, cw, row_gap_px),
-                    horizontal: true,
-                });
-            }
-        }
-    }
-
-    segments
+        out
+    };
+    // A fragment of a grid / wrapped flex cut by a multicol break paints only some of the row
+    // gaps; the row values are dealt over the gaps of the whole container (§4.6).
+    let (row_first, row_total) = b
+        .subgrid_tracks
+        .as_ref()
+        .filter(|t| t.fragment)
+        .and_then(|t| t.row_gap_base)
+        .unwrap_or((0, row_total));
+    let col_cmds = axis_cmds(&cols, &s.column_rule_width, &s.column_rule_style, &s.column_rule_color, col_total, column_reversed, 0);
+    let row_cmds = axis_cmds(&rows, &s.row_rule_width, &s.row_rule_style, &s.row_rule_color, row_total, false, row_first);
+    // CSS Gap Decorations L1 §3.5 `rule-overlap`: the axis painted last lies on top.
+    let (mut out, top) = match s.rule_overlap {
+        lumen_layout::RuleOverlap::RowOverColumn => (col_cmds, row_cmds),
+        lumen_layout::RuleOverlap::ColumnOverRow => (row_cmds, col_cmds),
+    };
+    out.extend(top);
+    out
 }
 
 /// LAYOUT-2 срез 9's explicit-stack driver replaces `walk`'s own four
@@ -688,9 +846,14 @@ struct BlockEpilogue {
     self_visible: bool,
     has_overflow_clip: bool,
     use_scroll_layer: bool,
+    /// `overflow: hidden` box scrolled by script: a `PushScrollLayer` sits inside its clip.
+    hidden_scrolled: bool,
     scroll_padding_box: Option<(f32, f32, f32, f32)>,
     is_scroll_x: bool,
     is_scroll_y: bool,
+    /// `perspective` wrapper (`PushTransform`) opened around the children,
+    /// inside the overflow clip — closed first, before the clip.
+    has_perspective: bool,
     has_filter: bool,
     has_backdrop: bool,
     has_clip_path: bool,
@@ -710,6 +873,9 @@ struct Frame<'a> {
     b: &'a LayoutBox,
     is_fixed: bool,
     is_sticky: bool,
+    /// Whether `b` or an ancestor is the containing block of `position: fixed`
+    /// descendants — a `fixed` child of this frame is not viewport-pinned.
+    in_fixed_cb: bool,
     epilogue: Epilogue,
     /// This frame's children in the order they must be walked — already
     /// depth-sorted for a `preserve-3d` container, plain DOM order otherwise.
@@ -757,7 +923,7 @@ fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&
         }
         let child = current.children[current.next_idx];
         current.next_idx += 1;
-        match dispatch(child, out, dpr, sel) {
+        match dispatch(child, current.in_fixed_cb, out, dpr, sel) {
             WalkOutcome::Done => {}
             WalkOutcome::NeedsLoop(child_frame) => {
                 stack.push(current);
@@ -794,18 +960,10 @@ fn finish_epilogue(frame: &Frame, out: &mut DisplayList) {
 /// (`emit_table_box` handles its own row/cell descent and calls back into
 /// public `walk` for cell content — see `run`'s doc comment).
 fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue) {
-    // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
-    if e.self_visible {
-        let gap_segs = collect_gap_segments(b);
-        if !gap_segs.is_empty() {
-            let s = &b.style;
-            let ctx = GapDecorationContext {
-                rule_width: s.gap_rule_width,
-                rule_style: s.gap_rule_style,
-                rule_color: s.gap_rule_color.resolve(s.color),
-            };
-            out.extend(emit_gap_rules(&b.children, &gap_segs, &ctx));
-        }
+    // Perspective projects only the children; gap rules are the container's
+    // own painting and stay flat.
+    if e.has_perspective {
+        out.push(DisplayCommand::PopTransform);
     }
     if e.has_overflow_clip {
         if e.use_scroll_layer {
@@ -817,6 +975,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
                 emit_scrollbars(b, padding_box, e.is_scroll_x, e.is_scroll_y, out);
             }
         } else {
+            if e.hidden_scrolled {
+                out.push(DisplayCommand::PopScrollLayer);
+            }
             out.push(DisplayCommand::PopClip);
         }
     }
@@ -858,7 +1019,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
 /// then drives that (and every further non-tail-recursive container it
 /// meets) on an explicit heap stack instead.
 pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
-    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, out, dpr, sel) {
+    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr, sel) {
         run(frame, out, dpr, sel);
     }
 }
@@ -871,6 +1032,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
 /// and `SvgRoot` — everywhere else falls through exactly as before.
 fn dispatch<'a>(
     b: &'a LayoutBox,
+    in_fixed_cb: bool,
     out: &mut DisplayList,
     dpr: f32,
     sel: Option<&SelectionHighlight>,
@@ -907,7 +1069,10 @@ fn dispatch<'a>(
     // split it out of the scrollable band (ADR-016 M3.2.1c). No draw-time offset:
     // fixed content is already at viewport-fixed coords (BUG-159), so the markers
     // render as no-ops — they are partition metadata only.
-    let is_fixed = matches!(b.style.position, Position::Fixed);
+    // A `fixed` box under a transformed/filtered ancestor scrolls with it
+    // (css-transforms-1 §2) — it is page content, not a viewport overlay.
+    let is_fixed = matches!(b.style.position, Position::Fixed) && !in_fixed_cb;
+    let child_in_fixed_cb = in_fixed_cb || contains_fixed_descendants(&b.style);
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);
     }
@@ -995,42 +1160,30 @@ fn dispatch<'a>(
             // cell's background and borders the same way (children still walked).
             let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
-                emit_box_shadows(b, out);
+                // HTML Rendering §15.3.13: фон, тени и рамка fieldset'а с rendered legend
+                // начинаются с границы блока-начала, опущенной под legend.
+                let shifted = fieldset_decoration_box(b);
+                let db = shifted.as_ref().unwrap_or(b);
+                emit_box_shadows(db, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
                 {
-                    let clip = background_clip_rect(b, background_color_clip(b));
+                    let clip = background_clip_rect(db, background_color_clip(db));
                     if clip.width > 0.0 && clip.height > 0.0 {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }
                 }
-                emit_background_image(out, b, dpr);
-                emit_inset_box_shadows(b, out);
+                emit_background_image(out, db, dpr);
+                emit_inset_box_shadows(db, out);
                 let s = &b.style;
                 let has_border = s.border_top_style.is_visible()
                     || s.border_right_style.is_visible()
                     || s.border_bottom_style.is_visible()
                     || s.border_left_style.is_visible();
                 if has_border {
-                    let cur = s.color;
-                    out.push(DisplayCommand::DrawBorder {
-                        rect: b.rect,
-                        widths: [
-                            s.border_top_width, s.border_right_width,
-                            s.border_bottom_width, s.border_left_width,
-                        ],
-                        colors: [
-                            s.border_top_color.resolve(cur),
-                            s.border_right_color.resolve(cur),
-                            s.border_bottom_color.resolve(cur),
-                            s.border_left_color.resolve(cur),
-                        ],
-                        styles: [
-                            s.border_top_style, s.border_right_style,
-                            s.border_bottom_style, s.border_left_style,
-                        ],
-                        radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
-                    });
+                    emit_box_border(
+                        b, CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height), out,
+                    );
                 }
                 emit_column_rules(b, out);
             }
@@ -1047,6 +1200,7 @@ fn dispatch<'a>(
             let is_scroll_x = matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto);
             let is_scroll_y = matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto);
             let use_scroll_layer = (is_scroll_x || is_scroll_y) && has_overflow_clip;
+            let hidden_scrolled = !use_scroll_layer && scrolled_hidden(b);
             // Capture padding-box rect for scrollbar geometry (used after PopScrollLayer).
             let scroll_padding_box: Option<(f32, f32, f32, f32)> = if use_scroll_layer {
                 let s = &b.style;
@@ -1100,14 +1254,38 @@ fn dispatch<'a>(
 
                 if use_scroll_layer {
                     out.push(DisplayCommand::PushScrollLayer {
+                        id: b.node.index() as u32,
                         clip_rect: cr,
                         scroll_x: b.scroll_x,
                         scroll_y: b.scroll_y,
                     });
                 } else {
                     out.push(DisplayCommand::PushClipRect { rect: cr });
+                    // CSS Overflow L3 §2: `hidden` is a scroll container too —
+                    // only the user cannot scroll it; `scrollTo()`/`scrollBy()`
+                    // move its content, so a non-zero offset translates it.
+                    if hidden_scrolled {
+                        out.push(DisplayCommand::PushScrollLayer {
+                            id: b.node.index() as u32,
+                            clip_rect: cr,
+                            scroll_x: b.scroll_x,
+                            scroll_y: b.scroll_y,
+                        });
+                    }
                 }
             }
+            // CSS Transforms L2 §4 — `perspective` projects the box's children
+            // (not the box itself): wrap only the descendants, inside the
+            // overflow clip. See `perspective_matrix` for why a separate
+            // wrapper rather than folding into each child's own matrix.
+            // CSS Gap Decorations L1 §2.1 — gap rules are «painted just above the border of the
+            // container»: after its own background/border, *under* the children (a translucent
+            // item shows the rule through it; flex-gap-decorations-033). Inside the overflow clip
+            // / scroll layer, flat (before the perspective wrapper).
+            if self_visible {
+                out.extend(gap_decoration_commands(b, None));
+            }
+            let has_perspective = emit_push_perspective(b, out);
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;
             // otherwise document order (flat compositing).
@@ -1128,9 +1306,11 @@ fn dispatch<'a>(
                 self_visible,
                 has_overflow_clip,
                 use_scroll_layer,
+                hidden_scrolled,
                 scroll_padding_box,
                 is_scroll_x,
                 is_scroll_y,
+                has_perspective,
                 has_filter,
                 has_backdrop,
                 has_clip_path,
@@ -1146,11 +1326,13 @@ fn dispatch<'a>(
             } else {
                 let children: Vec<&LayoutBox> = if establishes_3d_rendering_context(b) {
                     depth_sorted_child_order(&b.children).into_iter().map(|i| &b.children[i]).collect()
+                } else if let Some(order) = lumen_layout::paint_child_order(b) {
+                    order.into_iter().map(|i| &b.children[i]).collect()
                 } else {
                     b.children.iter().collect()
                 };
                 return WalkOutcome::NeedsLoop(Box::new(Frame {
-                    b, is_fixed, is_sticky,
+                    b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
                     epilogue: Epilogue::Full(epilogue),
                     children,
                     next_idx: 0,
@@ -1159,16 +1341,8 @@ fn dispatch<'a>(
         }
         BoxKind::FormControl { kind } => {
             // Replaced element: background + border box (Phase 0, no content).
-            //
-            // LAYOUT-2 срез 9: this `return` (like the five other `!is_paint_
-            // visible`/zero-size early returns below, on Image/Video/Canvas/
-            // Audio/Iframe) skips the `is_fixed`/`is_sticky` closing at
-            // `dispatch`'s own tail — a pre-existing quirk (an invisible
-            // `position:fixed`/`sticky` replaced element leaves its `Begin*
-            // Layer` unmatched), reproduced bit-for-bit rather than fixed
-            // here (out of scope — filed as BUG-1037 for follow-up).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
@@ -1214,7 +1388,7 @@ fn dispatch<'a>(
             // Анонимный контейнер: нет фона/бордера собственного.
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
             return WalkOutcome::NeedsLoop(Box::new(Frame {
-                b, is_fixed, is_sticky,
+                b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
                 epilogue: Epilogue::None,
                 children: b.children.iter().collect(),
                 next_idx: 0,
@@ -1230,7 +1404,7 @@ fn dispatch<'a>(
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → <img>.
             // background/border у `<img>` валидны по CSS — например, для
@@ -1297,7 +1471,7 @@ fn dispatch<'a>(
         BoxKind::Video { src, poster } => {
             // visibility:hidden на `<video>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → placeholder.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1367,7 +1541,7 @@ fn dispatch<'a>(
         BoxKind::Canvas { .. } => {
             // visibility:hidden on <canvas> skips everything (no children).
             if !is_paint_visible(b) {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Painter's order for replaced element: background → bg-image → border → bitmap.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1420,7 +1594,7 @@ fn dispatch<'a>(
         }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Phase 0: grey bar for audio controls UI.
             let grey = Color { r: 200, g: 200, b: 200, a: 255 };
@@ -1429,7 +1603,7 @@ fn dispatch<'a>(
         }
         BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return WalkOutcome::Done;
+                return close_position_layers(is_fixed, is_sticky, out);
             }
             // Phase 0: grey placeholder — no sub-document navigation.
             // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
@@ -1499,7 +1673,7 @@ fn dispatch<'a>(
             );
             out.push(DisplayCommand::PushClipRect { rect: clip });
             return WalkOutcome::NeedsLoop(Box::new(Frame {
-                b, is_fixed, is_sticky,
+                b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
                 epilogue: Epilogue::SvgViewportClip,
                 children: b.children.iter().collect(),
                 next_idx: 0,
@@ -1520,6 +1694,14 @@ fn dispatch<'a>(
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
     }
+    close_position_layers(is_fixed, is_sticky, out)
+}
+
+/// Closes the `BeginFixedLayer`/`BeginStickyLayer` that `dispatch` opened for
+/// this box. Every exit of `dispatch` after the markers are pushed — including
+/// the early returns of invisible replaced elements — goes through here, so the
+/// brackets stay balanced (BUG-1037).
+fn close_position_layers<'a>(is_fixed: bool, is_sticky: bool, out: &mut DisplayList) -> WalkOutcome<'a> {
     if is_fixed {
         out.push(DisplayCommand::EndFixedLayer);
     }

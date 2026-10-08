@@ -32,7 +32,7 @@ TextEncoder.prototype.encode = function(str) {
         } else if (c < 0x800) {
             bytes.push(0xC0 | (c >> 6));
             bytes.push(0x80 | (c & 0x3F));
-        } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+        } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
             var lo = s.charCodeAt(i + 1);
             var cp = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
             bytes.push(0xF0 | (cp >> 18));
@@ -41,6 +41,7 @@ TextEncoder.prototype.encode = function(str) {
             bytes.push(0x80 | (cp & 0x3F));
             i++;
         } else {
+            if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD; // lone surrogate → U+FFFD
             bytes.push(0xE0 | (c >> 12));
             bytes.push(0x80 | ((c >> 6) & 0x3F));
             bytes.push(0x80 | (c & 0x3F));
@@ -62,12 +63,13 @@ TextEncoder.prototype.encodeInto = function(src, dest) {
             out = [c];
         } else if (c < 0x800) {
             out = [0xC0 | (c >> 6), 0x80 | (c & 0x3F)];
-        } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+        } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
             var lo = s.charCodeAt(i + 1);
             var cp = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
             out = [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)];
             unitLen = 2;
         } else {
+            if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD; // lone surrogate → U+FFFD
             out = [0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F)];
         }
         if (written + out.length > dest.length) break;
@@ -164,7 +166,9 @@ TextDecoder.prototype.decode = function(buf, options) {
     // ignoreBOM=true (suppress stripping) on every chunk after the first so a
     // BOM-like byte sequence arriving mid-stream is decoded as plain content.
     var ignoreBOMForThisCall = this._sawInput ? true : this._ignoreBOM;
-    this._sawInput = true;
+    // Only a call that actually decodes bytes consumes the stream start: a chunk
+    // held back entirely as a partial BOM (EF BB / FF) must not count as seen.
+    if (toDecode.length > 0) this._sawInput = true;
 
     var result = _lumen_text_decode(this._encoding, toDecode, ignoreBOMForThisCall, this._fatal);
     if (result === undefined) {

@@ -38,16 +38,25 @@
 #![allow(missing_docs)]
 
 mod at_rules;
+mod cssom_op;
 mod declarations;
+mod layer_state;
 mod media;
 mod mixins;
+mod nesting_expand;
 mod selectors;
+mod sheet_diff;
+mod supports;
 
 pub use at_rules::*;
+pub use cssom_op::*;
 pub use declarations::*;
 pub use media::*;
 pub use mixins::*;
 pub use selectors::*;
+pub use supports::*;
+use layer_state::LayerState;
+use nesting_expand::{expand_nesting, substitute_nesting_selector};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
@@ -222,9 +231,9 @@ pub struct Stylesheet {
     /// resolution happen in layout (`resolve_font_palette_for_family`).
     pub font_palette_values: Vec<FontPaletteValuesRule>,
     /// CSS Color L5 §4 — `@color-profile --name { src: ...; rendering-intent: ...; }`.
-    /// Phase 0: parse+store. Matching against `color(--name ...)` and used-value
-    /// resolution happen in layout (`resolve_color_profile`); real ICC transform
-    /// is deferred — channels are treated as already-sRGB.
+    /// Parsed here; the profile bytes are attached by the embedder through
+    /// [`Stylesheet::load_color_profiles`] and `color(--name ...)` is converted
+    /// through the compiled ICC transform in layout (`parse_css_color_fn`).
     pub color_profiles: Vec<ColorProfileRule>,
     /// CSS Functions and Mixins L1 — `@function --name(<params>) { decls }`.
     /// Author-defined custom function, invoked as `--name(<args>)` from any
@@ -449,6 +458,68 @@ impl Stylesheet {
     /// [`Stylesheet::merge_from`] already does it.
     pub fn mark_mutated(&mut self) {
         self.revision = StylesheetRevision::fresh();
+    }
+
+    /// CSS Color L5 §5.3 — attaches ICC profile bytes to the `@color-profile`
+    /// rules. `fetch` receives a rule's `src` and returns the profile bytes, or
+    /// `None` when they could not be fetched (the rule then stays unloaded and
+    /// colours referencing it are invalid).
+    ///
+    /// "If multiple `@color-profile` rules are defined with the same name, the
+    /// last one in document order wins, and all preceding ones are ignored" —
+    /// so `fetch` is called only for the last rule of each name, and an earlier
+    /// duplicate has its `data` cleared. Mints a new revision when anything was
+    /// attached or cleared.
+    pub fn load_color_profiles(
+        &mut self,
+        mut fetch: impl FnMut(&str) -> Option<std::sync::Arc<Vec<u8>>>,
+    ) {
+        let mut changed = false;
+        for i in 0..self.color_profiles.len() {
+            let shadowed = self.color_profiles[i + 1..]
+                .iter()
+                .any(|later| later.name == self.color_profiles[i].name);
+            let data = if shadowed {
+                None
+            } else {
+                self.color_profiles[i].src.as_deref().and_then(&mut fetch)
+            };
+            if self.color_profiles[i].data != data {
+                self.color_profiles[i].data = data;
+                changed = true;
+            }
+        }
+        if changed {
+            self.mark_mutated();
+        }
+    }
+
+    /// Copies already-fetched ICC profile bytes from `prev` into the unloaded
+    /// `@color-profile` rules of this sheet that have the same name and `src`.
+    ///
+    /// For a sheet rebuilt from the same CSS text after the page has loaded
+    /// (a late `<style>`, a CSSOM edit): a relayout must not touch the network,
+    /// so the bytes fetched for the first sheet are carried over instead.
+    pub fn carry_color_profile_data(&mut self, prev: &Stylesheet) {
+        let mut changed = false;
+        for rule in &mut self.color_profiles {
+            if rule.data.is_some() {
+                continue;
+            }
+            // Last rule of the name wins — same order `load_color_profiles` uses.
+            let found = prev
+                .color_profiles
+                .iter()
+                .rev()
+                .find(|p| p.name == rule.name && p.src == rule.src && p.data.is_some());
+            if let Some(found) = found {
+                rule.data = found.data.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            self.mark_mutated();
+        }
     }
 
     /// Appends every rule of `other` to this sheet and mints a new revision.
@@ -945,78 +1016,6 @@ impl Stylesheet {
     }
 }
 
-/// One recorded CSSOM write against an owned sheet — CSSOM-8 вариант C.
-///
-/// The page cascade is an independent parse of every `<style>`/`<link>` body
-/// concatenated together, so a write applied to one node's own
-/// `Stylesheet` (which is what `document.styleSheets[i]` hands out) does not
-/// reach it. Rather than serialising the mutated node back to CSS text and
-/// re-parsing the page — which would need a byte-exact writer for every
-/// at-rule CSSOM cannot represent, and would corrupt the whole page's styles
-/// if that writer were ever wrong — each write is also recorded here and
-/// **replayed** onto the freshly parsed cascade sheet on demand
-/// ([`Stylesheet::replay_cssom_ops`]). A wrong address can then only misplace
-/// the one edit it describes, and the page's own CSS is never rewritten.
-///
-/// Indices are in the owning node's own `cssRules` space; the base that maps
-/// them into the cascade's space is resolved at replay time, so a recorded op
-/// survives any number of cascade rebuilds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CssomOp {
-    /// `CSSStyleSheet.insertRule(text, index)`.
-    InsertRule {
-        /// Position in the owning node's own `cssRules`.
-        index: usize,
-        /// The rule text exactly as JS passed it.
-        text: String,
-    },
-    /// `CSSStyleSheet.deleteRule(index)`.
-    DeleteRule {
-        /// Position in the owning node's own `cssRules`.
-        index: usize,
-    },
-    /// A top-level `CSSStyleRule.style` write.
-    SetRuleStyle {
-        /// Position in the owning node's own `cssRules`.
-        index: usize,
-        /// The rule's whole new declaration list.
-        css_text: String,
-    },
-    /// A `CSSStyleRule.style` write on a rule nested in a top-level `@media`.
-    SetMediaChildStyle {
-        /// The `@media` block's own position in the node's `cssRules`.
-        media_index: usize,
-        /// The rule's position inside that block (not rebased — a `@media`
-        /// block's children are addressed relative to the block itself).
-        child_index: usize,
-        /// The rule's whole new declaration list.
-        css_text: String,
-    },
-    /// A `.style` write on a node inside a top-level `@mixin`'s `@result`
-    /// tree (CSSOM-8, вложенные правила).
-    SetMixinResultStyle {
-        /// The `@mixin`'s own position in the node's `cssRules`.
-        mixin_index: usize,
-        /// Path from `@result`'s own children down to the target node —
-        /// not rebased, structural (see [`Stylesheet::set_mixin_result_style`]'s
-        /// doc comment).
-        path: Vec<usize>,
-        /// The node's whole new declaration list.
-        css_text: String,
-    },
-    /// `CSSGroupingRule.insertRule` of an `@apply` statement into a
-    /// TOP-LEVEL style rule's own body.
-    InsertRuleBodyApply {
-        /// The owning style rule's position in the node's `cssRules`.
-        rule_index: usize,
-        /// Position in that rule's own `@apply`-marker sub-list — see
-        /// [`Rule::insert_apply_marker`].
-        index: usize,
-        /// The rule text exactly as JS passed it.
-        text: String,
-    },
-}
-
 /// One `<style>`/`<link rel=stylesheet>` DOM node paired with its own parsed
 /// sheet — the per-element granularity `document.styleSheets`/`element.sheet`
 /// (CSSOM-1) need, as opposed to a page's single merged cascade [`Stylesheet`].
@@ -1157,8 +1156,7 @@ impl<'a> Parser<'a> {
         let mut imports = Vec::new();
         let mut font_faces = Vec::new();
         let mut font_palette_values: Vec<FontPaletteValuesRule> = Vec::new();
-        let mut layer_order: Vec<String> = Vec::new();
-        let mut layers: Vec<LayerRule> = Vec::new();
+        let mut layer_state = LayerState::default();
         let mut supports_rules: Vec<SupportsRule> = Vec::new();
         let mut keyframes: Vec<KeyframesRule> = Vec::new();
         let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
@@ -1172,7 +1170,6 @@ impl<'a> Parser<'a> {
         let mut mixin_rules: Vec<MixinRule> = Vec::new();
         let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
         let mut top_level_spans: Vec<usize> = Vec::new();
-        let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
             // CSSOM-8 вариант C: one `rule_start` per top-level construct,
@@ -1191,7 +1188,11 @@ impl<'a> Parser<'a> {
                     // conditional-group rule (сейчас @container) через `bubbled`.
                     let mut outcomes = std::mem::take(&mut self.bubbled);
                     outcomes.insert(0, primary);
-                    for outcome in outcomes {
+                    // Очередь, а не просто список: содержимое `@layer`-блока,
+                    // не привязанное к layer-у (`@font-face` и т.п.),
+                    // возвращается сюда и идёт тем же путём.
+                    let mut queue: std::collections::VecDeque<AtRuleOutcome> = outcomes.into();
+                    while let Some(outcome) = queue.pop_front() {
                         match outcome {
                             AtRuleOutcome::Property(p) => properties.push(p),
                             AtRuleOutcome::Media(m) => {
@@ -1217,27 +1218,14 @@ impl<'a> Parser<'a> {
                             }
                             AtRuleOutcome::LayerNames(names) => {
                                 for n in names {
-                                    if !layer_order.iter().any(|e| e == &n) {
-                                        layer_order.push(n);
-                                    }
+                                    layer_state.declare(n);
                                 }
                             }
-                            AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr } => {
-                                let resolved_name = name.unwrap_or_else(|| {
-                                    anon_counter += 1;
-                                    format!("__anon_{anon_counter}__")
-                                });
-                                if !layer_order.iter().any(|e| e == &resolved_name) {
-                                    layer_order.push(resolved_name.clone());
-                                }
-                                for mut m in lmr {
-                                    m.layer = Some(resolved_name.clone());
-                                    mixin_rules.push(m);
-                                }
-                                layers.push(LayerRule {
-                                    name: resolved_name,
-                                    rules: lr,
-                                });
+                            AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr, nested } => {
+                                layer_state.register(None, name, lr, lmr, nested);
+                                let (mixins, hoisted) = layer_state.take_outputs();
+                                mixin_rules.extend(mixins);
+                                queue.extend(hoisted);
                             }
                             AtRuleOutcome::Supports(s) => supports_rules.push(s),
                             AtRuleOutcome::Keyframes(k) => keyframes.push(k),
@@ -1278,24 +1266,16 @@ impl<'a> Parser<'a> {
                                 AtRuleOutcome::Supports(s) => supports_rules.push(s),
                                 AtRuleOutcome::LayerNames(names) => {
                                     for n in names {
-                                        if !layer_order.iter().any(|e| e == &n) {
-                                            layer_order.push(n);
-                                        }
+                                        layer_state.declare(n);
                                     }
                                 }
-                                AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr } => {
-                                    let resolved = name.unwrap_or_else(|| {
-                                        anon_counter += 1;
-                                        format!("__anon_{anon_counter}__")
-                                    });
-                                    if !layer_order.iter().any(|e| e == &resolved) {
-                                        layer_order.push(resolved.clone());
-                                    }
-                                    for mut m in lmr {
-                                        m.layer = Some(resolved.clone());
-                                        mixin_rules.push(m);
-                                    }
-                                    layers.push(LayerRule { name: resolved, rules: lr });
+                                AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr, nested } => {
+                                    // CSS Nesting: тело `@layer` внутри
+                                    // style-правила не несёт at-rules, так
+                                    // что `hoisted` здесь всегда пуст.
+                                    layer_state.register(None, name, lr, lmr, nested);
+                                    let (mixins, _) = layer_state.take_outputs();
+                                    mixin_rules.extend(mixins);
                                 }
                                 AtRuleOutcome::Container(c) => container_rules.push(c),
                                 AtRuleOutcome::Scope(s) => scope_rules.push(s),
@@ -1324,8 +1304,8 @@ impl<'a> Parser<'a> {
             imports,
             font_faces,
             font_palette_values,
-            layer_order,
-            layers,
+            layer_order: layer_state.order,
+            layers: layer_state.blocks,
             supports_rules,
             keyframes,
             counter_styles,
@@ -1426,7 +1406,11 @@ impl<'a> Parser<'a> {
                     let at_start = self.pos;
                     self.consume(); // '@'
                     let ident = self.parse_ident().unwrap_or_default();
-                    if ident.eq_ignore_ascii_case("apply") {
+                    if ident.eq_ignore_ascii_case("nest") {
+                        let (r, a) = self.parse_legacy_nest_rule(parent_sels);
+                        nested.extend(r);
+                        at_rules.extend(a);
+                    } else if ident.eq_ignore_ascii_case("apply") {
                         let raw_start = self.pos;
                         if self.parse_apply_rule().is_some() {
                             let raw = self.input[raw_start..self.pos].to_string();
@@ -1449,6 +1433,78 @@ impl<'a> Parser<'a> {
             }
         }
         (decls, nested, at_rules)
+    }
+
+    /// Legacy `@nest <selector-list> { declarations }` (css-nesting-1 ED до
+    /// 2023-02; в текущей спеке удалён, но старые таблицы стилей его содержат).
+    /// Курсор — сразу после `@nest`. Каждый complex-селектор prelude обязан
+    /// содержать хотя бы один `&` (иначе правило невалидно и блок пропускается
+    /// целиком); `&` заменяется на родительский селектор в любой позиции
+    /// (`@nest .dark & { }`, `@nest :not(&) { }`), а не только в начале, как в
+    /// `& sel` — этим `@nest` и отличается от современной формы. Семантика
+    /// подстановки — `:is(<родитель>)` (Nesting L1 §3.1); одиночный compound без
+    /// хвоста подставляется текстом как есть, чтобы не раздувать специфичность
+    /// и не терять pseudo-element-ы.
+    fn parse_legacy_nest_rule(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+    ) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
+        self.skip_ws_and_comments();
+        let prelude_start = self.pos;
+        // Prelude до `{` верхнего уровня; строки и скобки не завершают prelude.
+        let mut depth: i32 = 0;
+        let mut quote: Option<char> = None;
+        while let Some(c) = self.peek() {
+            match quote {
+                Some(q) => {
+                    if c == '\\' {
+                        self.consume();
+                    } else if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '"' | '\'' => quote = Some(c),
+                    '(' | '[' => depth += 1,
+                    ')' | ']' => depth -= 1,
+                    '{' | ';' | '}' if depth <= 0 => break,
+                    _ => {}
+                },
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') || parent_sels.is_empty() {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        }
+        let prelude = self.input[prelude_start..self.pos].to_string();
+        let parent_css = if let [only] = parent_sels {
+            if only.tail.is_empty() {
+                only.to_css_str()
+            } else {
+                format!(":is({})", only.to_css_str())
+            }
+        } else {
+            let list: Vec<String> = parent_sels.iter().map(ComplexSelector::to_css_str).collect();
+            format!(":is({})", list.join(", "))
+        };
+        let Some(substituted) = substitute_nesting_selector(&prelude, &parent_css) else {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        };
+        let mut sub = Parser::new(&substituted);
+        let expanded_sels = sub.parse_selector_list();
+        sub.skip_ws_and_comments();
+        if expanded_sels.is_empty() || sub.peek().is_some() {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        }
+        self.consume(); // '{'
+        let (declarations, sub_nested, sub_at) =
+            self.parse_declaration_block_with_nesting(&expanded_sels);
+        let mut result = vec![Rule { selectors: expanded_sels, declarations }];
+        result.extend(sub_nested);
+        (result, sub_at)
     }
 
     /// Parse `& [combinator] selector-list { declarations }` and expand into flat rules.
@@ -1701,6 +1757,7 @@ impl<'a> Parser<'a> {
                 // only covers the latter; a `@mixin` here remains
                 // unsupported, same as before this change.
                 mixin_rules: Vec::new(),
+                nested: Vec::new(),
             }];
             outcomes.extend(inner_at);
             return outcomes;
@@ -1872,58 +1929,6 @@ fn is_ident_continue(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit()
 }
 
-/// Hard cap on selectors a single [`expand_nesting`] call can produce.
-///
-/// CSS Nesting L1 doesn't bound cartesian growth (`parents.len() *
-/// nested.len()`), and the expanded list becomes the `parents` of the next
-/// nesting level — so on malformed input where recovery keeps entering
-/// [`Parser::parse_implicit_nested_rule`] instead of terminating, the
-/// selector count compounds multiplicatively *per level of nesting depth*
-/// instead of growing additively with input size. A 676-byte fuzzer
-/// minimization reached 50 MiB / ×74 000 blowup this way (BUG-788). Real
-/// stylesheets never come close to four figures of selectors from nesting
-/// alone, so truncating here only ever discards pathological expansion, not
-/// legitimate rules.
-const MAX_EXPANDED_SELECTORS: usize = 1024;
-
-/// CSS Nesting L1 §3 — expand `& (combinator) nested` into concrete selectors.
-///
-/// `combinator = None`  → compound join (e.g. `&.foo` → `parent.foo`)
-/// `combinator = Some(c)` → `parent c nested` (e.g. `& span` → `parent descendant span`)
-fn expand_nesting(
-    parents: &[ComplexSelector],
-    combinator: Option<Combinator>,
-    nested: &[ComplexSelector],
-) -> Vec<ComplexSelector> {
-    let mut result = Vec::new();
-    'outer: for parent in parents {
-        for n in nested {
-            if result.len() >= MAX_EXPANDED_SELECTORS {
-                break 'outer;
-            }
-            let expanded = match combinator {
-                None => {
-                    // `&.foo` → merge parent head with nested head, keep tails.
-                    let mut head = parent.head.clone();
-                    head.parts.extend_from_slice(&n.head.parts);
-                    let mut tail = parent.tail.clone();
-                    tail.extend_from_slice(&n.tail);
-                    ComplexSelector { head, tail }
-                }
-                Some(comb) => {
-                    // `& span` → parent + (comb, nested_head) + nested_tail
-                    let mut tail = parent.tail.clone();
-                    tail.push((comb, n.head.clone()));
-                    tail.extend_from_slice(&n.tail);
-                    ComplexSelector { head: parent.head.clone(), tail }
-                }
-            };
-            result.push(expanded);
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 #[path = "parser/tests/revision.rs"]
 mod revision_tests;
@@ -1939,6 +1944,10 @@ pub(crate) use selectors_tests::one;
 mod at_rules_tests;
 
 #[cfg(test)]
+#[path = "parser/tests/media.rs"]
+mod media_tests;
+
+#[cfg(test)]
 #[path = "parser/tests/nesting.rs"]
 mod nesting_tests;
 
@@ -1949,3 +1958,7 @@ mod recovery_tests;
 #[cfg(test)]
 #[path = "parser/tests/view_transitions.rs"]
 mod view_transitions_tests;
+
+#[cfg(test)]
+#[path = "parser/tests/sheet_diff.rs"]
+mod sheet_diff_tests;

@@ -81,6 +81,6 @@ directly against the engine (focus → mutate → assert not-yet-fixed-up →
 the WPT harness, because the vendored file's own async assertions turned out
 to depend on `ResizeObserver`-vs-`requestAnimationFrame` ordering that this
 engine doesn't guarantee — a separate, pre-existing scheduling gap, filed as
-[BUG-1056](BUG-1056-OPEN.md) rather than folded into this fix. `cargo test -p
+[BUG-1056](BUG-1056-FIXED.md) rather than folded into this fix. `cargo test -p
 lumen-js --features v8-backend focus_fixup` and `cargo clippy -p lumen-js
 --all-targets --features v8-backend -- -D warnings` are both green.

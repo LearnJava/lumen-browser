@@ -91,7 +91,7 @@ DOM §4.8: `ShadowRoot : DocumentFragment : Node`, плюс миксины `Docu
 - `delegatesFocus`/`slotAssignment`/`clonable`/`serializable` (readonly) и `onslotchange`.
 
 Сериализация `getHTML({serializableShadowRoots})` в скоуп не входила — она остаётся в
-[BUG-1064](BUG-1064-OPEN.md) (теперь у него есть `ShadowRoot.serializable`/`clonable`/
+[BUG-1064](BUG-1064-FIXED.md) (теперь у него есть `ShadowRoot.serializable`/`clonable`/
 `delegatesFocus`/`slotAssignment`).
 
 **Проверка.**
@@ -104,5 +104,5 @@ DOM §4.8: `ShadowRoot : DocumentFragment : Node`, плюс миксины `Docu
 - archive.org: `t.insertBefore is not a function` ушёл, но главная всё ещё пустая (46 узлов,
   высота 0; Chrome — 69 узлов, 3251px). Следующая причина — Lit обходит шаблон общим
   `TreeWalker` с `currentNode = template.content`, а `nextNode()` Lumen идёт по поддереву `root`
-  от `<html>` документа и падает на `getAttributeNames` — заведено [BUG-1171](BUG-1171-OPEN.md)
-  (дальше упрётся в [BUG-1136](BUG-1136-OPEN.md)).
+  от `<html>` документа и падает на `getAttributeNames` — заведено [BUG-1171](BUG-1171-FIXED.md)
+  (дальше упрётся в [BUG-1136](BUG-1136-FIXED.md)).

@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -264,7 +264,7 @@ impl lumen_core::ext::JsFetchProvider for CaptureFetch {
 fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -292,7 +292,7 @@ impl AbortFetch {
 fn v8_runtime_with_abort_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = AbortFetch::new();
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -322,7 +322,7 @@ impl BlockingFetch {
 fn v8_runtime_with_blocking_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = BlockingFetch::new();
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -439,4 +439,73 @@ fn fetch_post_content_type_override() {
     assert_eq!(calls.len(), 1);
     let (_, _, ct, _) = &calls[0];
     assert_eq!(ct, "application/json");
+}
+
+// ── BUG-1151: fetch() consumes a `<link rel=preload as=fetch>` hint ─────────
+
+/// Provider with a preloaded `/api` slot; counts requests that reach the network.
+struct PreloadedFetch {
+    network: std::sync::Mutex<Vec<String>>,
+}
+impl lumen_core::ext::JsFetchProvider for PreloadedFetch {
+    fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.network.lock().unwrap().push(url.into());
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"net".to_vec(), url: url.to_string() })
+    }
+    fn fetch_preloaded(&self, url: &str) -> Option<lumen_core::ext::JsFetchResult> {
+        (url == "https://example.com/api").then(|| lumen_core::ext::JsFetchResult {
+            status: 200, status_text: "OK".into(), headers: vec![], body: b"hint".to_vec(), url: url.to_string(),
+        })
+    }
+}
+
+fn preload_fetch_body(register: &str, fetch_call: &str) -> (String, usize) {
+    let provider = Arc::new(PreloadedFetch { network: std::sync::Mutex::new(vec![]) });
+    let rt = v8_runtime_with_fetch_dyn(Arc::clone(&provider) as Arc<dyn lumen_core::ext::JsFetchProvider>);
+    rt.eval(&format!(
+        "globalThis.out = 'pending'; {register} {fetch_call}.then(function(r) {{ return r.text(); }}).then(function(t) {{ out = t; }});"
+    )).unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+    let body = match rt.eval("out").unwrap() {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("{other:?}"),
+    };
+    let n = provider.network.lock().unwrap().len();
+    (body, n)
+}
+
+fn v8_runtime_with_fetch_dyn(p: Arc<dyn lumen_core::ext::JsFetchProvider>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
+    rt
+}
+
+#[test]
+fn fetch_takes_matching_preload_hint() {
+    let reg = "_lumen_fetch_hint_register('https://example.com/api', '');";
+    assert_eq!(preload_fetch_body(reg, "fetch('/api')"), ("hint".to_string(), 0));
+}
+
+#[test]
+fn fetch_ignores_hint_without_crossorigin() {
+    // No `crossorigin` = a no-cors hint: a cors fetch() cannot reuse it.
+    let reg = "_lumen_fetch_hint_register('https://example.com/api', null);";
+    assert_eq!(preload_fetch_body(reg, "fetch('/api')"), ("net".to_string(), 1));
+}
+
+#[test]
+fn fetch_ignores_hint_on_credentials_or_header_mismatch() {
+    let reg = "_lumen_fetch_hint_register('https://example.com/api', '');";
+    assert_eq!(preload_fetch_body(reg, "fetch('/api', {credentials: 'include'})").1, 1);
+    assert_eq!(preload_fetch_body(reg, "fetch('/api', {headers: {'X-A': '1'}})").1, 1);
+    let cred = "_lumen_fetch_hint_register('https://example.com/api', 'use-credentials');";
+    assert_eq!(preload_fetch_body(cred, "fetch('/api')").1, 1);
+    assert_eq!(preload_fetch_body(cred, "fetch('/api', {credentials: 'include'})"), ("hint".to_string(), 0));
+}
+
+#[test]
+fn preload_hint_is_consumed_once() {
+    let reg = "_lumen_fetch_hint_register('https://example.com/api', '');";
+    let (body, n) = preload_fetch_body(reg, "fetch('/api').then(function() { return fetch('/api'); })");
+    assert_eq!((body.as_str(), n), ("net", 1));
 }

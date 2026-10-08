@@ -29,6 +29,7 @@ mod adblock;
 mod address_bar;
 mod assets;
 mod app;
+mod browser_thread;
 mod animation_scheduler;
 mod automation_server;
 mod click_log;
@@ -50,10 +51,13 @@ mod js_escape;
 mod layout_metrics;
 mod layout_walk;
 mod nav_history;
+mod no_paint_backend;
 mod page_source;
 mod page_state;
+mod present_log;
 mod parallel_fetch;
 mod resource_base;
+mod css_url_rebase;
 mod stylesheets;
 mod subresources;
 mod text_cursor;
@@ -110,6 +114,7 @@ mod engine_bridge;
 mod engine_thread;
 mod download;
 mod find;
+mod frame_ancestry;
 mod frame_dynamic_load;
 mod frame_lazy;
 mod frame_log;
@@ -152,6 +157,7 @@ mod site_memory;
 mod csp_enforce;
 mod scroll;
 mod scroll_anim;
+mod wheel_scroll;
 mod extensions;
 mod scrollbar;
 mod session_persist;
@@ -159,6 +165,7 @@ mod tab_lifecycle;
 mod tabs;
 mod theme_tokens;
 mod toolbar;
+mod touch_state;
 mod tracks;
 mod update;
 mod update_ui;
@@ -169,9 +176,9 @@ mod renderer_process;
 
 // SPLIT SH-5: helpers that used to live at the bottom of this file.
 use crate::display_list_metrics::{
-    build_split_placeholder, content_height_of, content_width_of, next_dl_epoch, paint_ordered,
+    build_split_placeholder, content_height_of, content_width_of, next_dl_epoch, paint_ordered, paint_ordered_cached,
 };
-use crate::app::about_to_wait::PendingWait;
+use crate::app::about_to_wait::{PendingEval, PendingWait};
 use crate::doc_extract::{
     DynamicCssBase, collect_style_attr_csp_blocked, extract_style_blocks, extract_title,
     inline_style_fingerprint, stylesheet_link_fingerprint, window_title,
@@ -282,7 +289,7 @@ use lumen_dom::{
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
 use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
-use lumen_layout::{collect_scroll_containers, collect_scroll_containers_for_js_state, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
+use lumen_layout::{collect_scroll_containers_for_js_state, collect_snap_containers, find_snap_target, set_scroll_position};
 #[cfg(feature = "v8")]
 use lumen_layout::{collect_client_rects, collect_computed_styles, collect_custom_properties, collect_layout_rects, collect_pseudo_computed_styles};
 use lumen_layout::apply_intrinsic_size;
@@ -297,6 +304,7 @@ use lumen_driver::{
     ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NetworkEntry as DriverNetworkEntry,
     WaitCondition,
 };
+use browser_thread::MainHandle;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};

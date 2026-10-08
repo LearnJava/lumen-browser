@@ -130,6 +130,51 @@ use super::*;
     }
 
     #[test]
+    fn at_layer_media_inside_layer_applies_when_matching() {
+        // `@media` внутри `@layer`: правило остаётся в layer-е (unlayered
+        // выигрывает), а условие учитывается. `all` всегда истинно.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media all { p { color: red; } } } \
+             @layer top { p { color: blue; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media all { p { color: red; } } } p { color: blue; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media all { p { color: red; } } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_media_inside_layer_ignored_when_not_matching() {
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { @media print { p { color: red; } } p { color: green; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_supports_inside_layer_gated_by_condition() {
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { p { color: green; } @supports not (display: grid) { p { color: red; } } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
     fn at_layer_later_layer_beats_earlier_layer() {
         // layer `components` declared after `base` → higher priority.
         let s = cascade_at(
@@ -533,6 +578,62 @@ use super::*;
         assert!((s.font_size - 20.0 * 0.83).abs() < 1e-4, "font_size={}", s.font_size);
     }
 
+    // ── `all` shorthand (CSS Cascade L4 §3.2, GAP-CSSALL) ────────────────
+
+    #[test]
+    fn all_inherit_copies_non_inherited_parent_values() {
+        let css = "div { display: flex; color: red; margin-left: 7px; font-size: 30px; } \
+                   span { display: block; font-size: 10px; all: inherit; }";
+        let s = cascade_at("<div><span>x</span></div>", css, &[0, 0]);
+        let parent = cascade_at("<div><span>x</span></div>", css, &[0]);
+        assert_eq!(s.display, crate::style::Display::Flex);
+        assert_eq!(s.color, parent.color);
+        assert_eq!(s.margin_left, parent.margin_left);
+        assert!((s.font_size - 30.0).abs() < 1e-4, "font_size={}", s.font_size);
+    }
+
+    #[test]
+    fn all_initial_resets_ua_hints_and_keeps_direction() {
+        let s = cascade_at("<b>x</b>", "b { direction: rtl; margin-top: 3px; all: initial; }", &[0]);
+        assert_eq!(s.display, crate::style::Display::Inline);
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
+        assert_eq!(s.margin_top, ComputedStyle::root().margin_top);
+        assert_eq!(s.direction, crate::style::Direction::Rtl);
+    }
+
+    #[test]
+    fn all_unset_inherits_inherited_and_resets_the_rest() {
+        let css = "div { color: red; } p { all: unset; }";
+        let s = cascade_at("<div><p>x</p></div>", css, &[0, 0]);
+        let parent = cascade_at("<div><p>x</p></div>", css, &[0]);
+        assert_eq!(s.display, crate::style::Display::Inline);
+        assert_eq!(s.color, parent.color);
+    }
+
+    #[test]
+    fn all_revert_restores_ua_hint() {
+        let s = cascade_at("<b>x</b>", "b { font-weight: 100; display: block; all: revert; }", &[0]);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
+        assert_eq!(s.display, crate::style::Display::Inline);
+    }
+
+    #[test]
+    fn all_is_overridden_by_later_longhand_and_keeps_custom_props() {
+        let s = cascade_at(
+            "<div>x</div>",
+            "div { --x: 1; all: initial; display: grid; }",
+            &[0],
+        );
+        assert_eq!(s.display, crate::style::Display::Grid);
+        assert!(s.custom_props.contains_key("--x"));
+    }
+
+    #[test]
+    fn all_with_non_keyword_value_is_ignored() {
+        let s = cascade_at("<div>x</div>", "div { all: block; }", &[0]);
+        assert_eq!(s.display, crate::style::Display::Block);
+    }
+
     // ── matches_defined (CSS Selectors L4 §6.4.1 / HTML LS §4.13.5) ──────
 
     fn first_child_of_root(doc: &lumen_dom::Document) -> lumen_dom::NodeId {
@@ -610,19 +711,31 @@ use super::*;
         let approx = |got: Option<f32>, want: f32| {
             assert!(got.is_some_and(|g| (g - want).abs() < 1e-6), "got {got:?}, want {want}");
         };
-        approx(parse_zoom("0.8"), 0.8);
-        approx(parse_zoom(".8"), 0.8);
-        approx(parse_zoom("80%"), 0.8);
-        approx(parse_zoom("  1.5  "), 1.5);
+        approx(parse_zoom("0.8", 16.0), 0.8);
+        approx(parse_zoom(".8", 16.0), 0.8);
+        approx(parse_zoom("80%", 16.0), 0.8);
+        approx(parse_zoom("  1.5  ", 16.0), 1.5);
         // `normal`/`reset` contribute no scaling of their own.
-        approx(parse_zoom("normal"), 1.0);
-        approx(parse_zoom("RESET"), 1.0);
+        approx(parse_zoom("normal", 16.0), 1.0);
+        approx(parse_zoom("RESET", 16.0), 1.0);
         // Invalid values yield None so the caller drops the declaration rather
         // than resetting an already-cascaded value to 1.
-        assert_eq!(parse_zoom("-0.5"), None);
-        assert_eq!(parse_zoom("0"), None);
-        assert_eq!(parse_zoom("auto"), None);
-        assert_eq!(parse_zoom(""), None);
+        assert_eq!(parse_zoom("-0.5", 16.0), None);
+        assert_eq!(parse_zoom("0", 16.0), None);
+        assert_eq!(parse_zoom("auto", 16.0), None);
+        assert_eq!(parse_zoom("", 16.0), None);
+    }
+
+    /// BUG-1052: math functions (incl. `sign()` over `em`) are valid `zoom` values.
+    #[test]
+    fn zoom_accepts_math_functions() {
+        let approx = |got: Option<f32>, want: f32| {
+            assert!(got.is_some_and(|g| (g - want).abs() < 1e-6), "got {got:?}, want {want}");
+        };
+        approx(parse_zoom("calc(sign(1em - 1px) * 2)", 10.0), 2.0);
+        approx(parse_zoom("calc(sign(1em - 1px) * 2%)", 10.0), 0.02);
+        approx(parse_zoom("calc(1 + 0.5)", 10.0), 1.5);
+        assert_eq!(parse_zoom("calc(1 - 2)", 10.0), None);
     }
 
     /// The core of the property: `zoom` shrinks the box itself, not just its
@@ -639,6 +752,72 @@ use super::*;
         assert!((s.font_size - 20.0).abs() < 0.01, "font_size = {}", s.font_size);
         assert!((s.border_left_width - 2.0).abs() < 0.01);
         assert!((s.effective_zoom - 0.5).abs() < 1e-6);
+    }
+
+    /// BUG-1051: viewport units resolve against the unzoomed viewport, so the
+    /// zoom factor must land on their coefficient.
+    #[test]
+    fn zoom_scales_viewport_unit_coefficients() {
+        let s = zoom_test_style("<div style=\"zoom: 2; height: 1vh; width: 1vw\"></div>");
+        assert_eq!(s.height, Some(Length::Vh(2.0)));
+        assert_eq!(s.width, Some(Length::Vw(2.0)));
+    }
+
+    /// BUG-1051: `rem` follows the document element's (zoomed) font-size.
+    #[test]
+    fn rem_follows_root_font_size_and_zoom() {
+        let doc = lumen_html_parser::parse(
+            "<html style=\"font-size: 20px; zoom: 2\"><body><div style=\"width: 5rem; font-size: 1rem\"></div></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let html = doc.document_element().unwrap();
+        let html_style = compute_style(&doc, html, &sheet, &ComputedStyle::root(), vp, false);
+        assert!((html_style.font_size - 40.0).abs() < 0.01);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let body_style = compute_style(&doc, doc.body().unwrap(), &sheet, &html_style, vp, false);
+        let s = compute_style(&doc, div, &sheet, &body_style, vp, false);
+        assert!((s.font_size - 40.0).abs() < 0.01, "font_size = {}", s.font_size);
+        assert_eq!(s.width, Some(Length::Rem(12.5)), "{:?} {:?}", doc.get(div).data, s.display); // 5 × 40 / 16
+    }
+
+    /// BUG-1051: a nested `zoom` adds its factor on top of the root's for `rem`
+    /// and `rlh`, and a `px` line-height is zoomed like any other length.
+    #[test]
+    fn nested_zoom_scales_root_relative_units_and_px_line_height() {
+        let doc = lumen_html_parser::parse(
+            "<html style=\"font-size: 10px; zoom: 2\"><body><div style=\"zoom: 2; width: 1rem; height: 1rlh; line-height: 10px\"></div></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let html_style = compute_style(&doc, doc.document_element().unwrap(), &sheet, &ComputedStyle::root(), vp, false);
+        let body_style = compute_style(&doc, doc.body().unwrap(), &sheet, &html_style, vp, false);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &body_style, vp, false);
+        assert_eq!(s.width, Some(Length::Rem(2.5)), "{:?}", s.width); // 1 × 20/16 × (4/2)
+        assert_eq!(s.height, Some(Length::Rlh(2.0)), "{:?}", s.height);
+        assert!((s.line_height * s.font_size - 40.0).abs() < 0.01, "{} × {}", s.line_height, s.font_size);
+    }
+
+    /// BUG-1051: root-relative font units parse (were dropped) as root-font multiples.
+    #[test]
+    fn root_relative_font_units_parse() {
+        let vp = Size::new(800.0, 600.0);
+        for (unit, factor) in [("rlh", 1.2), ("rcap", 0.7), ("rex", 0.5), ("rch", 0.5), ("ric", 1.0)] {
+            let l = crate::style::values::length::parse_length_q(&format!("5{unit}"), false)
+                .unwrap_or_else(|| panic!("{unit} did not parse"));
+            let px = l.resolve(16.0, None, vp).unwrap();
+            assert!((px - 5.0 * factor * 16.0).abs() < 0.01, "{unit}: {px}");
+        }
+        let ic = crate::style::values::length::parse_length_q("3ic", false).unwrap();
+        assert_eq!(ic.resolve(16.0, None, vp), Some(48.0));
+        // Inside a layout pass they follow the root font's metrics (lh, ch, ex).
+        let prev = crate::style::push_root_font_metrics(Some((40.0, 22.0, 11.0)));
+        for (unit, want) in [("rlh", 200.0), ("rch", 110.0), ("rex", 55.0)] {
+            let l = crate::style::values::length::parse_length_q(&format!("5{unit}"), false).unwrap();
+            assert_eq!(l.resolve(16.0, None, vp), Some(want), "{unit}");
+        }
+        crate::style::pop_root_font_metrics(prev);
     }
 
     /// This is the shape tbank.ru relies on: a fixed-width container that only
@@ -1281,6 +1460,20 @@ use super::*;
     }
 
     #[test]
+    fn grid_template_columns_repeat_track_limit() {
+        // BUG-1320: `repeat(1000, Npx)` written 100 000 times must not build 100 million tracks.
+        let value = (0..100_000).map(|i| format!(" repeat(1000, {i}px)")).collect::<String>();
+        let parsed = GridTrackSize::parse_track_list(&value, false);
+        assert_eq!(parsed.len(), 10_000, "the explicit track count is clamped");
+        let names = crate::style::values::flexgrid::parse_track_line_names(&format!("[a] {value}"), false);
+        assert!(names.is_empty() || names.len() == parsed.len() + 1, "line names stay in step with the tracks");
+        // A huge count with a track-less body is not an endless loop.
+        let _ = GridTrackSize::parse_track_list("repeat(18446744073709551615, [a])", false);
+        let parsed = GridTrackSize::parse_track_list("repeat(18446744073709551615, 1px 2px)", false);
+        assert_eq!(parsed.len(), 10_000);
+    }
+
+    #[test]
     fn grid_template_columns_auto_fill_fit_content() {
         // `repeat(auto-fill, fit-content(200px))` should parse
         let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, fit-content(200px))", false);
@@ -1496,4 +1689,61 @@ use super::*;
         let result = compute_pseudo_element_style(&doc, node, "placeholder", &sheet, &parent, vp, false);
         assert!(result.is_some());
         assert!((result.unwrap().font_size - 20.0).abs() < 0.01);
+    }
+
+    // ── CSS View Transitions L1 §6: ::view-transition-* author styles ─────
+
+    fn view_transition_style(
+        css: &str,
+        part: ViewTransitionPart,
+        name: &str,
+    ) -> Option<ComputedStyle> {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let html = doc.create_element(lumen_dom::QualName::html("html"));
+        doc.append_child(root, html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = lumen_core::geom::Size { width: 800.0, height: 600.0 };
+        compute_view_transition_pseudo_style(&doc, &sheet, part, name, vp, false)
+    }
+
+    #[test]
+    fn view_transition_old_root_carries_author_animation() {
+        let s = view_transition_style(
+            "::view-transition-old(root) { animation-duration: 1.5s; animation-timing-function: ease-in; }",
+            ViewTransitionPart::Old,
+            "root",
+        )
+        .expect("rule targets ::view-transition-old(root)");
+        assert_eq!(s.animation_durations, vec![1.5]);
+        assert_eq!(s.animation_timing_functions.len(), 1);
+    }
+
+    #[test]
+    fn view_transition_name_argument_selects_the_group() {
+        let css = "::view-transition-group(hero) { animation-duration: 2s; }";
+        assert!(view_transition_style(css, ViewTransitionPart::Group, "root").is_none());
+        let s = view_transition_style(css, ViewTransitionPart::Group, "hero").unwrap();
+        assert_eq!(s.animation_durations, vec![2.0]);
+        // Same name, other part: not targeted.
+        assert!(view_transition_style(css, ViewTransitionPart::Old, "hero").is_none());
+    }
+
+    #[test]
+    fn view_transition_wildcard_matches_every_name_and_originates_from_root_element() {
+        let css = ":root::view-transition-new(*) { animation-duration: 0s; }";
+        for n in ["root", "hero", "x"] {
+            let s = view_transition_style(css, ViewTransitionPart::New, n).unwrap();
+            assert_eq!(s.animation_durations, vec![0.0], "{n}");
+        }
+        // Originating compound must match the document element.
+        let css = "body::view-transition-new(*) { animation-duration: 0s; }";
+        assert!(view_transition_style(css, ViewTransitionPart::New, "root").is_none());
+    }
+
+    #[test]
+    fn view_transition_arguments_are_case_sensitive_names() {
+        let css = "::view-transition-old(Hero) { animation-duration: 3s; }";
+        assert!(view_transition_style(css, ViewTransitionPart::Old, "hero").is_none());
+        assert!(view_transition_style(css, ViewTransitionPart::Old, "Hero").is_some());
     }

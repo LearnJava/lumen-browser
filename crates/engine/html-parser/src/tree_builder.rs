@@ -75,7 +75,14 @@ fn attrs_have_html_encoding(attrs: &[(String, String)]) -> bool {
 /// для `parse`/`parse_xml_flavoured`/`parse_fragment` — все три раньше молча
 /// разошлись бы, реализуй каждая свою копию цикла.
 fn run_pull(builder: &mut IncrementalTreeBuilder, input: &str) {
-    let mut tokenizer = Tokenizer::new(input);
+    run_pull_in_state(builder, input, None);
+}
+
+/// [`run_pull`] с заранее заданным RAWTEXT/RCDATA-состоянием токенизатора —
+/// фрагмент, чей контекстный элемент `<script>`/`<style>`/`<textarea>`/…
+/// (BUG-1158): `el.innerHTML = 'a<b'` обязан дать текст, а не тег.
+fn run_pull_in_state(builder: &mut IncrementalTreeBuilder, input: &str, text_only: Option<(String, bool)>) {
+    let mut tokenizer = Tokenizer::with_state(input, text_only);
     tokenizer.set_xml_mode(builder.xml_mode);
     tokenizer.set_cdata_allowed(builder.cdata_sections_allowed());
     while let Some(token) = tokenizer.next() {
@@ -177,8 +184,12 @@ pub struct FragmentContext {
 /// element (GAP-XMLDOC срез 14, BUG-685) — `context: None` reproduces
 /// `parse_fragment`'s old body-like default exactly.
 pub fn parse_fragment_with_context(input: &str, context: Option<FragmentContext>) -> (Document, NodeId) {
+    let text_only = context
+        .as_ref()
+        .filter(|c| c.namespace == Namespace::Html)
+        .and_then(|c| crate::tokenizer::fragment_text_only_state(&c.local));
     let (mut builder, root) = IncrementalTreeBuilder::new_fragment(context);
-    run_pull(&mut builder, input);
+    run_pull_in_state(&mut builder, input, text_only);
     (builder.finish(), root)
 }
 
@@ -431,8 +442,27 @@ impl IncrementalTreeBuilder {
         let doc_root = builder.doc.root();
         builder.doc.append_child(doc_root, html);
         builder.open_elements.push(html);
-        builder.insertion_mode = InsertionMode::InBody;
+        builder.insertion_mode = builder.fragment_context_mode();
         (builder, html)
+    }
+
+    /// §13.4 шаг 6 / §13.2.4.1 шаг 4: insertion mode, который «reset the
+    /// insertion mode appropriately» выбирает по контекстному элементу
+    /// фрагмента (BUG-1155). Только табличные HTML-контексты — остальные
+    /// (`select`, `template`, `html`, `frameset`) остаются `in body`, как и
+    /// раньше; без контекста — тоже `in body`.
+    fn fragment_context_mode(&self) -> InsertionMode {
+        match &self.fragment_context {
+            Some(ctx) if ctx.namespace == Namespace::Html => match ctx.local.as_str() {
+                "tr" => InsertionMode::InRow,
+                "tbody" | "thead" | "tfoot" => InsertionMode::InTableBody,
+                "caption" => InsertionMode::InCaption,
+                "colgroup" => InsertionMode::InColumnGroup,
+                "table" => InsertionMode::InTable,
+                _ => InsertionMode::InBody,
+            },
+            _ => InsertionMode::InBody,
+        }
     }
 
     /// Скармливает chunk push-токенизатору и применяет полученные
@@ -623,11 +653,27 @@ impl IncrementalTreeBuilder {
                 // never itself foreign even when the context element is
                 // (`current_namespace` would report the context's foreign
                 // namespace here and pop the root right off the stack).
-                while is_foreign_namespace(self.real_current_namespace()) {
-                    if let Some(&node) = self.open_elements.last() {
-                        self.mark_if_foreign_script_not_executable(node);
+                // BUG-1247: an `h:`-prefixed tag that is NOT on the HTML
+                // breakout list and whose prefix is really bound to XHTML by an
+                // `xmlns:h` in scope is, in an XML document, an ordinary child of
+                // the current foreign element (`<svg><h:script/></svg>`) —
+                // popping the SVG ancestors here turned every following
+                // sibling of a standalone `.svg` into HTML-namespace content.
+                let bound_html_child = forced_breakout
+                    && self.xml_mode
+                    && !foreign_content::breaks_out_of_foreign_content(name, attrs)
+                    && self
+                        .pending_prefix
+                        .as_deref()
+                        .and_then(|p| self.resolve_prefix_namespace(p, attrs))
+                        == Some(Namespace::Html);
+                if !bound_html_child {
+                    while is_foreign_namespace(self.real_current_namespace()) {
+                        if let Some(&node) = self.open_elements.last() {
+                            self.mark_if_foreign_script_not_executable(node);
+                        }
+                        self.open_elements.pop();
                     }
-                    self.open_elements.pop();
                 }
                 self.dispatch(token);
             }
@@ -3240,7 +3286,7 @@ impl IncrementalTreeBuilder {
             // and the EOF walk would then materialise a `<head>`/`<body>` pair
             // inside the fragment (visible on `'<table>…</table>'`).
             if last && self.is_fragment {
-                self.insertion_mode = InsertionMode::InBody;
+                self.insertion_mode = self.fragment_context_mode();
                 return;
             }
             let local = self.element_local(node);
@@ -6513,6 +6559,26 @@ mod tests {
             1,
             "script body must be a single RAWTEXT node, not parsed markup: {doc}"
         );
+    }
+
+    #[test]
+    fn bound_html_prefix_inside_svg_root_keeps_following_siblings_svg() {
+        // BUG-1247: a standalone `.svg` with `xmlns:h` bound to XHTML and
+        // `<h:link/>`/`<h:script/>` right after the root used to pop the
+        // `<svg>` off the stack, so `<rect>`/`<animate>` landed in XHTML.
+        let doc = parse_xml_flavoured(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml"><h:link rel="help" href="x"/><h:script src="a.js"/><rect width="5"><animate attributeName="fill"/></rect><script>var a=1;</script></svg>"#,
+        );
+        let ns_of = |local: &str| {
+            let n = doc
+                .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == local))
+                .unwrap_or_else(|| panic!("{local}: {doc}"));
+            let NodeData::Element { name, .. } = &n.data else { unreachable!() };
+            name.namespace.clone()
+        };
+        assert_eq!(ns_of("link"), Namespace::Html, "{doc}");
+        assert_eq!(ns_of("rect"), Namespace::Svg, "{doc}");
+        assert_eq!(ns_of("animate"), Namespace::Svg, "{doc}");
     }
 
     #[test]

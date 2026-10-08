@@ -10,7 +10,8 @@
 
 use super::*;
 // build/images уехали в display_list/tests/text_and_images.rs (батч DL-6).
-use super::text_and_images::{build, images};
+use super::images_media::images;
+use super::text_and_images::build;
 
     // ── Тесты <iframe> / DrawImage placeholder ──────────────────────────────
 
@@ -464,6 +465,175 @@ use super::text_and_images::{build, images};
             assert!((rect.width - 100.0).abs() < 0.1, "got {}", rect.width);
             assert!((rect.height - 60.0).abs() < 0.1, "got {}", rect.height);
         }
+    }
+
+    // ── Тесты background-attachment (CSS Backgrounds L3 §3.6) ─────────────────
+
+    fn fixed_bg_markers(dl: &DisplayList) -> (usize, usize) {
+        let begins = dl.iter().filter(|c| matches!(c, DisplayCommand::BeginFixedBackground)).count();
+        let ends = dl.iter().filter(|c| matches!(c, DisplayCommand::EndFixedBackground)).count();
+        (begins, ends)
+    }
+
+    #[test]
+    fn background_attachment_scroll_positions_against_the_element() {
+        let dl = build(
+            "<div></div>",
+            "div { margin: 50px 0 0 30px; width: 100px; height: 60px; \
+             background: url(x.png) scroll; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        let DisplayCommand::DrawBackgroundImage { rect, origin_rect, .. } = bgs[0] else {
+            unreachable!()
+        };
+        assert_eq!((origin_rect.x, origin_rect.y, origin_rect.width), (30.0, 50.0, 100.0));
+        assert_eq!(rect, origin_rect);
+        assert_eq!(fixed_bg_markers(&dl), (0, 0), "scroll needs no bracket");
+    }
+
+    /// `fixed`: the positioning area is the viewport (the root box, 800×600 in
+    /// `build`), while the painting area stays the element's border box, and
+    /// the layer is bracketed so a scrolling renderer can pin it.
+    #[test]
+    fn background_attachment_fixed_positions_against_the_viewport() {
+        let dl = build(
+            "<div></div>",
+            "div { margin: 50px 0 0 30px; width: 100px; height: 60px; \
+             border: 5px solid red; padding: 10px; \
+             background-image: url(x.png); background-attachment: fixed; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        let DisplayCommand::DrawBackgroundImage { rect, origin_rect, .. } = bgs[0] else {
+            unreachable!()
+        };
+        assert_eq!(
+            (origin_rect.x, origin_rect.y, origin_rect.width, origin_rect.height),
+            (0.0, 0.0, 800.0, 600.0),
+            "positioning area = viewport, background-origin is ignored",
+        );
+        assert_eq!(
+            (rect.x, rect.y, rect.width, rect.height),
+            (30.0, 50.0, 130.0, 90.0),
+            "painting area = element border box (background-clip)",
+        );
+        assert_eq!(fixed_bg_markers(&dl), (1, 1));
+        let begin = dl.iter().position(|c| matches!(c, DisplayCommand::BeginFixedBackground));
+        let draw = dl.iter().position(|c| matches!(c, DisplayCommand::DrawBackgroundImage { .. }));
+        let end = dl.iter().position(|c| matches!(c, DisplayCommand::EndFixedBackground));
+        assert!(begin < draw && draw < end, "the draw sits inside the bracket");
+    }
+
+    /// Only the `fixed` layer of a multi-layer background is bracketed; the
+    /// other keeps its element-relative positioning area.
+    #[test]
+    fn background_attachment_is_per_layer() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; margin-top: 20px; \
+             background-image: url(a.png), url(b.png); \
+             background-attachment: fixed, scroll; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 2);
+        // Bottom layer (b.png, scroll) is painted first.
+        let DisplayCommand::DrawBackgroundImage { src, origin_rect, .. } = bgs[0] else {
+            unreachable!()
+        };
+        assert_eq!(src, "b.png");
+        assert_eq!((origin_rect.y, origin_rect.width), (20.0, 100.0));
+        let DisplayCommand::DrawBackgroundImage { src, origin_rect, .. } = bgs[1] else {
+            unreachable!()
+        };
+        assert_eq!(src, "a.png");
+        assert_eq!((origin_rect.y, origin_rect.width), (0.0, 800.0));
+        assert_eq!(fixed_bg_markers(&dl), (1, 1));
+    }
+
+    /// A fixed gradient spans the viewport and is clipped to the element — so
+    /// that scrolling the page slides the element over a still gradient.
+    #[test]
+    fn background_attachment_fixed_gradient_spans_viewport_under_clip() {
+        let dl = build(
+            "<div></div>",
+            "div { margin-top: 100px; width: 200px; height: 50px; \
+             background: linear-gradient(red, blue) fixed; }",
+        );
+        let grads: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawLinearGradient { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(grads.len(), 1);
+        assert_eq!((grads[0].x, grads[0].y, grads[0].width, grads[0].height), (0.0, 0.0, 800.0, 600.0));
+        let clip = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushClipRect { rect } => Some(*rect),
+            _ => None,
+        });
+        assert_eq!(clip.map(|r| (r.x, r.y, r.width, r.height)), Some((0.0, 100.0, 200.0, 50.0)));
+        assert_eq!(fixed_bg_markers(&dl), (1, 1));
+    }
+
+    /// Tiled fixed gradient: tiles cover the whole viewport (not just the ones
+    /// meeting the element at scroll 0), anchored at the viewport origin.
+    #[test]
+    fn background_attachment_fixed_gradient_tiles_cover_viewport() {
+        let dl = build(
+            "<div></div>",
+            "div { margin-top: 100px; width: 200px; height: 50px; \
+             background: linear-gradient(red, blue) 0 0 / 400px 300px fixed; }",
+        );
+        let tiles: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawLinearGradient { rect, .. } => Some((rect.x, rect.y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tiles, vec![(0.0, 0.0), (400.0, 0.0), (0.0, 300.0), (400.0, 300.0)]);
+    }
+
+    /// The layout tree does not carry the viewport (the root box may be
+    /// document-tall): a caller-installed viewport wins over the root-rect
+    /// fallback, and is restored after the scope.
+    #[test]
+    fn background_attachment_fixed_uses_the_scoped_viewport() {
+        let dl_of = |css: &str| {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("body{{margin:0}}{css}"));
+            lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0))
+        };
+        let tree = dl_of("div { width: 100px; height: 60px; background: url(x.png) fixed; }");
+        let origin_of = |dl: &DisplayList| {
+            bg_images(dl).iter().find_map(|c| match c {
+                DisplayCommand::DrawBackgroundImage { origin_rect, .. } => Some(*origin_rect),
+                _ => None,
+            })
+        };
+        let root = tree.rect;
+        let unscoped = origin_of(&build_display_list(&tree)).expect("fixed layer drawn");
+        assert_eq!(unscoped, root, "fallback: the root box rect");
+
+        let scoped = crate::with_fixed_background_viewport(Size::new(640.0, 300.0), || {
+            build_display_list(&tree)
+        });
+        let r = origin_of(&scoped).expect("fixed layer drawn");
+        assert_eq!((r.x, r.y, r.width, r.height), (0.0, 0.0, 640.0, 300.0));
+        assert_eq!(origin_of(&build_display_list(&tree)), Some(root), "scope restored");
+    }
+
+    #[test]
+    fn background_attachment_fixed_serializes_its_bracket() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 10px; height: 10px; background: url(x.png) fixed; }",
+        );
+        let text = serialize_display_list(&dl);
+        assert!(text.contains("BeginFixedBackground\n"), "{text}");
+        assert!(text.contains("EndFixedBackground\n"), "{text}");
     }
 
     // ── Тесты background-origin ────────────────────────────────────────────────
@@ -1105,3 +1275,56 @@ use super::text_and_images::{build, images};
         assert_eq!(lines[4], "PopClip");
     }
 
+    // ── cross-fade() с градиентной стороной (CSS Images L4 §4) ─────────────
+
+    fn cross_fade_names(dl: &DisplayList) -> Vec<&'static str> {
+        dl.iter().map(|c| c.variant_name()).collect()
+    }
+
+    /// `cross-fade(url, gradient)`: `DrawCrossFade` смешивает только две
+    /// текстуры, поэтому сторона `a` рисуется слоем, а `b` — поверх, в
+    /// opacity-группе с альфой `t`.
+    #[test]
+    fn cross_fade_url_and_gradient_emits_layer_plus_opacity_group() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image:              cross-fade(url(a.png) 25%, linear-gradient(red, blue) 75%); }",
+        );
+        let names = cross_fade_names(&dl);
+        assert!(!names.contains(&"DrawCrossFade"), "{names:?}");
+        let img = names.iter().position(|n| *n == "DrawBackgroundImage").expect("сторона a");
+        let open = names.iter().position(|n| *n == "PushOpacity").expect("opacity-группа");
+        let grad = names.iter().position(|n| *n == "DrawLinearGradient").expect("сторона b");
+        let close = names.iter().position(|n| *n == "PopOpacity").expect("закрытие группы");
+        assert!(img < open && open < grad && grad < close, "{names:?}");
+        let alpha = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushOpacity { alpha, .. } => Some(*alpha),
+            _ => None,
+        });
+        assert!((alpha.unwrap() - 0.75).abs() < 1e-4, "alpha={alpha:?}");
+    }
+
+    /// Две градиентные стороны: оба градиента эмитятся, `b` внутри группы.
+    #[test]
+    fn cross_fade_two_gradients_emits_both_sides() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image:              cross-fade(linear-gradient(red, red) 50%, linear-gradient(blue, blue) 50%); }",
+        );
+        let names = cross_fade_names(&dl);
+        let grads = names.iter().filter(|n| **n == "DrawLinearGradient").count();
+        assert_eq!(grads, 2, "{names:?}");
+        assert_eq!(names.iter().filter(|n| **n == "PushOpacity").count(), 1, "{names:?}");
+    }
+
+    /// Две URL-стороны по-прежнему идут одной командой `DrawCrossFade`.
+    #[test]
+    fn cross_fade_two_urls_still_single_command() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image: cross-fade(url(a.png), url(b.png)); }",
+        );
+        let names = cross_fade_names(&dl);
+        assert_eq!(names.iter().filter(|n| **n == "DrawCrossFade").count(), 1, "{names:?}");
+        assert!(!names.contains(&"PushOpacity"), "{names:?}");
+    }

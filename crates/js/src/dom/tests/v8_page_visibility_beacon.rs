@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -38,7 +38,7 @@ impl lumen_core::ext::JsFetchProvider for CaptureFetch {
 fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -352,6 +352,29 @@ fn dynamic_script_runs_exactly_once() {
                        s.remove();
                        document.body.appendChild(s);
                        globalThis.__b571_n === 1"#,
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1229: the source text is the script's Text children only (HTML LS
+/// §4.12.1 "child text content"); an appended element's text is not code.
+#[test]
+fn script_source_ignores_element_children() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            r#"globalThis.__b1229_err = 0;
+                       window.addEventListener('error', function () { globalThis.__b1229_err++; });
+                       var s = document.createElement('script');
+                       document.body.appendChild(s);
+                       var sp = document.createElement('span');
+                       sp.textContent = 'light';
+                       s.append(sp);
+                       var s2 = document.createElement('script');
+                       document.body.appendChild(s2);
+                       s2.append('globalThis.__b1229_ok = 1;');
+                       globalThis.__b1229_err === 0"#,
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -943,7 +966,7 @@ impl lumen_core::ext::JsFetchProvider for NonceScriptSrcProvider {
     fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         Err(lumen_core::error::Error::Network("no body expected".into()))
     }
-    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, _integrity: &str) -> lumen_core::error::Result<()> {
+    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, _integrity: &str, _parser_inserted: bool) -> lumen_core::error::Result<()> {
         if destination == "script" && nonce != "abc" {
             return Err(lumen_core::error::Error::CspElementSrcBlocked {
                 directive: "script-src-elem".into(),
@@ -963,7 +986,7 @@ fn inserted_script_without_nonce_is_refused_by_script_src() {
     let provider = Arc::new(NonceScriptSrcProvider { fetches: std::sync::atomic::AtomicUsize::new(0) });
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider.clone();
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     let r = rt
         .eval(
             r#"globalThis.__b1175 = [];
@@ -993,7 +1016,7 @@ fn inserted_script_nonce_reaches_script_src_check() {
     let provider = Arc::new(NonceScriptSrcProvider { fetches: std::sync::atomic::AtomicUsize::new(0) });
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider.clone();
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     let r = rt
         .eval(
             r#"globalThis.__b1175n = 0;
@@ -1003,8 +1026,8 @@ fn inserted_script_nonce_reaches_script_src_check() {
                        s.setAttribute('nonce', 'abc');
                        document.body.appendChild(s);
                        _lumen_tick_timers();
-                       [_lumen_check_element_src('script', 'https://example.com/dyn.js', 'abc', '').length,
-                        _lumen_check_element_src('script', 'https://example.com/dyn.js', '', '').length,
+                       [_lumen_check_element_src('script', 'https://example.com/dyn.js', 'abc', '', false).length,
+                        _lumen_check_element_src('script', 'https://example.com/dyn.js', '', '', false).length,
                         globalThis.__b1175n].join(',')"#,
         )
         .unwrap();
@@ -1014,7 +1037,7 @@ fn inserted_script_nonce_reaches_script_src_check() {
 fn v8_runtime_with_csp_blocked_beacon(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedBeaconProvider);
-    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -1132,9 +1155,29 @@ fn url_create_object_url() {
     let r = rt.eval(
         "var b = new Blob(['data']); \
                  var url = URL.createObjectURL(b); \
-                 url.startsWith('blob:lumen/')"
+                 /^blob:null\\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(url) \
+                   && url !== URL.createObjectURL(b)"
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1197: File API §8.3 — the blob URL carries the creating document's
+/// origin, and the URL Standard reads it back out as the URL's own origin.
+#[test]
+fn url_create_object_url_carries_document_origin() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "_lumen_location_update('http://localhost:18300/dir/page.html'); \
+                 var u = URL.createObjectURL(new Blob(['x'])); \
+                 JSON.stringify([u.slice(0, 28), new URL(u).origin, new URL(u + '#f').origin, \
+                   Origin.from(u).isSameOrigin(Origin.from('http://localhost:18300/'))])"
+    ).unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            r#"["blob:http://localhost:18300/","http://localhost:18300","http://localhost:18300",true]"#.into()
+        )
+    );
 }
 
 #[test]
@@ -1144,7 +1187,7 @@ fn url_revoke_object_url() {
         "var b = new Blob(['x']); \
                  var u = URL.createObjectURL(b); \
                  URL.revokeObjectURL(u); \
-                 u.startsWith('blob:lumen/')"  // revoke just removes from store, url string stays
+                 u.startsWith('blob:')"  // revoke just removes from store, url string stays
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }

@@ -19,6 +19,7 @@ pub enum ShapeOutside {
 }
 
 /// CSS Motion Path L1 §3 — `offset-rotate`. NOT inherited. Initial: `Auto`.
+/// Углы хранятся в градусах.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum OffsetRotate {
     #[default]
@@ -29,7 +30,7 @@ pub enum OffsetRotate {
     Angle(f32),
 }
 
-/// CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`.
+/// CSS Color Adjustment L1 §4.1 — `print-color-adjust`. Inherited. Initial: `Economy`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PrintColorAdjust {
     #[default]
@@ -153,6 +154,17 @@ pub enum ScrollSnapStop {
     #[default]
     Normal,
     Always,
+}
+
+/// CSS Scroll Snap L2 §4 — `scroll-initial-target: none | nearest`. NOT inherited.
+/// Initial: `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollInitialTarget {
+    #[default]
+    None,
+    /// The element is scrolled into its nearest scroll container when the
+    /// document loads (see `lumen_layout::apply_scroll_initial_targets`).
+    Nearest,
 }
 
 /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior: auto | contain | none`.

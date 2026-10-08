@@ -57,7 +57,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `WebDriverBrowser` subclass) + `__wptrunner__` registration. Every launch,
   relaunches included, takes a fresh `<port>`: a killed `lumen.exe` can hold
   its port for seconds, and reusing it killed the whole `TestRunnerManager`
-  with `did not print [bidi] token` ([BUG-1073](../../bugs/BUG-1073-OPEN.md) срез 6).
+  with `did not print [bidi] token` ([BUG-1073](../../bugs/BUG-1073-FIXED.md) срез 6).
 - `tools/wptrunner/wptrunner/executors/executorlumen.py` — **ours** —
   `LumenBidiProtocol` (BiDi-only session negotiation via
   `webdriver.bidi.client.BidiSession.bidi_only`, no classic HTTP session) and
@@ -230,6 +230,114 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   default would rescan 72k files on each of the ~400 shards). `--pilot` runs
   ten categories chosen to exercise the orchestrator's hazards (https-only, ws,
   reftest-dominated, an unexecutable test type) rather than the engine.
+  `--prefixes a/b,c/d` / `--exclude-prefixes …` (WPT-RUN-14) narrow a run to a
+  part of a category — `css/css-flexbox` out of the 34 607-id `css` — and the
+  denominator shrinks with them. The category is implied by the first path
+  component. The filter is written to `state.json` (`prefixes`,
+  `exclude_prefixes`); `--resume`/`--aggregate-only` with a different one
+  refuse to run, and `score_audit.py`/`type_audit.py` read it back. Use a
+  separate `--out-dir` per filter (`.tmp/wpt-run14/<slug>`, never
+  `.tmp/wpt-corpus`). Shards are an exact cover of the selected ids
+  (`_narrow`/`_cover`): a directory entirely inside the selection is one prefix
+  shard, a mixed one is cut into subdirectories, and the files lying directly in
+  it become one explicit-id `(bare)` shard. `--selftest` checks this on a
+  hand-made manifest.
+  `--parallel-shards K` / `--batch-small N` (WPT-RUN-9, both off by default)
+  speed a run up without touching the verdicts. `--batch-small` runs
+  consecutive shards of at most N automatable ids as one wptrunner process
+  (capped by `--batch-max-ids`) and splits its report back into the per-shard
+  `<name>.json` files a solo run would have written (`split_batch`), so
+  `state.json`, `--resume` and every audit see the same shards as before; the
+  batch's own report lives under `<out-dir>/batches/`, out of `load_results`'
+  reach. `--parallel-shards` runs K units at once, longest budget first; lane
+  k > 0 serves on every `config.json` port + 1000·k through
+  `$LUMEN_WPT_SERVER_CONFIG`, which `run_smoke.py` merges over `config.json`
+  (the vendored wptrunner is not patched on disk). A lane waits to start while
+  less than `--min-free-gb` (6) of RAM is free and another lane is busy —
+  paging stretches the very timeouts the verdicts depend on. Lane-specific
+  rules: orphaned `lumen` processes are reaped once before the lanes start (not
+  between units, where the reaper would count a running lane's browsers as
+  stale), each lane guards only its own ports, and `heavy_lock` is held while
+  any lane runs. Measured A/B — `docs/tasks/p2-wpt-runner-throughput.md`
+  §WPT-RUN-9.
+  `--shared-queue` (off by default) — inside a shard, wptrunner normally deals
+  the tests out to its `--processes` up front (`hash(test.id) % N`), so the
+  shard waits for whichever process drew the most TIMEOUTs. The flag makes
+  `run_smoke.py` (`--lumen-shared-queue`) run wptrunner with `--fully-parallel
+  --no-restart-on-new-group` — one queue, longest declared timeout first, one
+  browser per process, still restarted on a real crash/hang — and interleaves
+  the queue by directory (`interleave_by_directory`), because seven
+  neighbouring files of one directory started together can starve each other
+  (`non-cancelable-when-passive/*touch*`). Measured −26 % wall on `dom`+8 with
+  the score inside the noise — §общая очередь.
+  `--max-browser-gb G` (default 4, `0` off) — `browser_rss_cap.py` watches the
+  run's own `lumen` processes (descendants of `run_corpus.py` only — another
+  session's browsers are never looked at) and kills one whose RSS passes G GB;
+  wptrunner records its test as CRASH and restarts the browser. Healthy
+  browsers peak at ~1 GB, the runaways (acid3 BUG-1267, the `webstorage`
+  quota tests) at 15-25 GB and TIMEOUT with no subtests anyway, so the cap
+  costs no score and keeps the other lanes out of the page file. Kills go to
+  `<out-dir>/rss-cap-kills.jsonl`, the shard state carries `rss_cap_kills`
+  (`batch_rss_cap_kills` on batch members), the snapshot `max_browser_gb` and
+  the kill count. Needs `psutil` (in the documented venv); without it the cap
+  is off and the run says so.
+  Not a flag but the executor itself (`executorlumen.py`, on for every run): a
+  test whose top-level document was replaced by a page that is not a test
+  (no `__wptrunner_is_test_context`, which `resources/testharnessreport.js`
+  sets) ends as TIMEOUT once that page has been live for 15 s
+  (`LUMEN_WPT_FOREIGN_GRACE_S`, `off` restores the old full-timeout wait),
+  instead of polling a page whose harness is gone until the 60-65 s
+  `timeout: long` runs out. The TIMEOUT message names the foreign URL. A test
+  that leaves and comes back on its own (bfcache helpers, ≤ 8.2 s away) is
+  unaffected. Measured on the `legacy-mb-japanese` shard that set the corpus
+  wall (BUG-1269) — `docs/tasks/p2-wpt-runner-throughput.md` §уход со
+  страницы теста; pinned by `verify_navaway_early_timeout.py`.
+  Also in the executor, for every run: a hard per-test cap of `timeout + 2 ×
+  extra_timeout` (20 s, 70 s for `timeout: long`) around the whole test —
+  a BiDi call stuck on a page that never yields used to wait for Lumen's own
+  30–65 s automation timeout and end on wptrunner's external timer plus a
+  10 s runner `join`; now it ends as TIMEOUT at the cap and the browser is
+  restarted (`LUMEN_WPT_HARD_CAP=off` — old behaviour). And a result whose URL
+  differs from the test id only in percent-encoding (54 ids with raw spaces in
+  the query, mostly `xhr/xmlhttprequest-timeout-*`) is accepted instead of
+  becoming INTERNAL-ERROR + browser restart. §URL результата и потолок теста;
+  pinned by `verify_hard_cap.py`.
+  And in `run_smoke.py` itself: nothing from wptrunner is imported at module
+  level (`_load_wptrunner()` inside `run()`). wptrunner starts its wptserve
+  daemons and test runners with `spawn`, which on Windows re-executes
+  `run_smoke.py` in every child; with the import at the top that was ~0.9 s
+  per child, the seven servers booting one after another (~7 s) and every
+  runner (re)start ~2 s. Shard startup 16.7 → 8.5 s, runner start 2.0 → 0.33 s
+  median, verdicts unchanged — §старт шарда; pinned by
+  `verify_lazy_startup.py`. Keep new imports in `run_smoke.py` lazy.
+  And in `browsers/lumen.py`: browser launches of one wptrunner process are
+  serialized (`_SPAWN_LOCK` around `ProcessHandler.run()`). On Windows
+  mozprocess spawns with `bInheritHandles=1`, so a browser launched by another
+  manager at the same moment inherited the previous launch's stdout pipe;
+  killing that browser on a restart then got no EOF and `kill(timeout=5)` sat
+  out the full timeout — 6.1 s (12.1 s two-deep) on ~1 restart in 5.
+  `LUMEN_WPT_SPAWN_LOCK=off` — old behaviour. §одновременный запуск
+  браузеров; pinned by `verify_spawn_lock.py`.
+  And in the reftest executor: a render that overruns its timeout drops the
+  `--ipc-server` socket (`LumenIpcProtocol.drop`) and reports
+  EXTERNAL-TIMEOUT (shown as TIMEOUT) so the browser is restarted. The IPC
+  protocol has no request id; the late reply used to be read by the next
+  test's `NavigateTab` ("expected Navigated, got variant 9"), and every later
+  reftest on that browser was a FAIL that never compared a pixel. A `TabError`
+  reply stays a plain FAIL on the same connection. §процессы на шард; pinned
+  by `verify_ipc_desync.py` (fake server, no browser).
+  `--processes`: 7 is the default; on a 16-thread/32 GB machine with
+  `--parallel-shards 3` use 14 (wall −16…−35 %, score inside the noise).
+- `tests/wpt/reftest_pixdiff.py` — **ours** (WPT-RUN-14) — for the FAIL reftests of a
+  `run_corpus.py` out-dir, renders test and `rel=match` reference with
+  `--screenshot` and classifies the pixel diff (`thin-only` = edge AA, `thick` =
+  geometry, `size-differs`). Separates "layout wrong" from "1-px seam" ([BUG-1249](../../bugs/BUG-1249-FIXED.md)).
+  Both captures are cropped to the viewport before comparing (a whole-page
+  `--screenshot` of a taller test used to come out `size-differs` regardless
+  of what is on screen); `--viewport 800x600` matches wptrunner, `--ahem`
+  makes `font-family: Ahem` resolve over `file://` ([BUG-1273](../../bugs/BUG-1273-FIXED.md)
+  — the reftest executor itself never waits for `@font-face url()`), and
+  `--output` names the result file. WPT-RUN-14 S2.
   Scoring — including "an id that never ran scores 0" — is written down in
   `docs/wpt/pass-rate.md`. Two flags exist because a corpus run must never
   quietly misreport its own coverage:
@@ -602,6 +710,11 @@ Without `--recursive`, `--root` still just globs `*.html` at that
 directory's top level (the `dom/nodes` default's original, deliberately
 non-recursive behavior — its own subdirectories are crashtests/other
 never-vetted sub-suites, not part of the 168-file count).
+
+`crashtest` items run too (`LumenCrashtestExecutor`, WPT-RUN-8-S1): PASS = page loaded,
+`test-wait` on `<html>` cleared (or never set), browser alive; CRASH = process died;
+TIMEOUT = `test-wait` never cleared. A crashtest with no `<script>` has no JS runtime,
+so the executor stops waiting `NAV_SETTLE_S` after navigate and checks liveness only.
 
 (Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
 explicitly when running the script from a `git worktree`, whose own `target/`

@@ -7,3 +7,17 @@ Test category, added 2026-08-05 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 ## Прогон и находки (`docs/wpt-status.md`)
 
 Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/mixed-content/`, 533 файла: `META.yml`, `README.md`, `LICENSE-WPT.md`, `WEB_FEATURES.yml`, `gen/` — 388 сгенерированных тестовых HTML через `common/security-features/tools/generate.py --spec mixed-content/`, `generic/`, `resources/`, `tentative/`, плюс корневые `blob.https.sub.html`/`csp.https.window.js`/`imageset.https.sub.html`/`nested-iframes.window.js`). Ни `variant`-ов, ни `testdriver.js`; все 388 отобранных id — `.https.`. Прогон `run_report.py --all --root mixed-content --recursive --processes=4` **остановлен вручную на 78/388 id** (~20%, ~12 мин): **0/78 harness OK**, 100% TIMEOUT — каждый доезжает до настоящего TLS-хендшейка и получает `UnknownIssuer` (уже задокументированный гэп WPT-RUN-2, см. «Охват» выше и `tests/wpt/certs/README.md` — тестовый сертификат не в доверенных корнях Lumen, фикс security-sensitive и вне скоупа вендоринга), без единого исключения на 78 файлах, покрывающих разные сабресурсы (audio-tag/video-tag/fetch/beacon/img-tag/script-tag/xhr/websocket/svg-a-tag/link-css-tag/link-prefetch-tag/picture-tag/object-tag) и контексты (`iframe-data-inherit.http-rp`/`.meta`, `opt-in`/`unset`). Полный прогон не был доведён до конца (методология `css`/`content-security-policy`: при нулевой дисперсии результата на представительной выборке продолжать нерентабельно). Новый BUG-NNN не заводился — TLS-гэп уже задокументирован как известный остаток WPT-RUN-2, не находка этой категории. Побочная находка для будущего: генерированные тесты в `gen/` подключают `/common/security-features/resources/common.sub.js`, который в репозитории не вендорен (`tests/wpt/common/` отсутствует целиком) — сейчас недостижимо (TLS-гэп рвёт навигацию раньше, чем скрипт исполнится), но станет следующим блокером, как только TLS-доверие будет исправлено
+
+## Обновление 2026-09-30 (P2, WPT-RUN-7 срез 65)
+
+Оба блокера из вендоринга устранены отдельными сессиями до этой даты: `common/security-features`
+довендорен в WPT-RUN-6 срезе 8 (коммит `b88126026`), TLS-гэп `UnknownIssuer` закрыт несколькими
+`BUG-6xx` (`BUG-615`/`633`/`640`/`642`/`643`/`646`/`649`/`656`/`657`/`659` и др.) — никто не
+возвращался обновить статус этой категории после. `run_report.py --all --root mixed-content
+--recursive` теперь выбирает все 388 id и реально исполняется: baseline
+(`--update-expected`, `--processes=1`, ~5ч10м) дал **222/388 harness OK, 1321/2241 сабтестов**,
+298 файлов `.ini` записано. Подробности методологии, найденного механизма ложных регрессий
+(рассогласование `--processes` между baseline и `--check`) и итогового состояния baseline —
+`docs/tasks/p2-test-track.md#test-3-срез-65-2026-0929-30`. TLS/сеть здесь больше не блокер;
+основной источник неисполненных id — стандартный для категории TIMEOUT-профиль (внешние
+кросс-доменные подресурсы), не специфичный для Lumen дефект.

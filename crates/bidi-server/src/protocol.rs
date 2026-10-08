@@ -206,6 +206,8 @@ pub struct BidiState {
     ///
     /// Set by `browser.setTimezoneOverride`; `None` = system timezone.
     timezone_override: Option<String>,
+    /// Permission states set by `permissions.setPermission` (name → state).
+    permission_states: HashMap<String, String>,
     /// Offline network simulation: `true` = all network requests fail.
     ///
     /// Set by `network.setOfflineStatus`.
@@ -320,6 +322,12 @@ impl BidiState {
     #[allow(dead_code)]
     pub fn timezone(&self) -> Option<&str> {
         self.timezone_override.as_deref()
+    }
+
+    /// State set for permission `name` by `permissions.setPermission`.
+    #[allow(dead_code)]
+    pub fn permission_state(&self, name: &str) -> Option<&str> {
+        self.permission_states.get(name).map(String::as_str)
     }
 
     /// Whether offline network simulation is active.
@@ -695,6 +703,8 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "emulation.setUserAgentOverride" => emulation_set_ua_override(id, &params, state),
         "browsingContext.handleUserPrompt" => bc_handle_user_prompt(id, &params, state),
         "browsingContext.setViewport" => bc_set_viewport(id, &params, state),
+        "permissions.setPermission" => permissions_set_permission(id, &params, state),
+        "lumen.getComputedA11y" => lumen_get_computed_a11y(id, &params, state),
         "storage.getCookies" => storage_get_cookies(id, &params, state),
         "storage.setCookie" => storage_set_cookie(id, &params, state),
         "storage.deleteCookies" => storage_delete_cookies(id, &params, state),
@@ -1513,6 +1523,85 @@ fn browser_set_timezone(id: i64, params: &JsonValue, state: &mut BidiState) -> D
     DispatchResult::single(make_success(id, empty_obj()))
 }
 
+/// `permissions.setPermission` (WebDriver BiDi Permissions module, BUG-1014).
+///
+/// Параметры: `descriptor: {name}`, `state: granted|denied|prompt`, `origin`
+/// (обязателен по спецификации; в живом окне не разделяет состояние — см.
+/// `lumen_js::v8_runtime::set_global_permission_override`). С живым окном
+/// состояние попадает в то, что реально читает `navigator.permissions.query()`;
+/// имя, неизвестное движку, — `invalid argument`, а не молчаливый успех.
+fn permissions_set_permission(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let bad = |msg: &str| DispatchResult::single(make_error(Some(id), "invalid argument", msg));
+    let Some(name) = params.get("descriptor").and_then(|d| d.get("name")).and_then(|v| v.as_str())
+    else {
+        return bad("setPermission: descriptor.name is required");
+    };
+    let Some(perm_state) = params.get("state").and_then(|v| v.as_str()) else {
+        return bad("setPermission: state is required");
+    };
+    if !matches!(perm_state, "granted" | "denied" | "prompt") {
+        return bad(&format!("setPermission: invalid state {perm_state:?}"));
+    }
+    if params.get("origin").and_then(|v| v.as_str()).is_none() {
+        return bad("setPermission: origin is required");
+    }
+    if let Some(live) = &mut state.live {
+        match live.set_permission(name, perm_state) {
+            Ok(true) => {}
+            Ok(false) => return bad(&format!("setPermission: unknown permission {name:?}")),
+            Err(e) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "unknown error",
+                    &format!("setPermission: {e}"),
+                ));
+            }
+        }
+    }
+    state.permission_states.insert(name.to_owned(), perm_state.to_owned());
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `lumen.getComputedA11y` — расширение Lumen (не часть BiDi): роль и
+/// accessible name элемента по цепочке селекторов `params.selectors`
+/// (внешний документ → вниз через shadow root). Нужен WPT-экшенам
+/// `get_computed_role` / `get_computed_label` (BUG-1014). Без живого окна
+/// дерева доступности нет — `no such element`.
+fn lumen_get_computed_a11y(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let selectors: Vec<String> = params
+        .get("selectors")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+    if selectors.is_empty() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "getComputedA11y: selectors must be a non-empty array of strings",
+        ));
+    }
+    let found = match &mut state.live {
+        Some(live) => match live.computed_a11y(&selectors) {
+            Ok(v) => v,
+            Err(e) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "unknown error",
+                    &format!("getComputedA11y: {e}"),
+                ));
+            }
+        },
+        None => None,
+    };
+    let Some((role, name)) = found else {
+        return DispatchResult::single(make_error(Some(id), "no such element", "getComputedA11y: no such element"));
+    };
+    let mut result = BTreeMap::new();
+    result.insert("role".into(), JsonValue::String(role));
+    result.insert("name".into(), JsonValue::String(name));
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
 /// `network.setOfflineStatus` — переключить симуляцию offline-режима сети.
 ///
 /// Параметры: `{"status": {"offline": true}}` или `{"offline": true}` (упрощённая форма).
@@ -2173,18 +2262,63 @@ fn input_perform_actions(id: i64, params: &JsonValue, state: &mut BidiState) -> 
     DispatchResult::single(make_success(id, empty_obj()))
 }
 
-/// Replay the pointer-click and key-input subset of a BiDi `input.performActions`
+/// WebDriver "normalised key value" (W3C WebDriver 17.4.2, PUA range
+/// `\u{E000}`-`\u{E05D}`) -> `(KeyboardEvent.key, KeyboardEvent.code)`.
+/// `None` - an ordinary character, which is typed as text.
+fn webdriver_special_key(ch: char) -> Option<(&'static str, &'static str)> {
+    Some(match ch {
+        '\u{E003}' => ("Backspace", "Backspace"),
+        '\u{E004}' => ("Tab", "Tab"),
+        '\u{E005}' => ("Clear", "Clear"),
+        '\u{E006}' => ("Enter", "Enter"),
+        '\u{E007}' => ("Enter", "NumpadEnter"),
+        '\u{E008}' => ("Shift", "ShiftLeft"),
+        '\u{E009}' => ("Control", "ControlLeft"),
+        '\u{E00A}' => ("Alt", "AltLeft"),
+        '\u{E00B}' => ("Pause", "Pause"),
+        '\u{E00C}' => ("Escape", "Escape"),
+        '\u{E00D}' => (" ", "Space"),
+        '\u{E00E}' => ("PageUp", "PageUp"),
+        '\u{E00F}' => ("PageDown", "PageDown"),
+        '\u{E010}' => ("End", "End"),
+        '\u{E011}' => ("Home", "Home"),
+        '\u{E012}' => ("ArrowLeft", "ArrowLeft"),
+        '\u{E013}' => ("ArrowUp", "ArrowUp"),
+        '\u{E014}' => ("ArrowRight", "ArrowRight"),
+        '\u{E015}' => ("ArrowDown", "ArrowDown"),
+        '\u{E016}' => ("Insert", "Insert"),
+        '\u{E017}' => ("Delete", "Delete"),
+        '\u{E031}' => ("F1", "F1"),
+        '\u{E032}' => ("F2", "F2"),
+        '\u{E033}' => ("F3", "F3"),
+        '\u{E034}' => ("F4", "F4"),
+        '\u{E035}' => ("F5", "F5"),
+        '\u{E036}' => ("F6", "F6"),
+        '\u{E037}' => ("F7", "F7"),
+        '\u{E038}' => ("F8", "F8"),
+        '\u{E039}' => ("F9", "F9"),
+        '\u{E03A}' => ("F10", "F10"),
+        '\u{E03B}' => ("F11", "F11"),
+        '\u{E03C}' => ("F12", "F12"),
+        '\u{E03D}' => ("Meta", "MetaLeft"),
+        _ => return None,
+    })
+}
+
+/// Replay the pointer and key-input subset of a BiDi `input.performActions`
 /// action chain against a live window (SDC-2 MVP).
 ///
-/// Supported: a `"pointer"` source's `pointerMove {x,y}` followed by
-/// `pointerDown` clicks at that point; a `"key"` source's `keyDown {value}`
-/// entries are concatenated and typed at the last-known pointer position (or
-/// the viewport origin if no pointer action preceded it). NOT modeled: pauses,
+/// Supported: a `"pointer"` source's `pointerMove {x,y}` moves the cursor
+/// (hover: `mouseover`/`:hover`, BUG-1194) and `pointerDown` clicks at the
+/// last point; a `"key"` source's `keyDown`/`keyUp {value}` - WebDriver PUA
+/// codes (`\u{E00C}` Escape, `\u{E004}` Tab, ...) become `keydown`/`keyup` with
+/// the proper `key`/`code`, ordinary characters are typed: at the last pointer
+/// position when a pointer action preceded them (click-then-type), otherwise
+/// into the already focused element, without a click. NOT modeled: pauses,
 /// multi-touch/wheel sources, drag gestures, or `pointerUp`-gated release
-/// semantics — full W3C Actions fidelity is future work; this covers the
-/// common click-then-type automation pattern.
+/// semantics - full W3C Actions fidelity is future work.
 fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
-    let mut last_point = Target::Point { x: 0.0, y: 0.0 };
+    let mut last_point: Option<Target> = None;
     for source in sources {
         let source_type = source.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let Some(actions) = source.get("actions").and_then(|v| v.as_array()) else { continue };
@@ -2195,10 +2329,12 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                         Some("pointerMove") => {
                             let x = action.get("x").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
                             let y = action.get("y").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
-                            last_point = Target::Point { x, y };
+                            last_point = Some(Target::Point { x, y });
+                            let _ = live.pointer_move(x, y);
                         }
                         Some("pointerDown") => {
-                            let _ = live.click(&last_point);
+                            let point = last_point.clone().unwrap_or(Target::Point { x: 0.0, y: 0.0 });
+                            let _ = live.click(&point);
                         }
                         _ => {}
                     }
@@ -2207,19 +2343,42 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
             "key" => {
                 let mut text = String::new();
                 for action in actions {
-                    if action.get("type").and_then(|v| v.as_str()) == Some("keyDown")
-                        && let Some(v) = action.get("value").and_then(|v| v.as_str())
-                    {
-                        text.push_str(v);
+                    let down = match action.get("type").and_then(|v| v.as_str()) {
+                        Some("keyDown") => true,
+                        Some("keyUp") => false,
+                        _ => continue,
+                    };
+                    let Some(value) = action.get("value").and_then(|v| v.as_str()) else { continue };
+                    for ch in value.chars() {
+                        match webdriver_special_key(ch) {
+                            Some((key, code)) => {
+                                flush_typed_text(live, last_point.as_ref(), &mut text);
+                                let _ = live.press_key(key, code, down);
+                            }
+                            None if down && !('\u{E000}'..='\u{E05D}').contains(&ch) => text.push(ch),
+                            None => {}
+                        }
                     }
                 }
-                if !text.is_empty() {
-                    let _ = live.type_text(&last_point, &text);
-                }
+                flush_typed_text(live, last_point.as_ref(), &mut text);
             }
             _ => {}
         }
     }
+}
+
+/// Type the characters collected from consecutive `keyDown` actions and clear
+/// the buffer: after a pointer action - click at its last point, then type;
+/// without one - straight into the focused element.
+fn flush_typed_text(live: &mut LiveWindowSession, point: Option<&Target>, text: &mut String) {
+    if text.is_empty() {
+        return;
+    }
+    let _ = match point {
+        Some(p) => live.type_text(p, text),
+        None => live.type_focused(text),
+    };
+    text.clear();
 }
 
 /// `input.releaseActions` — release all active input sources (BiDi §15.7.4).
@@ -2298,9 +2457,14 @@ mod tests {
             for (cmd, reply_tx) in rx {
                 let reply = match cmd {
                     AutomationCommand::Navigate(_) => AutomationReply::Ack,
-                    AutomationCommand::Eval(js) => AutomationReply::Eval(format!("\"{js}\"")),
+                    AutomationCommand::Eval(js, _) => AutomationReply::Eval(format!("\"{js}\"")),
                     AutomationCommand::Screenshot => AutomationReply::Screenshot(vec![0x89, b'P', b'N', b'G']),
-                    AutomationCommand::Click(_) | AutomationCommand::Type(_, _) | AutomationCommand::Scroll(_) => {
+                    AutomationCommand::Click(_)
+                    | AutomationCommand::Type(_, _)
+                    | AutomationCommand::Scroll(_)
+                    | AutomationCommand::PointerMove { .. }
+                    | AutomationCommand::Key { .. }
+                    | AutomationCommand::TypeFocused(_) => {
                         AutomationReply::Ack
                     }
                     AutomationCommand::Wait(_, _) => AutomationReply::Ack,
@@ -2373,10 +2537,10 @@ mod tests {
         std::thread::spawn(move || {
             for (cmd, reply_tx) in rx {
                 let reply = match cmd {
-                    AutomationCommand::Eval(js) if js.contains("Promise.resolve") => {
+                    AutomationCommand::Eval(js, _) if js.contains("Promise.resolve") => {
                         AutomationReply::Eval("\"pending\"".into())
                     }
-                    AutomationCommand::Eval(_) => AutomationReply::Eval(settled.clone()),
+                    AutomationCommand::Eval(..) => AutomationReply::Eval(settled.clone()),
                     _ => AutomationReply::Ack,
                 };
                 let _ = reply_tx.send(reply);
@@ -2682,6 +2846,61 @@ mod tests {
         );
         let r = dispatch(&cmd, &mut state);
         assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    /// Fake live window that records every `AutomationCommand` it receives.
+    fn recording_live_session() -> (LiveWindowSession, std::sync::mpsc::Receiver<String>) {
+        use lumen_driver::{AutomationHandle, AutomationReply};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for (cmd, reply_tx) in rx {
+                let _ = log_tx.send(format!("{cmd:?}"));
+                let _ = reply_tx.send(AutomationReply::Ack);
+            }
+        });
+        (LiveWindowSession::new(AutomationHandle::new(tx)), log_rx)
+    }
+
+    /// BUG-1194: `pointerMove` without a click moves the cursor, `` is an
+    /// Escape key press (not typed text), and a bare key chain never clicks.
+    #[test]
+    fn input_perform_actions_hover_and_special_keys() {
+        let (live, log) = recording_live_session();
+        let mut state = BidiState::with_live_session(live, None);
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
+                {{"type":"pointer","id":"m","actions":[{{"type":"pointerMove","x":10,"y":20}}]}},
+                {{"type":"key","id":"k","actions":[
+                    {{"type":"keyDown","value":""}},{{"type":"keyUp","value":""}}
+                ]}}
+            ]}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+        let seen: Vec<String> = log.try_iter().collect();
+        assert!(seen.iter().any(|c| c.contains("PointerMove") && c.contains("10.0")), "{seen:?}");
+        assert!(seen.iter().any(|c| c.contains("Key") && c.contains("Escape") && c.contains("down: true")), "{seen:?}");
+        assert!(seen.iter().any(|c| c.contains("Key") && c.contains("down: false")), "{seen:?}");
+        assert!(!seen.iter().any(|c| c.starts_with("Click") || c.starts_with("Type(")), "{seen:?}");
+    }
+
+    /// BUG-1194: ordinary characters without a preceding pointer action go to
+    /// the focused element; after a pointer action they are click-then-type.
+    #[test]
+    fn input_perform_actions_text_without_pointer_does_not_click() {
+        let (live, log) = recording_live_session();
+        let mut state = BidiState::with_live_session(live, None);
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
+                {{"type":"key","id":"k","actions":[{{"type":"keyDown","value":"a"}},{{"type":"keyDown","value":"b"}}]}}
+            ]}}}}"#
+        );
+        dispatch(&cmd, &mut state);
+        let seen: Vec<String> = log.try_iter().collect();
+        assert_eq!(seen, vec![r#"TypeFocused("ab")"#.to_owned()]);
     }
 
     #[test]
@@ -3226,6 +3445,23 @@ mod tests {
         let v = parse(&r.frames[0]);
         assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
         assert_eq!(state.timezone(), Some("Europe/Moscow"));
+    }
+
+    #[test]
+    fn set_permission_validates_and_stores() {
+        let mut state = BidiState::new();
+        let ok = dispatch(
+            r#"{"id":1,"method":"permissions.setPermission","params":{"descriptor":{"name":"geolocation"},"state":"granted","origin":"http://a.test"}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&ok.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.permission_state("geolocation"), Some("granted"));
+        let bad = dispatch(
+            r#"{"id":2,"method":"permissions.setPermission","params":{"descriptor":{"name":"geolocation"},"state":"maybe","origin":"http://a.test"}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&bad.frames[0]).get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+        assert_eq!(state.permission_state("geolocation"), Some("granted"));
     }
 
     #[test]

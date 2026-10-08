@@ -26,7 +26,7 @@ pumps the OS window message queue.
 
 That default is what makes real sites appear to hang on load. Measured on
 `https://lenta.ru` (9 `@font-face` files) during the BUG-274 investigation
-(`bugs/BUG-274-OPEN.md`, срез 2026-07-28): each arriving web font fires
+(`bugs/BUG-274-FIXED.md`, срез 2026-07-28): each arriving web font fires
 `LoadEvent::FontLoaded` → `relayout_chrome()`, and with the flag off those
 relayouts serialize on the UI thread — **9 synchronous full relayouts of a
 ~1800-node display list, ~300–700 ms each, before the first frame**. Windows marks
@@ -93,6 +93,7 @@ construction.
 - This does not touch `LUMEN_RENDER_THREAD` (ADR-016 M1, the *render* thread),
   which remains opt-in. The brief's risk note "wgpu backend (BUG-274) stays off
   the threaded default until fixed" refers to that flag, not this one.
+  (Superseded: the render thread is default-on since [ADR-029](ADR-029-render-thread-default.md).)
 
 ## Alternatives considered
 
@@ -109,7 +110,7 @@ construction.
 ## References
 
 - ADR-016 — multithreaded render pipeline (the mandate and M0–M4 staging)
-- `docs/tasks/ph3-render-multithreading.md` — per-slice history, M2 acceptance
-- `bugs/BUG-274-OPEN.md` — cold-start investigation that produced the measurement
+- `git show 21a414fe5^:docs/tasks/ph3-render-multithreading.md` (brief removed with the closed task) — per-slice history, M2 acceptance
+- `bugs/BUG-274-FIXED.md` — cold-start investigation that produced the measurement
 - `bugs/BUG-405-FIXED.md` — scroll expose-band stalls, explicitly not fixed here
 - `docs/perf-method.md` — counter-over-wall-clock acceptance rule

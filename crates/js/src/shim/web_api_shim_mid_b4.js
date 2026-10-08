@@ -388,6 +388,7 @@ _lumen_insert_before = function(parent, child, reference) {
 // again — `Node.prototype.replaceChild` has to be re-installed, or every node
 // keeps calling the two-record original.
 function _lumen_mo_replace_child(newChild, oldChild) { var nid = this.__nid__;
+    _lumen_adopt_detached(newChild);
     if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
         throw new TypeError('replaceChild: both arguments must be nodes');
     }
@@ -555,10 +556,10 @@ ResizeObserver.prototype.disconnect = function() {
 // _lumen_timers with nesting 0 rather than through setTimeout so the §8.6 4 ms
 // clamp cannot delay it, and _lumen_request_wakeup makes the parked shell loop
 // wake for it immediately.
-function _ro_schedule_initial() {
+function _ro_schedule_initial(delay) {
     if (_ro_initial_scheduled) return;
     _ro_initial_scheduled = true;
-    var deadline = _lumen_now_ms();
+    var deadline = _lumen_now_ms() + (delay || 0);
     _lumen_timers.push({ id: _lumen_timer_seq++, fn: _ro_initial_pass, deadline: deadline, interval: null, nesting: 0 });
     _lumen_request_wakeup(deadline);
 }
@@ -588,9 +589,45 @@ function _lumen_layout_published() {
     }
 }
 
+// BUG-1056: the same pending first delivery, run from the frame instead of the
+// timer task. `_lumen_run_raf_callbacks` calls it right after the rAF batch, so
+// «rAF callbacks, then resize observations, then focus fixup» is the fixed
+// order Resize Observer §3.2 gives; the timer task below only covers pages
+// that have no rAF pending. Returns without delivering while the first layout
+// snapshot is missing (the timer pass owns that wait).
+function _ro_frame_pass() {
+    if (!_ro_layout_deferred && (!_ro_has_pending_initial() || !_lumen_layout_published())) return;
+    _ro_layout_deferred = false;
+    _lumen_deliver_resize_observers();
+}
+
+// BUG-1056: the shell's post-relayout delivery (`deliver_layout_observers`)
+// runs outside the frame's rAF pump; with rAF callbacks still queued it would
+// report observations ahead of them. Hold it for `_ro_frame_pass`, which the
+// pump runs right after the rAF batch.
+var _ro_layout_deferred = false;
+function _lumen_deliver_resize_observers_layout() {
+    if (_ro_observers.length !== 0 && _lumen_raf_callbacks.length !== 0) {
+        _ro_layout_deferred = true;
+        return;
+    }
+    _lumen_deliver_resize_observers();
+}
+
+// Deferrals of the timer pass in favour of a pending rAF batch (each is one
+// frame length); bounded so a page whose rAF never runs still gets its callback.
+var _ro_raf_deferrals = 0;
+var _RO_MAX_RAF_DEFERRALS = 8;
+
 function _ro_initial_pass() {
     _ro_initial_scheduled = false;
-    if (!_ro_has_pending_initial()) return;
+    if (!_ro_has_pending_initial()) { _ro_raf_deferrals = 0; return; }
+    if (_lumen_raf_callbacks.length !== 0 && _ro_raf_deferrals < _RO_MAX_RAF_DEFERRALS) {
+        _ro_raf_deferrals++;
+        _ro_schedule_initial(_RO_HOLD_MAX_MS);
+        return;
+    }
+    _ro_raf_deferrals = 0;
     if (!_lumen_layout_published() && _ro_initial_attempts < _RO_INITIAL_MAX_ATTEMPTS) {
         _ro_initial_attempts++;
         _ro_schedule_initial();
@@ -656,27 +693,48 @@ function _ro_len(value, fontPx, rootFontPx) {
     return 0;
 }
 
-// Content-box geometry of a border box: {w, h} of the content area plus the
-// {x, y} offset of its top-left corner inside the border box, which is what
-// Resize Observer §5.1 calls the entry's contentRect.
-function _ro_content_geometry(nid, borderW, borderH) {
+// Border + padding thickness of an element in CSS px.
+function _ro_insets(nid) {
     var fontPx = parseFloat(_lumen_get_computed_style(nid, 'font-size')) || 16;
     var rootFontPx = 16;
     try {
         var root = document.documentElement;
         if (root) rootFontPx = parseFloat(_lumen_get_computed_style(root.__nid__, 'font-size')) || 16;
     } catch (e) { rootFontPx = 16; }
-    var bl = _ro_len(_lumen_get_computed_style(nid, 'border-left-width'), fontPx, rootFontPx);
-    var br = _ro_len(_lumen_get_computed_style(nid, 'border-right-width'), fontPx, rootFontPx);
-    var bt = _ro_len(_lumen_get_computed_style(nid, 'border-top-width'), fontPx, rootFontPx);
-    var bb = _ro_len(_lumen_get_computed_style(nid, 'border-bottom-width'), fontPx, rootFontPx);
-    var pl = _ro_len(_lumen_get_computed_style(nid, 'padding-left'), fontPx, rootFontPx);
-    var pr = _ro_len(_lumen_get_computed_style(nid, 'padding-right'), fontPx, rootFontPx);
-    var pt = _ro_len(_lumen_get_computed_style(nid, 'padding-top'), fontPx, rootFontPx);
-    var pb = _ro_len(_lumen_get_computed_style(nid, 'padding-bottom'), fontPx, rootFontPx);
-    var w = borderW - bl - br - pl - pr;
-    var h = borderH - bt - bb - pt - pb;
-    return { w: w > 0 ? w : 0, h: h > 0 ? h : 0, x: pl, y: pt };
+    return {
+        bl: _ro_len(_lumen_get_computed_style(nid, 'border-left-width'), fontPx, rootFontPx),
+        br: _ro_len(_lumen_get_computed_style(nid, 'border-right-width'), fontPx, rootFontPx),
+        bt: _ro_len(_lumen_get_computed_style(nid, 'border-top-width'), fontPx, rootFontPx),
+        bb: _ro_len(_lumen_get_computed_style(nid, 'border-bottom-width'), fontPx, rootFontPx),
+        pl: _ro_len(_lumen_get_computed_style(nid, 'padding-left'), fontPx, rootFontPx),
+        pr: _ro_len(_lumen_get_computed_style(nid, 'padding-right'), fontPx, rootFontPx),
+        pt: _ro_len(_lumen_get_computed_style(nid, 'padding-top'), fontPx, rootFontPx),
+        pb: _ro_len(_lumen_get_computed_style(nid, 'padding-bottom'), fontPx, rootFontPx)
+    };
+}
+
+// Content-box geometry of a border box: {w, h} of the content area plus the
+// {x, y} offset of its top-left corner inside the border box, which is what
+// Resize Observer §5.1 calls the entry's contentRect.
+function _ro_content_geometry(nid, borderW, borderH) {
+    var i = _ro_insets(nid);
+    var w = borderW - i.bl - i.br - i.pl - i.pr;
+    var h = borderH - i.bt - i.bb - i.pt - i.pb;
+    return { w: w > 0 ? w : 0, h: h > 0 ? h : 0, x: i.pl, y: i.pt };
+}
+
+// BUG-1003: `_lumen_get_bounding_rect` is the transformed bounding box, but
+// Resize Observer §5.1 measures the untransformed border box — a transform
+// must not read as a resize. Computed width/height are the used px of the
+// layout box, so an element with a transform takes its border-box size from
+// them. Returns [w, h], or null when they cannot be read.
+function _ro_untransformed_border_size(nid) {
+    var cw = parseFloat(_lumen_get_computed_style(nid, 'width'));
+    var ch = parseFloat(_lumen_get_computed_style(nid, 'height'));
+    if (!isFinite(cw) || !isFinite(ch)) return null;
+    if (_lumen_get_computed_style(nid, 'box-sizing') === 'border-box') return [cw, ch];
+    var i = _ro_insets(nid);
+    return [cw + i.bl + i.br + i.pl + i.pr, ch + i.bt + i.bb + i.pt + i.pb];
 }
 
 // CSS Contain L2 §4.1 (BUG-852) — deliver the shell's batch of
@@ -821,8 +879,56 @@ function _lumen_deliver_animation_events(events) {
     }
 }
 
+// BUG-1003: Resize Observer §3.4 «broadcast active observations». A change
+// made inside a callback is reported in the same frame only for targets deeper
+// than the shallowest one already notified; the rest wait for the next frame,
+// after that frame's rAF callbacks. Without the gate a rAF chain the callback
+// started sees the next notification before its own next step runs. The held
+// remainder is delivered by `_ro_deliver_after_raf` (called at the end of each
+// rAF batch), bounded by a frame-length timer for pages without rAF. The gate
+// only covers one frame length after a delivery, so an unrelated later change
+// is never held.
+var _ro_hold_epoch = -1;
+var _ro_hold_time = 0;
+var _ro_min_depth = 0;
+var _ro_held = false;
+var _RO_HOLD_MAX_MS = 32;
+
+function _ro_deliver_after_raf() {
+    if (!_ro_held) return;
+    _ro_held = false;
+    _ro_hold_epoch = -1;
+    _lumen_deliver_resize_observers();
+}
+
+function _ro_hold_timeout() {
+    _ro_deliver_after_raf();
+}
+
+function _ro_arm_hold() {
+    if (_ro_held) return;
+    _ro_held = true;
+    var deadline = _lumen_now_ms() + _RO_HOLD_MAX_MS;
+    _lumen_timers.push({ id: _lumen_timer_seq++, fn: _ro_hold_timeout, deadline: deadline, interval: null, nesting: 0 });
+    _lumen_request_wakeup(deadline);
+}
+
+// Number of ancestors of a node, the depth §3.4 orders observations by.
+function _ro_depth(nid) {
+    var d = 0;
+    var cur = _lumen_u2n(_lumen_get_parent(nid));
+    while (cur !== null && cur !== undefined) {
+        d++;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return d;
+}
+
 function _lumen_deliver_resize_observers() {
     if (_ro_observers.length === 0) return;
+    var gated = _ro_hold_epoch === _ro_raf_epoch && _lumen_now_ms() - _ro_hold_time < _RO_HOLD_MAX_MS;
+    var gateDepth = _ro_min_depth;
+    var passMin = -1;
     var dpr = (typeof devicePixelRatio === 'number' && devicePixelRatio > 0) ? devicePixelRatio : 1;
     for (var oi = 0; oi < _ro_observers.length; oi++) {
         var obs = _ro_observers[oi];
@@ -835,12 +941,22 @@ function _lumen_deliver_resize_observers() {
             // box per §5.1 «calculate box size» — reported once, then it stops
             // differing from lastW/lastH.
             var bw = rect ? rect[2] : 0, bh = rect ? rect[3] : 0;
+            if (rect) {
+                var tf = _lumen_get_computed_style(nid, 'transform');
+                if (tf && tf !== 'none') {
+                    var ub = _ro_untransformed_border_size(nid);
+                    if (ub) { bw = ub[0]; bh = ub[1]; }
+                }
+            }
             // The content geometry costs nine computed-style reads, so a
             // border-box observation only pays for it once it has an entry.
             var cg = o.box === 'border-box' ? null : _ro_content_geometry(nid, bw, bh);
             var w = cg ? cg.w : bw;
             var h = cg ? cg.h : bh;
             if (o.lastW >= 0 && Math.abs(w - o.lastW) < 0.5 && Math.abs(h - o.lastH) < 0.5) continue;
+            var depth = _ro_depth(nid);
+            if (gated && depth <= gateDepth) { _ro_arm_hold(); continue; }
+            if (passMin < 0 || depth < passMin) passMin = depth;
             if (!cg) cg = _ro_content_geometry(nid, bw, bh);
             o.lastW = w; o.lastH = h;
             entries.push({
@@ -853,6 +969,9 @@ function _lumen_deliver_resize_observers() {
             });
         }
         if (entries.length > 0) {
+            _ro_hold_epoch = _ro_raf_epoch;
+            _ro_hold_time = _lumen_now_ms();
+            _ro_min_depth = passMin;
             try { obs._cb(entries, obs); } catch(e) { _lumen_report_exception(e); }
         }
     }
@@ -1160,9 +1279,64 @@ function _io_intersect(a, b) {
 function _io_dom_rect(r) {
     var x = r ? r[0] : 0, y = r ? r[1] : 0;
     var w = r ? r[2] - r[0] : 0, h = r ? r[3] - r[1] : 0;
-    return { x: x, y: y, width: w, height: h,
-             top: y, left: x, bottom: y + h, right: x + w };
+    return new DOMRectReadOnly(x, y, w, h);
 }
+
+// ── IntersectionObserverEntry (Intersection Observer §2.3) ──────────────────
+// BUG-1131: entries used to be plain object literals, so the interface object
+// was missing from the global and feature checks such as
+// `"intersectionRatio" in IntersectionObserverEntry.prototype` failed
+// (duolingo redirects to /errors/not-supported.html on that). The fields live
+// in one non-enumerable slot and are read through readonly prototype getters.
+function _io_entry_slot(entry, fields) {
+    Object.defineProperty(entry, '_ioe', { value: fields, enumerable: false });
+    return entry;
+}
+
+function IntersectionObserverEntry(init) {
+    if (!(this instanceof IntersectionObserverEntry)) {
+        throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+            + "Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+    }
+    if (init === undefined || init === null || (typeof init !== 'object' && typeof init !== 'function')) {
+        throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+            + "The provided value is not of type 'IntersectionObserverEntryInit'.");
+    }
+    var required = ['time', 'rootBounds', 'boundingClientRect', 'intersectionRect', 'target'];
+    for (var i = 0; i < required.length; i++) {
+        if (init[required[i]] === undefined) {
+            throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+                + "required member " + required[i] + " is undefined.");
+        }
+    }
+    if (!init.target || init.target.nodeType !== 1) {
+        throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+            + "member target is not of type 'Element'.");
+    }
+    _io_entry_slot(this, {
+        time: +init.time,
+        rootBounds: init.rootBounds === null ? null : DOMRectReadOnly.fromRect(init.rootBounds),
+        boundingClientRect: DOMRectReadOnly.fromRect(init.boundingClientRect),
+        intersectionRect: DOMRectReadOnly.fromRect(init.intersectionRect),
+        isIntersecting: !!init.isIntersecting,
+        intersectionRatio: init.intersectionRatio === undefined ? 0 : +init.intersectionRatio,
+        target: init.target,
+    });
+}
+['time', 'rootBounds', 'boundingClientRect', 'intersectionRect',
+ 'isIntersecting', 'intersectionRatio', 'target'].forEach(function(name) {
+    var get = function() {
+        if (!this || !this._ioe) throw new TypeError('Illegal invocation');
+        return this._ioe[name];
+    };
+    Object.defineProperty(get, 'name', { value: 'get ' + name });
+    Object.defineProperty(IntersectionObserverEntry.prototype, name, {
+        get: get, enumerable: true, configurable: true,
+    });
+});
+Object.defineProperty(IntersectionObserverEntry.prototype, Symbol.toStringTag, {
+    value: 'IntersectionObserverEntry', configurable: true,
+});
 
 // §2.2 «content clip»: overflow clips the element's content to its padding
 // edge. Every such element (overflow scroll/auto/hidden/clip) is exactly the
@@ -1353,7 +1527,7 @@ function _lumen_deliver_intersection_observers() {
             o.lastIntersecting = c.hit;
             o.lastRatio = ratio;
             if (!changed) continue;
-            entries.push({
+            entries.push(_io_entry_slot(Object.create(IntersectionObserverEntry.prototype), {
                 target: o.target,
                 isIntersecting: c.hit,
                 intersectionRatio: ratio,
@@ -1361,7 +1535,7 @@ function _lumen_deliver_intersection_observers() {
                 intersectionRect: _io_dom_rect(it),
                 rootBounds: _io_dom_rect(c.rootBounds),
                 time: typeof performance !== 'undefined' ? performance.now() : 0,
-            });
+            }));
         }
     }
     // §3.2.4 notify: every observer's queue is filled above before any
@@ -1473,156 +1647,126 @@ _TreeWalker.prototype._cur_nid = function() {
     return _lumen_tree_nid(this.currentNode);
 };
 
-// Returns the parent node within the root subtree, or null.
-_TreeWalker.prototype.parentNode = function() {
-    var cur = this._cur_nid();
-    var root = this._root_nid();
-    if (cur === null || cur === root) return null;
-    var p = _lumen_u2n(_lumen_get_parent(cur));
-    while (p !== null) {
-        if (p === root) { break; }
-        var pp = _lumen_u2n(_lumen_get_parent(p));
-        if (pp === null) { p = null; break; }
-        p = pp;
-    }
+// DOM LS §6.2 — the walker moves along tree links from `currentNode`; `root`
+// only bounds upward movement. `currentNode` may sit outside `root`'s subtree
+// (Lit points one walker over `document` at `template.content`).
+function _tw_parent(n) { return _lumen_u2n(_lumen_get_parent(n)); }
+function _tw_first(n) { var c = _lumen_get_children(n); return c.length ? c[0] : null; }
+function _tw_last(n) { var c = _lumen_get_children(n); return c.length ? c[c.length - 1] : null; }
+function _tw_sib(n, next) {
+    var p = _tw_parent(n);
     if (p === null) return null;
-    // Walk from root towards cur; find first ancestor that is accepted
-    // Actually per spec: parentNode returns the nearest accepted ancestor in root subtree.
-    var candidate = _lumen_u2n(_lumen_get_parent(cur));
-    while (candidate !== null && candidate !== root) {
-        var r = _nf_accepts(candidate, this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(candidate);
-            return this.currentNode;
-        }
-        candidate = _lumen_u2n(_lumen_get_parent(candidate));
-    }
-    // Check root itself
-    if (root !== null && cur !== root) {
-        var rr = _nf_accepts(root, this.whatToShow, this.filter);
-        if (rr === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = this.root;
-            return this.currentNode;
+    var c = _lumen_get_children(p), i = c.indexOf(n);
+    if (i < 0) return null;
+    i += next ? 1 : -1;
+    return i >= 0 && i < c.length ? c[i] : null;
+}
+
+_TreeWalker.prototype._set = function(nid) {
+    this.currentNode = _lumen_make_node_by_nid(nid);
+    return this.currentNode;
+};
+
+_TreeWalker.prototype.parentNode = function() {
+    var node = this._cur_nid(), root = this._root_nid();
+    while (node !== null && node !== root) {
+        node = _tw_parent(node);
+        if (node !== null && _nf_accepts(node, this.whatToShow, this.filter) === NodeFilter.FILTER_ACCEPT) {
+            return this._set(node);
         }
     }
     return null;
 };
 
-// Returns the first child of currentNode that passes the filter.
-_TreeWalker.prototype.firstChild = function() {
-    var cur = this._cur_nid();
+_TreeWalker.prototype._children = function(first) {
+    var cur = this._cur_nid(), root = this._root_nid();
     if (cur === null) return null;
-    var children = _lumen_get_children(cur);
-    for (var i = 0; i < children.length; i++) {
-        var r = _nf_accepts(children[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            return this.currentNode;
+    var node = first ? _tw_first(cur) : _tw_last(cur);
+    while (node !== null) {
+        var r = _nf_accepts(node, this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
+        if (r === NodeFilter.FILTER_SKIP) {
+            var ch = first ? _tw_first(node) : _tw_last(node);
+            if (ch !== null) { node = ch; continue; }
         }
-        if (r !== NodeFilter.FILTER_REJECT) {
-            // SKIP — recurse into its children (DOM spec §4.5.5)
-            var saved = this.currentNode;
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            var found = this.firstChild();
-            if (found) return found;
-            this.currentNode = saved;
-        }
-    }
-    return null;
-};
-
-// Returns the last child of currentNode that passes the filter.
-_TreeWalker.prototype.lastChild = function() {
-    var cur = this._cur_nid();
-    if (cur === null) return null;
-    var children = _lumen_get_children(cur);
-    for (var i = children.length - 1; i >= 0; i--) {
-        var r = _nf_accepts(children[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            return this.currentNode;
-        }
-        if (r !== NodeFilter.FILTER_REJECT) {
-            var saved = this.currentNode;
-            this.currentNode = _lumen_make_node_by_nid(children[i]);
-            var found = this.lastChild();
-            if (found) return found;
-            this.currentNode = saved;
+        while (node !== null) {
+            var sib = _tw_sib(node, first);
+            if (sib !== null) { node = sib; break; }
+            var par = _tw_parent(node);
+            if (par === null || par === root || par === cur) return null;
+            node = par;
         }
     }
     return null;
 };
+_TreeWalker.prototype.firstChild = function() { return this._children(true); };
+_TreeWalker.prototype.lastChild = function() { return this._children(false); };
 
-// Returns the previous sibling (in root subtree) of currentNode.
-_TreeWalker.prototype.previousSibling = function() {
-    var cur = this._cur_nid();
-    var root = this._root_nid();
-    if (cur === null || cur === root) return null;
-    var pid = _lumen_u2n(_lumen_get_parent(cur));
-    if (pid === null) return null;
-    var sibs = _lumen_get_children(pid);
-    var idx  = sibs.indexOf(cur);
-    for (var i = idx - 1; i >= 0; i--) {
-        var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(sibs[i]);
-            return this.currentNode;
+_TreeWalker.prototype._siblings = function(next) {
+    var node = this._cur_nid(), root = this._root_nid();
+    if (node === null || node === root) return null;
+    for (;;) {
+        var sib = _tw_sib(node, next);
+        while (sib !== null) {
+            node = sib;
+            var r = _nf_accepts(node, this.whatToShow, this.filter);
+            if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
+            sib = next ? _tw_first(node) : _tw_last(node);
+            if (r === NodeFilter.FILTER_REJECT || sib === null) sib = _tw_sib(node, next);
         }
+        node = _tw_parent(node);
+        if (node === null || node === root) return null;
+        if (_nf_accepts(node, this.whatToShow, this.filter) === NodeFilter.FILTER_ACCEPT) return null;
     }
-    return null;
 };
+_TreeWalker.prototype.previousSibling = function() { return this._siblings(false); };
+_TreeWalker.prototype.nextSibling = function() { return this._siblings(true); };
 
-// Returns the next sibling (in root subtree) of currentNode.
-_TreeWalker.prototype.nextSibling = function() {
-    var cur = this._cur_nid();
-    var root = this._root_nid();
-    if (cur === null || cur === root) return null;
-    var pid = _lumen_u2n(_lumen_get_parent(cur));
-    if (pid === null) return null;
-    var sibs = _lumen_get_children(pid);
-    var idx  = sibs.indexOf(cur);
-    for (var i = idx + 1; i < sibs.length; i++) {
-        var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(sibs[i]);
-            return this.currentNode;
-        }
-    }
-    return null;
-};
-
-// Returns the previous node in document order (depth-first pre-order) that passes filter.
 _TreeWalker.prototype.previousNode = function() {
-    var root = this._root_nid();
-    var cur  = this._cur_nid();
-    if (cur === null || cur === root) return null;
-    var all = _tw_subtree(root);
-    var idx = all.indexOf(cur);
-    for (var i = idx - 1; i >= 0; i--) {
-        var r = _nf_accepts(all[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(all[i]);
-            return this.currentNode;
+    var node = this._cur_nid(), root = this._root_nid();
+    if (node === null) return null;
+    while (node !== root) {
+        var sib = _tw_sib(node, false);
+        while (sib !== null) {
+            node = sib;
+            var r = _nf_accepts(node, this.whatToShow, this.filter);
+            while (r !== NodeFilter.FILTER_REJECT && _tw_last(node) !== null) {
+                node = _tw_last(node);
+                r = _nf_accepts(node, this.whatToShow, this.filter);
+            }
+            if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
+            sib = _tw_sib(node, false);
         }
+        if (node === root) return null;
+        var par = _tw_parent(node);
+        if (par === null) return null;
+        node = par;
+        if (_nf_accepts(node, this.whatToShow, this.filter) === NodeFilter.FILTER_ACCEPT) return this._set(node);
     }
     return null;
 };
 
-// Returns the next node in document order (depth-first pre-order) that passes filter.
 _TreeWalker.prototype.nextNode = function() {
-    var root = this._root_nid();
-    var cur  = this._cur_nid();
-    if (root === null) return null;
-    var all = _tw_subtree(root);
-    var idx = cur !== null ? all.indexOf(cur) : -1;
-    for (var i = idx + 1; i < all.length; i++) {
-        var r = _nf_accepts(all[i], this.whatToShow, this.filter);
-        if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_node_by_nid(all[i]);
-            return this.currentNode;
+    var node = this._cur_nid(), root = this._root_nid();
+    if (node === null) return null;
+    var r = NodeFilter.FILTER_ACCEPT;
+    for (;;) {
+        while (r !== NodeFilter.FILTER_REJECT && _tw_first(node) !== null) {
+            node = _tw_first(node);
+            r = _nf_accepts(node, this.whatToShow, this.filter);
+            if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
         }
+        var sib = null, t = node;
+        while (t !== null) {
+            if (t === root) return null;
+            sib = _tw_sib(t, true);
+            if (sib !== null) { node = sib; break; }
+            t = _tw_parent(t);
+        }
+        if (sib === null) return null;
+        r = _nf_accepts(node, this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) return this._set(node);
     }
-    return null;
 };
 
 // ── NodeIterator (DOM LS §4.4) ───────────────────────────────────────────────
@@ -1692,9 +1836,13 @@ _CaretPosition.prototype.getClientRects = function() { return new DOMRectList([]
 // Pure-JS shim on top of the native binding `_lumen_match_media` (parses + matches
 // a media query against an ad-hoc MediaContext). The registry keeps strong refs
 // while the user-side MQL is reachable; shell pumps changes via
-// `_lumen_deliver_media_changes(w, h, dark, reducedMotion)` after each relayout
+// `_lumen_deliver_media_changes(w, h, dark, reducedMotion, forcedColors)` after each relayout
 // or preference flip.
 var _mqlRegistry = [];
+// Last user-preference snapshot the shell delivered. A freshly created list
+// evaluates against it, so `matchMedia('(forced-colors: active)')` created after
+// the a11y toggle agrees with the cascade instead of assuming all-false.
+var _mqlPrefs = { dark: false, reducedMotion: false, forcedColors: false };
 
 function MediaQueryListEvent(type, init) {
     Event.call(this, type, init || {});
@@ -1712,7 +1860,7 @@ function MediaQueryList(media) {
     // canonical serialization (whitespace collapsed, invalid clauses folded
     // into `not all`), not an echo of the constructor argument.
     this.media       = _lumen_serialize_media_query(raw);
-    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], false, false);
+    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], _mqlPrefs.dark, _mqlPrefs.reducedMotion, _mqlPrefs.forcedColors);
     this.onchange    = null;
     this._listeners  = [];
 }
@@ -1757,13 +1905,17 @@ MediaQueryList.prototype._fire = function(matches) {
 
 // Shell entry point: re-evaluate every registered MediaQueryList against the
 // new context. Fires `change` only when `matches` actually flipped (spec).
-function _lumen_deliver_media_changes(w, h, dark, reducedMotion) {
+function _lumen_deliver_media_changes(w, h, dark, reducedMotion, forcedColors) {
     var darkB = !!dark;
     var rmB   = !!reducedMotion;
+    var fcB   = !!forcedColors;
+    _mqlPrefs.dark = darkB;
+    _mqlPrefs.reducedMotion = rmB;
+    _mqlPrefs.forcedColors = fcB;
     for (var i = 0; i < _mqlRegistry.length; i++) {
         var mql = _mqlRegistry[i];
         if (!mql) continue;
-        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB);
+        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB, fcB);
         if (mql.matches !== newM) mql._fire(newM);
     }
 }
@@ -1885,7 +2037,43 @@ var window = {
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
     addEventListener: function(type, fn, options) {
-        if (typeof fn !== 'function') return;
+        // BUG-1172: DOM §2.7 — a listener is a callback function or an object
+        // with `handleEvent` (read at dispatch time); `null` is ignored.
+        var origFn = fn;
+        var isObj = fn !== null && typeof fn === 'object';
+        if (typeof fn !== 'function' && !isObj) return;
+        if (options !== null && typeof options === 'object' && options.signal && options.signal.aborted) return;
+        var capture = _lumen_capture_flag(options);
+        var wkey = 'win:' + (capture ? '1:' : '0:') + type;
+        var perFn = _lumen_once_wrappers.get(origFn);
+        // Same (type, callback, capture) twice is a no-op (DOM §2.7 step 4).
+        if (perFn && perFn[wkey] !== undefined) return;
+        if (isObj) {
+            var cbObj = origFn;
+            fn = function(ev) {
+                var h = cbObj.handleEvent;
+                if (typeof h === 'function') return h.call(cbObj, ev);
+            };
+        }
+        // BUG-865: a passive listener (explicit, or the default for the
+        // scroll-blocking types on the window) is stored as a wrapper that
+        // makes `preventDefault()` a no-op; `removeEventListener` finds it
+        // again through `_lumen_once_wrappers`.
+        if (_lumen_passive_flag(options, type, true)) fn = _lumen_passive_wrap(fn);
+        if (options !== null && typeof options === 'object' && options.once) {
+            var inner = fn;
+            fn = function() {
+                window.removeEventListener(type, origFn, options);
+                return inner.apply(this, arguments);
+            };
+        }
+        if (!perFn) { perFn = {}; _lumen_once_wrappers.set(origFn, perFn); }
+        perFn[wkey] = fn;
+        if (options !== null && typeof options === 'object' && options.signal) {
+            options.signal.addEventListener('abort', function() {
+                window.removeEventListener(type, origFn, options);
+            }, { once: true });
+        }
         // A capture listener on the window sees an event on its way DOWN to a
         // node, which is a different bucket from everything below (BUG-873).
         // Only for the generic types: the specially-bucketed ones below are all
@@ -1933,6 +2121,10 @@ var window = {
     },
     removeEventListener: function(type, fn, options) {
         var arr;
+        if (fn === null || (typeof fn !== 'function' && typeof fn !== 'object')) return;
+        var perFn = _lumen_once_wrappers.get(fn);
+        var wkey = 'win:' + (_lumen_capture_flag(options) ? '1:' : '0:') + type;
+        if (perFn && perFn[wkey] !== undefined) { var wrapped = perFn[wkey]; delete perFn[wkey]; fn = wrapped; }
         if (_lumen_capture_flag(options) && _LUMEN_WIN_TARGETED_EVENTS[type] !== 1) arr = _win_capture_listeners[type];
         else if (type === 'popstate') arr = _popstate_listeners;
         else if (type === 'pageshow') arr = _pageshow_listeners;
@@ -1949,8 +2141,32 @@ var window = {
     },
     dispatchEvent: function(evt) {
         if (!evt || !evt.type) return true;
+        // BUG-1139: a dispatch aimed at the window itself (not the last hop of
+        // `_lumen_propagate`, which has already set `eventPhase`/`target`) has
+        // the window as its whole path — DOM §2.9: `target` and
+        // `currentTarget` are the window, the phase is AT_TARGET, and both are
+        // cleared again when the dispatch ends.
+        var ownDispatch = !evt.eventPhase;
+        if (ownDispatch) {
+            evt.target = window;
+            evt.currentTarget = window;
+            evt.eventPhase = 2;
+            if (typeof _LUMEN_WIN_LISTENER_NID !== 'undefined') evt._path = [_LUMEN_WIN_LISTENER_NID];
+        }
         var arr;
-        if (evt.type === 'load') {
+        if (evt.type === 'message') {
+            // `message` has its own bucket (see `addEventListener`), so the
+            // generic branch below would never reach it. `onmessage` first:
+            // the order the engine's own delivery has always used.
+            if (typeof window.onmessage === 'function') {
+                try { window.onmessage.call(window, evt); } catch(e) { _lumen_report_exception(e); }
+            }
+            arr = _message_listeners.slice();
+            for (var i = 0; i < arr.length; i++) {
+                if (evt._stopImmediate) break;
+                try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); }
+            }
+        } else if (evt.type === 'load') {
             arr = _load_listeners.slice();
             for (var i = 0; i < arr.length; i++) {
                 try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); }
@@ -1998,10 +2214,15 @@ var window = {
             // property (`onpopstate`, `ongamepadconnected`, …) is reached this
             // way, so a new one needs no dispatch-side change. No double-fire:
             // `load`/`error` are handled by the branches above, and the engine's
-            // own delivery of `hashchange`/`popstate`/`message` calls the
+            // own delivery of `hashchange`/`popstate` calls the
             // handler directly instead of going through `dispatchEvent`.
             var onFn = window['on' + evt.type];
             if (typeof onFn === 'function') { try { onFn.call(window, evt); } catch(e) { _lumen_report_exception(e); } }
+        }
+        if (ownDispatch) {
+            evt.eventPhase = 0;
+            evt.currentTarget = null;
+            evt._path = null;
         }
         return !evt.defaultPrevented;
     },
@@ -2047,15 +2268,13 @@ var window = {
         var ev = new MessageEvent(structuredClone(message));
         ev.origin = origin;
         ev.source = window;
-        // Spec §7.7.4 step 5: dispatch as a task (asynchronously).
-        setTimeout(function() {
-            if (typeof window.onmessage === 'function') {
-                try { window.onmessage(ev); } catch(e) { _lumen_report_exception(e); }
-            }
-            for (var i = 0; i < _message_listeners.length; i++) {
-                try { _message_listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
-            }
-        }, 0);
+        // GAP-ORIGIN: a delivered event's real origin — the sender is this
+        // very window — as opposed to a constructed one's author-set `.origin`.
+        _lumen_origin_register_source(ev, function() { return globalThis; });
+        // Spec §7.7.4 step 5: dispatch as a task (asynchronously). «Fire an
+        // event» — a real dispatch, so `target`/`currentTarget` are the window
+        // (BUG-1139).
+        setTimeout(function() { window.dispatchEvent(ev); }, 0);
     },
 };
 
@@ -2077,16 +2296,17 @@ for (var _wohi = 0; _wohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _wohi++) {
 // фреймов (frame_bridge::_lumen_frame_pump_messages). Данные уже разобраны,
 // source — фасад окна отправителя или null. Тот же порядок, что у локального
 // window.postMessage выше: сначала onmessage, затем addEventListener('message').
-globalThis._lumen_deliver_frame_message = function(data, origin, source) {
+__lumen_C._lumen_deliver_frame_message = function(data, origin, source, opaqueId) {
     var ev = new MessageEvent(data);
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
-    if (typeof window.onmessage === 'function') {
-        try { window.onmessage(ev); } catch(e) {}
-    }
-    for (var i = 0; i < _message_listeners.length; i++) {
-        try { _message_listeners[i](ev); } catch(e) {}
-    }
+    // GAP-ORIGIN: the sender's origin as the frame bridge computed it; empty
+    // (a grandchild posting to top) stays "no origin". BUG-1198: an opaque
+    // sender (`origin === 'null'`) carries the identity of its opaque origin
+    // instead — the same one for every message of that document.
+    if (opaqueId) _lumen_origin_register_source(ev, function() { return _lumen_origin_opaque(opaqueId); });
+    else if (origin) _lumen_origin_register_source(ev, function() { return origin; });
+    window.dispatchEvent(ev);
 };
 
 // BUG-480 срез 6: синтетический click() из родительского фасада iframe
@@ -2095,7 +2315,7 @@ globalThis._lumen_deliver_frame_message = function(data, origin, source) {
 // документа; сама последовательность — та же бездоверительная семантика
 // click(), что у HTMLElement.prototype.click (общая _lumen_perform_click,
 // объявление поднимается хостингом в пределах одного скрипта шима).
-globalThis._lumen_deliver_frame_click = function(nid) {
+__lumen_C._lumen_deliver_frame_click = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     _lumen_perform_click(nid);
 };
@@ -2108,14 +2328,14 @@ globalThis._lumen_deliver_frame_click = function(nid) {
 // не дренируется (фреймы не рендерятся), запрос там только копился бы;
 // `preventScroll` переносится конвертом, но игнорируется — layout у фреймов
 // нулевой, скроллить нечего.
-globalThis._lumen_deliver_frame_focus = function(nid, preventScroll) {
+__lumen_C._lumen_deliver_frame_focus = function(nid, preventScroll) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (!_lumen_is_focusable(nid)) return;
     _lumen_focus_update(nid);
 };
 // Парный blur(): no-op для не сфокусированного элемента, как у
 // HTMLElement.prototype.blur; тоже без `_lumen_request_blur`.
-globalThis._lumen_deliver_frame_blur = function(nid) {
+__lumen_C._lumen_deliver_frame_blur = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (_lumen_last_focused_nid !== _lumen_nearest_element_nid(nid)) return;
     _lumen_focus_update(-1);
@@ -2125,7 +2345,7 @@ globalThis._lumen_deliver_frame_blur = function(nid) {
 // живых элементов): снимок Event строится заново в этом изоляте, диспатчится
 // через _lumen_dispatch (слушатели цели + on<type>), а недоверенный 'click'
 // без preventDefault запускает активационное поведение (BUG-439).
-globalThis._lumen_deliver_frame_dom_event = function(nid, env) {
+__lumen_C._lumen_deliver_frame_dom_event = function(nid, env) {
     if (typeof nid !== 'number' || nid < 0 || !env) return;
     var type = typeof env.type === 'string' ? env.type : '';
     if (!type) return;
@@ -2173,11 +2393,11 @@ function _lumen_frame_script_will_start(nid) {
     // error-таском (спека ставит already started до обеих веток).
     var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
     if (src !== null) return true;
-    var body = _lumen_u2n(_lumen_get_text_content(nid));
+    var body = _lumen_script_child_text(nid);
     return body !== null && String(body).trim() !== '';
 }
 var _lumen_frame_scripts_started = {};
-globalThis._lumen_deliver_frame_run_script = function(nid) {
+__lumen_C._lumen_deliver_frame_run_script = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (!_lumen_resource_is_connected(nid)) return;
     // Уже начавшийся — спековый ранний выход №1; не начинающийся вовсе

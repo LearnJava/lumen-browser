@@ -13,24 +13,28 @@ use lumen_dom::{Document, NodeId};
 use lumen_core::{ColorSpace, Size};
 
 use crate::box_tree::{BoxKind, LayoutBox};
-use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
+use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
+    SvgColorInterpolation,
     matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
     BackgroundRepeat, BackgroundSize, BgSizeAxis, BlockStepAlign, BlockStepInsert, BlockStepRound,
     BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
+    FlexBasis, FlexDirection, FlexWrap,
     ContainFlags, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
-    FontVariantCaps, FontVariantEmoji, ImageRendering, Isolation, IterationCount, Length,
+    FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
+    FontVariantPosition, ImageRendering, Isolation, IterationCount, Length,
     LengthOrAuto,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowAnchor, overflow_clip_margin_serialize,
     OutlineColor, OverscrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
-    TextDecorationLine, TextDecorationStyle,
+    TextAlignLast, TextDecorationLine, TextDecorationStyle, TextWrapMode, TextWrapStyle,
+    Hyphens, LineBreak, OverflowWrap, WordBreak,
     TextEmphasisStyle, TextOrientation, TextOverflow, TextShadow, TextTransform, TimingFunction,
     TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
@@ -495,7 +499,7 @@ pub(crate) fn px_str(v: f32) -> String {
 /// Serialises one `aspect-ratio` ratio component as a bare CSS `<number>`
 /// (no unit) — omits the decimal point for whole-number values, matching
 /// `test_computed_value("aspect-ratio", …)`'s expected `"auto W / H"` form.
-fn aspect_ratio_num(v: f32) -> String {
+fn number_str(v: f32) -> String {
     if v.fract() == 0.0 {
         format!("{}", v as i64)
     } else {
@@ -601,6 +605,14 @@ fn position_component_to_css(c: PositionComponent) -> String {
                 format!("{}%", pct)
             }
         }
+        // Смещение от дальнего края — `calc(<pct>% ± <px>px)` (Typed OM /
+        // CSS Values L4 §10.1 сериализация mixed length-percentage).
+        PositionComponent::PercentPlusPx { percent, px } => {
+            let pct = percent * 100.0;
+            let pct_s = if pct.fract() == 0.0 { format!("{}", pct as i64) } else { format!("{pct}") };
+            let (sign, mag) = if px < 0.0 { ('-', -px) } else { ('+', px) };
+            format!("calc({pct_s}% {sign} {})", px_str(mag))
+        }
     }
 }
 
@@ -647,6 +659,35 @@ fn background_position_axis_to_css(
 /// `pub(crate)`: also reused by `style::values::length::canonical_specified_length`
 /// (CSSOM-2/BUG-484) for inline-`style` `<length-percentage>` reflection —
 /// same canonical serialization as `getComputedStyle()`, one source of truth.
+/// Computed-значение `<length-percentage>`: `em` и `calc()` без процентов сворачиваются в px
+/// по `font_size`, остальное — как [`length_to_css`] (BUG-1325, `text-indent`).
+fn absolute_length_css(l: &Length, font_size: f32) -> String {
+    match l {
+        Length::Em(v) => px_str(v * font_size),
+        Length::Calc(node) => match node.resolve(font_size, None, Size::ZERO) {
+            Some(px) => px_str(px),
+            None => length_to_css(l),
+        },
+        other => length_to_css(other),
+    }
+}
+
+fn text_wrap_mode_css(v: TextWrapMode) -> &'static str {
+    match v {
+        TextWrapMode::Wrap => "wrap",
+        TextWrapMode::Nowrap => "nowrap",
+    }
+}
+
+fn text_wrap_style_css(v: TextWrapStyle) -> &'static str {
+    match v {
+        TextWrapStyle::Auto => "auto",
+        TextWrapStyle::Balance => "balance",
+        TextWrapStyle::Stable => "stable",
+        TextWrapStyle::Pretty => "pretty",
+    }
+}
+
 pub(crate) fn length_to_css(l: &Length) -> String {
     match l {
         Length::Px(v) => px_str(*v),
@@ -654,6 +695,10 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::Rem(v) => format!("{}rem", v),
         Length::Ch(v) => format!("{}ch", v),
         Length::Ex(v) => format!("{}ex", v),
+        Length::Lh(v) => format!("{}lh", v),
+        Length::Rlh(v) => format!("{}rlh", v),
+        Length::Rex(v) => format!("{}rex", v),
+        Length::Rch(v) => format!("{}rch", v),
         Length::Percent(v) => format!("{}%", v),
         Length::Vh(v) => format!("{}vh", v),
         Length::Vw(v) => format!("{}vw", v),
@@ -670,6 +715,7 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::MaxContent => "max-content".into(),
         Length::FitContent(None) => "fit-content".into(),
         Length::FitContent(Some(arg)) => format!("fit-content({})", length_to_css(arg)),
+        Length::Stretch => "stretch".into(),
     }
 }
 
@@ -727,13 +773,18 @@ fn length_or_auto_to_css(l: &LengthOrAuto) -> String {
     }
 }
 
-fn border_style_to_css(bs: BorderStyle) -> &'static str {
+pub(crate) fn border_style_to_css(bs: BorderStyle) -> &'static str {
     match bs {
         BorderStyle::None => "none",
         BorderStyle::Solid => "solid",
         BorderStyle::Dashed => "dashed",
         BorderStyle::Dotted => "dotted",
         BorderStyle::Double => "double",
+        BorderStyle::Hidden => "hidden",
+        BorderStyle::Groove => "groove",
+        BorderStyle::Ridge => "ridge",
+        BorderStyle::Inset => "inset",
+        BorderStyle::Outset => "outset",
     }
 }
 
@@ -756,6 +807,7 @@ fn align_value_to_css(a: AlignValue) -> &'static str {
         AlignValue::End => "end",
         AlignValue::Center => "center",
         AlignValue::Baseline => "baseline",
+        AlignValue::LastBaseline => "last baseline",
         AlignValue::SpaceBetween => "space-between",
         AlignValue::SpaceAround => "space-around",
         AlignValue::SpaceEvenly => "space-evenly",
@@ -775,53 +827,29 @@ pub(crate) fn opacity_to_css(v: f32) -> String {
 /// static one.
 pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
     if list.is_empty() {
-        "none".into()
+        return "none".into();
+    }
+    // CSSOM §9 / Transforms L1 §18: resolved value — `matrix()` для 2D,
+    // иначе `matrix3d()`, а не заданный список функций (BUG-1157).
+    let m = crate::property_trees::compute_local_transform(list, (0.0, 0.0, 0.0));
+    let v = &m.0;
+    if m.is_2d_affine() {
+        let parts = [v[0], v[1], v[4], v[5], v[12], v[13]].map(matrix_num);
+        format!("matrix({})", parts.join(", "))
     } else {
-        list.iter().map(transform_fn_to_css).collect::<Vec<_>>().join(" ")
+        format!("matrix3d({})", v.map(matrix_num).join(", "))
     }
 }
 
-fn transform_fn_to_css(f: &TransformFn) -> String {
-    match f {
-        TransformFn::Translate(x, y) => format!("translate({}, {})", px_str(*x), px_str(*y)),
-        TransformFn::TranslateX(x) => format!("translateX({})", px_str(*x)),
-        TransformFn::TranslateY(y) => format!("translateY({})", px_str(*y)),
-        TransformFn::TranslateZ(z) => format!("translateZ({})", px_str(*z)),
-        TransformFn::Translate3d(x, y, z) => {
-            format!("translate3d({}, {}, {})", px_str(*x), px_str(*y), px_str(*z))
-        }
-        TransformFn::Rotate(a) => {
-            let deg = a.to_degrees();
-            if deg.fract() == 0.0 {
-                format!("rotate({}deg)", deg as i64)
-            } else {
-                format!("rotate({}deg)", deg)
-            }
-        }
-        TransformFn::RotateX(a) => format!("rotateX({}deg)", a.to_degrees()),
-        TransformFn::RotateY(a) => format!("rotateY({}deg)", a.to_degrees()),
-        TransformFn::RotateZ(a) => format!("rotateZ({}deg)", a.to_degrees()),
-        TransformFn::Rotate3d(x, y, z, a) => {
-            format!("rotate3d({}, {}, {}, {}deg)", x, y, z, a.to_degrees())
-        }
-        TransformFn::Scale(sx, sy) => format!("scale({}, {})", sx, sy),
-        TransformFn::ScaleX(sx) => format!("scaleX({})", sx),
-        TransformFn::ScaleY(sy) => format!("scaleY({})", sy),
-        TransformFn::ScaleZ(sz) => format!("scaleZ({})", sz),
-        TransformFn::Scale3d(sx, sy, sz) => format!("scale3d({}, {}, {})", sx, sy, sz),
-        TransformFn::SkewX(a) => format!("skewX({}deg)", a.to_degrees()),
-        TransformFn::SkewY(a) => format!("skewY({}deg)", a.to_degrees()),
-        TransformFn::Matrix(m) => format!(
-            "matrix({}, {}, {}, {}, {}, {})",
-            m[0], m[1], m[2], m[3], m[4], m[5]
-        ),
-        TransformFn::Matrix3d(m) => format!(
-            "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
-            m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
-        ),
-        TransformFn::Perspective(d) => format!("perspective({})", px_str(*d)),
+/// Число в сериализации матрицы: до 6 значащих цифр, как у Chrome;
+/// микроскопический f32-шум от `sin/cos` даёт `-0` → `0`.
+fn matrix_num(v: f32) -> String {
+    let v = f64::from(v);
+    if v == 0.0 {
+        return "0".into();
     }
+    let r: f64 = format!("{:.5e}", v).parse().unwrap_or(v);
+    if r.abs() < 1e-4 { format!("{:e}", r) } else { format!("{}", r) }
 }
 
 fn filter_fn_to_css(f: &FilterFn) -> String {
@@ -1034,6 +1062,21 @@ fn seconds_list_to_css(v: &[f32]) -> String {
         .join(", ")
 }
 
+/// Shortest serialisation of a four-sided shorthand (CSS Values §… `margin`
+/// style): 1 value when all agree, 2 when top=bottom and left=right, 3 when
+/// only left=right, else 4.
+fn box_sides_shorthand(t: &str, r: &str, b: &str, l: &str) -> String {
+    if t == r && r == b && b == l {
+        t.to_string()
+    } else if t == b && r == l {
+        format!("{t} {r}")
+    } else if r == l {
+        format!("{t} {r} {b}")
+    } else {
+        format!("{t} {r} {b} {l}")
+    }
+}
+
 fn box_shadow_list_to_css(v: &[BoxShadow]) -> String {
     if v.is_empty() {
         return "none".into();
@@ -1041,8 +1084,9 @@ fn box_shadow_list_to_css(v: &[BoxShadow]) -> String {
     v.iter()
         .map(|s| {
             let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
+            // CSSOM: the colour serialises first (BUG-1050).
             let mut out = format!(
-                "{} {} {} {} {color}",
+                "{color} {} {} {} {}",
                 px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur), px_str(s.spread),
             );
             if s.inset {
@@ -1061,7 +1105,7 @@ fn text_shadow_list_to_css(v: &[TextShadow]) -> String {
     v.iter()
         .map(|s| {
             let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
-            format!("{} {} {} {color}", px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur))
+            format!("{color} {} {} {}", px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1155,8 +1199,8 @@ pub fn inline_segment_style_map(style: &ComputedStyle) -> HashMap<String, String
 /// never reach this function as a `WebkitBox`/`WebkitInlineBox` variant.
 fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
     let is_clamping = style.box_orient == WebkitBoxOrient::Vertical
-        && (style.line_clamp.is_some() || style.continue_value == CssContinue::Discard);
-    match style.display {
+        && (style.line_clamp.is_some() || style.line_clamp_auto || style.continue_value == CssContinue::Discard);
+    match style.legacy_box_display.unwrap_or(style.display) {
         Display::Block => "block",
         Display::Inline => "inline",
         Display::InlineBlock => "inline-block",
@@ -1230,6 +1274,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("block-step-align".into(), style.block_step_align.to_css().into());
     m.insert("block-step-round".into(), style.block_step_round.to_css().into());
     m.insert("block-step".into(), block_step_shorthand_computed(style));
+    // CSS Gap Decorations L1 §3–§4: `column-rule*` / `row-rule*` / `rule*`.
+    crate::style::insert_gap_rule_computed(style, &mut m);
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
@@ -1305,7 +1351,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ImageRendering::Pixelated => "pixelated",
     }.into());
     m.insert("aspect-ratio".into(), match style.aspect_ratio {
-        Some((w, h)) => format!("auto {} / {}", aspect_ratio_num(w), aspect_ratio_num(h)),
+        Some((w, h)) => format!("auto {} / {}", number_str(w), number_str(h)),
         None => "auto".into(),
     });
 
@@ -1340,19 +1386,40 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         FontStyle::Oblique => "oblique",
     }.into());
     // CSS Fonts L4 §6.10: shorthand сериализуется значениями реализованных
-    // компонент (caps + emoji) — остальные longhand-ы всегда в initial.
-    // Обе в initial → `normal`; иначе — только не-initial части, в порядке
-    // грамматики.
+    // компонент (ligatures, caps, numeric, position, emoji) — `-east-asian`/
+    // `-alternates` всегда в initial. Все в initial → `normal`; иначе — только
+    // не-initial части в порядке longhand-ов. `none` (ligatures) в списке
+    // невыразим → пустая строка (§6.10 serialization).
     m.insert("font-variant".into(), {
-        let mut parts: Vec<&str> = Vec::with_capacity(2);
+        let lig = style.font_variant_ligatures;
+        let num = style.font_variant_numeric;
+        let mut parts: Vec<String> = Vec::with_capacity(5);
+        if lig != FontVariantLigatures::default() {
+            parts.push(lig.serialize());
+        }
         if style.font_variant_caps != FontVariantCaps::Normal {
-            parts.push(style.font_variant_caps.as_str());
+            parts.push(style.font_variant_caps.as_str().into());
+        }
+        if num != FontVariantNumeric::default() {
+            parts.push(num.serialize());
+        }
+        if style.font_variant_position != FontVariantPosition::Normal {
+            parts.push(style.font_variant_position.as_str().into());
         }
         if style.font_variant_emoji != FontVariantEmoji::Normal {
-            parts.push(style.font_variant_emoji.as_str());
+            parts.push(style.font_variant_emoji.as_str().into());
         }
-        if parts.is_empty() { "normal".to_string() } else { parts.join(" ") }
+        if parts.is_empty() {
+            "normal".to_string()
+        } else if lig == FontVariantLigatures::NONE && parts.len() > 1 {
+            String::new()
+        } else {
+            parts.join(" ")
+        }
     });
+    m.insert("font-variant-ligatures".into(), style.font_variant_ligatures.serialize());
+    m.insert("font-variant-numeric".into(), style.font_variant_numeric.serialize());
+    m.insert("font-variant-position".into(), style.font_variant_position.as_str().into());
     m.insert("font-variant-caps".into(), style.font_variant_caps.as_str().into());
     m.insert("font-variant-emoji".into(), style.font_variant_emoji.as_str().into());
     m.insert("font-stretch".into(), {
@@ -1371,9 +1438,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
     m.insert("line-height".into(), {
         let v = style.line_height;
-        if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
+        if !style.line_height_is_relative {
+            // BUG-1050: an absolute `<length>` is stored as a ratio of the
+            // (zoomed) font-size; the computed value is that length in px.
+            px_str(v * style.font_size / z)
+        } else if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
     });
-    m.insert("letter-spacing".into(), px_str(style.letter_spacing));
+    // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
+    m.insert("letter-spacing".into(), if style.letter_spacing == 0.0 { "normal".into() } else { px_str(style.letter_spacing) });
     m.insert("word-spacing".into(), px_str(style.word_spacing));
     m.insert("text-align".into(), match style.text_align {
         TextAlign::Start => "start",
@@ -1381,6 +1453,59 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextAlign::Left => "left",
         TextAlign::Right => "right",
         TextAlign::Center => "center",
+        TextAlign::Justify => "justify",
+        // Не резолвлен каскадом (стиль собран в обход `compute_style`): ведёт себя как `start`.
+        TextAlign::MatchParent => "start",
+    }.into());
+    // BUG-1325: остальные свойства CSS Text, которых раньше не было в карте.
+    m.insert("text-align-last".into(), match style.text_align_last {
+        TextAlignLast::Auto => "auto",
+        TextAlignLast::Start => "start",
+        TextAlignLast::End => "end",
+        TextAlignLast::Left => "left",
+        TextAlignLast::Right => "right",
+        TextAlignLast::Center => "center",
+        TextAlignLast::Justify => "justify",
+        TextAlignLast::MatchParent => "match-parent",
+    }.into());
+    m.insert("tab-size".into(), match style.text_extra.tab_size_number {
+        Some(n) => number_str(n),
+        None => px_str(style.tab_size),
+    });
+    m.insert("text-wrap-mode".into(), text_wrap_mode_css(style.text_wrap_mode).into());
+    m.insert("text-wrap-style".into(), text_wrap_style_css(style.text_wrap_style).into());
+    m.insert("text-wrap".into(), match (style.text_wrap_mode, style.text_wrap_style) {
+        (TextWrapMode::Wrap, TextWrapStyle::Auto) => "wrap".into(),
+        (TextWrapMode::Wrap, st) => text_wrap_style_css(st).into(),
+        (TextWrapMode::Nowrap, TextWrapStyle::Auto) => "nowrap".into(),
+        (TextWrapMode::Nowrap, st) => format!("nowrap {}", text_wrap_style_css(st)),
+    });
+    m.insert("line-break".into(), match style.line_break {
+        LineBreak::Auto => "auto",
+        LineBreak::Loose => "loose",
+        LineBreak::Normal => "normal",
+        LineBreak::Strict => "strict",
+        LineBreak::Anywhere => "anywhere",
+    }.into());
+    m.insert("word-break".into(), match style.word_break {
+        WordBreak::Normal => "normal",
+        WordBreak::KeepAll => "keep-all",
+        WordBreak::BreakAll => "break-all",
+        WordBreak::BreakWord => "break-word",
+        WordBreak::AutoPhrase => "auto-phrase",
+    }.into());
+    let overflow_wrap = match style.overflow_wrap {
+        OverflowWrap::Normal => "normal",
+        OverflowWrap::BreakWord => "break-word",
+        OverflowWrap::Anywhere => "anywhere",
+    };
+    m.insert("overflow-wrap".into(), overflow_wrap.into());
+    // `word-wrap` — унаследованный псевдоним `overflow-wrap` (CSS Text L3 §5.5).
+    m.insert("word-wrap".into(), overflow_wrap.into());
+    m.insert("hyphens".into(), match style.hyphens {
+        Hyphens::None => "none",
+        Hyphens::Manual => "manual",
+        Hyphens::Auto => "auto",
     }.into());
     // CSS Writing Modes L4 §2.1/§2.2/§3.1/§5.1 — computed value "as
     // specified" for all four. The fields were cascaded and consumed by
@@ -1412,20 +1537,19 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextOrientation::Upright => "upright",
         TextOrientation::Sideways => "sideways",
     }.into());
-    m.insert("text-transform".into(), match style.text_transform {
-        TextTransform::None => "none",
-        TextTransform::Uppercase => "uppercase",
-        TextTransform::Lowercase => "lowercase",
-        TextTransform::Capitalize => "capitalize",
-    }.into());
-    m.insert("white-space".into(), match style.white_space {
-        WhiteSpace::Normal => "normal",
-        WhiteSpace::Nowrap => "nowrap",
-        WhiteSpace::Pre => "pre",
-        WhiteSpace::PreWrap => "pre-wrap",
-        WhiteSpace::PreLine => "pre-line",
-        WhiteSpace::BreakSpaces => "break-spaces",
-    }.into());
+    m.insert("text-transform".into(), style.text_extra.transform.serialize(style.text_transform));
+    // CSS Text L4 §2.1: shorthand над `white-space-collapse` + `text-wrap-mode`. Пары без
+    // legacy-ключевого слова (`preserve-breaks nowrap`, `break-spaces nowrap`) пишутся длинно.
+    m.insert("white-space".into(), match (style.white_space_collapse, style.text_wrap_mode) {
+        (WhiteSpaceCollapse::Collapse, TextWrapMode::Wrap) => "normal".into(),
+        (WhiteSpaceCollapse::Collapse, TextWrapMode::Nowrap) => "nowrap".into(),
+        (WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::PreserveSpaces, TextWrapMode::Nowrap) => "pre".into(),
+        (WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::PreserveSpaces, TextWrapMode::Wrap) => "pre-wrap".into(),
+        (WhiteSpaceCollapse::PreserveBreaks, TextWrapMode::Wrap) => "pre-line".into(),
+        (WhiteSpaceCollapse::PreserveBreaks, TextWrapMode::Nowrap) => "preserve-breaks nowrap".into(),
+        (WhiteSpaceCollapse::BreakSpaces, TextWrapMode::Wrap) => "break-spaces".into(),
+        (WhiteSpaceCollapse::BreakSpaces, TextWrapMode::Nowrap) => "break-spaces nowrap".into(),
+    });
     m.insert("white-space-collapse".into(), match style.white_space_collapse {
         WhiteSpaceCollapse::Collapse => "collapse",
         WhiteSpaceCollapse::Preserve => "preserve",
@@ -1467,14 +1591,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // reduced `none | <integer>` grammar, not the full `line-clamp`
     // shorthand (`max-lines`/`block-ellipsis`/`continue`/`-webkit-legacy`
     // longhands are unimplemented, see BUG-505).
-    m.insert("-webkit-line-clamp".into(), match style.line_clamp {
+    let line_clamp = match style.line_clamp {
+        None if style.line_clamp_auto => "auto".to_string(),
         None => "none".to_string(),
+        Some(n) if style.line_clamp_auto => format!("{n} auto"),
         Some(n) => n.to_string(),
-    });
-    m.insert("line-clamp".into(), match style.line_clamp {
-        None => "none".to_string(),
-        Some(n) => n.to_string(),
-    });
+    };
+    m.insert("-webkit-line-clamp".into(), line_clamp.clone());
+    m.insert("line-clamp".into(), line_clamp);
     // WHATWG Compat §2.1 / CSS Overflow L4 §continue (BUG-505 срез 5) — feed
     // `webkit_box_computed_display`'s condition, plus their own round-trip.
     m.insert("-webkit-box-orient".into(), match style.box_orient {
@@ -1487,7 +1611,18 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         CssContinue::Collapse => "collapse",
         CssContinue::WebkitLegacy => "-webkit-legacy",
     }.into());
-    m.insert("text-indent".into(), length_to_css(&style.text_indent));
+    {
+        // CSS Text L3 §7.1: `<length-percentage> hanging? each-line?`; `em` и `calc()` без `%`
+        // сворачиваются в px (computed value — абсолютная длина).
+        let mut indent = absolute_length_css(&style.text_indent, style.font_size);
+        if style.text_extra.indent_hanging {
+            indent.push_str(" hanging");
+        }
+        if style.text_extra.indent_each_line {
+            indent.push_str(" each-line");
+        }
+        m.insert("text-indent".into(), indent);
+    }
     m.insert("vertical-align".into(), vertical_align_to_css(&style.vertical_align));
 
     // ── Overflow / stacking ───────────────────────────────────────
@@ -1549,6 +1684,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         Some(v) => v.to_css(),
     });
     m.insert("scroll-target-group".into(), style.scroll_target_group.to_css().into());
+    // CSS Scroll Snap L1 §4 `scroll-margin-*` (BUG-962): already resolved to
+    // px at cascade time (`style/apply/motion.rs`) and, unlike `margin-*`,
+    // never touched by `apply_zoom_to_lengths` — reported as-is, no unzoom.
+    m.insert("scroll-margin-top".into(), px_str(style.scroll_margin_top));
+    m.insert("scroll-margin-right".into(), px_str(style.scroll_margin_right));
+    m.insert("scroll-margin-bottom".into(), px_str(style.scroll_margin_bottom));
+    m.insert("scroll-margin-left".into(), px_str(style.scroll_margin_left));
+    m.insert("scroll-padding-top".into(), px_str(style.scroll_padding_top));
+    m.insert("scroll-padding-right".into(), px_str(style.scroll_padding_right));
+    m.insert("scroll-padding-bottom".into(), px_str(style.scroll_padding_bottom));
+    m.insert("scroll-padding-left".into(), px_str(style.scroll_padding_left));
     // CSS Scroll Anchoring 1 — `overflow-anchor` (BUG-524 срез 1, parsing/CSSOM only).
     m.insert("overflow-anchor".into(), match style.overflow_anchor {
         OverflowAnchor::Auto => "auto",
@@ -1609,6 +1755,32 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("justify-items".into(), align_value_to_css(style.justify_items).into());
     m.insert("justify-self".into(), align_value_to_css(style.justify_self).into());
     m.insert("justify-content".into(), align_value_to_css(style.justify_content).into());
+
+    // ── Flexbox (CSS Flexbox L1 §4–§7) ────────────────────────────
+    let fd = match style.flex_direction {
+        FlexDirection::Row => "row",
+        FlexDirection::RowReverse => "row-reverse",
+        FlexDirection::Column => "column",
+        FlexDirection::ColumnReverse => "column-reverse",
+    };
+    let fw = match style.flex_wrap {
+        FlexWrap::Nowrap => "nowrap",
+        FlexWrap::Wrap => "wrap",
+        FlexWrap::WrapReverse => "wrap-reverse",
+    };
+    let fb = match &style.flex_basis {
+        FlexBasis::Auto => "auto".to_string(),
+        FlexBasis::Content => "content".to_string(),
+        FlexBasis::Length(l) => length_to_css(l),
+    };
+    m.insert("flex-direction".into(), fd.into());
+    m.insert("flex-wrap".into(), fw.into());
+    m.insert("flex-flow".into(), format!("{fd} {fw}"));
+    m.insert("flex-grow".into(), style.flex_grow.to_string());
+    m.insert("flex-shrink".into(), style.flex_shrink.to_string());
+    m.insert("flex".into(), format!("{} {} {fb}", style.flex_grow, style.flex_shrink));
+    m.insert("flex-basis".into(), fb);
+    m.insert("order".into(), style.order.to_string());
 
     // ── Cursor / pointer ─────────────────────────────────────────
     m.insert("cursor".into(), match style.cursor {
@@ -1684,13 +1856,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // `border-width`/`border-style` mirror `border-color` above: a shorthand
     // resolves only when all four sides agree, otherwise `""` — matches real
     // UA `getPropertyValue` behaviour on a per-side-differing shorthand.
-    m.insert("border-width".into(), {
-        let (t, r, b, l) = (
-            px_str(style.border_top_width), px_str(style.border_right_width),
-            px_str(style.border_bottom_width), px_str(style.border_left_width),
-        );
-        if t == r && r == b && b == l { t } else { String::new() }
-    });
+    m.insert("border-width".into(), box_sides_shorthand(
+        &px_str(style.border_top_width / z), &px_str(style.border_right_width / z),
+        &px_str(style.border_bottom_width / z), &px_str(style.border_left_width / z),
+    ));
     m.insert("border-style".into(), {
         let (t, r, b, l) = (
             border_style_to_css(style.border_top_style), border_style_to_css(style.border_right_style),
@@ -1727,6 +1896,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("box-shadow".into(), box_shadow_list_to_css(&style.box_shadow));
     m.insert("text-shadow".into(), text_shadow_list_to_css(&style.text_shadow));
 
+    // CSS Text Decoration L4 §3.3/§3.7 (BUG-1050) — `auto`/`from-font`/`<length>`.
+    m.insert("text-decoration-thickness".into(), match style.text_decoration_thickness {
+        crate::TextDecorationThickness::Auto => "auto".into(),
+        crate::TextDecorationThickness::FromFont => "from-font".into(),
+        crate::TextDecorationThickness::Length(v) => px_str(v),
+        crate::TextDecorationThickness::Percentage(p) => format!("{p}%"),
+    });
+    m.insert("text-underline-offset".into(), style.text_underline_offset.map_or("auto".into(), px_str));
+
     // ── Perspective ──────────────────────────────────────────────────
     m.insert("perspective-origin".into(), format!(
         "{} {}",
@@ -1737,6 +1915,20 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // ── Transitions / animations (CSS Transitions L1 §3, CSS Animations L1 §4.3) ─
     m.insert("transition-duration".into(), seconds_list_to_css(&style.transition_durations));
     m.insert("transition-delay".into(), seconds_list_to_css(&style.transition_delays));
+    // Interest Invokers: `normal` или время в секундах (`123ms` → `0.123s`).
+    for (name, v) in [
+        ("interest-delay-start", style.interest_delay_start),
+        ("interest-delay-end", style.interest_delay_end),
+    ] {
+        m.insert(name.into(), v.map_or_else(|| "normal".into(), |s| seconds_list_to_css(&[s])));
+    }
+    m.insert("transition-behavior".into(), {
+        if style.transition_behaviors.is_empty() {
+            "normal".to_string()
+        } else {
+            style.transition_behaviors.iter().map(|b| b.to_css()).collect::<Vec<_>>().join(", ")
+        }
+    });
     m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
     m.insert("transition-property".into(), if style.transition_properties.is_empty() {
         "all".into()
@@ -1867,6 +2059,23 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("stroke-linejoin".into(), stroke_linejoin_to_css(style.svg_stroke_linejoin).into());
     m.insert("stroke-miterlimit".into(), format!("{}", style.svg_stroke_miterlimit));
     m.insert("stroke-dashoffset".into(), px_str(style.svg_stroke_dashoffset));
+    // SVG 2 §Geometry / §Painting (BUG-1094).
+    m.insert("cx".into(), length_to_css(&style.svg_cx));
+    m.insert("cy".into(), length_to_css(&style.svg_cy));
+    m.insert("r".into(), length_to_css(&style.svg_r));
+    m.insert("x".into(), length_to_css(&style.svg_x));
+    m.insert("y".into(), length_to_css(&style.svg_y));
+    m.insert("rx".into(), length_or_auto_to_css(&style.svg_rx));
+    m.insert("ry".into(), length_or_auto_to_css(&style.svg_ry));
+    m.insert("color-interpolation".into(), match style.svg_color_interpolation {
+        SvgColorInterpolation::Auto => "auto",
+        SvgColorInterpolation::Srgb => "srgb",
+        SvgColorInterpolation::LinearRgb => "linearrgb",
+    }.into());
+    m.insert("path-length".into(), match style.svg_path_length {
+        Some(n) => format!("{}", n),
+        None => "none".into(),
+    });
     m.insert("stroke-dasharray".into(), if style.svg_stroke_dasharray.is_empty() {
         "none".into()
     } else {
@@ -1885,10 +2094,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     }.into());
 
     // ── Ruby (CSS Ruby L1 §4-6) ───────────────────────────────────────
-    m.insert("ruby-position".into(), match style.ruby_position {
-        RubyPosition::Over => "over",
-        RubyPosition::Under => "under",
-    }.into());
+    m.insert("ruby-position".into(), style.ruby_position.as_css().into());
     m.insert("ruby-align".into(), match style.ruby_align {
         RubyAlign::Start => "start",
         RubyAlign::Center => "center",
@@ -1907,10 +2113,28 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // (`style::logical::resolve_logical_properties`) only resolves
     // horizontal-tb/LTR onto physical fields — gate the same way here rather
     // than fabricate a mapping the layout side never applied.
+    // Sizing longhands depend on `writing-mode` only (not `direction`):
+    // vertical modes swap inline/block onto height/width.
+    {
+        let vertical = matches!(
+            style.writing_mode,
+            WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+        );
+        let pairs: [(&str, &str); 6] = if vertical {
+            [("inline-size", "height"), ("min-inline-size", "min-height"), ("max-inline-size", "max-height"),
+             ("block-size", "width"), ("min-block-size", "min-width"), ("max-block-size", "max-width")]
+        } else {
+            [("inline-size", "width"), ("min-inline-size", "min-width"), ("max-inline-size", "max-width"),
+             ("block-size", "height"), ("min-block-size", "min-height"), ("max-block-size", "max-height")]
+        };
+        for (logical, physical) in pairs {
+            if let Some(v) = m.get(physical).cloned() {
+                m.insert(logical.into(), v);
+            }
+        }
+    }
     if style.writing_mode == WritingMode::HorizontalTb && style.direction == Direction::Ltr {
         const LOGICAL_LONGHANDS: &[(&str, &str)] = &[
-            ("inline-size", "width"), ("min-inline-size", "min-width"), ("max-inline-size", "max-width"),
-            ("block-size", "height"), ("min-block-size", "min-height"), ("max-block-size", "max-height"),
             ("inset-inline-start", "left"), ("inset-inline-end", "right"),
             ("inset-block-start", "top"), ("inset-block-end", "bottom"),
             ("margin-inline-start", "margin-left"), ("margin-inline-end", "margin-right"),
@@ -1943,6 +2167,19 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         m.insert("padding-block".into(), two_value(&m, "padding-top", "padding-bottom"));
         m.insert("inset-inline".into(), two_value(&m, "left", "right"));
         m.insert("inset-block".into(), two_value(&m, "top", "bottom"));
+    }
+
+    // Four-sided shorthands (BUG-1050): serialised from the longhands already
+    // in the map (so un-zoom is inherited), collapsed to the shortest form.
+    for (short, [t, r, b, l]) in [
+        ("margin", ["margin-top", "margin-right", "margin-bottom", "margin-left"]),
+        ("padding", ["padding-top", "padding-right", "padding-bottom", "padding-left"]),
+        ("inset", ["top", "right", "bottom", "left"]),
+        ("scroll-margin", ["scroll-margin-top", "scroll-margin-right", "scroll-margin-bottom", "scroll-margin-left"]),
+        ("scroll-padding", ["scroll-padding-top", "scroll-padding-right", "scroll-padding-bottom", "scroll-padding-left"]),
+    ] {
+        let v = box_sides_shorthand(&m[t], &m[r], &m[b], &m[l]);
+        m.insert(short.into(), v);
     }
 
     m
@@ -2103,6 +2340,25 @@ mod tests {
     }
 
     #[test]
+    fn computed_transform_is_matrix_resolved_value() {
+        let t = |v: Vec<TransformFn>| transform_list_to_css(&v);
+        assert_eq!(t(vec![]), "none");
+        assert_eq!(t(vec![TransformFn::TranslateX(10.0)]), "matrix(1, 0, 0, 1, 10, 0)");
+        assert_eq!(
+            t(vec![TransformFn::Scale(2.0, 2.0), TransformFn::Rotate(0.0)]),
+            "matrix(2, 0, 0, 2, 0, 0)"
+        );
+        assert_eq!(
+            t(vec![TransformFn::TranslateX(5.0), TransformFn::TranslateY(3.0)]),
+            "matrix(1, 0, 0, 1, 5, 3)"
+        );
+        assert_eq!(
+            t(vec![TransformFn::Translate3d(1.0, 2.0, 3.0)]),
+            "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1)"
+        );
+    }
+
+    #[test]
     fn find_by_tag() {
         let (doc, tree) = layout_tree("<div>hello</div>", "");
         assert!(find_box_by_selector(&tree, &doc, "div").is_some());
@@ -2150,6 +2406,55 @@ mod tests {
         assert_eq!(get("#v", "direction").as_deref(), Some("rtl"));
         assert_eq!(get("#v", "unicode-bidi").as_deref(), Some("isolate-override"));
         assert_eq!(get("#v", "text-orientation").as_deref(), Some("upright"));
+    }
+
+    /// BUG-1325: the CSS Text longhands that `getComputedStyle()` used to read back as `""`.
+    #[test]
+    fn css_text_longhands_are_serialised() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="d">x</div><div id="v"><p id="m">y</p><p id="r">z</p></div>"#,
+            "#v { tab-size: 4; text-wrap: nowrap balance; line-break: strict; word-break: auto-phrase;                word-wrap: anywhere; hyphens: auto; text-align: center; text-align-last: match-parent;                text-transform: full-width capitalize; white-space: preserve-breaks nowrap;                font-size: 20px; text-indent: each-line calc(10px + 0.5em) hanging }              #m { text-align: match-parent } #r { tab-size: 10px; letter-spacing: 0px }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#d", "tab-size").as_deref(), Some("8"));
+        assert_eq!(get("#d", "text-wrap").as_deref(), Some("wrap"));
+        assert_eq!(get("#d", "white-space").as_deref(), Some("normal"));
+        assert_eq!(get("#d", "letter-spacing").as_deref(), Some("normal"));
+        assert_eq!(get("#v", "tab-size").as_deref(), Some("4"));
+        assert_eq!(get("#v", "text-wrap").as_deref(), Some("nowrap balance"));
+        assert_eq!(get("#v", "text-wrap-mode").as_deref(), Some("nowrap"));
+        assert_eq!(get("#v", "text-wrap-style").as_deref(), Some("balance"));
+        assert_eq!(get("#v", "line-break").as_deref(), Some("strict"));
+        assert_eq!(get("#v", "word-break").as_deref(), Some("auto-phrase"));
+        assert_eq!(get("#v", "overflow-wrap").as_deref(), Some("anywhere"));
+        assert_eq!(get("#v", "word-wrap").as_deref(), Some("anywhere"));
+        assert_eq!(get("#v", "hyphens").as_deref(), Some("auto"));
+        assert_eq!(get("#v", "text-align-last").as_deref(), Some("match-parent"));
+        assert_eq!(get("#v", "text-transform").as_deref(), Some("capitalize full-width"));
+        assert_eq!(get("#v", "white-space").as_deref(), Some("preserve-breaks nowrap"));
+        assert_eq!(get("#v", "text-indent").as_deref(), Some("20px hanging each-line"));
+        // `match-parent` takes the parent's `center`; a length `tab-size` is an absolute length.
+        assert_eq!(get("#m", "text-align").as_deref(), Some("center"));
+        assert_eq!(get("#r", "tab-size").as_deref(), Some("10px"));
+        assert_eq!(get("#r", "letter-spacing").as_deref(), Some("normal"));
+    }
+
+    /// CSS Text L3 §7.1: `start` inherited from an RTL parent becomes `right` under
+    /// `match-parent` (the root-element case is covered by WPT `text-align-match-parent-002`).
+    #[test]
+    fn text_align_match_parent_resolution() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="p"><p id="c">x</p></div>"#,
+            "#p { direction: rtl } #c { text-align: match-parent }",
+        );
+        let get = |sel: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get("text-align").cloned()
+        };
+        assert_eq!(get("#c").as_deref(), Some("right"));
     }
 
     #[test]
@@ -2656,6 +2961,23 @@ mod tests {
     // ──────────────── CSSOM-3 срез 1: extended computed-style coverage ────────────────
 
     #[test]
+    fn computed_map_box_shorthands_bug1050() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { margin: 1px 2px 3px 4px; padding: 5px 6px; scroll-margin: 7px;              scroll-padding: 8px 9px 10px; position: absolute; top: 1px; right: 2px; bottom: 1px; left: 2px;              text-decoration-thickness: 3px; text-underline-offset: 4px; line-height: 20px; }",
+        );
+        let g = |k: &str| m.get(k).map(String::as_str);
+        assert_eq!(g("margin"), Some("1px 2px 3px 4px"));
+        assert_eq!(g("padding"), Some("5px 6px"));
+        assert_eq!(g("scroll-margin"), Some("7px"));
+        assert_eq!(g("scroll-padding"), Some("8px 9px 10px"));
+        assert_eq!(g("inset"), Some("1px 2px"));
+        assert_eq!(g("text-decoration-thickness"), Some("3px"));
+        assert_eq!(g("text-underline-offset"), Some("4px"));
+        assert_eq!(g("line-height"), Some("20px"));
+    }
+
+    #[test]
     fn computed_map_border_width_style_shorthands() {
         let m = div_computed_map(
             "<div>x</div>",
@@ -2664,13 +2986,12 @@ mod tests {
         assert_eq!(m.get("border-width").map(String::as_str), Some("2px"));
         assert_eq!(m.get("border-style").map(String::as_str), Some("dashed"));
 
-        // Differing per-side values → shorthand resolves to "", matching
-        // border-color's already-established behaviour above.
+        // Differing per-side values → 4-value shorthand (BUG-1050).
         let m = div_computed_map(
             "<div>x</div>",
-            "div { border-top-width: 1px; border-right-width: 2px; border-bottom-width: 3px; border-left-width: 4px; }",
+            "div { border-top-width: 1px; border-right-width: 2px; border-bottom-width: 3px; border-left-width: 4px; border-style: solid; }",
         );
-        assert_eq!(m.get("border-width").map(String::as_str), Some(""));
+        assert_eq!(m.get("border-width").map(String::as_str), Some("1px 2px 3px 4px"));
     }
 
     #[test]
@@ -2708,11 +3029,11 @@ mod tests {
         );
         assert_eq!(
             m.get("box-shadow").map(String::as_str),
-            Some("1px 2px 3px 4px rgb(255, 0, 0) inset"),
+            Some("rgb(255, 0, 0) 1px 2px 3px 4px inset"),
         );
         assert_eq!(
             m.get("text-shadow").map(String::as_str),
-            Some("5px 6px 7px rgb(0, 0, 255)"),
+            Some("rgb(0, 0, 255) 5px 6px 7px"),
         );
 
         let m = div_computed_map("<div>x</div>", "");
@@ -2869,6 +3190,33 @@ mod tests {
     }
 
     #[test]
+    fn computed_map_font_variant_new_longhands() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("font-variant-ligatures").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("font-variant-numeric").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("font-variant-position").map(String::as_str), Some("normal"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { font-variant-ligatures: none; font-variant-numeric: slashed-zero tabular-nums; \
+             font-variant-position: sub; }",
+        );
+        assert_eq!(m.get("font-variant-ligatures").map(String::as_str), Some("none"));
+        assert_eq!(
+            m.get("font-variant-numeric").map(String::as_str),
+            Some("tabular-nums slashed-zero")
+        );
+        assert_eq!(m.get("font-variant-position").map(String::as_str), Some("sub"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { font-variant: no-contextual small-caps tabular-nums; }",
+        );
+        assert_eq!(
+            m.get("font-variant").map(String::as_str),
+            Some("no-contextual small-caps tabular-nums")
+        );
+    }
+
+    #[test]
     fn computed_map_font_variant_shorthand_joins_implemented_components() {
         let m = div_computed_map("<div>x</div>", "");
         assert_eq!(m.get("font-variant").map(String::as_str), Some("normal"));
@@ -2918,6 +3266,28 @@ mod tests {
             "div { background-image: url(a.png), url(b.png); background-position-x: 10%, 90%; }",
         );
         assert_eq!(m.get("background-position-x").map(String::as_str), Some("10%, 90%"));
+    }
+
+    #[test]
+    fn computed_map_background_position_x_edge_offset_serialization() {
+        // WPT `background-position-x-computed.html`: `left -20%` → `-20%`,
+        // `right -10px` → `calc(100% + 10px)`, `right 10px` → `calc(100% - 10px)`,
+        // `x-start`/`x-end` → `0%`/`100%`.
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-image: url(a.png), url(b.png), url(c.png);                    background-position-x: calc(10px - 0.5em), left -20%, right 10px; }",
+        );
+        assert_eq!(
+            m.get("background-position-x").map(String::as_str),
+            Some("2px, -20%, calc(100% - 10px)")
+        );
+        let m = div_computed_map("<div>x</div>", "div { background-position-x: right -10px; }");
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("calc(100% + 10px)"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-image: url(a.png), url(b.png); background-position-x: x-start, x-end; }",
+        );
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("0%, 100%"));
     }
 
     #[test]
@@ -3025,14 +3395,26 @@ mod tests {
 
     #[test]
     fn computed_map_logical_properties_absent_outside_horizontal_tb_ltr() {
-        // Phase 0 (`resolve_logical_properties`) only resolves logical props
-        // onto physical fields for horizontal-tb/LTR — the CSSOM mirror gates
-        // the same way rather than serve a made-up value for vertical modes.
+        // Margin/padding/inset/border logical longhands are still only
+        // resolved onto physical fields for horizontal-tb/LTR — the CSSOM
+        // mirror gates the same way rather than serve a made-up value.
         let m = div_computed_map(
             "<div>x</div>",
-            "div { writing-mode: vertical-rl; inline-size: 120px; }",
+            "div { writing-mode: vertical-rl; margin-inline-start: 12px; }",
         );
-        assert_eq!(m.get("inline-size"), None);
+        assert_eq!(m.get("margin-inline-start"), None);
+    }
+
+    #[test]
+    fn computed_map_logical_sizing_swaps_in_vertical_writing_mode() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { writing-mode: vertical-rl; inline-size: 120px; block-size: 80px; }",
+        );
+        assert_eq!(m.get("inline-size").map(String::as_str), Some("120px"));
+        assert_eq!(m.get("block-size").map(String::as_str), Some("80px"));
+        assert_eq!(m.get("height").map(String::as_str), Some("120px"));
+        assert_eq!(m.get("width").map(String::as_str), Some("80px"));
     }
 
     // ── computed_style_to_map: CSSOM-3 slice 3 (BUG-537 family) ──────────────
@@ -3293,6 +3675,43 @@ mod tests {
         // parser's own rejection independently of the JS shim gate.
         let m = div_computed_map("<div>x</div>", "div { scroll-marker-group: before before; }");
         assert_eq!(m.get("scroll-marker-group").map(String::as_str), Some("none"));
+    }
+
+    // GAP-INTERESTINVOKER — `interest-delay-start`/`-end` и шортхенд.
+    #[test]
+    fn computed_map_interest_delay_defaults_to_normal() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("normal"));
+    }
+
+    #[test]
+    fn computed_map_interest_delay_reports_seconds() {
+        let m = div_computed_map("<div>x</div>", "div { interest-delay-start: 123ms; interest-delay-end: 32s; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("0.123s"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("32s"));
+    }
+
+    #[test]
+    fn computed_map_interest_delay_shorthand_fills_both() {
+        let m = div_computed_map("<div>x</div>", "div { interest-delay: 0s; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("0s"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("0s"));
+        let m = div_computed_map("<div>x</div>", "div { interest-delay: normal 450ms; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("0.45s"));
+    }
+
+    #[test]
+    fn computed_map_interest_delay_rejects_invalid_and_does_not_inherit() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { interest-delay-start: 1s; interest-delay-start: -1s; interest-delay-end: 0; }",
+        );
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("1s"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("normal"));
+        let m = div_computed_map("<div>x</div>", "body { interest-delay: 2s; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("normal"));
     }
 
     #[test]

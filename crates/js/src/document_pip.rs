@@ -122,8 +122,8 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
         return;
       }
       this._closed = true;
-      if (globalThis.__lumen_pip_active_window === this) {
-        globalThis.__lumen_pip_active_window = null;
+      if (__lumen_C.__lumen_pip_active_window === this) {
+        __lumen_C.__lumen_pip_active_window = null;
       }
       if (typeof _lumen_docpip_close === 'function') {
         _lumen_docpip_close();
@@ -164,7 +164,7 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
       this._activeWindow = pipWindow;
       // Shared with video_pip.rs: whichever PiP session is open, so
       // `_lumen_pip_deliver_resize` (video_pip.rs) can update it uniformly.
-      globalThis.__lumen_pip_active_window = pipWindow;
+      __lumen_C.__lumen_pip_active_window = pipWindow;
 
       // Fire enter event on document
       const event = new DocumentPictureInPictureEvent(pipWindow);
@@ -199,7 +199,7 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
   /// real OS floating window is resized, so the active PictureInPictureWindow
   /// reflects the true client size and fires 'resize' (mirrors video PiP's
   /// `_lumen_pip_deliver_resize`).
-  globalThis._lumen_docpip_deliver_resize = function(width, height) {
+  __lumen_C._lumen_docpip_deliver_resize = function(width, height) {
     const win = documentPictureInPicture._activeWindow;
     if (!win || win._closed) {
       return;
@@ -212,7 +212,7 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
   /// _lumen_docpip_deliver_close() — shell calls this when the OS window is
   /// closed via its own close button (not `.close()`), so `_closed` and
   /// `pictureInPictureElement` reflect reality.
-  globalThis._lumen_docpip_deliver_close = function() {
+  __lumen_C._lumen_docpip_deliver_close = function() {
     const win = documentPictureInPicture._activeWindow;
     if (win) {
       win._closed = true;
@@ -234,7 +234,7 @@ mod tests {
     fn with_document_pip(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false, None)
             .unwrap();
         f(&rt);
     }
@@ -360,7 +360,7 @@ mod tests {
             let r = rt
                 .eval(
                     "documentPictureInPicture.requestWindow({width: 640, height: 360}); \
-                     var w = globalThis.__lumen_pip_active_window; \
+                     var w = __lumen_C.__lumen_pip_active_window; \
                      var fired = false; \
                      w.addEventListener('resize', function() { fired = true; }); \
                      _lumen_pip_deliver_resize(800, 600); \

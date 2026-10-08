@@ -1786,3 +1786,22 @@ use super::*;
         );
     }
 
+    #[test]
+    fn namespace_prefix_any_or_none_is_accepted() {
+        // wptrunner: `:root > *|body:nth-child(2)`; префикс отбрасывается.
+        for raw in [":root > *|body:nth-child(2)", "*|*", "|div", "*|div.a"] {
+            assert!(
+                Parser::new(raw).parse_selector_list_strict().is_some(),
+                "{raw}"
+            );
+        }
+        assert_eq!(parse_selector_list("*|div"), parse_selector_list("div"));
+    }
+
+    #[test]
+    fn namespace_prefix_undeclared_is_invalid_and_empty_ns_never_matches() {
+        // BUG-1063: `svg|rect` без `@namespace` — SyntaxError; `|E` не равен `E`.
+        assert!(!crate::is_valid_selector_list("svg|rect"));
+        assert!(crate::is_valid_selector_list("*|p#out"));
+        assert_ne!(parse_selector_list("|div"), parse_selector_list("div"));
+    }

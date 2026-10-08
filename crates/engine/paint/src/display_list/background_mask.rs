@@ -6,6 +6,63 @@
 
 use super::*;
 
+thread_local! {
+    /// CSS Backgrounds L3 §3.6 — the viewport rect (scroll 0, page space) that
+    /// `background-attachment: fixed` layers of the display list being built
+    /// are positioned against. `None` outside a build.
+    static FIXED_BG_VIEWPORT: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `build` — one or more display-list builds of a document laid out
+/// against `viewport` — with that viewport installed as the positioning area of
+/// its `background-attachment: fixed` layers (CSS Backgrounds L3 §3.6).
+///
+/// The layout tree does not carry the viewport: the root box is
+/// `max(viewport, document)` tall, so without this scope a fixed background of
+/// a page taller than the window would be positioned against the whole
+/// document. Builders called outside it fall back to the root box's rect —
+/// exact for a document no taller than its viewport.
+pub fn with_fixed_background_viewport<R>(viewport: Size, build: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Rect>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXED_BG_VIEWPORT.with(|c| c.set(self.0));
+        }
+    }
+    let rect = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    let _restore = Restore(FIXED_BG_VIEWPORT.with(|c| c.replace(Some(rect))));
+    build()
+}
+
+/// Installs the fixed-background viewport for one display-list build: keeps
+/// the one an enclosing [`with_fixed_background_viewport`] set, otherwise
+/// falls back to `root`'s rect. Restores the previous value on drop.
+pub(crate) struct FixedBgViewportGuard(Option<Rect>);
+
+impl FixedBgViewportGuard {
+    pub(crate) fn install(root: &LayoutBox) -> Self {
+        let prev = FIXED_BG_VIEWPORT.with(std::cell::Cell::get);
+        if prev.is_none() {
+            FIXED_BG_VIEWPORT.with(|c| c.set(Some(root.rect)));
+        }
+        Self(prev)
+    }
+}
+
+impl Drop for FixedBgViewportGuard {
+    fn drop(&mut self) {
+        FIXED_BG_VIEWPORT.with(|c| c.set(self.0));
+    }
+}
+
+/// Positioning area of a `background-attachment: fixed` layer — the viewport,
+/// when a build installed one and it is non-degenerate.
+pub(super) fn fixed_bg_viewport() -> Option<Rect> {
+    FIXED_BG_VIEWPORT
+        .with(std::cell::Cell::get)
+        .filter(|r| r.width > 0.0 && r.height > 0.0)
+}
+
 /// CSS Backgrounds L3 §3.3–3.5 — прямоугольники-плитки для градиентного слоя с
 /// явным `background-size`.
 ///
@@ -108,17 +165,36 @@ pub(crate) fn gradient_tile_rects(
 /// по `clip`, т.к. плитка может выходить за painting area). Auto/Cover/Contain
 /// (у градиента нет внутреннего размера/ratio) → одна команда на всю painting
 /// area (`clip`) — историческое поведение, клип не нужен.
-fn gradient_paint_rects(layer: &BackgroundLayer, origin: Rect, clip: Rect) -> (Vec<Rect>, bool) {
+///
+/// `fixed` — `background-attachment: fixed`: `origin` is the viewport and the
+/// renderer moves the gradient with the scroll offset, so tiles are generated
+/// over the whole viewport (not just the ones meeting `clip` at scroll 0) and
+/// an auto-sized gradient spans the viewport rather than the painting area —
+/// both then need the clip.
+fn gradient_paint_rects(
+    layer: &BackgroundLayer,
+    origin: Rect,
+    clip: Rect,
+    fixed: bool,
+) -> (Vec<Rect>, bool) {
+    let tile_bounds = if fixed { origin } else { clip };
     match layer.size {
         BackgroundSize::Length(w, h) => {
             // Gradients have no intrinsic size/ratio: an `auto` axis falls back
             // to the positioning-area extent; percent resolves against it.
             let tile_w = w.resolve(origin.width).unwrap_or(origin.width).max(1.0);
             let tile_h = h.resolve(origin.height).unwrap_or(origin.height).max(1.0);
-            let tiles =
-                gradient_tile_rects(tile_w, tile_h, layer.position, layer.repeat, origin, clip);
+            let tiles = gradient_tile_rects(
+                tile_w,
+                tile_h,
+                layer.position,
+                layer.repeat,
+                origin,
+                tile_bounds,
+            );
             (tiles, true)
         }
+        _ if fixed => (vec![origin], true),
         _ => (vec![clip], false),
     }
 }
@@ -148,23 +224,79 @@ fn emit_background_layer(
     // call site above).
     radii: CornerRadii,
 ) {
+    // CSS Backgrounds L4 §3.8 `background-clip: text` — paint the layer as for
+    // `border-box`, then keep only what lies under the glyphs.
+    if layer.clip == BackgroundClip::Text {
+        let mut plain = layer.clone();
+        plain.clip = BackgroundClip::BorderBox;
+        emit_text_clipped(out, b, dpr, |inner| {
+            emit_background_layer(inner, b, &plain, dpr, suppress_blend, radii);
+        });
+        return;
+    }
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
     }
+    // CSS Images L4 §4 — `cross-fade()` с хотя бы одной не-URL стороной
+    // (градиент, вложенный `cross-fade()`): `DrawCrossFade` умеет смешивать
+    // только две растровые текстуры, поэтому сторона `a` рисуется как обычный
+    // слой, а сторона `b` — поверх, внутри opacity-группы с альфой `t`. Для
+    // непрозрачных картинок это тот же результат, что даёт `DrawCrossFade`
+    // (`a` целиком, `b` с прогрессом `t`). Blend-режим слоя оборачивает пару
+    // целиком; сами стороны рисуются с `Normal`.
+    if let BackgroundImage::CrossFade { a, b: side_b, t } = &layer.image
+        && !matches!((a.as_ref(), side_b.as_ref()), (BackgroundImage::Url(_), BackgroundImage::Url(_)))
+    {
+        let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
+        if use_blend {
+            out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode), bounds: clip });
+        }
+        let mut side = layer.clone();
+        side.blend_mode = LayoutBlendMode::Normal;
+        side.image = (**a).clone();
+        emit_background_layer(out, b, &side, dpr, true, radii);
+        side.image = (**side_b).clone();
+        out.push(DisplayCommand::PushOpacity { alpha: t.clamp(0.0, 1.0), bounds: Some(clip) });
+        emit_background_layer(out, b, &side, dpr, true, radii);
+        out.push(DisplayCommand::PopOpacity);
+        if use_blend {
+            out.push(DisplayCommand::PopBlendMode);
+        }
+        return;
+    }
     // CSS Backgrounds L3 §3.5: positioning area (background-origin) is independent of
     // the painting/clip area (background-clip). size/position calculations use origin_rect.
-    let origin = background_origin_rect(b, layer.origin);
+    //
+    // CSS Backgrounds L3 §3.6 — `background-attachment: fixed`: the positioning
+    // area is the viewport (initial containing block) instead of
+    // `background-origin`'s box, and the picture must not move when the page
+    // scrolls. The list is scroll-independent, so the layer's draw commands are
+    // bracketed by `BeginFixedBackground`/`EndFixedBackground` and the renderer
+    // cancels the page scroll for their positioning geometry (not for the
+    // painting-area clip). `local` still paints like `scroll`: the element's
+    // own scrolled content isn't threaded into the background yet.
+    let fixed_vp = if layer.attachment == BackgroundAttachment::Fixed {
+        fixed_bg_viewport()
+    } else {
+        None
+    };
+    let fixed = fixed_vp.is_some();
+    let origin = fixed_vp.unwrap_or_else(|| background_origin_rect(b, layer.origin));
     let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
         out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode), bounds: clip });
     }
+    if fixed {
+        out.push(DisplayCommand::BeginFixedBackground);
+    }
     match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
-            // CSS: image-set — resolve image-set() to the best URL for the
+            // image-set: resolve image-set() to the best URL for the
             // current device pixel ratio; plain urls pass through unchanged.
-            // P4 wires parsing: keep the raw `image-set(…)` string in
-            // BackgroundImage::Url so this resolution triggers (CSS Images L4 §5).
+            // Parsing keeps the raw `image-set(…)` string in BackgroundImage::Url
+            // (`style/parse/image.rs`, `style/apply/paint.rs`), so this resolution
+            // triggers (CSS Images L4 §5).
             let resolved = if is_image_set(src) {
                 select_image_set_url(src, dpr)
             } else {
@@ -183,7 +315,7 @@ fn emit_background_layer(
             }
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, corner, stops, repeating }) => {
-            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip, fixed);
             // BUG-631: a rounded box needs its gradient clipped to the rounded
             // painting area even when `needs_clip` is false (single full-`clip`
             // rect, otherwise unclipped) — square corners must not leak through.
@@ -217,7 +349,7 @@ fn emit_background_layer(
         BackgroundImage::Gradient(ParsedGradient::Radial {
             center_x_pct, center_y_pct, shape, size, stops, repeating,
         }) => {
-            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip, fixed);
             let has_radii = !radii.all_zero();
             if (needs_clip || has_radii) && !rects.is_empty() {
                 if has_radii {
@@ -253,7 +385,7 @@ fn emit_background_layer(
         BackgroundImage::Gradient(ParsedGradient::Conic {
             center_x_pct, center_y_pct, from_angle_deg, stops, repeating
         }) => {
-            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip, fixed);
             let has_radii = !radii.all_zero();
             if (needs_clip || has_radii) && !rects.is_empty() {
                 if has_radii {
@@ -281,7 +413,7 @@ fn emit_background_layer(
         }
         BackgroundImage::CrossFade { a, b, t } => {
             // CSS Images L4 §4 — emit DrawCrossFade for two-URL cross-fade.
-            // Gradient sides are not composited via DrawCrossFade (Phase 0 scope).
+            // Не-URL стороны (градиенты, вложенный cross-fade) обработаны выше, в начале функции.
             if let (BackgroundImage::Url(url_a), BackgroundImage::Url(url_b)) =
                 (a.as_ref(), b.as_ref())
             {
@@ -321,9 +453,96 @@ fn emit_background_layer(
         }
         _ => {}
     }
+    if fixed {
+        out.push(DisplayCommand::EndFixedBackground);
+    }
     if use_blend {
         out.push(DisplayCommand::PopBlendMode);
     }
+}
+
+/// Glyph runs of `b` and its in-flow descendants for a `background-clip: text`
+/// mask, as opaque-black `DrawText` commands (only their coverage matters to
+/// the alpha mask).
+///
+/// CSS Backgrounds L4 §3.8: the mask is "the geometry of the text in the
+/// element and its in-flow and floated descendants" — so own absolutely
+/// positioned / fixed descendants are left out (they are out of flow), while a
+/// transformed in-flow descendant stays in the mask **at its transformed
+/// position**: its glyphs are wrapped in the descendant's own
+/// `PushTransform`/`PopTransform`, the same matrix `box_layer` puts around the
+/// box's normal paint. The root's own transform is not repeated here — the
+/// whole background group is already emitted inside it.
+fn collect_text_mask(b: &LayoutBox, dpr: f32, is_root: bool, out: &mut Vec<DisplayCommand>) {
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+    if !is_root && matches!(b.style.position, Position::Absolute | Position::Fixed) {
+        return;
+    }
+    // Only boxes that own a stacking context carry a transform of their own:
+    // anonymous `InlineRun` wrappers hold a clone of the parent's style (and
+    // so its `transform`), but `box_layer` never re-applies it to them.
+    let transform = if is_root || !box_can_own_stacking_context(b) {
+        None
+    } else {
+        forward_box_transform(b)
+    };
+    if let Some(matrix) = transform {
+        out.push(DisplayCommand::PushTransform { matrix });
+    }
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let mut tmp = Vec::new();
+        super::inline_frag::TEXT_MASK_BUILD.with(|f| f.set(true));
+        emit_inline_run(b, lines, None, dpr, &mut tmp);
+        super::inline_frag::TEXT_MASK_BUILD.with(|f| f.set(false));
+        for mut c in tmp {
+            if let DisplayCommand::DrawText { color, .. } = &mut c {
+                *color = Color { r: 0, g: 0, b: 0, a: 255 };
+                out.push(c);
+            }
+        }
+    }
+    for child in &b.children {
+        collect_text_mask(child, dpr, false, out);
+    }
+    if transform.is_some() {
+        out.push(DisplayCommand::PopTransform);
+    }
+}
+
+/// CSS Backgrounds L4 §3.8 — runs `paint` (which emits the background content
+/// as for `border-box`) and clips the result to the element's glyphs.
+///
+/// Emitted as `PushOpacity(1)` · content · `PushMaskLayer(alpha)` · glyphs ·
+/// `PopMaskLayer` · `PopOpacity` — the same order `emit_svg_shape_masked` uses:
+/// the content goes to the level below the mask layer, `PopMaskLayer`
+/// multiplies it by the glyph alpha. With no text under the box nothing is
+/// painted at all (an empty mask hides the whole background).
+fn emit_text_clipped(
+    out: &mut Vec<DisplayCommand>,
+    b: &LayoutBox,
+    dpr: f32,
+    paint: impl FnOnce(&mut Vec<DisplayCommand>),
+) {
+    let mut glyphs = Vec::new();
+    collect_text_mask(b, dpr, true, &mut glyphs);
+    // A transformed descendant leaves Push/PopTransform behind even when it
+    // holds no text, so test for actual glyph runs, not for an empty list.
+    if !glyphs.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. })) {
+        return;
+    }
+    let mut content = Vec::new();
+    paint(&mut content);
+    if content.is_empty() {
+        return;
+    }
+    out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    out.extend(content);
+    out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode: MaskMode::Alpha });
+    out.extend(glyphs);
+    out.push(DisplayCommand::PopMaskLayer);
+    out.push(DisplayCommand::PopOpacity);
 }
 
 /// CSS Backgrounds L3 §3.10 — эмитит все фоновые слои элемента.
@@ -367,6 +586,17 @@ pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox
     // path uses (BUG-631: a gradient background must be clipped to the same
     // rounded box, not a square `PushClipRect`).
     let radii = CornerRadii::from_style_and_box(&b.style, b.rect.width, b.rect.height);
+    // CSS Backgrounds L4 §3.8: `background-color` follows the last layer's clip;
+    // with `text` the call sites skipped the box fill (empty `background_clip_rect`),
+    // so the colour is painted here, glyph-masked, beneath every image layer.
+    if background_color_clip(b) == BackgroundClip::Text
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        emit_text_clipped(out, b, dpr, |inner| {
+            inner.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+        });
+    }
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).

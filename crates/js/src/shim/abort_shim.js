@@ -21,18 +21,65 @@ AbortSignal.prototype.removeEventListener = function(type, fn) {
 AbortSignal.prototype.throwIfAborted = function() {
     if (this.aborted) throw this.reason || new DOMException('signal is aborted without reason', 'AbortError');
 };
-// Shared signal-abort steps (DOM §3.2): set state, fire onabort + listeners.
+// DOM §3.2 «signal abort»: set the state of the signal and of every dependent
+// that is not aborted yet *before* any `abort` event fires, then run the abort
+// steps (onabort + listeners) for the signal followed by its dependents. A
+// dependent is never itself a source (`_lumen_abort_signal_make_dependent`
+// flattens), so one level is the whole graph.
 function _lumen_abort_signal_fire(sig, reason) {
     if (sig.aborted) return;
     sig.aborted = true;
     sig.reason = reason !== undefined ? reason
                : new DOMException('signal is aborted without reason', 'AbortError');
+    var toAbort = [];
+    var deps = sig._dependents || [];
+    for (var d = 0; d < deps.length; d++) {
+        if (deps[d].aborted) continue;
+        deps[d].aborted = true;
+        deps[d].reason = sig.reason;
+        toAbort.push(deps[d]);
+    }
+    _lumen_abort_signal_run_steps(sig);
+    for (var k = 0; k < toAbort.length; k++) _lumen_abort_signal_run_steps(toAbort[k]);
+}
+// DOM §3.2 «run the abort steps»: fire `abort` at the signal.
+function _lumen_abort_signal_run_steps(sig) {
     var evt = { type: 'abort', target: sig };
     if (typeof sig.onabort === 'function') { try { sig.onabort(evt); } catch(e) { _lumen_et_report(e); } }
     var listeners = sig._listeners.slice();
     for (var i = 0; i < listeners.length; i++) {
         try { listeners[i](evt); } catch(e) { _lumen_et_report(e); }
     }
+}
+// DOM §3.2 «create a dependent abort signal» — shared by `AbortSignal.any` and
+// `TaskSignal.any` (scheduler.rs, BUG-665). An already-aborted source decides
+// the result at once (the first one in list order); otherwise the result
+// follows the *non-dependent* sources: a dependent source contributes its own
+// sources instead, which is what makes events fire in creation order across
+// a chain of `any()` calls.
+function _lumen_abort_signal_make_dependent(result, signals) {
+    var i;
+    for (i = 0; i < signals.length; i++) {
+        if (signals[i] && signals[i].aborted) {
+            result.aborted = true;
+            result.reason = signals[i].reason;
+            return result;
+        }
+    }
+    result._abortDependent = true;
+    result._sources = [];
+    function link(src) {
+        if (result._sources.indexOf(src) >= 0) return;
+        result._sources.push(src);
+        (src._dependents || (src._dependents = [])).push(result);
+    }
+    for (i = 0; i < signals.length; i++) {
+        var s = signals[i];
+        if (!s) continue;
+        if (!s._abortDependent) { link(s); continue; }
+        for (var j = 0; j < s._sources.length; j++) link(s._sources[j]);
+    }
+    return result;
 }
 
 function AbortController() {
@@ -62,31 +109,8 @@ AbortSignal.timeout = function(ms) {
     }, ms);
     return sig;
 };
-// AbortSignal.any(signals) — DOM §3.2.2: races the sources; the result aborts
-// with the reason of the first source that aborts.
+// AbortSignal.any(signals) — DOM §3.2.2: the result aborts with the reason of
+// the first source that aborts.
 AbortSignal.any = function(signals) {
-    var sig = new AbortSignal();
-    var sources = [];
-    function onAbort(evt) {
-        if (sig.aborted) return;
-        // Detach from remaining sources — the race is decided.
-        for (var j = 0; j < sources.length; j++) {
-            sources[j].removeEventListener('abort', onAbort);
-        }
-        _lumen_abort_signal_fire(sig, evt && evt.target ? evt.target.reason : undefined);
-    }
-    if (signals) {
-        for (var i = 0; i < signals.length; i++) {
-            if (!signals[i]) continue;
-            if (signals[i].aborted) {
-                sig.aborted = true;
-                sig.reason = signals[i].reason;
-                return sig;
-            }
-            sources.push(signals[i]);
-            signals[i].addEventListener('abort', onAbort);
-        }
-    }
-    return sig;
+    return _lumen_abort_signal_make_dependent(new AbortSignal(), signals || []);
 };
-

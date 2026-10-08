@@ -233,6 +233,11 @@ pub(crate) enum EmbeddedResourceKind {
     /// Текст (`text/*`, JSON, XML) — документ с одним `<pre>`, как браузеры
     /// показывают такой ответ при навигации.
     Text,
+    /// SVG (`image/svg+xml`, без заголовка — `.svg` или сигнатура `<svg`) —
+    /// скриптуемый вложенный документ (срез 5: `contentDocument`,
+    /// `getSVGDocument()`), но рисует его image-конвейер через resvg (срез 1):
+    /// у картинки верный natural size, у фрейм-бокса — 300×150.
+    Svg,
     /// Картинка, плагинный тип, пустота — элементу не документ: картинку
     /// рисует image-конвейер (срез 1), остальное — fallback `<object>`.
     NotDocument,
@@ -240,20 +245,20 @@ pub(crate) enum EmbeddedResourceKind {
 
 /// Классифицировать ответ для `<object>`/`<embed>` (HTML LS §4.8.6/§4.8.7:
 /// тип ресурса — из `Content-Type`). Без заголовка (файл с диска, сервер
-/// промолчал) — по расширению пути, затем по сигнатуре HTML в начале тела.
-/// `image/svg+xml` — картинка: SVG в `<object>` срез 1 уже рисует через resvg.
+/// промолчал) — по расширению пути, затем по сигнатуре HTML/SVG в начале тела.
 pub(crate) fn classify_embedded_resource(
     content_type: Option<&str>,
     url: &str,
     body: &[u8],
 ) -> EmbeddedResourceKind {
-    use EmbeddedResourceKind::{Html, NotDocument, Text};
+    use EmbeddedResourceKind::{Html, NotDocument, Svg, Text};
     let essence = content_type
         .map(|ct| ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
         .filter(|e| !e.is_empty());
     if let Some(e) = essence {
         return match e.as_str() {
             "text/html" | "application/xhtml+xml" => Html,
+            "image/svg+xml" => Svg,
             "application/json" | "application/xml" => Text,
             _ if e.ends_with("+xml") && !e.starts_with("image/") => Text,
             _ if e.starts_with("text/") => Text,
@@ -269,11 +274,14 @@ pub(crate) fn classify_embedded_resource(
     match ext.as_deref() {
         Some("html" | "htm" | "xhtml" | "xht") => return Html,
         Some("txt" | "text") => return Text,
+        Some("svg") => return Svg,
         _ => {}
     }
     let head = String::from_utf8_lossy(&body[..body.len().min(64)]).trim_start().to_ascii_lowercase();
     if head.starts_with("<!doctype html") || head.starts_with("<html") {
         Html
+    } else if head.starts_with("<svg") || head.starts_with("<!doctype svg") {
+        Svg
     } else {
         NotDocument
     }
@@ -284,7 +292,8 @@ pub(crate) fn classify_embedded_resource(
 /// ошибки, а `None`: такой элемент по спеке показывает fallback-содержимое
 /// (HTML LS §4.8.7 — «fetch failed» / тип не документ), а картинку за него
 /// рисует image-конвейер. `data:`/`javascript:`/`about:` не грузятся: у
-/// `<object>` они не исполняются и не навигируют.
+/// `<object>` они не исполняются и не навигируют. Вместе с источником —
+/// вид ресурса: SVG-документ разбирается иначе и не получает фрейм-бокса.
 #[allow(clippy::too_many_arguments)] // тот же набор, что у fetch_iframe_source
 pub(crate) fn fetch_embedded_source(
     src: &str,
@@ -293,7 +302,7 @@ pub(crate) fn fetch_embedded_source(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     send_uir_header: bool,
     referrer_policy: lumen_network::ReferrerPolicy,
-) -> Option<FrameSource> {
+) -> Option<(FrameSource, EmbeddedResourceKind)> {
     let lowered = src.trim_start().to_ascii_lowercase();
     if lowered.is_empty()
         || lowered.starts_with("about:")
@@ -305,7 +314,7 @@ pub(crate) fn fetch_embedded_source(
     let as_html = |kind: EmbeddedResourceKind, bytes: &[u8]| -> Option<String> {
         let text = String::from_utf8_lossy(bytes);
         match kind {
-            EmbeddedResourceKind::Html => Some(text.into_owned()),
+            EmbeddedResourceKind::Html | EmbeddedResourceKind::Svg => Some(text.into_owned()),
             EmbeddedResourceKind::Text => Some(format!(
                 "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>\
                  <pre style=\"word-wrap:break-word;white-space:pre-wrap\">{}</pre></body></html>",
@@ -318,7 +327,7 @@ pub(crate) fn fetch_embedded_source(
         ResolvedResource::File(path) => {
             let bytes = std::fs::read(&path).ok()?;
             let kind = classify_embedded_resource(None, &path.to_string_lossy(), &bytes);
-            as_html(kind, &bytes).map(|html| FrameSource::File { html, path })
+            as_html(kind, &bytes).map(|html| (FrameSource::File { html, path }, kind))
         }
         ResolvedResource::Url(url) => {
             let sub_url = lumen_core::url::Url::parse(&url).ok()?;
@@ -332,7 +341,7 @@ pub(crate) fn fetch_embedded_source(
                 .map_err(|e| eprintln!("object/embed: загрузка '{url}' не удалась: {e}"))
                 .ok()?;
             let kind = classify_embedded_resource(content_type.as_deref(), &url, &bytes);
-            as_html(kind, &bytes).map(|html| FrameSource::Url { html, url })
+            as_html(kind, &bytes).map(|html| (FrameSource::Url { html, url }, kind))
         }
     }
 }
@@ -807,7 +816,7 @@ pub(crate) fn fetch_frame_subresources(
         images.push((req.node_id, first.is_some()));
         if let Some(image) = first {
             if wants_intrinsic {
-                lumen_layout::apply_intrinsic_size(doc, req.node_id, image.width, image.height);
+                lumen_layout::apply_intrinsic_size(doc, req.node_id, image.width, image.height, viewport);
             }
             decoded_images.push((key, image));
         }
@@ -1025,38 +1034,23 @@ fn frame_measurer(
     }
 }
 
-/// Синхронно грузит `@font-face` ребёнка (FRAME-5): `local()` — уже
-/// синхронно внутри [`load_font_faces`] (системный индекс в памяти), `url()` —
-/// блокирующим fetch здесь же, тем же приёмом, что [`fetch_frame_subresources`]
-/// уже применяет к картинкам ребёнка.
-///
-/// В отличие от страницы (PH3-19: async fetch + `FontLoaded` + FOUT-relayout,
-/// чтобы не держать первый paint), у фрейма загрузка и так уже синхронная до
-/// первого layout (срезы 11/12 — картинки и стили). Заводить отдельный
-/// async+relayout канал ради одних лишь шрифтов было бы непропорционально
-/// M-размеру этой задачи; расплата — фрейм с медленным веб-шрифтом чуть дольше
-/// показывает первый paint, а не мигает FOUT (в обмен де-факто лучший UX).
-/// GAP-CSPENF срез 25: `csp_gate` is the CHILD's own policy (computed once by
-/// the caller, same one-shot read as [`fetch_frame_subresources`]'s
-/// `csp_gate`) — `font-src`/`default-src` against a frame's own `@font-face
-/// url()` was named as not covered by срез 19 (which only gated the
-/// top-level page's fonts). `local()` sources are unaffected, same as the
-/// top-level path — CSP's fetch directives govern network fetches, not the
-/// system font lookup `load_font_faces` already resolved above. Returns the
-/// resolved URL of every blocked source alongside the registry/web-fonts, so
-/// the caller can dispatch `securitypolicyviolation` once its JS runtime
-/// exists (this function runs before that, same ordering constraint as
-/// `fetch_frame_subresources`'s `blocked_by_img_src`).
-pub(crate) fn load_frame_fonts(
-    font_faces: &[lumen_css_parser::FontFaceRule],
+/// `font-variation-settings` дескриптора `@font-face`: пары (тег оси, значение).
+type VariationSettings = Vec<([u8; 4], f32)>;
+
+/// Синхронно (блокирующим fetch) грузит `url()`-источники `@font-face`:
+/// общее ядро [`load_frame_fonts`] и headless-снимка (`dump_mode`, BUG-1273).
+/// Каждый источник идёт через `font-src`-гейт и `upgrade-insecure-requests`;
+/// возвращает загруженные шрифты вместе с их `font-variation-settings`
+/// дескриптора и URL-ы, заблокированные CSP.
+pub(crate) fn fetch_web_fonts_blocking(
+    pending: Vec<crate::subresources::PendingWebFont>,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
-) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
-    let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
+) -> (Vec<(LoadedWebFont, VariationSettings)>, Vec<String>) {
     let mut blocked_by_font_src = Vec::new();
     let mut web_fonts = Vec::with_capacity(pending.len());
     for pf in pending {
@@ -1102,11 +1096,56 @@ pub(crate) fn load_frame_fonts(
             .and_then(lumen_font::parse_metric_override_percent);
         let line_gap_override = pf.line_gap_override_str.as_deref()
             .and_then(lumen_font::parse_metric_override_percent);
-        web_fonts.push(LoadedWebFont {
-            family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
-            ascent_override, descent_override, size_adjust, line_gap_override, bytes,
-        });
+        let variation_settings = pf.variation_settings_str.as_deref()
+            .map(lumen_font::parse_variation_settings)
+            .unwrap_or_default();
+        web_fonts.push((
+            LoadedWebFont {
+                family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
+                ascent_override, descent_override, size_adjust, line_gap_override, bytes,
+            },
+            variation_settings,
+        ));
     }
+    (web_fonts, blocked_by_font_src)
+}
+
+/// Синхронно грузит `@font-face` ребёнка (FRAME-5): `local()` — уже
+/// синхронно внутри [`load_font_faces`] (системный индекс в памяти), `url()` —
+/// блокирующим fetch здесь же, тем же приёмом, что [`fetch_frame_subresources`]
+/// уже применяет к картинкам ребёнка.
+///
+/// В отличие от страницы (PH3-19: async fetch + `FontLoaded` + FOUT-relayout,
+/// чтобы не держать первый paint), у фрейма загрузка и так уже синхронная до
+/// первого layout (срезы 11/12 — картинки и стили). Заводить отдельный
+/// async+relayout канал ради одних лишь шрифтов было бы непропорционально
+/// M-размеру этой задачи; расплата — фрейм с медленным веб-шрифтом чуть дольше
+/// показывает первый paint, а не мигает FOUT (в обмен де-факто лучший UX).
+/// GAP-CSPENF срез 25: `csp_gate` is the CHILD's own policy (computed once by
+/// the caller, same one-shot read as [`fetch_frame_subresources`]'s
+/// `csp_gate`) — `font-src`/`default-src` against a frame's own `@font-face
+/// url()` was named as not covered by срез 19 (which only gated the
+/// top-level page's fonts). `local()` sources are unaffected, same as the
+/// top-level path — CSP's fetch directives govern network fetches, not the
+/// system font lookup `load_font_faces` already resolved above. Returns the
+/// resolved URL of every blocked source alongside the registry/web-fonts, so
+/// the caller can dispatch `securitypolicyviolation` once its JS runtime
+/// exists (this function runs before that, same ordering constraint as
+/// `fetch_frame_subresources`'s `blocked_by_img_src`).
+pub(crate) fn load_frame_fonts(
+    font_faces: &[lumen_css_parser::FontFaceRule],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+    self_origin: Option<&lumen_network::Origin>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
+    let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
+    let (loaded, blocked_by_font_src) = fetch_web_fonts_blocking(
+        pending, base, sink, cookie_jar, csp_gate, self_origin, referrer_policy,
+    );
+    let web_fonts = loaded.into_iter().map(|(wf, _)| wf).collect();
     (registry, web_fonts, blocked_by_font_src)
 }
 
@@ -1377,7 +1416,7 @@ pub(crate) fn sync_frame_viewports(
                 &measurer,
                 state,
             );
-            frames[i].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
+            frames[i].scroll_containers = lumen_layout::collect_page_scroll_containers(&layout);
             frames[i].layout = Some(layout);
             frames[i].viewport = size;
             frames[i].interactive = state;
@@ -1484,7 +1523,7 @@ pub(crate) fn relayout_frame_content(
         &measurer,
         state,
     );
-    frames[idx].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
+    frames[idx].scroll_containers = lumen_layout::collect_page_scroll_containers(&layout);
     frames[idx].layout = Some(layout);
     frames[idx].interactive = state;
     frames[idx].content_dl.clear();
@@ -1530,7 +1569,19 @@ pub(crate) fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[
                 let Some(layout) = frames[i].layout.as_ref() else {
                     continue;
                 };
-                let mut dl = crate::display_list_metrics::paint_ordered(layout);
+                let mut dl = crate::display_list_metrics::paint_ordered_in(layout, frames[i].viewport);
+                // CSS Backgrounds L3 §3.6: фиксированный фон под-документа
+                // стоит относительно вьюпорта ФРЕЙМА, а тот едет вместе со
+                // страницей — компенсировать скролл страницы (скобка
+                // `BeginFixedBackground`) здесь нельзя. Геометрия уже от
+                // вьюпорта фрейма при его скролле 0 — снимаем только скобки.
+                dl.retain(|c| {
+                    !matches!(
+                        c,
+                        lumen_paint::DisplayCommand::BeginFixedBackground
+                            | lumen_paint::DisplayCommand::EndFixedBackground
+                    )
+                });
                 // Срез 21: подложка под-документа на весь его вьюпорт — как
                 // [`redraw_requested.rs`] чистит ВСЁ окно в canvas-цвет
                 // страницы (CSS Backgrounds §3.11.1), а не только рамку
@@ -1972,6 +2023,9 @@ pub(crate) struct FrameLoadEnv {
     /// BUG-480 срез 15: целевое цветовое пространство декодера картинок — то
     /// же, с которым страница декодирует свои (`parse_and_layout`).
     pub(crate) target: lumen_core::ColorSpace,
+    /// BUG-1148: `(generation, прокси LoadEvent)` страницы — по ним скрипты
+    /// фрейма получают хук немедленной загрузки `<img>` (`None` в headless).
+    pub(crate) image_hook_channel: Option<(u64, winit::event_loop::EventLoopProxy<crate::page_load::LoadEvent>)>,
     /// База ВЕРХНЕГО окна: `window.top.location` фреймов глубины ≥ 1 и вторая
     /// сторона same-origin-проверки к нему.
     ///
@@ -2164,6 +2218,7 @@ pub(crate) fn spawn_frame(
     // вовсе — ни страницы ошибки, ни `about:blank`: картинку рисует image-
     // конвейер, прочее — fallback `<object>`. Гейт — `object-src`, а не
     // `frame-src`; нарушение сообщает JS-шим (`_lumen_embed_object_scan`).
+    let mut child_is_svg = false;
     let embedded_source = if info.embedded && js_url_result.is_none() {
         let (src, resolve_base) = match dest {
             Some((href, nav_base)) => (href, nav_base),
@@ -2193,11 +2248,15 @@ pub(crate) fn spawn_frame(
         // не за ссылку, кликнутую внутри уже показанного документа: layout
         // решает по `data`/`src`, а повторный скан фреймов по нему же
         // перестаёт предлагать «не документ» к загрузке.
+        // SVG-документ фрейм-бокса не получает (вердикт «не фрейм»): его
+        // рисует image-конвейер, а под-документ остаётся для скриптов.
         let attr_driven = dest.is_none_or(|(href, _)| info.src.as_deref() == Some(href));
         if attr_driven && let Some(raw) = info.src.as_deref() {
-            parent.lock().unwrap().set_embedded_document(info.node, raw, source.is_some());
+            let framed = source.as_ref().is_some_and(|(_, k)| *k != EmbeddedResourceKind::Svg);
+            parent.lock().unwrap().set_embedded_document(info.node, raw, framed);
         }
-        let Some(source) = source else { return Vec::new() };
+        let Some((source, kind)) = source else { return Vec::new() };
+        child_is_svg = kind == EmbeddedResourceKind::Svg;
         Some(source)
     } else {
         None
@@ -2292,8 +2351,34 @@ pub(crate) fn spawn_frame(
 
     let mut child_doc = {
         let _s = lumen_core::trace::span("parse-html-frame", "parse");
-        lumen_html_parser::parse(&html)
+        if child_is_svg {
+            // OBJECT-1 срез 5: тот же XML-разбор, что у SVG верхнего уровня
+            // (`is_xml_flavoured_document`), и тип, по которому
+            // `getSVGDocument()` отличает SVG-документ от HTML.
+            let mut d = lumen_html_parser::parse_xml_flavoured(&html);
+            d.set_content_type("image/svg+xml".to_owned());
+            d
+        } else {
+            lumen_html_parser::parse(&html)
+        }
     };
+    // BUG-1231: `document.referrer` ребёнка — то же значение, что ушло в
+    // `Referer` запроса `<iframe src>` (`compute_referrer` от URL родителя
+    // по политике выше). Только для сетевого источника: у file:/about:/srcdoc
+    // запрос не шёл.
+    if !load_failed
+        && child_url != "about:blank"
+        && child_url != "about:srcdoc"
+        && let ResourceBase::Url(parent_url) = base
+        && let Ok(parent_parsed) = lumen_core::url::Url::parse(parent_url)
+        && let Ok(child_parsed) = lumen_core::url::Url::parse(&child_url)
+    {
+        child_doc.set_document_referrer(lumen_network::referrer_policy::compute_referrer(
+            referrer_policy,
+            &parent_parsed,
+            &child_parsed,
+        ));
+    }
     // СРЕЗ 11 BUG-480: подресурсы парсерных элементов ребёнка (`<img src>`,
     // `<link rel=stylesheet>`). Сеть стартует ДО скриптов — парсерный порядок
     // (источник запроса — шаг разбора, а не исполнение); исходы держим до
@@ -2339,6 +2424,55 @@ pub(crate) fn spawn_frame(
     // хранилищ; провайдеры сети остаются: sandbox режет origin-доступ,
     // а не сеть (скрипты целиком гейтятся флагом SCRIPTS отдельно).
     let opaque = info.is_sandboxed && info.sandbox.contains(lumen_core::SandboxFlags::ORIGIN);
+    // BUG-1198: доступность в обе стороны считается ДО скриптов ребёнка —
+    // по ней [`crate::frame_ancestry::FrameAncestry`] регистрирует предков и сам биндинг ребёнка
+    // раньше первой строки его скрипта.
+    let accessible_parent = frame_access_allowed(base, &child_url, opaque);
+    let accessible_top = frame_access_allowed(&env.page_base, &child_url, opaque);
+    // BUG-921: снимок атрибута `name` хоста на момент создания контекста —
+    // `window.name` ребёнка запоминает его один раз (HTML LS §7.2.3), а не
+    // перечитывает атрибут при каждом обращении.
+    // BUG-979: peer — родитель, only когда сам доступен same-origin
+    // (`accessible_parent`) — глобалы читаются исключительно same-origin,
+    // натив ещё раз гейтит это явно, но не полагаться на второй слой
+    // защиты, когда первый доступен бесплатно.
+    let parent_peer = accessible_parent.then(|| parent_js.and_then(|js| js.frame_peer_bridge())).flatten();
+    let ancestry = crate::frame_ancestry::FrameAncestry {
+        parent_js,
+        host_nid: info.node.index() as u32,
+        name: info.name.as_deref(),
+        child_url: &child_url,
+        // Для биндинга ребёнка в реестре РОДИТЕЛЯ доступность та же, что
+        // у родителя для ребёнка: same-origin симметричен.
+        accessible: accessible_parent,
+        opaque,
+        parent_doc: parent,
+        parent_url: &parent_url,
+        parent_peer,
+        // Ребёнок глубины ≥ 1 получает отдельный слот top: его верх —
+        // корень страницы, а не непосредственный родитель.
+        // BUG-979: top's own runtime is not reachable here (only its doc
+        // Arc is threaded down through `top_doc`) — `window.top`'s facade
+        // keeps the IDL-only whitelist for now; scope stays contentWindow/
+        // parent, the shapes this bug's WPT repro actually exercises.
+        top: (depth >= 1).then_some((top_doc, top_url.as_str(), accessible_top)),
+    };
+    let image_hook = env.image_hook_channel.as_ref().map(|(generation, proxy)| {
+        crate::dynamic_image_hook::DynamicImgFetchHook::for_document(
+            &child_doc,
+            child_base.clone(),
+            Arc::clone(sink),
+            cookie_jar.clone(),
+            env.target,
+            (env.viewport.width, env.viewport.height),
+            crate::dynamic_image_hook::DynamicImageHookCtx {
+                generation: *generation,
+                dedup: Arc::default(),
+                proxy: proxy.clone(),
+            },
+        )
+    });
+    let _runtime_span = lumen_core::trace::span("frame-runtime", "js");
     let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
         child_doc,
         info.sandbox,
@@ -2364,7 +2498,11 @@ pub(crate) fn spawn_frame(
         // события/RunScript (срезы 4–8), а статические iframe — самый
         // частый встраиваемый случай. Странице (второй вызов) хватает
         // старого поведения: без скриптов ей нечем отвечать.
-        true,
+        // BUG-1011: синтетическая страница ошибки (отклонённый `data:`/
+        // `javascript:`/сетевой отказ) не несёт ни скриптов, ни собеседника для
+        // postMessage — рантайм со всем шим-набором (~80 мс) там чистая трата;
+        // 216 таких фреймов в `svg-embedded-sizing` упирались в таймаут теста.
+        !load_failed,
         // BUG-443: a sub-document is laid out only after this call returns
         // (`layout_frame_document`), so there is no parse-time layout to offer.
         None,
@@ -2376,14 +2514,15 @@ pub(crate) fn spawn_frame(
         // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above —
         // no layout to offer yet, so nothing to flush against either.
         None,
-        // BUG-1118: iframe scripts not wired to the immediate-`<img src>`
-        // hook yet — see `ImageLoadHook`'s doc comment for scope; sub-
-        // documents keep relying on the post-relayout sweep only.
-        None,
+        // BUG-1148: frame scripts get the immediate-`<img>` hook too, bound to
+        // the frame's own base URL.
+        image_hook,
         // BUG-1119: the frame's `document.cookie` uses the jar its requests
         // go through; an opaque origin has no cookies (HTML LS §3.1.3).
         env.cookie_jar.clone().filter(|_| !opaque),
+        Some(&ancestry),
     );
+    drop(_runtime_span);
     // PERF-14: same headless settle the page gets after its own scripts.
     crate::page_pipeline::settle_headless_fetches(child_js.as_ref());
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
@@ -2395,41 +2534,9 @@ pub(crate) fn spawn_frame(
         };
         eprintln!("iframe: навигация из под-документа ({child_url}) не поддерживается (BUG-480 срез 1), запрос '{target}' отклонён");
     }
-    // Срез 3 BUG-480: ссылки на предков в контексте ребёнка — до его
-    // DOMContentLoaded/load, чтобы обработчики (в т.ч. встроенный
-    // testharness на window load) читали window.parent/top/frameElement
-    // сразу. Инлайн-скрипты ребёнка к этому моменту уже исполнены и при
-    // чтении видели прежний fallback (parent === window) — известное
-    // ограничение среза.
-    if let Some(js) = &child_js {
-        let accessible_parent = frame_access_allowed(base, &child_url, opaque);
-        // BUG-921: снимок атрибута `name` хоста на момент создания контекста —
-        // `window.name` ребёнка запоминает его один раз (HTML LS §7.2.3), а не
-        // перечитывает атрибут при каждом обращении.
-        // BUG-979: peer — родитель, only когда сам доступен same-origin
-        // (`accessible_parent`) — глобалы читаются исключительно same-origin,
-        // натив ещё раз гейтит это явно, но не полагаться на второй слой
-        // защиты, когда первый доступен бесплатно.
-        let parent_peer = accessible_parent.then(|| parent_js.and_then(|js| js.frame_peer_bridge())).flatten();
-        js.register_parent_document(
-            info.node.index() as u32,
-            Arc::clone(parent),
-            &parent_url,
-            info.name.as_deref(),
-            accessible_parent,
-            parent_peer,
-        );
-        // Ребёнок глубины ≥ 2 получает отдельный слот top: его верх —
-        // корень страницы, а не непосредственный родитель.
-        if depth >= 1 {
-            let accessible_top = frame_access_allowed(&env.page_base, &child_url, opaque);
-            // BUG-979: top's own runtime is not reachable here (only its doc
-            // Arc is threaded down through `top_doc`) — `window.top`'s facade
-            // keeps the IDL-only whitelist for now; scope stays contentWindow/
-            // parent, the shapes this bug's WPT repro actually exercises.
-            js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top, None);
-        }
-    }
+    // Ссылки на предков в контексте ребёнка (срез 3 BUG-480) уже стоят:
+    // `run_scripts_with_dom` ставит их через `ancestry` до первой строки
+    // скрипта ребёнка (BUG-1198).
     // BUG-480 срез 12: cascade + layout ребёнка — контентная геометрия
     // внутри фрейма (getBoundingClientRect/offsetWidth/offsetHeight)
     // вместо честных нулей (см. frame_bridge.rs: «layout содержимого
@@ -2442,7 +2549,7 @@ pub(crate) fn spawn_frame(
     // того же текста на каждом relayout был бы чистой тратой. Сам layout
     // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
     // нём ищется host-бокс вложенного фрейма.
-    let frame_sheet = lumen_css_parser::parse(&subresources.css);
+    let mut frame_sheet = lumen_css_parser::parse(&subresources.css);
     // GAP-CSPENF срез 25: the CHILD's own policy, read once here so both
     // `load_frame_fonts` (`font-src`) and `fetch_frame_background_images`
     // (`img-src`) below can gate against it without each re-parsing —
@@ -2458,9 +2565,18 @@ pub(crate) fn spawn_frame(
     // images — `load_frame_fonts`/`fetch_frame_background_images` below.
     let child_referrer_policy =
         crate::resource_base::document_referrer_policy(&child_doc_arc.lock().unwrap());
+    // CSS Color L5 §5.3: ICC bytes for the child's `color(--name …)`.
+    crate::subresources::load_sheet_color_profiles(
+        &mut frame_sheet,
+        &child_base,
+        sink,
+        cookie_jar.clone(),
+        child_referrer_policy,
+    );
     // FRAME-5: синхронно (см. doc-comment `load_frame_fonts`) — тем же
     // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
     // ребёнка выше в этой функции.
+    let _fonts_span = lumen_core::trace::span("frame-fonts", "font");
     let (font_registry, web_fonts, blocked_by_font_src) = load_frame_fonts(
         &frame_sheet.font_faces,
         &child_base,
@@ -2470,6 +2586,8 @@ pub(crate) fn spawn_frame(
         child_self_origin.as_ref(),
         child_referrer_policy,
     );
+    drop(_fonts_span);
+    let _layout_span = lumen_core::trace::span("frame-layout", "layout");
     let frame_layout = frame_measurer(&frame_sheet.font_faces, &font_registry, &web_fonts).map(|measurer| {
         layout_frame_document(
             &child_doc_arc,
@@ -2482,6 +2600,7 @@ pub(crate) fn spawn_frame(
             FrameNodeState::default(),
         )
     });
+    drop(_layout_span);
     // FRAME-5: CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)`
     // ребёнка уже после его layout-а (см. doc-comment
     // `fetch_frame_background_images` — картинки фона не влияют на расчёт
@@ -2620,17 +2739,22 @@ pub(crate) fn spawn_frame(
     // contentDocument родителя — строго до trusted `load` на хосте,
     // чтобы обработчики читали фасады сразу из обработчика. Срез 3:
     // имя хоста едет вместе с биндингом (ключ window[name]).
+    //
+    // BUG-1198: у ребёнка с рантаймом биндинг уже стоит с до-скриптовой
+    // регистрации ([`crate::frame_ancestry::FrameAncestry::register`]); повтор здесь замещает его
+    // на месте, добавляя `peer`, которого до создания рантайма ребёнка не
+    // было, и сохраняет идентичность непрозрачного происхождения документа.
     if let Some(js) = parent_js {
-        let accessible = frame_access_allowed(base, &child_url, opaque);
         // BUG-979: peer only when same-origin — see the symmetric comment on
-        // the `register_parent_document` call site above.
-        let child_peer = accessible.then(|| child_js.as_ref().and_then(|js| js.frame_peer_bridge())).flatten();
+        // `parent_peer` above.
+        let child_peer = accessible_parent.then(|| child_js.as_ref().and_then(|js| js.frame_peer_bridge())).flatten();
         js.register_iframe_document(
             info.node.index() as u32,
             Arc::clone(&child_doc_arc),
             &child_url,
             info.name.as_deref(),
-            accessible,
+            accessible_parent,
+            opaque,
             child_peer,
         );
     }
@@ -2816,9 +2940,12 @@ pub(crate) fn clear_frame_nav_requests(requests: &mut Vec<FrameNavRequest>) {
 ///
 /// `uir_override` — GAP-CSPENF срез 55, прямиком в [`spawn_frame`]'s
 /// одноимённый параметр: см. его doc-comment.
+///
+/// `href: None` — источник снова берётся из разметки хозяина, как при
+/// первичной вставке (перезагрузка srcdoc-документа, BUG-1198).
 pub(crate) fn run_frame_navigation(
     prep: &FrameNavPrep,
-    href: &str,
+    href: Option<&str>,
     nav_base: &ResourceBase,
     page_doc: &Arc<Mutex<Document>>,
     env: &FrameLoadEnv,
@@ -2826,7 +2953,7 @@ pub(crate) fn run_frame_navigation(
 ) -> Vec<FrameHandle> {
     spawn_frame(
         &prep.info,
-        Some((href, nav_base)),
+        href.map(|href| (href, nav_base)),
         &prep.host_doc,
         prep.depth,
         &prep.host_base,

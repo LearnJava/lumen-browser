@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- HTML Rendering §15.3.13 — `<fieldset>` + rendered `<legend>`.
+     Legend сидит на верхней границе fieldset: середина `border-top` лежит на середине legend,
+     позади legend рамка не рисуется, содержимое начинается ниже `max(border-top, legend)`.
+     A: legend выше рамки (рамка опущена на полразницы) · B: legend ниже рамки (по центру
+     рамки) · C: legend у правого края (margin-left:auto) · D: по центру (margin:0 auto) ·
+     E: UA-значения без автор-стилей (groove 2px, padding .35/.75/.625em, margin-inline 2px) ·
+     F: vertical-rl — legend на правой границе блока-начала. Только цветные боксы, без текста. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; }
+  .s { margin: 0; padding: 12px; border: solid 8px #2b6cb0; width: 280px; height: 200px; box-sizing: border-box; }
+  .e fieldset { width: 280px; height: 200px; box-sizing: border-box; }
+  .s legend { width: 90px; height: 26px; padding: 0; background: #ed8936; }
+  .blk { height: 60px; background: #a8c8ec; }
+
+  .b .s { border-width: 24px; }
+  .b .s legend { height: 12px; width: 70px; }
+  .c .s legend { margin-left: auto; }
+  .d .s legend { margin: 0 auto; width: 120px; }
+  .e legend { width: 90px; height: 26px; background: #ed8936; }
+  .f .s { writing-mode: vertical-rl; width: 200px; height: 280px; }
+  .f .s legend { width: 26px; height: 90px; }
+  .f .blk { width: 60px; height: auto; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell a"><fieldset class="s"><legend></legend><div class="blk"></div></fieldset></div>
+  <div class="cell b"><fieldset class="s"><legend></legend><div class="blk"></div></fieldset></div>
+  <div class="cell c"><fieldset class="s"><legend></legend><div class="blk"></div></fieldset></div>
+  <div class="cell d"><fieldset class="s"><legend></legend><div class="blk"></div></fieldset></div>
+  <div class="cell e"><fieldset><legend></legend><div class="blk"></div></fieldset></div>
+  <div class="cell f"><fieldset class="s"><legend></legend><div class="blk"></div></fieldset></div>
+</div>
+</body>
+</html>

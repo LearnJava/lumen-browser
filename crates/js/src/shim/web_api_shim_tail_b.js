@@ -56,7 +56,17 @@ window.getComputedStyle = function(element, pseudoElt) {
     function readProp(name) {
         if (nid == null) return '';
         if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
-        return _lumen_computed_property(nid, name);
+        var base = _lumen_computed_property(nid, name);
+        // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
+        // settled value; a running transition of a rule property is applied here.
+        if (_wa_gap_tr_name_re.test(name)) {
+            // `currentcolor` is a used value: resolve it so colours can interpolate.
+            if (/-color$/.test(name) && /currentcolor/i.test(base)) {
+                base = base.replace(/currentcolor/gi, _lumen_computed_property(nid, 'color') || 'rgb(0, 0, 0)');
+            }
+            return _wa_gap_an_value(nid, name, base, _wa_gap_tr_value(nid, name, base));
+        }
+        return base;
     }
     var handler = {
         get: function(target, prop) {
@@ -489,7 +499,7 @@ if (typeof _lumen_idb_load === 'function') {
 // cannot read or drop anyone else's.
 (function() {
     var CLONERS = [];
-    Object.defineProperty(window, '__lumen_platform_cloners', {
+    Object.defineProperty(__lumen_C, '__lumen_platform_cloners', {
         value: Object.freeze({
             register: function(test, clone) { CLONERS.push([test, clone]); },
             find: function(v) {
@@ -620,7 +630,7 @@ function structuredClone(val, options) {
         // `__lumen_platform_cloners` entry, the same extension point
         // `filesystem_access.rs`'s handles use, checked further below.
         if (typeof Blob !== 'undefined' && v instanceof Blob &&
-            !(typeof File !== 'undefined' && v instanceof File)) {
+            !(typeof globalThis.File !== 'undefined' && v instanceof globalThis.File)) {
             var blobClone = Object.create(Blob.prototype);
             blobClone._bytes = v._bytes.slice(0);
             blobClone._type = v._type;
@@ -685,7 +695,7 @@ function structuredClone(val, options) {
             return arr;
         }
         // A `[Serializable]` platform object serializes through its own shim.
-        var platformClone = window.__lumen_platform_cloners.find(v);
+        var platformClone = __lumen_C.__lumen_platform_cloners.find(v);
         if (platformClone) {
             var pc = platformClone(v);
             memory.set(v, pc);
@@ -711,11 +721,21 @@ window.structuredClone = structuredClone;
 function _lumen_apply_ready_state(state) {
     if (state === 'interactive' && _doc_ready_state !== 'loading') return;
     if (state === 'complete' && _doc_ready_state === 'complete') return;
+    // BUG-1129: inserted external scripts still loading delay `complete`;
+    // `_lumen_load_delay_done` comes back here once the last one finishes.
+    if (state === 'complete' && typeof _lumen_load_delay_count === 'number' && _lumen_load_delay_count > 0) {
+        _lumen_load_deferred = true;
+        return;
+    }
     _doc_ready_state = state;
     // readystatechange on document
     var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
     document.dispatchEvent(rsEv);
     if (state === 'interactive') {
+        // BUG-568: «the end» step 3 — the `defer` scripts `document.write()`
+        // produced run after readyState turns 'interactive' and before
+        // DOMContentLoaded, like the markup's own deferred list.
+        if (typeof _lumen_dw_run_deferred === 'function') _lumen_dw_run_deferred();
         // BUG-826: the parser's `<link rel=preload|modulepreload|prefetch>`
         // elements start their fetch here — parsing is done, so the document
         // holds every hint the markup carries, and a hint appended by a head
@@ -766,6 +786,11 @@ function _lumen_apply_ready_state(state) {
             }
         }
     } else if (state === 'complete') {
+        // HTML LS §8.1.7.2.1: `<body onload="…">` is the window's `load` handler. The
+        // content attribute is compiled when the element's wrapper is first built
+        // (`_lumen_make_element`), and a page that never touches `document.body`
+        // never builds it — touch it here so the handler reaches `window.onload`.
+        try { void document.body; } catch(e) {}
         // load fires on window (does not bubble)
         var loadEv = new Event('load', { bubbles: false, cancelable: false });
         var loadArr = _load_listeners.slice();
@@ -808,9 +833,9 @@ function _lumen_apply_visibility(hidden) {
 function _lumen_mark_ready_state_restored() {
     _doc_ready_state = 'complete';
 }
-window._lumen_apply_ready_state = _lumen_apply_ready_state;
-window._lumen_apply_visibility  = _lumen_apply_visibility;
-window._lumen_mark_ready_state_restored = _lumen_mark_ready_state_restored;
+__lumen_C._lumen_apply_ready_state = _lumen_apply_ready_state;
+__lumen_C._lumen_apply_visibility  = _lumen_apply_visibility;
+__lumen_C._lumen_mark_ready_state_restored = _lumen_mark_ready_state_restored;
 
 // ── <dialog> modal stack (HTML5 §4.11.7) ─────────────────────────────────────
 // Tracks nids of dialogs opened via showModal(), in open order.
@@ -1075,8 +1100,11 @@ function _lumen_focus_update(newNid) {
         _lumen_dispatch_focus_event(newNid, 'focus', false, oldEl);
         _lumen_dispatch_focus_event(newNid, 'focusin', true, oldEl);
     }
+    // Interest Invokers: focus entering/leaving an invoker or its target
+    // (re)arms the interest delays.
+    _lumen_interest_note_focus();
 }
-window._lumen_focus_update = _lumen_focus_update;
+__lumen_C._lumen_focus_update = _lumen_focus_update;
 
 // HTML LS §6.6.2 "focus fixup rule" (BUG-600): whenever the element holding
 // focus stops being a focusable area (gets `disabled`, `hidden`, loses its
@@ -1092,7 +1120,7 @@ function _lumen_focus_fixup() {
     if (nid === null || nid === undefined || nid === -1) return;
     if (!_lumen_is_focusable(nid)) _lumen_focus_update(-1);
 }
-window._lumen_focus_fixup = _lumen_focus_fixup;
+__lumen_C._lumen_focus_fixup = _lumen_focus_fixup;
 
 // HTML LS §6.6.3 — `HTMLElement.focus(options)` / `HTMLElement.blur()`. The
 // shell is notified through the very `_lumen_request_focus`/`_lumen_request_blur`
@@ -2381,6 +2409,44 @@ _lumen_install_reflection(HTMLEmbedElement.prototype, [
     ['type',           'type',           'string'],
 ]);
 
+// OBJECT-1 срез 3: доступ к вложенному документу `<object>` — тот же бридж
+// под-документов, что у `<iframe>` (`frame_bridge.rs`): shell регистрирует
+// биндинг «хост → под-документ» в `spawn_frame` для `<object>`/`<embed>` так же,
+// как для `<iframe>`. Без биндинга (ресурс — картинка или fallback, загрузка не
+// удалась, фрейм ещё не загружен) — null; cross-origin — null у
+// `contentDocument`, но не у `contentWindow` (HTML LS §4.8.7, §4.8.5).
+// `<embed>` по IDL имеет только `getSVGDocument()`.
+Object.defineProperty(HTMLObjectElement.prototype, 'contentDocument', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return (n === -1 || typeof _lumen_frame_content_document !== 'function')
+            ? null : _lumen_frame_content_document(n);
+    },
+    configurable: true, enumerable: true,
+});
+Object.defineProperty(HTMLObjectElement.prototype, 'contentWindow', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return (n === -1 || typeof _lumen_frame_content_window !== 'function')
+            ? null : _lumen_frame_content_window(n);
+    },
+    configurable: true, enumerable: true,
+});
+// `getSVGDocument()` отдаёт вложенный документ, только если он построен как
+// SVG (`image/svg+xml`, HTML LS §4.8.7). OBJECT-1 срез 5: shell строит такой
+// документ для SVG-ответа `<object>`/`<embed>` (рисует его по-прежнему resvg).
+[HTMLObjectElement.prototype, HTMLEmbedElement.prototype].forEach(function(p) {
+    Object.defineProperty(p, 'getSVGDocument', {
+        value: function getSVGDocument() {
+            var n = _lumen_reflect_nid(this);
+            var d = (n === -1 || typeof _lumen_frame_content_document !== 'function')
+                ? null : _lumen_frame_content_document(n);
+            return (d && d.contentType === 'image/svg+xml') ? d : null;
+        },
+        writable: true, configurable: true, enumerable: true,
+    });
+});
+
 // BUG-798: `object.data`/`embed.src` are plain URL-reflecting attributes like
 // any other, but setting either while the element is connected must also
 // (re)start the resource load (`object-events.html`, `embed-change-src.html`)
@@ -2984,15 +3050,14 @@ Object.defineProperty(HTMLOptionElement.prototype, 'label', {
 });
 // HTML LS §4.10.10 — the legacy `Option(text, value, defaultSelected, selected)`
 // factory, the counterpart of `Image()`.
-function Option(text, value, defaultSelected, selected) {
+_lumen_define_legacy_factory('Option', HTMLOptionElement.prototype, function(text, value, defaultSelected, selected) {
     var op = document.createElement('option');
     if (text !== undefined && text !== null && String(text) !== '') op.text = String(text);
     if (value !== undefined && value !== null) op.setAttribute('value', String(value));
     if (defaultSelected) op.setAttribute('selected', '');
     op.selected = !!selected;
     return op;
-}
-window.Option = Option;
+});
 
 // ── <table>/<tr>/<thead>/<tbody>/<tfoot> (HTML LS §4.9.11, BUG-581) ──────────
 // The four table interfaces (`HTMLTableElement`, `HTMLTableSectionElement` —
@@ -3757,7 +3822,26 @@ function _lumen_run_activation_behavior(nid, el) {
         // `hashchange`, `location` back without the fragment, and a page that
         // clicks such a link from script looping through reloads forever.
         var href = el.href;
-        if (href) _lumen_navigate_or_fragment(String(href), false);
+        var targetHref = (typeof href === 'string') ? href : '';
+        if (!targetHref) {
+            // SVG <a> (SVGURIReference, SVG 2 §5.7) exposes `href` as an
+            // `SVGAnimatedString`, not a plain string — read the underlying
+            // attribute (falling back to `xlink:href`) the same way
+            // `SVGAElement.prototype.href`'s own getter does.
+            try {
+                var rawHref = el.getAttribute('href');
+                if (rawHref === null && typeof el.getAttributeNS === 'function') {
+                    rawHref = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+                }
+                if (rawHref !== null && rawHref !== undefined && String(rawHref) !== '') {
+                    targetHref = _url_resolve(String(rawHref), _lumen_document_base_url());
+                }
+            } catch (e) {}
+        }
+        // HTML LS §4.6.9 "Ping": fires independently of whether navigation
+        // itself succeeds, so it runs before the navigate/fragment call below.
+        _lumen_fire_hyperlink_ping(nid, targetHref);
+        if (targetHref) _lumen_navigate_or_fragment(targetHref, false);
         return;
     }
     if (tag === 'SUMMARY') {
@@ -4126,6 +4210,22 @@ _lumen_remove_attr = function(nid, name) {
     _lumen_details_open_changed(nid, was, false);
 };
 
+// BUG-968: chained onto the same `_lumen_set_attr`/`_lumen_remove_attr` wrap
+// point as `open` above, so `setAttribute`, `removeAttribute`,
+// `toggleAttribute` and every IDL property setter that writes through these
+// two natives all reach `_lumen_script_attr_changed` the same way, instead of
+// each call site needing its own copy of the check.
+var _orig_set_attr_script = _lumen_set_attr;
+_lumen_set_attr = function(nid, name, value) {
+    _orig_set_attr_script(nid, name, value);
+    _lumen_script_attr_changed(nid, String(name));
+};
+var _orig_remove_attr_script = _lumen_remove_attr;
+_lumen_remove_attr = function(nid, name) {
+    _orig_remove_attr_script(nid, name);
+    _lumen_script_attr_changed(nid, String(name));
+};
+
 // The parser's half, called when parsing ends (`_lumen_apply_ready_state`), for
 // the same reason `_lumen_link_hints_scan`/`_lumen_script_empty_src_scan` are:
 // markup never passes through the hook above, so a `<details open>` the parser
@@ -4265,7 +4365,22 @@ var _LPOP_ATTR = 'data-lumen-popover-open';
 // Fixed-position styles applied to open popovers (top-layer emulation).
 var _LPOP_STYLE = 'position:fixed;z-index:2147483647;inset:auto;margin:auto;overflow:auto;';
 
-function _lumen_popover_show(nid) {
+// HTML LS "topmost popover ancestor": the open auto popover highest in the
+// stack that contains `nid` (shadow-including) or the invoker that shows it.
+// Opening a nested popover must leave its ancestors open.
+function _lumen_popover_ancestor_index(nid, invokerNid) {
+    for (var i = _lumen_popover_stack.length - 1; i >= 0; i--) {
+        var p = _lumen_popover_stack[i];
+        if (p === nid) continue;
+        if (_lumen_shadow_including_ancestor(p, nid)) return i;
+        if (invokerNid !== undefined && invokerNid !== null && _lumen_shadow_including_ancestor(p, invokerNid)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function _lumen_popover_show(nid, invokerNid) {
     if (_lumen_get_attr(nid, 'popover') === undefined) {
         throw new DOMException('Element is not a popover', 'NotSupportedError');
     }
@@ -4291,8 +4406,9 @@ function _lumen_popover_show(nid) {
         // Showing an auto popover closes all hints first, then all autos.
         var hs2 = _lumen_hint_stack.slice();
         for (var hi2 = hs2.length - 1; hi2 >= 0; hi2--) { _lumen_popover_hide(hs2[hi2]); }
+        var keep = _lumen_popover_ancestor_index(nid, invokerNid);
         var snap = _lumen_popover_stack.slice();
-        for (var i = snap.length - 1; i >= 0; i--) { _lumen_popover_hide(snap[i]); }
+        for (var i = snap.length - 1; i > keep; i--) { _lumen_popover_hide(snap[i]); }
         _lumen_popover_stack.push(nid);
     }
     _lumen_set_attr(nid, _LPOP_ATTR, '');
@@ -4310,6 +4426,13 @@ function _lumen_popover_show(nid) {
 
 function _lumen_popover_hide(nid) {
     if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // already closed
+    // "Hide all popovers until": auto popovers nested above this one in the
+    // stack (see `_lumen_popover_ancestor_index`) close first, top-down.
+    var above = _lumen_popover_stack.indexOf(nid);
+    if (above >= 0) {
+        var nested = _lumen_popover_stack.slice(above + 1);
+        for (var ni = nested.length - 1; ni >= 0; ni--) { _lumen_popover_hide(nested[ni]); }
+    }
     var beforeEvt = new ToggleEvent('beforetoggle', {
         bubbles: false, cancelable: true, oldState: 'open', newState: 'closed' });
     beforeEvt.target = _lumen_make_element(nid);
@@ -4337,6 +4460,8 @@ function _lumen_popover_hide(nid) {
         bubbles: false, cancelable: false, oldState: 'open', newState: 'closed' });
     toggleEvt.target = _lumen_make_element(nid);
     _lumen_dispatch(nid, toggleEvt);
+    // A popover shown through interest loses that interest when it closes.
+    _lumen_interest_popover_hidden(nid);
 }
 
 function _lumen_popover_toggle(nid, force) {
@@ -4470,6 +4595,288 @@ document.addEventListener('click', function(evt) {
     } catch (e) { _lumen_report_exception(e); }
 });
 
+// ── Interest Invokers (WHATWG HTML PR #11006, `.tentative.`, GAP-INTERESTINVOKER) ──
+// `interestfor` on `<button>`/`<a href>`/`<area href>`/SVG `<a href>` is the
+// hover/focus analogue of `commandfor`: pointing at or focusing the invoker for
+// `interest-delay-start` fires a cancelable `interest` InterestEvent at the
+// target (and opens it if it is a popover); leaving both the invoker and the
+// target for `interest-delay-end` fires `loseinterest` (cancelable — a
+// cancelled one keeps the interest) and closes the popover again. Escape drops
+// every interest at once, newest first, with non-cancelable `loseinterest`.
+// State is mirrored into `data-lumen-interest-source`/`-target` for the
+// `:interest-source`/`:interest-target` pseudo-classes, the same hidden-attr
+// bridge `:popover-open` uses.
+
+// `interestForElement` — same explicit-attr-element reflection as
+// `commandForElement` above, on the four interfaces of the
+// `InterestInvokerElement` mixin. The SVG one is installed by `svg.rs` once
+// `SVGAElement` exists.
+var _LUMEN_INTEREST_FOR_EXPLICIT = new WeakMap();
+function _lumen_install_interest_for(proto, iface) {
+    Object.defineProperty(proto, 'interestForElement', {
+        get: function() {
+            if (this === proto || !proto.isPrototypeOf(this)) throw new TypeError('Illegal invocation');
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return null;
+            // Setting the content attribute afterwards clears the explicitly
+            // set element - the setter leaves the attribute at "".
+            if (_LUMEN_INTEREST_FOR_EXPLICIT.has(this) && _lumen_get_attr(n, 'interestfor') !== '') {
+                _LUMEN_INTEREST_FOR_EXPLICIT.delete(this);
+            }
+            if (_LUMEN_INTEREST_FOR_EXPLICIT.has(this)) {
+                var explicit = _LUMEN_INTEREST_FOR_EXPLICIT.get(this);
+                if (explicit === null || explicit.__nid__ === undefined) return null;
+                return _lumen_command_target_reachable(n, explicit.__nid__) ? explicit : null;
+            }
+            var idStr = _lumen_u2n(_lumen_get_attr(n, 'interestfor'));
+            if (idStr === null || idStr === '') return null;
+            var targetNid = _lumen_u2n(_lumen_get_element_by_id(String(idStr)));
+            return targetNid === null ? null : _lumen_make_element(targetNid);
+        },
+        set: function(v) {
+            if (this === proto || !proto.isPrototypeOf(this)) throw new TypeError('Illegal invocation');
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            if (v !== null && !(v && typeof v === 'object' && v.__nid__ !== undefined && v.nodeType === 1)) {
+                throw new TypeError("Failed to set the 'interestForElement' property on '" + iface + "': "
+                    + "the provided value is not of type 'Element'.");
+            }
+            _LUMEN_INTEREST_FOR_EXPLICIT.set(this, v);
+            _lumen_set_attr(n, 'interestfor', '');
+        },
+        enumerable: true, configurable: true,
+    });
+    // Named like WebIDL attribute accessors (`get interestForElement`).
+    var d = Object.getOwnPropertyDescriptor(proto, 'interestForElement');
+    Object.defineProperty(d.get, 'name', { value: 'get interestForElement' });
+    Object.defineProperty(d.set, 'name', { value: 'set interestForElement' });
+}
+_lumen_install_interest_for(HTMLAnchorElement.prototype, 'HTMLAnchorElement');
+_lumen_install_interest_for(HTMLAreaElement.prototype, 'HTMLAreaElement');
+_lumen_install_interest_for(HTMLButtonElement.prototype, 'HTMLButtonElement');
+
+var _LUMEN_INTEREST_SOURCE_ATTR = 'data-lumen-interest-source';
+var _LUMEN_INTEREST_TARGET_ATTR = 'data-lumen-interest-target';
+// `normal` delays — Chromium's defaults for the two properties.
+var _LUMEN_INTEREST_NORMAL_START_MS = 500;
+var _LUMEN_INTEREST_NORMAL_END_MS = 250;
+
+// One record per invoker with pending or shown interest:
+// { inv, tgt, shown, seq, showTimer, hideTimer, vetoed }. `vetoed` marks a
+// shown interest whose `loseinterest` was cancelled while disengaged — it
+// stays until the pointer/focus comes back, instead of re-firing forever.
+var _lumen_interest_states = [];
+var _lumen_interest_seq = 0;
+var _lumen_interest_hover_nid = -1;
+
+function _lumen_interest_state_for(inv) {
+    for (var i = 0; i < _lumen_interest_states.length; i++) {
+        if (_lumen_interest_states[i].inv === inv) return _lumen_interest_states[i];
+    }
+    return null;
+}
+
+function _lumen_interest_drop_state(st) {
+    if (st.showTimer !== null) { clearTimeout(st.showTimer); st.showTimer = null; }
+    if (st.hideTimer !== null) { clearTimeout(st.hideTimer); st.hideTimer = null; }
+    var i = _lumen_interest_states.indexOf(st);
+    if (i >= 0) _lumen_interest_states.splice(i, 1);
+}
+
+// The element types that can carry interest — `interestfor` on anything else
+// (a `<div>`, `<input type=button>`) is inert (`interestfor-input-invalid`).
+function _lumen_interest_is_invoker(nid) {
+    var el = _lumen_make_element(nid);
+    if (!el || el.nodeType !== 1) return false;
+    if (_lumen_get_attr(nid, 'interestfor') === undefined && !_LUMEN_INTEREST_FOR_EXPLICIT.has(el)) return false;
+    var local = String(el.localName || '').toLowerCase();
+    if (el.namespaceURI === 'http://www.w3.org/2000/svg') {
+        return local === 'a' && (_lumen_has_attr(nid, 'href') || _lumen_has_attr(nid, 'xlink:href'));
+    }
+    if (local === 'button') return !_lumen_has_attr(nid, 'disabled');
+    if (local === 'a' || local === 'area') return _lumen_has_attr(nid, 'href');
+    return false;
+}
+
+// The nearest shadow-including inclusive ancestor of `nid` that is an
+// interest invoker with a resolvable target, or -1.
+function _lumen_interest_invoker_for(nid) {
+    var cur = nid, guard = 0;
+    while (cur !== null && cur !== undefined && cur !== -1 && guard++ < 1024) {
+        if (_lumen_interest_is_invoker(cur)) {
+            var t = _lumen_make_element(cur).interestForElement;
+            if (t && t.__nid__ !== undefined && _lumen_resource_is_connected(t.__nid__)) return cur;
+        }
+        var p = _lumen_u2n(_lumen_get_parent(cur));
+        cur = p !== null ? p : _lumen_u2n(_lumen_get_shadow_root_host(cur));
+    }
+    return -1;
+}
+
+function _lumen_interest_inside(nid, anc) {
+    return nid !== -1 && nid !== null && nid !== undefined && _lumen_shadow_including_ancestor(anc, nid);
+}
+
+// Is the pointer or focus on the invoker or its target (or inside either)?
+function _lumen_interest_directly_engaged(st) {
+    var h = _lumen_interest_hover_nid, f = _lumen_last_focused_nid;
+    return _lumen_interest_inside(h, st.inv) || _lumen_interest_inside(h, st.tgt)
+        || _lumen_interest_inside(f, st.inv) || _lumen_interest_inside(f, st.tgt);
+}
+
+// The shown interests to keep: the directly engaged ones, plus - to a fixed
+// point - every interest whose target contains the invoker of one already
+// kept, so moving into a nested invoker's target keeps the whole chain alive
+// (`interestfor-invoker-descendants`).
+function _lumen_interest_engaged_set() {
+    var shown = _lumen_interest_states.filter(function(st) { return st.shown; });
+    var kept = shown.filter(_lumen_interest_directly_engaged);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (var i = 0; i < shown.length; i++) {
+            var st = shown[i];
+            if (kept.indexOf(st) >= 0) continue;
+            for (var j = 0; j < kept.length; j++) {
+                if (_lumen_interest_inside(kept[j].inv, st.tgt)) { kept.push(st); changed = true; break; }
+            }
+        }
+    }
+    return kept;
+}
+
+// `interest-delay-start`/`-end` of the invoker in ms — `normal` maps to the
+// UA default.
+function _lumen_interest_delay_ms(inv, start) {
+    var v = 'normal';
+    try {
+        var cs = getComputedStyle(_lumen_make_element(inv));
+        v = String(cs.getPropertyValue(start ? 'interest-delay-start' : 'interest-delay-end') || 'normal').trim();
+    } catch (e) { v = 'normal'; }
+    var m = /^([0-9]*\.?[0-9]+(?:e[+-]?[0-9]+)?)(ms|s)$/i.exec(v);
+    if (!m) return start ? _LUMEN_INTEREST_NORMAL_START_MS : _LUMEN_INTEREST_NORMAL_END_MS;
+    var n = parseFloat(m[1]);
+    return m[2].toLowerCase() === 's' ? n * 1000 : n;
+}
+
+function _lumen_interest_fire(type, st, cancelable) {
+    var ev = new InterestEvent(type, {
+        source: _lumen_make_element(st.inv), bubbles: false, cancelable: cancelable,
+        composed: true, isTrusted: true,
+    });
+    return _lumen_dispatch(st.tgt, ev);
+}
+
+function _lumen_interest_gain(st) {
+    st.showTimer = null;
+    var ok = _lumen_resource_is_connected(st.inv) && _lumen_interest_is_invoker(st.inv);
+    var t = ok ? _lumen_make_element(st.inv).interestForElement : null;
+    if (!t || t.__nid__ !== st.tgt || !_lumen_resource_is_connected(st.tgt)) {
+        _lumen_interest_drop_state(st);
+        return;
+    }
+    if (!_lumen_interest_fire('interest', st, true)) { _lumen_interest_drop_state(st); return; }
+    if (_lumen_interest_states.indexOf(st) < 0) return; // a listener reset the state
+    st.shown = true;
+    st.seq = ++_lumen_interest_seq;
+    _lumen_set_attr(st.inv, _LUMEN_INTEREST_SOURCE_ATTR, '');
+    _lumen_set_attr(st.tgt, _LUMEN_INTEREST_TARGET_ATTR, '');
+    if (_lumen_get_attr(st.tgt, 'popover') !== undefined && _lumen_get_attr(st.tgt, _LPOP_ATTR) === undefined) {
+        try { _lumen_popover_show(st.tgt, st.inv); } catch (e) { _lumen_report_exception(e); }
+    }
+    _lumen_interest_reevaluate();
+}
+
+// Runs the lose-interest steps; returns false when a cancelable
+// `loseinterest` was cancelled (the interest then stays).
+function _lumen_interest_lose(st, cancelable) {
+    if (st.hideTimer !== null) { clearTimeout(st.hideTimer); st.hideTimer = null; }
+    if (!_lumen_interest_fire('loseinterest', st, cancelable) && cancelable) {
+        st.vetoed = true;
+        return false;
+    }
+    _lumen_interest_drop_state(st);
+    _lumen_remove_attr(st.inv, _LUMEN_INTEREST_SOURCE_ATTR);
+    var targetStillShown = _lumen_interest_states.some(function(o) { return o.shown && o.tgt === st.tgt; });
+    if (!targetStillShown) {
+        _lumen_remove_attr(st.tgt, _LUMEN_INTEREST_TARGET_ATTR);
+        if (_lumen_get_attr(st.tgt, _LPOP_ATTR) !== undefined) {
+            try { _lumen_popover_hide(st.tgt); } catch (e) { _lumen_report_exception(e); }
+        }
+    }
+    return true;
+}
+
+// Re-derives every timer from the current hover and focus nodes. Hide
+// decisions go first so that moving from one invoker to another fires the
+// old target's `loseinterest` before the new target's `interest` when both
+// delays are equal (`interestfor-keyboard-behavior`).
+function _lumen_interest_reevaluate() {
+    var h = _lumen_interest_hover_nid, f = _lumen_last_focused_nid;
+    var engaged = _lumen_interest_engaged_set();
+    _lumen_interest_states.slice().forEach(function(st) {
+        if (st.shown) {
+            if (engaged.indexOf(st) >= 0) {
+                st.vetoed = false;
+                if (st.hideTimer !== null) { clearTimeout(st.hideTimer); st.hideTimer = null; }
+            } else if (st.hideTimer === null && !st.vetoed) {
+                st.hideTimer = setTimeout(function() {
+                    st.hideTimer = null;
+                    if (_lumen_interest_states.indexOf(st) >= 0) _lumen_interest_lose(st, true);
+                }, _lumen_interest_delay_ms(st.inv, false));
+            }
+        } else if (!_lumen_interest_inside(h, st.inv) && !_lumen_interest_inside(f, st.inv)) {
+            _lumen_interest_drop_state(st);
+        }
+    });
+    [h, f].forEach(function(n) {
+        if (n === -1 || n === null || n === undefined) return;
+        var inv = _lumen_interest_invoker_for(n);
+        if (inv === -1 || _lumen_interest_state_for(inv) !== null) return;
+        var st = {
+            inv: inv, tgt: _lumen_make_element(inv).interestForElement.__nid__,
+            shown: false, seq: 0, showTimer: null, hideTimer: null, vetoed: false,
+        };
+        _lumen_interest_states.push(st);
+        st.showTimer = setTimeout(function() { _lumen_interest_gain(st); },
+            _lumen_interest_delay_ms(inv, true));
+    });
+}
+
+// Called by `_lumen_focus_update` after every focus change.
+function _lumen_interest_note_focus() {
+    if (_lumen_interest_states === undefined) return; // shim still loading
+    if (_lumen_interest_states.length === 0 && _lumen_last_focused_nid === -1) return;
+    _lumen_interest_reevaluate();
+}
+
+// Called by `_lumen_popover_hide`: a target popover closed by anything other
+// than the lose-interest steps themselves loses interest right away, no delay.
+function _lumen_interest_popover_hidden(nid) {
+    if (_lumen_interest_states === undefined) return; // shim still loading
+    _lumen_interest_states.slice().reverse().forEach(function(st) {
+        if (st.shown && st.tgt === nid && _lumen_interest_states.indexOf(st) >= 0) {
+            _lumen_interest_lose(st, true);
+        }
+    });
+}
+
+document.addEventListener('mouseover', function(evt) {
+    var n = (evt._path && evt._path.length > 0) ? evt._path[0] : (evt.target && evt.target.__nid__);
+    _lumen_interest_hover_nid = (n === undefined || n === null) ? -1 : n;
+    _lumen_interest_reevaluate();
+}, true);
+
+document.addEventListener('keydown', function(evt) {
+    if (evt.key !== 'Escape' || _lumen_interest_states.length === 0) return;
+    var shown = _lumen_interest_states.filter(function(st) { return st.shown; });
+    _lumen_interest_states.filter(function(st) { return !st.shown; }).forEach(_lumen_interest_drop_state);
+    shown.sort(function(a, b) { return b.seq - a.seq; });
+    shown.forEach(function(st) {
+        if (_lumen_interest_states.indexOf(st) >= 0) _lumen_interest_lose(st, false);
+    });
+}, true);
+
 // ── Fullscreen API helpers ────────────────────────────────────────────────────
 // WHATWG Fullscreen §4.3 — the error preconditions of requestFullscreen(),
 // evaluated in spec order. Returns null when the request may proceed, or a short
@@ -4579,6 +4986,7 @@ function _lumen_notify_fullscreen_exit() {
 var _wa_current_time = 0;
 // Live registry of all non-idle Animation instances.
 var _wa_animations = [];
+var _wa_pending_events = [];
 
 // AnimationPlaybackEvent (W3C Web Animations §4.4.3) — fired on finish/cancel.
 function AnimationPlaybackEvent(type, init) {
@@ -4613,7 +5021,7 @@ function _wa_normalize_keyframes(keyframes) {
             var kf = {};
             kf.offset = (src.offset != null) ? +src.offset : (n <= 1 ? 0 : i / (n - 1));
             kf.easing = src.easing || 'linear';
-            kf.composite = src.composite || 'replace';
+            kf.composite = src.composite || 'auto';
             for (var p in src) {
                 if (p !== 'offset' && p !== 'easing' && p !== 'composite') kf[p] = src[p];
             }
@@ -4634,7 +5042,7 @@ function _wa_normalize_keyframes(keyframes) {
             var kf2 = {};
             kf2.offset = (offsets && offsets[j] != null) ? +offsets[j] : (len <= 1 ? 0 : j / (len - 1));
             kf2.easing = (Array.isArray(keyframes.easing) ? keyframes.easing[j] : keyframes.easing) || 'linear';
-            kf2.composite = 'replace';
+            kf2.composite = (Array.isArray(keyframes.composite) ? keyframes.composite[j] : keyframes.composite) || 'auto';
             for (var k = 0; k < propNames.length; k++) {
                 var arr = keyframes[propNames[k]];
                 kf2[propNames[k]] = arr[j];
@@ -4649,23 +5057,62 @@ function _wa_normalize_keyframes(keyframes) {
 // Easing functions: linear / ease / ease-in / ease-out / ease-in-out.
 function _wa_ease(t, easing) {
     if (!easing || easing === 'linear') return t;
-    if (easing === 'ease-in')  return t * t;
-    if (easing === 'ease-out') return t * (2 - t);
-    if (easing === 'ease' || easing === 'ease-in-out') return t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+    if (easing === 'ease')        easing = 'cubic-bezier(0.25,0.1,0.25,1)';
+    else if (easing === 'ease-in')     easing = 'cubic-bezier(0.42,0,1,1)';
+    else if (easing === 'ease-out')    easing = 'cubic-bezier(0,0,0.58,1)';
+    else if (easing === 'ease-in-out') easing = 'cubic-bezier(0.42,0,0.58,1)';
     if (easing === 'step-start') return t > 0 ? 1 : 0;
     if (easing === 'step-end')   return t >= 1 ? 1 : 0;
+    // CSS Easing L1 §2.3 steps(<n>[, <jump-term>]).
+    var sm = easing.match(/^steps\(\s*(\d+)\s*(?:,\s*(jump-start|jump-end|jump-none|jump-both|start|end)\s*)?\)$/);
+    if (sm) {
+        var n = +sm[1], pos = sm[2] || 'end';
+        if (pos === 'start') pos = 'jump-start'; else if (pos === 'end') pos = 'jump-end';
+        var stepsN = (pos === 'jump-none') ? n - 1 : (pos === 'jump-both' ? n + 1 : n);
+        var cur = Math.floor(t * n);
+        if (pos === 'jump-start' || pos === 'jump-both') cur += 1;
+        if (t >= 0 && cur < 0) cur = 0;
+        if (t <= 1 && cur > stepsN) cur = stepsN;
+        return stepsN <= 0 ? 0 : cur / stepsN;
+    }
     // cubic-bezier(p1x, p1y, p2x, p2y) — approximate with de Casteljau.
     var m = easing.match(/^cubic-bezier\(([^,]+),([^,]+),([^,]+),([^)]+)\)$/);
     if (m) {
         var p1x = +m[1], p1y = +m[2], p2x = +m[3], p2y = +m[4];
-        // Newton's method to find t_css for x == t, then return y.
-        var u = t;
-        for (var iter = 0; iter < 8; iter++) {
-            var cx = 3*p1x, bx = 3*(p2x-p1x)-cx, ax = 1-cx-bx;
-            var x = ((ax*u+bx)*u+cx)*u;
+        if (t < 0 || t > 1) {
+            // CSS Easing L1 §2.2: outside [0,1] a cubic-bezier extrapolates
+            // along the tangent of the nearest end; a curve whose control
+            // points lie on the diagonal is linear-equivalent and keeps slope 1.
+            if (p1x === p1y && p2x === p2y) return t;
+            var slope = 0;
+            if (t < 0) {
+                if (p1x > 0) slope = p1y / p1x;
+                else if (p1y === 0 && p2x > 0) slope = p2y / p2x;
+                return t * slope;
+            }
+            if (p2x < 1) slope = (1 - p2y) / (1 - p2x);
+            else if (p2y === 1 && p1x < 1) slope = (1 - p1y) / (1 - p1x);
+            return 1 + (t - 1) * slope;
+        }
+        // Newton's method to find t_css for x == t, bisection fallback.
+        var cx = 3*p1x, bx = 3*(p2x-p1x)-cx, ax = 1-cx-bx;
+        var u = t, solved = false;
+        for (var iter = 0; iter < 16; iter++) {
+            var x = ((ax*u+bx)*u+cx)*u - t;
+            if (Math.abs(x) < 1e-12) { solved = true; break; }
             var dx = (3*ax*u+2*bx)*u+cx;
             if (Math.abs(dx) < 1e-8) break;
-            u -= (x - t) / dx;
+            u -= x / dx;
+        }
+        if (!solved) {
+            var lo = 0, hi = 1;
+            u = t;
+            for (var k = 0; k < 60; k++) {
+                var xv = ((ax*u+bx)*u+cx)*u;
+                if (Math.abs(xv - t) < 1e-12) break;
+                if (xv < t) lo = u; else hi = u;
+                u = (lo + hi) / 2;
+            }
         }
         var cy = 3*p1y, by = 3*(p2y-p1y)-cy, ay = 1-cy-by;
         return ((ay*u+by)*u+cy)*u;
@@ -4693,20 +5140,34 @@ function _wa_parse_color(str) {
 function _wa_lerp_color(a, b, t) {
     var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
     if (!ca || !cb) return t < 0.5 ? a : b;
-    function lr(x, y) { return Math.round(x + (y-x)*t); }
+    function lr(x, y) { return Math.max(0, Math.min(255, Math.round(x + (y-x)*t))); }
     var al = lr(ca[3], cb[3]);
     if (al === 255) return 'rgb('+lr(ca[0],cb[0])+','+lr(ca[1],cb[1])+','+lr(ca[2],cb[2])+')';
     return 'rgba('+lr(ca[0],cb[0])+','+lr(ca[1],cb[1])+','+lr(ca[2],cb[2])+','+(al/255).toFixed(4)+')';
 }
 
 // Lerp a single CSS scalar+unit value (e.g. '100px', '0.5').
+// Absolute units of one dimension → factor to the canonical unit (s, px, deg).
+var _wa_unit_scale = {
+    s: ['s', 1], ms: ['s', 0.001],
+    px: ['px', 1], in: ['px', 96], cm: ['px', 96 / 2.54], mm: ['px', 96 / 25.4],
+    q: ['px', 96 / 101.6], pt: ['px', 96 / 72], pc: ['px', 16],
+    deg: ['deg', 1], grad: ['deg', 0.9], rad: ['deg', 180 / Math.PI], turn: ['deg', 360]
+};
+
 function _wa_lerp_scalar(a, b, t) {
     var na = parseFloat(a), nb = parseFloat(b);
     if (isNaN(na) || isNaN(nb)) return t < 0.5 ? a : b;
-    var v = na + (nb - na) * t;
-    var ua = String(a).replace(/[0-9. +-]/g, '');
-    var ub = String(b).replace(/[0-9. +-]/g, '');
-    return v + (ua || ub || '');
+    var ua = _wa_unit(a).toLowerCase(), ub = _wa_unit(b).toLowerCase();
+    if (ua === ub || !ua || !ub) {
+        return (na + (nb - na) * t) + (_wa_unit(a) || _wa_unit(b));
+    }
+    var sa = _wa_unit_scale[ua], sb = _wa_unit_scale[ub];
+    // Different units of one dimension mix in the canonical unit; anything
+    // else (px vs %, s vs px) is not interpolable and flips discretely.
+    if (!sa || !sb || sa[0] !== sb[0]) return t < 0.5 ? a : b;
+    na *= sa[1]; nb *= sb[1];
+    return +((na + (nb - na) * t).toFixed(6)) + sa[0];
 }
 
 // CSS color-like property names.
@@ -4798,9 +5259,388 @@ function _wa_lerp_dynamic_range_limit(a, b, t) {
     ]);
 }
 
+// CSS Gap Decorations L1 §4.7 — `column-rule-*`/`row-rule-*` width, color and
+// inset longhands interpolate as `<gap-rule-list>`s (repeat() expansion, lcm of
+// list lengths, premultiplied colours); the arithmetic lives in Rust
+// (`style/values/rule_interp.rs`, native `_lumen_css_interpolate_gap_rule`).
+var _wa_gap_prop_re = /^(column|row)Rule(Width|Color|Inset(Cap|Junction)(Start|End))$/;
+function _wa_is_gap_prop(p) { return _wa_gap_prop_re.test(p); }
+
+// Specified value -> something the Rust interpolator can parse: CSS-wide
+// keywords become their value (all gap properties are non-inherited, so `unset`
+// is `initial`), `currentcolor` becomes the target's computed `color`.
+function _wa_gap_resolve(eff, prop, v) {
+    if (v == null) return v;
+    v = String(v).trim();
+    var tgt = eff && eff.target;
+    var kw = v.toLowerCase();
+    var isColor = /Color$/.test(prop);
+    var initial = /Width$/.test(prop) ? '3px' : (isColor ? 'currentcolor' : '0px');
+    if (kw === 'initial' || kw === 'unset') {
+        v = initial;
+    } else if (kw === 'inherit') {
+        v = initial;
+        try {
+            var par = tgt && tgt.parentElement;
+            if (par) v = getComputedStyle(par)[prop] || initial;
+        } catch (e) {}
+    }
+    if (isColor && /currentcolor/i.test(v)) {
+        var cc = 'rgb(0, 0, 0)';
+        try { cc = getComputedStyle(tgt).color || cc; } catch (e) {}
+        v = v.replace(/currentcolor/gi, cc);
+    }
+    return v;
+}
+
+function _wa_gap_interp(prop, from, to, t) {
+    var kebab = prop.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
+    var r = _lumen_css_interpolate_gap_rule(kebab, String(from), String(to), t);
+    if (r == null) return _wa_gap_flip(kebab, t < 0.5 ? from : to);
+    return r;
+}
+
+// The discretely flipped end, serialised as a computed value (`red` -> `rgb(255, 0, 0)`).
+function _wa_gap_flip(kebab, v) {
+    var c = _lumen_css_canonical_gap_rule(kebab, String(v));
+    return c == null ? v : c;
+}
+
+// CSS Transitions L1 for the gap-decoration properties. The Rust
+// `TransitionScheduler` only knows opacity/color/background-color/transform/
+// height, so a transition of `*-rule-width|color|inset-*` is tracked here, in the
+// one place that observes the value: `getComputedStyle()` reads. The first read
+// of a property records its settled value (the before-change style); a later read
+// that finds a different settled value starts a transition when the element's
+// computed `transition-*` lists ask for one for this property, and until it ends
+// the read answers the interpolated value (`_wa_gap_interp`, same arithmetic as
+// Web Animations). Limits: a change nobody read in between is not seen, and the
+// painted rules are not animated frame by frame (only the computed value is).
+var _wa_gap_tr_name_re = /^(column|row)-rule-(width|color|inset-(cap|junction)-(start|end))$/;
+var _wa_gap_tr = {};
+var _wa_gap_tr_clock_ms = null;
+
+// One `performance.now()` per task: every read of one script turn sees one time.
+function _wa_gap_tr_clock() {
+    if (_wa_gap_tr_clock_ms === null) {
+        _wa_gap_tr_clock_ms = performance.now();
+        Promise.resolve().then(function() { _wa_gap_tr_clock_ms = null; });
+    }
+    return _wa_gap_tr_clock_ms;
+}
+
+// Longhand name -> every `transition-property` token that covers it, longhand
+// last (shorthands `rule`, `column-rule`, `rule-width`, `row-rule-inset-cap`, ...).
+function _wa_gap_tr_tokens(kebab) {
+    var m = /^(column|row)-rule-(.*)$/.exec(kebab);
+    var part = m[2], isInset = part.indexOf('inset-') === 0, p = part.split('-');
+    var out = ['all'], axes = [m[1] + '-rule', 'rule'];
+    for (var i = 0; i < axes.length; i++) {
+        var pre = axes[i];
+        if (isInset) {
+            out.push(pre + '-inset', pre + '-inset-' + p[1], pre + '-inset-' + p[2]);
+        } else {
+            out.push(pre);
+        }
+        out.push(pre + '-' + part);
+    }
+    return out;
+}
+
+function _wa_gap_tr_split(list) {
+    var out = [], depth = 0, cur = '';
+    for (var i = 0; i < list.length; i++) {
+        var c = list.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        if (c === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += c;
+    }
+    out.push(cur.trim());
+    return out;
+}
+
+function _wa_gap_tr_seconds(tok) {
+    var m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i.exec(tok || '');
+    if (!m) return 0;
+    return m[2].toLowerCase() === 'ms' ? parseFloat(m[1]) / 1000 : parseFloat(m[1]);
+}
+
+// Timing of the transition for `kebab` from the element's computed lists, or null.
+function _wa_gap_tr_timing(nid, kebab) {
+    var props = _wa_gap_tr_split(_lumen_computed_property(nid, 'transition-property').toLowerCase());
+    var cover = _wa_gap_tr_tokens(kebab), idx = -1;
+    for (var i = 0; i < props.length; i++) {
+        if (cover.indexOf(props[i]) >= 0) idx = i;   // the last match wins
+    }
+    if (idx < 0) return null;
+    var pick = function(name) {
+        var l = _wa_gap_tr_split(_lumen_computed_property(nid, name));
+        return l[idx % l.length];
+    };
+    var dur = _wa_gap_tr_seconds(pick('transition-duration'));
+    var delay = _wa_gap_tr_seconds(pick('transition-delay'));
+    if (!(dur > 0)) return null;   // a zero duration never starts a transition
+    return { dur: dur, delay: delay, easing: pick('transition-timing-function') || 'ease',
+             discrete: pick('transition-behavior') === 'allow-discrete' };
+}
+
+function _wa_gap_tr_value(nid, kebab, base) {
+    var key = nid + ':' + kebab, rec = _wa_gap_tr[key];
+    if (!rec) { _wa_gap_tr[key] = { seen: base, run: null }; return base; }
+    var now = _wa_gap_tr_clock();
+    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    if (base !== rec.seen) {
+        var from = rec.run ? _wa_gap_tr_current(rec, now, camel) : rec.seen;
+        var timing = null;
+        // Pairs that do not interpolate (overlap-join, mismatched lists) are
+        // discrete and transition (flipping at 50%) only with
+        // `transition-behavior: allow-discrete`.
+        if (from !== base) {
+            var flip = _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) == null;
+            timing = _wa_gap_tr_timing(nid, kebab);
+            if (timing && flip && !timing.discrete) timing = null;
+        }
+        rec.seen = base;
+        rec.run = timing ? { from: from, to: base, start: now, dur: timing.dur * 1000,
+                             delay: timing.delay * 1000, easing: timing.easing } : null;
+    }
+    if (!rec.run) return base;
+    var cur = _wa_gap_tr_current(rec, now, camel);
+    if (rec.run && rec.run.done) rec.run = null;
+    return cur;
+}
+
+function _wa_gap_tr_current(rec, now, camel) {
+    var r = rec.run;
+    var raw = (now - r.start - r.delay) / r.dur;
+    if (raw >= 1) { r.done = true; return r.to; }
+    if (raw < 0) return r.from;   // inside the delay the effect fills backwards
+    // The Rust side serialises `cubic-bezier()` through f32 (0.23333333 for 0.2333...), so
+    // the eased progress is off by up to ~1e-6; snap it before the width is floored to a pixel.
+    var eased = Math.round(_wa_ease(raw, r.easing) * 1e5) / 1e5;
+    return _wa_gap_interp(camel, r.from, r.to, eased);
+}
+
+// CSS Animations L1 for the gap-decoration properties. The Rust `AnimationScheduler`
+// only knows opacity/transform/color/background-color/height, so an `@keyframes`
+// animation of `*-rule-width|color|inset-*` is evaluated here, at the same place as
+// the transitions above: `getComputedStyle()` reads. The element's computed
+// `animation-*` lists say which animations run; the keyframes come from the document's
+// sheets (`_lumen_keyframes_json`); the first read that sees an animation starts its
+// clock (one `performance.now()` per task, so every read of a turn agrees); the value
+// is interpolated between the keyframes around the directed progress with the same
+// Rust arithmetic as Web Animations (`_wa_interp_prop`). A keyframe missing at 0%/100%
+// is the neutral keyframe — the underlying (settled) computed value. Later animations
+// of the list win. Limits: only `getComputedStyle()` sees it (painted rules are not
+// driven frame by frame; no `animationstart/iteration/end` events), no
+// `animation-composition`, shorthand declarations of a keyframe (`column-rule: ...`) are
+// not read. `getAnimations()` lists it through `_wa_gap_an_sync` below.
+var _wa_gap_an = {};
+
+// The winning `@keyframes <name>` of the document as JSON, or null (a shim-level seam
+// over the native so the unit tests can substitute it).
+function _wa_gap_keyframes_json(name) { return _lumen_keyframes_json(name); }
+
+// The keyframes of `name` that declare the longhand `kebab`: [{offset, value, easing}]
+// sorted by offset, one per offset (a later declaration wins), or null.
+function _wa_gap_an_frames(kebab, name) {
+    var json = _wa_gap_keyframes_json(name);
+    if (json == null) return null;
+    var frames = JSON.parse(json);
+    var accept = {};
+    accept[kebab] = 1;
+    accept[kebab.replace(/^(column|row)-/, '')] = 1;   // `rule-width` sets both axes
+    var out = [];
+    for (var i = 0; i < frames.length; i++) {
+        var val = null, easing = null, decls = frames[i].decls;
+        for (var j = 0; j < decls.length; j++) {
+            if (accept[decls[j][0]]) val = decls[j][1];
+            else if (decls[j][0] === 'animation-timing-function') easing = decls[j][1];
+        }
+        if (val !== null) out.push({ offset: frames[i].offset, value: val, easing: easing });
+    }
+    out.sort(function(a, b) { return a.offset - b.offset; });
+    var uniq = [];
+    for (var k = 0; k < out.length; k++) {
+        if (uniq.length && uniq[uniq.length - 1].offset === out[k].offset) uniq[uniq.length - 1] = out[k];
+        else uniq.push(out[k]);
+    }
+    return uniq.length ? uniq : null;
+}
+
+// Progress of the animation as a number in [0, 1] before the keyframe easing
+// (CSS Animations L1 §4.3 `animation-delay`, §3.6 iteration/direction, §4.8 fill), or
+// null when the animation does not apply at `ms` (before the delay without a backwards
+// fill, after the end without a forwards fill).
+function _wa_gap_an_progress(t, ms) {
+    var fill = t.fill, back = fill === 'backwards' || fill === 'both';
+    var fwd = fill === 'forwards' || fill === 'both';
+    var directed = function(raw, idx) {
+        var odd = idx % 2 === 1;
+        if (t.dir === 'reverse') return 1 - raw;
+        if (t.dir === 'alternate') return odd ? 1 - raw : raw;
+        if (t.dir === 'alternate-reverse') return odd ? raw : 1 - raw;
+        return raw;
+    };
+    var elapsed = (ms - t.start) / 1000 - t.delay;
+    if (elapsed < 0) return back ? directed(0, 0) : null;
+    var ended = function() {
+        if (!fwd) return null;
+        var n = t.iters, frac = n % 1;
+        return directed(frac === 0 ? 1 : frac, frac === 0 ? n - 1 : Math.floor(n));
+    };
+    if (!(t.dur > 0)) return ended();
+    if (elapsed >= t.dur * t.iters) return ended();
+    var idx = Math.floor(elapsed / t.dur);
+    return directed((elapsed - idx * t.dur) / t.dur, idx);
+}
+
+// The animated value of `kebab` for `nid` given its settled value `base`, or `value`
+// (what the transitions made of it) when no animation of the element touches it.
+function _wa_gap_an_value(nid, kebab, base, value) {
+    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
+    var recs = _wa_gap_an[nid];
+    if (names.length === 1 && (names[0] === 'none' || names[0] === '')) {
+        if (recs) delete _wa_gap_an[nid];
+        return value;
+    }
+    var lists = {};
+    ['duration', 'delay', 'timing-function', 'iteration-count', 'direction', 'fill-mode', 'play-state']
+        .forEach(function(p) { lists[p] = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-' + p)); });
+    var pick = function(p, i) { var l = lists[p]; return l[i % l.length]; };
+    var ms = _wa_gap_tr_clock();
+    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    var live = {}, result = value, eff = null;
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (name === 'none' || name === '') continue;
+        var key = i + ':' + name;
+        var rec = (recs && recs[key]) || { start: ms, pausedAt: null };
+        live[key] = rec;
+        var paused = pick('play-state', i) === 'paused';
+        if (paused && rec.pausedAt === null) rec.pausedAt = ms;
+        else if (!paused && rec.pausedAt !== null) { rec.start += ms - rec.pausedAt; rec.pausedAt = null; }
+        var frames = _wa_gap_an_frames(kebab, name);
+        if (!frames) continue;
+        var itok = pick('iteration-count', i);
+        var t = {
+            start: rec.start,
+            dur: _wa_gap_tr_seconds(pick('duration', i)),
+            delay: _wa_gap_tr_seconds(pick('delay', i)),
+            iters: itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1),
+            dir: pick('direction', i), fill: pick('fill-mode', i)
+        };
+        var p = _wa_gap_an_progress(t, rec.pausedAt !== null ? rec.pausedAt : ms);
+        if (p === null) continue;
+        if (!eff) eff = { target: _lumen_make_element(nid) };
+        if (frames[0].offset > 0) frames.unshift({ offset: 0, value: base, easing: null });
+        if (frames[frames.length - 1].offset < 1) frames.push({ offset: 1, value: base, easing: null });
+        var a = 0;
+        for (var f = 0; f < frames.length - 1; f++) { if (frames[f].offset <= p) a = f; }
+        var from = frames[a], to = frames[a + 1];
+        var local = (p - from.offset) / (to.offset - from.offset);
+        // `animation-timing-function` shapes every keyframe interval (a keyframe's own
+        // declaration wins); snapped like the transitions' eased progress.
+        local = Math.round(_wa_ease(local, from.easing || pick('timing-function', i)) * 1e5) / 1e5;
+        result = _wa_interp_prop(camel, _wa_gap_resolve(eff, camel, from.value),
+                                 _wa_gap_resolve(eff, camel, to.value), local);
+    }
+    if (Object.keys(live).length) _wa_gap_an[nid] = live; else delete _wa_gap_an[nid];
+    return result;
+}
+
+// `element.getAnimations()` for a CSS `@keyframes` animation of a gap-decoration property.
+// The Rust `AnimationScheduler` registers a `getAnimations()` shadow entry only after its
+// first frame and with an effect that knows no timing, while the value `getComputedStyle()`
+// reports comes from the clock in `_wa_gap_an` above. This brings the two together: for
+// every animation of the element whose `@keyframes` declare a gap-decoration longhand it
+// finds (or creates, under the same registry key the scheduler's `animationstart` uses) the
+// `Animation`, gives its effect the computed `animation-*` timing, and lets `currentTime`
+// read and write that clock — a seek (`anim.currentTime = ms`) re-bases the record, so the
+// next `getComputedStyle()` read sees the value at that time. A paused animation is held at
+// the moment the record was created. Animations that are not current (finished without a
+// forwards/both fill) are not listed.
+var _wa_gap_an_kf_re = /^(?:(?:column|row)-)?rule-(?:width|color|inset)/;
+
+function _wa_gap_an_has_gap_frames(name) {
+    var json = _wa_gap_keyframes_json(name);
+    if (json == null) return false;
+    var frames = JSON.parse(json);
+    for (var i = 0; i < frames.length; i++) {
+        for (var j = 0; j < frames[i].decls.length; j++) {
+            if (_wa_gap_an_kf_re.test(frames[i].decls[j][0])) return true;
+        }
+    }
+    return false;
+}
+
+function _wa_gap_an_sync(target) {
+    var nid = target && target.__nid__;
+    if (nid == null) return;
+    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
+    var lists = null;
+    var ms = _wa_gap_tr_clock();
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (name === 'none' || name === '' || !_wa_gap_an_has_gap_frames(name)) continue;
+        if (!lists) {
+            lists = {};
+            ['duration', 'delay', 'iteration-count', 'direction', 'fill-mode', 'play-state']
+                .forEach(function(p) { lists[p] = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-' + p)); });
+        }
+        var pick = function(p) { var l = lists[p]; return l[i % l.length]; };
+        var recs = _wa_gap_an[nid] || (_wa_gap_an[nid] = {});
+        var key = i + ':' + name;
+        var paused = pick('play-state') === 'paused';
+        var rec = recs[key];
+        if (!rec) { rec = recs[key] = { start: ms, pausedAt: paused ? ms : null }; }
+        var dur = _wa_gap_tr_seconds(pick('duration')), delay = _wa_gap_tr_seconds(pick('delay'));
+        var itok = pick('iteration-count');
+        var iters = itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1);
+        var fill = pick('fill-mode');
+        var now = rec.pausedAt !== null ? rec.pausedAt : ms;
+        var elapsed = (now - rec.start) / 1000 - delay;
+        var finished = !(iters === Infinity) && elapsed >= dur * iters;
+        var fwd = fill === 'forwards' || fill === 'both';
+        if (finished && !fwd) {
+            _lumen_css_anim_unregister('a:', nid, name, 'idle');
+            continue;
+        }
+        // The scheduler's `animationend` drops the registry key but leaves a finished
+        // entry in the list; reuse that one rather than registering a second.
+        var anim = (rec.anim && _wa_animations.indexOf(rec.anim) >= 0) ? rec.anim
+                 : _lumen_css_anim_register('a:', nid, name);
+        rec.anim = anim;
+        anim.effect._timing = {
+            duration: dur * 1000, delay: delay * 1000, endDelay: 0, fill: fill === 'none' ? 'auto' : fill,
+            iterationStart: 0, iterations: iters, easing: 'linear', direction: pick('direction')
+        };
+        anim._state = finished ? 'finished' : (paused ? 'paused' : 'running');
+        if (!anim._wa_gap_an_bound) {
+            anim._wa_gap_an_bound = true;
+            (function(anim, nid, key, rec0) {
+                Object.defineProperty(anim, 'currentTime', {
+                    get: function() {
+                        var r = (_wa_gap_an[nid] || {})[key] || rec0;
+                        return (r.pausedAt !== null ? r.pausedAt : _wa_gap_tr_clock()) - r.start;
+                    },
+                    set: function(v) {
+                        var r = (_wa_gap_an[nid] || {})[key] || rec0;
+                        var at = _wa_gap_tr_clock();
+                        if (r.pausedAt !== null) r.pausedAt = at;
+                        r.start = at - (+v || 0);
+                    },
+                    configurable: true
+                });
+            })(anim, nid, key, rec);
+        }
+    }
+}
+
 // Interpolate a single CSS property value between two string values.
 function _wa_interp_prop(prop, from, to, t) {
     if (from === to) return from;
+    if (_wa_gap_prop_re.test(prop)) return _wa_gap_interp(prop, from, to, t);
     if (_wa_color_props[prop]) return _wa_lerp_color(from, to, t);
     if (prop === 'opacity') {
         var fa2 = parseFloat(from), fb2 = parseFloat(to);
@@ -4811,44 +5651,187 @@ function _wa_interp_prop(prop, from, to, t) {
     return _wa_lerp_scalar(from, to, t);
 }
 
+// Web Animations §5.4.2 composite operations. `under` is the underlying value
+// (the target's own inline / computed value before this animation painted
+// anything), `v` the keyframe value. Only `add` and `accumulate` reach here;
+// `replace` never calls in. Value types the shim cannot combine (mixed units,
+// keywords) fall back to `replace`, i.e. the keyframe value itself.
+function _wa_unit(v) {
+    var m = String(v).trim().match(/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(.*)$/i);
+    return m ? m[1].trim() : '';
+}
+
+function _wa_transform_fns(s) { return (s && s !== 'none') ? (s.match(/\w+\([^)]*\)/g) || []) : []; }
+
+function _wa_composite_transform(under, v, mode) {
+    var ua = _wa_transform_fns(under), va = _wa_transform_fns(v);
+    if (!ua.length && !va.length) return 'none';
+    if (!ua.length) return va.join(' ');
+    if (!va.length) return ua.join(' ');
+    if (mode === 'accumulate' && ua.length === va.length) {
+        var out = [];
+        for (var i = 0; i < ua.length; i++) {
+            var fa = _wa_parse_tfn(ua[i]), fb = _wa_parse_tfn(va[i]);
+            if (fa && fb && fa.name === 'matrix' && fb.name === 'matrix' && fa.args.length === 6 && fb.args.length === 6) {
+                // Accumulating matrices needs decomposition; a singular
+                // operand cannot be decomposed, so the keyframe value stands.
+                var da = fa.args[0] * fa.args[3] - fa.args[1] * fa.args[2];
+                var db = fb.args[0] * fb.args[3] - fb.args[1] * fb.args[2];
+                if (Math.abs(da) < 1e-9 || Math.abs(db) < 1e-9) return va.join(' ');
+            }
+            if (!fa || !fb || fa.name !== fb.name || fa.args.length !== fb.args.length ||
+                fa.name === 'matrix' || fa.name === 'matrix3d' || fa.name === 'rotate3d') { out = null; break; }
+            var scale = fa.name.indexOf('scale') === 0;
+            var args = [];
+            for (var j = 0; j < fa.args.length; j++) {
+                var x = parseFloat(fa.args[j]), y = parseFloat(fb.args[j]);
+                if (isNaN(x) || isNaN(y)) { out = null; break; }
+                var unit = _wa_unit(fa.args[j]) || _wa_unit(fb.args[j]);
+                args.push((scale ? x + y - 1 : x + y) + unit);
+            }
+            if (!out) break;
+            out.push(fa.name + '(' + args.join(', ') + ')');
+        }
+        if (out) return out.join(' ');
+    }
+    return ua.join(' ') + ' ' + va.join(' ');
+}
+
+function _wa_composite_scalar(under, v) {
+    var nu = parseFloat(under), nv = parseFloat(v);
+    if (isNaN(nu) || isNaN(nv)) return v;
+    var uu = _wa_unit(under), uv = _wa_unit(v);
+    if (uu !== uv && uu !== '' && uv !== '') return v;
+    return String(+(nu + nv).toFixed(6)) + (uv || uu);
+}
+
+function _wa_composite_color(under, v) {
+    var cu = _wa_parse_color(under), cv = _wa_parse_color(v);
+    if (!cu || !cv) return v;
+    function ad(x, y) { return Math.max(0, Math.min(255, x + y)); }
+    var al = ad(cu[3], cv[3]);
+    var rgb = ad(cu[0], cv[0]) + ',' + ad(cu[1], cv[1]) + ',' + ad(cu[2], cv[2]);
+    return al === 255 ? 'rgb(' + rgb + ')' : 'rgba(' + rgb + ',' + (al / 255).toFixed(4) + ')';
+}
+
+function _wa_composite_value(prop, under, v, mode) {
+    if (mode !== 'add' && mode !== 'accumulate') return v;
+    if (under == null || under === '') return v;
+    if (prop === 'transform') return _wa_composite_transform(under, v, mode);
+    if (_wa_color_props[prop]) return _wa_composite_color(under, v);
+    return _wa_composite_scalar(under, v);
+}
+
 // Compute the per-property interpolated styles for a KeyframeEffect at progress p.
 function _wa_compute_at_p(effect, p) {
     var kfs = effect._keyframes;
     if (!kfs || !kfs.length) return {};
+    // §5.3 implicit 0%/100% keyframes (the "neutral keyframe"): a gap-decoration
+    // property with no keyframe at an end interpolates to/from the underlying value.
+    var hasGap = false;
+    for (var gi = 0; gi < kfs.length && !hasGap; gi++) {
+        for (var gk in kfs[gi]) { if (_wa_gap_prop_re.test(gk)) { hasGap = true; break; } }
+    }
+    if (hasGap) {
+        if (kfs[0].offset > 0) kfs = [{ offset: 0, easing: 'linear', composite: 'auto' }].concat(kfs);
+        if (kfs[kfs.length - 1].offset < 1) kfs = kfs.concat([{ offset: 1, easing: 'linear', composite: 'auto' }]);
+    }
     // Find surrounding keyframe pair.
     var from = kfs[0], to = kfs[kfs.length - 1];
     for (var i = 0; i < kfs.length - 1; i++) {
         if (kfs[i].offset <= p && kfs[i+1].offset >= p) { from = kfs[i]; to = kfs[i+1]; break; }
     }
     var span = to.offset - from.offset;
-    var lt = span < 1e-7 ? 1 : Math.max(0, Math.min(1, (p - from.offset) / span));
-    lt = _wa_ease(lt, from.easing || 'linear');
+    // Outside [0,1] (an overshooting timing easing) the first/last interval
+    // extrapolates (Web Animations §5.3.3); a non-linear keyframe easing is
+    // only defined on [0,1], so it still sees a clamped input.
+    var lt = span < 1e-7 ? 1 : (p - from.offset) / span;
+    var kfe = from.easing || 'linear';
+    if (kfe !== 'linear' && !/^cubic-bezier\(/.test(kfe)) lt = Math.max(0, Math.min(1, lt));
+    lt = _wa_ease(lt, kfe);
     var result = {};
+    var under = effect._underlying || {};
+    function comp(kf, prop) {
+        var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
+        return _wa_composite_value(prop, under[prop], kf[prop], mode);
+    }
+    // Gap-decoration values are resolved (keywords, currentcolor) before they meet
+    // the interpolator; an end without the property takes the underlying value.
+    function val(kf, prop) {
+        var v = comp(kf, prop);
+        return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : v;
+    }
+    function under_val(prop) {
+        return _wa_gap_resolve(effect, prop, under[prop]);
+    }
     for (var fp in from) {
         if (fp === 'offset' || fp === 'easing' || fp === 'composite') continue;
-        result[fp] = (fp in to) ? _wa_interp_prop(fp, from[fp], to[fp], lt) : from[fp];
+        if (fp in to) {
+            result[fp] = _wa_interp_prop(fp, val(from, fp), val(to, fp), lt);
+        } else if (_wa_gap_prop_re.test(fp) && under[fp]) {
+            result[fp] = _wa_interp_prop(fp, val(from, fp), under_val(fp), lt);
+        } else {
+            result[fp] = comp(from, fp);
+        }
     }
     for (var tp in to) {
         if (tp === 'offset' || tp === 'easing' || tp === 'composite') continue;
-        if (!(tp in result)) result[tp] = to[tp];
+        if (tp in result) continue;
+        if (_wa_gap_prop_re.test(tp) && under[tp]) {
+            result[tp] = _wa_interp_prop(tp, under_val(tp), val(to, tp), lt);
+        } else {
+            result[tp] = comp(to, tp);
+        }
     }
     return result;
+}
+
+// Phase test, separate from what gets painted (BUG-1192): true once `ct` is
+// past the end of the active interval, whatever `fill` is.
+function _wa_after_end(timing, ct) {
+    var dur = +timing.duration || 0;
+    var elapsed = ct - +(timing.delay || 0);
+    if (elapsed < 0) return false;
+    if (dur <= 0) return true;
+    var it = timing.iterations;
+    if (it === Infinity || it == null) return false;
+    return elapsed >= dur * (+it || 1);
+}
+
+// Directed, eased progress of the last frame of the active interval — what
+// `fill: forwards|both` leaves on screen (honours iterations and direction).
+function _wa_end_progress(timing) {
+    var it = timing.iterations;
+    var maxIter = (it == null) ? 1 : (+it || 1);
+    var frac = maxIter % 1;
+    var iterProg = frac === 0 ? 1 : frac;
+    var iterIdx = frac === 0 ? maxIter - 1 : Math.floor(maxIter);
+    var dir = timing.direction || 'normal';
+    var isOdd = iterIdx % 2 === 1;
+    var d = iterProg;
+    if      (dir === 'reverse')           d = 1 - iterProg;
+    else if (dir === 'alternate')         d = isOdd ? 1 - iterProg : iterProg;
+    else if (dir === 'alternate-reverse') d = isOdd ? iterProg : 1 - iterProg;
+    return _wa_ease(Math.max(0, Math.min(1, d)), timing.easing || 'linear');
 }
 
 // Compute the iteration progress [0,1] from animation timing and currentTime.
 function _wa_iter_progress(timing, ct) {
     var dur = +timing.duration || 0;
-    if (dur <= 0) return 1;
     var delay = +(timing.delay || 0);
     var elapsed = ct - delay;
     var fill = timing.fill || 'auto';
     if (elapsed < 0) {
         return (fill === 'backwards' || fill === 'both') ? 0 : -1;
     }
+    // A zero-length active interval is over as soon as the delay is: the
+    // animation must reach `finished` (and resolve `finished`) like any other,
+    // not stay `running` at progress 1 forever (found with BUG-670).
+    if (dur <= 0) return (fill === 'forwards' || fill === 'both') ? _wa_end_progress(timing) : -2;
     var maxIter = (timing.iterations === Infinity || timing.iterations == null) ? Infinity : +(timing.iterations) || 1;
     var totalDur = maxIter === Infinity ? Infinity : dur * maxIter;
     if (totalDur !== Infinity && elapsed >= totalDur) {
-        return (fill === 'forwards' || fill === 'both') ? 1 : -2;
+        return (fill === 'forwards' || fill === 'both') ? _wa_end_progress(timing) : -2;
     }
     var iterFloor = Math.floor(elapsed / dur);
     var iterProg = (elapsed % dur) / dur;
@@ -4885,6 +5868,83 @@ KeyframeEffect.prototype.updateTiming = function(t) { Object.assign(this._timing
 KeyframeEffect.prototype.getKeyframes = function() { return this._keyframes.slice(); };
 KeyframeEffect.prototype.setKeyframes = function(kf) { this._keyframes = _wa_normalize_keyframes(kf); };
 
+// Web Animations §5.4.1 `getComputedTiming()` — the *computed* timing, as
+// opposed to `getTiming()`'s *specified* one (BUG-670): `duration: 'auto'`
+// and `fill: 'auto'` resolved, plus the derived `activeDuration`/`endTime`
+// and the time-dependent `localTime`/`progress`/`currentIteration`, which
+// follow §4.6–4.10 against the owning animation's current time. An effect
+// no animation owns has no local time, so those three are null.
+//
+// `duration` resolves `'auto'` to 0 — the §4.5 intrinsic iteration duration
+// of a monotonic timeline; a scroll-driven timeline's intrinsic duration is
+// not modelled by this shim.
+Object.defineProperty(KeyframeEffect.prototype, 'getComputedTiming', {
+    value: function() {
+        var t = this._timing;
+        var duration = +t.duration;
+        if (isNaN(duration)) duration = 0;
+        var iterations = (t.iterations == null) ? 1 : +t.iterations;
+        var delay = +t.delay || 0, endDelay = +t.endDelay || 0;
+        var iterationStart = +t.iterationStart || 0;
+        var fill = (t.fill === 'auto' || !t.fill) ? 'none' : t.fill;
+        var activeDuration = (duration === 0 || iterations === 0) ? 0 : duration * iterations;
+        var endTime = Math.max(delay + activeDuration + endDelay, 0);
+        var anim = this._animation;
+        var localTime = (anim && anim.effect === this) ? anim.currentTime : null;
+        var out = {
+            delay: delay, endDelay: endDelay, fill: fill,
+            iterationStart: iterationStart, iterations: iterations,
+            duration: duration, direction: t.direction || 'normal',
+            easing: t.easing || 'linear',
+            activeDuration: activeDuration, endTime: endTime,
+            localTime: localTime, progress: null, currentIteration: null,
+        };
+        if (localTime === null) return out;
+        // §4.6.2 phases. The animation direction is backwards only for a
+        // negative playback rate.
+        var backwards = anim.playbackRate < 0;
+        var beforeActive = Math.max(Math.min(delay, endTime), 0);
+        var activeAfter = Math.max(Math.min(delay + activeDuration, endTime), 0);
+        var phase = 'active';
+        if (localTime < beforeActive || (backwards && localTime === beforeActive)) phase = 'before';
+        else if (localTime > activeAfter || (!backwards && localTime === activeAfter)) phase = 'after';
+        // §4.8.3 active time.
+        var activeTime = null;
+        if (phase === 'before') {
+            if (fill === 'backwards' || fill === 'both') activeTime = Math.max(localTime - delay, 0);
+        } else if (phase === 'active') {
+            activeTime = localTime - delay;
+        } else if (fill === 'forwards' || fill === 'both') {
+            activeTime = Math.max(Math.min(localTime - delay, activeDuration), 0);
+        }
+        if (activeTime === null) return out;
+        // §4.9.1 overall progress, §4.9.2 simple iteration progress.
+        var overall;
+        if (duration === 0) overall = (phase === 'before') ? iterationStart : iterationStart + iterations;
+        else overall = activeTime / duration + iterationStart;
+        var simple = (overall === Infinity) ? iterationStart % 1 : overall % 1;
+        if (simple === 0 && (phase === 'active' || phase === 'after') &&
+                activeTime === activeDuration && iterations !== 0) {
+            simple = 1;
+        }
+        // §4.9.4 current iteration.
+        var current;
+        if (phase === 'after' && iterations === Infinity) current = Infinity;
+        else if (simple === 1) current = Math.floor(overall) - 1;
+        else current = Math.floor(overall);
+        // §4.10.1 directed progress, then the effect's timing function.
+        var dir = out.direction;
+        var forwards = dir === 'normal' ||
+            ((dir === 'alternate' || dir === 'alternate-reverse') &&
+             (current === Infinity || (current % 2 === 0) === (dir === 'alternate')));
+        var directed = forwards ? simple : 1 - simple;
+        out.currentIteration = current;
+        out.progress = _wa_ease(directed, out.easing);
+        return out;
+    },
+    writable: true, configurable: true,
+});
+
 // Animation constructor (Web Animations §3.4).
 // `Animation : EventTarget` (§5.3) — the three playback events (finish, cancel,
 // remove) must reach `addEventListener` and not only the `on<type>` property,
@@ -4896,6 +5956,12 @@ function Animation(effect, timeline) {
     this._wid         = _wa_anim_seq++;
     this.id           = '';
     this.effect       = effect   || null;
+    // Back-reference for `getComputedTiming()`, which needs the owning
+    // animation's current time as the effect's local time (§4.6.1).
+    if (effect && typeof effect === 'object') {
+        Object.defineProperty(effect, '_animation',
+            { value: this, writable: true, configurable: true });
+    }
     this.timeline     = timeline || _wa_doc_timeline;
     this._startTime   = null;
     this._holdTime    = null;
@@ -4943,9 +6009,21 @@ Object.defineProperty(Animation.prototype, '_fire', {
             timelineTime: this.timeline ? this.timeline.currentTime : null,
         });
         var deadline = _lumen_now_ms();
+        // BUG-1041: «update animations and send events» precedes the rAF
+        // callbacks of the same frame, so `_lumen_run_raf_callbacks` drains
+        // this queue first; whichever of the two (task or frame) comes first
+        // dispatches, the other finds `sent` set.
+        var rec = { sent: false, run: function() {
+            if (rec.sent) return;
+            rec.sent = true;
+            var at = _wa_pending_events.indexOf(rec);
+            if (at >= 0) _wa_pending_events.splice(at, 1);
+            self.dispatchEvent(ev);
+        } };
+        _wa_pending_events.push(rec);
         _lumen_timers.push({
             id: _lumen_timer_seq++,
-            fn: function() { self.dispatchEvent(ev); },
+            fn: function() { rec.run(); },
             deadline: deadline, interval: null, nesting: 0,
         });
         _lumen_request_wakeup(deadline);
@@ -4970,8 +6048,28 @@ Object.defineProperty(Animation.prototype, 'currentTime', {
         // while `paused` (or `idle`/`finished`) nothing else will ever paint
         // it. See BUG-530.
         this._syncStyleAtCurrentTime();
+        this._leaveFinishedIfSeekedBack();
     },
     configurable: true,
+});
+// §4.4.11 «update the finished state», the part a seek can trigger: a
+// `finished` animation whose current time moved back before the end becomes
+// `running` again, its `finished` promise is replaced and the next arrival at
+// the end fires a new `finish` (BUG-861). Non-enumerable internal.
+Object.defineProperty(Animation.prototype, '_leaveFinishedIfSeekedBack', {
+    value: function() {
+        var eff = this.effect, ct = this.currentTime;
+        if (this._state !== 'finished' || !eff || ct === null || this._startTime === null) return;
+        if (_wa_iter_progress(eff._timing, ct) === -2 || _wa_after_end(eff._timing, ct)) return;
+        this._state = 'running';
+        if (this._finishRes === null) {
+            var self = this;
+            this.finished = new Promise(function(res) { self._finishRes = res; });
+        }
+        if (_wa_animations.indexOf(this) < 0) _wa_animations.push(this);
+        this._scheduleRaf();
+    },
+    writable: true, configurable: true,
 });
 Object.defineProperty(Animation.prototype, 'startTime', {
     get: function() { return this._startTime; },
@@ -5126,12 +6224,14 @@ Animation.prototype._tick = function(now) {
     var ct = this.currentTime;
     if (ct === null) return;
     var p = _wa_iter_progress(eff._timing, ct);
-    if (p === -2) {
-        // Past end — finished
+    if (p === -2 || _wa_after_end(eff._timing, ct)) {
+        // Past end — finished. `fill` only decides which frame stays and
+        // whether the animation stays relevant (listed in getAnimations()).
         this._state = 'finished';
-        this._applyAtP(1);
+        if (p === -2) this._applyAtP(1); else this._applyAtP(p);
+        var fillEnd = eff._timing.fill;
         var idx = _wa_animations.indexOf(this);
-        if (idx >= 0) _wa_animations.splice(idx, 1);
+        if (idx >= 0 && fillEnd !== 'forwards' && fillEnd !== 'both') _wa_animations.splice(idx, 1);
         this._onFinish();
         _wa_process_replacements(this);
         return;
@@ -5168,9 +6268,34 @@ Animation.prototype._syncStyleAtCurrentTime = function() {
     this._applyForIterProgress(p, eff);
 };
 
+// Snapshot the target's own value of every animated property before this
+// animation paints over it — the "underlying value" `add`/`accumulate` build
+// on, and what `_clearStyles` puts back. Taken once per (re)start of painting.
+function _wa_capture_underlying(anim, eff) {
+    if (eff._underlying) return;
+    var composites = eff.composite === 'add' || eff.composite === 'accumulate' ||
+        eff._keyframes.some(function(k) { return k.composite === 'add' || k.composite === 'accumulate'; });
+    var u = {}, tgt = eff.target, props = _wa_effect_props(eff), cs = null;
+    for (var pr in props) {
+        var iv = '';
+        try { iv = tgt.style[pr]; } catch (e) {}
+        if (!iv && (composites || _wa_gap_prop_re.test(pr))) {
+            try {
+                if (!cs) cs = getComputedStyle(tgt);
+                iv = cs[pr];
+            } catch (e) {}
+        }
+        u[pr] = iv;
+    }
+    eff._underlying = u;
+    anim._inlineBefore = {};
+    for (var q in props) { try { anim._inlineBefore[q] = tgt.style[q]; } catch (e) {} }
+}
+
 Animation.prototype._applyAtP = function(p) {
     var eff = this.effect;
     if (!eff || !eff.target) return;
+    _wa_capture_underlying(this, eff);
     var styles = _wa_compute_at_p(eff, p);
     for (var prop in styles) {
         try { eff.target.style[prop] = styles[prop]; } catch(e) {}
@@ -5178,13 +6303,17 @@ Animation.prototype._applyAtP = function(p) {
     this._prevStyles = styles;
 };
 
-Animation.prototype._clearStyles = function() {
+Animation.prototype._clearStyles = function(keep) {
     var eff = this.effect;
     if (!eff || !eff.target) return;
+    var before = this._inlineBefore || {};
     for (var prop in this._prevStyles) {
-        try { eff.target.style[prop] = ''; } catch(e) {}
+        if (keep && keep[prop]) continue;
+        try { eff.target.style[prop] = before[prop] || ''; } catch(e) {}
     }
     this._prevStyles = {};
+    eff._underlying = null;
+    this._inlineBefore = null;
 };
 
 Animation.prototype._onFinish = function() {
@@ -5227,9 +6356,9 @@ function _wa_is_replaceable(anim) {
 
 // Supersede `anim`: mark it removed, drop the inline styles it had committed,
 // take it out of the live registry and fire `remove` (§4.4.2).
-function _wa_remove_replaced(anim) {
+function _wa_remove_replaced(anim, keep) {
     anim._replaceState = 'removed';
-    anim._clearStyles();
+    anim._clearStyles(keep);
     var idx = _wa_animations.indexOf(anim);
     if (idx >= 0) _wa_animations.splice(idx, 1);
     anim._onRemove();
@@ -5252,7 +6381,7 @@ function _wa_process_replacements(anim) {
         var otherProps = _wa_effect_props(other.effect);
         var shared = false;
         for (var p in otherProps) { if (props[p]) { shared = true; break; } }
-        if (shared) _wa_remove_replaced(other);
+        if (shared) _wa_remove_replaced(other, props);
     }
 }
 
@@ -5266,6 +6395,7 @@ function _wa_element_animate(target, keyframes, options) {
 
 // element.getAnimations() — all non-idle animations targeting this element.
 function _wa_get_animations_for(target) {
+    _wa_gap_an_sync(target);
     return _wa_animations.filter(function(a) {
         return a._state !== 'idle' && a.effect && a.effect.target === target;
     });
@@ -5485,26 +6615,48 @@ function _wa_doc_get_animations() {
 // navigator.connection — effective type, downlink, downlinkMax, rtt, saveData.
 // Phase 1 stub: reports '4g'/10 Mbps/100 ms (reasonable desktop default).
 (function() {
-  function NetworkInformation() {
-    this.effectiveType = '4g';
-    this.downlink      = 10;
+  // §7 declares `interface NetworkInformation : EventTarget` with no
+  // constructor, so this is a real interface chained to the shared
+  // EventTarget (BUG-664) — not a flat object with no-op listener stubs, which
+  // silently dropped every `change` subscription and failed `instanceof
+  // EventTarget`. The attributes are getter-only accessors on the prototype
+  // (readonly WebIDL attributes, class of BUG-366) over closure state, so page
+  // script cannot answer for the engine by plain assignment.
+  function NetworkInformation() { throw new TypeError('Illegal constructor'); }
+  NetworkInformation.prototype = Object.create(EventTarget.prototype);
+  NetworkInformation.prototype.constructor = NetworkInformation;
+  Object.defineProperty(NetworkInformation.prototype, Symbol.toStringTag,
+    { value: 'NetworkInformation', configurable: true });
+
+  var state = {
+    type:          'wifi',
+    effectiveType: '4g',
+    downlink:      10,
     // BUG-641: WICG Network Information §`downlinkMax` — with no knowledge of
     // the underlying link's max speed the UA reports +Infinity.
-    this.downlinkMax   = Infinity;
-    this.rtt           = 100;
-    this.saveData      = false;
-    this.type          = 'wifi';
-    this._onchange     = null;
-  }
-  Object.defineProperty(NetworkInformation.prototype, 'onchange', {
-    get: function() { return this._onchange; },
-    set: function(fn) { this._onchange = typeof fn === 'function' ? fn : null; },
-    configurable: true,
+    downlinkMax:   Infinity,
+    rtt:           100,
+    saveData:      false,
+  };
+  Object.keys(state).forEach(function(name) {
+    Object.defineProperty(NetworkInformation.prototype, name, {
+      get: function() { return state[name]; },
+      enumerable: true, configurable: true,
+    });
   });
-  NetworkInformation.prototype.addEventListener    = function() {};
-  NetworkInformation.prototype.removeEventListener = function() {};
+  // `attribute EventHandler onchange` — EventTarget.dispatchEvent invokes it
+  // after the listeners. Nothing dispatches `change` yet: Lumen has no live
+  // network measurement, the values above are static.
+  var onchange = null;
+  Object.defineProperty(NetworkInformation.prototype, 'onchange', {
+    get: function() { return onchange; },
+    set: function(fn) { onchange = typeof fn === 'function' ? fn : null; },
+    enumerable: true, configurable: true,
+  });
 
-  navigator.connection = new NetworkInformation();
+  var connection = Object.create(NetworkInformation.prototype);
+  EventTarget.call(connection);
+  navigator.connection = connection;
   window.NetworkInformation = NetworkInformation;
 })();
 
@@ -5636,7 +6788,7 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
 // Phase 1: shell wires up a real message bus between content scripts and extension background.
 // Guard: only install when _LUMEN_EXTENSION_ACTIVE is set (avoids CDP automation detection markers).
 (function() {
-    if (typeof globalThis === 'undefined' || !globalThis._LUMEN_EXTENSION_ACTIVE) { return; }
+    if (typeof globalThis === 'undefined' || !__lumen_C._LUMEN_EXTENSION_ACTIVE) { return; }
     var _rt = {
         id: 'lumen-extension',
         sendMessage: function(msg, callback) {
@@ -5778,7 +6930,12 @@ function _lumen_fire_window_resize_event() {
 //    exactly what non-configurable-but-writable globals still allow.
 (function() {
     var descs = Object.getOwnPropertyDescriptors(window);
+    // BUG-753 срез 2: engine internals listed on the `window` literal above
+    // (`_lumen_dispatch_*`, `_lumen_pump_*`, …) are already reachable through the
+    // internal container — copying them would put them back on the page's global.
+    var INTERNAL_KEY = /^__|^_+lumen/i;
     for (var k in descs) {
+        if (INTERNAL_KEY.test(k)) continue;
         var d = descs[k];
         if (d.get || d.set) {
             Object.defineProperty(globalThis, k, d);
@@ -5818,20 +6975,39 @@ Object.defineProperty(window, 'window', {
     enumerable: true,
     configurable: false,
 });
+// BUG-1198: `top` is unforgeable, so the frame bridge cannot redefine it for
+// an embedded frame's context the way it does `parent`/`frameElement` — it
+// installs `_lumen_frame_top` (`frame_bridge.rs::installHierarchyAccessors`)
+// and this getter defers to it. Before that `window.top` of every frame was
+// the frame itself, and `top.postMessage()` from a frame never left it.
 Object.defineProperty(window, 'top', {
-    get: function() { return globalThis; },   // top-level browsing context is itself
+    get: function() {
+        // Top-level browsing context is itself.
+        return typeof _lumen_frame_top === 'function' ? _lumen_frame_top() : globalThis;
+    },
     enumerable: true,
     configurable: false,
 });
 
-// addEventListener/removeEventListener/dispatchEvent now resolve as bare
-// identifiers because `window` (just reassigned above) IS the global object —
-// this rebind is mostly for clarity, since the copy loop above already put the
-// raw functions onto globalThis. Kept explicit and bound to `window` so
-// `this` inside these methods is well-defined regardless of call style.
-var addEventListener    = window.addEventListener.bind(window);
-var removeEventListener = window.removeEventListener.bind(window);
-var dispatchEvent       = window.dispatchEvent.bind(window);
+// BUG-1208: `WindowOrWorkerGlobalScope.origin` (HTML LS §8.1.3.5) — the
+// Unicode serialization of THIS REALM's own origin, distinct from
+// `location.origin` (a plain URL Standard origin of the document's address):
+// a non-sandboxed `about:blank`/`about:srcdoc` document's realm origin is
+// its PARENT's, while its `location.origin` still serializes the `about:`
+// address itself (`"null"`). Rust computes both cases into `_LUMEN_ORIGIN`
+// (`v8_runtime.rs::install_dom`'s `realm_origin`, `origin::origin_serialization_for_url`)
+// before this shim runs, mirroring `_LUMEN_PAGE_URL`'s injection just above
+// this file's `location` setup. `[Replaceable]` per WebIDL default for a
+// readonly attribute with no `[SameObject]`/`[LegacyUnforgeable]` — a plain
+// getter-only accessor already refuses assignment in strict mode and is
+// silently ignored in sloppy mode, matching that.
+Object.defineProperty(window, 'origin', {
+    get: function() {
+        return typeof _LUMEN_ORIGIN !== 'undefined' ? _LUMEN_ORIGIN : 'null';
+    },
+    enumerable: true,
+    configurable: true,
+});
 
 // BUG-589: `window` must be a proper WebIDL exotic object — instanceof
 // `EventTarget`, `Object.prototype.toString.call(window) === "[object
@@ -5868,4 +7044,51 @@ var dispatchEvent       = window.dispatchEvent.bind(window);
     Object.defineProperty(globalThis, 'Window', {
         value: Window, writable: true, enumerable: false, configurable: true,
     });
+})();
+
+// BUG-1123: the window and the document hand their own EventTarget methods
+// over to the tables `_lumen_et_platform_impl` reads (`web_api_shim_mid.js`)
+// and from here on inherit `EventTarget.prototype`'s, as every node already
+// does — `window.addEventListener === EventTarget.prototype.addEventListener`,
+// which ShadyDOM (youtube) relies on when it copies that prototype's
+// descriptors. Done last, after every shim has finished defining or wrapping
+// them, so the tables hold the final implementations and a page that later
+// wraps `window.addEventListener` around the inherited method cannot turn the
+// delegation into a loop. The bare `addEventListener(…)` call still works: an
+// identifier lookup on the global object walks its prototype chain, and a
+// missing receiver is the global object.
+(function() {
+    var names = ['addEventListener', 'removeEventListener', 'dispatchEvent'];
+    function take(obj) {
+        var out = {};
+        for (var i = 0; i < names.length; i++) {
+            var fn = obj[names[i]];
+            out[names[i]] = (typeof fn === 'function' && fn !== EventTarget.prototype[names[i]]) ? fn : null;
+            delete obj[names[i]];
+        }
+        return out;
+    }
+    _lumen_window_et = take(window);
+    _lumen_document_et = take(document);
+})();
+
+// WebIDL §3.7.3 (BUG-912): every event interface gets its own @@toStringTag on
+// its own prototype (an inherited one would make subclasses answer with the
+// base name). Own property already present (ErrorEvent, …) is left alone.
+(function() {
+    var names = ['UIEvent', 'MouseEvent', 'KeyboardEvent', 'InputEvent', 'FocusEvent',
+        'WheelEvent', 'PointerEvent', 'TouchEvent', 'AnimationEvent', 'TransitionEvent',
+        'StorageEvent', 'PopStateEvent', 'HashChangeEvent', 'TrackEvent', 'ToggleEvent',
+        'CommandEvent', 'InterestEvent', 'ContentVisibilityAutoStateChangeEvent',
+        'ErrorEvent', 'PromiseRejectionEvent', 'SubmitEvent', 'PageTransitionEvent',
+        'BeforeUnloadEvent', 'MessageEvent', 'MediaQueryListEvent', 'AnimationPlaybackEvent',
+        'CloseEvent', 'ProgressEvent', 'CompositionEvent', 'DragEvent', 'ClipboardEvent',
+        'FormDataEvent', 'SecurityPolicyViolationEvent'];
+    for (var i = 0; i < names.length; i++) {
+        var C = globalThis[names[i]];
+        if (typeof C !== 'function' || !C.prototype) continue;
+        if (Object.prototype.hasOwnProperty.call(C.prototype, Symbol.toStringTag)) continue;
+        Object.defineProperty(C.prototype, Symbol.toStringTag,
+            { value: names[i], writable: false, enumerable: false, configurable: true });
+    }
 })();

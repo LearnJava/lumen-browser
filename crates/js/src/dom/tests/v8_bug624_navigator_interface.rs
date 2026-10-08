@@ -8,8 +8,8 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -53,7 +53,7 @@ fn members_live_on_the_prototype_not_the_instance() {
         );
         assert!(is_true(&rt, &code), "{attr} must be a readonly accessor on Navigator.prototype");
     }
-    for op in ["sendBeacon", "share", "canShare", "getGamepads"] {
+    for op in ["sendBeacon", "share", "canShare", "getGamepads", "javaEnabled"] {
         let code = format!(
             "(function() {{ var d = Object.getOwnPropertyDescriptor(Navigator.prototype, '{op}'); \
                return !!d && typeof d.value === 'function'; }})()"
@@ -93,4 +93,14 @@ fn user_agent_override_script_reaches_a_loaded_page() {
     rt.eval(&crate::v8_runtime::user_agent_override_script("LumenBug624UA/1.0")).unwrap();
     assert!(is_true(&rt, "navigator.userAgent === 'LumenBug624UA/1.0'"));
     assert!(is_true(&rt, "Object.getOwnPropertyNames(navigator).length === 0"));
+}
+
+/// BUG-1142: HTML LS §8.9.1.6 `NavigatorPlugins.javaEnabled()` always
+/// returns `false`; Adobe Analytics calls it unguarded from `track()`.
+#[test]
+fn java_enabled_is_an_operation_returning_false() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(is_true(&rt, "typeof navigator.javaEnabled === 'function'"));
+    assert!(is_true(&rt, "navigator.javaEnabled() === false"));
+    assert!(is_true(&rt, "Navigator.prototype.javaEnabled.name === 'javaEnabled'"));
 }

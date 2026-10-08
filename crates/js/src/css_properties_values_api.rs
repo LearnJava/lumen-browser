@@ -95,8 +95,8 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
   'use strict';
 
   // Store registered properties in a global map accessible from Rust bindings.
-  if (!global._lumen_registered_properties) {
-    global._lumen_registered_properties = new Map();
+  if (!__lumen_C._lumen_registered_properties) {
+    __lumen_C._lumen_registered_properties = new Map();
   }
 
   // Create or extend CSS global object.
@@ -144,13 +144,13 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
     }
 
     // Check if already registered (override allowed per spec).
-    if (global._lumen_registered_properties.has(name)) {
+    if (__lumen_C._lumen_registered_properties.has(name)) {
       // Silently override or throw DOMException SyntaxError per CSS Houdini spec.
       // Phase 0: just override.
     }
 
     // Store definition.
-    global._lumen_registered_properties.set(name, {
+    __lumen_C._lumen_registered_properties.set(name, {
       name,
       syntax,
       inherits,
@@ -172,7 +172,7 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
   // (Used for testing and StyleSheet.registered_properties access.)
   global.CSS._getRegisteredProperties = function() {
     const result = {};
-    global._lumen_registered_properties.forEach((def, name) => {
+    __lumen_C._lumen_registered_properties.forEach((def, name) => {
       result[name] = def;
     });
     return result;

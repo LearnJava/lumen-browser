@@ -98,6 +98,141 @@ pub fn measure_text_w_varied(
     total - letter_spacing
 }
 
+/// Tab-stop geometry of one run of text (CSS Text L3 §4.2 `tab-size`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TabStops {
+    /// Distance between neighbouring tab stops, in px. `0` — no stops.
+    pub(crate) unit: f32,
+    /// Shortest rendered tab: a stop closer than this is skipped (`0.5ch`).
+    pub(crate) min_w: f32,
+}
+
+impl TabStops {
+    /// `tab-size: <number>` is `n` advances of U+0020 *including* its
+    /// `letter-spacing` and `word-spacing`; `<length>` is taken as is.
+    pub(crate) fn of(style: &ComputedStyle, m: &dyn TextMeasurer) -> Self {
+        let fams = &style.font_family;
+        let unit = match style.text_extra.tab_size_number {
+            Some(n) => {
+                let space = m.char_width_with_families(' ', style.font_size, fams)
+                    + style.letter_spacing
+                    + style.word_spacing;
+                n * space
+            }
+            None => style.tab_size,
+        };
+        Self { unit, min_w: 0.5 * m.char_width_with_families('0', style.font_size, fams) }
+    }
+
+    /// Advance of a tab whose pen sits at `x` (measured from the line's start edge).
+    pub(crate) fn advance(&self, x: f32) -> f32 {
+        if self.unit <= 0.0 {
+            return 0.0;
+        }
+        let adv = self.unit - x.max(0.0).rem_euclid(self.unit);
+        if adv < self.min_w { adv + self.unit } else { adv }
+    }
+}
+
+/// Width of `text` laid out from pen position `start_x`, where every `\t`
+/// runs to the next tab stop. `letter_spacing` follows each character except
+/// a tab (which ends exactly on its stop) and the last one.
+pub(crate) fn measure_text_tabbed(
+    text: &str,
+    start_x: f32,
+    style: &ComputedStyle,
+    tabs: TabStops,
+    m: &dyn TextMeasurer,
+) -> f32 {
+    let ls = style.letter_spacing;
+    let mut pen = start_x;
+    let mut trailing_ls = 0.0_f32;
+    for c in text.chars() {
+        if c == '\t' {
+            pen += tabs.advance(pen);
+            trailing_ls = 0.0;
+        } else {
+            pen += m.char_width_varied(c, style.font_size, &style.font_variation_settings, &style.font_family) + ls;
+            trailing_ls = ls;
+        }
+    }
+    pen - start_x - trailing_ls
+}
+
+/// Pushes `text` of `seg` as fragments of `line` starting at pen `*x`, and
+/// advances `*x`. Each tab becomes a fragment of its own whose
+/// `tab_size` is the tab's real advance, so paint draws it with the width
+/// layout chose; text between tabs stays one fragment. `src_off` is the byte
+/// offset of `text` inside `seg.text`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_tabbed_frags(
+    seg: &InlineSegment,
+    text: &str,
+    src_off: usize,
+    pad_l: f32,
+    pad_r: f32,
+    m: &dyn TextMeasurer,
+    line: &mut Vec<InlineFrag>,
+    x: &mut f32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let style = &seg.style;
+    let tabs = TabStops::of(style, m);
+    let ls = style.letter_spacing;
+    // `[start, end)` byte ranges: a run without tabs, or one tab.
+    let mut pieces: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in text.char_indices() {
+        if c == '\t' {
+            if start < i {
+                pieces.push((start, i));
+            }
+            pieces.push((i, i + 1));
+            start = i + 1;
+        }
+    }
+    if start < text.len() {
+        pieces.push((start, text.len()));
+    }
+    let last = pieces.len() - 1;
+    for (n, &(s, e)) in pieces.iter().enumerate() {
+        let piece = &text[s..e];
+        let is_tab = piece == "\t";
+        let (width, frag_style) = if is_tab {
+            let adv = tabs.advance(*x);
+            let mut st = (**style).clone();
+            // Paint splits on `\t` only for a positive `tab_size`.
+            st.tab_size = adv.max(f32::MIN_POSITIVE);
+            (adv, std::sync::Arc::new(st))
+        } else {
+            let w = measure_text_tabbed(piece, *x, style, tabs, m);
+            // A tab follows: the letter-spacing after the last character is
+            // part of the run, the tab then starts after it.
+            (if n < last { w + ls } else { w }, style.clone())
+        };
+        line.push(InlineFrag {
+            x: *x,
+            y_offset: 0.0,
+            width,
+            text: piece.to_string(),
+            style: frag_style,
+            padding_left: if n == 0 { pad_l } else { 0.0 },
+            padding_right: if n == last { pad_r } else { 0.0 },
+            is_element_box: seg.is_element_box,
+            img_src: None,
+            img_is_lazy: false,
+            is_first_line: false,
+            source_node: seg.source_node,
+            source_char_offset: seg.source_char_offset.saturating_add((src_off + s) as u32),
+            bidi_level: seg.bidi_level,
+            merged_sources: Vec::new(),
+        });
+        *x += width;
+    }
+}
+
 /// CSS Fonts L4 §6.2 — множитель `font-size` для синтезированной капители.
 ///
 /// Настоящая капитель приходит из OpenType-фич (`smcp`/`c2sc`/`pcap`/`c2pc`),
@@ -188,8 +323,8 @@ pub(crate) fn caps_synthesis(
             continue;
         }
         // Стиль капители: уменьшенный кегль + компенсация базовой линии.
-        let small = {
-            let mut st = seg.style.clone();
+        let small = Arc::new({
+            let mut st = (*seg.style).clone();
             let big = seg.style.font_size;
             st.font_size = big * SMALL_CAPS_SCALE;
             if seg.style.vertical_align == VerticalAlign::Baseline {
@@ -205,7 +340,7 @@ pub(crate) fn caps_synthesis(
                 st.vertical_align = VerticalAlign::Length(delta * (0.5 - ascent_ratio));
             }
             st
-        };
+        });
         // Разрез на однородные по роли прогоны символов.
         let start = out.len();
         let mut prev_role: Option<CapsRole> = None;
@@ -234,7 +369,7 @@ pub(crate) fn caps_synthesis(
                 });
                 no_break.push(
                     out.len() > start + 1
-                        && !prev_ch.is_some_and(|c: char| c.is_whitespace()),
+                        && !prev_ch.is_some_and(|c: char| is_wrap_whitespace(c)),
                 );
                 prev_role = Some(role);
             }
@@ -380,7 +515,7 @@ fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
         let ls = seg.style.letter_spacing;
         let tab = seg.style.tab_size;
         let families = &seg.style.font_family;
-        for raw in seg.text.split_whitespace() {
+        for raw in split_css_whitespace(&seg.text) {
             let (display, _) = strip_soft_hyphens(raw);
             let w = measure_text_w_families(&display, em, ls, tab, families, m);
             max_w = max_w.max(w);
@@ -472,7 +607,7 @@ pub(crate) fn pretty_wrap(
     // single InlineFrag, so check word count, not frag count.
     let last_word_count: usize = greedy_lines
         .last()
-        .map(|l| l.iter().map(|f| f.text.split_whitespace().count()).sum())
+        .map(|l| l.iter().map(|f| split_css_whitespace(&f.text).count()).sum())
         .unwrap_or(0);
     if last_word_count != 1 || greedy_lines.len() < 2 {
         return greedy_lines;
@@ -494,8 +629,8 @@ pub(crate) fn pretty_wrap(
     let last_frag = penult.last().unwrap();
     let last_word_w = last_frag
         .text
-        .split_whitespace()
-        .last()
+        .split(is_wrap_whitespace)
+        .rfind(|w| !w.is_empty())
         .map(|w| {
             let (display, _) = strip_soft_hyphens(w);
             measure_text_w_families(
@@ -524,7 +659,7 @@ pub(crate) fn pretty_wrap(
     // didn't blow up by more than 1 line.
     let trial_last_words: usize = trial
         .last()
-        .map(|l| l.iter().map(|f| f.text.split_whitespace().count()).sum())
+        .map(|l| l.iter().map(|f| split_css_whitespace(&f.text).count()).sum())
         .unwrap_or(0);
     if trial_last_words >= 2 && trial.len() <= target + 1 {
         trial
@@ -579,6 +714,9 @@ pub(crate) fn wrap_inline_run(
     // A segment boundary with no whitespace on either side joins tightly (e.g.
     // `<q>` `::before` open-quote glued to the quoted text, `<a>link</a>!`).
     let mut prev_trailing_ws = false;
+    // pre-wrap / break-spaces: the previous segment ended with a preserved
+    // space, i.e. a line may break before this segment's first word.
+    let mut pre_wrap_space_before = false;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         // Перенос перед первым словом запрещён, когда сегмент — «хвост»
@@ -589,13 +727,14 @@ pub(crate) fn wrap_inline_run(
             result.push(std::mem::take(&mut current_line));
             current_x = 0.0;
             prev_trailing_ws = false;
+            pre_wrap_space_before = false;
             continue;
         }
 
         // Does this segment's source text carry collapsible whitespace at its
         // edges? Used to decide the boundary gap with the previous segment.
-        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
-        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
+        let seg_lead_ws = seg.text.starts_with(|c: char| is_wrap_whitespace(c));
+        let seg_trail_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
 
         // Pre-mode: whitespace preserved, no word wrapping, tabs are tab_size wide.
         if white_space.preserves_whitespace() {
@@ -603,33 +742,29 @@ pub(crate) fn wrap_inline_run(
                 continue;
             }
             prev_trailing_ws = false;
+            // BUG-1322: pre-wrap / break-spaces keep the spaces but still wrap
+            // after them; only `pre` is a single unbreakable fragment.
+            if !white_space.is_nowrap() {
+                let starts_space = seg.text.starts_with([' ', '\t']);
+                let params = super::inline_wrap_preserved::PreservedWrap {
+                    max_width, viewport, m, white_space, word_break, overflow_wrap, line_break,
+                    break_before: !no_break_before
+                        && pre_wrap_space_before
+                        && (white_space == crate::style::WhiteSpace::BreakSpaces || !starts_space),
+                };
+                super::inline_wrap_preserved::wrap_preserved_segment(
+                    seg, &params, &mut result, &mut current_line, &mut current_x,
+                );
+                pre_wrap_space_before = seg.text.ends_with([' ', '\t']);
+                continue;
+            }
             let style = &seg.style;
             let em = style.font_size;
-            let ls = style.letter_spacing;
-            let tab_size = style.tab_size;
             let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
             let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_x += seg.pre_space;
-            let frag_x = current_x;
-            let frag_w = measure_text_w_varied(&seg.text, em, ls, tab_size, &seg.style.font_family, &seg.style.font_variation_settings, m);
-            current_line.push(InlineFrag {
-                x: frag_x,
-                y_offset: 0.0,
-                width: frag_w,
-                text: seg.text.clone(),
-                style: style.clone(),
-                padding_left: pad_l,
-                padding_right: pad_r,
-                is_element_box: seg.is_element_box,
-                img_src: None,
-                img_is_lazy: false,
-                is_first_line: false,
-                source_node: seg.source_node,
-                source_char_offset: seg.source_char_offset,
-                bidi_level: seg.bidi_level,
-                merged_sources: Vec::new(),
-            });
-            current_x += frag_w + seg.post_space;
+            push_tabbed_frags(seg, &seg.text, 0, pad_l, pad_r, m, &mut current_line, &mut current_x);
+            current_x += seg.post_space;
             continue;
         }
 
@@ -672,8 +807,8 @@ pub(crate) fn wrap_inline_run(
             continue;
         }
 
-        // Collect words; split_whitespace preserves U+00AD within tokens.
-        let raw_words: Vec<&str> = seg.text.split_whitespace().collect();
+        // Collect words; split_css_whitespace preserves U+00AD within tokens.
+        let raw_words: Vec<&str> = split_css_whitespace(&seg.text).collect();
         if raw_words.is_empty() {
             // Whitespace-only segment (rare in collapsing mode): propagate the gap.
             if seg_lead_ws || seg_trail_ws {
@@ -700,7 +835,7 @@ pub(crate) fn wrap_inline_run(
             let (display_word, shy_positions) = strip_soft_hyphens(raw_word);
 
             // Byte offset of this word within seg.text — used for Selection/Range mapping.
-            // raw_word is a subslice produced by split_whitespace(), so pointer arithmetic is valid.
+            // raw_word is a subslice produced by split_css_whitespace(), so pointer arithmetic is valid.
             let frag_source_offset = {
                 let raw_ptr = raw_word.as_ptr() as usize;
                 let seg_ptr = seg.text.as_ptr() as usize;
@@ -731,13 +866,16 @@ pub(crate) fn wrap_inline_run(
             // Перенос перед этим словом разрешён? Запрещён он только на стыке
             // подсегментов, разрезанных капителью внутри слова.
             let breakable = !is_seg_first || !no_break_before;
+            // Слово не влезает в остаток строки. Для мягкого переноса и
+            // `word-break: break-all` это достаточное условие, в том числе когда
+            // слово начинает строку и переполняет контейнер в одиночку
+            // (CSS Text L3 §5.2, §6.1).
+            let overflows = breakable && current_x + gap + pre + word_w > max_width;
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
-            let needs_wrap = !current_line.is_empty()
-                && breakable
-                && current_x + gap + pre + word_w > max_width;
+            let needs_wrap = !current_line.is_empty() && overflows;
 
             // CSS Text L3 §5.5 `line-break` — soft wrap opportunities *inside*
-            // the word. CJK text carries no spaces, so `split_whitespace` hands
+            // the word. CJK text carries no spaces, so `split_css_whitespace` hands
             // us whole paragraphs here; without this the run would either
             // overflow the container or be pushed onto a line of its own.
             // Only relevant when the word does not fit as-is; `word-break:
@@ -813,7 +951,7 @@ pub(crate) fn wrap_inline_run(
                 continue;
             }
 
-            if needs_wrap {
+            if overflows {
                 // CSS Text L3 §6: try hyphenation before hard wrap.
                 let hyph_result = if hyphens != Hyphens::None {
                     let mut break_pts = shy_positions.clone();
@@ -919,9 +1057,12 @@ pub(crate) fn wrap_inline_run(
                     continue;
                 }
 
-                // No hyphenation break found — normal wrap.
-                result.push(std::mem::take(&mut current_line));
-                current_x = 0.0;
+                // No hyphenation break found — normal wrap. A word that starts the
+                // line has nowhere to wrap to: it stays and overflows.
+                if needs_wrap {
+                    result.push(std::mem::take(&mut current_line));
+                    current_x = 0.0;
+                }
             }
 
             // CSS Text L3 §8.1: overflow-wrap: break-word / anywhere — char-break
@@ -1075,10 +1216,25 @@ pub(crate) fn align_lines(
     text_align_last: TextAlignLast,
     direction: Direction,
 ) {
-    let is_rtl = direction == Direction::Rtl;
     let total = lines.len();
     for (idx, line) in lines.iter_mut().enumerate() {
-        let is_last = idx + 1 == total;
+        align_one_line(line, idx + 1 == total, content_width, text_align, text_align_last, direction);
+    }
+}
+
+/// One iteration of [`align_lines`]: reorder + align a single line box.
+/// `is_last` selects `text-align-last`; `content_width` is the width of *this*
+/// line box (a line shortened by a float aligns inside its own band).
+pub(crate) fn align_one_line(
+    line: &mut [InlineFrag],
+    is_last: bool,
+    content_width: f32,
+    text_align: TextAlign,
+    text_align_last: TextAlignLast,
+    direction: Direction,
+) {
+    let is_rtl = direction == Direction::Rtl;
+    {
         // CSS Text L3 §7.2: last line uses text-align-last.
         // Auto → same as text-align (justify not yet in TextAlign, so no special case).
         // TextAlignLast::Justify → Start (word-spacing justification not yet implemented).
@@ -1090,7 +1246,7 @@ pub(crate) fn align_lines(
                 TextAlignLast::Center  => TextAlign::Center,
                 TextAlignLast::Start   => TextAlign::Start,
                 TextAlignLast::End     => TextAlign::End,
-                TextAlignLast::Justify => TextAlign::Start,
+                TextAlignLast::Justify | TextAlignLast::MatchParent => TextAlign::Start,
             }
         } else {
             text_align
@@ -1103,7 +1259,7 @@ pub(crate) fn align_lines(
         };
         // Measured before reordering, while `wrap_inline_run`'s ascending-x
         // order still holds, so the last frag is the rightmost one.
-        let Some(last_frag) = line.last() else { continue };
+        let Some(last_frag) = line.last() else { return };
         let line_width = last_frag.x + last_frag.width;
         // UAX #9 L2 — logical → visual placement. Subsumes the RTL line mirror
         // `align_lines` used to do itself, but level-aware, so an LTR island
@@ -1205,12 +1361,12 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
             });
-            prev_trailing_ws = seg.text.ends_with(|c: char| c.is_whitespace());
+            prev_trailing_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
             continue;
         }
-        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
-        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
-        let text: String = seg.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let seg_lead_ws = seg.text.starts_with(|c: char| is_wrap_whitespace(c));
+        let seg_trail_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
+        let text: String = split_css_whitespace(&seg.text).collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             if seg_lead_ws || seg_trail_ws {
                 prev_trailing_ws = true;
@@ -1332,34 +1488,44 @@ fn truncate_frag_with_ellipsis(
 
 /// CSS Overflow L4 §3.2 / CSS Display L3 §7.2 — `-webkit-line-clamp` / `line-clamp`.
 ///
-/// Truncates `lines` to at most `max_lines` entries. If truncation occurred, forces
-/// an ellipsis (U+2026) onto the *last* visible line to signal omitted content.
+/// Forces an ellipsis (U+2026) onto the *last* visible line of a clamped container to
+/// signal omitted content (the container itself cuts the lines, see `line_clamp_flow`).
 /// The ellipsis is appended to the last fragment if the line fits within `max_width`,
 /// or replaces overflowing text if the line is already too wide.
 ///
 /// Called only when a text measurer is available (same guard as `text-overflow: ellipsis`).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-pub(crate) fn apply_line_clamp(
-    lines: &mut Vec<Vec<InlineFrag>>,
-    max_lines: u32,
+pub(crate) fn ellipsize_last_line(
+    last: &mut Vec<InlineFrag>,
     max_width: f32,
     font_size: f32,
     m: &dyn TextMeasurer,
+    rtl: bool,
 ) {
-    let n = max_lines as usize;
-    if lines.len() <= n {
-        return;
-    }
-    lines.truncate(n);
-
     let ellipsis = '\u{2026}';
     let ellipsis_w = m.char_width(ellipsis, font_size);
-    let last = match lines.last_mut() {
-        Some(l) => l,
-        None => return,
-    };
     if last.is_empty() {
         return;
+    }
+    // A right-to-left line ends on its left: the ellipsis is a frag of its own (paragraph
+    // level, so bidi keeps it left of the text) in the room the right-aligned text leaves.
+    if rtl {
+        let first = last.iter().min_by(|a, b| a.x.total_cmp(&b.x)).unwrap();
+        if first.x + 0.01 >= ellipsis_w {
+            let mut e = first.clone();
+            e.x = first.x - ellipsis_w;
+            e.width = ellipsis_w;
+            e.text = ellipsis.to_string();
+            e.padding_left = 0.0;
+            e.padding_right = 0.0;
+            e.is_element_box = false;
+            e.img_src = None;
+            e.img_is_lazy = false;
+            e.bidi_level = 1;
+            e.merged_sources.clear();
+            last.push(e);
+            return;
+        }
     }
 
     let line_end = last.last().map(|f| f.x + f.width).unwrap_or(0.0);

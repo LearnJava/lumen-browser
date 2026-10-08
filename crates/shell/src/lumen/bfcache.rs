@@ -10,6 +10,9 @@
 
 use crate::*;
 
+/// Срок ответа движка о блокерах bfcache (THREAD-9); дальше — «заблокирована».
+const BFCACHE_BLOCKER_WAIT: std::time::Duration = std::time::Duration::from_millis(30);
+
 impl Lumen {
     /// Whether the current page may be stored as a full bfcache freeze.
     ///
@@ -26,10 +29,25 @@ impl Lumen {
         if no_store {
             return false;
         }
-        !route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.has_bfcache_freeze_blocker()
-        })
-        .unwrap_or(false)
+        !self.bfcache_blocker_within(BFCACHE_BLOCKER_WAIT)
+    }
+
+    /// THREAD-9: `has_bfcache_freeze_blocker` без неограниченного ожидания UI-потока.
+    /// Под движковым потоком чтение стоит в FIFO за текущим заданием; не дождавшись
+    /// за `wait`, считаем страницу заблокированной — она уйдёт по снимочному
+    /// пути bfcache (как у страниц с `unload`), а навигация не встанет за JS-ходом.
+    fn bfcache_blocker_within(&self, wait: std::time::Duration) -> bool {
+        match self.engine_thread.as_ref() {
+            Some(engine) => engine
+                .query_within(wait, |state| {
+                    state.js.as_ref().is_some_and(|j| j.has_bfcache_freeze_blocker())
+                })
+                .unwrap_or(true),
+            None => self
+                .js_ctx
+                .as_ref()
+                .is_some_and(|j| j.has_bfcache_freeze_blocker()),
+        }
     }
 
     /// Thaw a frozen page — restore DOM + stylesheet, reinstall a fresh JS runtime
@@ -109,6 +127,9 @@ impl Lumen {
                         push_backend,
                         None,
                         false,
+                        // BUG-1208: bfcache thaw is always the top-level page —
+                        // no parent to inherit an `about:` origin from.
+                        None,
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }
@@ -139,6 +160,7 @@ impl Lumen {
         self.relayout();
         self.scroll_x = entry.scroll_x;
         self.scroll_y = entry.scroll_y;
+        self.issue_scroll_command();
         self.title = entry.title.clone();
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));
@@ -238,6 +260,7 @@ impl Lumen {
         self.relayout();
         self.scroll_x = parked.scroll_x;
         self.scroll_y = parked.scroll_y;
+        self.issue_scroll_command();
         self.title = parked.title.clone();
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));

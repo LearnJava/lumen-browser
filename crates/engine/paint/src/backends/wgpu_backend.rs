@@ -12,7 +12,6 @@ use lumen_core::ColorSpace;
 use lumen_core::ext::{FontProvider, MemoryPressureLevel};
 use lumen_core::geom::Size;
 use lumen_image::Image;
-use winit::window::Window;
 
 use crate::backend::{RenderBackend, RenderError};
 use crate::renderer::Renderer;
@@ -65,7 +64,7 @@ impl WgpuBackend {
     /// Возвращает `Err` если GPU-адаптер недоступен или инициализация шейдеров
     /// завершилась ошибкой.
     pub fn new(
-        window: Arc<Window>,
+        window: Arc<crate::SurfaceWindow>,
         font_bytes: Vec<u8>,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {

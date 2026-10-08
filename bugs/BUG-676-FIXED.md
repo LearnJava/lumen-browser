@@ -72,14 +72,14 @@
 `createHTMLDocument()` без Node-методов — `document.createNodeIterator`/
 `importNode` "not a function" на нём же), [BUG-464](BUG-464-OPEN.md)/
 [BUG-477](BUG-477-OPEN.md) (`document.elementFromPoint`/`elementsFromPoint`
-не реализованы), [BUG-601](BUG-601-OPEN.md) (глобальный `DOMTokenList`
+не реализованы), [BUG-601](BUG-601-FIXED.md) (глобальный `DOMTokenList`
 отсутствует), [BUG-471](BUG-471-FIXED.md) (`CSSStyleSheet`/CSSOM не
 подключены). Новых номеров под них не заведено — реконфирмации.
 
 ## Причина
 
 Тот же класс дефекта, что уже документирован для `Selection`
-([BUG-671](BUG-671-OPEN.md)) и `Headers`/`Response`
+([BUG-671](BUG-671-FIXED.md)) и `Headers`/`Response`
 ([BUG-369](BUG-369-FIXED.md)/[BUG-370](BUG-370-FIXED.md)): объект собирается
 как ES5-литерал с методами вместо `class` + прототипной цепочки, поэтому
 глобального конструктора негде взяться, а методы, которых нет в самом

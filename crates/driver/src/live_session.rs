@@ -65,6 +65,26 @@ impl LiveWindowSession {
         Self { handle, current_url: Mutex::new(String::new()) }
     }
 
+    /// Move the pointer to viewport CSS-pixel `(x, y)` without pressing
+    /// anything (BUG-1194).
+    pub fn pointer_move(&self, x: f32, y: f32) -> Result<()> {
+        self.execute(AutomationCommand::PointerMove { x, y })?;
+        Ok(())
+    }
+
+    /// Dispatch one `keydown` (`down`) or `keyup` for a non-text key at the
+    /// focused element, without clicking (BUG-1194).
+    pub fn press_key(&self, key: &str, code: &str, down: bool) -> Result<()> {
+        self.execute(AutomationCommand::Key { key: key.to_owned(), code: code.to_owned(), down })?;
+        Ok(())
+    }
+
+    /// Type `text` into the focused element without clicking first (BUG-1194).
+    pub fn type_focused(&self, text: &str) -> Result<()> {
+        self.execute(AutomationCommand::TypeFocused(text.to_owned()))?;
+        Ok(())
+    }
+
     /// Send `command` and unwrap the expected reply variant, mapping
     /// `AutomationReply::Error` and any other unexpected reply to `Err`.
     fn execute(&self, command: AutomationCommand) -> Result<AutomationReply> {
@@ -213,7 +233,7 @@ impl BrowserSession for LiveWindowSession {
     /// «адрес, который запросили» единственное, что вообще известно.
     fn current_url(&self) -> String {
         let snapshot = self.current_url.lock().map(|g| g.clone()).unwrap_or_default();
-        match self.execute(AutomationCommand::Eval("location.href".to_owned())) {
+        match self.execute(AutomationCommand::Eval("location.href".to_owned(), None)) {
             Ok(AutomationReply::Eval(json)) => serde_json::from_str::<String>(&json)
                 .ok()
                 .filter(|u| !u.is_empty())
@@ -267,8 +287,20 @@ impl BrowserSession for LiveWindowSession {
     }
 
     fn eval(&mut self, js: &str) -> Result<String> {
-        match self.execute(AutomationCommand::Eval(js.to_owned()))? {
+        match self.execute(AutomationCommand::Eval(js.to_owned(), None))? {
             AutomationReply::Eval(json) => Ok(json),
+            other => Err(unexpected_reply("Eval", &other)),
+        }
+    }
+
+    /// BUG-1145: the live window waits `timeout_ms` for its engine thread
+    /// (instead of its default) — the round-trip gets the same headroom
+    /// `wait` gives its deadline, never less than [`DEFAULT_TIMEOUT`].
+    fn eval_with_timeout(&mut self, js: &str, timeout_ms: u64) -> Result<String> {
+        let round_trip = (Duration::from_millis(timeout_ms) + Duration::from_secs(2)).max(DEFAULT_TIMEOUT);
+        match self.handle.execute(AutomationCommand::Eval(js.to_owned(), Some(timeout_ms)), round_trip)? {
+            AutomationReply::Eval(json) => Ok(json),
+            AutomationReply::Error(msg) => Err(Error::Other(msg)),
             other => Err(unexpected_reply("Eval", &other)),
         }
     }
@@ -339,6 +371,34 @@ impl BrowserSession for LiveWindowSession {
     fn set_timezone(&mut self, timezone_id: Option<&str>) -> Result<()> {
         self.execute(AutomationCommand::SetTimezone(timezone_id.map(str::to_owned)))?;
         Ok(())
+    }
+
+    /// BUG-1014: round-trips to the live window, which records the state
+    /// process-globally (survives navigation) and pushes it into the current
+    /// page's Permissions shim. `false` = unknown permission name / state.
+    fn set_permission(&mut self, name: &str, state: &str) -> Result<bool> {
+        match self.execute(AutomationCommand::SetPermission {
+            name: name.to_owned(),
+            state: state.to_owned(),
+        })? {
+            AutomationReply::Eval(json) => Ok(json.trim() == "true"),
+            other => Err(unexpected_reply("SetPermission", &other)),
+        }
+    }
+
+    /// BUG-1014: the live window resolves the selector chain against its DOM
+    /// and reads role/name from the accessibility tree. `None` = no match.
+    fn computed_a11y(&mut self, selectors: &[String]) -> Result<Option<(String, String)>> {
+        match self.execute(AutomationCommand::ComputedA11y { selectors: selectors.to_vec() })? {
+            AutomationReply::Eval(json) => {
+                let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| Error::Other(e.to_string()))?;
+                Ok(match (v["role"].as_str(), v["name"].as_str()) {
+                    (Some(r), Some(n)) => Some((r.to_owned(), n.to_owned())),
+                    _ => None,
+                })
+            }
+            other => Err(unexpected_reply("ComputedA11y", &other)),
+        }
     }
 
     /// BUG-295 remainder: round-trips to the live window, which registers

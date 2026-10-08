@@ -219,6 +219,15 @@ impl Lumen {
             let y_css = (position.y as f32) / dpr;
             self.update_text_drag_select(x_css, y_css);
         }
+        // CSS UI L4 §6.2: page-text drag selection — move the focus end.
+        if self.doc_select.is_some() {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            self.update_doc_select((position.x as f32) / dpr, (position.y as f32) / dpr);
+        }
         // PiP window drag (task #21): follow the cursor while the title
         // bar is held, clamped to the window.
         if self.pip.dragging() {

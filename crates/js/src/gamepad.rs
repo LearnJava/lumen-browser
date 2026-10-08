@@ -125,7 +125,7 @@ const GAMEPAD_SHIM: &str = r#"(function() {
   // Called by future shell integration (P3) to deliver real hardware events.
   // _lumen_gamepad_connect(index, id, mapping) → fires 'gamepadconnected'.
   // _lumen_gamepad_disconnect(index)           → fires 'gamepaddisconnected'.
-  globalThis._lumen_gamepad_connect = function(index, id, mapping) {
+  __lumen_C._lumen_gamepad_connect = function(index, id, mapping) {
     var i = (typeof index === 'number' && index >= 0) ? (index | 0) : 0;
     var gp = new Gamepad(id || '', i, true, mapping || 'standard');
     gp.timestamp = typeof performance !== 'undefined' ? performance.now() : 0;
@@ -139,7 +139,7 @@ const GAMEPAD_SHIM: &str = r#"(function() {
 
   // Disconnecting clears the slot but does NOT shrink the list: once a gamepad
   // has been seen in this navigation, its index stays observable (spec §5.1).
-  globalThis._lumen_gamepad_disconnect = function(index) {
+  __lumen_C._lumen_gamepad_disconnect = function(index) {
     var i = (typeof index === 'number' && index >= 0) ? (index | 0) : 0;
     var gp = _gamepads[i];
     if (i < _gamepads.length) _gamepads[i] = null;
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn get_gamepads_grows_to_connected_index() {
         with_gamepad_api(|rt| {
-            rt.eval("globalThis._lumen_gamepad_connect(2, 'TestPad', 'standard');")
+            rt.eval("__lumen_C._lumen_gamepad_connect(2, 'TestPad', 'standard');")
                 .unwrap();
             let shape = rt
                 .eval(
@@ -316,7 +316,7 @@ mod tests {
     fn gamepad_connect_helper_exists() {
         with_gamepad_api(|rt| {
             let ok = rt
-                .eval("typeof globalThis._lumen_gamepad_connect === 'function'")
+                .eval("typeof __lumen_C._lumen_gamepad_connect === 'function'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
@@ -326,7 +326,7 @@ mod tests {
     fn gamepad_disconnect_helper_exists() {
         with_gamepad_api(|rt| {
             let ok = rt
-                .eval("typeof globalThis._lumen_gamepad_disconnect === 'function'")
+                .eval("typeof __lumen_C._lumen_gamepad_disconnect === 'function'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
@@ -336,7 +336,7 @@ mod tests {
     fn gamepad_connect_fills_slot() {
         with_gamepad_api(|rt| {
             rt.eval(
-                "globalThis._lumen_gamepad_connect(0, 'Xbox Controller (STANDARD GAMEPAD)', 'standard');",
+                "__lumen_C._lumen_gamepad_connect(0, 'Xbox Controller (STANDARD GAMEPAD)', 'standard');",
             )
             .unwrap();
             let connected = rt
@@ -349,9 +349,9 @@ mod tests {
     #[test]
     fn gamepad_disconnect_clears_slot() {
         with_gamepad_api(|rt| {
-            rt.eval("globalThis._lumen_gamepad_connect(1, 'TestPad', 'standard');")
+            rt.eval("__lumen_C._lumen_gamepad_connect(1, 'TestPad', 'standard');")
                 .unwrap();
-            rt.eval("globalThis._lumen_gamepad_disconnect(1);").unwrap();
+            rt.eval("__lumen_C._lumen_gamepad_disconnect(1);").unwrap();
             let null_slot = rt.eval("navigator.getGamepads()[1] === null").unwrap();
             assert_eq!(null_slot, JsValue::Bool(true));
         });
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn gamepad_has_17_buttons() {
         with_gamepad_api(|rt| {
-            rt.eval("globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');")
+            rt.eval("__lumen_C._lumen_gamepad_connect(0, 'TestPad', 'standard');")
                 .unwrap();
             let count = rt.eval("navigator.getGamepads()[0].buttons.length").unwrap();
             assert_eq!(count, JsValue::Number(17.0));
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn gamepad_has_four_axes() {
         with_gamepad_api(|rt| {
-            rt.eval("globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');")
+            rt.eval("__lumen_C._lumen_gamepad_connect(0, 'TestPad', 'standard');")
                 .unwrap();
             let count = rt.eval("navigator.getGamepads()[0].axes.length").unwrap();
             assert_eq!(count, JsValue::Number(4.0));
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn gamepad_vibration_actuator_present() {
         with_gamepad_api(|rt| {
-            rt.eval("globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');")
+            rt.eval("__lumen_C._lumen_gamepad_connect(0, 'TestPad', 'standard');")
                 .unwrap();
             let has_actuator = rt
                 .eval("navigator.getGamepads()[0].vibrationActuator !== null")

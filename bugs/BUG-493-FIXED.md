@@ -509,18 +509,18 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
 
 **Что вскрылось попутно** (заведено отдельно или дописано в существующие):
 
-- [BUG-1176](BUG-1176-OPEN.md) — quora: управляемый челлендж Cloudflare падает в Lumen с
+- [BUG-1176](BUG-1176-FIXED.md) — quora: управляемый челлендж Cloudflare падает в Lumen с
   `Cannot read properties of null (reading 'eval')` и перезапускается по кругу;
-- [BUG-1177](BUG-1177-OPEN.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
+- [BUG-1177](BUG-1177-FIXED.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
   connection closing` после обрыва общего HTTP/2-соединения (1 прогон из 3);
-- [BUG-1178](BUG-1178-OPEN.md) — MCP `eval` на странице без `<script>` всегда отвечает
+- [BUG-1178](BUG-1178-FIXED.md) — MCP `eval` на странице без `<script>` всегда отвечает
   `JS context not available`: у такого документа рантайма нет вовсе;
-- [BUG-1179](BUG-1179-OPEN.md) — imdb: страница челленджа (13 узлов) остаётся текущим документом
+- [BUG-1179](BUG-1179-FIXED.md) — imdb: страница челленджа (13 узлов) остаётся текущим документом
   до 26–88 с после навигации, хотя HTML настоящей страницы и её скрипты получены к 9-й секунде;
   первый непустой кадр — 37–87 с (Chrome: `load` за 21.7 с);
-- [BUG-648](BUG-648-OPEN.md) — imdb тоже падает на синхронной доставке buffered-записей
+- [BUG-648](BUG-648-FIXED.md) — imdb тоже падает на синхронной доставке buffered-записей
   `PerformanceObserver` (`a is not a function`), дописано к cnbc;
-- [BUG-1158](BUG-1158-OPEN.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
+- [BUG-1158](BUG-1158-FIXED.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
   дописано к yahoo;
-- [BUG-1145](BUG-1145-OPEN.md) — imdb и twitch: `eval` отвечает `JS context not available` посреди
+- [BUG-1145](BUG-1145-FIXED.md) — imdb и twitch: `eval` отвечает `JS context not available` посреди
   загрузки и снова работает через 10–25 с, дописано.

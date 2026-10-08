@@ -29,13 +29,14 @@ pub(crate) fn print_usage() {
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
     eprintln!("  [--maximized]                                   — развернуть окно на весь экран (живой перф-аудит)");
+    eprintln!("  [--no-paint]                                    — без растеризации: DOM+JS+layout, окно не активируется (или LUMEN_NO_PAINT=1, PERF-10)");
     eprintln!("  [--forced-colors]                               — включить Forced Colors Mode (или LUMEN_FORCED_COLORS=1, BUG-755)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
-    eprintln!("  [--network-service]                             — вынести HTTP/TLS/DNS в отдельный процесс (PH1-4)");
+    eprintln!("  [--network-service]                             — [заглушка] запустить lumen-network-service; запросы пока идут через встроенный HttpClient");
     eprintln!("  --ipc-server                                    — headless IPC-сервер таб-команд: PNG-снимки через TCP (TAB-5)");
 }
 
@@ -263,6 +264,44 @@ pub(crate) fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
     (found, rest)
 }
 
+/// Извлечь `--no-paint` из аргументов (PERF-10).
+///
+/// Режим «DOM+JS+layout без paint»: вместо wgpu-бэкенда ставится
+/// `NoPaintBackend`, окно видимо, но не активируется (не уводит фокус). Для
+/// WPT-категорий, не проверяющих пиксели. Также включается `LUMEN_NO_PAINT=1`.
+pub(crate) fn extract_no_paint(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_NO_PAINT").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--no-paint" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+#[cfg(test)]
+mod no_paint_tests {
+    use super::extract_no_paint;
+
+    #[test]
+    fn flag_present_is_extracted_and_removed() {
+        let args: Vec<String> = vec!["--no-paint".into(), "http://x.com".into()];
+        let (found, rest) = extract_no_paint(&args);
+        assert!(found);
+        assert_eq!(rest, vec!["http://x.com".to_string()]);
+    }
+
+    #[test]
+    fn flag_absent_keeps_args() {
+        let args: Vec<String> = vec!["http://x.com".into()];
+        let (_, rest) = extract_no_paint(&args);
+        assert_eq!(rest, args);
+    }
+}
+
 /// Извлечь `--forced-colors` из аргументов (BUG-755).
 ///
 /// Также активируется переменной окружения `LUMEN_FORCED_COLORS=1` — до этого
@@ -303,8 +342,9 @@ mod forced_colors_tests {
 
 /// Извлечь `--network-service` из аргументов (PH1-4).
 ///
-/// Когда флаг присутствует, шелл запускает `lumen-network-service` как дочерний процесс
-/// и делегирует все HTTP/TLS/DNS запросы через IPC вместо встроенного `HttpClient`.
+/// Когда флаг присутствует, шелл запускает `lumen-network-service` как дочерний процесс.
+/// Запросы через него **пока не идут** (BUG-769): загрузчик ресурсов принимает конкретный
+/// `HttpClient`, а не `NetworkTransport`, поэтому транспорт только удерживается живым.
 pub(crate) fn extract_network_service(args: &[String]) -> (bool, Vec<String>) {
     let mut found = false;
     let mut rest = Vec::new();
@@ -657,6 +697,42 @@ pub(crate) fn run_cli() -> ExitCode {
     {
         startup_profile.no_persistent_state = true;
     }
+
+    // BUG-1210: `--proxy`/`--tor` must be folded into `startup_profile` BEFORE the
+    // single `config::init_global` call below — the profile `OnceLock` is set-once,
+    // so a *second* `init_global(cfg)` after the first one (as this used to do,
+    // once here and once further down per flag) is silently ignored and the flag
+    // has no effect. Parse them here, off the raw args, same as the
+    // `no_persistent_state` scan above.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (proxy, args) = match extract_proxy(&args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка --proxy: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(proxy_str) = proxy {
+        startup_profile.proxy = Some(proxy_str);
+    }
+    let (tor_port, args) = extract_tor_mode(&args);
+    if let Some(port) = tor_port {
+        if !check_tor_connectivity(port) {
+            eprintln!(
+                "lumen --tor: Tor-демон недоступен на 127.0.0.1:{port} — \
+                 запустите Tor перед запуском Lumen"
+            );
+            return ExitCode::FAILURE;
+        }
+        startup_profile.http_profile = lumen_network::HttpProfile::TorBrowser;
+        startup_profile.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
+        startup_profile.no_persistent_state = true;
+        eprintln!(
+            "lumen: Tor-режим активирован (socks5://127.0.0.1:{port}, \
+             профиль TorBrowser, без персистентного хранилища)"
+        );
+    }
+
     // UPD-5: first-run-after-update detection + `data/*.db` backup. Must run
     // before any `lumen_storage` store is constructed — see
     // `update::backup_before_migration_if_updated`. Skipped for
@@ -676,7 +752,6 @@ pub(crate) fn run_cli() -> ExitCode {
     drop(cfg_phase);
 
     let arg_phase = startup.phase("arg-parse");
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
         Ok(r) => r,
         Err(err) => {
@@ -711,6 +786,8 @@ pub(crate) fn run_cli() -> ExitCode {
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
     let (maximized, rest_args) = extract_maximized(&rest_args);
     let (forced_colors, rest_args) = extract_forced_colors(&rest_args);
+    let (no_paint, rest_args) = extract_no_paint(&rest_args);
+    crate::no_paint_backend::set_no_paint(no_paint);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
     // PERF-6: session health journal. Turned on by `--activity-log`/`--click-log`
@@ -725,42 +802,9 @@ pub(crate) fn run_cli() -> ExitCode {
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (use_network_service, rest_args) = extract_network_service(&rest_args);
     let (ipc_server, rest_args) = extract_ipc_server(&rest_args);
-    let (proxy, rest_args) = match extract_proxy(&rest_args) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("Ошибка --proxy: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // Если прокси передан в командной строке, переопределить конфиг.
-    if let Some(proxy_str) = proxy {
-        let mut cfg = config::global().clone();
-        cfg.proxy = Some(proxy_str);
-        config::init_global(cfg);
-    }
-
-    let (tor_port, rest_args) = extract_tor_mode(&rest_args);
-
-    // --tor: переключить на профиль TorBrowser + SOCKS5 + без персистентного хранилища.
-    if let Some(port) = tor_port {
-        if !check_tor_connectivity(port) {
-            eprintln!(
-                "lumen --tor: Tor-демон недоступен на 127.0.0.1:{port} — \
-                 запустите Tor перед запуском Lumen"
-            );
-            return ExitCode::FAILURE;
-        }
-        let mut cfg = config::global().clone();
-        cfg.http_profile = lumen_network::HttpProfile::TorBrowser;
-        cfg.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
-        cfg.no_persistent_state = true;
-        config::init_global(cfg);
-        eprintln!(
-            "lumen: Tor-режим активирован (socks5://127.0.0.1:{port}, \
-             профиль TorBrowser, без персистентного хранилища)"
-        );
-    }
+    // BUG-1210: `--proxy`/`--tor` were already parsed and folded into
+    // `startup_profile` before the single `config::init_global` call above —
+    // no second parse/apply here, see the comment there.
 
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
@@ -844,10 +888,13 @@ pub(crate) fn run_cli() -> ExitCode {
     // PH1-4: Запустить сетевой сервис как дочерний процесс (если --network-service).
     // Хендл живёт до конца main() — при дропе убивает дочерний процесс.
     // _transport хранит Arc, чтобы не дропнуть IPC-соединение до конца сессии.
+    // BUG-769: транспорт в загрузчик НЕ передаётся — все запросы идут через встроенный
+    // `HttpClient` (HSTS/cookies/кэш/ad-block/прокси). Подпроцесс клиента с этим стеком
+    // не имеет, поэтому подстановку нельзя делать без переноса конфигурации в подпроцесс.
     let (_network_svc, _transport) = if use_network_service {
         match network_service::NetworkServiceHandle::spawn() {
             Ok((handle, transport)) => {
-                eprintln!("lumen: сетевой сервис запущен (PH1-4, --network-service)");
+                eprintln!("lumen: сетевой сервис запущен (PH1-4, --network-service), но запросы пока идут через встроенный HttpClient (BUG-769)");
                 (Some(handle), Some(transport))
             }
             Err(e) => {

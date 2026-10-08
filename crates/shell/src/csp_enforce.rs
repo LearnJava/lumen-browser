@@ -452,16 +452,7 @@ fn single_inline_directive_blocked(
     nonce: Option<&str>,
     body: &str,
 ) -> bool {
-    let Some(sources) = policy.effective_sources(directive) else {
-        return false;
-    };
-    let allowed = sources.iter().any(|s| match s {
-        CspSource::UnsafeInline => true,
-        CspSource::Nonce(n) => nonce.is_some_and(|actual| actual == n),
-        CspSource::Hash { algorithm, value } => algorithm.digest_base64(body.as_bytes()) == *value,
-        _ => false,
-    });
-    !allowed
+    !policy.inline_allows(directive, nonce, body)
 }
 
 /// Вызвать уже определённый JS-хук `_lumen_dispatch_csp_violation`

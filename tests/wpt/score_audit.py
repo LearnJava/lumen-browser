@@ -73,7 +73,13 @@ def shard_index(manifest: dict, state: dict) -> tuple:
     """
     names = {s["name"] for s in state["shards"]}
     categories = sorted({n.split("/")[0].replace(" (bare)", "") for n in names})
-    planned = {s["name"]: s for s in run_corpus.plan_shards(manifest, categories)}
+    # A `--prefixes` run planned its shards through the same filter; re-planning
+    # without it would give shards the run never had, and the ids of the narrowed
+    # ones would be blamed on a wider shard that is "not attempted" — i.e. a lost
+    # id would pass as nobody's.
+    planned = {s["name"]: s for s in run_corpus.plan_shards(
+        manifest, categories, state.get("prefixes") or [],
+        state.get("exclude_prefixes") or [])}
     # Longest prefix wins: `/css/CSS2/` must not swallow `/css/CSS2/floats/`.
     prefixes = sorted(((s["prefix"], name) for name, s in planned.items() if s["prefix"]),
                       key=lambda pair: -len(pair[0]))
@@ -223,6 +229,10 @@ def wall_clock(state: dict, out_dir: str, min_results: int = 20) -> dict:
             if r != i and normal[i][i]:
                 factor = normal[r][i] / normal[i][i]
                 normal[r] = [normal[r][c] - factor * normal[i][c] for c in range(4)]
+    if any(abs(normal[i][i]) < 1e-9 for i in range(3)):
+        # Вырожденная система: в срезе нет ни одного TIMEOUT (столбец нулевой),
+        # цену таймаута оценить нечем — модель времени не строится.
+        return {"shards": len(rows)}
     coef = [normal[i][3] / normal[i][i] for i in range(3)]
 
     buckets = collections.defaultdict(list)
@@ -248,7 +258,7 @@ def runnable_ids_per_shard(shards: list, manifest: dict = None) -> dict:
     """`shard name -> how many ids of a type this harness can execute it holds`.
 
     A shard that produced no verdicts is not automatically a hole: a directory
-    whose only automatable tests are `crashtest`/`print-reftest`/`aamtest` has
+    whose only automatable tests are `print-reftest`/`aamtest`/`wdspec` has
     nothing wptrunner will run for lumen, so it answers "No tests ran" and
     leaves an empty report *by construction* (WPT-RUN-5 slice 25 — corpus-wide
     6 shards / 50 ids). Telling that apart from a shard that should have run
@@ -560,7 +570,7 @@ def _selftest() -> int:
 
     manifest = {"items": {
         "testharness": {"dom": {"ok.html": leaf()}, "referrer-policy": {"r.html": leaf()}},
-        "crashtest": {"print": {"c.html": leaf()}},
+        "aamtest": {"print": {"c.html": leaf()}},
         "manual": {"appmanifest": {"m.html": leaf()}},
     }}
     shards = [
@@ -577,7 +587,7 @@ def _selftest() -> int:
         "totals": {"ids": 3, "ran": 1, "score": 1.0, "pass_rate": 0.33},
         "empty_shards": ["print", "referrer-policy", "appmanifest"],
         "per_category": {
-            "print": {"not_run": 1, "by_type": {"crashtest": 1}},
+            "print": {"not_run": 1, "by_type": {"aamtest": 1}},
             "referrer-policy": {"not_run": 1, "by_type": {"testharness": 1}},
             "dom": {"not_run": 0, "by_type": {"testharness": 1}},
         }}}
@@ -623,6 +633,24 @@ def _selftest() -> int:
         ("a category only the second run reached is reported as such",
          cmp["right_only_categories"] == ["onlyright"]),
     ]
+    # `wall_clock` fits seconds ~ a*TIMEOUT + b*resolved + c by least squares. A
+    # slice with no TIMEOUT at all (css-grid part 1, WPT-RUN-14 S7) makes the first
+    # column zero and the system singular: it used to die with ZeroDivisionError
+    # before printing anything. It must now say "no model", not crash.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        shards = []
+        for k in range(4):
+            name = f"s{k}"
+            shards.append({"name": name, "outcome": "ran", "seconds": 10.0 + k})
+            with open(os.path.join(tmp, name + ".json"), "w", encoding="utf-8") as fh:
+                json.dump({"results": [{"status": "OK"}] * (20 + 5 * k)}, fh)
+        try:
+            clock = wall_clock({"shards": shards}, tmp, min_results=1)
+        except ZeroDivisionError:
+            clock = None
+    checks.append(("wall-clock without any TIMEOUT does not divide by zero",
+                   clock is not None and "seconds_per_timeout" not in clock))
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     failed = [label for label, ok in checks if not ok]

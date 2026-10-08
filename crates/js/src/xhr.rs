@@ -53,10 +53,18 @@ function ProgressEvent(type, init) {
 }
 ProgressEvent.prototype = Object.create(Event.prototype);
 ProgressEvent.prototype.constructor = ProgressEvent;
+Object.defineProperty(ProgressEvent.prototype, Symbol.toStringTag,
+    { value: 'ProgressEvent', writable: false, enumerable: false, configurable: true });
 
 // ── XMLHttpRequestEventTarget (XHR §3.1) ──────────────────────────────────
-// Base mixin for XMLHttpRequest and XMLHttpRequestUpload.
-function _XhrEventTarget() {
+// Base interface of XMLHttpRequest and XMLHttpRequestUpload, itself an
+// `EventTarget` (BUG-1123: it was a free-standing base with its own
+// listener methods, so `xhr instanceof EventTarget` was `false` and
+// `EventTarget.prototype.addEventListener.call(xhr, …)` wrote into a store
+// this dispatch never read). Listeners, `once`, `handleEvent` objects and the
+// `on<type>` handler all come from `EventTarget.prototype`.
+function XMLHttpRequestEventTarget() {
+    EventTarget.call(this);
     this.onloadstart  = null;
     this.onprogress   = null;
     this.onabort      = null;
@@ -64,43 +72,23 @@ function _XhrEventTarget() {
     this.onload       = null;
     this.ontimeout    = null;
     this.onloadend    = null;
-    this._listeners   = {};
 }
-_XhrEventTarget.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (!this._listeners[type]) this._listeners[type] = [];
-    this._listeners[type].push(fn);
-};
-_XhrEventTarget.prototype.removeEventListener = function(type, fn) {
-    var arr = this._listeners[type];
-    if (!arr) return;
-    var idx = arr.indexOf(fn);
-    if (idx >= 0) arr.splice(idx, 1);
-};
-_XhrEventTarget.prototype.dispatchEvent = function(evt) {
-    evt.target = this;
-    var prop = 'on' + evt.type;
-    if (typeof this[prop] === 'function') { try { this[prop](evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
-    var arr = this._listeners[evt.type];
-    if (arr) {
-        var snap = arr.slice();
-        for (var i = 0; i < snap.length; i++) { try { snap[i](evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
-    }
-    return !evt.defaultPrevented;
-};
+XMLHttpRequestEventTarget.prototype = Object.create(EventTarget.prototype);
+XMLHttpRequestEventTarget.prototype.constructor = XMLHttpRequestEventTarget;
+Object.setPrototypeOf(XMLHttpRequestEventTarget, EventTarget);
 
 // ── XMLHttpRequestUpload (XHR §4.7) ────────────────────────────────────────
 // Stub: holds upload event handlers, no actual upload tracking in Phase 0.
 function XMLHttpRequestUpload() {
-    _XhrEventTarget.call(this);
+    XMLHttpRequestEventTarget.call(this);
 }
-XMLHttpRequestUpload.prototype = Object.create(_XhrEventTarget.prototype);
+XMLHttpRequestUpload.prototype = Object.create(XMLHttpRequestEventTarget.prototype);
 XMLHttpRequestUpload.prototype.constructor = XMLHttpRequestUpload;
 
 // ── XMLHttpRequest (XHR §4) ────────────────────────────────────────────────
 
 function XMLHttpRequest() {
-    _XhrEventTarget.call(this);
+    XMLHttpRequestEventTarget.call(this);
 
     // XHR §4.1 — readyState
     this.readyState = 0; // UNSENT
@@ -141,7 +129,7 @@ XMLHttpRequest.HEADERS_RECEIVED = 2;
 XMLHttpRequest.LOADING          = 3;
 XMLHttpRequest.DONE             = 4;
 
-XMLHttpRequest.prototype = Object.create(_XhrEventTarget.prototype);
+XMLHttpRequest.prototype = Object.create(XMLHttpRequestEventTarget.prototype);
 XMLHttpRequest.prototype.constructor = XMLHttpRequest;
 
 // Inherit UNSENT/OPENED/HEADERS_RECEIVED/LOADING/DONE on instances too.
@@ -368,18 +356,26 @@ XMLHttpRequest.prototype.send = function(body) {
         self._fireProgress('loadend', 0, 0);
     }
 
+    // The network path reads the response off the native FetchCache; the
+    // `blob:` path (BUG-1126) hands its own status/headers/bytes to `deliver`.
     function commitResponse() {
-        self.status     = _lumen_fetch_get_status();
-        self.statusText = _lumen_fetch_get_status_text();
+        var bodyLen = _lumen_fetch_body_length();
         // BUG-984: the final URL after redirects, not the pre-fetch request URL.
-        self.responseURL = _lumen_fetch_get_url() || self._url;
-        self._parseResponseHeaders(_lumen_fetch_get_headers());
+        deliver(_lumen_fetch_get_status(), _lumen_fetch_get_status_text(),
+                _lumen_fetch_get_url() || self._url, _lumen_fetch_get_headers(),
+                bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : []);
+    }
+
+    function deliver(status, statusText, finalUrl, rawHeaders, rawBody) {
+        self.status      = status;
+        self.statusText  = statusText;
+        self.responseURL = finalUrl;
+        self._parseResponseHeaders(rawHeaders);
 
         self._setReadyState(2); // HEADERS_RECEIVED
         self._setReadyState(3); // LOADING
 
-        var bodyLen = _lumen_fetch_body_length();
-        var rawBody = bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : [];
+        var bodyLen = rawBody.length;
         self._buildResponse(rawBody);
 
         // BUG-839: Resource Timing entry with initiatorType 'xmlhttprequest'.
@@ -392,10 +388,32 @@ XMLHttpRequest.prototype.send = function(body) {
                   contentType: self.getResponseHeader('content-type') || '' });
         }
 
+        // BUG-1141, XHR «handle response end-of-body» steps 4–9: the final
+        // `progress` (async only) fires while still LOADING, before DONE's
+        // `readystatechange` — a handler that drops the XHR on readyState 4
+        // must not see another event after it.
+        if (self._async !== false) self._fireProgress('progress', bodyLen, bodyLen);
         self._setReadyState(4); // DONE
-        self._fireProgress('progress', bodyLen, bodyLen);
         self._fireProgress('load', bodyLen, bodyLen);
         self._fireProgress('loadend', bodyLen, bodyLen);
+    }
+
+    // Fetch §4.2 «scheme fetch», `blob`: answered from the page's blob URL
+    // store, never from the network layer (which rejects the scheme). Only GET;
+    // a revoked URL is a network error. Async mode still returns to the caller
+    // first, same as the network path below.
+    if (self._url.slice(0, 5) === 'blob:' && typeof _lumen_blob_url_entry === 'function') {
+        var blobEntry = (self._method === 'GET') ? _lumen_blob_url_entry(self._url) : null;
+        var blobSettle = function() {
+            if (self._aborted) return;
+            if (!blobEntry) { fail('error'); return; }
+            var blobBytes = new Uint8Array(blobEntry._bytes);
+            deliver(200, 'OK', self._url,
+                    ['Content-Length', String(blobBytes.length), 'Content-Type', blobEntry.type],
+                    blobBytes);
+        };
+        if (self._async === false) { blobSettle(); } else { setTimeout(blobSettle, 0); }
+        return;
     }
 
     // XHR §4.5.1: true synchronous mode (`async === false`, only reachable when
@@ -530,12 +548,12 @@ XMLHttpRequest.prototype.overrideMimeType = function(mime) {
 // `window.XMLHttpRequest` works in library compatibility checks.
 globalThis.XMLHttpRequest            = XMLHttpRequest;
 globalThis.XMLHttpRequestUpload      = XMLHttpRequestUpload;
-globalThis.XMLHttpRequestEventTarget = _XhrEventTarget;
+globalThis.XMLHttpRequestEventTarget = XMLHttpRequestEventTarget;
 globalThis.ProgressEvent             = ProgressEvent;
 if (typeof window !== 'undefined') {
     window.XMLHttpRequest            = XMLHttpRequest;
     window.XMLHttpRequestUpload      = XMLHttpRequestUpload;
-    window.XMLHttpRequestEventTarget = _XhrEventTarget;
+    window.XMLHttpRequestEventTarget = XMLHttpRequestEventTarget;
     window.ProgressEvent             = ProgressEvent;
 }
 
@@ -582,7 +600,7 @@ mod tests {
             None,
             None,
             None,
-            false,
+            false, None,
         )
         .unwrap();
         r
@@ -977,7 +995,7 @@ mod tests {
             None, None,
             None,
             None,
-            false)
+            false, None)
         .unwrap();
         r
     }
@@ -1018,7 +1036,7 @@ mod tests {
             None, None,
             None,
             None,
-            false)
+            false, None)
         .unwrap();
         r
     }
@@ -1146,6 +1164,38 @@ mod tests {
         assert_eq!(
             r.eval("__states.indexOf(4) !== -1").unwrap(),
             bool_true()
+        );
+    }
+
+    /// BUG-1141: the final `progress` fires at readyState 3, before DONE's
+    /// `readystatechange`; a handler that nulls its XHR reference on
+    /// readyState 4 must not be followed by a `progress` (airbnb).
+    #[test]
+    fn xhr_final_progress_precedes_done_readystatechange() {
+        let r = rt_with_policy(None, None);
+        r.eval(
+            "var x = new XMLHttpRequest(); globalThis.__ev = []; \
+             ['loadstart','progress','load','loadend'].forEach(function(n) { \
+               x.addEventListener(n, function() { __ev.push(n + '@' + x.readyState); }); }); \
+             x.onreadystatechange = function() { __ev.push('rsc' + x.readyState); }; \
+             x.open('GET', '/data'); \
+             x.send();",
+        )
+        .unwrap();
+
+        for _ in 0..400 {
+            let _ = r.eval("_lumen_tick_timers();");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if r.eval("__ev.indexOf('loadend@4') !== -1").unwrap() == bool_true() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            r.eval("__ev.join(',')").unwrap(),
+            JsValue::String(
+                "rsc1,loadstart@1,rsc2,rsc3,progress@3,rsc4,load@4,loadend@4".into()
+            )
         );
     }
 

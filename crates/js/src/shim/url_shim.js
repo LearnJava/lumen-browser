@@ -253,8 +253,12 @@ function _lumen_url_cut_host(v) {
 }
 function URL(href, base) {
     if (arguments.length === 0) throw new TypeError('URL constructor: at least 1 argument required');
-    var resolved = _url_resolve(String(href), base ? String(base) : (typeof location !== 'undefined' ? location.href : ''));
-    var p = _lumen_parse_url(resolved);
+    // URL Standard §6.1: an omitted `base` means no base at all — a relative
+    // `href` throws. It used to fall back to `location.href`, so `new URL('')`
+    // and `new URL('not-valid')` quietly became the document URL (GAP-ORIGIN).
+    var p = (base === undefined)
+        ? _lumen_parse_url(String(href))
+        : _lumen_parse_url(_url_resolve(String(href), String(base)));
     if (!p.protocol) throw new TypeError('URL constructor: invalid URL: ' + href);
     _lumen_url_define_slots(this);
     _lumen_url_adopt(this, p);

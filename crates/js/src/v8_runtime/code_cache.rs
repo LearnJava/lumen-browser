@@ -103,9 +103,15 @@ macro_rules! compile_cached {
                 ) {
                     if let Some(__cache) = __unbound.create_code_cache() {
                         let mut __map = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-                        if __map.len() < CODE_CACHE_MAX_ENTRIES || __map.contains_key(&__hash) {
-                            __map.insert(__hash, __cache.to_vec());
+                        // At the cap, evict an arbitrary other entry instead of
+                        // dropping the new one: the cache stays bounded, and a
+                        // miss always leaves its own entry behind (BUG-1243).
+                        if __map.len() >= CODE_CACHE_MAX_ENTRIES && !__map.contains_key(&__hash) {
+                            if let Some(__victim) = __map.keys().next().copied() {
+                                __map.remove(&__victim);
+                            }
                         }
+                        __map.insert(__hash, __cache.to_vec());
                     }
                     __compiled = Some(__unbound.bind_to_current_context($tc));
                 }

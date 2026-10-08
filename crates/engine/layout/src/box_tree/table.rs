@@ -6,6 +6,7 @@
 //! правок тел.
 
 use super::*;
+use crate::style::{CaptionSide, TableLayout};
 
 /// CSS 2.1 §17.5 — table row layout with colspan/rowspan support.
 ///
@@ -287,6 +288,7 @@ pub(crate) fn build_table_init(
     available_height: Option<f32>,
     padding_top: f32,
     padding_bottom: f32,
+    hp: &dyn HyphenationProvider,
 ) -> Box<super::table_trampoline::TableInit> {
     use super::table_trampoline::{TableInit, TopEntry};
 
@@ -298,6 +300,26 @@ pub(crate) fn build_table_init(
     };
 
     let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
+
+    // CSS Tables L2 §17.4 — `display: table-caption` boxes. The table box here is wrapper and
+    // grid in one, so a caption sits inside the table's content box (above the rows for
+    // `caption-side: top`, below them for `bottom`) rather than outside the table border as in
+    // a browser that keeps two boxes. Top captions are placed now; bottom ones in `finish_table`.
+    let mut top_caption_h = 0.0_f32;
+    let mut bottom_captions: Vec<usize> = Vec::new();
+    for i in 0..b.children.len() {
+        if !is_table_caption(&b.children[i]) {
+            continue;
+        }
+        if b.children[i].style.caption_side == CaptionSide::Bottom {
+            bottom_captions.push(i);
+        } else {
+            let y = content_y + top_caption_h;
+            top_caption_h += lay_out_caption(
+                &mut b.children[i], content_x, y, content_width, measurer, viewport, children_pcb, hp,
+            );
+        }
+    }
 
     // CSS 2.1 §17.6.2 — collapsing border model. Adjacent cell borders (and the table's own
     // border with the outer cells) share a single grid line whose width is the larger of the
@@ -351,7 +373,7 @@ pub(crate) fn build_table_init(
 
     // First row starts after the top outer v_spacing slot; in collapse mode the first row's top
     // border coincides with the table's top border (start at the table border-box top edge).
-    let cur_y = if collapse { b.rect.y } else { content_y + v_spacing };
+    let cur_y = if collapse { b.rect.y + top_caption_h } else { content_y + top_caption_h + v_spacing };
 
     Box::new(TableInit {
         top_level,
@@ -375,7 +397,34 @@ pub(crate) fn build_table_init(
         available_height,
         padding_top,
         padding_bottom,
+        bottom_captions,
+        cell_dy: Vec::new(),
     })
+}
+
+/// True for a `display: table-caption` child of a table box.
+fn is_table_caption(c: &LayoutBox) -> bool {
+    matches!(c.style.display, Display::TableCaption) && !matches!(c.kind, BoxKind::Skip)
+}
+
+/// Lays out one caption as a block of `width` at `(x, y)` (its margin-box origin) and returns the
+/// margin-box height it occupies in the table's block axis.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lay_out_caption(
+    cap: &mut LayoutBox,
+    x: f32,
+    y: f32,
+    width: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) -> f32 {
+    lay_out(cap, x, y, width, None, measurer, viewport, pcb, hp, false);
+    let em = cap.style.font_size;
+    let mt = cap.style.margin_top.resolve_or_zero(em, width, viewport);
+    let mb = cap.style.margin_bottom.resolve_or_zero(em, width, viewport);
+    cap.rect.height + mt + mb
 }
 
 /// One row's Steps 1–2 (column assignment) plus rowspan-occupancy
@@ -432,6 +481,49 @@ fn build_row_init(
     }
 
     RowInit { cell_idxs, cell_cols }
+}
+
+/// CSS Tables L2 §17.5.2.1 fixed table layout: a column's width is its first-row cell's explicit
+/// width (a spanning cell splits evenly across its columns); columns without one share the
+/// remaining table width equally; if every column is sized and the table is wider than their
+/// sum, the surplus is spread equally.
+fn fixed_layout_col_widths(
+    b: &LayoutBox,
+    n_cols: usize,
+    content_width: f32,
+    h_spacing: f32,
+    viewport: Size,
+) -> Vec<f32> {
+    let mut first_row: Option<&LayoutBox> = None;
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => first_row = Some(child),
+            BoxKind::TableRowGroup => {
+                first_row = child.children.iter().find(|r| matches!(r.kind, BoxKind::TableRow));
+            }
+            _ => {}
+        }
+        if first_row.is_some() {
+            break;
+        }
+    }
+    let mut cols: Vec<Option<f32>> = Vec::new();
+    if let Some(row) = first_row {
+        let mut rowspan_map: Vec<u32> = Vec::new();
+        scan_row_explicit_widths(row, &mut cols, &mut rowspan_map, content_width, viewport);
+    }
+    cols.resize(n_cols, None);
+
+    let available = (content_width - (n_cols + 1) as f32 * h_spacing).max(0.0);
+    let explicit: f32 = cols.iter().filter_map(|w| *w).sum();
+    let auto_count = cols.iter().filter(|w| w.is_none()).count();
+    if auto_count > 0 {
+        let share = ((available - explicit) / auto_count as f32).max(0.0);
+        cols.iter().map(|w| w.unwrap_or(share)).collect()
+    } else {
+        let extra = ((available - explicit) / n_cols as f32).max(0.0);
+        cols.iter().map(|w| w.unwrap_or(0.0) + extra).collect()
+    }
 }
 
 /// Scans `row`'s cells and updates `col_explicit` with per-column explicit border-box
@@ -735,6 +827,12 @@ fn compute_table_col_widths(
     let n_cols = col_explicit.len();
     if n_cols == 0 {
         return Vec::new();
+    }
+
+    // CSS Tables L2 §17.5.2.1 — `table-layout: fixed` (only with a non-`auto` table `width`):
+    // column widths come from the first row alone; content never widens a column.
+    if b.style.table_layout == TableLayout::Fixed && b.style.width.is_some() {
+        return fixed_layout_col_widths(b, n_cols, content_width, h_spacing, viewport);
     }
 
     // Subtract spacing slots from available width before distributing to auto columns.

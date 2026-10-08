@@ -110,6 +110,69 @@ use super::text_and_images::Fixed8;
         );
     }
 
+    /// ADR-032, срез 4: смещение, подставленное по `id` без `LayoutBox`
+    /// (`apply_scroll_overrides`), даёт тот же список, что и полная пересборка.
+    fn check_override_equals_rebuild(html: &str, css: &str, x: f32, y: f32) {
+        let mut tree = layout_for(html, css);
+        let containers = lumen_layout::collect_scroll_containers(&tree);
+        assert_eq!(containers.len(), 1, "тест ожидает ровно один scroll-контейнер");
+        let c = containers[0].clone();
+        let mut dl = ordered_of(&tree);
+        assert!(lumen_layout::set_scroll_position(&mut tree, c.node, x, y));
+        let truth = ordered_of(&tree);
+        let o = ScrollLayerOverride {
+            id: c.node.index() as u32,
+            scroll_x: x,
+            scroll_y: y,
+            max_x: (c.scroll_width - c.clip_rect.width).max(0.0),
+            max_y: (c.scroll_height - c.clip_rect.height).max(0.0),
+        };
+        assert_eq!(apply_scroll_overrides(&mut dl, &[o]), 1);
+        assert_dl_eq(&dl, &truth);
+    }
+
+    #[test]
+    fn override_matches_rebuild_vertical() {
+        check_override_equals_rebuild(
+            "<div class='s'><div class='tall'>x</div></div>",
+            "body { margin: 0; } .s { overflow-y: auto; overflow-x: hidden; width: 100px; height: 80px; } .tall { height: 400px; }",
+            0.0,
+            40.0,
+        );
+    }
+
+    #[test]
+    fn override_matches_rebuild_both_axes_with_border() {
+        check_override_equals_rebuild(
+            "<div class='s'><div class='big'>x</div></div>",
+            "body { margin: 0; } .s { overflow: scroll; width: 120px; height: 90px; border: 3px solid #0f3460; } .big { width: 500px; height: 400px; }",
+            35.0,
+            60.0,
+        );
+    }
+
+    #[test]
+    fn override_matches_rebuild_zindexed_child_reestablished() {
+        check_override_equals_rebuild(
+            "<div class='s'><div class='inner'></div></div>",
+            "body { margin: 0; } .s { width: 100px; height: 100px; overflow: auto; } .inner { position: relative; z-index: 1; width: 50px; height: 200px; background: #0000ff; }",
+            0.0,
+            30.0,
+        );
+    }
+
+    #[test]
+    fn override_of_unknown_id_touches_nothing() {
+        let mut dl = ordered_of(&layout_for(
+            "<div class='s'><div class='tall'>x</div></div>",
+            ".s { overflow: auto; height: 50px; } .tall { height: 300px; }",
+        ));
+        let before = format!("{dl:?}");
+        let o = ScrollLayerOverride { id: u32::MAX, scroll_x: 0.0, scroll_y: 10.0, max_x: 0.0, max_y: 250.0 };
+        assert_eq!(apply_scroll_overrides(&mut dl, &[o]), 0);
+        assert_eq!(before, format!("{dl:?}"));
+    }
+
     /// Микробенч (не гейт): выигрыш патча против полной пересборки.
     /// `cargo test -p lumen-paint --release patch_scroll_layer_bench -- --ignored --nocapture`
     #[test]
@@ -960,4 +1023,98 @@ use super::text_and_images::Fixed8;
         );
         assert!(dl.is_empty(), "пустой PaintOrder → пустой display list");
         assert!(provenance.spans().is_empty(), "пустой display list → пустой provenance");
+    }
+
+    // ── positioned `z-index: auto` (CSS 2.1 App. E step 8) ──────────────
+
+    fn fill_ys(dl: &[DisplayCommand]) -> Vec<f32> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { rect, .. } => Some(rect.y),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn positioned_auto_precedes_in_flow_in_dom_but_paints_above_it() {
+        // The absolute box (y=20) comes first in the DOM, the in-flow box (y=0..100)
+        // after it. Step 8 paints positioned descendants after step 3-5 content,
+        // so the absolute one must be the *later* command.
+        let dl = build_ordered(
+            r#"<div id="a"></div><div id="f"></div>"#,
+            "body{margin:0}#a{position:absolute;top:20px;left:0;width:50px;height:5px;background:gold}
+             #f{height:100px;background:white}",
+        );
+        assert_eq!(fill_ys(&dl), vec![0.0, 20.0]);
+    }
+
+    #[test]
+    fn positioned_auto_stays_in_dom_order_among_positioned() {
+        // Two positioned z-auto boxes keep tree order between themselves.
+        let dl = build_ordered(
+            r#"<div id="a"></div><div id="b"></div>"#,
+            "body{margin:0}#a,#b{position:relative;height:10px}
+             #a{background:red} #b{background:blue}",
+        );
+        let colors: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { color, .. } => Some((color.r, color.b)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors, vec![(255, 0), (0, 255)]);
+    }
+
+    #[test]
+    fn positioned_auto_inner_negative_z_still_paints_below_in_flow() {
+        // `z-index: -1` inside a positioned z-auto box belongs to the *enclosing*
+        // context (the box is not a stacking context), so it goes under the
+        // in-flow content of that context, not just under its parent box.
+        let dl = build_ordered(
+            r#"<div id="p"><div id="n"></div></div><div id="f"></div>"#,
+            "body{margin:0}#p{position:relative;height:10px}
+             #n{position:absolute;z-index:-1;top:40px;left:0;width:5px;height:5px;background:red}
+             #f{height:100px;background:white}",
+        );
+        // negative layer (y=40) first, then the in-flow white box (y=10).
+        assert_eq!(fill_ys(&dl), vec![40.0, 10.0]);
+    }
+
+    // ── overflow: hidden, сдвинутый скриптом ───────────────────────────
+
+    fn scroll_layers_of(dl: &[DisplayCommand]) -> Vec<(f32, f32)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushScrollLayer { scroll_x, scroll_y, .. } => Some((*scroll_x, *scroll_y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn overflow_hidden_scrolled_by_script_gets_scroll_layer() {
+        // `scrollBy()` moves an `overflow: hidden` box too (CSS Overflow L3 §2):
+        // its content is wrapped in a PushScrollLayer inside the clip, no scrollbars.
+        let mut tree = layout_for(
+            "<div class='s'><div class='tall'>x</div></div>",
+            "body { margin: 0; } .s { overflow: hidden; width: 100px; height: 80px; } .tall { height: 400px; }",
+        );
+        let before = ordered_of(&tree);
+        assert!(scroll_layers_of(&before).is_empty(), "без сдвига — обычный клип");
+        fn hidden_node(b: &lumen_layout::LayoutBox) -> Option<lumen_dom::NodeId> {
+            if b.style.overflow_y == lumen_layout::style::Overflow::Hidden {
+                return Some(b.node);
+            }
+            b.children.iter().find_map(hidden_node)
+        }
+        let node = hidden_node(&tree).expect("overflow:hidden box");
+        assert!(lumen_layout::set_scroll_position(&mut tree, node, 0.0, 30.0));
+        let dl = ordered_of(&tree);
+        assert_eq!(scroll_layers_of(&dl), vec![(0.0, 30.0)]);
+        let pushes = dl.iter().filter(|c| matches!(c, DisplayCommand::PushScrollLayer { .. })).count();
+        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopScrollLayer)).count();
+        assert_eq!(pushes, pops);
+        assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::DrawScrollbar { .. })));
     }

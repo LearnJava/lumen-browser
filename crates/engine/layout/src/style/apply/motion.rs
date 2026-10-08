@@ -12,15 +12,17 @@
 
 use crate::style::{
     AnimationDirection,
-    AnimationFillMode,
+    AnimationFillMode, TransitionBehavior,
     AnimationPlayState,
     BackfaceVisibility,
     ComputedStyle,
     IterationCount,
+    Length,
     ObjectPosition,
     OffsetRotate,
     PositionComponent,
     ScrollBehavior,
+    ScrollInitialTarget,
     ScrollSnapStop,
     TimingFunction,
     TouchAction,
@@ -44,10 +46,171 @@ use crate::style::parse::timeline::{
     apply_view_timeline_shorthand,
     parse_animation_timeline_list,
     parse_scroll_axis,
+    parse_interest_delay,
     parse_time_list,
 };
 use crate::style::parse::transform::{parse_angle_to_radians, parse_length_px, parse_transform_list};
 use lumen_core::geom::Size;
+
+/// Разбор `offset-rotate`: `auto | reverse | <angle> | [auto | reverse] <angle>`
+/// (в любом порядке токенов). Угол — в градусах; `reverse <angle>` ≡ `auto`
+/// с добавкой `angle + 180deg`. Невалидное значение → `None` (декларация
+/// игнорируется).
+fn parse_offset_rotate(val: &str) -> Option<OffsetRotate> {
+    let mut mode: Option<bool> = None; // Some(false) = auto, Some(true) = reverse
+    let mut angle: Option<f32> = None;
+    let mut tokens = 0;
+    for t in val.split_whitespace() {
+        tokens += 1;
+        if t.eq_ignore_ascii_case("auto") && mode.is_none() {
+            mode = Some(false);
+        } else if t.eq_ignore_ascii_case("reverse") && mode.is_none() {
+            mode = Some(true);
+        } else if angle.is_none() && let Some(rad) = parse_angle_to_radians(t) {
+            angle = Some(rad.to_degrees());
+        } else {
+            return None;
+        }
+    }
+    match (tokens, mode, angle) {
+        (1..=2, Some(false), None) => Some(OffsetRotate::Auto),
+        (1..=2, Some(true), None) => Some(OffsetRotate::Reverse),
+        (1..=2, Some(false), Some(a)) => Some(OffsetRotate::AutoAngle(a)),
+        (1..=2, Some(true), Some(a)) => Some(OffsetRotate::AutoAngle(a + 180.0)),
+        (1, None, Some(a)) => Some(OffsetRotate::Angle(a)),
+        _ => None,
+    }
+}
+
+/// Разбивает значение `offset` на токены верхнего уровня: пробелы разделяют,
+/// `/` — самостоятельный токен, содержимое `(...)` не режется.
+fn split_offset_tokens(val: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start: Option<usize> = None;
+    for (i, c) in val.char_indices() {
+        match c {
+            '(' => {
+                depth += 1;
+                start.get_or_insert(i);
+            }
+            ')' => depth -= 1,
+            '/' if depth == 0 => {
+                if let Some(st) = start.take() {
+                    out.push(&val[st..i]);
+                }
+                out.push("/");
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(st) = start.take() {
+                    out.push(&val[st..i]);
+                }
+            }
+            _ => {
+                start.get_or_insert(i);
+            }
+        }
+    }
+    if let Some(st) = start {
+        out.push(&val[st..]);
+    }
+    out
+}
+
+/// `offset-path`-токен: `none` или функция (`path()`, `ray()`, `url()`, фигура).
+fn is_offset_path_token(t: &str) -> bool {
+    t.eq_ignore_ascii_case("none") || (t.contains('(') && t.ends_with(')') && !t.starts_with("calc(")
+        && !t.starts_with("min(") && !t.starts_with("max(") && !t.starts_with("clamp("))
+}
+
+/// Шортхенд `offset` (CSS Motion Path L1 §4):
+/// `[<offset-position>? [<offset-path> [<offset-distance> || <offset-rotate>]?]?]! [/ <offset-anchor>]?`.
+///
+/// Сбрасывает `offset-path`/`-distance`/`-rotate`/`-anchor` к initial и
+/// присваивает заданные. `offset-position` в движке не хранится (роль
+/// начальной точки играет нормальная позиция бокса), поэтому ведущая позиция
+/// разбирается, но отбрасывается. Невалидное значение — декларация
+/// игнорируется целиком.
+fn apply_offset_shorthand(
+    style: &mut ComputedStyle,
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) {
+    let tokens = split_offset_tokens(val);
+    if tokens.is_empty() {
+        return;
+    }
+    let slash = tokens.iter().position(|t| *t == "/");
+    let (main, anchor_toks) = match slash {
+        Some(i) => (&tokens[..i], Some(&tokens[i + 1..])),
+        None => (&tokens[..], None),
+    };
+    let anchor = match anchor_toks {
+        None => None,
+        Some([]) => return,
+        Some(a) => {
+            let joined = a.join(" ");
+            if joined.eq_ignore_ascii_case("auto") {
+                Some(None)
+            } else {
+                match ObjectPosition::parse(&joined, em_basis, viewport) {
+                    Some(p) => Some(Some(p)),
+                    None => return,
+                }
+            }
+        }
+    };
+    // Ведущая `<offset-position>`: `normal | auto | <position>` до path-токена.
+    let path_idx = main.iter().position(|t| is_offset_path_token(t));
+    let (pos_toks, rest) = match path_idx {
+        Some(i) => (&main[..i], &main[i..]),
+        None => (main, &main[main.len()..]),
+    };
+    if !pos_toks.is_empty() {
+        let joined = pos_toks.join(" ");
+        let ok = joined.eq_ignore_ascii_case("normal")
+            || joined.eq_ignore_ascii_case("auto")
+            || ObjectPosition::parse(&joined, em_basis, viewport).is_some();
+        if !ok {
+            return;
+        }
+    }
+    if rest.is_empty() && pos_toks.is_empty() && anchor.is_none() {
+        return;
+    }
+    let mut path: Option<String> = None;
+    let mut distance = None;
+    let mut rotate_toks: Vec<&str> = Vec::new();
+    if let Some((first, tail)) = rest.split_first() {
+        path = if first.eq_ignore_ascii_case("none") { None } else { Some((*first).to_string()) };
+        for t in tail {
+            let lower = t.to_ascii_lowercase();
+            let is_angle = ["deg", "grad", "rad", "turn"].iter().any(|u| lower.ends_with(u))
+                && parse_angle_to_radians(t).is_some();
+            if is_angle || lower == "auto" || lower == "reverse" {
+                rotate_toks.push(t);
+            } else if distance.is_none() && let Some(len) = parse_length_q(t, is_quirks) {
+                distance = Some(len);
+            } else {
+                return;
+            }
+        }
+    }
+    let rotate = if rotate_toks.is_empty() {
+        OffsetRotate::Auto
+    } else {
+        match parse_offset_rotate(&rotate_toks.join(" ")) {
+            Some(r) => r,
+            None => return,
+        }
+    };
+    style.offset_path = path;
+    style.offset_distance = distance.unwrap_or(Length::Px(0.0));
+    style.offset_rotate = rotate;
+    style.offset_anchor = anchor.unwrap_or(None);
+}
 
 /// Применить одну декларацию из группы «трансформации, анимации и прокрутка».
 ///
@@ -108,6 +271,7 @@ pub(in crate::style) fn apply_decl_motion(
                 }
             }
         }
+        "offset" => apply_offset_shorthand(style, val, em_basis, viewport, is_quirks),
         "offset-path" => {
             style.offset_path = match val.trim() {
                 "none" => None,
@@ -120,22 +284,12 @@ pub(in crate::style) fn apply_decl_motion(
             }
         }
         "offset-rotate" => {
-            let v = val.trim();
-            style.offset_rotate = if v.eq_ignore_ascii_case("auto") {
-                OffsetRotate::Auto
-            } else if v.eq_ignore_ascii_case("reverse") {
-                OffsetRotate::Reverse
-            } else if let Some(angle) = parse_angle_to_radians(v) {
-                OffsetRotate::Angle(angle)
-            } else if let Some(rest) = v.strip_prefix("auto ") {
-                if let Some(angle) = parse_angle_to_radians(rest.trim()) {
-                    OffsetRotate::AutoAngle(angle)
-                } else {
-                    style.offset_rotate
-                }
-            } else {
-                style.offset_rotate
-            };
+            // CSS Motion Path L1 §3.2 — `[ auto | reverse ] || <angle>`. Угол
+            // хранится в ГРАДУСАХ (как ждёт `motion_path::resolve_motion_transform`),
+            // а не в радианах, в которых его отдаёт `parse_angle_to_radians`.
+            if let Some(r) = parse_offset_rotate(val) {
+                style.offset_rotate = r;
+            }
         }
         "offset-anchor" => {
             let v = val.trim();
@@ -202,6 +356,13 @@ pub(in crate::style) fn apply_decl_motion(
             match val.trim().to_ascii_lowercase().as_str() {
                 "normal" => style.scroll_snap_stop = ScrollSnapStop::Normal,
                 "always" => style.scroll_snap_stop = ScrollSnapStop::Always,
+                _ => {}
+            }
+        }
+        "scroll-initial-target" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "none" => style.scroll_initial_target = ScrollInitialTarget::None,
+                "nearest" => style.scroll_initial_target = ScrollInitialTarget::Nearest,
                 _ => {}
             }
         }
@@ -374,8 +535,37 @@ pub(in crate::style) fn apply_decl_motion(
         "transition-delay" => {
             style.transition_delays = parse_time_list(val);
         }
+        // Interest Invokers (GAP-INTERESTINVOKER): задержки показа/снятия
+        // интереса. Раскладку не двигают — их читает JS-шим через
+        // getComputedStyle, когда взводит таймеры `interest`/`loseinterest`.
+        "interest-delay-start" => {
+            if let Some(v) = parse_interest_delay(val) {
+                style.interest_delay_start = v;
+            }
+        }
+        "interest-delay-end" => {
+            if let Some(v) = parse_interest_delay(val) {
+                style.interest_delay_end = v;
+            }
+        }
+        "interest-delay" => {
+            // `<start> <end>?` — одно значение задаёт обе половины.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let parsed: Option<Vec<Option<f32>>> =
+                parts.iter().map(|p| parse_interest_delay(p)).collect();
+            if let Some(v) = parsed.filter(|v| matches!(v.len(), 1 | 2)) {
+                style.interest_delay_start = v[0];
+                style.interest_delay_end = *v.last().unwrap_or(&v[0]);
+            }
+        }
         "transition-timing-function" => {
             style.transition_timing_functions = TimingFunction::parse_list(val);
+        }
+        "transition-behavior" => {
+            // CSS Transitions L2 §3.1: невалидный список отбрасывает декларацию.
+            if let Some(v) = TransitionBehavior::parse_list(val) {
+                style.transition_behaviors = v;
+            }
         }
         "transition-fill-mode" => {
             style.transition_fill_modes = AnimationFillMode::parse_list(val);

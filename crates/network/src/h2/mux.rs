@@ -52,6 +52,16 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// dedicated connection.
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// With streams in flight and no frame of any kind from the peer for this
+/// long, the owner sends a PING (BUG-1205). A silent connection with open
+/// streams is either slow or dead without FIN/RST (a dropped tunnel).
+const PROBE_AFTER: Duration = Duration::from_secs(8);
+
+/// How long the PING may stay unanswered before the connection is declared
+/// dead: its streams fail (idempotent ones retryably) and the pool opens a
+/// new connection.
+const PING_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Concurrent-stream cap when the peer states no SETTINGS_MAX_CONCURRENT_STREAMS
 /// (RFC 9113 §5.1.2 recommends peers allow at least 100).
 const DEFAULT_MAX_STREAMS: usize = 100;
@@ -121,6 +131,15 @@ impl H2Mux {
     /// done) and start its owner thread. `cert_info` is the certificate of
     /// the TLS handshake that opened it, reported on every response it serves.
     pub(crate) fn spawn(conn: H2Conn<RawStream>, cert_info: Option<CertInfo>) -> Result<Self, Error> {
+        Self::spawn_with(conn, cert_info, PROBE_AFTER, PING_TIMEOUT)
+    }
+
+    fn spawn_with(
+        conn: H2Conn<RawStream>,
+        cert_info: Option<CertInfo>,
+        probe_after: Duration,
+        ping_timeout: Duration,
+    ) -> Result<Self, Error> {
         conn.transport()
             .set_read_timeout(Some(POLL_INTERVAL))
             .map_err(|e| Error::Network(format!("H2 set poll timeout: {e}")))?;
@@ -132,6 +151,10 @@ impl H2Mux {
             accepting: Arc::clone(&accepting),
             queued: VecDeque::new(),
             active: HashMap::new(),
+            last_rx: Instant::now(),
+            ping_sent: None,
+            probe_after,
+            ping_timeout,
         };
         std::thread::Builder::new()
             .name("lumen-h2-mux".to_owned())
@@ -209,6 +232,12 @@ struct Owner {
     accepting: Arc<AtomicBool>,
     queued: VecDeque<(u64, MuxRequest, Reply)>,
     active: HashMap<u32, Active>,
+    /// Last time any frame arrived on the connection.
+    last_rx: Instant,
+    /// When the outstanding liveness PING went out.
+    ping_sent: Option<Instant>,
+    probe_after: Duration,
+    ping_timeout: Duration,
 }
 
 impl Owner {
@@ -255,10 +284,14 @@ impl Owner {
                 return Some(e);
             }
             if self.active.is_empty() {
+                self.ping_sent = None;
+                self.last_rx = Instant::now();
                 continue;
             }
             match self.conn.poll_frame() {
                 Ok(Some(frame)) => {
+                    self.last_rx = Instant::now();
+                    self.ping_sent = None;
                     if let Some(a) = self.active.get_mut(&frame.stream_id()) {
                         a.last_frame = Instant::now();
                     }
@@ -268,7 +301,12 @@ impl Owner {
                         Err(e) => return Some(e),
                     }
                 }
-                Ok(None) => self.expire_streams(),
+                Ok(None) => {
+                    if let Err(e) = self.check_liveness() {
+                        return Some(e);
+                    }
+                    self.expire_streams();
+                }
                 Err(e) => return Some(e),
             }
         }
@@ -369,6 +407,23 @@ impl Owner {
         }
     }
 
+    /// PING a connection that has been silent while streams wait on it; `Err`
+    /// when the PING went unanswered — the connection is dead (BUG-1205).
+    fn check_liveness(&mut self) -> Result<(), Error> {
+        let now = Instant::now();
+        match self.ping_sent {
+            Some(sent) if now.duration_since(sent) > self.ping_timeout => Err(Error::Network(
+                format!("no response to PING for {} ms", self.ping_timeout.as_millis()),
+            )),
+            Some(_) => Ok(()),
+            None if now.duration_since(self.last_rx) > self.probe_after => {
+                self.ping_sent = Some(now);
+                self.conn.send_ping()
+            }
+            None => Ok(()),
+        }
+    }
+
     /// Fail streams that went [`STREAM_TIMEOUT`] without a frame.
     fn expire_streams(&mut self) {
         let now = Instant::now();
@@ -404,7 +459,7 @@ mod tests {
     use super::*;
     use crate::h2::frame::{Frame, SETTING_MAX_CONCURRENT_STREAMS};
     use crate::h2::hpack::{Decoder, Encoder};
-    use crate::h2::pool::{Acquire, H2Pool};
+    use crate::h2::pool::{send_resending, Acquire, H2Pool, Sent, H2_RESEND_LIMIT};
     use crate::pool::PoolKey;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -595,6 +650,209 @@ mod tests {
         assert!(err.retryable, "idempotent request lost before any response is retryable");
         std::thread::sleep(Duration::from_millis(50));
         assert!(!mux.is_usable());
+    }
+
+    #[test]
+    fn silent_connection_is_dropped_and_request_resent() {
+        // BUG-1205: the first connection goes mute (no FIN/RST) after the
+        // request; the PING stays unanswered, the request moves to a new one.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::thread::spawn(move || {
+                        let mut s = s;
+                        let mut magic = [0u8; 24];
+                        let _ = s.read_exact(&mut magic);
+                        let mut out = Vec::new();
+                        let _ = Frame::Settings { ack: false, params: vec![] }.encode(&mut out);
+                        let _ = s.write_all(&out);
+                        // Mute: keep the socket open, read and say nothing.
+                        let mut chunk = [0u8; 4096];
+                        while matches!(s.read(&mut chunk), Ok(n) if n > 0) {}
+                    });
+                } else {
+                    std::thread::spawn(move || serve(s, 1, None));
+                }
+            }
+        });
+        let pool = H2Pool::new();
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let open = |addr| {
+            let tcp = TcpStream::connect(addr).expect("connect");
+            let conn = H2Conn::connect(RawStream::Plain(tcp)).expect("h2 preface");
+            H2Mux::spawn_with(conn, None, Duration::from_millis(200), Duration::from_millis(200))
+                .expect("spawn")
+        };
+        let mut left = H2_RESEND_LIMIT;
+        let send = |m: &H2Mux| m.request(get("/mute"), None);
+        let mut opened = None;
+        let started = Instant::now();
+        let resp = loop {
+            match send_resending(Some(&pool), &key, opened.take(), &mut left, &send) {
+                Sent::Done(r) => break r,
+                Sent::Connect(Some(r)) => opened = Some(r.fulfill(open(addr))),
+                Sent::Connect(None) => opened = Some(Arc::new(open(addr))),
+            }
+        };
+        let (status, _, body) = resp.expect("resent on a fresh connection");
+        assert_eq!((status, body), (200, b"/mute".to_vec()));
+        assert_eq!(accepted.load(Ordering::SeqCst), 2);
+        assert!(started.elapsed() < Duration::from_secs(5), "not the 60 s stream timeout");
+    }
+
+    /// h2c server that answers each request as soon as it arrives and hangs
+    /// up — without GOAWAY, like a dropped TCP connection — once it has
+    /// answered `limit` of them (`0`: hang up after reading the first frames).
+    /// Requests still in flight or queued at that moment got no response.
+    fn serve_then_drop(stream: TcpStream, max_streams: u32, limit: usize) {
+        let mut s = stream;
+        let mut magic = [0u8; 24];
+        if s.read_exact(&mut magic).is_err() {
+            return;
+        }
+        let mut out = Vec::new();
+        let _ = Frame::Settings { ack: false, params: vec![(SETTING_MAX_CONCURRENT_STREAMS, max_streams)] }
+            .encode(&mut out);
+        let _ = Frame::Settings { ack: true, params: vec![] }.encode(&mut out);
+        if s.write_all(&out).is_err() {
+            return;
+        }
+        let mut dec = Decoder::new();
+        let mut enc = Encoder::new();
+        let mut buf = Vec::new();
+        let mut answered = 0;
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = match s.read(&mut chunk) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            if limit == 0 {
+                return;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            while let Ok(Some((frame, used))) = Frame::parse(&buf, 1 << 20) {
+                buf.drain(..used);
+                let Frame::Headers { stream_id, block_fragment, .. } = frame else {
+                    continue;
+                };
+                let fields = dec.decode(&block_fragment).unwrap_or_default();
+                let path = fields.iter().find(|f| f.name == b":path").map(|f| f.value.clone()).unwrap_or_default();
+                let mut out = Vec::new();
+                let block = enc.encode(&[(b":status".as_slice(), b"200".as_slice())]);
+                let _ = Frame::Headers { stream_id, end_stream: false, end_headers: true, priority: None, block_fragment: block }
+                    .encode(&mut out);
+                let _ = Frame::Data { stream_id, end_stream: true, data: path }.encode(&mut out);
+                if s.write_all(&out).is_err() {
+                    return;
+                }
+                answered += 1;
+                if answered == limit {
+                    // FIN after the answers, then drain: closing with unread
+                    // client frames would send RST, and on Windows an RST
+                    // discards the answers the client has not read yet.
+                    let _ = s.shutdown(std::net::Shutdown::Write);
+                    let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
+                    while matches!(s.read(&mut chunk), Ok(n) if n > 0) {}
+                    return;
+                }
+            }
+        }
+    }
+
+    /// What `fetch_single` does around [`send_resending`]: open the
+    /// connection whenever told to, then send through the resending path.
+    fn fetch_via_pool(pool: &H2Pool, key: &PoolKey, addr: std::net::SocketAddr, path: &str) -> (Result<H2Response, MuxError>, u32) {
+        let mut left = H2_RESEND_LIMIT;
+        let send = |m: &H2Mux| m.request(get(path), None);
+        let mut opened = None;
+        loop {
+            match send_resending(Some(pool), key, opened.take(), &mut left, &send) {
+                Sent::Done(r) => return (r, left),
+                Sent::Connect(Some(r)) => opened = Some(r.fulfill(open_mux(addr))),
+                Sent::Connect(None) => opened = Some(Arc::new(open_mux(addr))),
+            }
+        }
+    }
+
+    #[test]
+    fn request_that_opened_a_dying_connection_is_resent() {
+        // BUG-1177: the first connection dies holding the very request that
+        // opened it; that request used to fail outright.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                let limit = if count.fetch_add(1, Ordering::SeqCst) == 0 { 0 } else { usize::MAX };
+                std::thread::spawn(move || serve_then_drop(s, 100, limit));
+            }
+        });
+        let pool = H2Pool::new();
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let (resp, left) = fetch_via_pool(&pool, &key, addr, "/opener");
+        let (status, _, body) = resp.expect("resent on a fresh connection");
+        assert_eq!((status, body), (200, b"/opener".to_vec()));
+        assert_eq!(accepted.load(Ordering::SeqCst), 2);
+        assert_eq!(left, H2_RESEND_LIMIT - 1, "exactly one resend");
+    }
+
+    #[test]
+    fn requests_lost_with_a_dying_connection_all_get_answers() {
+        // BUG-1177 (bbc): 6 requests to one origin, 2 streams at a time; the
+        // connection drops after 4 answers, the rest are in flight or queued.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                count.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || serve_then_drop(s, 2, 4));
+            }
+        });
+        let pool = Arc::new(H2Pool::new());
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let handles: Vec<_> = (0..6)
+            .map(|i| {
+                let pool = Arc::clone(&pool);
+                let key = key.clone();
+                std::thread::spawn(move || (i, fetch_via_pool(&pool, &key, addr, &format!("/b{i}")).0))
+            })
+            .collect();
+        for h in handles {
+            let (i, resp) = h.join().expect("join");
+            let (status, _, body) = resp.unwrap_or_else(|e| panic!("/b{i} lost: {}", e.error));
+            assert_eq!((status, body), (200, format!("/b{i}").into_bytes()));
+        }
+        assert_eq!(accepted.load(Ordering::SeqCst), 2, "the survivors coalesce on one new connection");
+    }
+
+    #[test]
+    fn resend_budget_is_bounded() {
+        // A peer that drops every connection unanswered: the request gives up
+        // after `H2_RESEND_LIMIT` resends instead of looping.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                count.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || serve_then_drop(s, 100, 0));
+            }
+        });
+        let pool = H2Pool::new();
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let (resp, left) = fetch_via_pool(&pool, &key, addr, "/never");
+        assert!(resp.expect_err("every connection drops").retryable);
+        assert_eq!(left, 0);
+        assert_eq!(accepted.load(Ordering::SeqCst), H2_RESEND_LIMIT as usize + 1);
     }
 
     #[test]

@@ -1041,10 +1041,18 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
                 }
                 emit_column_rules(b, out);
             }
+            // CSS Gap Decorations L1 §2.1 — just above the border, under the children (as `walk`).
+            if self_visible {
+                out.extend(gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())));
+            }
             // CSS Transforms L2 §6.2 — depth-sort children of a 3D rendering
             // context (preserve-3d); else document order. Mirrors `walk`.
             if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
+                    walk_with_anim(&b.children[i], anim, out, dpr);
+                }
+            } else if let Some(order) = lumen_layout::paint_child_order(b) {
+                for i in order {
                     walk_with_anim(&b.children[i], anim, out, dpr);
                 }
             } else {

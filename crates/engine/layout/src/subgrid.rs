@@ -28,6 +28,10 @@ pub struct SubgridContext {
     pub offsets: Vec<f32>,
     /// Gap between tracks (gap already included in offsets; stored for spacing items).
     pub gap: f32,
+    /// Names of the parent's lines the subgrid spans, one group per line (`sizes.len() + 1`
+    /// groups, or none when the parent has no names). CSS Grid L2 §9: the subgrid's own line
+    /// names are added to them.
+    pub names: Vec<Vec<String>>,
 }
 
 impl SubgridContext {
@@ -39,7 +43,34 @@ impl SubgridContext {
             offsets.push(cursor);
             cursor += s + gap;
         }
-        Self { sizes: sizes.to_vec(), offsets, gap }
+        Self { sizes: sizes.to_vec(), offsets, gap, names: Vec::new() }
+    }
+
+    /// The names of the spanned parent lines (see [`SubgridContext::names`]).
+    pub fn with_names(mut self, names: Vec<Vec<String>>) -> Self {
+        self.names = names;
+        self
+    }
+
+    /// Grid L2 §9: a subgrid with an explicit `column-gap`/`row-gap` replaces the parent's gutter
+    /// between its own tracks. The difference `own - parent` is split in half and added to the
+    /// margin of the items on both sides of every inner gutter, so each inner edge of a track moves
+    /// by half of it (negative when the subgrid's gap is smaller). The tracks the subgrid's items
+    /// (and the gap-rule painter) see are the shrunk/grown ones, `gap` becomes the subgrid's own;
+    /// the total span is unchanged. A single track has no inner gutter.
+    pub fn with_own_gap(mut self, own_gap: f32) -> Self {
+        let n = self.sizes.len();
+        let half = (own_gap - self.gap) / 2.0;
+        if n < 2 || half == 0.0 {
+            return self;
+        }
+        for i in 0..n {
+            let (lead, trail) = (if i > 0 { half } else { 0.0 }, if i + 1 < n { half } else { 0.0 });
+            self.offsets[i] += lead;
+            self.sizes[i] = (self.sizes[i] - lead - trail).max(0.0);
+        }
+        self.gap = own_gap;
+        self
     }
 
     /// Total span width/height occupied by all inherited tracks (including inter-track gaps).
@@ -52,6 +83,40 @@ impl SubgridContext {
     }
 }
 
+/// Дорожки grid-контейнера для щелей `column-rule`/`row-rule`, как `(начало, конец)` по каждой оси
+/// от начала content box (сдвиг subtree не сбивает их). У оси `subgrid` — унаследованные от
+/// родителя (Grid L2 §9: щели subgrid'а — щели родителя; `layout_dispatch`, grid-ветка), у прочих
+/// осей без `repeat(auto-*)` — собственные (`record_own_tracks` в `grid_trampoline.rs`): по
+/// элементам щели не восстановить, если рядом нет элементов (пустой subgrid
+/// `subgrid-gap-decorations-012…017`) или ни один не примыкает к соседу. `None` — дорожки не
+/// записаны. Читает paint.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SubgridTracks {
+    pub cols: Option<Vec<(f32, f32)>>,
+    pub rows: Option<Vec<(f32, f32)>>,
+    /// Бокс — фрагмент grid-контейнера, разрезанного по колонкам multicol'а
+    /// (`multicol_grid_fragments`): `rows` — только видимые в этом фрагменте дорожки (края
+    /// обрезаны по фрагменту, координаты от его верха), так что щель, у которой нет дорожки с
+    /// одной из сторон, не рисуется (CSS Gap Decorations L1 §6.2: щель, разорванная границей
+    /// фрагмента или последняя перед ней, подавляется).
+    pub fragment: bool,
+    /// Только у фрагмента: `(номер первой щели фрагмента среди щелей всего контейнера, число щелей
+    /// контейнера)`. Значения `row-rule-*` раздаются щелям всего контейнера (§4.6), а в фрагменте
+    /// видна лишь часть дорожек, так что нумерация щелей фрагмента начинается не с нуля.
+    pub row_gap_base: Option<(usize, usize)>,
+    /// Только у фрагмента wrapped row flex: щели главной оси каждой видимой строки (`rows`) как
+    /// `(начало, конец)` по X от левого края бокса. Элемент, целиком оставшийся в предыдущем
+    /// фрагменте (`flex-gap-decorations-fragmentation-011`: первый элемент ниже других), не даёт
+    /// painter'у границу щели, так что щели считает раскладка по всему контейнеру.
+    pub line_gaps: Option<Vec<Vec<(f32, f32)>>>,
+}
+
+/// Names of the lines `first..=end` (0-based track indices: the lines around tracks `first..end`)
+/// of a list that holds one group per line; lines the list does not reach have no names.
+pub(crate) fn line_names_between(names: &[Vec<String>], first: usize, end: usize) -> Vec<Vec<String>> {
+    (first..=end).map(|line| names.get(line).cloned().unwrap_or_default()).collect()
+}
+
 // ── Thread-local subgrid context ─────────────────────────────────────────────
 
 thread_local! {
@@ -61,6 +126,31 @@ thread_local! {
 
     /// Row-axis subgrid context (same lifecycle as `SUBGRID_COL_CTX`).
     pub(crate) static SUBGRID_ROW_CTX: RefCell<Option<SubgridContext>> = const { RefCell::new(None) };
+}
+
+/// Дорожки, которые родитель оставил в thread-local'ах для раскладываемого сейчас subgrid'а, без
+/// их изъятия. `None` — ни одна ось не subgrid.
+pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
+    let spans = |ctx: &RefCell<Option<SubgridContext>>| {
+        ctx.borrow().as_ref().map(|c| c.offsets.iter().zip(&c.sizes).map(|(&o, &s)| (o, o + s)).collect::<Vec<_>>())
+    };
+    let cols = SUBGRID_COL_CTX.with(spans);
+    let rows = SUBGRID_ROW_CTX.with(spans);
+    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false, row_gap_base: None, line_gaps: None }))
+}
+
+/// Replaces the parent's gutters in the pending subgrid contexts with the subgrid's own explicit
+/// `column-gap`/`row-gap` (`None` — `normal`, keep the parent's); see [`SubgridContext::with_own_gap`].
+pub(crate) fn apply_own_gaps(col_gap: Option<f32>, row_gap: Option<f32>) {
+    for (cell, gap) in [(&SUBGRID_COL_CTX, col_gap), (&SUBGRID_ROW_CTX, row_gap)] {
+        let Some(gap) = gap else { continue };
+        cell.with(|c| {
+            let mut c = c.borrow_mut();
+            if let Some(ctx) = c.take() {
+                *c = Some(ctx.with_own_gap(gap));
+            }
+        });
+    }
 }
 
 /// RAII guard: sets the thread-local subgrid contexts and clears them on drop.
@@ -169,6 +259,22 @@ mod tests {
         let ctx = SubgridContext::from_parent_tracks(&[80.0], 10.0);
         assert_eq!(ctx.offsets, vec![0.0]);
         assert!((ctx.total_size() - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn own_gap_moves_inner_edges_by_half_the_difference() {
+        // Parent: 3 × 20 px, no gutter; the subgrid asks for 10 px between its tracks.
+        let ctx = SubgridContext::from_parent_tracks(&[20.0, 20.0, 20.0], 0.0).with_own_gap(10.0);
+        assert_eq!(ctx.sizes, vec![15.0, 10.0, 15.0]);
+        assert_eq!(ctx.offsets, vec![0.0, 25.0, 45.0]);
+        assert!((ctx.total_size() - 60.0).abs() < 0.01);
+        // A smaller gap than the parent's grows the tracks back.
+        let ctx = SubgridContext::from_parent_tracks(&[15.0, 10.0, 15.0], 10.0).with_own_gap(0.0);
+        assert_eq!(ctx.sizes, vec![20.0, 20.0, 20.0]);
+        assert_eq!(ctx.offsets, vec![0.0, 20.0, 40.0]);
+        // One track has no inner gutter.
+        let ctx = SubgridContext::from_parent_tracks(&[30.0], 0.0).with_own_gap(8.0);
+        assert_eq!((ctx.sizes, ctx.offsets), (vec![30.0], vec![0.0]));
     }
 
     #[test]

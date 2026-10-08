@@ -91,9 +91,14 @@ const WEBASSEMBLY_SHIM: &str = r#"
       var initial = descriptor.initial | 0;
       if (initial < 0) throw new RangeError('Memory initial must be >= 0');
       var maximum = (descriptor.maximum !== undefined) ? (descriptor.maximum | 0) : 65536;
+      var shared = !!descriptor.shared;
+      if (shared && descriptor.maximum === undefined) {
+        throw new TypeError('Shared memory requires a maximum');
+      }
       this._pages = initial;
       this._max = maximum;
-      this._buffer = new ArrayBuffer(initial * 65536);
+      this._shared = shared;
+      this._buffer = shared ? new SharedArrayBuffer(initial * 65536) : new ArrayBuffer(initial * 65536);
     }
     get buffer() { return this._buffer; }
     grow(delta) {
@@ -103,7 +108,7 @@ const WEBASSEMBLY_SHIM: &str = r#"
       var next = prev + d;
       if (next > this._max) return -1;
       this._pages = next;
-      this._buffer = new ArrayBuffer(next * 65536);
+      this._buffer = this._shared ? new SharedArrayBuffer(next * 65536) : new ArrayBuffer(next * 65536);
       return prev;
     }
   }
@@ -280,15 +285,23 @@ const WEBASSEMBLY_SHIM: &str = r#"
       else if (e.kind === 'global') exports[e.name] = makeExportGlobal(instId, e.index);
       else if (e.kind !== 'memory') exports[e.name] = null; // table export — MVP stub
     }
-    return exports;
+    return Object.freeze(exports);
   }
 
   // ── WebAssembly.Instance ──────────────────────────────────────────────────
+  function checkImportObject(importObject) {
+    if (importObject !== undefined &&
+        (importObject === null || (typeof importObject !== 'object' && typeof importObject !== 'function'))) {
+      throw new TypeError('WebAssembly.Instance(): Argument 1 must be an object');
+    }
+  }
+
   class Instance {
     constructor(module, importObject) {
       if (!(module instanceof Module)) {
         throw new LinkError('Instance requires a WebAssembly.Module');
       }
+      checkImportObject(importObject);
       var imports = JSON.parse(__lumen_wasm_module_imports(module._id));
       var funcs = [], globals = [];
       for (var i = 0; i < imports.length; i++) {
@@ -339,22 +352,34 @@ const WEBASSEMBLY_SHIM: &str = r#"
     });
   }
 
-  function compileStreaming(source) {
+  // Streaming-compile source check: Response with `application/wasm`, ok, unused body.
+  function streamingBytes(source) {
     return Promise.resolve(source).then(function(resp) {
-      if (resp && typeof resp.arrayBuffer === 'function') {
-        return resp.arrayBuffer().then(function(buf) { return compile(buf); });
+      if (typeof Response === 'undefined' || !(resp instanceof Response)) {
+        throw new TypeError('WebAssembly streaming: Argument 0 must be a Response or a Promise for a Response');
       }
-      return compile(resp);
+      var ct = String(resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (ct !== 'application/wasm') {
+        throw new TypeError('WebAssembly streaming: Incorrect response MIME type. Expected application/wasm.');
+      }
+      if (!resp.ok) {
+        throw new TypeError('WebAssembly streaming: HTTP status code is not ok');
+      }
+      if (resp.bodyUsed) {
+        throw new TypeError('WebAssembly streaming: Response body has already been used');
+      }
+      return resp.arrayBuffer();
     });
   }
 
+  function compileStreaming(source) {
+    return streamingBytes(source).then(function(buf) { return compile(buf); });
+  }
+
   function instantiateStreaming(source, importObject) {
-    return Promise.resolve(source).then(function(resp) {
-      if (resp && typeof resp.arrayBuffer === 'function') {
-        return resp.arrayBuffer().then(function(buf) { return instantiate(buf, importObject); });
-      }
-      return instantiate(resp, importObject);
-    });
+    try { checkImportObject(importObject); }
+    catch (e) { return Promise.reject(e); }
+    return streamingBytes(source).then(function(buf) { return instantiate(buf, importObject); });
   }
 
   // ── Publish global WebAssembly object ─────────────────────────────────────
@@ -688,6 +713,20 @@ mod tests_v8 {
         assert_eq!(sum, JsValue::Number(42.0));
     }
 
+    /// BUG-1079: `exports` is a frozen null-prototype object and a non-object
+    /// `importObject` is a `TypeError` (WebAssembly JS API §Instance).
+    #[test]
+    fn v8_exports_frozen_and_bad_imports_type_error() {
+        let rt = rt_with_wasm();
+        bytes_global(&rt, "__add_bytes", ADD_WASM);
+        let ok = rt
+            .eval(
+                "var m = new WebAssembly.Module(new Uint8Array(__add_bytes));                 var inst = new WebAssembly.Instance(m);                 var bad = 0;                 [null, true, ''].forEach(function(v){                   try { new WebAssembly.Instance(m, v); } catch (e) { if (e instanceof TypeError) bad++; }                 });                 Object.isFrozen(inst.exports) && Object.getPrototypeOf(inst.exports) === null && bad === 3",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
     /// `(module (import "env" "h" (func (param i64) (result i64)))
     ///   (func (export "f") (param i64) (result i64) local.get 0 call 0))`
     /// — hand-assembled.
@@ -895,6 +934,18 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(same, JsValue::Bool(true), "buffer identity must persist across a non-growing call");
+    }
+
+    /// BUG-1085: `shared:true` memory exposes a `SharedArrayBuffer` and needs `maximum`.
+    #[test]
+    fn v8_shared_memory_buffer_is_sab() {
+        let rt = rt_with_wasm();
+        let ok = rt
+            .eval(
+                "var m = new WebAssembly.Memory({shared:true, initial:1, maximum:2});                 var thrown = false;                 try { new WebAssembly.Memory({shared:true, initial:1}); } catch (e) { thrown = e instanceof TypeError; }                 (m.buffer instanceof SharedArrayBuffer) && thrown                 && !(new WebAssembly.Memory({initial:1}).buffer instanceof SharedArrayBuffer)",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]

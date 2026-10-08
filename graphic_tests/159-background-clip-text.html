@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 159 background-clip: text</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: content-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+    /* CSS Backgrounds L4 §3.8 background-clip: text — the background shows
+       only through the glyphs of the element (and its descendants). Bold
+       60px glyphs keep the masked area large, so glyph antialiasing differences
+       against Edge stay small. */
+    .t { position: absolute; font: 700 60px/60px sans-serif; color: transparent; }
+
+    /* Row 1: linear gradient through 4 glyph squares. */
+    .a { left: 40px; top: 30px; width: 240px; height: 60px;
+         background: linear-gradient(to right, #e53e3e, #d69e2e, #38a169, #3182ce);
+         background-clip: text; -webkit-background-clip: text; }
+    /* Row 1: solid colour through the glyphs, no box fill. */
+    .b { left: 340px; top: 30px; width: 240px; height: 60px;
+         background-color: #ed64a6; background-clip: text; -webkit-background-clip: text; }
+    /* Row 1: descendant text is part of the mask. */
+    .c { left: 640px; top: 30px; width: 240px; height: 120px; font-size: 60px;
+         background: linear-gradient(#f6e05e, #2b6cb0); background-clip: text;
+         -webkit-background-clip: text; }
+
+    /* Row 2: same gradient with border-box — full rect, the reference. */
+    .d { left: 40px; top: 230px; width: 240px; height: 60px; color: #1a202c;
+         background: linear-gradient(to right, #e53e3e, #d69e2e, #38a169, #3182ce);
+         background-clip: border-box; }
+    /* Row 2: padding + border — gradient is positioned over the border box
+       (background-origin padding-box by default), clipped to the glyphs. */
+    .e { left: 340px; top: 230px; width: 200px; height: 60px; padding: 10px 20px;
+         border: 6px solid #e2e8f0;
+         background: linear-gradient(135deg, #805ad5, #ed8936); background-clip: text;
+         -webkit-background-clip: text; }
+    /* Row 2: with colour text the glyphs are covered by the opaque background
+       text paints on top of the clipped background (colour wins) — transparent
+       text shows the gradient, opaque text paints over it. */
+    .f { left: 640px; top: 230px; width: 240px; height: 60px; color: rgba(255,255,255,0.35);
+         background: linear-gradient(to right, #e53e3e, #3182ce); background-clip: text;
+         -webkit-background-clip: text; }
+
+    /* Row 3: radial gradient through two lines. */
+    .g { left: 40px; top: 420px; width: 180px; height: 120px; font-size: 60px;
+         background: radial-gradient(circle at 50% 50%, #fff, #e53e3e 70%, #2b6cb0);
+         background-clip: text; -webkit-background-clip: text; }
+    /* Row 3: background-color follows the LAST layer's clip (L3 §3.10); the
+       list has one image layer, so it takes `border-box` and the surplus `text`
+       is ignored — the whole box is filled, as in the reference row. */
+    .h { left: 340px; top: 420px; width: 240px; height: 60px;
+         background-image: linear-gradient(to right, rgba(49,130,206,0.6), rgba(49,130,206,0));
+         background-color: #38a169; background-clip: border-box, text; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <div class="t a">ABCD</div>
+    <div class="t b">ABCD</div>
+    <div class="t c"><p>AB</p><p>CD</p></div>
+    <div class="t d">ABCD</div>
+    <div class="t e">ABC</div>
+    <div class="t f">ABCD</div>
+    <div class="t g">AB<br>CD</div>
+    <div class="t h">ABCD</div>
+  </div>
+</body>
+</html>

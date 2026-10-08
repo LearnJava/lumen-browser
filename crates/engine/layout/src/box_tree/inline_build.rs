@@ -60,9 +60,13 @@ fn probe_display_and_flow(
         v.display_probes += 1;
         s.set(v);
     });
+    let legend = is_fieldset_legend(doc, id);
     let read = |s: &ComputedStyle| {
+        // HTML Rendering §15.3.13: a legend of a fieldset is blockified (`build_box` applies the
+        // same mapping to the box's own style), so it never flattens into the text around it.
+        let display = if legend { blockified_legend_display(s.display).unwrap_or(s.display) } else { s.display };
         (
-            s.display,
+            display,
             s.float_side != FloatSide::None
                 || matches!(s.position, Position::Absolute | Position::Fixed),
         )
@@ -141,7 +145,7 @@ pub(crate) fn is_inline_content(
     match &doc.get(id).data {
         // Control-only text (after BUG-120 stripping) is no more inline content
         // than whitespace-only text: it must not open an inline run / line box.
-        NodeData::Text(s) => !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)),
+        NodeData::Text(s) => !is_discardable_text(s, inherited.white_space),
         NodeData::Element { .. } => {
             if is_image_element(doc, id)
                 || is_inline_replaced_media_element(doc, id)
@@ -280,8 +284,11 @@ pub(crate) fn anon_inline_run(
         node,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::new(style),
-        kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None, row_continuation_width: None },
+        kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
         children: vec![],
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -302,7 +309,7 @@ pub(crate) fn build_anon_text_item(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,
-    parent: &ComputedStyle,
+    parent: &Arc<ComputedStyle>,
     viewport: Size,
     flat: &FlatTree,
     counters: &CounterMap,
@@ -336,6 +343,9 @@ pub(crate) fn build_anon_text_item(
         node: id,
         rect: Rect::ZERO,
         used_line_height: item_style.font_size * item_style.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::new(item_style),
         kind: BoxKind::Block,
         children: vec![run],
@@ -379,7 +389,7 @@ fn apply_first_letter_pseudo(
     }
     if first_char_end >= segs[pos].text.len() {
         // Single-character segment: layer the pseudo style on in place.
-        segs[pos].style = crate::style::merge_pseudo_inherited(&segs[pos].style, parent, &fl_style);
+        segs[pos].style = Arc::new(crate::style::merge_pseudo_inherited(&segs[pos].style, parent, &fl_style));
         return;
     }
     // Multi-character: split into [first_char | rest], each with its own style.
@@ -388,7 +398,7 @@ fn apply_first_letter_pseudo(
     let source_node = segs[pos].source_node;
     let post_space = segs[pos].post_space;
     segs[pos].text.truncate(first_char_end);
-    segs[pos].style = crate::style::merge_pseudo_inherited(&original_style, parent, &fl_style);
+    segs[pos].style = Arc::new(crate::style::merge_pseudo_inherited(&original_style, parent, &fl_style));
     segs[pos].post_space = 0.0;
     segs.insert(pos + 1, InlineSegment {
         text: rest_text,
@@ -442,7 +452,7 @@ pub(crate) fn split_inline_pieces(
     let mut rest = segs;
     // Escape-ы приходят в порядке обхода, их `at` не убывает; идём с конца,
     // чтобы отрезать хвост `split_off`-ом без сдвигов уже отданных индексов.
-    let mut tails: Vec<(Vec<InlineSegment>, NodeId, ComputedStyle)> = Vec::new();
+    let mut tails: Vec<(Vec<InlineSegment>, NodeId, Arc<ComputedStyle>)> = Vec::new();
     for esc in escapes.into_iter().rev() {
         let at = esc.at.min(rest.len());
         tails.push((rest.split_off(at), esc.node, esc.inherited));
@@ -513,7 +523,7 @@ pub(crate) fn inline_run_lead_space(b: &LayoutBox, measurer: Option<&dyn TextMea
     let starts_ws = segments
         .iter()
         .find(|seg| !seg.text.is_empty())
-        .is_some_and(|seg| seg.text.starts_with(|c: char| c.is_whitespace()));
+        .is_some_and(|seg| seg.text.starts_with(|c: char| is_wrap_whitespace(c)));
     if starts_ws { inline_space_width(b, measurer) } else { 0.0 }
 }
 
@@ -545,7 +555,7 @@ pub(crate) fn inline_run_advance(b: &LayoutBox, measurer: Option<&dyn TextMeasur
             .iter()
             .rev()
             .find(|seg| !seg.text.is_empty())
-            .is_some_and(|seg| seg.text.ends_with(|c: char| c.is_whitespace()));
+            .is_some_and(|seg| seg.text.ends_with(|c: char| is_wrap_whitespace(c)));
         if ends_ws { inline_space_width(b, measurer) } else { 0.0 }
     };
     extent + trail
@@ -588,6 +598,21 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             {
                 return None;
             }
+            // CSS Flexbox L1 §8.5: у flex-контейнера своя базовая линия по оси
+            // строки (а не последнего ребёнка потока) — её и берёт inline-flex в строке.
+            if matches!(b.style.display, Display::Flex | Display::InlineFlex) {
+                return super::baseline::flex_container_baseline(b, BaselineSide::First, measurer);
+            }
+            // CSS 2.1 §17.5.1 / Tables L3 §3.7: базовая линия `inline-table` — линия его первой
+            // строки (подпись не считается).
+            if matches!(b.kind, BoxKind::Table) {
+                return super::table_valign::table_baseline(b, BaselineSide::First, measurer);
+            }
+            // CSS Grid L1 §6.1: у grid-контейнера — первая базовая линия сетки (ее считает
+            // раскладка), а не последнего ребёнка потока.
+            if matches!(b.style.display, Display::Grid | Display::InlineGrid) {
+                return b.grid_baselines.map(|(first, _)| first);
+            }
             if let Some(bl) = last_in_flow_baseline(b, measurer) {
                 return Some(bl);
             }
@@ -597,32 +622,27 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             // центру content box — ровно так, как её рисует
             // `emit_input_value_text`, иначе раскладка и отрисовка разъедутся.
             if matches!(b.kind, BoxKind::FormControl { .. }) {
-                let m = measurer?;
-                let s = &b.style;
-                let em = s.font_size;
-                let pt = s.padding_top.resolve_or_zero(em, 0.0, Size::ZERO);
-                let pb = s.padding_bottom.resolve_or_zero(em, 0.0, Size::ZERO);
-                let inner_h = (b.rect.height
-                    - s.border_top_width
-                    - s.border_bottom_width
-                    - pt
-                    - pb)
-                    .max(0.0);
-                let line_h = step_line_height(em * s.line_height, s.line_height_step);
-                let ascent = m.ascent_px_with_families(em, &s.font_family);
-                let descent = m.descent_px_with_families(em, &s.font_family);
-                let half_leading = (line_h - (ascent + descent)) / 2.0;
-                return Some(
-                    s.border_top_width
-                        + pt
-                        + ((inner_h - line_h) / 2.0).max(0.0)
-                        + half_leading
-                        + ascent,
-                );
+                return control_value_baseline(b, measurer);
             }
             None
         }
     }
+}
+
+/// Базовая линия строки значения текстового контрола — центр content box
+/// (см. комментарий в `inline_baseline`); отсчёт от верхней кромки border box.
+pub(crate) fn control_value_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Option<f32> {
+    let m = measurer?;
+    let s = &b.style;
+    let em = s.font_size;
+    let pt = s.padding_top.resolve_or_zero(em, 0.0, Size::ZERO);
+    let pb = s.padding_bottom.resolve_or_zero(em, 0.0, Size::ZERO);
+    let inner_h = (b.rect.height - s.border_top_width - s.border_bottom_width - pt - pb).max(0.0);
+    let line_h = step_line_height(em * s.line_height, s.line_height_step);
+    let ascent = m.ascent_px_with_families(em, &s.font_family);
+    let descent = m.descent_px_with_families(em, &s.font_family);
+    let half_leading = (line_h - (ascent + descent)) / 2.0;
+    Some(s.border_top_width + pt + ((inner_h - line_h) / 2.0).max(0.0) + half_leading + ascent)
 }
 
 /// Несёт ли контрол текст, по которому браузер берёт его базовую линию.
@@ -633,7 +653,7 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
 /// строкой. `<textarea>` тоже выравнивается по нижней кромке (проверено против
 /// Edge на TEST-34: `<select>` рядом с ним садится НИЖЕ его нижнего края —
 /// значит базовая линия строки идёт по textarea, а не по его первой строке).
-fn form_control_has_text_baseline(kind: &FormControlKind) -> bool {
+pub(crate) fn form_control_has_text_baseline(kind: &FormControlKind) -> bool {
     match kind {
         FormControlKind::Button | FormControlKind::Select { .. } => true,
         FormControlKind::Input { input_type, .. } => matches!(
@@ -713,6 +733,9 @@ pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items:
         node,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::new(style),
         kind: BoxKind::InlineBlockRow,
         children: items,
@@ -733,7 +756,7 @@ pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items:
 pub(crate) fn control_value_segments(
     node: NodeId,
     value_text: &str,
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
 ) -> Vec<InlineSegment> {
     let mut out = Vec::new();
     let mut push = |text: String, forced_break: bool, byte_offset: u32| {
@@ -795,7 +818,7 @@ pub(crate) struct InlineEscape {
     /// Блочный контейнер строит бокс далеко от места находки, и его
     /// собственный стиль здесь не подходит: цвет/шрифт `<span>`-а между ними
     /// был бы потерян.
-    inherited: ComputedStyle,
+    inherited: Arc<ComputedStyle>,
 }
 
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
@@ -812,7 +835,7 @@ pub(crate) fn collect_inline_segments(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,
-    inherited: &ComputedStyle,
+    inherited: &Arc<ComputedStyle>,
     viewport: Size,
     out: &mut Vec<InlineSegment>,
     escapes: &mut Vec<InlineEscape>,
@@ -900,7 +923,7 @@ pub(crate) fn collect_inline_segments(
                     byte_offset += 1; // the \n character
                 }
                 let stripped = strip_invisible_controls(line);
-                if !stripped.chars().all(|c| c.is_whitespace()) {
+                if !stripped.chars().all(is_collapsible_whitespace) {
                     let text = inherited.text_transform.apply(&stripped);
                     let kind = if *need_first_letter && !text.trim().is_empty() {
                         *need_first_letter = false;
@@ -972,13 +995,13 @@ pub(crate) fn collect_inline_segments(
             if let Some(last) = out.last_mut()
                 && !last.forced_break
                 && !last.style.white_space.preserves_whitespace()
-                && !last.text.ends_with(|c: char| c.is_whitespace())
+                && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
             {
                 last.text.push(' ');
             }
         }
         NodeData::Element { .. } => {
-            let s = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
+            let s = Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode));
             if s.display == Display::None {
                 return;
             }
@@ -1123,6 +1146,9 @@ pub(crate) fn inject_pseudo(
                 node: parent_id,
                 rect: Rect::ZERO,
                 used_line_height: ps.font_size * ps.line_height,
+                grid_baselines: None,
+                fieldset_legend: None,
+                subgrid_tracks: None,
                 style: Arc::new(ps),
                 kind: BoxKind::Block,
                 children: inner,
@@ -1259,7 +1285,7 @@ fn make_content_text_segment(
 ) -> InlineSegment {
     InlineSegment {
         text,
-        style: style.clone(),
+        style: Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1287,7 +1313,7 @@ fn make_content_image_segment(
 ) -> InlineSegment {
     InlineSegment {
         text: String::new(),
-        style: style.clone(),
+        style: Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: true,
@@ -1393,6 +1419,9 @@ pub(crate) fn inject_marker(
         node:     parent_id,
         rect:     Rect::ZERO,
         used_line_height: ms.font_size * ms.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style:    Arc::new(ms),
         kind:     BoxKind::Marker {
             text,

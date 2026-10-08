@@ -67,8 +67,15 @@ pub(super) fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::V
     from_v8_bounded(scope, val, &mut ancestors, &mut visited)
 }
 
+/// True if a path entry has `hash` AND is the same object per `same`.
+/// The identity hash is only a bucket key (V8 gives no uniqueness
+/// guarantee), so a bare hash match must not be taken for a cycle (BUG-1200).
+fn on_path<T>(path: &[(std::num::NonZeroI32, T)], hash: std::num::NonZeroI32, same: impl Fn(&T) -> bool) -> bool {
+    path.iter().any(|(h, t)| *h == hash && same(t))
+}
+
 /// Depth/cycle/budget-guarded worker behind [`from_v8`]. `ancestors` holds
-/// the identity hashes of every object/array currently being walked on the
+/// the identity hash and handle of every object/array currently being walked on the
 /// current path (push on entry, pop on exit) so a self-reference anywhere in
 /// the chain is caught instead of recursed into forever. `visited` counts
 /// every object/array node entered across the whole call, capped by
@@ -77,7 +84,7 @@ pub(super) fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::V
 pub(super) fn from_v8_bounded<'s>(
     scope: &v8::PinScope<'s, '_>,
     val: v8::Local<'s, v8::Value>,
-    ancestors: &mut Vec<std::num::NonZeroI32>,
+    ancestors: &mut Vec<(std::num::NonZeroI32, v8::Local<'s, v8::Value>)>,
     visited: &mut usize,
 ) -> JsResult<JsValue> {
     if val.is_null() || val.is_undefined() {
@@ -104,11 +111,11 @@ pub(super) fn from_v8_bounded<'s>(
         if *visited >= FROM_V8_MAX_VISITED {
             return Ok(JsValue::String("[Max Nodes Exceeded]".into()));
         }
-        if ancestors.contains(&hash) {
+        if on_path(ancestors, hash, |a| a.strict_equals(val)) {
             return Ok(JsValue::String("[Circular]".into()));
         }
         *visited += 1;
-        ancestors.push(hash);
+        ancestors.push((hash, val));
         let len = arr.length();
         let mut items = Vec::with_capacity(len as usize);
         for i in 0..len {
@@ -129,11 +136,11 @@ pub(super) fn from_v8_bounded<'s>(
         if *visited >= FROM_V8_MAX_VISITED {
             return Ok(JsValue::String("[Max Nodes Exceeded]".into()));
         }
-        if ancestors.contains(&hash) {
+        if on_path(ancestors, hash, |a| a.strict_equals(val)) {
             return Ok(JsValue::String("[Circular]".into()));
         }
         *visited += 1;
-        ancestors.push(hash);
+        ancestors.push((hash, val));
         let own_props = obj
             .get_own_property_names(scope, Default::default())
             .ok_or_else(|| JsError::Runtime("get_own_property_names failed".into()))?;
@@ -144,9 +151,17 @@ pub(super) fn from_v8_bounded<'s>(
                 .to_string(scope)
                 .ok_or_else(|| JsError::Runtime("property key to_string failed".into()))?
                 .to_rust_string_lossy(scope);
-            let prop_val = obj
-                .get(scope, key)
-                .ok_or_else(|| JsError::Runtime(format!("get '{key_str}' failed")))?;
+            // BUG-662: an own accessor that throws when read off this object
+            // (`Foo.prototype = { get x() { return this._a[0]; } }` read with
+            // `this` = the bare prototype) must not fail the whole conversion
+            // — the script itself ran fine. Every caller runs this under a
+            // `TryCatch` (`eval.rs`), so the getter's exception is caught
+            // there and never reaches page code; it becomes a marker like
+            // `[Circular]` instead.
+            let Some(prop_val) = obj.get(scope, key) else {
+                entries.push((key_str, JsValue::String("[Getter threw]".into())));
+                continue;
+            };
             entries.push((key_str, from_v8_bounded(scope, prop_val, ancestors, visited)?));
         }
         ancestors.pop();
@@ -204,4 +219,19 @@ pub(super) fn v8_err<'s>(scope: &v8::PinScope<'s, '_>, exc: v8::Local<'s, v8::Va
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "JS exception".into());
     JsError::Runtime(msg)
+}
+
+#[cfg(test)]
+mod on_path_tests {
+    use super::on_path;
+    use std::num::NonZeroI32;
+
+    #[test]
+    fn same_hash_different_object_is_not_a_cycle() {
+        let h = NonZeroI32::new(7).unwrap();
+        let path = [(h, 1u32), (NonZeroI32::new(9).unwrap(), 2)];
+        assert!(!on_path(&path, h, |&o| o == 3));
+        assert!(on_path(&path, h, |&o| o == 1));
+        assert!(!on_path(&path, h, |&o| o == 2), "other hash bucket");
+    }
 }

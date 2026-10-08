@@ -381,7 +381,7 @@ impl InProcessSession {
         self.page_base_dir = local_base_dir(&url);
         self.load_subresource_images(&doc)?;
 
-        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
+        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet, &[])?;
 
         self.current_url = url;
         self.state = Some(SessionState { doc, stylesheet: sheet, layout_root, flat_tree, layout_pass_count: 1 });
@@ -399,6 +399,7 @@ impl InProcessSession {
         &mut self,
         doc: &Arc<Mutex<Document>>,
         sheet: &Arc<lumen_css_parser::Stylesheet>,
+        prev_scroll: &[(NodeId, f32, f32)],
     ) -> Result<(LayoutBox, lumen_dom::FlatTree)> {
         let doc_guard = Self::lock_arc_doc(doc)?;
         let font = lumen_font::Font::parse(INTER_FONT)
@@ -406,8 +407,11 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let (layout_root, counters) =
+        let (mut layout_root, counters) =
             lumen_layout::layout_measured_with_counters(&doc_guard, sheet, self.viewport, &measurer);
+        for &(node, x, y) in prev_scroll {
+            lumen_layout::set_scroll_position(&mut layout_root, node, x, y);
+        }
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
@@ -456,7 +460,7 @@ impl InProcessSession {
             if let Ok(doc_guard) = doc.lock() {
                 rt.update_layout_rects(lumen_layout::collect_layout_rects(layout_root, &doc_guard));
                 rt.update_client_rects(lumen_layout::collect_client_rects(layout_root, &doc_guard));
-                rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root, &doc_guard, counters, self.viewport));
+                rt.update_style_maps(lumen_layout::collect_computed_styles(layout_root, &doc_guard, counters, self.viewport));
                 rt.update_pseudo_computed_styles(lumen_layout::collect_pseudo_computed_styles(layout_root));
             }
             rt.update_custom_properties(lumen_layout::collect_custom_properties(layout_root, self.viewport));
@@ -477,7 +481,9 @@ impl InProcessSession {
         // to the compositor (two-buffer model: pending → active on flush_pending).
         let stacking_tree = StackingTree::build(layout_root);
         let paint_order = PaintOrder::from_tree(&stacking_tree);
-        let (commands, _provenance) = lumen_paint::build_display_list_ordered(layout_root, &stacking_tree, &paint_order);
+        let (commands, _provenance) = lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(layout_root, &stacking_tree, &paint_order)
+        });
         let viewport_rect = lumen_core::geom::Rect::new(0.0, 0.0, self.viewport.width, self.viewport.height);
         let layer_tree = BasicLayerTree::single_layer(viewport_rect, commands);
         self.compositor.commit(Arc::new(property_trees.clone()), Arc::new(layer_tree));
@@ -501,7 +507,15 @@ impl InProcessSession {
         let doc = Arc::clone(&state.doc);
         let sheet = Arc::clone(&state.stylesheet);
 
-        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
+        // BUG-1215: a fresh layout starts every scroll offset at 0 — carry the
+        // offsets `scroll()` set on the previous tree over to the new one.
+        let prev_scroll: Vec<_> = lumen_layout::collect_scroll_containers(&state.layout_root)
+            .into_iter()
+            .filter(|c| c.scroll_x != 0.0 || c.scroll_y != 0.0)
+            .map(|c| (c.node, c.scroll_x, c.scroll_y))
+            .collect();
+
+        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet, &prev_scroll)?;
 
         let state = self.state.as_mut().ok_or_else(|| {
             Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
@@ -630,6 +644,7 @@ impl InProcessSession {
                     req.node_id,
                     image.width,
                     image.height,
+                    self.viewport,
                 );
             }
         }
@@ -845,7 +860,9 @@ impl InProcessSession {
         let state = self.state()?;
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
-        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0;
+        let display_list = lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0
+        });
         let (width, height) = (self.viewport.width as u32, self.viewport.height as u32);
         // The rasterizer resolves `DrawImage`/`DrawBackgroundImage` against this
         // set alone: an unregistered key paints the grey placeholder (`<img>`) or
@@ -886,7 +903,9 @@ impl InProcessSession {
         let state = self.state()?;
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
-        Ok(lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0)
+        Ok(lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0
+        }))
     }
 }
 
@@ -915,7 +934,9 @@ impl BrowserSession for InProcessSession {
 
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
-        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0;
+        let display_list = lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0
+        });
 
         // Create headless renderer for off-screen rendering.
         let width = self.viewport.width as u32;
@@ -1038,9 +1059,17 @@ impl BrowserSession for InProcessSession {
         self.net_log.clear();
         self.con_log.clear();
 
-        if let Some(path) = url.strip_prefix("file://") {
-            let bytes = std::fs::read(path)
-                .map_err(|e| Error::Io(format!("не удалось прочитать {path}: {e}")))?;
+        // BUG-760: `about:blank` — штатный стартовый документ, а не файл.
+        if url == "about:blank" {
+            return self.navigate_html("");
+        }
+
+        // BUG-760: `file:///D:/x` → `D:/x` (общий разбор `file_url_to_path`,
+        // а не голый `strip_prefix`, оставлявший `/D:/x`).
+        if let Some(path) = file_url_to_path(url) {
+            let bytes = std::fs::read(&path).map_err(|e| {
+                Error::Io(format!("не удалось прочитать {}: {e}", path.display()))
+            })?;
             return self.run_pipeline(&bytes, None, url.to_owned());
         }
 
@@ -1670,7 +1699,7 @@ fn new_v8_runtime(
         }
     };
     if let Err(e) = rt.install_dom(
-        doc, page_url, None, None, None, None, None, None, None, None, None, false,
+        doc, page_url, None, None, None, None, None, None, None, None, None, false, None,
     ) {
         eprintln!("InProcessSession: V8 install_dom failed: {e}");
         return None;
@@ -2410,6 +2439,27 @@ mod tests {
     }
 
     #[test]
+    fn navigate_file_url_with_drive_letter_slash() {
+        // BUG-760: `file:///<abs>` не должен оставлять ведущий `/` перед буквой диска.
+        let dir = std::env::temp_dir().join("lumen_bug760");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("p.html");
+        std::fs::write(&f, r#"<html><body><div id="a">x</div></body></html>"#).unwrap();
+        let p = f.display().to_string().replace('\\', "/");
+        let url = if p.starts_with('/') { format!("file://{p}") } else { format!("file:///{p}") };
+        let mut s = InProcessSession::new();
+        s.navigate(&url).expect("file:// URL должен грузиться");
+        assert_eq!(s.current_url(), url);
+    }
+
+    #[test]
+    fn navigate_about_blank_headless() {
+        let mut s = InProcessSession::new();
+        s.navigate("about:blank").expect("about:blank — штатный документ");
+        assert_eq!(s.current_url(), "about:blank");
+    }
+
+    #[test]
     fn build_http_client_wires_hsts() {
         // BUG-402: драйвер собирал HttpClient мимо HSTS — автоматизация и
         // headless-навигация ходили по http без апгрейда даже на preload-хосты.
@@ -2947,6 +2997,17 @@ mod tests {
     }
 
     #[test]
+    fn scroll_offset_survives_relayout_after_eval() {
+        // BUG-1215: eval() relayouts into a fresh tree; the offset must carry over.
+        let mut s = make_session(nested_scroll_html());
+        s.scroll(&Target::Selector("#leaf".into()), ScrollDelta { x: 0.0, y: 50.0 })
+            .expect("scroll");
+        s.eval("1").expect("eval");
+        let containers = lumen_layout::collect_scroll_containers(&s.state().unwrap().layout_root);
+        assert_eq!(containers[0].scroll_y, 50.0);
+    }
+
+    #[test]
     fn scroll_with_selector_target_clamps_to_container_bounds() {
         let mut s = make_session(nested_scroll_html());
         s.scroll(&Target::Selector("#leaf".into()), ScrollDelta { x: 0.0, y: 10_000.0 })
@@ -2979,5 +3040,40 @@ mod tests {
         assert_eq!(containers[0].scroll_y, 0.0, "#outer must stay untouched");
         let root_offset = s.active_property_trees().and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y));
         assert_eq!(root_offset, Some(30.0), "delta should land on the page-level scroll node");
+    }
+
+    // ── BUG-965 (regression): headless JS scroll geometry reads real state ──
+    //
+    // Filed 2026-09-03 against `InProcessSession` (`--mcp-port`/`--mcp`):
+    // `scrollWidth` fell back to the border-box size instead of the real
+    // padding-box/overflow extent, and `scrollLeft`/`scrollTop` always read
+    // `0` regardless of a prior JS `scrollTo()`. Both are no longer
+    // reproducible — `FlushHandles::maybe_flush` (the shared lazy style/layout
+    // flush all `getComputedStyle`/geometry getters go through, including in
+    // this crate) now unconditionally recomputes `scroll_states` from a fresh
+    // layout on every `_lumen_get_scroll_state` call and reapplies any
+    // previously-known JS-side scroll offset onto it first. Kept as a
+    // regression guard rather than a fix.
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn js_scroll_width_reads_padding_box_not_border_box_headless() {
+        // Mirrors the bug's own live repro: a childless `overflow:auto` box
+        // with an asymmetric border (border-box would be 280, padding-box 200).
+        let mut s = make_session(
+            r#"<html><body style="margin:0">
+                <div id="outer" style="overflow:auto;width:200px;height:200px;
+                    border-style:solid;border-width:0 0 50px 80px"></div>
+            </body></html>"#,
+        );
+        assert_eq!(s.eval("document.getElementById('outer').scrollWidth").expect("eval"), "200");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn js_scroll_top_reflects_prior_js_scroll_to_headless() {
+        let mut s = make_session(nested_scroll_html());
+        s.eval("document.getElementById('outer').scrollTo(0, 50)").expect("eval scrollTo");
+        assert_eq!(s.eval("document.getElementById('outer').scrollTop").expect("eval"), "50");
     }
 }

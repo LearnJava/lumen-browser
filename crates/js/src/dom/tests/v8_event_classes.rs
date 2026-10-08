@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -240,6 +240,17 @@ fn dispatch_pointer_event_delivers_to_element() {
                  got.clientX === 10 && got.clientY === 20 && \
                  got.pointerId === 1 && got.pointerType === 'mouse' && got.isPrimary === true && \
                  got.pressure === 0.5"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn dispatch_pointer_event_carries_touch_identity_and_keeps_mouse_default() {
+    // TOUCH-1-S3: the optional trailing arguments set pointerId/pointerType/
+    // isPrimary/width/height/pressure; the old 7-argument call stays a mouse.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var div = document.createElement('div'); document.body.appendChild(div);                  var got = [];                  div.addEventListener('pointermove', function(e) { got.push(e); });                  _lumen_dispatch_pointer_event(div.__nid__, 'pointermove', 5, 6, 0, 1, 0,                      [[1, 2]], 2, 'touch', false, 30, 40, 0.25);                  _lumen_dispatch_pointer_event(div.__nid__, 'pointermove', 5, 6, 0, 1, 0);                  var t = got[0], m = got[1], c = t.getCoalescedEvents()[0];                  t.pointerType === 'touch' && t.pointerId === 2 && t.isPrimary === false &&                  t.width === 30 && t.height === 40 && t.pressure === 0.25 &&                  c.pointerType === 'touch' && c.pointerId === 2 &&                  t.getPredictedEvents()[0].pointerType === 'touch' &&                  m.pointerType === 'mouse' && m.pointerId === 1 && m.isPrimary === true &&                  m.width === 1 && m.pressure === 0.5"
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -808,5 +819,31 @@ fn window_exports_all_event_classes() {
                  typeof window.ClipboardEvent === 'function' && \
                  typeof window.CompositionEvent === 'function'"
     ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-691: `TextEvent` существует, не конструируется напрямую, создаётся через
+/// `createEvent('TextEvent')`; `UIEvent.prototype.pseudoTarget` — унаследованный геттер.
+#[test]
+fn text_event_and_pseudo_target_surface() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var thrown = false; \
+         try { new TextEvent('textInput'); } catch (x) { thrown = x instanceof TypeError; } \
+         var e = document.createEvent('TextEvent'); \
+         var chain = Object.getPrototypeOf(e) === TextEvent.prototype \
+             && Object.getPrototypeOf(TextEvent.prototype) === UIEvent.prototype; \
+         var noArg = false; \
+         try { e.initTextEvent(); } catch (x) { noArg = x instanceof TypeError; } \
+         e.initTextEvent('foo'); \
+         var d1 = e.type === 'foo' && !e.bubbles && e.view === null && e.data === 'undefined'; \
+         e.initTextEvent('foo', true, true, window, 'bar'); \
+         var d2 = e.bubbles && e.cancelable && e.view === window && e.data === 'bar'; \
+         var pt = typeof Object.getOwnPropertyDescriptor(UIEvent.prototype, 'pseudoTarget').get === 'function' \
+             && Object.getOwnPropertyDescriptor(MouseEvent.prototype, 'pseudoTarget') === undefined \
+             && 'pseudoTarget' in MouseEvent.prototype; \
+         thrown && chain && noArg && d1 && d2 && pt",
+    )
+    .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }

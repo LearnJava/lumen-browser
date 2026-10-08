@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 // V8 twin of the (removed) QuickJS `runtime_with_dom` helper.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -27,7 +27,7 @@ fn v8_runtime_deterministic_cfg(
 ) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.set_deterministic_mode(true, rng_seed, monotonic_clock);
-    rt.install_dom(doc, url, None, None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, url, None, None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -750,6 +750,15 @@ fn animation_cancel_removes_from_registry() {
 }
 
 #[test]
+fn animation_playback_events_precede_raf_callbacks_bug1041() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var log = [];          var a = new Animation(new KeyframeEffect(null, [], 300));          a.oncancel = function() { log.push('cancel'); };          a.play(); a.cancel();          requestAnimationFrame(function() { log.push('raf'); });          _lumen_run_raf_callbacks(16);          log.join(',')"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("cancel,raf".into()));
+}
+
+#[test]
 fn document_timeline_exists() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval("document.timeline instanceof DocumentTimeline").unwrap();
@@ -868,6 +877,17 @@ fn animation_finish_state() {
     assert_eq!(r, lumen_core::JsValue::String("finished".into()));
 }
 
+/// BUG-861: a bare `currentTime` seek back out of `finished` revives the
+/// animation — new `finished` promise, second `finish` event on the way out.
+#[test]
+fn animation_seek_back_from_finished_refires_finish() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var el = document.createElement('div');                  var a = el.animate([{opacity:0},{opacity:1}], 100);                  var n = 0; a.onfinish = function() { n++; };                  a.finish(); _lumen_tick_timers();                  var p1 = a.finished;                  a.currentTime = 0;                  [n, a.playState, a.finished !== p1].join(',')"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("1,running,true".into()));
+}
+
 #[test]
 fn keyframe_effect_property_indexed_form() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -942,6 +962,138 @@ fn animation_pause_reapplies_style_at_current_time() {
                  el.style.marginLeft"
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::String("50px".into()));
+}
+
+// ── AnimationEffect.getComputedTiming() (BUG-670) ──────────────────────────
+
+/// The method exists on both a free `KeyframeEffect` and `animation.effect`,
+/// and stays non-enumerable like every other IDL member on a prototype.
+#[test]
+fn get_computed_timing_is_a_non_enumerable_method() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "var el = document.createElement('div'); \
+         var a = el.animate([{opacity:0},{opacity:1}], 300); \
+         typeof new KeyframeEffect(null, [], 100).getComputedTiming === 'function' && \
+         typeof a.effect.getComputedTiming === 'function' && \
+         Object.keys(KeyframeEffect.prototype).indexOf('getComputedTiming') === -1"
+    ));
+}
+
+/// Without an owning animation there is no local time: the derived
+/// durations resolve, the time-dependent fields are null, `fill: 'auto'`
+/// resolves to `'none'`.
+#[test]
+fn get_computed_timing_unowned_effect_resolves_durations_only() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var c = new KeyframeEffect(null, [], \
+                 {duration: 1000, iterations: 2, delay: 100, endDelay: 50}).getComputedTiming(); \
+             [c.activeDuration, c.endTime, c.fill, c.localTime, c.progress, \
+              c.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("2000,2150,none,,,".into()));
+}
+
+/// `duration: 'auto'` resolves to 0 on the document timeline instead of
+/// leaking the NaN the specified timing holds.
+#[test]
+fn get_computed_timing_auto_duration_is_zero() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("new KeyframeEffect(null, [], {duration: 'auto'}).getComputedTiming().duration")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+/// Mid-iteration: local time is the animation's current time, progress is
+/// the eased iteration progress.
+#[test]
+fn get_computed_timing_reports_progress_of_owning_animation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], {duration:1000}); \
+             a.pause(); a.currentTime = 250; \
+             var c = a.effect.getComputedTiming(); \
+             [c.localTime, c.progress, c.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("250,0.25,0".into()));
+}
+
+/// `alternate` runs the second iteration backwards (§4.10.1).
+#[test]
+fn get_computed_timing_alternate_second_iteration_runs_backwards() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], \
+                 {duration:1000, iterations:2, direction:'alternate'}); \
+             a.pause(); a.currentTime = 1250; \
+             var c = a.effect.getComputedTiming(); \
+             [c.progress, c.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("0.75,1".into()));
+}
+
+/// Past the end, progress is null unless the fill mode covers the after
+/// phase; with `forwards` the last iteration holds at progress 1.
+#[test]
+fn get_computed_timing_after_phase_depends_on_fill() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], {duration:1000}); \
+             var b = el.animate([{opacity:0},{opacity:1}], {duration:1000, fill:'forwards'}); \
+             a.pause(); a.currentTime = 1500; b.pause(); b.currentTime = 1500; \
+             var ca = a.effect.getComputedTiming(), cb = b.effect.getComputedTiming(); \
+             [ca.progress === null, cb.progress, cb.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true,1,0".into()));
+}
+
+/// A zero-duration animation is over once its delay is: it must reach
+/// `finished` instead of ticking at progress 1 forever — WPT
+/// `current-iteration.html` awaits its `finished` promise.
+#[test]
+fn zero_duration_animation_finishes_after_delay() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate({opacity:[0, 1]}, {delay: 1}); \
+             _wa_current_time = 5; a._tick(5); \
+             a.playState",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("finished".into()));
+}
+
+/// BUG-1192: `fill: forwards|both` must not keep the animation `running`
+/// after the active interval; it finishes, stays in `getAnimations()` and
+/// leaves the directed last frame (not a bare progress 1).
+#[test]
+fn fill_forwards_animation_finishes_and_stays_relevant() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div');              _wa_current_time = 0;              var a = el.animate({opacity:[0, 1]}, {duration: 100, fill: 'forwards', direction: 'reverse'});              var b = el.animate({width:['0px', '10px']}, {duration: 100});              _wa_current_time = 500; a._tick(500); b._tick(500);              [a.playState, b.playState, el.getAnimations().indexOf(a) >= 0,               el.getAnimations().indexOf(b) >= 0, el.style.opacity].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("finished,finished,true,false,0".into()));
 }
 
 // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ──
@@ -1268,4 +1420,26 @@ fn decompression_stream_multi_chunk_matches_single_chunk() {
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// ── BUG-1195: смешивание единиц в _wa_lerp_scalar ───────────────────────────
+
+/// Разные единицы одного измерения приводятся к каноническим (s/px/deg),
+/// несовместимые — дискретно; одинаковые остаются как есть; прогресс вне
+/// [0,1] экстраполирует.
+#[test]
+fn wa_lerp_scalar_converts_units_and_extrapolates() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "[_wa_lerp_scalar('1s','2000ms',0.5), _wa_lerp_scalar('1s','2000ms',-0.3), \
+              _wa_lerp_scalar('1in','96px',0.5), _wa_lerp_scalar('1turn','90deg',0.5), \
+              _wa_lerp_scalar('10px','20px',0.5), _wa_lerp_scalar('10px','50%',0.2), \
+              _wa_lerp_scalar('1s','2px',0.7)].join()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("1.5s,0.7s,96px,225deg,15px,10px,2px".into())
+    );
 }

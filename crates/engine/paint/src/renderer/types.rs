@@ -376,6 +376,16 @@ pub(crate) struct PageBandCache {
     /// list-а при scroll (0,0) + `content_generation` + геометрия полосы.
     /// Урок EXPERIMENT.md п.15: скролл в ключе = промах каждый кадр.
     pub(crate) key: u64,
+    /// Статичная часть списка (без анимируемых сегментов), которой нарисована
+    /// полоса, и `hash_one_command` каждой её команды (ADR-033, THREAD-11 S2).
+    /// Пусты, пока `key == 0`. Нужны диффу `band_diff::diff_band`: границы
+    /// старых команд берутся из них, а не из нового списка.
+    pub(crate) cmds: Vec<crate::display_list::DisplayCommand>,
+    pub(crate) digests: Vec<u64>,
+    /// `content_generation`, при котором полоса нарисована: ключ меняется и
+    /// от него (картинки, шрифты, фон холста), а список команд при этом тот
+    /// же — дифф по дайджестам такого не видит (THREAD-11 S3).
+    pub(crate) generation: u64,
     /// Y верхнего края полосы в документных CSS px (≥ 0).
     pub(crate) band_top_css: f32,
     /// База кольцевой адресации: документный Y (CSS px), лежащий в строке 0

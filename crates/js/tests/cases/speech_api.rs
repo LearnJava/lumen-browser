@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 fn make_rt() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -291,5 +291,93 @@ fn voices_changed_listener_registers() {
         &rt,
         "speechSynthesis.addEventListener('voiceschanged', function() {}); \
          typeof speechSynthesis.onvoiceschanged === 'function'"
+    ));
+}
+
+// ── SpeechSynthesisEvent / SpeechSynthesisErrorEvent (BUG-680) ───────────────
+
+#[test]
+fn synthesis_event_constructors_are_exposed() {
+    let rt = make_rt();
+    assert!(bool_eval(
+        &rt,
+        "typeof SpeechSynthesisEvent === 'function' && \
+         typeof window.SpeechSynthesisErrorEvent === 'function' && \
+         SpeechSynthesisErrorEvent.prototype instanceof SpeechSynthesisEvent && \
+         SpeechSynthesisEvent.prototype instanceof Event"
+    ));
+}
+
+#[test]
+fn synthesis_event_requires_utterance() {
+    let rt = make_rt();
+    assert!(bool_eval(
+        &rt,
+        "function throwsType(f) { try { f(); return false; } catch (e) { return e instanceof TypeError; } } \
+         throwsType(function() { new SpeechSynthesisEvent(); }) && \
+         throwsType(function() { new SpeechSynthesisEvent('type'); }) && \
+         throwsType(function() { new SpeechSynthesisEvent('type', {}); }) && \
+         throwsType(function() { new SpeechSynthesisEvent('type', {charIndex: 10, name: 'foo'}); }) && \
+         throwsType(function() { new SpeechSynthesisEvent('type', {utterance: {}}); })"
+    ));
+}
+
+#[test]
+fn synthesis_event_init_defaults_and_custom() {
+    let rt = make_rt();
+    assert!(bool_eval(
+        &rt,
+        "var u = new SpeechSynthesisUtterance('foo'); \
+         var d = new SpeechSynthesisEvent('type', {utterance: u}); \
+         var c = new SpeechSynthesisEvent('type', {utterance: u, charIndex: 5, charLength: 3, \
+                                                   elapsedTime: 100, name: 'foo'}); \
+         d.utterance === u && d.charIndex === 0 && d.charLength === 0 && \
+         d.elapsedTime === 0 && d.name === '' && \
+         c.type === 'type' && c.bubbles === false && c.cancelable === false && \
+         c.charIndex === 5 && c.charLength === 3 && c.elapsedTime === 100 && c.name === 'foo'"
+    ));
+}
+
+#[test]
+fn synthesis_error_event_requires_valid_error() {
+    let rt = make_rt();
+    assert!(bool_eval(
+        &rt,
+        "function throwsType(f) { try { f(); return false; } catch (e) { return e instanceof TypeError; } } \
+         var u = new SpeechSynthesisUtterance(); \
+         throwsType(function() { new SpeechSynthesisErrorEvent('type', {error: 'not-allowed'}); }) && \
+         throwsType(function() { new SpeechSynthesisErrorEvent('type', {utterance: u}); }) && \
+         throwsType(function() { new SpeechSynthesisErrorEvent('type', {utterance: u, error: ''}); }) && \
+         throwsType(function() { new SpeechSynthesisErrorEvent('type', {utterance: u, error: 'foo'}); }) && \
+         new SpeechSynthesisErrorEvent('type', {utterance: u, error: 'synthesis-failed', \
+                                                charIndex: 5}).error === 'synthesis-failed'"
+    ));
+}
+
+#[test]
+fn delivered_start_event_is_synthesis_event() {
+    let rt = make_rt();
+    assert!(bool_eval(
+        &rt,
+        "var got = null; \
+         var u = new SpeechSynthesisUtterance('hi'); \
+         u.onstart = function(e) { got = e; }; \
+         speechSynthesis.speak(u); \
+         speechSynthesis.cancel(); \
+         got instanceof SpeechSynthesisEvent && got.type === 'start' && \
+         got.utterance === u && got.target === u && got.isTrusted === true"
+    ));
+}
+
+#[test]
+fn delivered_error_event_is_synthesis_error_event() {
+    let rt = make_rt();
+    assert!(bool_eval(
+        &rt,
+        "var got = null; \
+         var u = new SpeechSynthesisUtterance('hi'); \
+         u.addEventListener('error', function(e) { got = e; }); \
+         u._fire('error'); \
+         got instanceof SpeechSynthesisErrorEvent && got.error === 'synthesis-failed'"
     ));
 }

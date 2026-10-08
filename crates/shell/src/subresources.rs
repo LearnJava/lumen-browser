@@ -80,12 +80,18 @@ pub(crate) fn fetch_and_decode_background_images(
     let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let outcomes = parallel_map(&urls, |_, url| {
+        // BUG-692: `upgrade-insecure-requests` переписывает схему ДО гейта
+        // `img-src` (Fetch §4.1 шаг 5 < шаг 6); ключ кэша остаётся сырым
+        // `url`, меняется только адрес запроса.
+        let mut upgraded: Option<String> = None;
         if let Some((policy, self_origin)) = csp_gate {
             let resolved = base.resolve(url);
             let abs = match &resolved {
                 ResolvedResource::Url(u) => u.clone(),
                 ResolvedResource::File(p) => p.display().to_string(),
             };
+            upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &abs);
+            let abs = upgraded.clone().unwrap_or(abs);
             // Срез 58: report one text per independently violated policy
             // (CSP3 §7.8/§3.4) — the fetch stays blocked once regardless.
             let violated = crate::csp_enforce::violating_fetch_policy(
@@ -98,6 +104,7 @@ pub(crate) fn fetch_and_decode_background_images(
         let Some(image) = decode_background_image(
             image_cache::IMAGE_CACHE.current_generation(),
             url,
+            upgraded.as_deref().unwrap_or(url),
             base,
             sink,
             cookie_jar.clone(),
@@ -141,6 +148,7 @@ pub(crate) fn fetch_and_decode_background_images(
 pub(crate) fn decode_background_image(
     generation: u64,
     url: &str,
+    fetch_url: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
@@ -148,7 +156,7 @@ pub(crate) fn decode_background_image(
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<Arc<lumen_image::Image>> {
     let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, url, || {
-        decode_image(url, base, sink, cookie_jar, target, referrer_policy)
+        decode_image(fetch_url, base, sink, cookie_jar, target, referrer_policy)
     })?;
     Some(match decoded {
         image_cache::DecodedImage::Static(image) => image,
@@ -188,11 +196,14 @@ pub(crate) fn spawn_background_image_prefetch(job: BackgroundPrefetch) {
     let generation = image_cache::IMAGE_CACHE.current_generation();
     let spawned = std::thread::Builder::new().name("lumen-bg-prefetch".to_owned()).spawn(move || {
         parallel_map(&job.urls, |_, url| {
+            let mut upgraded: Option<String> = None;
             if let Some((policy, self_origin)) = &job.csp {
                 let abs = match job.base.resolve(url) {
                     ResolvedResource::Url(u) => u,
                     ResolvedResource::File(p) => p.display().to_string(),
                 };
+                upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &abs);
+                let abs = upgraded.clone().unwrap_or(abs);
                 if !crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, &abs, self_origin.as_ref(),
                 )
@@ -204,6 +215,7 @@ pub(crate) fn spawn_background_image_prefetch(job: BackgroundPrefetch) {
             let _ = decode_background_image(
                 generation,
                 url,
+                upgraded.as_deref().unwrap_or(url),
                 &job.base,
                 &job.sink,
                 job.cookie_jar.clone(),
@@ -428,6 +440,9 @@ pub(crate) fn fetch_and_decode_images(
     viewport: lumen_core::geom::Size,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
+    // BUG-935 срез 94: узлы, которым `apply_intrinsic_size` дописал `width`/`height` —
+    // вызывающий сообщает их трекеру мутаций страницы (см. `Lumen::note_shell_attr_writes`).
+    written: &mut Vec<u32>,
 ) -> (
     Vec<(String, Arc<lumen_image::Image>)>,
     Vec<(String, lumen_image::AnimatedGif)>,
@@ -556,22 +571,28 @@ pub(crate) fn fetch_and_decode_images(
         // GAP-CANVASORIGIN срез 2 (BUG-941): `<img crossorigin>` on a
         // cross-origin URL takes the real CORS-checked fetch instead of the
         // plain cached one — see `decode_image_cors` doc comment for why it
-        // bypasses `IMAGE_CACHE`. A passing check untaints the canvas draw
+        // has its own `IMAGE_CACHE` slot. A passing check untaints the canvas draw
         // (`cross_origin = false` below); a failing one is a fetch error,
         // same bucket as a network failure (`ImgOutcome::Skip`), not a
         // tainted-but-visible image.
         let (decoded, cross_origin) = match (url_cross_origin, req.crossorigin, self_origin.as_ref()) {
             (true, Some(mode), Some(origin)) => (
-                decode_image_cors(CorsImageFetch {
-                    resolved_url: &resolved_url,
-                    raw_src: &req.url,
-                    self_origin: origin,
-                    mode,
-                    base,
-                    sink,
-                    cookie_jar: cookie_jar.clone(),
-                    target,
-                    referrer_policy,
+                // BUG-1150: отдельный слот кэша с ключом (URL, mode); origin
+                // документа неизменен в пределах навигации (кэш поколенческий).
+                // NUL-префикс не пересекается с ключом no-cors записи (сырой
+                // `req.url`).
+                image_cache::IMAGE_CACHE.get_or_decode_current(&cors_cache_key(&resolved_url, mode), || {
+                    decode_image_cors(CorsImageFetch {
+                        resolved_url: &resolved_url,
+                        raw_src: &req.url,
+                        self_origin: origin,
+                        mode,
+                        base,
+                        sink,
+                        cookie_jar: cookie_jar.clone(),
+                        target,
+                        referrer_policy,
+                    })
                 }),
                 false,
             ),
@@ -608,8 +629,10 @@ pub(crate) fn fetch_and_decode_images(
             ImgOutcome::Skip => {}
             ImgOutcome::Blocked => blocked_by_img_src.push(base.resolve_str(&req.url)),
             ImgOutcome::Static { image, intrinsic, cross_origin } => {
-                if let Some((w, h)) = intrinsic {
-                    apply_intrinsic_size(doc, req.node_id, w, h);
+                if let Some((w, h)) = intrinsic
+                    && apply_intrinsic_size(doc, req.node_id, w, h, viewport)
+                {
+                    written.push(req.node_id.raw());
                 }
                 if cross_origin {
                     cross_origin_urls.push(req.url.clone());
@@ -617,8 +640,10 @@ pub(crate) fn fetch_and_decode_images(
                 out.push((req.url, image));
             }
             ImgOutcome::Animated { first, gif, intrinsic, cross_origin } => {
-                if let Some((w, h)) = intrinsic {
-                    apply_intrinsic_size(doc, req.node_id, w, h);
+                if let Some((w, h)) = intrinsic
+                    && apply_intrinsic_size(doc, req.node_id, w, h, viewport)
+                {
+                    written.push(req.node_id.raw());
                 }
                 if cross_origin {
                     cross_origin_urls.push(req.url.clone());
@@ -675,6 +700,55 @@ pub(crate) fn fetch_font_bytes(
         "font",
         referrer_policy,
     )
+}
+
+/// CSS Color L5 §5.3 — fetches the ICC profile bytes of one `@color-profile`
+/// `src`. Tagged `RequestDestination::Other` (the spec's `color-profile`
+/// destination has no dedicated variant; like fonts it is neither an image nor
+/// a script, and `Other` keeps Mixed Content's blockable classification).
+pub(crate) fn fetch_color_profile_bytes(
+    raw_src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    fetch_subresource_bytes(
+        raw_src,
+        base,
+        sink,
+        cookie_jar,
+        lumen_network::RequestDestination::Other,
+        "color-profile",
+        referrer_policy,
+    )
+}
+
+/// CSS Color L5 §5.3 — loads the ICC bytes of every `@color-profile` rule of
+/// `sheet` (the last rule of each name only; see
+/// [`lumen_css_parser::Stylesheet::load_color_profiles`]). Synchronous, like a
+/// frame's `@font-face`: a colour that depends on a profile has no meaningful
+/// first paint without it (an unloaded profile makes the colour invalid), and
+/// sheets without `@color-profile` pay nothing — the loop body never runs.
+pub(crate) fn load_sheet_color_profiles(
+    sheet: &mut lumen_css_parser::Stylesheet,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) {
+    if sheet.color_profiles.is_empty() {
+        return;
+    }
+    sheet.load_color_profiles(|src| {
+        match fetch_color_profile_bytes(src, base, sink, cookie_jar.clone(), referrer_policy) {
+            Ok(bytes) => Some(Arc::new(bytes)),
+            Err(e) => {
+                eprintln!("@color-profile: не удалось загрузить {src}: {e}");
+                None
+            }
+        }
+    });
 }
 
 /// GAP-MEDIADECODE срез 7: fetch an FFmpeg-container `<video src>` body.
@@ -779,12 +853,10 @@ pub(crate) fn decode_image(
 /// resource fetch algorithm treats both the same way (the request errors,
 /// no image loads), it does not fall back to a tainted-but-visible image.
 ///
-/// Bypasses `image_cache::IMAGE_CACHE` deliberately: that cache is keyed by
-/// URL alone, with no axis for "was this fetched with credentials/Origin or
-/// without" — reusing a plain no-cors cache hit here would skip the very
-/// check this function exists to run. The cost is a duplicate network
-/// round-trip if the same cross-origin URL also appears as a plain `<img>`
-/// elsewhere on the page; acceptable for a first slice, not a correctness bug.
+/// Does not read the plain no-cors `IMAGE_CACHE` slot (keyed by URL alone):
+/// reusing it would skip the very check this function exists to run. The
+/// caller wraps it in its own slot keyed by [`cors_cache_key`] (BUG-1150), so
+/// identical `<img crossorigin>` elements share one request and one decode.
 /// Bundles [`decode_image_cors`]'s inputs — plain positional params would
 /// trip `clippy::too_many_arguments` at eight.
 struct CorsImageFetch<'a> {
@@ -797,6 +869,29 @@ struct CorsImageFetch<'a> {
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
     referrer_policy: lumen_network::ReferrerPolicy,
+}
+
+/// Ключ CORS-слота в `IMAGE_CACHE` (BUG-1150): `(resolved URL, crossorigin mode)`.
+fn cors_cache_key(resolved_url: &str, mode: lumen_layout::CrossOriginMode) -> String {
+    let m = match mode {
+        lumen_layout::CrossOriginMode::Anonymous => 'a',
+        lumen_layout::CrossOriginMode::UseCredentials => 'c',
+    };
+    format!("\0cors\0{m}\0{resolved_url}")
+}
+
+#[cfg(test)]
+mod cors_key_tests {
+    use super::cors_cache_key;
+    use lumen_layout::CrossOriginMode::{Anonymous, UseCredentials};
+
+    #[test]
+    fn key_separates_mode_and_never_equals_plain_url() {
+        let u = "https://cdn.example/a.svg";
+        assert_eq!(cors_cache_key(u, Anonymous), cors_cache_key(u, Anonymous));
+        assert_ne!(cors_cache_key(u, Anonymous), cors_cache_key(u, UseCredentials));
+        assert_ne!(cors_cache_key(u, Anonymous), u);
+    }
 }
 
 fn decode_image_cors(req: CorsImageFetch<'_>) -> Option<image_cache::DecodedImage> {

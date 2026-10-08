@@ -147,7 +147,7 @@ function _lumen_resource_track(nid, local) {
 - [BUG-571](BUG-571-FIXED.md) / [BUG-722](BUG-722-FIXED.md) —
   `createElement`-путь для `<script>`/`<link>`; **работает**, подтверждено
   A/B выше. Чинить их заново не нужно.
-- [BUG-630](BUG-630-FIXED.md) (`<img>`), [BUG-798](BUG-798-OPEN.md)
+- [BUG-630](BUG-630-FIXED.md) (`<img>`), [BUG-798](BUG-798-FIXED.md)
   (`<embed>`/`<object>`) — тот же КЛАСС («элемент не сообщает об исходе
   загрузки»), но другие элементы и другой код; общего фикса с ними нет.
 

@@ -5,7 +5,8 @@
 //! (анкер `fn apply_css_wide_keyword`) без правок тела: изменены только
 //! видимость функции и пути импортов.
 
-use crate::style::{ComputedStyle, CssWideKeyword, WhiteSpace};
+use crate::style::values::misc::RuleInsetProp;
+use crate::style::{ComputedStyle, CssWideKeyword, Display, WhiteSpace};
 
 
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
@@ -45,6 +46,44 @@ pub(in crate::style) fn apply_css_wide_keyword(
     });
 }
 
+/// CSS Cascade L4 §3.2 — шортхенд `all`: CSS-wide keyword применяется ко всем
+/// свойствам сразу, кроме `direction`, `unicode-bidi` и custom properties.
+///
+/// Источник берётся целым стилем, а не перебором имён: список арм-ов
+/// `apply_css_wide_keyword_with` покрывает не все поля `ComputedStyle`, а
+/// `all` обязан сбросить каждое.
+/// - `Inherit` — родительский стиль целиком;
+/// - `Initial` — стиль корня (initial-значения), с `display: inline`;
+/// - `Unset` — [`ComputedStyle::inheriting`]: наследуемые от родителя,
+///   прочие initial;
+/// - `Revert` — UA-снэпшот (`ua_baseline`).
+///
+/// `font-size` и `effective_zoom` сохраняются: их уже посчитали pre-pass-ы
+/// `apply_font_size`/`zoom` в `compute_style`, которые разбирают `all` сами.
+pub(in crate::style) fn apply_all_shorthand(
+    style: &mut ComputedStyle,
+    kw: CssWideKeyword,
+    inherited: &ComputedStyle,
+    ua_baseline: &ComputedStyle,
+) {
+    let mut next = match kw {
+        CssWideKeyword::Inherit => inherited.clone(),
+        CssWideKeyword::Initial => {
+            let mut root = ComputedStyle::root();
+            root.display = Display::Inline;
+            root
+        }
+        CssWideKeyword::Unset => ComputedStyle::inheriting(inherited),
+        CssWideKeyword::Revert => ua_baseline.clone(),
+    };
+    next.direction = style.direction;
+    next.unicode_bidi = style.unicode_bidi;
+    next.custom_props = std::mem::take(&mut style.custom_props);
+    next.font_size = style.font_size;
+    next.effective_zoom = style.effective_zoom;
+    *style = next;
+}
+
 fn apply_css_wide_keyword_with(
     style: &mut ComputedStyle,
     prop: &str,
@@ -67,6 +106,9 @@ fn apply_css_wide_keyword_with(
     match prop {
         // ──────── Inherited properties ────────
         "color" => style.color = if inh { inherited.color } else { init.color },
+        "caret-color" => {
+            style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
+        }
         // `font-size` сюда не доходит: `apply_declaration` отсекает его до
         // keyword-ветки (BUG-731) — размер целиком считает pre-pass
         // `apply_font_size`, который один видит весь каскад, включая
@@ -99,7 +141,23 @@ fn apply_css_wide_keyword_with(
             if prop == "font-variant" {
                 style.font_variant_emoji =
                     if inh { inherited.font_variant_emoji } else { init.font_variant_emoji };
+                let src = if inh { inherited } else { init };
+                style.font_variant_ligatures = src.font_variant_ligatures;
+                style.font_variant_numeric = src.font_variant_numeric;
+                style.font_variant_position = src.font_variant_position;
             }
+        }
+        "font-variant-ligatures" => {
+            style.font_variant_ligatures =
+                if inh { inherited.font_variant_ligatures } else { init.font_variant_ligatures };
+        }
+        "font-variant-numeric" => {
+            style.font_variant_numeric =
+                if inh { inherited.font_variant_numeric } else { init.font_variant_numeric };
+        }
+        "font-variant-position" => {
+            style.font_variant_position =
+                if inh { inherited.font_variant_position } else { init.font_variant_position };
         }
         "font-variant-emoji" => {
             style.font_variant_emoji =
@@ -155,6 +213,24 @@ fn apply_css_wide_keyword_with(
         "interpolate-size" => {
             style.interpolate_size =
                 if inh { inherited.interpolate_size } else { init.interpolate_size };
+        }
+        // Не наследуемые: только явный `inherit` берёт родителя.
+        "interest-delay-start" => {
+            style.interest_delay_start =
+                if inh_only_inherit { inherited.interest_delay_start } else { init.interest_delay_start };
+        }
+        "interest-delay-end" => {
+            style.interest_delay_end =
+                if inh_only_inherit { inherited.interest_delay_end } else { init.interest_delay_end };
+        }
+        "interest-delay" => {
+            let (s, e) = if inh_only_inherit {
+                (inherited.interest_delay_start, inherited.interest_delay_end)
+            } else {
+                (init.interest_delay_start, init.interest_delay_end)
+            };
+            style.interest_delay_start = s;
+            style.interest_delay_end = e;
         }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
@@ -299,6 +375,9 @@ fn apply_css_wide_keyword_with(
         "cursor" => {
             style.cursor = if inh { inherited.cursor } else { init.cursor };
         }
+        "pointer-events" => {
+            style.pointer_events = if inh { inherited.pointer_events } else { init.pointer_events };
+        }
         "writing-mode" => {
             style.writing_mode = if inh { inherited.writing_mode } else { init.writing_mode };
         }
@@ -403,7 +482,7 @@ fn apply_css_wide_keyword_with(
             };
         }
         "print-color-adjust" | "color-adjust" => {
-            style.print_color_adjust = if inh_only_inherit {
+            style.print_color_adjust = if inh {
                 inherited.print_color_adjust
             } else {
                 init.print_color_adjust
@@ -428,6 +507,20 @@ fn apply_css_wide_keyword_with(
         }
         "shape-image-threshold" => {
             style.shape_image_threshold = if inh_only_inherit { inherited.shape_image_threshold } else { init.shape_image_threshold };
+        }
+        "offset" => {
+            // Шортхенд: сбрасывает/наследует все четыре хранимых лонгхенда.
+            if inh_only_inherit {
+                style.offset_path = inherited.offset_path.clone();
+                style.offset_distance = inherited.offset_distance.clone();
+                style.offset_rotate = inherited.offset_rotate;
+                style.offset_anchor = inherited.offset_anchor;
+            } else {
+                style.offset_path = init.offset_path.clone();
+                style.offset_distance = init.offset_distance.clone();
+                style.offset_rotate = init.offset_rotate;
+                style.offset_anchor = init.offset_anchor;
+            }
         }
         "offset-path" => {
             style.offset_path = if inh_only_inherit {
@@ -491,6 +584,22 @@ fn apply_css_wide_keyword_with(
         // CSS Logical Properties L1 — inline-size / block-size.
         "inline-size" => style.inline_size = if inh_only_inherit { inherited.inline_size.clone() } else { init.inline_size.clone() },
         "block-size" => style.block_size = if inh_only_inherit { inherited.block_size.clone() } else { init.block_size.clone() },
+        // min-/max- inline-size/block-size share one boxed side-struct.
+        "min-inline-size" | "max-inline-size" | "min-block-size" | "max-block-size" => {
+            let src = if inh_only_inherit { inherited.logical_min_max_sizes.clone() } else { init.logical_min_max_sizes.clone() };
+            // Only the named longhand resets; keep the other three as cascaded.
+            let (new_min_i, new_max_i, new_min_b, new_max_b) = src
+                .as_deref()
+                .map(|x| (x.min_inline.clone(), x.max_inline.clone(), x.min_block.clone(), x.max_block.clone()))
+                .unwrap_or((None, None, None, None));
+            let sizes = style.logical_min_max_sizes.get_or_insert_with(Default::default);
+            match prop {
+                "min-inline-size" => sizes.min_inline = new_min_i,
+                "max-inline-size" => sizes.max_inline = new_max_i,
+                "min-block-size" => sizes.min_block = new_min_b,
+                _ => sizes.max_block = new_max_b,
+            }
+        }
         "min-width" => style.min_width = if inh_only_inherit { inherited.min_width.clone() } else { init.min_width.clone() },
         "max-width" => style.max_width = if inh_only_inherit { inherited.max_width.clone() } else { init.max_width.clone() },
         "min-height" => style.min_height = if inh_only_inherit { inherited.min_height.clone() } else { init.min_height.clone() },
@@ -575,6 +684,74 @@ fn apply_css_wide_keyword_with(
             style.block_step_align = src.block_step_align;
             style.block_step_round = src.block_step_round;
         }
+        // CSS Multi-column L1 §4 / CSS Gap Decorations L1 §3 — none of the
+        // `*-rule*` properties are inherited.
+        "column-rule-width" | "column-rule-style" | "column-rule-color" | "column-rule"
+        | "row-rule-width" | "row-rule-style" | "row-rule-color" | "row-rule" | "rule-width"
+        | "rule-style" | "rule-color" | "rule" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            let cols = !prop.starts_with("row-");
+            let rows = !prop.starts_with("column-");
+            let width = prop.ends_with("width") || !prop.ends_with("style") && !prop.ends_with("color");
+            let st = prop.ends_with("style") || !prop.ends_with("width") && !prop.ends_with("color");
+            let color = prop.ends_with("color") || !prop.ends_with("width") && !prop.ends_with("style");
+            if cols {
+                if width {
+                    style.column_rule_width = src.column_rule_width.clone();
+                }
+                if st {
+                    style.column_rule_style = src.column_rule_style.clone();
+                }
+                if color {
+                    style.column_rule_color = src.column_rule_color.clone();
+                }
+            }
+            if rows {
+                if width {
+                    style.row_rule_width = src.row_rule_width.clone();
+                }
+                if st {
+                    style.row_rule_style = src.row_rule_style.clone();
+                }
+                if color {
+                    style.row_rule_color = src.row_rule_color.clone();
+                }
+            }
+        }
+        "column-rule-break" | "row-rule-break" | "rule-break" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            if prop != "row-rule-break" {
+                style.column_rule_break = src.column_rule_break;
+            }
+            if prop != "column-rule-break" {
+                style.row_rule_break = src.row_rule_break;
+            }
+        }
+        "column-rule-visibility-items" | "row-rule-visibility-items" | "rule-visibility-items" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            if prop != "row-rule-visibility-items" {
+                style.column_rule_visibility_items = src.column_rule_visibility_items;
+            }
+            if prop != "column-rule-visibility-items" {
+                style.row_rule_visibility_items = src.row_rule_visibility_items;
+            }
+        }
+        "rule-overlap" => {
+            style.rule_overlap = if inh_only_inherit { inherited.rule_overlap } else { init.rule_overlap };
+        }
+        p if RuleInsetProp::of(p).is_some() => {
+            let src = if inh_only_inherit { inherited } else { init };
+            if let Some(rp) = RuleInsetProp::of(p) {
+                for &slot in rp.slots() {
+                    if rp.cols {
+                        *style.column_rule_inset.slot_mut(slot) = src.column_rule_inset.slot(slot).clone();
+                    }
+                    if rp.rows {
+                        *style.row_rule_inset.slot_mut(slot) = src.row_rule_inset.slot(slot).clone();
+                    }
+                }
+            }
+        }
         "opacity" => {
             style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };
         }
@@ -613,6 +790,18 @@ fn apply_css_wide_keyword_with(
         }
         "stroke-dashoffset" => {
             style.svg_stroke_dashoffset = if inh_only_inherit { inherited.svg_stroke_dashoffset } else { init.svg_stroke_dashoffset };
+        }
+        // SVG 2 §Geometry (BUG-1094): non-inherited; `color-interpolation` inherited.
+        "cx" => style.svg_cx = if inh_only_inherit { inherited.svg_cx.clone() } else { init.svg_cx.clone() },
+        "cy" => style.svg_cy = if inh_only_inherit { inherited.svg_cy.clone() } else { init.svg_cy.clone() },
+        "r" => style.svg_r = if inh_only_inherit { inherited.svg_r.clone() } else { init.svg_r.clone() },
+        "x" => style.svg_x = if inh_only_inherit { inherited.svg_x.clone() } else { init.svg_x.clone() },
+        "y" => style.svg_y = if inh_only_inherit { inherited.svg_y.clone() } else { init.svg_y.clone() },
+        "rx" => style.svg_rx = if inh_only_inherit { inherited.svg_rx.clone() } else { init.svg_rx.clone() },
+        "ry" => style.svg_ry = if inh_only_inherit { inherited.svg_ry.clone() } else { init.svg_ry.clone() },
+        "path-length" => style.svg_path_length = if inh_only_inherit { inherited.svg_path_length } else { init.svg_path_length },
+        "color-interpolation" => {
+            style.svg_color_interpolation = if inh { inherited.svg_color_interpolation } else { init.svg_color_interpolation };
         }
         // CSS Fill & Stroke L3 §6 — paint-order is inherited: unset/revert → inherited.
         "paint-order" => {
@@ -664,6 +853,8 @@ fn apply_css_wide_keyword_with(
         }
         "-webkit-line-clamp" | "line-clamp" => {
             style.line_clamp = if inh_only_inherit { inherited.line_clamp } else { init.line_clamp };
+            style.line_clamp_auto = if inh_only_inherit { inherited.line_clamp_auto } else { init.line_clamp_auto };
+            style.line_clamp_legacy = if inh_only_inherit { inherited.line_clamp_legacy } else { init.line_clamp_legacy };
         }
         "box-shadow" => {
             style.box_shadow = if inh_only_inherit {
@@ -745,6 +936,12 @@ fn apply_css_wide_keyword_with(
         }
         "border-collapse" => {
             style.border_collapse = if inh_only_inherit { inherited.border_collapse } else { init.border_collapse };
+        }
+        "caption-side" => {
+            style.caption_side = if inh { inherited.caption_side } else { init.caption_side };
+        }
+        "table-layout" => {
+            style.table_layout = if inh_only_inherit { inherited.table_layout } else { init.table_layout };
         }
         "empty-cells" => {
             style.empty_cells = if inh_only_inherit { inherited.empty_cells } else { init.empty_cells };
@@ -1137,6 +1334,10 @@ fn apply_css_wide_keyword_with(
                 style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
                 style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
+                style.grid_template_col_line_names = init.grid_template_col_line_names.clone();
+                style.grid_template_row_line_names = init.grid_template_row_line_names.clone();
+                style.grid_template_col_subgrid_fill = init.grid_template_col_subgrid_fill;
+                style.grid_template_row_subgrid_fill = init.grid_template_row_subgrid_fill;
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
                 style.grid_auto_rows = init.grid_auto_rows.clone();
@@ -1150,6 +1351,10 @@ fn apply_css_wide_keyword_with(
                 style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
                 style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
+                style.grid_template_col_line_names = init.grid_template_col_line_names.clone();
+                style.grid_template_row_line_names = init.grid_template_row_line_names.clone();
+                style.grid_template_col_subgrid_fill = init.grid_template_col_subgrid_fill;
+                style.grid_template_row_subgrid_fill = init.grid_template_row_subgrid_fill;
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
                 style.grid_auto_rows = init.grid_auto_rows.clone();

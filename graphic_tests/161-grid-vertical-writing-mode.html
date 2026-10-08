@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<!-- GRID-VWM: CSS Grid в вертикальном `writing-mode` (CSS Grid L1 §1.1, Writing Modes L3 §3).
+     Столбцы идут по inline-оси (физическая y), строки — по block-оси (x: справа налево у
+     `vertical-rl`, слева направо у `vertical-lr`).
+     A: vertical-rl, `fr`/фикс. дорожки, gap, span, align-/justify-self start/end/center ·
+     B: vertical-lr + direction:rtl (столбцы снизу вверх), inline-grid по дорожкам, авто-поля ·
+     C: sideways-lr, justify-content: space-between, align-content: end ·
+     D: baseline-группа строк по оси x (first/last) ·
+     E: вложенный grid и subgrid в vertical-rl · F: stretch/fit-content по обеим осям.
+     Только цветные боксы, без текста. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 12px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 320px; height: 330px; margin: 0 8px 8px 0; position: relative; }
+  .g { display: grid; background: #d8d8d8; }
+
+  .a .g { writing-mode: vertical-rl; grid-template-columns: 80px 1fr 60px; grid-template-rows: 50px auto 30px;
+          gap: 6px 10px; width: 300px; height: 300px; padding: 8px; border: 4px solid #888; box-sizing: border-box; }
+  .a .g > div { background: #f55; }
+  .a .g > div:nth-child(2) { background: #5a5; width: 20px; }
+  .a .g > div:nth-child(3) { background: #55f; height: 40px; align-self: end; justify-self: center; }
+  .a .g > div:nth-child(4) { background: #fa0; width: 30px; height: 30px; align-self: center; justify-self: end; }
+  .a .g > div:nth-child(5) { background: #0aa; grid-column: 2 / 4; grid-row: 2 / 4; align-self: start;
+                             justify-self: start; width: 25px; height: 25px; }
+
+  .b .g { display: inline-grid; writing-mode: vertical-lr; direction: rtl; grid-template-columns: 100px 60px;
+          grid-template-rows: 40px 70px; column-gap: 10px; margin: 10px; }
+  .b .g > div { background: #f55; width: 20px; height: 30px; }
+  .b .g > div:nth-child(2) { background: #5a5; margin: auto; }
+  .b .g > div:nth-child(3) { background: #55f; margin-left: auto; }
+  .b .g > div:nth-child(4) { background: #fa0; align-self: stretch; width: auto; }
+
+  .c .g { writing-mode: sideways-lr; grid-template-columns: repeat(2, 70px); grid-template-rows: 60px 40px; gap: 8px;
+          width: 200px; height: 250px; margin: 10px; justify-content: space-between; align-content: end; }
+  .c .g > div { background: #f55; width: 25px; height: 30px; }
+  .c .g > div:nth-child(2) { background: #5a5; justify-self: end; }
+  .c .g > div:nth-child(3) { background: #55f; align-self: center; }
+
+  .d .g { writing-mode: vertical-rl; grid-template-columns: 100px 100px; grid-template-rows: auto auto;
+          width: 300px; height: 250px; margin: 10px; align-items: baseline; }
+  .d .g > div { background: #f55; }
+  .d .g > div:nth-child(1) { width: 30px; height: 20px; }
+  .d .g > div:nth-child(2) { width: 20px; height: 50px; margin-right: 12px; background: #5a5; }
+  .d .g > div:nth-child(3) { width: 40px; height: 30px; background: #55f; align-self: last baseline; }
+  .d .g > div:nth-child(4) { width: 15px; height: 30px; background: #fa0; align-self: last baseline; }
+
+  .e .g { writing-mode: vertical-rl; grid-template-columns: 100px 100px; grid-template-rows: 80px 80px;
+          margin: 10px; position: relative; width: 200px; height: 250px; }
+  .e .g > .a1 { background: #f55; grid-area: 1 / 1; }
+  .e .g > .b1 { background: #5a5; grid-area: 2 / 2; display: grid; grid-template-columns: 30px 30px;
+                grid-template-rows: 20px 20px; gap: 4px; }
+  .e .g > .b1 > div { background: #55f; }
+  .e .g > .c1 { position: absolute; background: #fa0; width: 30px; height: 30px; right: 10px; bottom: 10px; }
+  .e .g > .d1 { background: #0aa; grid-area: 1 / 2; display: grid; grid-template-columns: subgrid; grid-template-rows: subgrid; }
+  .e .g > .d1 > div { background: #222; width: 10px; }
+
+  .f .g { writing-mode: vertical-rl; grid-template-columns: 90px 90px; grid-template-rows: 70px 70px;
+          width: 220px; height: 250px; margin: 10px; justify-items: center; align-items: end; }
+  .f .g > div { background: #f55; }
+  .f .g > div:nth-child(2) { background: #5a5; justify-self: stretch; align-self: stretch; }
+  .f .g > div:nth-child(3) { background: #55f; width: 24px; height: 36px; justify-self: start; }
+  .f .g > div:nth-child(4) { background: #fa0; width: 24px; }
+  .f .g > div > i { display: block; width: 14px; height: 40px; background: #222; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="cell a"><div class="g"><div></div><div></div><div></div><div></div><div></div></div></div>
+    <div class="cell b"><div class="g"><div></div><div></div><div></div><div></div></div></div>
+    <div class="cell c"><div class="g"><div></div><div></div><div></div><div></div></div></div>
+    <div class="cell d"><div class="g"><div></div><div></div><div></div><div></div></div></div>
+    <div class="cell e"><div class="g"><div class="a1"></div><div class="b1"><div></div><div></div><div></div></div><div class="c1"></div><div class="d1"><div></div></div></div></div>
+    <div class="cell f"><div class="g"><div><i></i></div><div><i></i></div><div></div><div></div></div></div>
+  </div>
+</body>
+</html>

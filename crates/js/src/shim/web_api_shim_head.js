@@ -147,7 +147,8 @@ function _lumen_legacy_event_ctor(name) {
         case 'storageevent': return StorageEvent;
         case 'messageevent': return MessageEvent;
         case 'dragevent': return DragEvent;
-        case 'compositionevent': case 'textevent': return CompositionEvent;
+        case 'compositionevent': return CompositionEvent;
+        case 'textevent': return TextEvent;
         case 'beforeunloadevent': return BeforeUnloadEvent;
         default: return null;
     }

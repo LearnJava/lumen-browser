@@ -61,6 +61,7 @@ use history_state::HistoryState;
 // Реализация трейта, отчёт об исключениях, кэш байт-кода и конвертеры значений
 // вынесены в подмодули батчем SPLIT-JS5.
 
+mod classic_script;
 mod code_cache;
 mod eval;
 mod value;
@@ -84,7 +85,10 @@ mod named_access;
 mod promise_reject;
 mod script_attribution;
 mod sheet_sync;
+mod stall_sampler;
 mod style_flush;
+#[cfg(test)]
+pub(crate) use style_flush::CONTENT_JOURNAL_DISABLED;
 mod thread;
 
 pub use named_access::ensure_v8_platform;
@@ -98,15 +102,18 @@ mod overrides;
 mod runtime;
 
 pub use overrides::{
-    set_global_timezone_override, set_global_user_agent_override,
+    permission_override_script, set_global_permission_override, set_global_timezone_override,
+    set_global_user_agent_override,
     timezone_override_script, user_agent_override_script,
 };
-pub use runtime::{CustomPropertySnapshot, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub use runtime::{CustomPropertySnapshot, DomChanges, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub use style_flush::{attr_narrowing_enabled, child_list_narrowing_enabled, fresh_node_roots_enabled};
 pub use sheet_sync::CascadeSource;
 pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
 use overrides::{global_timezone_override, global_user_agent_override};
+pub(crate) use overrides::global_permission_overrides;
 use runtime::pairs_from_flat;
 
 // ── S3: DOM-core native registration ─────────────────────────────────────────
@@ -143,6 +150,16 @@ impl V8JsRuntime {
         push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
         sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
         cross_origin_isolated: bool,
+        // BUG-1208: `window.origin`/`self.origin`/`Origin.from(globalThis)`
+        // (HTML LS §8.1.3.5, the realm's own origin, distinct from
+        // `location.origin` — a URL Standard origin) inherit the PARENT's
+        // origin for a non-sandboxed `about:blank`/`about:srcdoc` document
+        // (HTML LS §7.4.1). `Some(parent_url)` — this document's own
+        // `page_url` starts with `about:` and it is not opaque-sandboxed
+        // (`frames::spawn_frame` passes the host's own URL); `None` for every
+        // other caller (a real-URL document, an opaque-sandboxed one, or the
+        // top-level page, which has no parent to inherit from).
+        origin_inherit_from: Option<&str>,
     ) -> JsResult<()> {
         let ls_store =
             ls_store.unwrap_or_else(|| Arc::new(Mutex::new(lumen_core::WebStorage::default())));
@@ -159,6 +176,7 @@ impl V8JsRuntime {
         // BUG-1119: the tab's jar, attached via `with_cookie_jar`; `None` keeps
         // `document.cookie` empty (tests, headless, opaque-origin frames).
         let cookie_jar = self.cookie_jar.clone();
+        let document_referrer = self.document_referrer.clone().unwrap_or_default();
         let deterministic_seed = if self
             .deterministic
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -182,6 +200,15 @@ impl V8JsRuntime {
         // Derived here, before `page_url` is moved into the `self.run` closure
         // below, and never taken from a JS argument.
         let page_origin = crate::file_input::origin_for_url(page_url);
+        // BUG-1208: `window.origin`/`self.origin` — the URL Standard origin
+        // serialization of `page_url`, EXCEPT for a non-sandboxed
+        // `about:blank`/`about:srcdoc` document, which inherits the parent's
+        // instead (HTML LS §7.4.1); `origin_inherit_from` carries that
+        // parent URL for exactly that case (`None` otherwise).
+        let realm_origin = origin_inherit_from.map_or_else(
+            || crate::origin::origin_serialization_for_url(page_url),
+            crate::origin::origin_serialization_for_url,
+        );
         let page_url = page_url.to_owned();
         // BUG-480 срез 4: ключ этого контекста в исходящем ящике кросс-
         // фреймовых postMessage — указатель Arc собственного документа. Тот
@@ -252,6 +279,11 @@ impl V8JsRuntime {
             }
         });
         let worker_determinism_inner = worker_determinism.clone();
+        // BUG-674: the Service Worker registry and Cache Storage key on this,
+        // not on an origin string passed in from JS — the same binding the
+        // file-API grants get (BUG-371). Cloned before `page_origin` is needed
+        // again by the installs after `self.run` returns.
+        let sw_origin = page_origin.clone();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -349,6 +381,26 @@ impl V8JsRuntime {
                 text_frag_rects: Arc::clone(&self.text_frag_rects),
                 text_frags_needed: Arc::clone(&self.text_frags_needed),
                 text_frags_collected: Arc::clone(&self.text_frags_collected),
+                hit_tree_stale: Arc::clone(&self.hit_tree_stale),
+                dom_touched: Arc::clone(&dom_touched),
+                incr_basis: Arc::new(Mutex::new(None)),
+                incremental_flushes: Arc::clone(&self.incremental_flushes),
+                style_entries_kept: Arc::clone(&self.style_entries_kept),
+                style_skip_off: Arc::clone(&self.style_skip_off),
+                shallow_roots_used: Arc::clone(&self.shallow_roots_used),
+                shallow_roots_off: Arc::clone(&self.shallow_roots_off),
+                sheet_delta_used: Arc::clone(&self.sheet_delta_used),
+                sheet_delta_off: Arc::clone(&self.sheet_delta_off),
+                scope_prune_off: Arc::clone(&self.scope_prune_off),
+                scope_pruned: Arc::clone(&self.scope_pruned),
+                released_evict_off: Arc::clone(&self.released_evict_off),
+                scroll_rollup_off: Arc::clone(&self.scroll_rollup_off),
+                scroll_rollup_served: Arc::clone(&self.scroll_rollup_served),
+                scroll_rollup_walked: Arc::clone(&self.scroll_rollup_walked),
+                node_index_cache: Arc::new(Mutex::new(None)),
+                node_index_builds: Arc::clone(&self.node_index_builds),
+                verify_shadow: Arc::new(Mutex::new(Default::default())),
+                patched_sheet_cache: Arc::new(Mutex::new(None)),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
@@ -358,6 +410,7 @@ impl V8JsRuntime {
             let nav_state = Arc::clone(&self.nav_state);
             let pending_navigation_updates = Arc::clone(&self.pending_navigation_updates);
             let pending_nav_intercepted = Arc::clone(&self.pending_nav_intercepted);
+            let navigate_listeners = Arc::clone(&self.navigate_listeners);
             let fullscreen_requests = Arc::clone(&self.fullscreen_requests);
             let print_requests = Arc::clone(&self.print_requests);
             let pending_focus_requests = Arc::clone(&self.pending_focus_requests);
@@ -406,6 +459,7 @@ impl V8JsRuntime {
             install::install_tree_navigation(scope, ctx, store, Arc::clone(&doc))?;
 
             install::install_node_count(scope, ctx, store, Arc::clone(&doc))?;
+            install::install_dom_reclaim(scope, ctx, store_scoped, Arc::clone(&doc))?;
 
             install::install_tree_mutation(
                 scope,
@@ -428,6 +482,7 @@ impl V8JsRuntime {
                 fp_sw_net.clone(),
                 idb_sw.clone(),
                 worker_determinism_inner.clone(),
+                sw_origin.clone(),
             )?;
 
             install::install_history(
@@ -445,6 +500,7 @@ impl V8JsRuntime {
                 Arc::clone(&nav_state),
                 Arc::clone(&pending_navigation_updates),
                 Arc::clone(&pending_nav_intercepted),
+                Arc::clone(&navigate_listeners),
             )?;
 
             install::install_navigation(scope, ctx, store, Arc::clone(&nav_out))?;
@@ -507,7 +563,7 @@ impl V8JsRuntime {
                 flush_handles.clone(),
             )?;
 
-            install::install_point_hit_test(scope, ctx, store, Arc::clone(&hit_test_tree))?;
+            install::install_point_hit_test(scope, ctx, store, Arc::clone(&hit_test_tree), flush_handles.clone())?;
 
             install::install_match_media(scope, ctx, store)?;
 
@@ -623,14 +679,33 @@ impl V8JsRuntime {
                     .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_PAGE_URL'".into()))?;
                 let val = v8::String::new(scope, &page_url)
                     .ok_or_else(|| JsError::Runtime("OOM: page_url value".into()))?;
-                ctx.global(scope).set(scope, key.into(), val.into());
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
+            }
+            // BUG-1208: `window.origin`/`self.origin`/`Origin.from(globalThis)`
+            // read this — the realm's own origin, computed above
+            // (`realm_origin`), distinct from `location.origin` (a plain URL
+            // Standard origin of `page_url`, no inheritance).
+            {
+                let key = v8::String::new(scope, "_LUMEN_ORIGIN")
+                    .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_ORIGIN'".into()))?;
+                let val = v8::String::new(scope, &realm_origin)
+                    .ok_or_else(|| JsError::Runtime("OOM: realm_origin value".into()))?;
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
+            }
+            // BUG-1156: `document.referrer`'s seed (`_lumen_document_referrer`).
+            {
+                let key = v8::String::new(scope, "_LUMEN_DOCUMENT_REFERRER")
+                    .ok_or_else(|| JsError::Runtime("OOM: key '_LUMEN_DOCUMENT_REFERRER'".into()))?;
+                let val = v8::String::new(scope, &document_referrer)
+                    .ok_or_else(|| JsError::Runtime("OOM: document_referrer value".into()))?;
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
             }
             {
                 let key = v8::String::new(scope, "_LUMEN_CROSS_ORIGIN_ISOLATED").ok_or_else(
                     || JsError::Runtime("OOM: key '_LUMEN_CROSS_ORIGIN_ISOLATED'".into()),
                 )?;
                 let val = v8::Boolean::new(scope, cross_origin_isolated);
-                ctx.global(scope).set(scope, key.into(), val.into());
+                crate::internal_globals::holder_for(scope, ctx, "_LUMEN").set(scope, key.into(), val.into());
             }
 
             // GAP-DOCALLDDA / BUG-1057: `_lumen_make_html_all_collection(coll)`
@@ -672,6 +747,17 @@ impl V8JsRuntime {
                 store_scoped,
                 "_lumen_capture_call_site",
                 Box::new(script_attribution::capture_call_site),
+            )?;
+
+            // BUG-1049: classic `<script>` bodies inserted through the DOM run as
+            // a real Script so their top-level `let`/`const` reach the global
+            // lexical environment (`classic_script.rs`).
+            crate::v8_compat::register_v8_native_scoped(
+                scope,
+                ctx,
+                store_scoped,
+                "_lumen_run_classic_script",
+                Box::new(classic_script::run_classic_script),
             )?;
 
             // Polyfill `DOMException`: quickjs-ng provides it as a built-in (part of
@@ -720,17 +806,35 @@ impl V8JsRuntime {
             // configurable and `internal_globals::seal_internal_globals_v8` can
             // hide and freeze them at the end of this function.
             //
+            // BUG-753 срез 1: the source is now wrapped in an IIFE
+            // (`internal_globals::wrap_page_shim`) that re-exports its names to the
+            // global itself; the indirect eval is kept for the module-shim-visible
+            // parts of the sealing contract until срез 3.
+            //
             // Safe only because the shim has no top-level `let`/`const`/`class`:
             // those are lexical, and eval puts them in a declarative environment
             // that dies with the eval call instead of on the global object — a
             // future top-level `const` would silently vanish. Guarded by
             // `internal_globals`'s `shim_has_no_top_level_lexical_declarations`.
             {
+                let container = crate::internal_globals::container(scope, ctx)
+                    .ok_or_else(|| JsError::Runtime("internal container missing".into()))?;
+                let natives: Vec<String> = container
+                    .get_own_property_names(scope, Default::default())
+                    .map(|arr| {
+                        (0..arr.length())
+                            .filter_map(|i| arr.get_index(scope, i))
+                            .filter_map(|k| k.to_string(scope))
+                            .map(|s| s.to_rust_string_lossy(scope))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 v8::tc_scope!(tc, scope);
                 let shim = crate::dom::web_api_shim();
+                let shim = crate::internal_globals::wrap_page_shim(&shim, &natives);
                 let src = v8::String::new(tc, &shim)
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM source".into()))?;
-                let wrapper_src = v8::String::new(tc, "(function(s) { (0, eval)(s); })")
+                let wrapper_src = v8::String::new(tc, "(function(s, c) { return (0, eval)(s)(c); })")
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM eval wrapper".into()))?;
                 let compiled = v8::Script::compile(tc, wrapper_src, None);
                 if tc.has_caught() {
@@ -751,7 +855,7 @@ impl V8JsRuntime {
                         JsError::Runtime("WEB_API_SHIM eval wrapper is not a function".into())
                     })?;
                 let recv = v8::undefined(tc).into();
-                let result = wrapper.call(tc, recv, &[src.into()]);
+                let result = wrapper.call(tc, recv, &[src.into(), container.into()]);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
@@ -762,8 +866,14 @@ impl V8JsRuntime {
             // Trusted Types API (W3C TT L2, Phase 0): plain JS, no rquickjs-specific API,
             // so the shared shim string is evaluated the same way as WEB_API_SHIM above.
             {
+                let tt_js = crate::internal_globals::wrap_for_container(
+                    scope,
+                    ctx,
+                    crate::trusted_types::TRUSTED_TYPES_SHIM,
+                )
+                .unwrap_or_else(|| crate::trusted_types::TRUSTED_TYPES_SHIM.to_owned());
                 v8::tc_scope!(tc, scope);
-                let src = v8::String::new(tc, crate::trusted_types::TRUSTED_TYPES_SHIM)
+                let src = v8::String::new(tc, &tt_js)
                     .ok_or_else(|| JsError::Runtime("OOM: TRUSTED_TYPES_SHIM source".into()))?;
                 let compiled = v8::Script::compile(tc, src, None);
                 if tc.has_caught() {
@@ -794,6 +904,7 @@ impl V8JsRuntime {
                 // advance in lockstep off one shared counter instead of Date.now()
                 // staying frozen at 0.
                 let js = crate::deterministic_patch_script(seed32, monotonic_clock);
+                let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
                 v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: deterministic seed script".into()))?;
@@ -820,8 +931,9 @@ impl V8JsRuntime {
             // even a synchronous top-level read of `navigator.userAgent` sees
             // the override from the very first script.
             if let Some(ua) = ua_override {
-                v8::tc_scope!(tc, scope);
                 let js = user_agent_override_script(&ua);
+                let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
+                v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: UA override script".into()))?;
                 let compiled = v8::Script::compile(tc, src, None);
@@ -845,8 +957,9 @@ impl V8JsRuntime {
             // call site) since the shim reads the marker lazily at
             // `DateTimeFormat` construction time, not at shim-install time.
             if let Some(tz) = timezone_override {
-                v8::tc_scope!(tc, scope);
                 let js = timezone_override_script(&tz);
+                let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
+                v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: timezone override script".into()))?;
                 let compiled = v8::Script::compile(tc, src, None);
@@ -1124,6 +1237,7 @@ impl V8JsRuntime {
             self,
             &self.shared_worker_outbox,
             &self.shared_worker_errors,
+            &self.shared_worker_client_ports,
             fp_shared_worker,
             ws_worker,
             worker_determinism,

@@ -139,29 +139,207 @@ Performance.prototype.now = function() {
     return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
 };
 // User Timing L3 §4.2/§4.3 `[Default] object toJSON()` — shared by
-// PerformanceMark and PerformanceMeasure, the only two entry types this shim
-// gives an own `detail` attribute to.
+// PerformanceMark and PerformanceMeasure, the only two entry types with a
+// `detail` attribute.
 function _perf_user_timing_to_json() {
     return { name: this.name, entryType: this.entryType, startTime: this.startTime,
               duration: this.duration, detail: this.detail };
 }
-// A mark name (string, resolved against the most recent same-named mark) or a
-// timestamp (number, used as-is) — the shared conversion both the named-args
-// and dictionary forms of `measure()` apply to `start`/`end` (User Timing L3
-// §4.3 "convert a mark to a timestamp").
-function _perf_mark_to_timestamp(value) {
-    if (typeof value === 'string') {
-        var m = _perf_entries_by_name(value, 'mark');
-        return m.length > 0 ? m[m.length - 1].startTime : 0;
-    }
-    return Number(value);
+// User Timing L3 §4.2/§4.3: `detail` is a structured clone of what the page
+// passed, not the object itself — a later mutation of the page's object must
+// not show through the entry, and an unserialisable value (a function) is a
+// DataCloneError from mark()/measure(). `structuredClone` is a page-shim
+// global (web_api_shim_tail_b.js); a scope without it keeps the raw value.
+function _perf_clone_detail(detail) {
+    if (detail === undefined || detail === null) return null;
+    return typeof structuredClone === 'function' ? structuredClone(detail) : detail;
 }
-// User Timing L3 §4.2 — performance.mark(name, options?)
-Performance.prototype.mark = function(name, opts) {
-    var start = (opts && typeof opts.startTime === 'number') ? opts.startTime : this.now();
-    var detail = (opts && 'detail' in opts) ? opts.detail : null;
-    var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0, detail: detail };
-    entry.toJSON = _perf_user_timing_to_json;
+// `readonly attribute any detail` is a getter on each interface prototype
+// (WebIDL), not an own data property: the value sits in a non-enumerable slot.
+function _perf_set_detail(entry, detail) {
+    Object.defineProperty(entry, '_perf_detail', {
+        value: detail, writable: false, enumerable: false, configurable: true,
+    });
+}
+// Taken off an object-literal accessor so the function's `name` is the WebIDL
+// `get detail`.
+function _perf_detail_getter(ctor) {
+    return Object.getOwnPropertyDescriptor({
+        get detail() {
+            if (!(this instanceof ctor)) throw new TypeError('Illegal invocation');
+            return this._perf_detail;
+        },
+    }, 'detail').get;
+}
+// The read-only PerformanceTiming attribute names a Window-scope mark may not
+// take (User Timing L3 §4.2 constructor step 1): the spec's `measure()`
+// resolves a string against these before marks, so such a mark would be
+// unreachable by name.
+var _PERF_TIMING_ATTR_NAMES = [
+    'navigationStart', 'unloadEventStart', 'unloadEventEnd', 'redirectStart',
+    'redirectEnd', 'fetchStart', 'domainLookupStart', 'domainLookupEnd',
+    'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart',
+    'responseStart', 'responseEnd', 'domLoading', 'domInteractive',
+    'domContentLoadedEventStart', 'domContentLoadedEventEnd', 'domComplete',
+    'loadEventStart', 'loadEventEnd',
+];
+// Entry fields are set with [[DefineOwnProperty]], not assignment: the
+// PerformanceEntry accessors below have no setter, so `entry.name = x` on an
+// object that inherits from it would silently not create the field (BUG-1189).
+function _perf_put(o, k, v) {
+    Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+}
+// Performance Timeline L2 §3 `interface PerformanceEntry` (BUG-1189) — the
+// common base every entry interface below and in web_api_shim_tail.js chains
+// its prototype to. No IDL constructor. Entries keep `name`/`entryType`/
+// `startTime`/`duration` as own data properties (they shadow the accessors
+// here); the accessors answer only for an entry that lacks the own field
+// (`id`/`navigationId`, which no entry sets) and throw on anything that is not
+// a PerformanceEntry, the prototype object included. A function *expression*
+// published as a non-enumerable global, as `_perf_mark_iface` explains.
+var _perf_entry_iface = function PerformanceEntry() { throw new TypeError('Illegal constructor'); };
+function _perf_entry_getter(attr, dflt) {
+    var g = {};
+    g[attr] = function() {
+        if (this === _perf_entry_iface.prototype || !(this instanceof _perf_entry_iface)) {
+            throw new TypeError("Failed to read the '" + attr + "' property from 'PerformanceEntry': Illegal invocation");
+        }
+        return dflt;
+    };
+    Object.defineProperty(g[attr], 'name', { value: 'get ' + attr, configurable: true });
+    return g[attr];
+}
+['id', 'name', 'entryType', 'startTime', 'duration', 'navigationId'].forEach(function(attr) {
+    Object.defineProperty(_perf_entry_iface.prototype, attr, {
+        get: _perf_entry_getter(attr, attr === 'name' || attr === 'entryType' ? '' : 0),
+        enumerable: true, configurable: true });
+});
+_perf_entry_iface.prototype.toJSON = function toJSON() {
+    if (this === _perf_entry_iface.prototype || !(this instanceof _perf_entry_iface)) {
+        throw new TypeError("Failed to execute 'toJSON' on 'PerformanceEntry': Illegal invocation");
+    }
+    return { id: this.id, name: this.name, entryType: this.entryType, startTime: this.startTime,
+             duration: this.duration, navigationId: this.navigationId };
+};
+Object.defineProperty(_perf_entry_iface, 'prototype', { writable: false });
+Object.defineProperty(_perf_entry_iface.prototype, Symbol.toStringTag,
+    { value: 'PerformanceEntry', configurable: true });
+Object.defineProperty(globalThis, 'PerformanceEntry',
+    { value: _perf_entry_iface, writable: true, enumerable: false, configurable: true });
+// User Timing L3 §4.2 `interface PerformanceMark : PerformanceEntry` with
+// `constructor(DOMString markName, optional PerformanceMarkOptions markOptions = {})`
+// (BUG-687) — unlike the other entry interfaces in this shim it IS
+// constructible, and `performance.mark()` is defined as running this very
+// constructor and then queueing the result. Fields stay own properties, as on
+// every other entry type here. `[Exposed=(Window,Worker)]`: this block is
+// shared with the worker scope. A function *expression* under an internal
+// name, published below as a non-enumerable global (WebIDL §3.7.1) — a
+// top-level declaration would land on the global enumerable and
+// non-configurable (idlharness), as `_perf_po_iface` explains.
+// `markOptions` comes off `arguments`: an optional argument does not count
+// towards the WebIDL `length`, which is 1.
+var _perf_mark_iface = function PerformanceMark(markName) {
+    var markOptions = arguments[1];
+    if (new.target === undefined) {
+        throw new TypeError("Failed to construct 'PerformanceMark': Please use the 'new' operator.");
+    }
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to construct 'PerformanceMark': 1 argument required, but only 0 present.");
+    }
+    var name = String(markName);
+    if (typeof document === 'object' && document !== null
+        && _PERF_TIMING_ATTR_NAMES.indexOf(name) !== -1) {
+        throw new DOMException("Failed to construct 'PerformanceMark': '" + name
+            + "' is part of the PerformanceTiming interface, and cannot be used as a mark name.", 'SyntaxError');
+    }
+    // WebIDL dictionary conversion: only undefined/null (→ `{}`) or an object.
+    if (markOptions !== undefined && markOptions !== null
+        && typeof markOptions !== 'object' && typeof markOptions !== 'function') {
+        throw new TypeError("Failed to construct 'PerformanceMark': The provided value is not of type 'PerformanceMarkOptions'.");
+    }
+    var opts = markOptions === undefined || markOptions === null ? {} : markOptions;
+    var start;
+    if (opts.startTime !== undefined) {
+        start = Number(opts.startTime);
+        if (!isFinite(start)) {
+            throw new TypeError("Failed to construct 'PerformanceMark': The provided double value is non-finite.");
+        }
+        if (start < 0) {
+            throw new TypeError("Failed to construct 'PerformanceMark': '" + name
+                + "' cannot have a negative start time.");
+        }
+    } else {
+        start = performance.now();
+    }
+    _perf_put(this, 'entryType', 'mark');
+    _perf_put(this, 'name', name);
+    _perf_put(this, 'startTime', start);
+    _perf_put(this, 'duration', 0);
+    _perf_set_detail(this, _perf_clone_detail(opts.detail));
+};
+_perf_mark_iface.prototype.toJSON = _perf_user_timing_to_json;
+Object.defineProperty(_perf_mark_iface.prototype, 'detail',
+    { get: _perf_detail_getter(_perf_mark_iface), enumerable: true, configurable: true });
+// User Timing L3 §4.3 `interface PerformanceMeasure : PerformanceEntry` — no
+// IDL constructor; entries are built off the prototype by `measure()` only.
+var _perf_measure_iface = function PerformanceMeasure() { throw new TypeError('Illegal constructor'); };
+_perf_measure_iface.prototype.toJSON = _perf_user_timing_to_json;
+Object.defineProperty(_perf_measure_iface.prototype, 'detail',
+    { get: _perf_detail_getter(_perf_measure_iface), enumerable: true, configurable: true });
+Object.setPrototypeOf(_perf_mark_iface.prototype, _perf_entry_iface.prototype);
+Object.setPrototypeOf(_perf_measure_iface.prototype, _perf_entry_iface.prototype);
+// An interface object's `prototype` is non-writable (WebIDL §3.7.1).
+Object.defineProperty(_perf_mark_iface, 'prototype', { writable: false });
+Object.defineProperty(_perf_measure_iface, 'prototype', { writable: false });
+// `Object.prototype.toString` must name the interface — what the registry
+// WPT's `[object PerformanceMark]` check reads; an entry built off a plain
+// function prototype would otherwise stringify as `[object Object]`.
+Object.defineProperty(_perf_mark_iface.prototype, Symbol.toStringTag,
+    { value: 'PerformanceMark', configurable: true });
+Object.defineProperty(_perf_measure_iface.prototype, Symbol.toStringTag,
+    { value: 'PerformanceMeasure', configurable: true });
+Object.defineProperty(globalThis, 'PerformanceMark',
+    { value: _perf_mark_iface, writable: true, enumerable: false, configurable: true });
+Object.defineProperty(globalThis, 'PerformanceMeasure',
+    { value: _perf_measure_iface, writable: true, enumerable: false, configurable: true });
+// User Timing L3 §4.3 "convert a mark to a timestamp". A number is used as-is
+// (negative or non-finite is a TypeError); anything else is a mark name. In a
+// Window a PerformanceTiming attribute name resolves first, through
+// `performance.timing` relative to `navigationStart`, and a zero attribute
+// (an event that never happened) is an InvalidAccessError; otherwise the most
+// recent same-named mark, and none at all is a SyntaxError.
+function _perf_mark_to_timestamp(value) {
+    if (typeof value === 'number') {
+        if (!isFinite(value)) throw new TypeError("Failed to execute 'measure' on 'Performance': The provided double value is non-finite.");
+        if (value < 0) throw new TypeError("Failed to execute 'measure' on 'Performance': Timestamps cannot be negative.");
+        return value;
+    }
+    var name = String(value);
+    if (typeof document === 'object' && document !== null
+        && _PERF_TIMING_ATTR_NAMES.indexOf(name) !== -1 && typeof performance.timing === 'object') {
+        var v = performance.timing[name];
+        if (name === 'navigationStart') return 0;
+        if (!v) {
+            throw new DOMException("Failed to execute 'measure' on 'Performance': The PerformanceTiming attribute '"
+                + name + "' is 0.", 'InvalidAccessError');
+        }
+        return v - performance.timing.navigationStart;
+    }
+    var m = _perf_entries_by_name(name, 'mark');
+    if (m.length === 0) {
+        throw new DOMException("Failed to execute 'measure' on 'Performance': The mark '" + name
+            + "' does not exist.", 'SyntaxError');
+    }
+    return m[m.length - 1].startTime;
+}
+// User Timing L3 §4.2 — performance.mark(name, options?): the PerformanceMark
+// constructor, then queue + buffer the entry it made.
+// WebIDL operations: named, `length` counts only the required argument, and
+// a missing one is a TypeError — the operation's, not the constructor's.
+Performance.prototype.mark = function mark(markName) {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'mark' on 'Performance': 1 argument required, but only 0 present.");
+    var entry = new _perf_mark_iface(markName, arguments[1]);
     _perf_entries.push(entry);
     // Guarded: PerformanceObserver is part of the page shim only, so in a
     // worker scope this function does not exist (see PERFORMANCE_SHIM docs).
@@ -173,58 +351,97 @@ Performance.prototype.mark = function(name, opts) {
 // a `PerformanceMeasureOptions` dictionary (`{start, end, duration, detail}`,
 // dictionary form) — the two forms are mutually exclusive, so the dictionary
 // case takes `endMark` off the table entirely rather than merging with it.
-Performance.prototype.measure = function(name, startOrMeasureOptions, endMark) {
+Performance.prototype.measure = function measure(measureName) {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'measure' on 'Performance': 1 argument required, but only 0 present.");
+    var name = measureName, startOrMeasureOptions = arguments[1], endMark = arguments[2];
     var start, end, detail = null;
-    if (startOrMeasureOptions !== null && typeof startOrMeasureOptions === 'object') {
-        var opts = startOrMeasureOptions;
-        var hasStart = opts.start !== undefined;
-        var hasEnd = opts.end !== undefined;
-        var hasDuration = opts.duration !== undefined;
-        if ('detail' in opts) detail = opts.detail;
-        if (hasStart) start = _perf_mark_to_timestamp(opts.start);
-        if (hasEnd) end = _perf_mark_to_timestamp(opts.end);
-        if (hasDuration) {
-            if (!hasStart) start = end - Number(opts.duration);
-            if (!hasEnd) end = (hasStart ? start : 0) + Number(opts.duration);
+    var opts = null;
+    if (startOrMeasureOptions !== null && startOrMeasureOptions !== undefined
+        && (typeof startOrMeasureOptions === 'object' || typeof startOrMeasureOptions === 'function')) {
+        opts = startOrMeasureOptions;
+    }
+    var hasStart = false, hasEnd = false, hasDuration = false;
+    if (opts !== null) {
+        hasStart = opts.start !== undefined;
+        hasEnd = opts.end !== undefined;
+        hasDuration = opts.duration !== undefined;
+        var hasDetail = opts.detail !== undefined;
+        if (hasStart || hasEnd || hasDuration || hasDetail) {
+            if (endMark !== undefined) {
+                throw new TypeError("Failed to execute 'measure' on 'Performance': If a non-empty PerformanceMeasureOptions object was passed, |end_mark| must not be passed.");
+            }
+            if (!hasStart && !hasEnd) {
+                throw new TypeError("Failed to execute 'measure' on 'Performance': If a non-empty PerformanceMeasureOptions object was passed, it must have at least one of 'start' or 'end'.");
+            }
+            if (hasStart && hasEnd && hasDuration) {
+                throw new TypeError("Failed to execute 'measure' on 'Performance': If a non-empty PerformanceMeasureOptions object was passed, it must not have all of 'start', 'duration', and 'end'.");
+            }
         }
-        if (!hasStart && !hasDuration) start = 0;
-        if (!hasEnd && !hasDuration) end = this.now();
+        if (opts.detail !== undefined) detail = opts.detail;
+    }
+    // WebIDL: a union member that is neither an object nor a number becomes a
+    // DOMString, so a number is a mark *name* here ('51.15'), not a timestamp.
+    function toTimeArg(v) { return typeof v === 'number' ? v : String(v); }
+    if (endMark !== undefined) {
+        end = _perf_mark_to_timestamp(String(endMark));
+    } else if (hasEnd) {
+        end = _perf_mark_to_timestamp(toTimeArg(opts.end));
+    } else if (hasStart && hasDuration) {
+        end = _perf_mark_to_timestamp(toTimeArg(opts.start)) + Number(opts.duration);
+    } else {
+        end = this.now();
+    }
+    if (opts === null && startOrMeasureOptions !== undefined) {
+        start = _perf_mark_to_timestamp(String(startOrMeasureOptions));
+    } else if (hasStart) {
+        start = _perf_mark_to_timestamp(toTimeArg(opts.start));
+    } else if (hasDuration && hasEnd) {
+        start = end - Number(opts.duration);
     } else {
         start = 0;
-        end = this.now();
-        if (typeof startOrMeasureOptions === 'string') {
-            start = _perf_mark_to_timestamp(startOrMeasureOptions);
-        } else if (typeof startOrMeasureOptions === 'number') {
-            start = startOrMeasureOptions;
-        }
-        if (typeof endMark === 'string') {
-            end = _perf_mark_to_timestamp(endMark);
-        } else if (typeof endMark === 'number') {
-            end = endMark;
-        }
     }
-    var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start, detail: detail };
-    entry.toJSON = _perf_user_timing_to_json;
+    var entry = Object.create(_perf_measure_iface.prototype);
+    _perf_put(entry, 'entryType', 'measure');
+    _perf_put(entry, 'name', String(name));
+    _perf_put(entry, 'startTime', start);
+    _perf_put(entry, 'duration', end - start);
+    _perf_set_detail(entry, _perf_clone_detail(detail));
     _perf_entries.push(entry);
     if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
     return entry;
 };
-Performance.prototype.getEntriesByName = function(name, type) {
-    return _perf_entries_by_name(String(name), type);
+// WebIDL operations: named functions with the IDL `length` (optional
+// arguments do not count) and a TypeError for a missing required argument —
+// what `performance-timeline/idlharness.any.js` checks (BUG-648), including
+// the brand check: `this` that is not a Performance is a TypeError.
+Performance.prototype.getEntriesByName = function getEntriesByName(name) {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'getEntriesByName' on 'Performance': 1 argument required, but only 0 present.");
+    return _perf_entries_by_name(String(name), arguments[1]);
 };
-Performance.prototype.getEntriesByType = function(type) {
+Performance.prototype.getEntriesByType = function getEntriesByType(type) {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'getEntriesByType' on 'Performance': 1 argument required, but only 0 present.");
     var t = String(type);
     return _perf_entries.filter(function(e) { return e.entryType === t; });
 };
-Performance.prototype.getEntries = function() { return _perf_entries.slice(); };
-Performance.prototype.clearMarks = function(name) {
+Performance.prototype.getEntries = function getEntries() {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    return _perf_entries.slice();
+};
+Performance.prototype.clearMarks = function clearMarks() {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    var name = arguments[0];
     if (typeof name === 'string') {
         _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'mark' && e.name === name); });
     } else {
         _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'mark'; });
     }
 };
-Performance.prototype.clearMeasures = function(name) {
+Performance.prototype.clearMeasures = function clearMeasures() {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    var name = arguments[0];
     if (typeof name === 'string') {
         _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'measure' && e.name === name); });
     } else {

@@ -197,6 +197,10 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
     if range.is_collapsed() {
         return None;
     }
+    // CSS UI L4 §6.2: `user-select: none` text is never highlighted.
+    if frag.style.user_select == lumen_layout::UserSelect::None {
+        return None;
+    }
     let frag_end = frag.source_char_offset + frag.text.len() as u32;
     let same_start = range.start.container == frag.source_node;
     let same_end = range.end.container == frag.source_node;
@@ -219,9 +223,12 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
         if e == 0 { return None; }
         (0, e)
     } else {
-        // Frag node is between range endpoints: fully selected, but multi-node
-        // selection depth is not tracked in Phase 0 without tree traversal.
-        return None;
+        // Neither endpoint lives in this node: the whole fragment is selected
+        // when its node sits between them in document order.
+        if !lumen_layout::node_between(frag.source_node, range) {
+            return None;
+        }
+        (0, frag.text.len() as u32)
     };
 
     let total = frag.text.len() as f32;
@@ -251,26 +258,28 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
 /// already correct, only this paint conversion was never ported to the axis
 /// swap).
 ///
-/// Each outer `lines` entry is one wrapped column along the block axis;
-/// column 0 sits at `b.rect.x` (already correctly placed by
-/// `lay_out_vertical_inline_run`/the vertical block-stacking cursor in
-/// `vertical.rs`), so wrapped column N shifts by `N * col_width` — leftward
-/// for `vertical-rl`/`sideways-rl` (later columns sit further from the
-/// right-edge start), rightward for `vertical-lr`/`sideways-lr`.
+/// Each outer `lines` entry is one wrapped column along the block axis; the
+/// run's rect spans all of them (`lay_out_vertical_inline_run`), one
+/// `used_line_height` wide each. Column 0 is the first in block direction —
+/// the rightmost for `vertical-rl`/`sideways-rl`, the leftmost for
+/// `vertical-lr`/`sideways-lr` — and column N steps from it by `N * col_width`
+/// (leftward for `rl`, rightward for `lr`).
 ///
 /// Not yet ported to this axis (Phase 0, same class of gap the horizontal
 /// path documents elsewhere): `vertical-align` (`frag.y_offset`), inline
 /// replaced content (images), `::selection` highlight, and
 /// `text-overflow: ellipsis`.
 fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<DisplayCommand>) {
-    let col_width = b.rect.width;
+    let col_width = b.used_line_height;
     let is_rtl = matches!(
         b.style.writing_mode,
         lumen_layout::style::WritingMode::VerticalRl | lumen_layout::style::WritingMode::SidewaysRl
     );
     for (line_idx, line) in lines.iter().enumerate() {
+        // The run's rect spans all its columns; column 0 is the first in block
+        // direction — the rightmost for `rl`, the leftmost for `lr`.
         let column_x = if is_rtl {
-            b.rect.x - line_idx as f32 * col_width
+            b.rect.x + b.rect.width - (line_idx + 1) as f32 * col_width
         } else {
             b.rect.x + line_idx as f32 * col_width
         };

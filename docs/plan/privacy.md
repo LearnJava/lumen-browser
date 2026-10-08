@@ -59,7 +59,7 @@ Anti-detection покрывает **шесть слоёв**, потому что
 
 #### Слой 1 — Surface API: нет automation-маркеров (always-on, default)
 
-- `navigator.webdriver` **не существует** (не `false`, а отсутствует — как в clean Chrome без `--enable-automation`).
+- `navigator.webdriver === false` (configurable enumerable accessor, как в Chrome/Firefox вне автоматизации; отсутствие свойства само было бы маркером — BUG-754).
 - Нет `chrome.runtime`, `__playwright`, `__puppeteer`, `cdc_*` (ChromeDriver), `_phantom`, `callPhantom`, `Buffer`, `emit`-on-window и других классических маркеров.
 - JS-runtime (`rquickjs` Phase 0, V8 Phase 3+) **не инструментирован** для automation. Автоматизация идёт через `BrowserSession` (см. §6.11, ADR-006) — она не касается JS-окружения, если страница сама к нему не обращается.
 - `event.isTrusted = true` для native-injected input — события приходят в event loop тем же путём, что от ОС.
@@ -117,7 +117,7 @@ Anti-detection покрывает **шесть слоёв**, потому что
 - **Network log в UI** (всегда видимый, Ctrl+Shift+N для деталей):
   - сколько запросов, куда, сколько байт, что заблокировано.
 - **Permission UI** — каждое разрешение (камера/гео/нотификации) отдельным prompt, по умолчанию `deny`. Никаких «remember for this site» автоматически.
-- **No silent network** — если что-то идёт во время idle (телеметрия, prefetch, update check), это видно и отключаемо. Update check — единственное штатное исключение из «no phone-home» (§9.7); его политика (канал/подпись/данные/частота) задокументирована отдельно — [ADR-031](decisions/ADR-031-self-update-channel-policy.md).
+- **No silent network** — если что-то идёт во время idle (телеметрия, prefetch, update check), это видно и отключаемо. Update check — единственное штатное исключение из «no phone-home» (§9.7); его политика (канал/подпись/данные/частота) задокументирована отдельно — [ADR-031](../decisions/ADR-031-self-update-channel-policy.md).
 
 ### 9.7 Принципиальный отказ
 

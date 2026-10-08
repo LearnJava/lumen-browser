@@ -16,7 +16,7 @@ use super::super::*;
 /// `live.stderr.*.log`) и пропускаем операцию. Строка помечена `[BUG-986]`,
 /// чтобы следующий прогон корпуса назвал источник чужих идентификаторов
 /// по логу, без `RUST_BACKTRACE=1`.
-fn log_foreign_node_id(doc: &lumen_dom::Document, what: &str, id: u32) {
+pub(super) fn log_foreign_node_id(doc: &lumen_dom::Document, what: &str, id: u32) {
     eprintln!(
         "[BUG-986] {what}: NodeId {id} вне арены документа (len {}) — операция пропущена",
         doc.len()
@@ -41,13 +41,59 @@ fn queue_pending_img_loads(
     let mut stack = vec![root];
     while let Some(nid) = stack.pop() {
         let Some(node) = doc.try_get(nid) else { continue };
-        if node.element_name().is_some_and(|n| n.local == "img")
-            && let Some(src) = node.get_attr("src")
-            && !src.trim().is_empty()
-        {
-            hook.queue_image_load(nid.raw(), src);
-        }
+        queue_img_element(doc, nid, hook);
         stack.extend(node.children.iter().copied());
+    }
+}
+
+/// BUG-1148: queue the load of `nid` if it is an `<img>`, choosing the URL with
+/// the same `<picture>`/`srcset`/`sizes`/`src` picker the relayout sweep uses
+/// (`lumen_layout::collect_image_requests`), so both producers key the shared
+/// dedup set identically.
+fn queue_img_element(
+    doc: &lumen_dom::Document,
+    nid: lumen_dom::NodeId,
+    hook: &dyn lumen_core::ext::ImageLoadHook,
+) {
+    let Some(node) = doc.try_get(nid) else { return };
+    if !node.element_name().is_some_and(|n| n.local == "img") {
+        return;
+    }
+    let (w, h) = hook.viewport();
+    let url = lumen_layout::pick_image_request_url(doc, nid, lumen_core::Size { width: w, height: h });
+    if !url.trim().is_empty() {
+        hook.queue_image_load(nid.raw(), &url);
+    }
+}
+
+/// BUG-1148: HTML LS §4.8.4.3 — an attribute change that re-runs "update the
+/// image data": `src`/`srcset`/`sizes` on `<img>` itself, and
+/// `srcset`/`sizes`/`media`/`type`/`src` on a `<source>` whose parent is a
+/// `<picture>` (every `<img>` child of that `<picture>` re-picks).
+fn queue_img_after_attr_change(
+    doc: &lumen_dom::Document,
+    nid: lumen_dom::NodeId,
+    name: &str,
+    hook: &dyn lumen_core::ext::ImageLoadHook,
+) {
+    let Some(node) = doc.try_get(nid) else { return };
+    let Some(tag) = node.element_name() else { return };
+    let is = |a: &str| name.eq_ignore_ascii_case(a);
+    match tag.local.as_str() {
+        "img" if is("src") || is("srcset") || is("sizes") => queue_img_element(doc, nid, hook),
+        "source" if is("srcset") || is("sizes") || is("media") || is("type") || is("src") => {
+            if let Some(parent) = node.parent
+                && doc
+                    .try_get(parent)
+                    .and_then(|p| p.element_name())
+                    .is_some_and(|n| n.local == "picture")
+            {
+                for &c in &doc.get(parent).children {
+                    queue_img_element(doc, c, hook);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -679,7 +725,7 @@ pub(crate) fn install_node_properties(
                 // whether the value changed).
                 let changed = old.as_deref() != Some(value.as_str());
                 if changed {
-                    record_dom_touch(&touched, nid);
+                    record_dom_touch_attr(&touched, nid, &name, old.as_deref());
                 }
                 // BUG-1118: HTML LS §4.8.4.3 "update the image data" — a
                 // script assigning `<img>.src`/`setAttribute('src', …)` must
@@ -688,13 +734,8 @@ pub(crate) fn install_node_properties(
                 // possibly itself blocked in a synchronous network call,
                 // returns). See `ImageLoadHook`'s doc comment for the exact
                 // scope of what this covers.
-                if changed
-                    && name.eq_ignore_ascii_case("src")
-                    && !value.trim().is_empty()
-                    && let Some(hook) = &img_hook
-                    && doc.get(nid).element_name().is_some_and(|n| n.local == "img")
-                {
-                    hook.queue_image_load(nid.raw(), &value);
+                if changed && let Some(hook) = &img_hook {
+                    queue_img_after_attr_change(&doc, nid, &name, hook.as_ref());
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
@@ -711,10 +752,10 @@ pub(crate) fn install_node_properties(
             if !doc.contains_id(nid) {
                 return;
             }
-            let had = doc.get(nid).get_attr(&name).is_some();
+            let before = doc.get(nid).get_attr(&name).map(|s| s.to_string());
             remove_attribute(&mut doc, nid, &name);
-            if had {
-                record_dom_touch(&touched, nid);
+            if before.is_some() {
+                record_dom_touch_attr(&touched, nid, &name, before.as_deref());
             }
             dirty.store(true, Ordering::Relaxed);
             stale.store(true, Ordering::Relaxed);
@@ -903,7 +944,7 @@ pub(crate) fn install_node_properties(
                 set_text_content(&mut doc, nid, &text);
                 // BUG-341 S7: record `nid` itself (not just its parent) —
                 // a text/childList change here can flip `:empty` for `nid`.
-                record_dom_touch(&touched, nid);
+                record_dom_touch_child_list(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -921,6 +962,29 @@ pub(crate) fn install_node_properties(
                 }
                 let mut out = String::new();
                 serialize_children(&doc, nid, &mut out);
+                out
+            }
+        );
+        // BUG-1064: `getHTML()` — innerHTML plus shadow roots as
+        // `<template shadowrootmode>`. `explicit`: comma-separated nids of
+        // `shadowRoots`; `flags`: `nid:bits` pairs (1 delegatesFocus,
+        // 2 clonable, 4 serializable) from the JS-side init map.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_html",
+            move |node_id: u32, serializable_all: bool, explicit: String, flags: String| -> String {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                if !doc.contains_id(nid) {
+                    return String::new();
+                }
+                let opts = ShadowOpts {
+                    serializable_all,
+                    explicit: explicit.split(',').filter_map(|t| t.parse().ok()).collect(),
+                    flags,
+                };
+                let mut out = String::new();
+                serialize_children_shadow(&doc, nid, &mut out, Some(&opts));
                 out
             }
         );
@@ -980,7 +1044,7 @@ pub(crate) fn install_node_properties(
                         queue_pending_img_loads(&doc, c, hook.as_ref());
                     }
                 }
-                record_dom_touch(&touched, nid);
+                record_dom_touch_child_list(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -1082,6 +1146,61 @@ pub(crate) fn install_node_count(
     Ok(())
 }
 
+/// BUG-1160: synchronous reclaim of detached, unreferenced nodes, called by the
+/// shim when `_lumen_create_*` reports `MAX_DOM_NODES` reached.
+///
+/// The shell's 30 s idle GC tick (`gc_tick.rs`) cannot help a page that builds
+/// and drops nodes in one synchronous script — `WeakRef` targets stay pinned
+/// until the job ends and the `FinalizationRegistry` cleanup runs as a later
+/// platform task, so `Document::js_refs` never drops inside the loop. Here the
+/// native forces the sequence itself: lift the kept-objects pin, run a V8 GC,
+/// pump the platform queue (runs the finalizer callbacks, which call
+/// `_lumen_dom_release_ref` — hence the document lock is NOT held across it),
+/// then `dead_node_ids` + `reclaim_dead_nodes`.
+///
+/// Returns the freed node indices (for `_lumen_gc_collect`'s JS-side purge), or
+/// an empty array. A pass that freed nothing suppresses the next one for
+/// `RECLAIM_BACKOFF`, so a page that really holds 50 000 live nodes does not
+/// pay a full GC per failed `createElement`.
+#[allow(clippy::unwrap_used)]  // как у соседних секций: poisoned doc-мьютекс = паника потока JS
+pub(crate) fn install_dom_reclaim(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<crate::v8_compat::OwnedNativeFnScoped>,
+    doc: Arc<Mutex<lumen_dom::Document>>,
+) -> JsResult<()> {
+    const RECLAIM_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+    let last_empty: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let native = Box::new(
+        move |scope: &mut v8::PinScope, _args: &v8::FunctionCallbackArguments, rv: &mut v8::ReturnValue| {
+            if let Ok(g) = last_empty.lock()
+                && g.is_some_and(|t| t.elapsed() < RECLAIM_BACKOFF)
+            {
+                rv.set(v8::Array::new(scope, 0).into());
+                return;
+            }
+            let platform = v8::V8::get_current_platform();
+            scope.clear_kept_objects();
+            scope.low_memory_notification();
+            scope.low_memory_notification();
+            while v8::Platform::pump_message_loop(&platform, scope, false) {}
+            let freed: Vec<u32> = {
+                let mut d = doc.lock().unwrap();
+                let dead = d.dead_node_ids();
+                d.reclaim_dead_nodes(&dead);
+                dead.iter().map(|n| n.index() as u32).collect()
+            };
+            if let Ok(mut g) = last_empty.lock() {
+                *g = freed.is_empty().then(std::time::Instant::now);
+            }
+            let elems: Vec<v8::Local<v8::Value>> =
+                freed.iter().map(|&i| v8::Number::new(scope, f64::from(i)).into()).collect();
+            rv.set(v8::Array::new_with_elements(scope, &elems).into());
+        },
+    );
+    crate::v8_compat::register_v8_native_scoped(scope, ctx, store, "_lumen_dom_reclaim_now", native)
+}
+
 /// `appendChild`/`removeChild`/`insertBefore` and friends.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]  // BUG-1118 срез 2 added the 8th; mirrors install_node_properties
@@ -1165,6 +1284,19 @@ pub(crate) fn install_tree_mutation(
             }
         );
         let d = Arc::clone(&doc);
+        // BUG-1055: promotes a detached JS-only ProcessingInstruction to an
+        // arena node on insertion; same -1-on-overflow contract as above.
+        reg!(scope, ctx, store,
+            "_lumen_create_processing_instruction",
+            move |target: String, data: String| -> i32 {
+                let mut doc = d.lock().unwrap();
+                match doc.try_create_processing_instruction(target, data) {
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
         reg!(scope, ctx, store,
             "_lumen_create_cdata_section",
             move |text: String| -> i32 {
@@ -1195,12 +1327,16 @@ pub(crate) fn install_tree_mutation(
                     log_foreign_node_id(&doc, "_lumen_append_child child", child_id);
                     return;
                 }
+                // BUG-935 срез 60: moving a node out of another parent changes *that*
+                // parent's child list too (`:first-child`, `+` of its remaining children).
+                // BUG-935 срез 89: each list gets the edit with the ends it touched.
+                let probe = probe_child_edit(&doc, child);
                 doc.append_child(parent, child);
                 // BUG-341 S7: record the container — covers `parent`'s own
                 // `:empty`/nth-child-of-its-parent state plus the reconciled
                 // children (all within `restyle_root_set_for_node_change`'s
                 // parent-subtree invalidation).
-                record_dom_touch(&touched, parent);
+                record_child_edit(&touched, &doc, &probe, child, Some(parent));
                 // BUG-1118 срез 2: `child` may already be a fully-built
                 // `<img src>` subtree (cloneNode(true), or a fragment from
                 // `_lumen_parse_html_fragment`) — see `queue_pending_img_loads`.
@@ -1227,11 +1363,9 @@ pub(crate) fn install_tree_mutation(
                 }
                 // Read the authoritative parent from the DOM (not the
                 // JS-supplied `_parent_id`) before detaching.
-                let parent = doc.get(child).parent;
+                let probe = probe_child_edit(&doc, child);
                 doc.detach(child);
-                if let Some(parent) = parent {
-                    record_dom_touch(&touched, parent);
-                }
+                record_child_edit(&touched, &doc, &probe, child, None);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -1432,10 +1566,10 @@ pub(crate) fn install_shadow_dom(
                     return;
                 }
                 let parent = doc.get(reference).parent;
+                // BUG-935 срез 60: see `_lumen_append_child` — the old parent's list changed too.
+                let probe = probe_child_edit(&doc, child);
                 doc.insert_before(child, reference);
-                if let Some(parent) = parent {
-                    record_dom_touch(&touched, parent);
-                }
+                record_child_edit(&touched, &doc, &probe, child, parent);
                 // BUG-1118 срез 2: same rationale as `_lumen_append_child`.
                 if let Some(hook) = &img_hook {
                     queue_pending_img_loads(&doc, child, hook.as_ref());
@@ -1471,456 +1605,6 @@ pub(crate) fn install_shadow_dom(
                 }
             }
         });
-    }
-    Ok(())
-}
-
-/// Selection API (WHATWG Selection API + DOM §4.5).
-#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-pub(crate) fn install_selection(
-    scope: &mut v8::PinScope<'_, '_>,
-    ctx: v8::Local<'_, v8::Context>,
-    store: &mut Vec<OwnedNativeFn>,
-    doc: Arc<Mutex<lumen_dom::Document>>,
-    dom_dirty: Arc<AtomicBool>,
-    flush_stale: Arc<AtomicBool>,
-    dom_touched: Arc<Mutex<DomTouched>>,
-) -> JsResult<()> {
-    // ── Selection API (WHATWG Selection API + DOM §4.5) ─────────────────────
-    // Exposes document selection state to JavaScript. The Selection object is a
-    // singleton per document; Range objects are snapshots of endpoint pairs.
-    {
-        // Returns [anchor_nid, anchor_offset, focus_nid, focus_offset] or null.
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_get_selection", move || -> Option<Vec<u32>> {
-            let doc = d.lock().unwrap();
-            let sel = doc.get_selection();
-            match (sel.anchor, sel.focus) {
-                (Some(a), Some(f)) => Some(vec![
-                    a.container.raw(),
-                    a.offset,
-                    f.container.raw(),
-                    f.offset,
-                ]),
-                _ => None,
-            }
-        });
-    }
-    {
-        // Sets selection to [anchor_nid, anchor_offset, focus_nid, focus_offset].
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
-            "_lumen_set_selection",
-            move |anchor_nid: u32, anchor_off: u32, focus_nid: u32, focus_off: u32| {
-                let mut doc = d.lock().unwrap();
-                let anchor_id = NodeId::from_raw(anchor_nid);
-                let focus_id = NodeId::from_raw(focus_nid);
-                // BUG-1031-class: a stale/foreign NodeId stored here panics
-                // later, whenever anything (contenteditable delete, caret
-                // read) resolves `Selection::anchor`/`focus` — reject it here
-                // instead of letting it reach `Document::get` unguarded.
-                if !doc.contains_id(anchor_id) || !doc.contains_id(focus_id) {
-                    log_foreign_node_id(&doc, "_lumen_set_selection anchor", anchor_nid);
-                    log_foreign_node_id(&doc, "_lumen_set_selection focus", focus_nid);
-                    return;
-                }
-                doc.set_selection(Selection {
-                    anchor: Some(DomPosition {
-                        container: anchor_id,
-                        offset: anchor_off,
-                    }),
-                    focus: Some(DomPosition {
-                        container: focus_id,
-                        offset: focus_off,
-                    }),
-                });
-                // BUG-341 S7: conservative — no differential test yet proves
-                // `::selection` styling is independent of live selection state
-                // in this cascade, so a selection change forces a full cascade
-                // rather than risk an under-approximated restyle root-set.
-                record_dom_touch_unattributed(&touched);
-                dirty.store(true, Ordering::Relaxed);
-                stale.store(true, Ordering::Relaxed);
-            }
-        );
-    }
-    {
-        // Clears the current selection.
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, "_lumen_clear_selection", move || {
-            let mut doc = d.lock().unwrap();
-            doc.set_selection(Selection { anchor: None, focus: None });
-            record_dom_touch_unattributed(&touched);
-            dirty.store(true, Ordering::Relaxed);
-            stale.store(true, Ordering::Relaxed);
-        });
-    }
-    {
-        // Returns text of the current selection.
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_get_selection_text", move || -> String {
-            let doc = d.lock().unwrap();
-            match doc.get_selection().get_range() {
-                Some(r) => range_text(&doc, &r),
-                None => String::new(),
-            }
-        });
-    }
-    {
-        // Returns text covered by the given range endpoints.
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
-            "_lumen_get_range_text",
-            move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> String {
-                let doc = d.lock().unwrap();
-                let r = DomRange {
-                    start: DomPosition {
-                        container: NodeId::from_raw(start_nid),
-                        offset: start_off,
-                    },
-                    end: DomPosition {
-                        container: NodeId::from_raw(end_nid),
-                        offset: end_off,
-                    },
-                };
-                range_text(&doc, &r)
-            }
-        );
-    }
-    {
-        // Number of direct DOM children (element offset validation).
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_node_child_count", move |nid: u32| -> u32 {
-            let doc = d.lock().unwrap();
-            node_child_count(&doc, NodeId::from_raw(nid)) as u32
-        });
-    }
-    {
-        // DOM-spec "length" of node: char count for text, child count for elements.
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_node_length", move |nid: u32| -> u32 {
-            let doc = d.lock().unwrap();
-            node_length(&doc, NodeId::from_raw(nid)) as u32
-        });
-    }
-    {
-        // Text content of a node (node.textContent).
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_node_text_content", move |nid: u32| -> String {
-            let doc = d.lock().unwrap();
-            node_text_content(&doc, NodeId::from_raw(nid))
-        });
-    }
-    {
-        // Deletes the contents of range; returns [new_pos_nid, new_pos_offset].
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
-            "_lumen_range_delete_contents",
-            move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> Vec<u32> {
-                let mut doc = d.lock().unwrap();
-                let r = DomRange {
-                    start: DomPosition {
-                        container: NodeId::from_raw(start_nid),
-                        offset: start_off,
-                    },
-                    end: DomPosition {
-                        container: NodeId::from_raw(end_nid),
-                        offset: end_off,
-                    },
-                };
-                let pos = lumen_dom::delete_range(&mut doc, &r);
-                // BUG-341 S7: arbitrary-range content deletion can remove
-                // whole elements — not attributable to a simple node set.
-                record_dom_touch_unattributed(&touched);
-                dirty.store(true, Ordering::Relaxed);
-                stale.store(true, Ordering::Relaxed);
-                vec![pos.container.raw(), pos.offset]
-            }
-        );
-    }
-    Ok(())
-}
-
-/// `contenteditable` mutation bindings (Input Events L2 §4.1).
-#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-pub(crate) fn install_contenteditable(
-    scope: &mut v8::PinScope<'_, '_>,
-    ctx: v8::Local<'_, v8::Context>,
-    store: &mut Vec<OwnedNativeFn>,
-    doc: Arc<Mutex<lumen_dom::Document>>,
-) -> JsResult<()> {
-    // ── contenteditable mutation bindings (Input Events Level 2 §4.1) ─────────
-    // These are called by the JS shim's _lumen_handle_contenteditable_key()
-    // which fires beforeinput → calls here → fires input.
-    {
-        // True if nid or any ancestor has contenteditable set to a truthy value.
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_is_contenteditable", move |nid: u32| -> bool {
-            let doc = d.lock().unwrap();
-            lumen_dom::find_editing_host(&doc, NodeId::from_raw(nid)).is_some()
-        });
-    }
-    Ok(())
-}
-
-/// `document.designMode` and the editing command surface (HTML LS §6.6.3, BUG-353).
-#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-pub(crate) fn install_design_mode(
-    scope: &mut v8::PinScope<'_, '_>,
-    ctx: v8::Local<'_, v8::Context>,
-    store: &mut Vec<OwnedNativeFn>,
-    doc: Arc<Mutex<lumen_dom::Document>>,
-    dom_dirty: Arc<AtomicBool>,
-    flush_stale: Arc<AtomicBool>,
-    dom_touched: Arc<Mutex<DomTouched>>,
-) -> JsResult<()> {
-    // ── document.designMode (HTML LS §6.6.3, BUG-353) ──────────────────────
-    {
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_get_design_mode", move || -> bool {
-            d.lock().unwrap().design_mode()
-        });
-    }
-    {
-        let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, "_lumen_set_design_mode", move |enabled: bool| {
-            d.lock().unwrap().set_design_mode(enabled);
-        });
-    }
-    {
-        // Insert `text` at the current selection (or caret) inside contenteditable.
-        // Replaces selected content if the selection is non-collapsed.
-        // Returns true on success.
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, "_lumen_contenteditable_insert_text", move |text: String| -> bool {
-            if text.is_empty() { return false; }
-            let mut doc = d.lock().unwrap();
-            let sel = doc.get_selection().clone();
-            let Some(anchor) = sel.anchor else { return false; };
-            let insert_pos = if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
-                lumen_dom::delete_range(&mut doc, &r)
-            } else {
-                anchor
-            };
-            let new_pos = lumen_dom::insert_text_at(&mut doc, insert_pos, &text);
-            doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
-            // BUG-341 S7: text insertion at an arbitrary caret position — not
-            // attributable to a simple node set.
-            record_dom_touch_unattributed(&touched);
-            dirty.store(true, Ordering::Relaxed);
-            stale.store(true, Ordering::Relaxed);
-            true
-        });
-    }
-    {
-        // Delete one grapheme cluster before the caret (Backspace key).
-        // If the selection is non-collapsed, deletes the selection instead.
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, "_lumen_contenteditable_delete_backward", move || -> bool {
-            let mut doc = d.lock().unwrap();
-            let sel = doc.get_selection().clone();
-            // Non-collapsed selection: delete it.
-            if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
-                let pos = lumen_dom::delete_range(&mut doc, &r);
-                doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
-                record_dom_touch_unattributed(&touched);
-                dirty.store(true, Ordering::Relaxed);
-                stale.store(true, Ordering::Relaxed);
-                return true;
-            }
-            let Some(anchor) = sel.anchor else { return false; };
-            if anchor.offset == 0 { return false; }
-            let text = match &doc.get(anchor.container).data {
-                NodeData::Text(s) => s.clone(),
-                _ => return false,
-            };
-            // Walk backward one UTF-8 character boundary.
-            let off = anchor.offset as usize;
-            let mut prev = off.saturating_sub(1);
-            while prev > 0 && !text.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            let r = DomRange {
-                start: DomPosition { container: anchor.container, offset: prev as u32 },
-                end: anchor,
-            };
-            let pos = lumen_dom::delete_range(&mut doc, &r);
-            doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
-            record_dom_touch_unattributed(&touched);
-            dirty.store(true, Ordering::Relaxed);
-            stale.store(true, Ordering::Relaxed);
-            true
-        });
-    }
-    {
-        // Delete one grapheme cluster after the caret (Delete key).
-        // If the selection is non-collapsed, deletes the selection instead.
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, "_lumen_contenteditable_delete_forward", move || -> bool {
-            let mut doc = d.lock().unwrap();
-            let sel = doc.get_selection().clone();
-            if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
-                let pos = lumen_dom::delete_range(&mut doc, &r);
-                doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
-                record_dom_touch_unattributed(&touched);
-                dirty.store(true, Ordering::Relaxed);
-                stale.store(true, Ordering::Relaxed);
-                return true;
-            }
-            let Some(anchor) = sel.anchor else { return false; };
-            let text = match &doc.get(anchor.container).data {
-                NodeData::Text(s) => s.clone(),
-                _ => return false,
-            };
-            let off = anchor.offset as usize;
-            if off >= text.len() { return false; }
-            // Walk forward one UTF-8 character boundary.
-            let mut next = off + 1;
-            while next < text.len() && !text.is_char_boundary(next) {
-                next += 1;
-            }
-            let r = DomRange {
-                start: anchor,
-                end: DomPosition { container: anchor.container, offset: next as u32 },
-            };
-            let pos = lumen_dom::delete_range(&mut doc, &r);
-            doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
-            record_dom_touch_unattributed(&touched);
-            dirty.store(true, Ordering::Relaxed);
-            stale.store(true, Ordering::Relaxed);
-            true
-        });
-    }
-    {
-        // Split the block at the caret position (Enter key in contenteditable).
-        // Finds the editing host, then calls insert_paragraph_break.
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, "_lumen_contenteditable_insert_paragraph", move || -> bool {
-            let mut doc = d.lock().unwrap();
-            let sel = doc.get_selection().clone();
-            let pos = if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
-                lumen_dom::delete_range(&mut doc, &r)
-            } else if let Some(p) = sel.anchor {
-                p
-            } else {
-                return false;
-            };
-            let Some(host) = lumen_dom::find_editing_host(&doc, pos.container) else {
-                return false;
-            };
-            let new_pos = lumen_dom::insert_paragraph_break(&mut doc, pos, host);
-            doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
-            record_dom_touch_unattributed(&touched);
-            dirty.store(true, Ordering::Relaxed);
-            stale.store(true, Ordering::Relaxed);
-            true
-        });
-    }
-    {
-        // execCommand: bold/italic/underline/insertText/delete/selectAll/copy/cut/paste
-        // Returns true if the command was handled.
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let stale = Arc::clone(&flush_stale);
-        let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
-            "_lumen_exec_command",
-            move |cmd: String, value: String| -> bool {
-                let mut doc = d.lock().unwrap();
-                let sel = doc.get_selection().clone();
-                match cmd.as_str() {
-                    "selectAll" => {
-                        // Select entire document body text
-                        if let Some(body) = find_element_by_tag(&doc, "body") {
-                            let children = doc.get(body).children.clone();
-                            if !children.is_empty() {
-                                let first = *children.first().unwrap();
-                                let last = *children.last().unwrap();
-                                let last_len = node_length(&doc, last);
-                                doc.set_selection(Selection {
-                                    anchor: Some(DomPosition { container: first, offset: 0 }),
-                                    focus: Some(DomPosition {
-                                        container: last,
-                                        offset: last_len as u32,
-                                    }),
-                                });
-                                record_dom_touch_unattributed(&touched);
-                                dirty.store(true, Ordering::Relaxed);
-                                stale.store(true, Ordering::Relaxed);
-                            }
-                        }
-                        true
-                    }
-                    "insertText" => {
-                        if let Some(pos) = sel.anchor {
-                            // Delete selection first if non-collapsed
-                            let pos = sel
-                                .get_range()
-                                .filter(|r| !r.is_collapsed())
-                                .map(|r| lumen_dom::delete_range(&mut doc, &r))
-                                .unwrap_or(pos);
-                            let new_pos = lumen_dom::insert_text_at(&mut doc, pos, &value);
-                            doc.set_selection(Selection {
-                                anchor: Some(new_pos),
-                                focus: Some(new_pos),
-                            });
-                            record_dom_touch_unattributed(&touched);
-                            dirty.store(true, Ordering::Relaxed);
-                            stale.store(true, Ordering::Relaxed);
-                        }
-                        true
-                    }
-                    "delete" | "forwardDelete" => {
-                        if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
-                            let pos = lumen_dom::delete_range(&mut doc, &r);
-                            doc.set_selection(Selection {
-                                anchor: Some(pos),
-                                focus: Some(pos),
-                            });
-                            record_dom_touch_unattributed(&touched);
-                            dirty.store(true, Ordering::Relaxed);
-                            stale.store(true, Ordering::Relaxed);
-                        }
-                        true
-                    }
-                    // bold/italic/underline: CSSOM inline style toggling (stub — returns true
-                    // so editors know the command is accepted; real inline-style mutation
-                    // requires Range wrapping which is Phase 3 contenteditable work).
-                    "bold" | "italic" | "underline" | "strikeThrough"
-                    | "justifyLeft" | "justifyCenter" | "justifyRight" | "justifyFull"
-                    | "indent" | "outdent"
-                    | "createLink" | "unlink"
-                    | "insertOrderedList" | "insertUnorderedList"
-                    | "fontName" | "fontSize" | "foreColor" | "backColor"
-                    | "removeFormat" => true,
-                    // copy/cut/paste: clipboard interaction is handled by the shell;
-                    // returning false lets it fall through to native clipboard handling.
-                    "copy" | "cut" | "paste" => false,
-                    _ => false,
-                }
-            }
-        );
     }
     Ok(())
 }

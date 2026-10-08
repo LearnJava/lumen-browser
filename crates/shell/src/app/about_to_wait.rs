@@ -15,7 +15,7 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn on_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    pub(crate) fn on_about_to_wait(&mut self, event_loop: &MainHandle<'_>) {
         // FRAME-8: спавнит фоновые потоки для того, что скан прошлого тика
         // поставил в очередь — до какой-либо накачки JS в ЭТОМ тике, ровно
         // на дистанции в один полный проход event loop от места, где скан
@@ -153,6 +153,7 @@ impl Lumen {
         // BUG-480 срез 20: `form.submit()`/`requestSubmit()` из скрипта самого
         // ребёнка — второй вход в отправку его формы.
         let mut frame_submits: Vec<(usize, u32, i32)> = Vec::new();
+        let mut frame_reloads: Vec<usize> = Vec::new();
         // BUG-480 срез 25: relayout ребёнка при мутации его DOM — своим
         // скриптом (штатный `take_dom_dirty` этого рантайма) или родителем
         // через мост (`take_frame_dom_dirty`, тот же тик, что и остальной
@@ -175,10 +176,20 @@ impl Lumen {
             // не навигация «куда попало», а второй вход в ту же отправку формы
             // ребёнка, что и нативный клик по submit-кнопке. Применяется после
             // цикла: там нужен `&mut self`.
-            if let Some(JsNavigateRequest::SubmitForm { form, submitter }) =
-                fjs.take_navigate_request()
-            {
-                frame_submits.push((*idx, form, submitter));
+            //
+            // BUG-1198: и кроме перезагрузки самого фрейма — `location.reload()`
+            // сюда, `navigation.reload()` очередью Navigation API ниже. Прочие
+            // запросы Navigation API фрейма дренируются и отбрасываются, как
+            // навигация выше.
+            match fjs.take_navigate_request() {
+                Some(JsNavigateRequest::SubmitForm { form, submitter }) => {
+                    frame_submits.push((*idx, form, submitter));
+                }
+                Some(JsNavigateRequest::Reload) => frame_reloads.push(*idx),
+                _ => {}
+            }
+            if fjs.take_nav_updates().iter().any(|(code, ..)| *code == 5) {
+                frame_reloads.push(*idx);
             }
             // Гладкий (`behavior: 'smooth'`) применяется мгновенно: своей
             // анимации у прокрутки фрейма нет, а тикать её было бы негде —
@@ -223,6 +234,14 @@ impl Lumen {
             let form_id = NodeId::from_index(form as usize);
             let submitter_id = (submitter >= 0).then(|| NodeId::from_index(submitter as usize));
             self.run_frame_form_submission(idx, form_id, submitter_id, false);
+        }
+        // BUG-1198: перезагрузка асинхронна (`replace_frame_document` уносит
+        // загрузку на фоновый поток), `self.frames` до её ответа не меняется —
+        // индексы этого тика остаются верны. Дубли (оба API в один тик)
+        // схлопываются: вторая перезагрузка лишь перебила бы первую.
+        frame_reloads.dedup();
+        for idx in frame_reloads {
+            self.reload_frame(idx);
         }
         // ADR-016 M2.2c-2d (20): gate on `self.js_present` instead of borrowing the
         // `Arc` directly (`if let Some(js) = &self.js_ctx`), so the block stays live
@@ -269,6 +288,10 @@ impl Lumen {
                 // BUG-480 срез 4: доставка кросс-фреймовых postMessage в страницу.
                 j.pump_frame_messages();
             });
+            // THREAD-9: nav-запрос, поставленный скриптом страницы в этом тике, читает
+            // сама движковая задача (после pump-батча — порядок прежний) и кладёт в
+            // `js_nav_inbox`; блокирующего `query` на тик больше нет.
+            self.queue_js_navigate_read();
             // ADR-016 M2.2c-2c/THREAD-2: value-returning nav/timer чтения через
             // `drain_query_js` (тот же non-blocking-when-busy паттерн, что канва/
             // scroll/история ниже). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются
@@ -276,9 +299,6 @@ impl Lumen {
             // ИЛИ ещё не применённым relayout-job'ом (иначе `query` FIFO-serialize
             // за его хвостом — то, что THREAD-2 убирает); без флага (по умолчанию)
             // — прежний прямой `js.<read>()`, байт-идентично.
-            if let Some(nav) = self.drain_query_js(|j| j.take_navigate_request()).flatten() {
-                self.pending_js_navigate = Some(nav);
-            }
             if let Some(wakeup_epoch_ms) =
                 self.drain_query_js(|j| j.take_timer_wakeup()).flatten()
             {
@@ -372,12 +392,23 @@ impl Lumen {
             // never a blocking engine `query` that would stall the parked loop
             // behind the JS turn.
             let raf_due = now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
+            // SMIL keeps itself alive with a no-op rAF (see `_lumen_smil_wake`):
+            // a batch that dirties nothing never reaches `RedrawRequested`, so
+            // tick the timeline here too, before the batch fires.
+            #[cfg(feature = "v8")]
+            if raf_due && self.raf_pending_lockfree() {
+                self.tick_smil((now_ms / 1000.0) as f32);
+            }
             if self.pump_raf_engine_thread(raf_due, now_ms) {
                 self.request_redraw();
             }
             // Keep the loop warm while rAF work remains: a batch is queued, or a
             // turn is still running whose dom-dirty must be re-checked when it
             // finishes. Peek lock-free (does not consume the pending flag).
+            if self.frame_scan_retry {
+                let retry = std::time::Instant::now() + std::time::Duration::from_millis(8);
+                next_wakeup = Some(next_wakeup.map_or(retry, |t| t.min(retry)));
+            }
             if self.raf_pending_lockfree() || self.raf_turn_inflight() {
                 let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
                 let raf_wakeup = std::time::Instant::now()
@@ -396,6 +427,9 @@ impl Lumen {
                 }
                 self.last_raf_batch_ms = now_ms;
                 let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
+                // Same reason as the engine-thread branch above.
+                #[cfg(feature = "v8")]
+                self.tick_smil((now_ms / 1000.0) as f32);
                 if let Some(j) = self.js_ctx.as_ref() {
                     j.run_animation_frame(raf_ts);
                 }
@@ -495,8 +529,12 @@ impl Lumen {
         // commit — arm a short poll deadline. Bounded by the always-landing newest
         // job (coalescing) so this clears promptly. A future slice can replace this
         // with an `EventLoopProxy` wake on commit.
+        // THREAD-9 срез 6: клик ждёт ответа движка («не отменён ли») — тот же
+        // короткий опрос, пока `click_proceed_inbox` не заберут.
         if self.engine_thread.is_some()
-            && self.engine_job_generation != self.engine_applied_generation
+            && (self.engine_job_generation != self.engine_applied_generation
+                || !self.pending_clicks.is_empty()
+                || !self.pending_submits.is_empty())
         {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(4);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
@@ -786,6 +824,14 @@ impl Lumen {
         for (cmd, reply_tx) in automation_cmds {
             match cmd {
                 AutomationCommand::Navigate(url) => {
+                    // BUG-1199: a `window.open()` of the previous page left the
+                    // automation tab in the background — navigate *it*, not the
+                    // popup that took the foreground.
+                    if let Some(idx) =
+                        self.automation_tab.and_then(|id| self.tab_strip.inactive_index_of(id))
+                    {
+                        self.switch_tab(idx);
+                    }
                     // Real browsers clear the console on navigation (unless "preserve
                     // log" is set); doing the same here keeps `ConsoleLog` (DEVX-1)
                     // scoped to the page just loaded instead of accumulating across
@@ -798,6 +844,7 @@ impl Lumen {
                     // Letting it through `navigate_to` let a leftover listener from
                     // the previous test page wedge the browsing context forever.
                     self.navigate_to_forced(page_source_for_automation_url(&url));
+                    self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::NewTab(url) => {
@@ -808,6 +855,7 @@ impl Lumen {
                     // BUG-1031: see `AutomationCommand::Navigate` above — the tab
                     // starts blank, but stay consistent and non-interceptable here too.
                     self.navigate_to_forced(page_source_for_automation_url(&url));
+                    self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Click(target) => {
@@ -919,27 +967,80 @@ impl Lumen {
                     self.scroll_by_delta(delta.x, delta.y);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
-                AutomationCommand::Eval(js) => {
-                    // ADR-016 M2.2c-2c: value-returning `eval_js_value` через
-                    // `route_query_js`. Под флагом чтение упорядочено за уже
-                    // отправленными `task`; без флага байт-идентично: `Some(js_ctx)`
-                    // → `Some(result)`, отсутствие хэндла → `None` → «JS context
-                    // not available».
-                    match route_query_js(
-                        self.engine_thread.as_ref(),
-                        self.js_ctx.as_ref(),
-                        move |j| j.eval_js_value(&js),
-                    ) {
-                        Some(Ok(json)) => {
-                            let _ = reply_tx.send(AutomationReply::Eval(json));
-                        }
-                        Some(Err(e)) => {
-                            let _ = reply_tx.send(AutomationReply::Error(e));
+                // BUG-1194: hover without a click — the same handler a real
+                // `CursorMoved` runs (hit test, `:hover`, over/out/enter/leave).
+                AutomationCommand::PointerMove { x, y } => {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f64, |r| r.scale_factor())
+                        .max(1e-6);
+                    self.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+                        f64::from(x) * dpr,
+                        f64::from(y) * dpr,
+                    ));
+                    #[cfg(feature = "v8")]
+                    self.flush_pointer_moves();
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // BUG-1194: a bare key press/release (Escape, Tab, Shift, …).
+                AutomationCommand::Key { key, code, down } => {
+                    let event = if down { "keydown" } else { "keyup" };
+                    self.inject_key_events(&key, &code, &[event]);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // BUG-1194: characters into the already focused element.
+                AutomationCommand::TypeFocused(text) => {
+                    let in_frame = self.focused_frame.is_some();
+                    let mut consumed = true;
+                    for ch in text.chars() {
+                        consumed &= if in_frame { self.inject_frame_char(ch) } else { self.inject_char(ch) };
+                    }
+                    let reply = if consumed {
+                        AutomationReply::Ack
+                    } else {
+                        AutomationReply::Error("Focused element is not a mutable text field".to_string())
+                    };
+                    let _ = reply_tx.send(reply);
+                }
+                // BUG-1199: the page under test called `window.open()` and is
+                // parked in `bg_tabs` — its runtime keeps ticking there (GAP-NAVCTX
+                // срез 15), so evaluate against it directly, as the per-tick pump
+                // below does, instead of polling the popup in the foreground.
+                AutomationCommand::Eval(js, _) if let Some(id) = self.automation_tab_in_background() => {
+                    let outcome = self
+                        .bg_tabs
+                        .get(&id)
+                        .and_then(|snap| snap.js_ctx.as_ref())
+                        .map(|j| j.eval_js_value(&js));
+                    let _ = reply_tx.send(eval_outcome_reply(outcome, false));
+                }
+                AutomationCommand::Eval(js, timeout_ms) => {
+                    // BUG-1145: с движковым потоком eval уходит `Task`-ом (по
+                    // порядку за уже отправленными `task`) и ждёт в
+                    // `pending_evals`, не блокируя UI-поток; срок — из запроса.
+                    // Без потока — синхронно по UI-хэндлу, как раньше.
+                    match self.engine_thread.as_ref() {
+                        Some(engine) => {
+                            let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<EvalOutcome>(1);
+                            let wake = self.load_proxy.clone();
+                            engine.task(move |state| {
+                                let outcome = state.js.as_ref().map(|j| j.eval_js_value(&js));
+                                // Клиент уже получил отказ по сроку — будить некого.
+                                if result_tx.send(outcome).is_ok() {
+                                    let _ = wake.send_event(LoadEvent::AutomationWake);
+                                }
+                            });
+                            self.pending_evals.push(PendingEval {
+                                result_rx,
+                                started: std::time::Instant::now(),
+                                timeout: PendingEval::timeout_from_ms(timeout_ms),
+                                reply_tx,
+                            });
                         }
                         None => {
-                            let _ = reply_tx.send(AutomationReply::Error(
-                                "JS context not available".to_string(),
-                            ));
+                            let outcome = self.js_ctx.as_ref().map(|j| j.eval_js_value(&js));
+                            let _ = reply_tx.send(eval_outcome_reply(outcome, self.nav_start.is_some()));
                         }
                     }
                 }
@@ -972,6 +1073,15 @@ impl Lumen {
                         let _ = reply_tx.send(AutomationReply::Error("no page loaded".to_string()));
                     }
                 },
+                AutomationCommand::ComputedA11y { selectors } => {
+                    // BUG-1014: `null` (no page / no match) makes the BiDi layer
+                    // answer `no such element`.
+                    let json = match self.automation_computed_a11y(&selectors) {
+                        Some((role, name)) => serde_json::json!({ "role": role, "name": name }).to_string(),
+                        None => "null".to_owned(),
+                    };
+                    let _ = reply_tx.send(AutomationReply::Eval(json));
+                }
                 AutomationCommand::ConsoleLog => {
                     // Drain any messages the JS runtime queued this tick before the
                     // periodic DevTools drain below would (same pattern, just eager
@@ -1080,6 +1190,32 @@ impl Lumen {
                     }
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::SetPermission { name, state } => {
+                    // BUG-1014 (`permissions.setPermission`): recorded
+                    // process-globally so the next navigation's fresh runtime
+                    // re-applies it, and pushed into the current page now.
+                    // The reply is the shim's own verdict (`false` = unknown
+                    // name/state), so the BiDi client is not told «success»
+                    // for a permission `query()` could never report.
+                    let mut accepted = true;
+                    #[cfg(feature = "v8")]
+                    {
+                        let script = lumen_js::v8_runtime::permission_override_script(&name, &state);
+                        // No live page (`None`) cannot validate: record anyway,
+                        // the next navigation's shim ignores what it rejects.
+                        if let Some(Ok(v)) = route_query_js(
+                            self.engine_thread.as_ref(),
+                            self.js_ctx.as_ref(),
+                            move |j| j.eval_js_value(&script),
+                        ) {
+                            accepted = v.trim() == "true";
+                        }
+                        if accepted {
+                            lumen_js::v8_runtime::set_global_permission_override(&name, &state);
+                        }
+                    }
+                    let _ = reply_tx.send(AutomationReply::Eval(accepted.to_string()));
+                }
                 AutomationCommand::AddIntercept { id, phases, url_patterns } => {
                     // BUG-295 remainder (`network.addIntercept`): synced into
                     // `lumen_network`'s process-global registry, consulted at
@@ -1157,6 +1293,31 @@ impl Lumen {
             self.pending_waits = still_pending;
         }
 
+        // BUG-1145: ответы движкового потока на eval и сроки ожидания. Приход
+        // ответа будит цикл сам (`AutomationWake`), а срок — нет, поэтому
+        // ближайший вкладываем в уже выставленный `ControlFlow`.
+        if !self.pending_evals.is_empty() {
+            let now = std::time::Instant::now();
+            let engine = self.engine_thread.as_ref();
+            let loading = self.nav_start.is_some();
+            self.pending_evals.retain(|pending| match pending.poll(now, loading, || engine.and_then(|e| e.busy())) {
+                Some(reply) => {
+                    let _ = pending.reply_tx.send(reply);
+                    false
+                }
+                None => true,
+            });
+            if let Some(deadline) = self.pending_evals.iter().map(PendingEval::deadline).min() {
+                match event_loop.control_flow() {
+                    ControlFlow::Poll => {}
+                    ControlFlow::WaitUntil(t) => {
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(t.min(deadline)));
+                    }
+                    ControlFlow::Wait => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+                }
+            }
+        }
+
         // Ph3 pointer-events-l3: flush any `CursorMoved` samples queued this
         // tick as one coalesced `pointermove` — Pointer Events L3 §4.1. Runs
         // once per `about_to_wait` iteration (roughly once per frame); a fast
@@ -1186,6 +1347,7 @@ impl Lumen {
                 input::InputCommand::Scroll { x, y } => {
                     self.scroll_x = clamp_scroll(x, self.max_scroll_x());
                     self.scroll_y = clamp_scroll(y, (self.content_height - self.viewport_height_css()).max(0.0));
+                    self.issue_scroll_command();
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
@@ -1264,7 +1426,27 @@ impl Lumen {
         // stays visible while the new tab loads.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
-            let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
+            // BUG-1268: while an automation-driven navigation is in flight the
+            // popup requests are left in the runtime: the document that queued
+            // them is either about to be replaced (its requests die with it) or
+            // still loading, and a popup opened now takes the foreground, so the
+            // pending `wait` would report the popup's load error (or its
+            // readiness) as the verdict of the navigation it was waiting for.
+            let popups = if self.automation_tab.is_some() && self.nav_start.is_some() {
+                Vec::new()
+            } else {
+                self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default()
+            };
+            // BUG-1212: read ONCE, before the loop below can switch tabs.
+            // Every popup drained here was queued by the SAME synchronous
+            // script tick on the SAME calling tab — two `window.open()`
+            // calls back to back share one real opener. Reading this inside
+            // the loop (the pre-fix code did) is only correct for the FIRST
+            // iteration: `open_new_tab()`/`switch_tab()` below move
+            // `self.tab_strip.active` to the just-created popup, so a second
+            // request in the same batch would pick up the FIRST popup's tab
+            // id as its "opener" instead of the real one.
+            let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
             for (url, target, _width, _height, token, no_opener) in popups {
                 // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
                 // the code (in the OPENER's context, per HTML LS §7.4.5) rather
@@ -1282,16 +1464,16 @@ impl Lumen {
                         None => PageSource::AboutBlank,
                     })
                 } else if url.is_empty() {
-                    Ok(PageSource::url("about:blank"))
+                    Ok(PageSource::AboutBlank)
                 } else if let Some((upgraded, uir)) = self.window_open_navigate_to_gate(&url) {
                     resolve_js_navigation(&upgraded, &self.source).map(|s| s.with_uir_header(uir))
                 } else {
                     Err("blocked by CSP navigate-to".to_owned())
                 };
-                // GAP-NAVCTX срез 4 (BUG-797): opener's tab id, read BEFORE
-                // `open_new_tab()`/`switch_tab()` moves `self.tab_strip.active`
-                // away from it.
-                let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                // GAP-NAVCTX срез 4 (BUG-797): opener's tab id — now read ONCE
+                // above the loop (BUG-1212) instead of here, so a second
+                // popup in the same batch does not pick up the first popup's
+                // tab id as its opener.
                 // GAP-NAVCTX срез 14 (BUG-883): `_self` (HTML LS §7.3.2) means
                 // "navigate THIS browsing context", not "open a browsing
                 // context" — before this slice it fell through to the
@@ -1601,7 +1783,8 @@ impl Lumen {
                         self.view_transition = Some(ViewTransitionState {
                             old_dl: self.display_list.clone(),
                             start_ms: 0.0,
-                            duration_ms: 300.0,
+                            duration_ms: crate::view_transition::DEFAULT_DURATION_MS,
+                            easing: lumen_layout::TimingFunction::Linear,
                         });
                     }
                     ViewTransitionEvent::End => {
@@ -1613,6 +1796,14 @@ impl Lumen {
                             vt.start_ms = now_ms;
                         }
                         self.relayout();
+                        // Author `animation-duration`/`-timing-function` on
+                        // `::view-transition-old(root)` — read after the
+                        // callback's DOM mutation, like the spec's new state.
+                        let (duration_ms, easing) = self.view_transition_author_params();
+                        if let Some(vt) = &mut self.view_transition {
+                            vt.duration_ms = duration_ms;
+                            vt.easing = easing;
+                        }
                         if let Some(w) = self.window.as_ref() {
                             w.request_redraw();
                         }
@@ -1661,6 +1852,10 @@ impl Lumen {
         #[cfg(feature = "v8")]
         {
             let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
+            // Вьюпорт — до мутабельного заимствования `layout_box` ниже: им
+            // позиционируются `background-attachment: fixed` слои (§3.6).
+            let fixed_bg_vp = self.relayout_viewport();
+            let mut cmd_ids: Vec<u32> = Vec::new();
             if !scroll_reqs.is_empty()
                 && let Some(lb) = self.layout_box.as_mut()
             {
@@ -1674,7 +1869,10 @@ impl Lumen {
                 }
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
-                    let mut new_dl = paint_ordered(lb);
+                    let mut new_dl = match fixed_bg_vp {
+                        Some(vp) => crate::display_list_metrics::paint_ordered_in(lb, vp),
+                        None => paint_ordered(lb),
+                    };
                     // BUG-480 срез 14: paint_ordered пересобирает список из
                     // layout и о фреймах не знает — без вклейки содержимое
                     // фрейма исчезло бы на первом же скролле контейнера.
@@ -1694,6 +1892,7 @@ impl Lumen {
                         .iter()
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();
+                    let scrolled_nids_copy = scrolled_nids.clone();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                         j.update_scroll_states(states);
                         for nid in scrolled_nids {
@@ -1709,7 +1908,11 @@ impl Lumen {
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
+                    cmd_ids = scrolled_nids_copy;
                 }
+            }
+            if !cmd_ids.is_empty() {
+                self.issue_container_scroll_command(&cmd_ids);
             }
         }
 
@@ -1794,6 +1997,9 @@ impl Lumen {
         // JS navigation: location.href=, assign(), replace(), reload().
         // Executed after the initial page render so the user sees something
         // before the redirect completes (matches browser behaviour).
+        self.collect_js_nav_inbox();
+        self.collect_js_url_inbox();
+        self.collect_click_proceed();
         if let Some(nav) = self.pending_js_navigate.take() {
             match nav {
                 JsNavigateRequest::Push(url) => {
@@ -1804,14 +2010,11 @@ impl Lumen {
                     // session-history entry), regardless of whether it was
                     // assigned via `location.href=` (push) or `.replace()`.
                     if let Some(code) = javascript_url_code(&url) {
-                        if let Some(html) = self.eval_javascript_url(code) {
-                            let current = self.current_display_url().to_owned();
-                            self.navigate_replace(PageSource::Static { html, url: current });
-                        }
+                        self.queue_javascript_url(code);
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
                         match resolve_js_navigation(&resolved, &self.source) {
-                            Ok(source) => self.navigate_to(source.with_uir_header(uir)),
+                            Ok(source) => self.navigate_to(source.with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""))),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
                     }
@@ -1819,13 +2022,10 @@ impl Lumen {
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
                     if let Some(code) = javascript_url_code(&url) {
-                        if let Some(html) = self.eval_javascript_url(code) {
-                            let current = self.current_display_url().to_owned();
-                            self.navigate_replace(PageSource::Static { html, url: current });
-                        }
+                        self.queue_javascript_url(code);
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         match resolve_js_navigation(&resolved, &self.source) {
-                            Ok(source) => self.navigate_replace(source.with_uir_header(uir)),
+                            Ok(source) => self.navigate_replace(source.with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""))),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
                     }
@@ -1951,4 +2151,99 @@ pub(crate) struct PendingWait {
     pub(crate) deadline: std::time::Instant,
     /// Where to send the `Ack`/`Error` reply once resolved.
     pub(crate) reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+}
+
+/// Верхняя граница `timeout_ms` у `AutomationCommand::Eval` (BUG-1145): дальше
+/// ждать движковый поток бессмысленно, а неограниченное значение переполнило бы
+/// `Instant + Duration`.
+const MAX_EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Итог `eval_js_value` на движковом потоке; `None` — JS-контекста нет.
+pub(crate) type EvalOutcome = Option<Result<String, String>>;
+
+/// `AutomationCommand::Eval`, поставленный движковому потоку и ждущий его
+/// (BUG-1145). Раньше UI-поток блокировался на `EngineThread::query` и после
+/// `QUERY_TIMEOUT` отвечал «JS context not available» — так же, как при
+/// настоящем отсутствии контекста. Теперь eval уходит `Task`-ом, UI-поток не
+/// ждёт, а `about_to_wait` раз в итерацию проверяет ответ и срок.
+///
+/// По истечении срока задание остаётся в очереди и всё равно исполнится —
+/// теряется только ответ, как и у `query`.
+pub(crate) struct PendingEval {
+    /// Сюда движковый поток кладёт итог; дроп без отправки — поток остановлен.
+    pub(crate) result_rx: std::sync::mpsc::Receiver<EvalOutcome>,
+    /// Когда eval поставлен в очередь.
+    pub(crate) started: std::time::Instant,
+    /// Сколько ждать до ответа «поток занят».
+    pub(crate) timeout: std::time::Duration,
+    /// Куда ответить клиенту автоматизации.
+    pub(crate) reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+}
+
+impl PendingEval {
+    /// Срок ожидания `timeout_ms` (или умолчание — `QUERY_TIMEOUT`), обрезанный
+    /// по [`MAX_EVAL_TIMEOUT`].
+    pub(crate) fn timeout_from_ms(timeout_ms: Option<u64>) -> std::time::Duration {
+        timeout_ms
+            .map_or(crate::engine_thread::QUERY_TIMEOUT, std::time::Duration::from_millis)
+            .min(MAX_EVAL_TIMEOUT)
+    }
+
+    /// Момент, когда eval сдаётся.
+    pub(crate) fn deadline(&self) -> std::time::Instant {
+        self.started + self.timeout
+    }
+
+    /// Ответ клиенту, если eval завершён: итог, остановленный поток или срок
+    /// (`busy` называет, чем поток занят); `None` — ждать дальше. `loading` —
+    /// идёт навигация (см. [`eval_outcome_reply`]).
+    pub(crate) fn poll(
+        &self,
+        now: std::time::Instant,
+        loading: bool,
+        busy: impl FnOnce() -> Option<(crate::engine_thread::EngineWork, std::time::Duration)>,
+    ) -> Option<AutomationReply> {
+        match self.result_rx.try_recv() {
+            Ok(outcome) => Some(eval_outcome_reply(outcome, loading)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(AutomationReply::Error(
+                "engine thread stopped before running eval".to_string(),
+            )),
+            Err(std::sync::mpsc::TryRecvError::Empty) if now >= self.deadline() => {
+                Some(AutomationReply::Error(eval_busy_message(self.timeout, busy())))
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        }
+    }
+}
+
+/// Ответ автоматизации на итог eval: `None` — контекста действительно нет.
+/// `loading` — навигация ещё не дошла до установки рантайма страницы: на
+/// тяжёлом сайте это десятки секунд, и без пометки такой ответ неотличим от
+/// страницы, где рантайма нет вовсе (BUG-1178).
+pub(crate) fn eval_outcome_reply(outcome: EvalOutcome, loading: bool) -> AutomationReply {
+    match outcome {
+        Some(Ok(json)) => AutomationReply::Eval(json),
+        Some(Err(e)) => AutomationReply::Error(e),
+        None if loading => {
+            AutomationReply::Error("JS context not available: page is still loading".to_string())
+        }
+        None => AutomationReply::Error("JS context not available".to_string()),
+    }
+}
+
+/// Текст отказа по сроку: сколько ждали и, если известно, чем занят поток.
+fn eval_busy_message(
+    timeout: std::time::Duration,
+    busy: Option<(crate::engine_thread::EngineWork, std::time::Duration)>,
+) -> String {
+    let mut msg = format!(
+        "engine thread busy: eval not run within {:.1} s",
+        timeout.as_secs_f32()
+    );
+    if let Some((work, for_how_long)) = busy {
+        use std::fmt::Write as _;
+        let _ = write!(msg, " (running {work} for {:.1} s)", for_how_long.as_secs_f32());
+    }
+    msg.push_str("; retry or pass a larger timeout_ms");
+    msg
 }

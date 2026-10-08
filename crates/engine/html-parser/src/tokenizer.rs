@@ -783,6 +783,19 @@ fn is_raw_text_element(name: &str) -> bool {
     )
 }
 
+/// Начальное `text_only`-состояние токенизатора для фрагмента с HTML-контекстом
+/// `name` (HTML LS §13.4 шаг 4: контекст script/style/… → RAWTEXT, title/
+/// textarea → RCDATA). `None` для остальных — обычный data state.
+pub(crate) fn fragment_text_only_state(name: &str) -> Option<(String, bool)> {
+    if is_raw_text_element(name) {
+        Some((name.to_string(), false))
+    } else if is_rcdata_element(name) {
+        Some((name.to_string(), true))
+    } else {
+        None
+    }
+}
+
 /// Элементы, чьё содержимое — RCDATA (литеральный текст до `</tag` +
 /// терминатор; character references декодируются). Это нужно, чтобы
 /// `<title>Foo &amp; Bar</title>` стало текстом `Foo & Bar`, и чтобы

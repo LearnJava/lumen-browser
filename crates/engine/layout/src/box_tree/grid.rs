@@ -5,6 +5,7 @@
 //! (анкер `fn grid_content_distribution`) без правок тел.
 
 use super::*;
+use crate::style::{GridRepeat, NameFill, RepeatCount};
 
 /// CSS Box Alignment L3 §5 — content distribution along one axis of a grid container.
 ///
@@ -16,27 +17,26 @@ use super::*;
 /// * `align` — the used `align-content` / `justify-content` value.
 /// * `free` — leftover space after all tracks and their gaps.
 /// * `n` — number of tracks on the axis.
+/// * `safe` — the `safe` overflow keyword was written (`safe center` / `safe end`).
 ///
 /// With non-positive free space the axis overflows, and §5.3 replaces the
 /// distribution with its fallback alignment — `space-between` → `start`,
-/// `space-around` / `space-evenly` → `center` — after which the alignment is
-/// resolved *unsafely*: `center` / `end` still shift the tracks back past the
-/// content-box start edge (a negative offset), matching Edge. `safe` / `unsafe`
-/// are not parsed, so the unsafe behaviour is unconditional.
+/// `space-around` / `space-evenly` → `safe center` (so they start-align on overflow
+/// rather than spilling out of the start edge). Plain `center` / `end` without an
+/// overflow keyword are resolved *unsafely*: the tracks still shift back past the
+/// content-box start edge (a negative offset), matching Edge; `safe` clamps that to `0`.
 ///
 /// `normal` / `stretch` always return `(0, 0)` — that pair is handled by the track
 /// sizing pass, which hands the free space to the auto-sized tracks instead.
-pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f32) {
+pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize, safe: bool) -> (f32, f32) {
     if n == 0 {
         return (0.0, 0.0);
     }
     if free <= 0.0 {
         return match align {
-            AlignValue::End => (free, 0.0),
-            // `center` directly, plus the two distributions that fall back to it.
-            AlignValue::Center | AlignValue::SpaceAround | AlignValue::SpaceEvenly => {
-                (free / 2.0, 0.0)
-            }
+            AlignValue::End if !safe => (free, 0.0),
+            AlignValue::Center if !safe => (free / 2.0, 0.0),
+            // `safe` clamps to `start`; the `space-*` fallback is `safe center`, i.e. also `start`;
             // `start`, `space-between` (falls back to `start`), `normal`, `stretch`.
             _ => (0.0, 0.0),
         };
@@ -58,6 +58,150 @@ pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize) 
         }
         _ => (0.0, 0.0),
     }
+}
+
+/// CSS Grid L1 §7.2.3.2 — number of repetitions of an auto `repeat()` that fit `avail`
+/// (the container's definite content size on the axis; `None` → the list repeats once).
+///
+/// Every track counts at its definite minimum size (`minmax(100px, 1fr)` → 100px), the
+/// tracks around the repeat (`rep.before` / `rep.after`) and the gutters between all
+/// tracks take their space first; at least one repetition is always produced.
+fn auto_repeat_count(rep: &GridRepeat, avail: Option<f32>, gap: f32, em: f32, viewport: Size) -> usize {
+    let Some(avail) = avail.filter(|a| *a > 0.0) else {
+        return 1;
+    };
+    let min_px = |t: &GridTrackSize| match t {
+        GridTrackSize::FitContent(limit) => limit.resolve_fixed(em, avail, viewport).unwrap_or(0.0),
+        other => other.resolve_fixed(em, avail, viewport).unwrap_or(0.0).max(0.0),
+    };
+    let fixed_sum: f32 = rep.before.iter().chain(&rep.after).map(min_px).sum();
+    let fixed_n = rep.before.len() + rep.after.len();
+    let unit_sum: f32 = rep.tracks.iter().map(min_px).sum();
+    let unit_n = rep.tracks.len();
+    // k · (unit_sum + unit_n · gap) ≤ avail − fixed_sum − (fixed_n − 1) · gap
+    let per_unit = unit_sum + unit_n as f32 * gap;
+    if per_unit <= 0.0 {
+        return 1;
+    }
+    let room = avail - fixed_sum - (fixed_n as f32 - 1.0) * gap;
+    ((room / per_unit).floor().max(1.0)) as usize
+}
+
+/// The track list with the auto `repeat()` expanded `count` times between the tracks
+/// written around it.
+fn expand_auto_repeat(rep: &GridRepeat, count: usize) -> Vec<GridTrackSize> {
+    let mut out = Vec::with_capacity(rep.before.len() + rep.after.len() + count * rep.tracks.len());
+    out.extend_from_slice(&rep.before);
+    for _ in 0..count {
+        out.extend_from_slice(&rep.tracks);
+    }
+    out.extend_from_slice(&rep.after);
+    out
+}
+
+/// CSS Grid L1 §7.2.3.2 — `repeat(auto-fit, …)`: tracks produced by the repeat that hold no
+/// item are collapsed (sized `0`, the gutters on both sides merge into one). Returns the
+/// track list with those tracks replaced by `0px` and the per-track collapsed flags; for
+/// any other template (no `auto-fit`) the flags are all `false` and the list is unchanged.
+///
+/// `used(t)` — whether some item covers 0-based track `t`.
+fn collapse_auto_fit(
+    template: &[GridTrackSize],
+    rep: Option<&GridRepeat>,
+    count: usize,
+    used: impl Fn(usize) -> bool,
+) -> (Vec<GridTrackSize>, Vec<bool>) {
+    let mut collapsed = vec![false; template.len()];
+    let mut tracks = template.to_vec();
+    if let Some(rep) = rep.filter(|r| r.count == RepeatCount::AutoFit) {
+        let first = rep.before.len();
+        for t in first..(first + count * rep.tracks.len()).min(template.len()) {
+            if !used(t) {
+                collapsed[t] = true;
+                tracks[t] = GridTrackSize::Length(Length::Px(0.0));
+            }
+        }
+    }
+    (tracks, collapsed)
+}
+
+/// Line names of both axes of a grid container, `[(subgrid, tracks, inherited, repeat_count); 2]`
+/// for columns then rows. A non-subgrid axis keeps the written names, with an auto `repeat()`
+/// expanded `repeat_count` times; a subgrid axis merges its own `subgrid [a] [b]` names with the
+/// parent lines it spans (`subgrid_line_names`). Out of line: this frame sits on the deep-chain
+/// stack the grid trampoline measures.
+#[inline(never)]
+fn axis_line_names(
+    s: &ComputedStyle,
+    axes: [(bool, usize, Option<&SubgridContext>, Option<usize>); 2],
+) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    let one = |col: bool, (subgrid, tracks, inherited, count): (bool, usize, Option<&SubgridContext>, Option<usize>)| {
+        let (written, fill, repeat) = if col {
+            (&s.grid_template_col_line_names, s.grid_template_col_subgrid_fill, &s.grid_template_col_auto_repeat)
+        } else {
+            (&s.grid_template_row_line_names, s.grid_template_row_subgrid_fill, &s.grid_template_row_auto_repeat)
+        };
+        if subgrid {
+            subgrid_line_names(written, fill, inherited.map_or(&[][..], |ctx| &ctx.names), tracks)
+        } else if let (Some(rep), Some(count)) = (repeat, count) {
+            rep.names.expand(count)
+        } else {
+            written.clone()
+        }
+    };
+    (one(true, axes[0]), one(false, axes[1]))
+}
+
+/// CSS Grid L2 §9 — names of the `tracks + 1` lines of a subgrid axis: the subgrid's own
+/// `subgrid [a] [b]` names (`fill` — its `repeat(auto-fill, …)`) plus the names of the parent
+/// lines it spans (`inherited`), merged line by line.
+pub(super) fn subgrid_line_names(
+    own: &[Vec<String>],
+    fill: Option<NameFill>,
+    inherited: &[Vec<String>],
+    tracks: usize,
+) -> Vec<Vec<String>> {
+    let lines = tracks + 1;
+    let own = match fill {
+        Some(fill) => fill.expand(own, lines),
+        None => own.to_vec(),
+    };
+    (0..lines)
+        .map(|i| {
+            let mut group = own.get(i).cloned().unwrap_or_default();
+            group.extend(inherited.get(i).into_iter().flatten().cloned());
+            group
+        })
+        .collect()
+}
+
+/// Start offsets of tracks sized `sizes` along one axis: one `gap` between consecutive
+/// non-collapsed tracks, so the gutters on both sides of a collapsed track (or run of
+/// them) merge into a single one and no gutter is left at the container edges. `start` is
+/// where the first track begins; the content-distribution extra is added per gutter.
+pub(super) fn track_offsets(sizes: &[f32], collapsed: &[bool], gap: f32, extra: f32, start: f32) -> Vec<f32> {
+    let mut offsets = Vec::with_capacity(sizes.len());
+    let mut pos = start;
+    let mut any_visible = false;
+    for (t, &size) in sizes.iter().enumerate() {
+        if collapsed.get(t).copied().unwrap_or(false) {
+            offsets.push(pos);
+            continue;
+        }
+        if any_visible {
+            pos += gap + extra;
+        }
+        offsets.push(pos);
+        pos += size;
+        any_visible = true;
+    }
+    offsets
+}
+
+/// Number of gutters on an axis: one between each pair of consecutive non-collapsed tracks.
+pub(super) fn gutter_count(collapsed: &[bool], n: usize) -> usize {
+    let visible = (0..n).filter(|&t| !collapsed.get(t).copied().unwrap_or(false)).count();
+    visible.saturating_sub(1)
 }
 
 /// Size of the cell spanning tracks `t0..t1` (0-based, end-exclusive), measured from
@@ -88,6 +232,13 @@ pub(super) fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usi
 /// - `align-content` / `justify-content` (and the `place-content` shorthand)
 ///   distributing the container's free space between tracks — CSS Box Alignment
 ///   L3 §5 / CSS Grid L1 §12.3.
+///
+/// `vertical` (GRID-VWM): `Some` for a container in a vertical `writing-mode`. Everything here
+/// then stays logical — `content_width` is the inline extent (the physical content height),
+/// `definite_content_height` the definite block extent (the physical content width), the
+/// `col_*` vectors run along physical y and the `row_*` ones along x; the physical mapping is
+/// done by `grid_vertical` at the item boundary. Only the `min-/max-content` column sizing
+/// reads it here (inline-axis margins and intrinsic height instead of width).
 ///
 /// `definite_content_height` is the container's content-box block size when it is
 /// definite (explicit `height`, box-sizing already applied), `None` when the height
@@ -121,6 +272,10 @@ pub(crate) fn build_grid_init(
     padding_top: f32,
     padding_bottom: f32,
     size_contained: bool,
+    is_positioned: bool,
+    own_pcb: Rect,
+    measurer: Option<&dyn TextMeasurer>,
+    vertical: Option<super::grid_vertical::VGridGeom>,
 ) -> Option<Box<super::grid_trampoline::GridInit>> {
     use super::grid_trampoline::GridInit;
 
@@ -130,19 +285,22 @@ pub(crate) fn build_grid_init(
     let inherited_cols: Option<SubgridContext> = SUBGRID_COL_CTX.with(|c| c.borrow_mut().take());
     let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
 
-    // Indices of actual items (non-Skip).
-    let mut item_idxs: Vec<usize> = children
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
-        .map(|(i, _)| i)
-        .collect();
-    // CSS Grid §6: grid items are placed in "modified document order" — source order
-    // reordered by the `order` property. A stable sort preserves source order among
-    // items with equal `order`, so auto-placement honours `order` like Edge does.
-    item_idxs.sort_by_key(|&i| children[i].style.order);
+    let item_idxs = grid_item_indices(children);
 
-    if item_idxs.is_empty() {
+    // CSS Grid L1 §7.1: a grid container with no items still has its explicit
+    // tracks (`grid-template-*` of fixed lengths) — they give it a size and
+    // gaps, and `column-rule`/`row-rule` are painted in those gaps. Only a
+    // container with nothing to size (no explicit template, or a subgrid whose
+    // tracks come from the parent) takes the zero-height shortcut.
+    if item_idxs.is_empty()
+        && (inherited_cols.is_some()
+            || inherited_rows.is_some()
+            || (s.grid_template_columns.is_empty() && s.grid_template_rows.is_empty())
+            || s.grid_template_col_auto_repeat.is_some()
+            || s.grid_template_row_auto_repeat.is_some()
+            || s.grid_template_columns.first() == Some(&GridTrackSize::Subgrid)
+            || s.grid_template_rows.first() == Some(&GridTrackSize::Subgrid))
+    {
         return None;
     }
 
@@ -157,21 +315,34 @@ pub(crate) fn build_grid_init(
 
     // CSS Grid L1 §7.2.3.4 — Phase 2: expand repeat(auto-fill|auto-fit, ...) at layout time.
     // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
-    let auto_fill_col_tracks: Vec<GridTrackSize> =
-        if let Some(ref rep) = s.grid_template_col_auto_repeat {
-            let n = resolve_auto_fill_fit_count(content_width, &rep.tracks, col_gap).max(1);
-            let mut tracks = Vec::with_capacity(n * rep.tracks.len());
-            for _ in 0..n {
-                tracks.extend_from_slice(&rep.tracks);
-            }
-            tracks
-        } else {
-            Vec::new()
-        };
+    // CSS Grid L1 §7.2.3.2: the repeat is expanded between the fixed tracks written around it;
+    // `auto-fit` tracks that end up empty are collapsed after placement (below).
+    let col_repeat_count = s
+        .grid_template_col_auto_repeat
+        .as_ref()
+        .map(|rep| auto_repeat_count(rep, Some(content_width), col_gap, em, viewport));
+    let auto_fill_col_tracks: Vec<GridTrackSize> = match (&s.grid_template_col_auto_repeat, col_repeat_count) {
+        (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
+        _ => Vec::new(),
+    };
     let eff_col_template: &[GridTrackSize] = if s.grid_template_col_auto_repeat.is_some() {
         &auto_fill_col_tracks
     } else {
         &s.grid_template_columns
+    };
+    // Rows repeat against the container's definite content height; an indefinite one repeats once.
+    let row_repeat_count = s
+        .grid_template_row_auto_repeat
+        .as_ref()
+        .map(|rep| auto_repeat_count(rep, definite_content_height, row_gap, em, viewport));
+    let auto_fill_row_tracks: Vec<GridTrackSize> = match (&s.grid_template_row_auto_repeat, row_repeat_count) {
+        (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
+        _ => Vec::new(),
+    };
+    let src_row_template: &[GridTrackSize] = if s.grid_template_row_auto_repeat.is_some() {
+        &auto_fill_row_tracks
+    } else {
+        &s.grid_template_rows
     };
 
     // CSS Masonry Layout (CSS Grid L3 §14) is not shipped by any stable browser —
@@ -180,9 +351,9 @@ pub(crate) fn build_grid_init(
     // strip the `masonry` sentinel from the effective track list on whichever axis
     // carries it, then fall through to the normal grid placement algorithm below.
     let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
-    let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
+    let row_is_masonry = src_row_template.first() == Some(&GridTrackSize::Masonry);
     let eff_col_template: &[GridTrackSize] = if col_is_masonry { &[] } else { eff_col_template };
-    let eff_row_template: &[GridTrackSize] = if row_is_masonry { &[] } else { &s.grid_template_rows };
+    let eff_row_template: &[GridTrackSize] = if row_is_masonry { &[] } else { src_row_template };
 
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
@@ -193,7 +364,341 @@ pub(crate) fn build_grid_init(
         eff_col_template.len().max(1)
     };
 
+    // Явная сетка для разрешения линий: треки шаблона или строки/столбцы
+    // `grid-template-areas` (что больше — CSS Grid L1 §7.1).
+    let areas_cols = s.grid_template_areas.first().map_or(0, Vec::len);
+    let areas_rows = s.grid_template_areas.len();
+    let subgrid_cols = eff_col_template.first() == Some(&GridTrackSize::Subgrid);
+    let subgrid_rows = eff_row_template.first() == Some(&GridTrackSize::Subgrid);
+    let n_subgrid_rows = inherited_rows.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1);
+    let (col_names, row_names) = axis_line_names(
+        s,
+        [(subgrid_cols, n_explicit_cols, inherited_cols.as_ref(), col_repeat_count),
+         (subgrid_rows, n_subgrid_rows, inherited_rows.as_ref(), row_repeat_count)],
+    );
+    let col_axis = GridAxis {
+        n_tracks: if subgrid_cols { n_explicit_cols as u32 } else { eff_col_template.len().max(areas_cols) as u32 },
+        names: &col_names,
+        areas: &s.grid_template_areas,
+        is_col: true,
+        clamp: subgrid_cols,
+    };
+    let row_axis = GridAxis {
+        n_tracks: if subgrid_rows { n_subgrid_rows as u32 } else { eff_row_template.len().max(areas_rows) as u32 },
+        names: &row_names,
+        areas: &s.grid_template_areas,
+        is_col: false,
+        clamp: subgrid_rows,
+    };
+
     // --- Step 1: Resolve placements for every item ---
+    let placements = place_grid_items(children, &item_idxs, s, n_explicit_cols, eff_row_template.len(), &col_axis, &row_axis);
+
+    // --- Step 2: Determine total grid dimensions ---
+    let n_cols = placements.iter().map(|&(_, ce, _, _)| ce.saturating_sub(1)).max().unwrap_or(1)
+        .max(n_explicit_cols as u32);
+    let mut n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
+    // Every explicit row is a track even when no item reaches it (§7.1, like the
+    // columns above): trailing empty rows keep their size and the gaps before them.
+    n_rows = n_rows.max(eff_row_template.len() as u32);
+
+    // CSS Grid L1 §7.2.3.2: `repeat(auto-fit, …)` tracks that hold no item collapse to zero
+    // (the gutters on both sides merge into one). Placement above used the full expanded list.
+    let covers = |track: usize, axis_col: bool| {
+        placements.iter().any(|&(cs, ce, rs, re)| {
+            let (a, b) = if axis_col { (cs, ce) } else { (rs, re) };
+            a != 0 && (a as usize - 1) <= track && track < (b.max(a + 1) as usize - 1)
+        })
+    };
+    let (col_tracks_collapsed, col_collapsed) = collapse_auto_fit(
+        eff_col_template,
+        s.grid_template_col_auto_repeat.as_ref(),
+        col_repeat_count.unwrap_or(0),
+        |t| covers(t, true),
+    );
+    let eff_col_template: &[GridTrackSize] = &col_tracks_collapsed;
+    let (row_tracks_collapsed, row_collapsed) = collapse_auto_fit(
+        eff_row_template,
+        s.grid_template_row_auto_repeat.as_ref(),
+        row_repeat_count.unwrap_or(0),
+        |t| covers(t, false),
+    );
+    let eff_row_template: &[GridTrackSize] = &row_tracks_collapsed;
+    // Collapsed tracks have no gutters: `col_gutters` / `row_gutters` count the real ones.
+    let col_gutters = gutter_count(&col_collapsed, n_cols as usize);
+
+    // --- Step 3: Compute column widths ---
+    // If the column axis is subgridded, use the inherited track sizes directly;
+    // otherwise compute from the style as usual (CSS Grid L2 §9).
+    let (col_widths, col_offsets) = if let Some(ref ctx) = inherited_cols {
+        // Subgrid column axis: clip to n_cols (parent may span more tracks than
+        // the explicit template; auto-place inside those tracks).
+        let sizes: Vec<f32> = ctx.sizes.iter().take(n_cols as usize).cloned().collect();
+        let offsets: Vec<f32> = ctx.offsets.iter().take(n_cols as usize).cloned().collect();
+        (sizes, offsets)
+    } else {
+        // Normal grid: compute column widths from the style.
+        let mut col_widths: Vec<f32> = (0..n_cols)
+            .map(|c| {
+                let ts = grid_track(c, eff_col_template, &s.grid_auto_columns);
+                match ts {
+                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                    // Subgrid sentinel without parent context — fall back to auto.
+                    GridTrackSize::Subgrid => 0.0,
+                    _ => 0.0, // fr / auto resolved later
+                }
+            })
+            .collect();
+
+        // Total gap between columns.
+        let total_col_gap = col_gap * col_gutters as f32;
+
+        // CSS Grid L1 §11: `auto` / fixed-length columns are sized from the items
+        // (subgrid items contribute through their own items, L2 §9). Anything else
+        // — `fr`, `minmax()`, content keywords, `repeat(auto-*)`, a vertical
+        // writing mode, a single column — keeps the older path below. Out of line:
+        // this frame sits on the deep-chain stack the grid trampoline measures.
+        let content_sized = if vertical.is_none()
+            && s.grid_template_col_auto_repeat.is_none()
+            && !col_collapsed.iter().any(|&c| c)
+        {
+            super::grid_auto_cols::content_sized_col_widths(
+                children,
+                &item_idxs,
+                &placements,
+                &col_names,
+                s,
+                eff_col_template,
+                n_cols as usize,
+                col_gap,
+                content_width,
+                em,
+                viewport,
+                measurer,
+            )
+        } else {
+            None
+        };
+        if let Some(widths) = content_sized {
+            col_widths = widths;
+        } else {
+            // CSS Grid L1 §11.5 — a `min-content` / `max-content` track is as wide as the
+            // largest contribution of the items that sit in it alone (spanning items
+            // contribute to several tracks and are left to the free-space pass).
+            for (c, col_w) in col_widths.iter_mut().enumerate() {
+                let kind = grid_track(c as u32, eff_col_template, &s.grid_auto_columns);
+                let is_max = match kind {
+                    GridTrackSize::MaxContent => true,
+                    GridTrackSize::MinContent => false,
+                    _ => continue,
+                };
+                let mut w = 0.0_f32;
+                for (k, &i) in item_idxs.iter().enumerate() {
+                    let (cs, ce, _, _) = placements[k];
+                    if cs as usize != c + 1 || ce.saturating_sub(cs) > 1 {
+                        continue;
+                    }
+                    let item = &children[i];
+                    let cem = item.style.font_size;
+                    // Вертикальный режим: колонка — inline-ось, то есть физическая высота.
+                    let (ml, mr, outer) = if vertical.is_some() {
+                        (
+                            item.style.margin_top.resolve_or_zero(cem, 0.0, viewport),
+                            item.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport),
+                            max_content_outer_height(item, measurer, viewport),
+                        )
+                    } else {
+                        (
+                            item.style.margin_left.resolve_or_zero(cem, 0.0, viewport),
+                            item.style.margin_right.resolve_or_zero(cem, 0.0, viewport),
+                            if is_max {
+                                max_content_outer_width(item, measurer, viewport)
+                            } else {
+                                min_content_outer_width(item, measurer, viewport)
+                            },
+                        )
+                    };
+                    w = w.max(outer + ml + mr);
+                }
+                *col_w = w;
+            }
+
+            let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+            let free_col = (content_width - fixed_col_total).max(0.0);
+
+            // Distribute fr among column tracks.
+            // Flexible tracks are `Nfr` and `minmax(<min>, Nfr)` (BUG-1217): the latter keeps its
+            // fixed minimum as a floor and takes its share of what the other tracks leave.
+            let flex: Vec<Option<f32>> = (0..n_cols)
+                .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).flex_factor())
+                .collect();
+            let total_fr: f32 = flex.iter().map(|f| f.unwrap_or(0.0)).sum();
+            let (flex_fr, frozen) = find_fr_size(&flex, &col_widths, content_width, total_col_gap);
+            let auto_col_count = (0..n_cols)
+                .filter(|&c| matches!(grid_track(c, eff_col_template, &s.grid_auto_columns), GridTrackSize::Auto))
+                .count();
+
+            // For auto columns, divide remaining free space equally (after fr).
+            let fr_width = flex_fr;
+            let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
+                free_col / auto_col_count as f32
+            } else {
+                0.0
+            };
+
+            for c in 0..n_cols {
+                match grid_track(c, eff_col_template, &s.grid_auto_columns) {
+                    GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
+                    GridTrackSize::Minmax(..) if flex[c as usize].is_some() => {
+                        if !frozen[c as usize] {
+                            col_widths[c as usize] = (flex[c as usize].unwrap_or(0.0) * fr_width).max(col_widths[c as usize]);
+                        }
+                    }
+                    GridTrackSize::Auto => {
+                        col_widths[c as usize] = auto_col_width;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // CSS Box Alignment L3 §5 — `justify-content` distributes whatever inline-axis
+        // space the tracks left over. `fr` / `auto` tracks already absorb it during
+        // sizing above, so this only ever fires for a fixed-size track list.
+        let used_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+        let (jc_start, jc_extra) = grid_content_distribution(
+            s.justify_content,
+            content_width - used_col_total,
+            col_gutters + 1,
+            s.content_align_extra.justify_safe,
+        );
+
+        // Column start offsets (a collapsed track takes no gutter).
+        let col_offsets = track_offsets(&col_widths, &col_collapsed, col_gap, jc_extra, jc_start);
+
+        (col_widths, col_offsets)
+    };
+
+    // Initial row sizes (CSS Grid L1 §12.3 track-sizing base, before auto-row
+    // content growth). If the row axis is subgridded, use inherited sizes;
+    // otherwise compute from style. LAYOUT-2 срез 4: this stays native — no
+    // `lay_out` call — grown auto/fr sizes are resolved by the trampoline's
+    // `grid_trampoline::finish_probe_pass` once every item's probe height is in.
+    let row_heights: Vec<f32> = if let Some(ref ctx) = inherited_rows {
+        ctx.sizes.iter().take(n_rows as usize).cloned().collect()
+    } else {
+        (0..n_rows)
+            .map(|r| {
+                match grid_track(r, eff_row_template, &s.grid_auto_rows) {
+                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                    GridTrackSize::Subgrid => 0.0,
+                    _ => 0.0,
+                }
+            })
+            .collect()
+    };
+
+    // BUG-341 S33: the probe pass (`grid_trampoline`'s Probe phase) and the
+    // final positioning pass (its Final phase) always call `lay_out` with the
+    // exact same `(width, height=None)` for a given non-subgrid item —
+    // `col_offsets`/`col_widths` are resolved once, right above, and nothing
+    // between here and the final pass touches them again, so `cell_w` is
+    // bit-identical for both passes *by construction*, not just "happens to
+    // match" the way S30-S32's general `(node, width, height)` cache could
+    // only ever hope for. `grid_trampoline` stashes each non-subgrid item's
+    // probe result and reuses it directly in the final pass instead of laying
+    // the subtree out twice — the one real redundancy the S28-S32 general
+    // layout-result cache slices ever found a case for, captured here with
+    // zero overhead on every other box in the document (no thread-local
+    // `HashMap`, no per-call key, nothing paid on a miss that never repeats —
+    // see `CV_AUTO_TOUCHED`'s doc comment for why the general mechanism was
+    // removed instead of kept).
+    //
+    // Subgrid items are excluded: their own recursive grid layout reads a
+    // thread-local track context (`SubgridContextGuard`, set in both phases)
+    // that genuinely differs between this estimated-tracks probe and the
+    // final pass's resolved-tracks pass.
+    let probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
+    let item_baselines = vec![None; item_idxs.len()];
+    let row_groups = vec![(0.0_f32, 0.0_f32); n_rows as usize];
+    let item_col_baselines = vec![None; item_idxs.len()];
+    let col_groups = vec![(0.0_f32, 0.0_f32); n_cols as usize];
+
+    Some(Box::new(GridInit {
+        item_idxs,
+        placements,
+        n_cols,
+        n_rows,
+        col_widths,
+        col_offsets,
+        col_names,
+        row_names,
+        eff_row_template: eff_row_template.to_vec(),
+        row_collapsed,
+        inherited_rows,
+        row_heights,
+        row_offsets: Vec::new(),
+        y_off: 0.0,
+        content_x,
+        content_y,
+        content_width,
+        definite_content_height,
+        col_gap,
+        row_gap,
+        s: Arc::clone(s),
+        children_pcb: pcb,
+        em,
+        available_height,
+        padding_top,
+        padding_bottom,
+        size_contained,
+        is_positioned,
+        own_pcb,
+        probe_reuse,
+        item_baselines,
+        row_first_group: row_groups.clone(),
+        row_last_group: row_groups,
+        item_col_baselines,
+        col_first_group: col_groups.clone(),
+        col_last_group: col_groups,
+        vertical,
+    }))
+}
+
+/// Indices of the actual grid items of `children`. CSS Grid L1 §9.1: an
+/// absolutely-positioned child does not take part in grid layout — it is not a grid
+/// item and is laid out afterwards against its containing block
+/// (`grid_trampoline::lay_out_abs`). CSS Grid §6: items are placed in "modified
+/// document order" — source order reordered by `order`; a stable sort keeps source
+/// order among equal `order`, so auto-placement honours `order` like Edge does.
+pub(super) fn grid_item_indices(children: &[LayoutBox]) -> Vec<usize> {
+    let mut item_idxs: Vec<usize> = children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip)
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|(i, _)| i)
+        .collect();
+    item_idxs.sort_by_key(|&i| children[i].style.order);
+    item_idxs
+}
+
+/// CSS Grid L1 §8 — resolve every grid item's `(col_start, col_end, row_start, row_end)`
+/// (1-based lines, end exclusive): explicit placements first, then the §8.5 auto-placement
+/// algorithm. `n_explicit_cols` is the column count auto-placement wraps at (for a subgrid —
+/// the number of parent tracks it spans), `n_explicit_rows` the template's row count.
+/// Shared by `build_grid_init` and the subgrid contribution walk (`grid_auto_cols`).
+pub(super) fn place_grid_items(
+    children: &[LayoutBox],
+    item_idxs: &[usize],
+    s: &ComputedStyle,
+    n_explicit_cols: usize,
+    n_explicit_rows: usize,
+    col_axis: &GridAxis,
+    row_axis: &GridAxis,
+) -> Vec<(u32, u32, u32, u32)> {
     // placement: (col_start, col_end, row_start, row_end) all 1-based inclusive/exclusive.
     let mut placements: Vec<(u32, u32, u32, u32)> = vec![(0, 0, 0, 0); item_idxs.len()];
 
@@ -203,42 +708,12 @@ pub(crate) fn build_grid_init(
     for (k, &i) in item_idxs.iter().enumerate() {
         let is = &children[i].style;
 
-        // Resolve named area references first (grid-area: <name> shorthand or
-        // individual grid-{row,column}-{start,end}: <name> values).
-        let (named_cs, named_ce, named_rs, named_re) = {
-            let has_named = matches!(&is.grid_column_start, GridLine::Named(_))
-                || matches!(&is.grid_column_end, GridLine::Named(_))
-                || matches!(&is.grid_row_start, GridLine::Named(_))
-                || matches!(&is.grid_row_end, GridLine::Named(_));
-            if has_named && !s.grid_template_areas.is_empty() {
-                resolve_named_lines(
-                    &is.grid_column_start,
-                    &is.grid_column_end,
-                    &is.grid_row_start,
-                    &is.grid_row_end,
-                    &s.grid_template_areas,
-                )
-            } else {
-                (0, 0, 0, 0)
-            }
-        };
-
-        // For each axis: use resolved named value if non-zero, else fall back to
-        // the normal numeric/span resolver.
-        let cs = if named_cs != 0 { named_cs } else { resolve_grid_line(&is.grid_column_start, n_explicit_cols as u32) };
-        let ce = if named_ce != 0 { named_ce } else { resolve_grid_line_end(&is.grid_column_end, cs, n_explicit_cols as u32) };
-        let rs = if named_rs != 0 { named_rs } else { resolve_grid_line(&is.grid_row_start, 0) };
-        let re = if named_re != 0 { named_re } else { resolve_grid_line_end(&is.grid_row_end, rs, 0) };
-
-        // `grid-column: span N` → start=Span(N), end=Auto → cs=0, ce=0.
-        // resolve_grid_line returns 0 for Span-on-start, losing the count.
-        // Recover the span so Pass 2 can use it for placement sizing.
-        let ce = if ce == 0 {
-            match &is.grid_column_start { GridLine::Span(n) => *n, _ => 0 }
-        } else { ce };
-        let re = if re == 0 {
-            match &is.grid_row_start { GridLine::Span(n) => *n, _ => 0 }
-        } else { re };
+        // CSS Grid L1 §8.3: каждая ось разрешается независимо — номера линий
+        // (в т.ч. отрицательные), `span`, имена линий и неявные линии областей.
+        // Результат оси — `(start, end)`; `start == 0` — позиция авто, тогда
+        // `end` несёт span (0 — span 1).
+        let (cs, ce) = resolve_grid_axis(&is.grid_column_start, &is.grid_column_end, col_axis);
+        let (rs, re) = resolve_grid_axis(&is.grid_row_start, &is.grid_row_end, row_axis);
 
         if cs != 0 && rs != 0 {
             // Fully explicit: both axes known.
@@ -293,9 +768,19 @@ pub(crate) fn build_grid_init(
         if row_flow {
             let fixed_cs = if cs != 0 { cs } else { 0 };
             let fixed_ce = if cs != 0 { ce } else { 0 };
+            // CSS Grid L1 §8.5 шаг 2: элемент с определённой строкой и авто-столбцом
+            // остаётся в своей строке и ищет первый свободный столбец (а не уезжает
+            // за курсором).
+            let fixed_rs = rs;
 
             // Dense packing starts each scan from (1,1); sparse continues from cursor.
-            let (mut scan_r, mut scan_c) = if dense { (1u32, 1u32) } else { (cursor_row, cursor_col) };
+            let (mut scan_r, mut scan_c) = if fixed_rs != 0 {
+                (fixed_rs, 1u32)
+            } else if dense {
+                (1u32, 1u32)
+            } else {
+                (cursor_row, cursor_col)
+            };
 
             // BUG-801: the column bound below must never be able to reject
             // EVERY scan position, or the loop has no exit. Two ways that
@@ -317,7 +802,7 @@ pub(crate) fn build_grid_init(
                 let try_ce_val = if fixed_cs != 0 { fixed_ce } else { try_c + col_span };
 
                 // Bounds: item must fit within the (possibly grid-grown) column count.
-                let fits = fixed_cs != 0 || (try_ce_val - 1) <= col_bound;
+                let fits = fixed_cs != 0 || fixed_rs != 0 || (try_ce_val - 1) <= col_bound;
                 let cell_free = fits && (try_c..try_ce_val)
                     .all(|c| (scan_r..scan_r + row_span).all(|r| !occupied.contains(&(c, r))));
 
@@ -329,6 +814,10 @@ pub(crate) fn build_grid_init(
                         }
                     }
                     // Track highest placed row for grid-size calculation.
+                    if fixed_rs != 0 {
+                        // Элемент закреплён за строкой — курсор авто-размещения не двигается.
+                        break;
+                    }
                     cursor_row = cursor_row.max(scan_r);
                     if !dense {
                         cursor_col = try_ce_val;
@@ -341,7 +830,9 @@ pub(crate) fn build_grid_init(
                 }
 
                 // Advance scan position.
-                if fixed_cs != 0 {
+                if fixed_rs != 0 {
+                    scan_c += 1;
+                } else if fixed_cs != 0 {
                     scan_r += 1;
                     scan_c = 1;
                 } else {
@@ -354,7 +845,7 @@ pub(crate) fn build_grid_init(
             }
         } else {
             // Column flow: fill top-to-bottom, wrap to next column.
-            let n_explicit_rows = eff_row_template.len().max(1) as u32;
+            let n_explicit_rows = n_explicit_rows.max(1) as u32;
             let fixed_rs = if rs != 0 { rs } else { 0 };
             let fixed_re = if rs != 0 { re } else { 0 };
 
@@ -402,161 +893,7 @@ pub(crate) fn build_grid_init(
             }
         }
     }
-
-    // --- Step 2: Determine total grid dimensions ---
-    let n_cols = placements.iter().map(|&(_, ce, _, _)| ce.saturating_sub(1)).max().unwrap_or(1)
-        .max(n_explicit_cols as u32);
-    let n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
-
-    // --- Step 3: Compute column widths ---
-    // If the column axis is subgridded, use the inherited track sizes directly;
-    // otherwise compute from the style as usual (CSS Grid L2 §9).
-    let (col_widths, col_offsets) = if let Some(ref ctx) = inherited_cols {
-        // Subgrid column axis: clip to n_cols (parent may span more tracks than
-        // the explicit template; auto-place inside those tracks).
-        let sizes: Vec<f32> = ctx.sizes.iter().take(n_cols as usize).cloned().collect();
-        let offsets: Vec<f32> = ctx.offsets.iter().take(n_cols as usize).cloned().collect();
-        (sizes, offsets)
-    } else {
-        // Normal grid: compute column widths from the style.
-        let mut col_widths: Vec<f32> = (0..n_cols)
-            .map(|c| {
-                let ts = grid_track(c, eff_col_template, &s.grid_auto_columns);
-                match ts {
-                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
-                    // Subgrid sentinel without parent context — fall back to auto.
-                    GridTrackSize::Subgrid => 0.0,
-                    _ => 0.0, // fr / auto resolved later
-                }
-            })
-            .collect();
-
-        // Total gap between columns.
-        let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
-        let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
-        let free_col = (content_width - fixed_col_total).max(0.0);
-
-        // Distribute fr among column tracks.
-        let total_fr: f32 = (0..n_cols)
-            .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).fr().unwrap_or(0.0))
-            .sum();
-        let auto_col_count = (0..n_cols)
-            .filter(|&c| matches!(
-                grid_track(c, eff_col_template, &s.grid_auto_columns),
-                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
-            ))
-            .count();
-
-        // For auto columns, divide remaining free space equally (after fr).
-        let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
-        let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
-            free_col / auto_col_count as f32
-        } else {
-            0.0
-        };
-
-        for c in 0..n_cols {
-            match grid_track(c, eff_col_template, &s.grid_auto_columns) {
-                GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
-                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
-                    col_widths[c as usize] = auto_col_width;
-                }
-                _ => {}
-            }
-        }
-
-        // CSS Box Alignment L3 §5 — `justify-content` distributes whatever inline-axis
-        // space the tracks left over. `fr` / `auto` tracks already absorb it during
-        // sizing above, so this only ever fires for a fixed-size track list.
-        let used_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
-        let (jc_start, jc_extra) = grid_content_distribution(
-            s.justify_content,
-            content_width - used_col_total,
-            n_cols as usize,
-        );
-
-        // Column start offsets.
-        let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
-        let mut x_off = jc_start;
-        for c in 0..n_cols {
-            col_offsets.push(x_off);
-            x_off += col_widths[c as usize]
-                + if c < n_cols - 1 { col_gap + jc_extra } else { 0.0 };
-        }
-
-        (col_widths, col_offsets)
-    };
-
-    // Initial row sizes (CSS Grid L1 §12.3 track-sizing base, before auto-row
-    // content growth). If the row axis is subgridded, use inherited sizes;
-    // otherwise compute from style. LAYOUT-2 срез 4: this stays native — no
-    // `lay_out` call — grown auto/fr sizes are resolved by the trampoline's
-    // `grid_trampoline::finish_probe_pass` once every item's probe height is in.
-    let row_heights: Vec<f32> = if let Some(ref ctx) = inherited_rows {
-        ctx.sizes.iter().take(n_rows as usize).cloned().collect()
-    } else {
-        (0..n_rows)
-            .map(|r| {
-                match grid_track(r, eff_row_template, &s.grid_auto_rows) {
-                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
-                    GridTrackSize::Subgrid => 0.0,
-                    _ => 0.0,
-                }
-            })
-            .collect()
-    };
-
-    // BUG-341 S33: the probe pass (`grid_trampoline`'s Probe phase) and the
-    // final positioning pass (its Final phase) always call `lay_out` with the
-    // exact same `(width, height=None)` for a given non-subgrid item —
-    // `col_offsets`/`col_widths` are resolved once, right above, and nothing
-    // between here and the final pass touches them again, so `cell_w` is
-    // bit-identical for both passes *by construction*, not just "happens to
-    // match" the way S30-S32's general `(node, width, height)` cache could
-    // only ever hope for. `grid_trampoline` stashes each non-subgrid item's
-    // probe result and reuses it directly in the final pass instead of laying
-    // the subtree out twice — the one real redundancy the S28-S32 general
-    // layout-result cache slices ever found a case for, captured here with
-    // zero overhead on every other box in the document (no thread-local
-    // `HashMap`, no per-call key, nothing paid on a miss that never repeats —
-    // see `CV_AUTO_TOUCHED`'s doc comment for why the general mechanism was
-    // removed instead of kept).
-    //
-    // Subgrid items are excluded: their own recursive grid layout reads a
-    // thread-local track context (`SubgridContextGuard`, set in both phases)
-    // that genuinely differs between this estimated-tracks probe and the
-    // final pass's resolved-tracks pass.
-    let probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
-
-    Some(Box::new(GridInit {
-        item_idxs,
-        placements,
-        n_cols,
-        n_rows,
-        col_widths,
-        col_offsets,
-        eff_row_template: eff_row_template.to_vec(),
-        inherited_rows,
-        row_heights,
-        row_offsets: Vec::new(),
-        y_off: 0.0,
-        content_x,
-        content_y,
-        content_width,
-        definite_content_height,
-        col_gap,
-        row_gap,
-        s: Arc::clone(s),
-        children_pcb: pcb,
-        em,
-        available_height,
-        padding_top,
-        padding_bottom,
-        size_contained,
-        probe_reuse,
-    }))
+    placements
 }
 
 /// CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count.
@@ -623,49 +960,6 @@ pub(super) fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track
     template.get(idx as usize).unwrap_or(auto_track)
 }
 
-/// Resolve a `GridLine` to a 1-based track number, or 0 if auto.
-fn resolve_grid_line(line: &GridLine, n_tracks: u32) -> u32 {
-    match line {
-        GridLine::Auto | GridLine::Named(_) => 0,
-        GridLine::Line(n) => {
-            if *n > 0 {
-                *n as u32
-            } else if n_tracks > 0 {
-                // Negative line numbers count from the end.
-                (n_tracks as i32 + 1 + n).max(1) as u32
-            } else {
-                1
-            }
-        }
-        GridLine::Span(_) => 0, // span on start — auto
-    }
-}
-
-/// Resolve a grid-line end given start position and span.
-fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
-    match line {
-        GridLine::Auto | GridLine::Named(_) => {
-            if start > 0 { start + 1 } else { 0 }
-        }
-        GridLine::Line(n) => {
-            if *n > 0 {
-                (*n as u32).max(start + 1)
-            } else if n_tracks > 0 {
-                let abs = (n_tracks as i32 + 1 + n).max(1) as u32;
-                abs.max(start + 1)
-            } else {
-                start + 1
-            }
-        }
-        GridLine::Span(n) => {
-            // When start is known: end = start + span.
-            // When start is auto (0): store span N directly so pass-2 placement
-            // can use `re - rs = N - 0 = N` to recover the span count.
-            if start > 0 { start + n } else { *n }
-        }
-    }
-}
-
 /// CSS Grid L1 §7.3 — locate a named area in `grid-template-areas`.
 ///
 /// Returns `(row_start, row_end, col_start, col_end)` as 1-based exclusive
@@ -693,46 +987,217 @@ fn find_named_area(areas: &[Vec<String>], name: &str) -> Option<(u32, u32, u32, 
     Some((row_start?, row_end?, col_start?, col_end?))
 }
 
-/// Resolve named grid-line references for a single item against the
-/// container's `grid-template-areas`. Returns `(col_start, col_end, row_start, row_end)`.
-///
-/// When all four placement properties are `Named(same_name)` (set by
-/// `grid-area: <name>` shorthand), the area bounds are looked up once and
-/// applied to all four axes. Mixed named/unnamed configurations fall back
-/// to `Auto` (0) for any unresolved axis.
-fn resolve_named_lines(
-    col_start: &GridLine,
-    col_end: &GridLine,
-    row_start: &GridLine,
-    row_end: &GridLine,
-    areas: &[Vec<String>],
-) -> (u32, u32, u32, u32) {
-    // When grid-area: <name> sets all four to Named(name), resolve as one area.
-    if let (
-        GridLine::Named(n_cs),
-        GridLine::Named(n_ce),
-        GridLine::Named(n_rs),
-        GridLine::Named(n_re),
-    ) = (col_start, col_end, row_start, row_end)
-        && n_cs == n_ce
-        && n_ce == n_rs
-        && n_rs == n_re
-        && let Some((rs, re, cs, ce)) = find_named_area(areas, n_cs)
-    {
-        return (cs, ce, rs, re);
+/// Явная сетка одной оси для разрешения `<grid-line>` (CSS Grid L1 §8.3).
+pub(super) struct GridAxis<'a> {
+    /// Число треков явной сетки (линий — на одну больше).
+    pub(super) n_tracks: u32,
+    /// Имена линий: индекс `i` — линия номер `i + 1`.
+    pub(super) names: &'a [Vec<String>],
+    /// `grid-template-areas` — источник неявных линий `<area>-start/-end`.
+    pub(super) areas: &'a [Vec<String>],
+    /// `true` — ось столбцов.
+    pub(super) is_col: bool,
+    /// Ось subgrid: неявных дорожек нет, позиции за явной сеткой прижимаются к её краю
+    /// (CSS Grid L2 §9).
+    pub(super) clamp: bool,
+}
+
+impl GridAxis<'_> {
+    /// Номер последней линии явной сетки.
+    pub(super) fn last_line(&self) -> u32 {
+        self.n_tracks + 1
     }
-    // Partial Named references: each axis resolved independently.
-    let cs = if let GridLine::Named(n) = col_start {
-        find_named_area(areas, n).map_or(0, |(_, _, cs, _)| cs)
-    } else { 0 };
-    let ce = if let GridLine::Named(n) = col_end {
-        find_named_area(areas, n).map_or(0, |(_, _, _, ce)| ce)
-    } else { 0 };
-    let rs = if let GridLine::Named(n) = row_start {
-        find_named_area(areas, n).map_or(0, |(rs, _, _, _)| rs)
-    } else { 0 };
-    let re = if let GridLine::Named(n) = row_end {
-        find_named_area(areas, n).map_or(0, |(_, re, _, _)| re)
-    } else { 0 };
-    (cs, ce, rs, re)
+
+    /// Все линии с именем `name` (по возрастанию, без дублей): именованные
+    /// линии `grid-template-*` и неявные `<area>-start` / `<area>-end`.
+    fn lines_named(&self, name: &str) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for (i, group) in self.names.iter().enumerate() {
+            if group.iter().any(|n| n == name) {
+                out.push(i as u32 + 1);
+            }
+        }
+        let implicit = name
+            .strip_suffix("-start")
+            .map(|a| (a, true))
+            .or_else(|| name.strip_suffix("-end").map(|a| (a, false)));
+        if let Some((area, is_start)) = implicit
+            && let Some((rs, re, cs, ce)) = find_named_area(self.areas, area)
+        {
+            let (start, end) = if self.is_col { (cs, ce) } else { (rs, re) };
+            out.push(if is_start { start } else { end });
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// `<integer> <custom-ident>` — N-я линия с именем (отрицательная — с конца).
+    /// Не хватает линий — неявные линии за явной сеткой считаются имеющими это
+    /// имя (§8.3), в нужную сторону от явной сетки.
+    fn nth_named(&self, name: &str, n: i32) -> u32 {
+        let lines = self.lines_named(name);
+        let k = lines.len() as i32;
+        if n > 0 {
+            if n <= k {
+                lines[n as usize - 1]
+            } else {
+                self.last_line() + (n - k) as u32
+            }
+        } else if -n <= k {
+            lines[(k + n) as usize]
+        } else {
+            1
+        }
+    }
+
+    /// `<custom-ident>` на стороне start/end: сначала `<ident>-start|-end`
+    /// (область), затем линия с именем `<ident>`, иначе `1 <ident>`.
+    fn named_edge(&self, name: &str, is_start: bool) -> u32 {
+        let suffixed = format!("{name}{}", if is_start { "-start" } else { "-end" });
+        if let Some(&l) = self.lines_named(&suffixed).first() {
+            return l;
+        }
+        self.nth_named(name, 1)
+    }
+
+    /// Номер линии для `Line(n)`: положительный как есть, отрицательный — с
+    /// конца явной сетки (`-1` — последняя линия). Не меньше 1.
+    fn numbered(&self, n: i32) -> u32 {
+        if n > 0 {
+            n as u32
+        } else {
+            (self.last_line() as i32 + 1 + n).max(1) as u32
+        }
+    }
+
+    /// N-я линия `name` строго после `from` (поиск вперёд, для `span N name`).
+    fn span_forward(&self, name: &str, from: u32, n: u32) -> u32 {
+        let after: Vec<u32> = self.lines_named(name).into_iter().filter(|&l| l > from).collect();
+        let k = after.len() as u32;
+        if n <= k {
+            after[n as usize - 1]
+        } else {
+            from.max(self.last_line()) + (n - k)
+        }
+    }
+
+    /// N-я линия `name` строго до `from` (поиск назад); нет — 1.
+    fn span_backward(&self, name: &str, from: u32, n: u32) -> u32 {
+        let before: Vec<u32> = self.lines_named(name).into_iter().filter(|&l| l < from).collect();
+        let k = before.len() as u32;
+        if n <= k { before[(k - n) as usize] } else { 1 }
+    }
+}
+
+/// Одна сторона `<grid-line>` после разрешения имён.
+enum Edge {
+    /// Позиция авто.
+    Auto,
+    /// Определённая линия.
+    Line(u32),
+    /// `span N` с необязательным именем линии-границы.
+    Span(u32, Option<String>),
+}
+
+fn resolve_edge(line: &GridLine, axis: &GridAxis, is_start: bool) -> Edge {
+    match line {
+        GridLine::Auto => Edge::Auto,
+        GridLine::Line(n) => Edge::Line(axis.numbered(*n)),
+        GridLine::Span(n) => Edge::Span(*n, None),
+        GridLine::Named(name) => Edge::Line(axis.named_edge(name, is_start)),
+        GridLine::NamedLine(name, n) => Edge::Line(axis.nth_named(name, *n)),
+        GridLine::SpanNamed(name, n) => Edge::Span(*n, Some(name.clone())),
+    }
+}
+
+/// CSS Grid L1 §8.3.1 — разрешает пару `start`/`end` одной оси.
+///
+/// Возвращает `(start, end)` — номера линий, 1-based. `start == 0` означает
+/// авто-позицию: тогда `end` — число занимаемых треков (0 — один).
+pub(super) fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
+    let (a, b) = resolve_grid_axis_unclamped(start, end, axis);
+    if !axis.clamp {
+        return (a, b);
+    }
+    let n = axis.n_tracks.max(1);
+    if a == 0 {
+        return (0, b.min(n));
+    }
+    let a = a.min(n);
+    (a, b.clamp(a + 1, n + 1))
+}
+
+fn resolve_grid_axis_unclamped(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {
+    let s = resolve_edge(start, axis, true);
+    let mut e = resolve_edge(end, axis, false);
+    // Два `span` — end отбрасывается (§8.3.1).
+    if matches!(s, Edge::Span(..)) && matches!(e, Edge::Span(..)) {
+        e = Edge::Auto;
+    }
+    match (s, e) {
+        (Edge::Line(a), Edge::Line(b)) => match a.cmp(&b) {
+            std::cmp::Ordering::Less => (a, b),
+            std::cmp::Ordering::Greater => (b, a), // меняются местами
+            std::cmp::Ordering::Equal => (a, a + 1),
+        },
+        (Edge::Line(a), Edge::Span(n, name)) => {
+            let b = match name {
+                Some(name) => axis.span_forward(&name, a, n),
+                None => a + n,
+            };
+            (a, b)
+        }
+        (Edge::Line(a), Edge::Auto) => (a, a + 1),
+        (Edge::Span(n, name), Edge::Line(b)) => {
+            let a = match name {
+                Some(name) => axis.span_backward(&name, b, n),
+                None => b.saturating_sub(n).max(1),
+            };
+            (a, b.max(a + 1))
+        }
+        // Без противоположной линии именованный span считается по числу.
+        (Edge::Span(n, _), Edge::Auto) => (0, n),
+        (Edge::Auto, Edge::Line(b)) => {
+            let a = b.saturating_sub(1).max(1);
+            (a, b.max(a + 1))
+        }
+        (Edge::Auto, Edge::Span(n, _)) => (0, n),
+        (Edge::Auto, Edge::Auto) => (0, 0),
+        (Edge::Span(..), Edge::Span(..)) => unreachable!("end span dropped above"),
+    }
+}
+
+/// CSS Grid L1 §12.7.1 "find the size of an fr": the fr size left once the non-flexible tracks
+/// and gaps are taken out, freezing flexible tracks whose share falls below their base size
+/// (`minmax(<min>, Nfr)`) and redistributing until stable. Returns the size and the frozen set.
+/// Kept out of line: inlined into `lay_out_grid` it deepens the frame of a deep grid chain.
+#[inline(never)]
+fn find_fr_size(flex: &[Option<f32>], base: &[f32], content_width: f32, total_gap: f32) -> (f32, Vec<bool>) {
+    let mut frozen = vec![false; flex.len()];
+    let nonflex_total: f32 =
+        base.iter().zip(flex).filter(|(_, f)| f.is_none()).map(|(w, _)| *w).sum::<f32>() + total_gap;
+    let mut fr = 0.0_f32;
+    loop {
+        let frozen_total: f32 = (0..flex.len()).filter(|&c| frozen[c]).map(|c| base[c]).sum();
+        let live_fr: f32 = (0..flex.len()).filter(|&c| !frozen[c]).map(|c| flex[c].unwrap_or(0.0)).sum();
+        if live_fr <= 0.0 {
+            break;
+        }
+        fr = (content_width - nonflex_total - frozen_total).max(0.0) / live_fr;
+        let mut changed = false;
+        for c in 0..flex.len() {
+            if let Some(f) = flex[c]
+                && !frozen[c]
+                && f * fr < base[c]
+            {
+                frozen[c] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (fr, frozen)
 }

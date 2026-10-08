@@ -36,7 +36,9 @@ impl Lumen {
         // «не рисовать» (см. crates/shell/src/bench_frames.rs).
         let bench_t0 = bench_frames::active().then(std::time::Instant::now);
 
-        // Step 1: scroll update.
+        // Step 1: scroll update. ADR-032, срез 3: сначала смещение, которое
+        // вело колесо на рендер-потоке.
+        self.adopt_scroll_feedback();
         if self.advance_scroll_anim() {
             self.request_redraw();
         }
@@ -554,6 +556,15 @@ impl Lumen {
                         .unwrap_or(find::TARGET_TEXT_HIGHLIGHT_DEFAULT),
                 );
                 (Some(page), Vec::new())
+            } else if let Some((rects, color)) = self.doc_selection_overlay() {
+                // CSS UI L4 §6.2: mouse/JS page-text selection. Shown only
+                // when no find / `::target-text` highlight is active.
+                let page = crate::lumen::build_page_with_selection_highlight(
+                    &self.display_list,
+                    &rects,
+                    color,
+                );
+                (Some(page), Vec::new())
             } else {
                 (None, Vec::new())
             };
@@ -916,7 +927,9 @@ impl Lumen {
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         if let Some(ref vt) = self.view_transition {
             let elapsed = now_ms - vt.start_ms;
-            let progress = (elapsed / vt.duration_ms).clamp(0.0, 1.0) as f32;
+            // `animation-duration: 0s` (or `animation: none`) skips the fade.
+            let linear = if vt.duration_ms > 0.0 { (elapsed / vt.duration_ms).clamp(0.0, 1.0) as f32 } else { 1.0 };
+            let progress = vt.easing.progress(linear).clamp(0.0, 1.0);
             let alpha = 1.0 - progress;
             if alpha > 0.0 {
                 let mut vt_cmds = Vec::with_capacity(vt.old_dl.len() + 2);
@@ -1429,7 +1442,7 @@ impl Lumen {
             let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
             // CSS UI L4 §6.3 `caret-color: auto` follows the text color —
             // same resolution `emit_input_caret` applies for `<input>`.
-            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let color = field_lb.style.used_caret_color();
             let mut caret_cmd = vec![
                 lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
                 lumen_paint::DisplayCommand::FillRect { rect, color },
@@ -1505,7 +1518,7 @@ impl Lumen {
             && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
         {
             let rect = forms::input_caret_rect(field_lb, &value, cursor);
-            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let color = field_lb.style.used_caret_color();
             let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
                 x: r.x + ox,
                 y: r.y + oy,
@@ -1597,7 +1610,7 @@ impl Lumen {
                 s.chars().map(|c| m.char_width(c, fs)).sum()
             };
             let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
-            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let color = field_lb.style.used_caret_color();
             let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
                 x: r.x + ox,
                 y: r.y + oy,

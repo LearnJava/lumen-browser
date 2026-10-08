@@ -17,8 +17,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// entirely absent instead of exercising it.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -41,6 +41,16 @@ fn sensors_are_real_event_targets() {
     assert!(bool_eval(
         &rt,
         "(new Magnetometer()).addEventListener === EventTarget.prototype.addEventListener"
+    ));
+}
+
+/// BUG-761: `SensorErrorEvent : Event` against the engine's real `Event`.
+#[test]
+fn sensor_error_event_is_a_real_event() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "var err = new DOMException('x', 'NotAllowedError');          var e = new SensorErrorEvent('error', {error: err, cancelable: true});          e instanceof Event && e.type === 'error' && e.error === err          && e.bubbles === false && e.cancelable === true          && typeof e.preventDefault === 'function'"
     ));
 }
 
@@ -98,8 +108,8 @@ fn sensor_listeners_support_event_target_options() {
 #[test]
 fn sensors_absent_on_insecure_origin() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     assert!(bool_eval(
         &rt,

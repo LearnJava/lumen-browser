@@ -29,8 +29,7 @@
 //! policy rather than an engine capability, and reusing the transformer keeps
 //! the two engines byte-identical on that surface.
 
-use crate::esm::{resolve_specifier_with, ImportMap};
-use crate::import_meta::transform_import_meta;
+use crate::esm::{resolve_module_specifier, resolve_specifier_with, ImportMap};
 use lumen_core::ext::JsFetchProvider;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -55,6 +54,9 @@ struct EsmState {
     /// callback can use the *referrer's* specifier as the base URL for
     /// relative imports.
     specifier_by_hash: HashMap<i32, String>,
+    /// `Module::get_identity_hash()` → `import.meta.url` (differs from the
+    /// specifier for inline modules, whose URL is the page's).
+    meta_url_by_hash: HashMap<i32, String>,
     /// Page URL — fallback base for relative imports from inline modules.
     page_url: String,
     /// Import map (HTML LS §8.1.6.2) for bare specifiers.
@@ -345,10 +347,10 @@ pub(crate) fn register_inline(source: &str) -> String {
 /// outright.
 fn document_base_url(scope: &mut v8::PinScope<'_, '_>) -> String {
     let stored = with_state(|s| s.page_url.clone());
-    let Some(code) = v8::String::new(
-        scope,
-        "(function(){try{return (typeof _lumen_document_base_url==='function')?_lumen_document_base_url():'';}catch(e){return '';}})()",
-    ) else {
+    const PROBE: &str = "(function(){try{return (typeof _lumen_document_base_url==='function')?_lumen_document_base_url():'';}catch(e){return '';}})()";
+    let ctx = scope.get_current_context();
+    let probe = crate::internal_globals::wrap_for_container(scope, ctx, PROBE);
+    let Some(code) = v8::String::new(scope, probe.as_deref().unwrap_or(PROBE)) else {
         return stored;
     };
     v8::tc_scope!(let tc, scope);
@@ -463,7 +465,7 @@ fn module_text(specifier: &str, source: &str, ty: &DeclaredType) -> Result<Strin
             "module '{specifier}': unsupported import attribute type '{t}'"
         )),
         DeclaredType::Js => {
-            Ok(transform_import_meta(source, specifier).unwrap_or_else(|| source.to_owned()))
+            Ok(source.to_owned())
         }
     }
 }
@@ -521,6 +523,7 @@ fn compile<'s>(
     with_state(|s| {
         s.modules.insert(key.to_owned(), global);
         s.specifier_by_hash.insert(hash, specifier.to_owned());
+        s.meta_url_by_hash.insert(hash, specifier.to_owned());
     });
     Some(module)
 }
@@ -824,6 +827,90 @@ pub(crate) fn install_dynamic_import_hook(isolate: &mut v8::Isolate) {
     isolate.set_host_import_module_dynamically_callback(dynamic_import_callback);
 }
 
+/// Install the isolate-wide `import.meta` initializer (BUG-753 срез 3).
+///
+/// V8 calls it the first time a module touches `import.meta`; it fills `url`,
+/// `resolve()` and the Vite-style `env` stub. Being a host callback, it needs no
+/// engine-internal name on the page's global (the previous source-level preamble
+/// read `_lumen_import_meta_resolve` from there).
+pub(crate) fn install_import_meta_hook(isolate: &mut v8::Isolate) {
+    isolate.set_host_initialize_import_meta_object_callback(initialize_import_meta);
+}
+
+unsafe extern "C" fn initialize_import_meta(
+    context: v8::Local<v8::Context>,
+    module: v8::Local<v8::Module>,
+    meta: v8::Local<v8::Object>,
+) {
+    v8::callback_scope!(unsafe scope, context);
+    let url = with_state(|s| {
+        s.meta_url_by_hash
+            .get(&module.get_identity_hash().get())
+            .cloned()
+            .unwrap_or_default()
+    });
+    let (Some(url_key), Some(url_val), Some(resolve_key), Some(env_key)) = (
+        v8::String::new(scope, "url"),
+        v8::String::new(scope, &url),
+        v8::String::new(scope, "resolve"),
+        v8::String::new(scope, "env"),
+    ) else {
+        return;
+    };
+    meta.create_data_property(scope, url_key.into(), url_val.into());
+    // `import.meta.resolve()` must answer exactly what `import()` would load: the
+    // same document-base fallback and import map, but WHATWG URL parsing and a
+    // `TypeError` for an unmapped bare specifier (HTML LS §8.1.5.5, BUG-1135).
+    // The module URL rides along as the function's data, so a page can't
+    // redirect it.
+    if let Some(func) = v8::Function::builder(import_meta_resolve)
+        .data(url_val.into())
+        .build(scope)
+    {
+        if let Some(name) = v8::String::new(scope, "resolve") {
+            func.set_name(name);
+        }
+        meta.create_data_property(scope, resolve_key.into(), func.into());
+    }
+    // Vite-style env stub so `import.meta.env.MODE` doesn't throw.
+    let env = v8::Object::new(scope);
+    for (k, v) in [("MODE", "production"), ("BASE_URL", "/")] {
+        if let (Some(k), Some(v)) = (v8::String::new(scope, k), v8::String::new(scope, v)) {
+            env.create_data_property(scope, k.into(), v.into());
+        }
+    }
+    for (k, v) in [("DEV", false), ("PROD", true), ("SSR", false)] {
+        if let Some(k) = v8::String::new(scope, k) {
+            let v = v8::Boolean::new(scope, v);
+            env.create_data_property(scope, k.into(), v.into());
+        }
+    }
+    meta.create_data_property(scope, env_key.into(), env.into());
+}
+
+/// `import.meta.resolve(specifier)` — see [`initialize_import_meta`].
+fn import_meta_resolve(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let base = args.data().to_rust_string_lossy(scope);
+    let name = args.get(0).to_rust_string_lossy(scope);
+    let page_url = document_base_url(scope);
+    let resolved =
+        with_state(|s| resolve_module_specifier(&page_url, &s.import_map, &base, &name));
+    match resolved.and_then(|r| v8::String::new(scope, &r)) {
+        Some(r) => rv.set(r.into()),
+        None => {
+            let msg = format!("Failed to resolve module specifier '{name}'");
+            if let Some(m) = v8::String::new(scope, &msg) {
+                let exc = v8::Exception::type_error(scope, m);
+                scope.throw_exception(exc);
+            }
+        }
+    }
+}
+
 /// Evaluate `source` as the entry ES module of an inline `<script type=module>`.
 ///
 /// The page URL (stored by [`set_page_url`]) becomes `import.meta.url` when
@@ -847,9 +934,9 @@ pub(crate) fn evaluate_entry_module(
             s.page_url.clone()
         }
     });
-    let text = transform_import_meta(source, &meta_url).unwrap_or_else(|| source.to_owned());
-
-    let module = compile(scope, &specifier, &specifier, &text).ok_or(ModuleFailure::Load)?;
+    let module = compile(scope, &specifier, &specifier, source).ok_or(ModuleFailure::Load)?;
+    let hash = module.get_identity_hash().get();
+    with_state(|s| s.meta_url_by_hash.insert(hash, meta_url));
     // Граф inline-модуля забирается так же, как у внешнего: его импорты — это
     // и есть чанки приложения (см. [`prefetch_graph`]).
     prefetch_graph(scope, &specifier, &specifier);
@@ -999,7 +1086,7 @@ mod tests {
         // (`<base href>`), not the page URL captured once at navigation.
         let rt = rt();
         rt.eval(
-            "globalThis._lumen_document_base_url = function() { \
+            "__lumen_C._lumen_document_base_url = function() { \
              return 'https://example.com/base/'; };",
         )
         .unwrap();
@@ -1097,7 +1184,7 @@ mod tests {
             doc,
             "https://example.com/",
             None, None, None, None, None, None, None, None, None,
-            false,
+            false, None,
         )
         .unwrap();
         rt.register_module_source("styles", "body { color: red; } p { color: blue; }");
@@ -1276,7 +1363,7 @@ mod tests {
             None, None,
             None,
             None,
-            false)
+            false, None)
         .unwrap();
         rt
     }
@@ -1443,8 +1530,51 @@ mod tests {
             .unwrap();
         assert_eq!(
             rt.eval("globalThis.__res").unwrap(),
-            JsValue::String("https://example.com/app/./utils.js".into())
+            JsValue::String("https://example.com/app/utils.js".into())
         );
+    }
+
+    /// BUG-1135: `import.meta.resolve()` parses like `new URL(s, import.meta.url)`
+    /// — root-relative, `../`, absolute — and applies the import map.
+    #[test]
+    fn v8_import_meta_resolve_follows_url_parser_and_import_map() {
+        let rt = rt();
+        let map = ImportMap::parse(r#"{ "imports": { "react": "/vendor/react.js" } }"#).unwrap();
+        rt.set_import_map(map);
+        let specifier = "https://example.com/sub/dir/m.js";
+        rt.register_module_source(
+            specifier,
+            "const m = import.meta; export const r = [\
+             m.resolve('/abs/x.js'), m.resolve('../up.js'), m.resolve('./a/../b.js'),\
+             m.resolve('https://cdn.test/y.js'), m.resolve('react')].join(' ');",
+        );
+        rt.eval_module(&format!("import {{ r }} from '{specifier}'; globalThis.__res = r;"))
+            .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__res").unwrap(),
+            JsValue::String(
+                "https://example.com/abs/x.js https://example.com/sub/up.js \
+                 https://example.com/sub/dir/b.js https://cdn.test/y.js \
+                 https://example.com/vendor/react.js"
+                    .into()
+            )
+        );
+    }
+
+    /// BUG-1135: an unmapped bare specifier is a `TypeError`, not the name echoed back.
+    #[test]
+    fn v8_import_meta_resolve_bare_specifier_throws_type_error() {
+        let rt = rt();
+        let specifier = "https://example.com/bare.js";
+        rt.register_module_source(
+            specifier,
+            "let r; try { r = import.meta.resolve('lodash'); } \
+             catch (e) { r = e instanceof TypeError ? 'TypeError' : String(e); } \
+             export { r };",
+        );
+        rt.eval_module(&format!("import {{ r }} from '{specifier}'; globalThis.__res = r;"))
+            .unwrap();
+        assert_eq!(rt.eval("globalThis.__res").unwrap(), JsValue::String("TypeError".into()));
     }
 
     #[test]

@@ -63,7 +63,7 @@ async_test(t => {
 загрузчик ресурса, ни один вызов скрипта, ни одна навигация хук не зовут —
 то есть нарушение некому обнаружить, и событию неоткуда взяться.
 
-Это не то же самое, что [BUG-692](BUG-692-OPEN.md): там одна директива
+Это не то же самое, что [BUG-692](BUG-692-FIXED.md): там одна директива
 (`upgrade-insecure-requests`) не применяется к URL; здесь отсутствует весь
 шаг применения и весь путь отчётности (`report-uri`/`report-to` — тоже).
 
@@ -493,7 +493,7 @@ honest независимая проверка заголовка и `<meta>`; h
 -p lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто) +
 `cargo test -p lumen-shell --features v8 --bin lumen` (1822 passed, 0
 failed). `scripts/scoped-test.sh` не догнан до конца — известный сломанный
-гейт [BUG-805](BUG-805-OPEN.md) (виснет на
+гейт [BUG-805](BUG-805-FIXED.md) (виснет на
 `lumen-network::h3::udp::tests::udp_round_trip`, не связано с этой правкой,
 не регрессия этого среза).
 
@@ -560,7 +560,7 @@ failed). `scripts/scoped-test.sh` не догнан до конца — изве
 warnings` (чисто) + адресные `cargo test -p lumen-network`, `-p lumen-js
 --features v8-backend --lib`, `-p lumen-shell csp` (все зелёные).
 `scripts/scoped-test.sh` не догнан до конца — тот же известный сломанный
-гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого среза.
+гейт [BUG-805](BUG-805-FIXED.md), не регрессия этого среза.
 
 ## Срез 11 (2026-09-17, P6) — `connect-src` против WebSocket/EventSource
 
@@ -2168,7 +2168,7 @@ HTTP-сервер, dev-release, коммит текущего среза): ро�
 failed, 20 ignored) без регрессий; `cargo clippy -p lumen-shell
 --all-targets --features v8 -- -D warnings` чисто. Полный
 `scripts/scoped-test.sh` не был доведён до конца — замыкание тянет
-`lumen-network`, и прогон упёрся в уже известный [BUG-805](BUG-805-OPEN.md)
+`lumen-network`, и прогон упёрся в уже известный [BUG-805](BUG-805-FIXED.md)
 (бинарь виснет навсегда независимо от правки); до зависания видны только
 чужой дрейф — `cpu_snapshots_match_references` (BUG-1008, тот же
 7-файловый сигнатурный набор: `55-text-rendering`, `57-canvas-2d`,
@@ -2485,7 +2485,7 @@ warnings` (оба чисто); `cargo test -p lumen-shell --profile dev-release
 запрос. Поле `CspPolicy::upgrade_insecure_requests` парсится с самого начала
 (`crates/network/src/csp.rs:165`/`:440`, юнит-тест
 `parse_upgrade_insecure_requests`), но до этого среза не читалось нигде —
-ровно то, на что заведён отдельный [BUG-692](BUG-692-OPEN.md) (`rg
+ровно то, на что заведён отдельный [BUG-692](BUG-692-FIXED.md) (`rg
 upgrade_insecure_requests crates/` давал только сам `csp.rs`).
 
 Живая проба (`.tmp/srez43/serve.py` — python-сервер на `127.0.0.1`,
@@ -2594,7 +2594,7 @@ csp` — 96 passed, 0 failed (без изменений числа — логи�
 живая проба покрывает именно два новых call site); `cargo clippy -p
 lumen-shell --profile dev-release --all-targets --features v8 -- -D
 warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца — тот же
-известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого
+известный сломанный гейт [BUG-805](BUG-805-FIXED.md), не регрессия этого
 среза.
 
 Не покрыто этим срезом (продолжение BUG-692, не изменилось): `<script
@@ -2645,7 +2645,7 @@ csp` — 96 passed, 0 failed (без изменений числа, как и в
 переиспользуется уже протестированная `upgrade_insecure_url`); `cargo
 clippy -p lumen-shell --profile dev-release --all-targets --features v8 --
 -D warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца — тот же
-известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого
+известный сломанный гейт [BUG-805](BUG-805-FIXED.md), не регрессия этого
 среза.
 
 Не покрыто этим срезом (продолжение BUG-692, не изменилось): `<link
@@ -2741,7 +2741,7 @@ href="http://…/style.css">`, лист несёт собственный `@impo
 csp` — 96 passed, 0 failed (без изменений числа, как и в срезах 44-46);
 `cargo clippy -p lumen-shell --profile dev-release --all-targets --features
 v8 -- -D warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца —
-тот же известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия
+тот же известный сломанный гейт [BUG-805](BUG-805-FIXED.md), не регрессия
 этого среза.
 
 Не покрыто этим срезом (продолжение BUG-692, не изменилось): `@font-face
@@ -2789,7 +2789,7 @@ CSP и `@font-face` во фрейме) — та же картина: `GET /top.h
 
 `cargo clippy -p lumen-shell --profile dev-release --all-targets --features
 v8 -- -D warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца —
-тот же известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия
+тот же известный сломанный гейт [BUG-805](BUG-805-FIXED.md), не регрессия
 этого среза.
 
 Не покрыто этим срезом (продолжение BUG-692, не изменилось):
@@ -2882,7 +2882,7 @@ JS-шима (`__lumen_video_load`/`__lumen_audio_load`) через собств�
 dev-release --features v8 --bin lumen csp` — 96 passed, `... track` — 27
 passed, 0 failed. `cargo clippy --workspace --all-targets -- -D warnings`
 — чисто. `scripts/scoped-test.sh` не догнан до конца — тот же известный
-сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого среза.
+сломанный гейт [BUG-805](BUG-805-FIXED.md), не регрессия этого среза.
 
 Не покрыто этим срезом (продолжение BUG-692): `<video src>`/`<audio src>`
 через `__lumen_video_load`/`__lumen_audio_load` (свои HttpClient-загрузчики
@@ -3204,7 +3204,7 @@ warnings` — чисто. `scripts/scoped-test.sh` — один красный �
 проводка переиспользует без изменений их собственной логики.
 
 Попутно найден и заведён отдельным дефектом (не в скоупе этого среза):
-[BUG-1067](BUG-1067-OPEN.md) — form GET-отправка ИЗ `<iframe>` с
+[BUG-1067](BUG-1067-FIXED.md) — form GET-отправка ИЗ `<iframe>` с
 `target="_top"`/`_parent` (`frame_form_submit.rs::frame_submit_navigate`,
 ветка `LinkTarget::Page`) резолвит `action` без апгрейда схемы и без UIR-
 заголовка вовсе, в отличие от соседней ветки `LinkTarget::Frame` той же

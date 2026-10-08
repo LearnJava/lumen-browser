@@ -665,9 +665,9 @@ fn canvas_css_resize_scales_pixels() {
                 var ctx = c.getContext('2d');
                 ctx.fillStyle = '#ff0000';
                 ctx.fillRect(0, 0, 4, 4);
-                window.__test_canvas_nid = c.__nid__;
+                globalThis.__test_canvas_nid = c.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_canvas_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     // First delivery at 4×4 — records baseline.
     rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
@@ -694,9 +694,9 @@ fn canvas_css_resize_fires_resize_event() {
                 c2.getContext('2d');
                 var _css_resize_fired = false;
                 c2.addEventListener('resize', function() { _css_resize_fired = true; });
-                window.__test_c2_nid = c2.__nid__;
+                globalThis.__test_c2_nid = c2.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_c2_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_c2_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     // First delivery at 10×10 — records baseline, no event.
     rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
@@ -719,9 +719,9 @@ fn canvas_css_resize_no_event_when_size_unchanged() {
                 c3.getContext('2d');
                 var _css_cnt = 0;
                 c3.addEventListener('resize', function() { _css_cnt++; });
-                window.__test_c3_nid = c3.__nid__;
+                globalThis.__test_c3_nid = c3.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_c3_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_c3_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
     rt.update_layout_rects(rect);
@@ -742,9 +742,9 @@ fn canvas_css_resize_not_triggered_without_context() {
                 // intentionally no getContext('2d')
                 var _no_ctx_fired = false;
                 c4.addEventListener('resize', function() { _no_ctx_fired = true; });
-                window.__test_c4_nid = c4.__nid__;
+                globalThis.__test_c4_nid = c4.__nid__;
             "#).unwrap();
-    let nid_val = rt.eval("window.__test_c4_nid").unwrap();
+    let nid_val = rt.eval("globalThis.__test_c4_nid").unwrap();
     let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
     rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
     rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
@@ -1506,6 +1506,26 @@ fn bug591_dynamic_script_runtime_exception_fires_window_error() {
     assert_eq!(result, lumen_core::JsValue::String("dyn-boom".to_string()));
 }
 
+/// BUG-1049: a DOM-inserted classic script is a real Script, so its top-level
+/// `const`/`let`/`class` land in the global lexical environment and stay visible
+/// to later code (a module reads them as free variables), not only its `var`s.
+#[test]
+fn bug1049_dynamic_script_lexical_declarations_reach_global() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"var s = document.createElement('script');
+               s.textContent = 'const c1049 = 42; let l1049 = 7; class K1049 {} var v1049 = 1;';
+               document.body.appendChild(s);
+               [typeof c1049, typeof l1049, typeof K1049, typeof v1049].join()"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        lumen_core::JsValue::String("number,number,function,number".to_string())
+    );
+}
+
 /// `V8JsRuntime::eval_and_report` (`v8_runtime.rs`) is the Rust-side
 /// counterpart wired into `crates/shell/src/main.rs`'s initial classic
 /// `<script>` loop; `lineno` here comes from `v8::Message` (1-based), not
@@ -1775,7 +1795,8 @@ fn bug591_performance_observer_callback_exception_fires_window_error() {
                  window.addEventListener('error', function(e) { caught = e.message; }); \
                  var po = new PerformanceObserver(function() { throw new Error('po-boom'); }); \
                  po.observe({ entryTypes: ['mark'] }); \
-                 performance.mark('m1');",
+                 performance.mark('m1'); \
+                 _lumen_tick_timers();",
     )
     .unwrap();
     let result = rt.eval("caught").unwrap();

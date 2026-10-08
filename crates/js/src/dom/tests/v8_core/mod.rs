@@ -23,14 +23,15 @@ mod canvas_size_attributes;
 mod canvas_object_model;
 mod bug454_canvas_noise;
 mod selectors_canvas_window;
+mod bug923_factory_functions;
 
 /// V8 twin of [`super::runtime_with_dom`]: same fixture document, same
 /// `install_dom` argument list (the two signatures are identical), same
 /// `_LUMEN_EXTENSION_ACTIVE` pre-eval so `chrome.runtime` is present.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -54,7 +55,7 @@ fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::I
 /// (`pushState` resolves relative URLs against it).
 fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -404,7 +405,7 @@ fn dynamic_window_property_is_bare_reachable() {
     let rt = v8_runtime_with_dom(make_doc());
     let ok = rt
         .eval(
-            "window.__bug280_probe = function() { return 42; }; \
+            "globalThis.__bug280_probe = function() { return 42; }; \
                      typeof __bug280_probe === 'function' && __bug280_probe() === 42",
         )
         .unwrap();
@@ -879,6 +880,32 @@ fn dataset_maps_data_attributes_both_ways() {
     assert_eq!(same, lumen_core::JsValue::Bool(true));
 }
 
+/// GAP-FOCUSGROUP: `focusGroup` is a [SameObject, PutForwards=value]
+/// DOMTokenList with its own `supports()`, `focusGroupStart` a boolean
+/// reflection — both on SVG elements too (HTMLOrSVGOrMathMLElement mixin).
+#[test]
+fn focus_group_reflects_and_forwards() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var d = document.createElement('div'); \
+                     var fg = d.focusGroup; \
+                     d.focusGroup = 'toolbar wrap'; \
+                     var ok = fg instanceof DOMTokenList && d.focusGroup === fg \
+                       && d.getAttribute('focusgroup') === 'toolbar wrap' \
+                       && fg.supports('nomemory') && !fg.supports('vertical'); \
+                     d.focusGroupStart = true; \
+                     ok = ok && d.hasAttribute('focusgroupstart'); \
+                     d.focusGroupStart = false; \
+                     var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); \
+                     s.focusGroup.value = 'menu'; \
+                     ok && !d.hasAttribute('focusgroupstart') \
+                       && s.getAttribute('focusgroup') === 'menu'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 /// BUG-414: the WPT `dataset` tests assert `instanceof DOMStringMap`,
 /// and one of them asserts it for an SVG element — which used to hit
 /// `svg.rs`'s `get dataset() { return {}; }` stub instead.
@@ -957,6 +984,20 @@ fn detached_document_has_node_mutation_members() {
         )
         .unwrap();
     assert_eq!(throws, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1161: the children of a detached document answer `parentNode`,
+/// sibling links and `ownerDocument` with that document, not `null`/the page.
+#[test]
+fn detached_document_children_link_back_to_document() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "var d = document.implementation.createHTMLDocument('t');                      var root = d.documentElement;                      var c = d.createComment('x'); d.insertBefore(c, root);                      var pi = d.createProcessingInstruction('a', 'b'); d.appendChild(pi);                      var el = d.createElement('p');                      root.parentNode === d && c.parentNode === d && pi.parentNode === d                      && c.nextSibling === root && root.previousSibling === c                      && root.nextSibling === pi && pi.previousSibling === root                      && c.previousSibling === d.doctype && pi.nextSibling === null \
+                     && d.doctype.parentNode === d && d.doctype.nextSibling === c                      && root.ownerDocument === d && el.ownerDocument === d                      && root.parentElement === null && root.getRootNode() === d                      && d.parentNode === null && d.previousSibling === null                      && d.textContent === null                      && (d.removeChild(c), c.parentNode === null && root.previousSibling === d.doctype)                      && document.createElement('b').ownerDocument === document                      && document.body.ownerDocument === document",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
 /// BUG-415: `body` must be rooted at an HTML-namespace `html` element,
@@ -1051,11 +1092,8 @@ fn detached_document_body_setter() {
 /// whose first `doc.removeChild(...)` used to take 17 of its 24 failures
 /// with it. Each `assert_equals` of the original becomes one clause.
 ///
-/// The four subtests that put an element in a foreign namespace *and*
-/// expect it to stay distinguishable from the HTML one are omitted: the
-/// arena stores `Namespace` as a six-value enum, so
-/// `createElementNS('http://example.org/test', 'body')` is indistinguishable
-/// from `createElement('body')` — [BUG-830], a separate defect one layer down.
+/// The foreign-namespace subtests live in
+/// `create_element_ns_arbitrary_uri_stays_foreign` (BUG-830).
 #[test]
 fn detached_document_wpt_document_body_subtests() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -1105,6 +1143,16 @@ fn detached_document_wpt_document_body_subtests() {
                 b = d.createElement('body'); d.body = b; \
                 r.push(d.documentElement.firstChild.isSameNode(b) && d.body === null); \
                 r.indexOf(false)";
+    let first_failure = rt.eval(script).unwrap();
+    assert_eq!(first_failure, lumen_core::JsValue::Number(-1.0));
+}
+
+/// BUG-830: the four foreign-namespace subtests of WPT
+/// `Document.body.html`, plus the raw `createElementNS` symptom.
+#[test]
+fn create_element_ns_arbitrary_uri_stays_foreign() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = "                var NS = 'http://example.org/test';                 function mk() {                     var d = document.implementation.createHTMLDocument('');                     d.removeChild(d.documentElement);                     return d;                 }                 var r = []; var d, html, b, x;                 var e = document.createElementNS(NS, 'body');                 r.push(e.namespaceURI === NS && e.tagName === 'body' && e.localName === 'body');                 d = mk(); html = d.appendChild(d.createElementNS(NS, 'html'));                 html.appendChild(d.createElement('body')); r.push(d.body === null);                 d = mk(); html = d.appendChild(d.createElement('html'));                 x = html.appendChild(d.createElementNS(NS, 'body'));                 b = html.appendChild(d.createElement('body')); r.push(d.body.isSameNode(b));                 d = mk(); html = d.appendChild(d.createElement('html'));                 x = html.appendChild(d.createElementNS(NS, 'frameset'));                 b = html.appendChild(d.createElement('body')); r.push(d.body.isSameNode(b));                 r.indexOf(false)";
     let first_failure = rt.eval(script).unwrap();
     assert_eq!(first_failure, lumen_core::JsValue::Number(-1.0));
 }

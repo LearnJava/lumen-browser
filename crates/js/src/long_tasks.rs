@@ -60,6 +60,9 @@ const LONGTASK_SHIM: &str = r#"(function() {
       containerId: this.containerId, containerName: this.containerName
     };
   };
+  // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+  Object.defineProperty(TaskAttributionTiming.prototype, Symbol.toStringTag,
+    { value: 'TaskAttributionTiming', configurable: true });
   globalThis.TaskAttributionTiming = TaskAttributionTiming;
 
   // W3C Long Tasks API §3.1 — a single task that blocked the main thread for
@@ -86,6 +89,9 @@ const LONGTASK_SHIM: &str = r#"(function() {
       attribution: this.attribution.map(function(a) { return a.toJSON(); })
     };
   };
+  // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+  Object.defineProperty(PerformanceLongTaskTiming.prototype, Symbol.toStringTag,
+    { value: 'PerformanceLongTaskTiming', configurable: true });
   globalThis.PerformanceLongTaskTiming = PerformanceLongTaskTiming;
 
   // Called by the shell after any `eval_js` dispatch measured over the 50ms
@@ -93,7 +99,7 @@ const LONGTASK_SHIM: &str = r#"(function() {
   //
   //   start_ms    — task start (performance.now() equivalent)
   //   duration_ms — task duration; should be >= 50 to qualify
-  globalThis._lumen_deliver_longtask_entry = function(start_ms, duration_ms) {
+  __lumen_C._lumen_deliver_longtask_entry = function(start_ms, duration_ms) {
     var entry = new PerformanceLongTaskTiming({
       startTime: Number(start_ms),
       duration:  Number(duration_ms)

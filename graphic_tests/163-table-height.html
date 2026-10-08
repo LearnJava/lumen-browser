@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<!-- CSS 2.1 §17.5.3 / CSS Tables L3 §3.4 — `height` таблицы делится по строкам.
+     A: одна строка тянется на всю высоту, содержимое по центру (vertical-align: middle по
+     умолчанию) · B: две строки 30 и 90, излишек делится пропорционально высотам, содержимое
+     сверху · C: строка с заданной `height` не растёт, излишек берёт строка с `auto` ·
+     D: thead + tbody, ячейки top и bottom — группы сдвигаются и растут вместе со строками ·
+     E: ячейка с rowspan=2 дотягивается до низа второй растянутой строки · F: border-spacing
+     между растянутыми строками и `height` меньше содержимого (таблица не сжимается).
+     Только цветные боксы, без текста. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; }
+  table { width: 280px; border-spacing: 0; background: #e2e8f0; }
+  td { padding: 0; background: #bee3f8; }
+  td > div { width: 40px; background: #2b6cb0; }
+  .o { background: #ed8936; }
+  .g { background: #38a169; }
+
+  .a table { height: 260px; }
+  .a td > div { height: 50px; }
+  .b table { height: 260px; }
+  .b td { vertical-align: top; }
+  .b tr:nth-child(1) div { height: 30px; }
+  .b tr:nth-child(2) div { height: 90px; }
+  .c table { height: 260px; }
+  .c tr:nth-child(1) { height: 60px; }
+  .c td > div { height: 20px; }
+  .d table { height: 260px; }
+  .d thead td { vertical-align: top; }
+  .d tbody td { vertical-align: bottom; }
+  .d td > div { height: 40px; }
+  .e table { height: 260px; }
+  .e td[rowspan] { vertical-align: top; background: #fbd38d; }
+  .e td > div { height: 30px; }
+  .f table { height: 100px; border-spacing: 8px; }
+  .f td > div { height: 70px; }
+  .f tr:nth-child(2) td > div { height: 60px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell a"><table><tr><td><div></div></td><td><div class="o"></div></td></tr></table></div>
+  <div class="cell b"><table><tr><td><div></div></td></tr><tr><td><div class="o"></div></td></tr></table></div>
+  <div class="cell c"><table><tr><td><div></div></td></tr><tr><td><div class="g"></div></td></tr></table></div>
+  <div class="cell d"><table><thead><tr><td><div></div></td></tr></thead><tbody><tr><td><div class="o"></div></td></tr></tbody></table></div>
+  <div class="cell e"><table><tr><td rowspan="2"><div class="g"></div></td><td><div></div></td></tr><tr><td><div class="o"></div></td></tr></table></div>
+  <div class="cell f"><table><tr><td><div></div></td></tr><tr><td><div class="o"></div></td></tr></table></div>
+</div>
+</body>
+</html>

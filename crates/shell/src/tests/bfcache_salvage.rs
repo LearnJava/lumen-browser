@@ -184,6 +184,7 @@ fn s22_pipeline_cycles(restore: bool) -> (u32, u32, u64) {
                     prev_styles: std::mem::take(&mut prev_cascade_styles),
                     dirty_roots,
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    shallow_roots: Default::default(), point_roots: Default::default(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 lumen_layout::box_tree::set_incremental_box_build(true);

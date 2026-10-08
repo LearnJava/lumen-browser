@@ -103,3 +103,40 @@
         assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255),
             "later same-specificity rule must win");
     }
+
+    /// BUG-935 срез 90: `compute_pseudo_element_style` reads candidates from the
+    /// pseudo-subject indices (top level, active `@media`, active `@supports`),
+    /// which carry the general index's rule numbering. Cascade order across the
+    /// containers (top level < `@media` < `@supports`) and the activity of each
+    /// block must come out as before, and blocks without a pseudo rule must not
+    /// disturb the numbering of the ones after them.
+    #[test]
+    fn pseudo_probe_keeps_cascade_order_across_containers() {
+        let doc = lumen_html_parser::parse("<p class=x>t</p><span>s</span>");
+        let body = doc.body().expect("body");
+        let p = doc.get(body).children[0];
+        let span = doc.get(body).children[1];
+        let parent = ComputedStyle::root();
+        let content_of = |css: &str, node: NodeId, pseudo: &str| {
+            let sheet = lumen_css_parser::parse(css);
+            compute_pseudo_element_style(&doc, node, pseudo, &sheet, &parent, VP, false)
+                .map(|s| format!("{:?}", s.content))
+        };
+        let blocks = "@media (min-width: 100px) { .nope { margin: 0 } } \
+                      p::before { content: \"top\" } \
+                      @media (max-width: 10px) { p::before { content: \"inactive\" } } \
+                      @media (min-width: 100px) { .nope2 { margin: 0 } p::before { content: \"media\" } }";
+        let c = content_of(blocks, p, "before").expect("::before must match");
+        assert!(c.contains("media") && !c.contains("inactive") && !c.contains("top"), "@media beats top level: {c}");
+        let c = content_of(&format!("{blocks} @supports (display: grid) {{ p::before {{ content: \"sup\" }} }}"), p, "before")
+            .expect("::before must match");
+        assert!(c.contains("sup"), "@supports beats @media: {c}");
+        let c = content_of("p::before { content: \"a\" } .x::before { content: \"b\" }", p, "before").expect("match");
+        assert!(c.contains('b'), "class rule outranks type rule: {c}");
+        assert!(content_of(blocks, span, "before").is_none(), "<span> matches no rule");
+        assert!(content_of(blocks, p, "after").is_none(), "no ::after rule at all");
+        assert!(
+            content_of("p { color: red } p::after { content: \"z\" }", p, "after").is_some(),
+            "a plain rule before the pseudo rule must not shift it out of the index",
+        );
+    }

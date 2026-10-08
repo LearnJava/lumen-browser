@@ -63,35 +63,94 @@ struct RawResult {
     modified_source: *const v8::String,
 }
 
+/// The machine-level shape of the callback V8 calls — it differs per ABI,
+/// because the C++ type returns a 16-byte struct by value.
+///
+/// * MSVC x64: a non-trivial aggregate (the `= false` default member
+///   initializer) comes back through a hidden result pointer passed as the
+///   first argument — confirmed by `dumpbin` in срез 6, see
+///   `cpp/codegen_callback.cc`.
+/// * System V x86-64 (Linux/macOS) and AArch64: the Itanium C++ ABI only
+///   demotes a type to memory return when it is non-trivial *for the purpose
+///   of calls* (a non-trivial copy/move constructor or destructor). A default
+///   member initializer makes only the default constructor non-trivial, so
+///   `{bool, pointer}` is returned in RAX:RDX (x0:x1) and V8 passes the three
+///   real arguments in the first three registers. The MSVC shape there read
+///   `context` as `out`, `source` as `context` and so on, and the first
+///   `eval` wrote through a garbage pointer — SIGSEGV in every Linux
+///   process that ran `eval`/`new Function` (the `snapshot_cpu` driver test,
+///   `lumen-js` `tt_codegen_*` tests).
+///
+/// A Rust `extern "C"` function returning the `#[repr(C)]` [`RawResult`] by
+/// value produces exactly the System V shape.
+#[cfg(all(windows, target_env = "msvc"))]
+type RawCallback = unsafe extern "C" fn(
+    *mut RawResult,
+    v8::Local<v8::Context>,
+    v8::Local<v8::Value>,
+    bool,
+);
+#[cfg(not(all(windows, target_env = "msvc")))]
+type RawCallback =
+    unsafe extern "C" fn(v8::Local<v8::Context>, v8::Local<v8::Value>, bool) -> RawResult;
+
 unsafe extern "C" {
     /// `cpp/codegen_callback.cc`'s trampoline for
     /// `v8::Isolate::SetModifyCodeGenerationFromStringsCallback`. Takes the
     /// same [`v8::UnsafeRawIsolatePtr`] every other native-isolate call in
     /// this crate uses (`html_all.rs`, `promise_reject.rs`) — `&*isolate`
     /// is the wrapper's `Deref` target, not the raw pointer V8's C++ API
-    /// wants.
+    /// wants. The trampoline stores the pointer verbatim, so the callback's
+    /// ABI shape is decided entirely by [`RawCallback`].
     fn lumen_v8__Isolate__SetModifyCodeGenerationFromStringsCallback(
         this: v8::UnsafeRawIsolatePtr,
-        callback: unsafe extern "C" fn(
-            *mut RawResult,
-            v8::Local<v8::Context>,
-            v8::Local<v8::Value>,
-            bool,
-        ),
+        callback: RawCallback,
     );
 }
 
-/// The raw ABI-shape callback V8 actually calls. Builds a full scope from the
-/// bare `Local<Context>` V8 hands us — the same idiom
-/// `promise_reject.rs::on_promise_reject` uses for the same reason (V8
-/// invokes this from deep inside its own C++, with no existing `HandleScope`
-/// of ours on the stack).
+/// MSVC x64 entry point: V8 passes the hidden result buffer first.
+#[cfg(all(windows, target_env = "msvc"))]
 unsafe extern "C" fn modify_code_generation_from_strings(
     out: *mut RawResult,
     context: v8::Local<v8::Context>,
     source: v8::Local<v8::Value>,
     _is_code_like: bool,
 ) {
+    // SAFETY: V8 calls this only from inside a live isolate on this thread,
+    // with a HandleScope active (see `codegen_result`).
+    let result = unsafe { codegen_result(context, source) };
+    // SAFETY: `out` is the hidden result-buffer pointer V8's caller
+    // allocated on its own stack and passes uninitialised — writing the
+    // `RawResult` here is exactly what `cpp/codegen_callback.cc`'s C++-level
+    // by-value-return signature expects the callee to do, matching MSVC
+    // x64's "return via hidden pointer" convention confirmed by dumpbin in
+    // срез 6.
+    unsafe { std::ptr::write(out, result) };
+}
+
+/// System V / AArch64 entry point: the result comes back in registers.
+#[cfg(not(all(windows, target_env = "msvc")))]
+unsafe extern "C" fn modify_code_generation_from_strings(
+    context: v8::Local<v8::Context>,
+    source: v8::Local<v8::Value>,
+    _is_code_like: bool,
+) -> RawResult {
+    // SAFETY: as in the MSVC entry point above.
+    unsafe { codegen_result(context, source) }
+}
+
+/// The ABI-independent body. Builds a full scope from the bare
+/// `Local<Context>` V8 hands us — the same idiom
+/// `promise_reject.rs::on_promise_reject` uses for the same reason (V8
+/// invokes this from deep inside its own C++, with no existing `HandleScope`
+/// of ours on the stack).
+///
+/// # Safety
+/// Must only be called from V8's codegen callback, on the isolate's thread.
+unsafe fn codegen_result(
+    context: v8::Local<v8::Context>,
+    source: v8::Local<v8::Value>,
+) -> RawResult {
     // Deliberately *not* `v8::scope!(let scope, scope)` on top of this: V8
     // calls this hook synchronously from deep inside `Compiler::
     // ValidateDynamicCompilationSource`, with a real `HandleScope` already
@@ -132,7 +191,12 @@ unsafe extern "C" fn modify_code_generation_from_strings(
         let Some(key) = v8::String::new(scope, "_lumen_tt_get_compliant_script_for_codegen") else {
             return Outcome::NoShim;
         };
-        let Some(func) = global
+        let holder = crate::internal_globals::holder_for(
+            scope,
+            ctx,
+            "_lumen_tt_get_compliant_script_for_codegen",
+        );
+        let Some(func) = holder
             .get(scope, key.into())
             .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
         else {
@@ -184,20 +248,9 @@ unsafe extern "C" fn modify_code_generation_from_strings(
         }
     };
 
-    // SAFETY: `out` is the hidden result-buffer pointer V8's caller
-    // allocated on its own stack and passes uninitialised — writing the
-    // `RawResult` here is exactly what `cpp/codegen_callback.cc`'s C++-level
-    // by-value-return signature expects the callee to do, matching MSVC
-    // x64's "return via hidden pointer" convention confirmed by dumpbin in
-    // срез 6.
-    unsafe {
-        std::ptr::write(
-            out,
-            RawResult {
-                codegen_allowed,
-                modified_source,
-            },
-        );
+    RawResult {
+        codegen_allowed,
+        modified_source,
     }
 }
 

@@ -1,16 +1,27 @@
 
-// ── PerformanceObserver (Performance Timeline L2 §5–6) ───────────────────────
-// observe({entryTypes}) or observe({type, buffered}) per §6.2.2.
-// disconnect() → stops observing. Callback: fn(list, observer).
+// ── PerformanceObserver (Performance Timeline L2 §4–5) ───────────────────────
+// The spec's model, not a convenience filter (BUG-648):
+// * each observer has an *observer type* ('undefined' → 'single'/'multiple'),
+//   an *options list* and an *observer buffer* of entries not yet delivered;
+// * `_perf_observer_notify` is §5.1 «queue a PerformanceEntry»: it only
+//   appends to the buffers of interested observers and queues ONE
+//   PerformanceObserver task (§5.3) per global — the callback never runs inside
+//   `mark()`/`measure()`/`observe()`, so `disconnect()` right after `mark()`
+//   still cancels the delivery and a page may assign the function its callback
+//   calls after `observe({buffered: true})` (the web-vitals shape);
+// * `takeRecords()` drains the observer buffer, which the task drains too, so
+//   an entry reaches a page exactly once.
 var _perf_observers = [];
+// §2 «performance observer task queued flag».
+var _perf_po_task_queued = false;
 
 // Single source of truth for supportedEntryTypes AND observe()'s admission
 // check (BUG-354): only types an entry constructor actually produces belong
-// here, so the two cannot drift apart again. 'element'/'event'/'first-input'/
-// 'soft-navigation' are intentionally excluded — no PerformanceEntry of those
-// types is ever produced on the live document (soft-navigation has a
-// PerformanceSoftNavigationEntry class but nothing calls its delivery hook
-// outside unit tests). 'taskattribution' (LONGTASK-1) is excluded on purpose
+// here, so the two cannot drift apart again. 'element'/'event'/'first-input'
+// are intentionally excluded — no PerformanceEntry of those types is ever
+// produced on the live document. 'soft-navigation' is in since GAP-SOFTNAV-S1
+// (the `_sn_*` block at the end of this file feeds `_lumen_deliver_soft_nav`).
+// 'taskattribution' (LONGTASK-1) is excluded on purpose
 // too — spec-visible only via `PerformanceLongTaskTiming.attribution`, never
 // independently observable (`longtask-timing/supported-longtask-types.window.js`).
 // 'longtask'/'long-animation-frame' (LONGTASK-1): the shell times every
@@ -18,137 +29,306 @@ var _perf_observers = [];
 // `crates/shell/src/persistent_js.rs`/`relayout.rs`.
 var _PERF_SUPPORTED_ENTRY_TYPES = ['largest-contentful-paint', 'layout-shift',
     'long-animation-frame', 'longtask', 'mark', 'measure', 'navigation',
-    'paint', 'resource'];
+    'paint', 'resource', 'soft-navigation'];
 
-function PerformanceObserver(callback) {
-    if (typeof callback !== 'function') throw new TypeError('PerformanceObserver: callback must be a function');
-    this._cb      = callback;
-    this._types   = [];
-    this._buffered = false;
-    // Performance Timeline L2 §6.2 «requires dropped entries»: raised by every
-    // observe() call, lowered by the first callback that reports the count.
-    this._requiresDropped = false;
+function _perf_po_warn(msg) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('PerformanceObserver: ' + msg);
 }
-// Performance Timeline L2 §6.2.2: supportedEntryTypes static accessor.
-Object.defineProperty(PerformanceObserver, 'supportedEntryTypes', {
-    get: function() {
-        return _PERF_SUPPORTED_ENTRY_TYPES.slice();
-    },
-    configurable: true,
+
+// Function *expressions* under internal names, published below as
+// non-enumerable globals (WebIDL §3.7.1) — a top-level declaration would land
+// on the global object enumerable and non-configurable (idlharness), the same
+// reason as `IdleDeadline` further down.
+var _perf_po_iface = function PerformanceObserver(callback) {
+    if (!new.target) throw new TypeError("Failed to construct 'PerformanceObserver': Please use the 'new' operator");
+    if (typeof callback !== 'function') throw new TypeError('PerformanceObserver: callback must be a function');
+    this._cb = callback;
+    // §4 observer type / options list / observer buffer.
+    this._observerType = 'undefined';
+    this._options = [];
+    this._buffer = [];
+    // §4 «requires dropped entries»: raised by every observe() call, lowered
+    // by the first callback that reports the count.
+    this._requiresDropped = false;
+    // A buffered observe() whose only news is a dropped count (see observe()).
+    this._forceDeliver = false;
+};
+Object.defineProperty(globalThis, 'PerformanceObserver', {
+    value: _perf_po_iface, writable: true, enumerable: false, configurable: true,
 });
-PerformanceObserver.prototype.observe = function(opts) {
-    var types;
-    var buffered;
-    if (opts && typeof opts.type === 'string') {
-        // §6.2.2 single-type form: observe({type, buffered})
-        // Per spec step 6: an unsupported single type aborts observe() entirely.
-        if (_PERF_SUPPORTED_ENTRY_TYPES.indexOf(opts.type) === -1) {
-            if (typeof console !== 'undefined' && console.warn) {
-                console.warn('PerformanceObserver: unsupported entryType ' + opts.type);
-            }
-            return;
+// Performance Timeline L2 §4.5: `[SameObject] static readonly attribute
+// FrozenArray<DOMString> supportedEntryTypes` — one frozen array, the same
+// object on every read (`supportedEntryTypes.any.js` «caches result»).
+var _PERF_SUPPORTED_ENTRY_TYPES_FROZEN = Object.freeze(_PERF_SUPPORTED_ENTRY_TYPES.slice());
+var _perf_po_supported_get = function() { return _PERF_SUPPORTED_ENTRY_TYPES_FROZEN; };
+Object.defineProperty(_perf_po_supported_get, 'name', { value: 'get supportedEntryTypes' });
+Object.defineProperty(PerformanceObserver, 'supportedEntryTypes', {
+    get: _perf_po_supported_get, enumerable: true, configurable: true,
+});
+
+// The entry types an observer's options list subscribes it to.
+function _perf_po_types(obs) {
+    var out = [];
+    for (var i = 0; i < obs._options.length; i++) {
+        var o = obs._options[i];
+        var list = o.entryTypes ? o.entryTypes : [o.type];
+        for (var j = 0; j < list.length; j++) {
+            if (out.indexOf(list[j]) === -1) out.push(list[j]);
         }
-        types   = [opts.type];
-        buffered = !!(opts.buffered);
-    } else {
-        // §6.2.2 multi-type form: observe({entryTypes[, buffered]})
-        // Spec disallows buffered here, but we accept it for compatibility.
-        // Unsupported types are dropped individually, not fatal to the call.
-        var requested = (opts && Array.isArray(opts.entryTypes)) ? opts.entryTypes : [];
-        types = [];
-        for (var r = 0; r < requested.length; r++) {
-            if (_PERF_SUPPORTED_ENTRY_TYPES.indexOf(requested[r]) === -1) {
-                if (typeof console !== 'undefined' && console.warn) {
-                    console.warn('PerformanceObserver: unsupported entryType ' + requested[r]);
-                }
-                continue;
-            }
-            types.push(requested[r]);
+    }
+    return out;
+}
+
+// WebIDL conversion of the `PerformanceObserverInit` dictionary: members in
+// lexicographic order, `entryTypes` as `sequence<DOMString>` (a string is not
+// an object and so not a sequence — `observe({entryTypes: 'mark'})` is a
+// TypeError, per `po-observe.any.js`).
+function _perf_po_convert_init(opts) {
+    if (opts === undefined || opts === null) return {};
+    if (typeof opts !== 'object' && typeof opts !== 'function') {
+        throw new TypeError("Failed to execute 'observe' on 'PerformanceObserver': The provided value is not of type 'PerformanceObserverInit'.");
+    }
+    var out = {};
+    var b = opts.buffered;
+    if (b !== undefined) out.buffered = !!b;
+    var et = opts.entryTypes;
+    if (et !== undefined) {
+        if ((typeof et !== 'object' && typeof et !== 'function') || et === null
+            || typeof et[Symbol.iterator] !== 'function') {
+            throw new TypeError("Failed to execute 'observe' on 'PerformanceObserver': The provided value cannot be converted to a sequence.");
         }
-        buffered = !!(opts && opts.buffered);
+        var seq = [];
+        for (var it = et[Symbol.iterator](), step = it.next(); !step.done; step = it.next()) {
+            seq.push(String(step.value));
+        }
+        out.entryTypes = seq;
     }
-    // Merge into existing subscribed types so repeated observe() calls accumulate.
-    for (var i = 0; i < types.length; i++) {
-        if (this._types.indexOf(types[i]) === -1) this._types.push(types[i]);
+    var t = opts.type;
+    if (t !== undefined) out.type = String(t);
+    return out;
+}
+
+// §4.2 observe().
+// Brand check shared by the three operations (WebIDL «this is not a
+// platform object implementing the interface» → TypeError).
+function _perf_po_check(obj) {
+    if (!(obj instanceof _perf_po_iface)) throw new TypeError('Illegal invocation');
+}
+PerformanceObserver.prototype.observe = function observe() {
+    _perf_po_check(this);
+    var opts = _perf_po_convert_init(arguments[0]);
+    var hasEntryTypes = opts.entryTypes !== undefined;
+    var hasType = opts.type !== undefined;
+    if (!hasEntryTypes && !hasType) {
+        throw new TypeError("Failed to execute 'observe' on 'PerformanceObserver': An observe() call must include either entryTypes or type arguments.");
     }
-    if (buffered) this._buffered = true;
-    // §6.2 step «set this's requires dropped entries to true» — every observe()
+    // The spec says «entryTypes and any other member» — but `buffered` next to
+    // `entryTypes` is ignored with a warning in every engine, and WPT
+    // (`buffered-flag-with-entryTypes-observer.tentative.any.js`) asserts
+    // exactly that; only `type` together with `entryTypes` throws.
+    if (hasEntryTypes && hasType) {
+        throw new TypeError("Failed to execute 'observe' on 'PerformanceObserver': An observe() call must not include both entryTypes and type arguments.");
+    }
+    if (this._observerType === 'undefined') {
+        this._observerType = hasEntryTypes ? 'multiple' : 'single';
+    }
+    if (this._observerType === 'single' && hasEntryTypes) {
+        throw new DOMException("Failed to execute 'observe' on 'PerformanceObserver': This observer has performed observe({type:...}, therefore it cannot perform observe({entryTypes:...})", 'InvalidModificationError');
+    }
+    if (this._observerType === 'multiple' && hasType) {
+        throw new DOMException("Failed to execute 'observe' on 'PerformanceObserver': This PerformanceObserver has performed observe({entryTypes:...}, therefore it cannot perform observe({type:...})", 'InvalidModificationError');
+    }
+    // §4.2 «set this's requires dropped entries to true» — every observe()
     // call, not only a buffered one: `droppedentriescount.any.js` re-arms an
     // already-delivered observer with a second observe() and asserts the count
     // is reported again.
     this._requiresDropped = true;
-    // De-duplicate in global list.
-    var idx = _perf_observers.indexOf(this);
-    if (idx === -1) _perf_observers.push(this);
-    // If buffered: deliver already-existing matching entries immediately.
-    // Delivered even when the buffer holds nothing, provided this observer has
-    // a dropped count to report — an observer armed on `resource` after the
-    // buffer overflowed learns the count and nothing else, which is exactly the
-    // «Dropped entries counted even if observer was not registered at the time»
-    // case of the WPT file above.
-    if (buffered && types.length > 0) {
-        var buf = _perf_entries.filter(function(e) {
-            return types.indexOf(e.entryType) !== -1;
-        });
-        if (buf.length > 0 || _perf_dropped_count_for(this) > 0) {
-            _perf_deliver_to_observer(this, buf);
+    var registered = _perf_observers.indexOf(this) !== -1;
+    if (this._observerType === 'multiple') {
+        var types = [];
+        for (var r = 0; r < opts.entryTypes.length; r++) {
+            var et = opts.entryTypes[r];
+            if (_PERF_SUPPORTED_ENTRY_TYPES.indexOf(et) === -1) {
+                _perf_po_warn('unsupported entryType ' + et);
+                continue;
+            }
+            if (types.indexOf(et) === -1) types.push(et);
         }
+        if (opts.buffered) _perf_po_warn('the buffered flag is ignored together with entryTypes');
+        if (types.length === 0) {
+            _perf_po_warn('no supported entryTypes, observe() aborted');
+            return;
+        }
+        // Repeated calls replace, never stack (§4.2 note).
+        this._options = [{ entryTypes: types }];
+        if (!registered) _perf_observers.push(this);
+        return;
+    }
+    // Single-type form: unsupported type aborts the call.
+    if (_PERF_SUPPORTED_ENTRY_TYPES.indexOf(opts.type) === -1) {
+        _perf_po_warn('unsupported entryType ' + opts.type);
+        return;
+    }
+    var item = { type: opts.type, buffered: !!opts.buffered };
+    var replaced = false;
+    for (var i = 0; i < this._options.length; i++) {
+        if (this._options[i].type === item.type) { this._options[i] = item; replaced = true; break; }
+    }
+    if (!replaced) this._options.push(item);
+    if (!registered) _perf_observers.push(this);
+    if (item.buffered) {
+        for (var k = 0; k < _perf_entries.length; k++) {
+            if (_perf_entries[k].entryType === item.type) this._buffer.push(_perf_entries[k]);
+        }
+        // An observer armed on `resource` after the buffer overflowed learns
+        // the count even with nothing buffered — the «Dropped entries counted
+        // even if observer was not registered at the time» case of
+        // `droppedentriescount.any.js`.
+        if (_perf_dropped_count_for(this) > 0) this._forceDeliver = true;
+        _perf_queue_observer_task();
     }
 };
-PerformanceObserver.prototype.disconnect = function() {
+// §4.4 disconnect(). The observer type survives: re-observing in the other
+// form is still an InvalidModificationError.
+PerformanceObserver.prototype.disconnect = function disconnect() {
+    _perf_po_check(this);
     var idx = _perf_observers.indexOf(this);
     if (idx !== -1) _perf_observers.splice(idx, 1);
+    this._buffer = [];
+    this._options = [];
+    this._forceDeliver = false;
 };
-PerformanceObserver.prototype.takeRecords = function() {
-    var entries = [];
-    for (var i = 0; i < this._types.length; i++) {
-        var type = this._types[i];
-        var matching = _perf_entries.filter(function(e) { return e.entryType === type; });
-        entries = entries.concat(matching);
-    }
+// §4.3 takeRecords(): a copy of the observer buffer, which is then emptied.
+PerformanceObserver.prototype.takeRecords = function takeRecords() {
+    _perf_po_check(this);
+    var entries = this._buffer;
+    this._buffer = [];
     return entries;
 };
 
-// Performance Timeline L2 §6.2.1: the number of entries dropped for the types
+// Performance Timeline L2 §4 «dropped entries count» summed over the types
 // this observer subscribes to. `resource` is the only bounded buffer in the
 // engine, so it is the only type that can contribute — a type with no limit
 // never drops anything, and reporting a non-zero count for it would be a lie
 // the page cannot check.
 function _perf_dropped_count_for(obs) {
     var n = 0;
-    if (obs._types.indexOf('resource') !== -1) n += _perf_rt_dropped;
+    if (_perf_po_types(obs).indexOf('resource') !== -1) n += _perf_rt_dropped;
     return n;
 }
 
-// Deliver a batch of entries to a single observer (wraps in EntryList).
-//
-// The callback takes THREE arguments (§6.2.1 `PerformanceObserverCallback`):
-// the entry list, the observer, and a `PerformanceObserverCallbackOptions`
-// whose `droppedEntriesCount` is present only while the observer's «requires
-// dropped entries» flag is up. Delivering two arguments made every read of
-// `options.droppedEntriesCount` throw a TypeError inside the callback — which
-// the surrounding catch then swallowed (BUG-840).
+// §5.5 «filter buffer by name and type»: the result is sorted by startTime.
+// `Array.prototype.sort` is stable, so equal timestamps keep arrival order.
+function _perf_po_filter(entries, name, type) {
+    var out = [];
+    for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (type !== null && e.entryType !== type) continue;
+        if (name !== null && e.name !== name) continue;
+        out.push(e);
+    }
+    out.sort(function(a, b) { return a.startTime - b.startTime; });
+    return out;
+}
+
+// §4.2.2 `interface PerformanceObserverEntryList` — the first callback
+// argument. No IDL constructor; the list is built off the prototype.
+var _perf_po_entry_list_iface = function PerformanceObserverEntryList() { throw new TypeError('Illegal constructor'); };
+Object.defineProperty(globalThis, 'PerformanceObserverEntryList', {
+    value: _perf_po_entry_list_iface, writable: true, enumerable: false, configurable: true,
+});
+function _perf_po_list_check(obj) {
+    if (!(obj instanceof _perf_po_entry_list_iface)) throw new TypeError('Illegal invocation');
+}
+PerformanceObserverEntryList.prototype.getEntries = function getEntries() {
+    _perf_po_list_check(this);
+    return _perf_po_filter(this._entries, null, null);
+};
+PerformanceObserverEntryList.prototype.getEntriesByType = function getEntriesByType(type) {
+    _perf_po_list_check(this);
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'getEntriesByType' on 'PerformanceObserverEntryList': 1 argument required, but only 0 present.");
+    return _perf_po_filter(this._entries, null, String(type));
+};
+PerformanceObserverEntryList.prototype.getEntriesByName = function getEntriesByName(name) {
+    _perf_po_list_check(this);
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'getEntriesByName' on 'PerformanceObserverEntryList': 1 argument required, but only 0 present.");
+    var type = arguments[1];
+    return _perf_po_filter(this._entries, String(name), type === undefined ? null : String(type));
+};
+function _perf_po_make_entry_list(entries) {
+    var list = Object.create(PerformanceObserverEntryList.prototype);
+    Object.defineProperty(list, '_entries', { value: entries, writable: false, enumerable: false, configurable: false });
+    return list;
+}
+
+// WebIDL interface-object shape for both interfaces (§3.7): the prototype is
+// non-writable, members are enumerable, the class string names the
+// interface.
+[[PerformanceObserver, 'PerformanceObserver'],
+ [PerformanceObserverEntryList, 'PerformanceObserverEntryList']].forEach(function(pair) {
+    var iface = pair[0];
+    var proto = iface.prototype;
+    Object.keys(proto).forEach(function(k) {
+        Object.defineProperty(proto, k, { enumerable: true, writable: true, configurable: true });
+    });
+    Object.defineProperty(proto, Symbol.toStringTag, { value: pair[1], configurable: true });
+    Object.defineProperty(iface, 'prototype', { writable: false, enumerable: false, configurable: false });
+});
+
+// Invoke one observer's callback with its drained entries. The callback takes
+// THREE arguments (§4 `PerformanceObserverCallback`): the entry list, the
+// observer, and a `PerformanceObserverCallbackOptions` whose
+// `droppedEntriesCount` is present only while the observer's «requires
+// dropped entries» flag is up (BUG-840). `this` is the observer (§5.3
+// «invoke … with po as the callback this value»).
 function _perf_deliver_to_observer(obs, entries) {
-    var list = {
-        getEntries:        function() { return entries.slice(); },
-        getEntriesByName:  function(n, t) { return entries.filter(function(e) { return e.name === n && (!t || e.entryType === t); }); },
-        getEntriesByType:  function(t) { return entries.filter(function(e) { return e.entryType === t; }); },
-    };
+    var list = _perf_po_make_entry_list(entries);
     var options = {};
     if (obs._requiresDropped) {
         options.droppedEntriesCount = _perf_dropped_count_for(obs);
         obs._requiresDropped = false;
     }
-    try { obs._cb(list, obs, options); } catch(e) { _lumen_report_exception(e); }
+    try { obs._cb.call(obs, list, obs, options); } catch(e) { _lumen_report_exception(e); }
 }
 
-// Called internally when new entries are created (mark/measure/paint).
+// §5.3 «queue the PerformanceObserver task»: at most one pending per global.
+function _perf_queue_observer_task() {
+    if (_perf_po_task_queued) return;
+    _perf_po_task_queued = true;
+    _perf_queue_task(_perf_run_observer_task);
+}
+function _perf_run_observer_task() {
+    _perf_po_task_queued = false;
+    var notifyList = _perf_observers.slice();
+    for (var i = 0; i < notifyList.length; i++) {
+        var po = notifyList[i];
+        var entries = po._buffer;
+        // The spec text says «return» here; every engine continues with the
+        // next observer, and an early return would starve every observer
+        // registered after an idle one.
+        if (entries.length === 0 && !po._forceDeliver) continue;
+        po._buffer = [];
+        po._forceDeliver = false;
+        _perf_deliver_to_observer(po, entries);
+    }
+}
+
+// §5.1 «queue a PerformanceEntry», observer half — called for every new entry
+// (mark/measure/paint/LCP/layout-shift/resource/navigation/longtask/LoAF). The
+// caller has already put the entry into the performance entry buffer.
 function _perf_observer_notify(entries) {
+    var any = false;
     for (var i = 0; i < _perf_observers.length; i++) {
         var obs = _perf_observers[i];
-        var matching = entries.filter(function(e) { return obs._types.indexOf(e.entryType) !== -1; });
-        if (matching.length > 0) _perf_deliver_to_observer(obs, matching);
+        var types = _perf_po_types(obs);
+        for (var j = 0; j < entries.length; j++) {
+            if (types.indexOf(entries[j].entryType) !== -1) {
+                obs._buffer.push(entries[j]);
+                any = true;
+            }
+        }
     }
+    if (any) _perf_queue_observer_task();
 }
 
 // Paint Timing `interface PerformancePaintTiming : PerformanceEntry` —
@@ -157,9 +337,7 @@ function _perf_observer_notify(entries) {
 // declares no constructor, so script-side `new` throws; the shell's entries
 // are built off the prototype instead. Fields stay own properties, as on every
 // other entry type in this shim; `toJSON` is the WebIDL `[Default]` one of
-// PerformanceEntry. PerformanceEntry itself is not exposed: mark/measure/
-// resource entries are still plain objects, and a global that `instanceof`
-// answered false for would lie about them.
+// PerformanceEntry. PerformanceEntry is the shared base (BUG-1189).
 function PerformancePaintTiming() { throw new TypeError('Illegal constructor'); }
 PerformancePaintTiming.prototype.toJSON = function() {
     return { name: this.name, entryType: this.entryType, startTime: this.startTime,
@@ -170,29 +348,44 @@ PerformancePaintTiming.prototype.toJSON = function() {
 // name = 'first-paint' | 'first-contentful-paint', start_ms = DOMHighResTimeStamp.
 function _lumen_deliver_paint_entry(name, start_ms) {
     var entry = Object.create(PerformancePaintTiming.prototype);
-    entry.entryType = 'paint';
-    entry.name = String(name);
-    entry.startTime = start_ms;
-    entry.duration = 0;
+    _perf_put(entry, 'entryType', 'paint');
+    _perf_put(entry, 'name', String(name));
+    _perf_put(entry, 'startTime', start_ms);
+    _perf_put(entry, 'duration', 0);
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }
+
+// Largest Contentful Paint §2 `interface LargestContentfulPaint :
+// PerformanceEntry` (BUG-678) — the interface object every LCP and
+// soft-navigation WPT feature-detects (`assert_implements(window.
+// LargestContentfulPaint)`). Same shape as PerformancePaintTiming above: no IDL
+// constructor, entries are built off the prototype, fields stay own
+// properties; `[Default] toJSON` serialises the IDL attributes.
+function LargestContentfulPaint() { throw new TypeError('Illegal constructor'); }
+LargestContentfulPaint.prototype.toJSON = function() {
+    return { name: this.name, entryType: this.entryType, startTime: this.startTime,
+             duration: this.duration, renderTime: this.renderTime,
+             loadTime: this.loadTime, size: this.size, id: this.id, url: this.url,
+             element: this.element };
+};
 
 // Called by the shell after rendering a large content element (LCP).
 // element_id = NID of the element; size = area in pixels (>500px²).
 // start_ms = DOMHighResTimeStamp; render_time_ms = when rendering completed.
 function _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) {
-    var entry = {
-        entryType: 'largest-contentful-paint',
-        name: 'largest-contentful-paint',
-        startTime: start_ms,
-        duration: render_time_ms - start_ms,
-        size: size,
-        element: element_id >= 0 ? _lumen_make_element(element_id) : null,
-        url: '',
-        id: '',
-        activationStart: 0,
-    };
+    var entry = Object.create(LargestContentfulPaint.prototype);
+    _perf_put(entry, 'entryType', 'largest-contentful-paint');
+    _perf_put(entry, 'name', 'largest-contentful-paint');
+    _perf_put(entry, 'startTime', start_ms);
+    _perf_put(entry, 'duration', render_time_ms - start_ms);
+    _perf_put(entry, 'renderTime', render_time_ms);
+    _perf_put(entry, 'loadTime', start_ms);
+    _perf_put(entry, 'size', size);
+    _perf_put(entry, 'element', element_id >= 0 ? _lumen_make_element(element_id) : null);
+    _perf_put(entry, 'url', '');
+    _perf_put(entry, 'id', '');
+    _perf_put(entry, 'activationStart', 0);
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }
@@ -211,10 +404,10 @@ function LayoutShiftAttribution(node, previousRect, currentRect) {
     this.currentRect = currentRect;
 }
 function LayoutShift(init) {
-    this.entryType = 'layout-shift';
-    this.name = 'layout-shift';
-    this.startTime = init.startTime;
-    this.duration = 0;
+    _perf_put(this, 'entryType', 'layout-shift');
+    _perf_put(this, 'name', 'layout-shift');
+    _perf_put(this, 'startTime', init.startTime);
+    _perf_put(this, 'duration', 0);
     this.value = init.value;
     this.hadRecentInput = init.hadRecentInput;
     this.lastInputTime = init.lastInputTime || 0;
@@ -242,6 +435,43 @@ function _lumen_deliver_layout_shift(value, sources, had_input) {
     _perf_observer_notify([entry]);
 }
 
+// Resource Timing L2 §4 `interface PerformanceResourceTiming : PerformanceEntry`
+// and Navigation Timing L2 §4 `interface PerformanceNavigationTiming :
+// PerformanceResourceTiming` (BUG-673) — the interface objects resource-,
+// navigation- and server-timing WPTs feature-detect and `instanceof`-check.
+// Same shape as PerformancePaintTiming above: no IDL constructor, entries are
+// built off the prototype, fields stay own properties. The `[Default] toJSON`
+// serialises exactly those own fields — a navigation entry carries whatever
+// set the shell's detail_json supplied, so the attribute list is per entry.
+function PerformanceResourceTiming() { throw new TypeError('Illegal constructor'); }
+PerformanceResourceTiming.prototype.toJSON = function() {
+    var out = {};
+    var keys = Object.keys(this);
+    for (var i = 0; i < keys.length; i++) { out[keys[i]] = this[keys[i]]; }
+    return out;
+};
+function PerformanceNavigationTiming() { throw new TypeError('Illegal constructor'); }
+PerformanceNavigationTiming.prototype = Object.create(PerformanceResourceTiming.prototype, {
+    constructor: { value: PerformanceNavigationTiming, writable: true, configurable: true },
+});
+
+// Class strings of the entry interfaces above: `timing-entrytypes-registry`
+// checks `Object.prototype.toString.call(entry)` against the interface name
+// for every supported entry type (BUG-687), and an entry built off a plain
+// function prototype answers `[object Object]`. Per prototype, so the
+// navigation entry does not inherit the resource tag.
+// BUG-1189: all entry interfaces share the PerformanceEntry base prototype
+Object.setPrototypeOf(PerformancePaintTiming.prototype, PerformanceEntry.prototype);
+Object.setPrototypeOf(LargestContentfulPaint.prototype, PerformanceEntry.prototype);
+Object.setPrototypeOf(LayoutShift.prototype, PerformanceEntry.prototype);
+Object.setPrototypeOf(PerformanceResourceTiming.prototype, PerformanceEntry.prototype);
+_lumen_idl_tag(PerformancePaintTiming, 'PerformancePaintTiming');
+_lumen_idl_tag(LargestContentfulPaint, 'LargestContentfulPaint');
+_lumen_idl_tag(LayoutShift, 'LayoutShift');
+_lumen_idl_tag(LayoutShiftAttribution, 'LayoutShiftAttribution');
+_lumen_idl_tag(PerformanceResourceTiming, 'PerformanceResourceTiming');
+_lumen_idl_tag(PerformanceNavigationTiming, 'PerformanceNavigationTiming');
+
 // Called when a resource fetch completes — from the shim itself for everything
 // the page starts (`fetch()`, XHR, `<script src>`, `<link>`), and from the
 // shell through `_lumen_deliver_resource_timings` for the subresources the
@@ -267,7 +497,8 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms, de
     // served from cache transferred nothing.
     var delivery = det.deliveryType ? String(det.deliveryType) : '';
     var transfer = (delivery === 'cache') ? 0 : encoded + 300;
-    var entry = {
+    var entry = Object.create(PerformanceResourceTiming.prototype);
+    var fields = {
         entryType: 'resource',
         name: String(url),
         startTime: s,
@@ -295,18 +526,7 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms, de
         renderBlockingStatus: 'non-blocking',
         contentType: det.contentType ? String(det.contentType) : '',
     };
-    // §4.2 `[Default] object toJSON()` — the whole attribute set, which is what
-    // `JSON.stringify(entry)` must produce; an own-property spread would also
-    // carry toJSON itself.
-    var _keys = Object.keys(entry);
-    Object.defineProperty(entry, 'toJSON', {
-        value: function() {
-            var out = {};
-            for (var i = 0; i < _keys.length; i++) { out[_keys[i]] = entry[_keys[i]]; }
-            return out;
-        },
-        writable: true, configurable: true, enumerable: false,
-    });
+    for (var f in fields) { _perf_put(entry, f, fields[f]); }
     // The buffer and the observer stream are separate sinks: an entry the
     // buffer refuses is still delivered to every interested observer.
     _perf_rt_add(entry);
@@ -348,17 +568,19 @@ function _lumen_deliver_resource_timings(rows_json) {
 // types listed in _PERF_SUPPORTED_ENTRY_TYPES (BUG-354) — delivering a type
 // outside that list populates the buffer silently without notifying observers.
 function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, detail_json) {
-    var entry = {
-        entryType: String(entry_type),
-        name: String(name),
-        startTime: Number(start_ms),
-        duration: Number(duration_ms),
-    };
+    var type = String(entry_type);
+    var entry = type === 'navigation' ? Object.create(PerformanceNavigationTiming.prototype)
+              : type === 'resource' ? Object.create(PerformanceResourceTiming.prototype)
+              : {};
+    _perf_put(entry, 'entryType', type);
+    _perf_put(entry, 'name', String(name));
+    _perf_put(entry, 'startTime', Number(start_ms));
+    _perf_put(entry, 'duration', Number(duration_ms));
     if (detail_json) {
         try {
             var extra = JSON.parse(String(detail_json));
             for (var k in extra) {
-                if (Object.prototype.hasOwnProperty.call(extra, k)) entry[k] = extra[k];
+                if (Object.prototype.hasOwnProperty.call(extra, k)) _perf_put(entry, k, extra[k]);
             }
         } catch(e) {}
     }
@@ -473,7 +695,12 @@ function _lumen_idle_arm(deadline) {
 
 function _lumen_idle_invoke(fn, deadline) {
     var t0 = _lumen_now_ms();
-    try { fn(deadline); } catch (e) { _lumen_report_exception(e); }
+    // BUG-665: run under a background scheduling state (scheduler.rs), so a
+    // `scheduler.yield()` inside the callback continues at that priority.
+    try {
+        if (typeof _lumen_sched_idle_invoke === 'function') _lumen_sched_idle_invoke(fn, deadline);
+        else fn(deadline);
+    } catch (e) { _lumen_report_exception(e); }
     var t1 = _lumen_now_ms();
     if (t1 - t0 > _LUMEN_IDLE_FRAME_MS) _lumen_idle_busy_until = t1 + _LUMEN_IDLE_FRAME_MS;
 }
@@ -549,3 +776,79 @@ function cancelIdleCallback(id) {
         }
     }
 }
+
+// ── Soft Navigations, slice 1 (WICG soft-navigation-heuristics; GAP-SOFTNAV-S1) ──
+// Synchronous attribution only: while the shell's TRUSTED click/keydown is being
+// dispatched, remember (a) a same-document URL change through
+// `pushState`/`replaceState` and (b) the first node inserted into the connected
+// document. When one interaction produced both, the next animation frame — if the
+// inserted node is connected and has a box — delivers one `soft-navigation` entry.
+// No promise/timer propagation of the context (S2), no LCP/ICP (S3). The scope
+// wraps the shell-only dispatch helpers, never `_lumen_propagate`, so a page's own
+// `dispatchEvent(new Event('click'))` cannot open it (same rule as
+// `_lumen_note_activation_input`).
+var _sn_ctx = null;
+
+function _sn_node_has_box(nid) {
+    var el = _lumen_make_element(nid);
+    var r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    return !!r && r.width > 0 && r.height > 0;
+}
+
+function _sn_note_insert(nid) {
+    if (_sn_ctx === null || _sn_ctx.node !== null) return;
+    if (typeof nid === 'number' && _lumen_resource_is_connected(nid)) _sn_ctx.node = nid;
+}
+
+// Called by `history.pushState`/`replaceState` after the document URL moved.
+function _sn_note_url(href) {
+    if (_sn_ctx !== null) _sn_ctx.url = String(href);
+}
+
+function _sn_close(ctx) {
+    if (ctx.url === null || ctx.node === null) return;
+    requestAnimationFrame(function() {
+        // The node may have been detached or hidden again before the frame ran.
+        if (!_lumen_resource_is_connected(ctx.node) || !_sn_node_has_box(ctx.node)) return;
+        _lumen_deliver_soft_nav(ctx.url, ctx.start, 0);
+    });
+}
+
+function _sn_scope_dispatch(native, args) {
+    var type = args[1];
+    if (_sn_ctx !== null || (type !== 'click' && type !== 'keydown')) {
+        return native.apply(this, args);
+    }
+    var ctx = _sn_ctx = { start: performance.now(), url: null, node: null };
+    try {
+        return native.apply(this, args);
+    } finally {
+        _sn_ctx = null;
+        _sn_close(ctx);
+    }
+}
+
+var _sn_native_dispatch_bubble = _lumen_dispatch_bubble;
+_lumen_dispatch_bubble = function() { return _sn_scope_dispatch(_sn_native_dispatch_bubble, arguments); };
+var _sn_native_dispatch_mouse = _lumen_dispatch_mouse_event;
+_lumen_dispatch_mouse_event = function() { return _sn_scope_dispatch(_sn_native_dispatch_mouse, arguments); };
+var _sn_native_dispatch_key = _lumen_dispatch_key_event;
+_lumen_dispatch_key_event = function() { return _sn_scope_dispatch(_sn_native_dispatch_key, arguments); };
+
+var _sn_native_append_child = _lumen_append_child;
+_lumen_append_child = function(parent, child) {
+    _sn_native_append_child(parent, child);
+    if (_sn_ctx !== null) _sn_note_insert(child);
+};
+var _sn_native_insert_before = _lumen_insert_before;
+_lumen_insert_before = function(parent, child, reference) {
+    _sn_native_insert_before(parent, child, reference);
+    if (_sn_ctx !== null) _sn_note_insert(child);
+};
+// `innerHTML =` is the other everyday way a router swaps the view in; the
+// container itself stands for the new content.
+var _sn_native_set_inner_html = _lumen_set_inner_html;
+_lumen_set_inner_html = function(nid, html) {
+    _sn_native_set_inner_html(nid, html);
+    if (_sn_ctx !== null) _sn_note_insert(nid);
+};

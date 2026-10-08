@@ -36,7 +36,7 @@ pub enum Display {
     /// CSS Display L3 — `display: flow-root`. Creates a BFC; treated as Block in layout.
     FlowRoot,
     /// CSS Display L3 — `display: contents`. Box itself generates no box;
-    /// children participate in parent formatting context. Treated as Block (deferred).
+    /// children participate in parent formatting context (`BoxKind::Contents`).
     Contents,
     /// CSS 2.1 table display types — parsed/stored; table layout deferred.
     Table,
@@ -76,6 +76,13 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// CSS Text L3 §7.1 `justify`. Хранится ради computed-значения и наследования;
+    /// межсловное выравнивание строк ещё не реализовано — layout ведёт себя как `start`.
+    Justify,
+    /// `match-parent`: промежуточное значение каскада. `compute_style` заменяет его значением
+    /// родителя (`start`/`end` пересчитываются по `direction` родителя) либо `start` для корня
+    /// (CSS Text L3 §7.1); до этого шага и в обход каскада layout ведёт себя как `start`.
+    MatchParent,
 }
 
 /// CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`.
@@ -91,6 +98,9 @@ pub enum TextAlignLast {
     Right,
     Center,
     Justify,
+    /// `match-parent`: `start`/`end` родителя пересчитываются по его `direction`.
+    /// Хранится как есть; layout ведёт себя как `start`.
+    MatchParent,
 }
 
 /// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
@@ -446,6 +456,104 @@ pub enum TextTransform {
     Capitalize,
 }
 
+/// CSS Text L3 §3.4 / Text L4 §3.4 — дополнительные компоненты `text-transform`:
+/// `full-width`, `full-size-kana` и самостоятельное `math-auto`. Хранятся ради
+/// computed-значения (CSSOM) и наследования; преобразование текста не применяют —
+/// `TextTransform::apply` их не читает.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextTransformExtra {
+    pub full_width: bool,
+    pub full_size_kana: bool,
+    pub math_auto: bool,
+}
+
+impl TextTransformExtra {
+    /// Разбор значения `text-transform`:
+    /// `none | math-auto | [capitalize | uppercase | lowercase] || full-width || full-size-kana`.
+    /// Токены в любом порядке, каждый не более одного раза; `none` и `math-auto` — только
+    /// поодиночке. `None` — значение невалидно.
+    pub fn parse(val: &str) -> Option<(TextTransform, TextTransformExtra)> {
+        let mut case: Option<TextTransform> = None;
+        let mut extra = TextTransformExtra::default();
+        let mut any = false;
+        let mut lone = false;
+        for tok in val.split_whitespace() {
+            let tok = tok.to_ascii_lowercase();
+            any = true;
+            match tok.as_str() {
+                "none" | "math-auto" => {
+                    if lone { return None; }
+                    lone = true;
+                    if tok == "math-auto" { extra.math_auto = true; }
+                }
+                "uppercase" | "lowercase" | "capitalize" => {
+                    if case.is_some() { return None; }
+                    case = Some(match tok.as_str() {
+                        "uppercase" => TextTransform::Uppercase,
+                        "lowercase" => TextTransform::Lowercase,
+                        _ => TextTransform::Capitalize,
+                    });
+                }
+                "full-width" => {
+                    if extra.full_width { return None; }
+                    extra.full_width = true;
+                }
+                "full-size-kana" => {
+                    if extra.full_size_kana { return None; }
+                    extra.full_size_kana = true;
+                }
+                _ => return None,
+            }
+        }
+        let count = val.split_whitespace().count();
+        if !any || (lone && count != 1) { return None; }
+        Some((case.unwrap_or(TextTransform::None), extra))
+    }
+
+    /// Каноническая запись computed-значения: `<case> full-width full-size-kana`
+    /// (CSSOM §serialize — порядок по грамматике), `none`, `math-auto`.
+    pub fn serialize(self, case: TextTransform) -> String {
+        if self.math_auto { return "math-auto".into(); }
+        let mut parts: Vec<&str> = Vec::new();
+        match case {
+            TextTransform::None => {}
+            TextTransform::Uppercase => parts.push("uppercase"),
+            TextTransform::Lowercase => parts.push("lowercase"),
+            TextTransform::Capitalize => parts.push("capitalize"),
+        }
+        if self.full_width { parts.push("full-width"); }
+        if self.full_size_kana { parts.push("full-size-kana"); }
+        if parts.is_empty() { "none".into() } else { parts.join(" ") }
+    }
+}
+
+/// CSS Text L3 §7.1 — `text-align: match-parent` у элемента с родителем: значение родителя, но
+/// унаследованные `start`/`end` пересчитываются в `left`/`right` по `direction` родителя.
+pub fn resolve_match_parent(parent: TextAlign, parent_direction: Direction) -> TextAlign {
+    match (parent, parent_direction) {
+        (TextAlign::Start, Direction::Ltr) | (TextAlign::End, Direction::Rtl) => TextAlign::Left,
+        (TextAlign::Start, Direction::Rtl) | (TextAlign::End, Direction::Ltr) => TextAlign::Right,
+        (TextAlign::MatchParent, _) => TextAlign::Start,
+        (other, _) => other,
+    }
+}
+
+/// Компоненты наследуемых свойств CSS Text, которые движок хранит только ради
+/// computed-значения (CSSOM, BUG-1325): layout их не читает. Всё поле наследуется целиком —
+/// `text-transform`, `text-indent` и `tab-size` наследуются все.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TextCssomExtra {
+    /// `full-width` / `full-size-kana` / `math-auto` из `text-transform`.
+    pub transform: TextTransformExtra,
+    /// `hanging` из `text-indent` (CSS Text L3 §7.1).
+    pub indent_hanging: bool,
+    /// `each-line` из `text-indent`.
+    pub indent_each_line: bool,
+    /// `tab-size: <number>` — число пробелов, как записано. `None` — задана `<length>`
+    /// (тогда ширина табуляции — `ComputedStyle::tab_size` в px).
+    pub tab_size_number: Option<f32>,
+}
+
 impl TextTransform {
     /// Применяет преобразование к строке. Не аллоцирует, если transform = None.
     pub fn apply(self, s: &str) -> String {
@@ -617,6 +725,281 @@ impl FontVariantEmoji {
     }
 }
 
+/// CSS Fonts L4 §6.5 — `font-variant-ligatures`. Inherited.
+///
+/// Каждая из четырёх категорий лигатур: `None` — не задана (решает шрифт/UA),
+/// `Some(true)` — включена, `Some(false)` — выключена. Ключевое слово `none`
+/// выключает все четыре (см. [`FontVariantLigatures::NONE`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FontVariantLigatures {
+    /// `common-ligatures` / `no-common-ligatures` — OpenType `liga` + `clig`.
+    pub common: Option<bool>,
+    /// `discretionary-ligatures` / `no-discretionary-ligatures` — `dlig`.
+    pub discretionary: Option<bool>,
+    /// `historical-ligatures` / `no-historical-ligatures` — `hlig`.
+    pub historical: Option<bool>,
+    /// `contextual` / `no-contextual` — `calt`.
+    pub contextual: Option<bool>,
+}
+
+impl FontVariantLigatures {
+    /// Значение `none`: все категории явно выключены.
+    pub const NONE: Self = Self {
+        common: Some(false),
+        discretionary: Some(false),
+        historical: Some(false),
+        contextual: Some(false),
+    };
+
+    /// Разбирает значение longhand-а: `normal | none | [ <common-lig> ||
+    /// <discretionary-lig> || <historical-lig> || <contextual> ]`. Повтор
+    /// категории или неизвестный токен → `None` (объявление невалидно).
+    pub fn parse(val: &str) -> Option<Self> {
+        let toks: Vec<String> = val.split_whitespace().map(str::to_ascii_lowercase).collect();
+        match toks.as_slice() {
+            [] => None,
+            [one] if one == "normal" => Some(Self::default()),
+            [one] if one == "none" => Some(Self::NONE),
+            _ => {
+                let mut out = Self::default();
+                toks.iter().all(|t| out.set_keyword(t)).then_some(out)
+            }
+        }
+    }
+
+    /// Применяет одно keyword-значение; `false` — токен чужой или категория
+    /// уже задана.
+    pub fn set_keyword(&mut self, kw: &str) -> bool {
+        let (slot, on) = match kw {
+            "common-ligatures" => (&mut self.common, true),
+            "no-common-ligatures" => (&mut self.common, false),
+            "discretionary-ligatures" => (&mut self.discretionary, true),
+            "no-discretionary-ligatures" => (&mut self.discretionary, false),
+            "historical-ligatures" => (&mut self.historical, true),
+            "no-historical-ligatures" => (&mut self.historical, false),
+            "contextual" => (&mut self.contextual, true),
+            "no-contextual" => (&mut self.contextual, false),
+            _ => return false,
+        };
+        if slot.is_some() {
+            return false;
+        }
+        *slot = Some(on);
+        true
+    }
+
+    /// OpenType-фичи (тег, 0/1) этого значения.
+    pub fn push_features(self, out: &mut Vec<([u8; 4], u32)>) {
+        let mut put = |tags: &[[u8; 4]], v: Option<bool>| {
+            if let Some(on) = v {
+                out.extend(tags.iter().map(|t| (*t, u32::from(on))));
+            }
+        };
+        put(&[*b"liga", *b"clig"], self.common);
+        put(&[*b"dlig"], self.discretionary);
+        put(&[*b"hlig"], self.historical);
+        put(&[*b"calt"], self.contextual);
+    }
+
+    /// CSS-сериализация (`getComputedStyle`): `normal`, `none` или список keyword-ов.
+    pub fn serialize(self) -> String {
+        if self == Self::default() {
+            return "normal".into();
+        }
+        if self == Self::NONE {
+            return "none".into();
+        }
+        let table = [
+            (self.common, "common-ligatures", "no-common-ligatures"),
+            (self.discretionary, "discretionary-ligatures", "no-discretionary-ligatures"),
+            (self.historical, "historical-ligatures", "no-historical-ligatures"),
+            (self.contextual, "contextual", "no-contextual"),
+        ];
+        let parts: Vec<&str> =
+            table.iter().filter_map(|(v, on, off)| v.map(|v| if v { *on } else { *off })).collect();
+        parts.join(" ")
+    }
+}
+
+/// `<numeric-figure-values>` из `font-variant-numeric`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NumericFigure {
+    #[default]
+    Normal,
+    /// `lining-nums` — `lnum`.
+    Lining,
+    /// `oldstyle-nums` — `onum`.
+    Oldstyle,
+}
+
+/// `<numeric-spacing-values>` из `font-variant-numeric`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NumericSpacing {
+    #[default]
+    Normal,
+    /// `proportional-nums` — `pnum`.
+    Proportional,
+    /// `tabular-nums` — `tnum`.
+    Tabular,
+}
+
+/// `<numeric-fraction-values>` из `font-variant-numeric`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NumericFraction {
+    #[default]
+    Normal,
+    /// `diagonal-fractions` — `frac`.
+    Diagonal,
+    /// `stacked-fractions` — `afrc`.
+    Stacked,
+}
+
+/// CSS Fonts L4 §6.7 — `font-variant-numeric`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FontVariantNumeric {
+    pub figure: NumericFigure,
+    pub spacing: NumericSpacing,
+    pub fraction: NumericFraction,
+    /// `ordinal` — `ordn`.
+    pub ordinal: bool,
+    /// `slashed-zero` — `zero`.
+    pub slashed_zero: bool,
+}
+
+impl FontVariantNumeric {
+    /// Разбирает `normal | [ <figure> || <spacing> || <fraction> || ordinal ||
+    /// slashed-zero ]`. Повтор категории или неизвестный токен → `None`.
+    pub fn parse(val: &str) -> Option<Self> {
+        let toks: Vec<String> = val.split_whitespace().map(str::to_ascii_lowercase).collect();
+        match toks.as_slice() {
+            [] => None,
+            [one] if one == "normal" => Some(Self::default()),
+            _ => {
+                let mut out = Self::default();
+                toks.iter().all(|t| out.set_keyword(t)).then_some(out)
+            }
+        }
+    }
+
+    /// Применяет одно keyword-значение; `false` — токен чужой или категория
+    /// уже задана.
+    pub fn set_keyword(&mut self, kw: &str) -> bool {
+        match kw {
+            "lining-nums" | "oldstyle-nums" if self.figure == NumericFigure::Normal => {
+                self.figure =
+                    if kw == "lining-nums" { NumericFigure::Lining } else { NumericFigure::Oldstyle };
+            }
+            "proportional-nums" | "tabular-nums" if self.spacing == NumericSpacing::Normal => {
+                self.spacing = if kw == "proportional-nums" {
+                    NumericSpacing::Proportional
+                } else {
+                    NumericSpacing::Tabular
+                };
+            }
+            "diagonal-fractions" | "stacked-fractions" if self.fraction == NumericFraction::Normal => {
+                self.fraction = if kw == "diagonal-fractions" {
+                    NumericFraction::Diagonal
+                } else {
+                    NumericFraction::Stacked
+                };
+            }
+            "ordinal" if !self.ordinal => self.ordinal = true,
+            "slashed-zero" if !self.slashed_zero => self.slashed_zero = true,
+            _ => return false,
+        }
+        true
+    }
+
+    /// OpenType-фичи (тег, 1) включённых компонент.
+    pub fn push_features(self, out: &mut Vec<([u8; 4], u32)>) {
+        match self.figure {
+            NumericFigure::Normal => {}
+            NumericFigure::Lining => out.push((*b"lnum", 1)),
+            NumericFigure::Oldstyle => out.push((*b"onum", 1)),
+        }
+        match self.spacing {
+            NumericSpacing::Normal => {}
+            NumericSpacing::Proportional => out.push((*b"pnum", 1)),
+            NumericSpacing::Tabular => out.push((*b"tnum", 1)),
+        }
+        match self.fraction {
+            NumericFraction::Normal => {}
+            NumericFraction::Diagonal => out.push((*b"frac", 1)),
+            NumericFraction::Stacked => out.push((*b"afrc", 1)),
+        }
+        if self.ordinal {
+            out.push((*b"ordn", 1));
+        }
+        if self.slashed_zero {
+            out.push((*b"zero", 1));
+        }
+    }
+
+    /// CSS-сериализация (`getComputedStyle`): `normal` или список keyword-ов.
+    pub fn serialize(self) -> String {
+        let mut parts: Vec<&str> = Vec::with_capacity(5);
+        match self.figure {
+            NumericFigure::Normal => {}
+            NumericFigure::Lining => parts.push("lining-nums"),
+            NumericFigure::Oldstyle => parts.push("oldstyle-nums"),
+        }
+        match self.spacing {
+            NumericSpacing::Normal => {}
+            NumericSpacing::Proportional => parts.push("proportional-nums"),
+            NumericSpacing::Tabular => parts.push("tabular-nums"),
+        }
+        match self.fraction {
+            NumericFraction::Normal => {}
+            NumericFraction::Diagonal => parts.push("diagonal-fractions"),
+            NumericFraction::Stacked => parts.push("stacked-fractions"),
+        }
+        if self.ordinal {
+            parts.push("ordinal");
+        }
+        if self.slashed_zero {
+            parts.push("slashed-zero");
+        }
+        if parts.is_empty() { "normal".into() } else { parts.join(" ") }
+    }
+}
+
+/// CSS Fonts L4 §6.8 — `font-variant-position`. Inherited.
+///
+/// Включает OpenType `subs`/`sups`. Bundled-шрифт (Inter) этих фич не имеет —
+/// как и `titling-caps`, значение на пиксели bundled-текста не влияет, но
+/// наследуется и доезжает до шейпера для шрифтов с такими глифами.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontVariantPosition {
+    /// `normal` (initial).
+    #[default]
+    Normal,
+    /// `sub` — `subs`.
+    Sub,
+    /// `super` — `sups`.
+    Super,
+}
+
+impl FontVariantPosition {
+    /// Разбирает keyword; `None` — не наш токен.
+    pub fn from_keyword(kw: &str) -> Option<Self> {
+        match kw {
+            "normal" => Some(Self::Normal),
+            "sub" => Some(Self::Sub),
+            "super" => Some(Self::Super),
+            _ => None,
+        }
+    }
+
+    /// CSS-сериализация значения.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Sub => "sub",
+            Self::Super => "super",
+        }
+    }
+}
+
 /// Собирает набор OpenType-фич для `DrawText.font_features`.
 ///
 /// CSS Fonts L4 §6.4 (Font Feature Resolution) задаёт порядок: сперва фичи
@@ -626,8 +1009,15 @@ impl FontVariantEmoji {
 /// `font-feature-settings`.
 pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
     let caps = style.font_variant_caps.feature_tags();
-    let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len());
+    let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len() + 8);
     out.extend(caps.iter().map(|tag| (*tag, 1)));
+    style.font_variant_ligatures.push_features(&mut out);
+    style.font_variant_numeric.push_features(&mut out);
+    match style.font_variant_position {
+        FontVariantPosition::Normal => {}
+        FontVariantPosition::Sub => out.push((*b"subs", 1)),
+        FontVariantPosition::Super => out.push((*b"sups", 1)),
+    }
     out.extend(style.font_feature_settings.iter().map(|f| (f.tag, f.value)));
     out
 }

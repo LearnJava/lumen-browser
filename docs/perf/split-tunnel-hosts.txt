@@ -1,0 +1,46 @@
+# Суффиксы доменов, которые scripts/split_proxy.py всегда отправляет в VPN-туннель:
+# напрямую заблокированы или замедлены (TLS не проходит/обрывается после ClientHello).
+# Построен 2026-09-28: `split_proxy.py --probe` по хостам прогона 2026-09-23 + ручная
+# проверка curl --interface. Хосты, не вошедшие сюда, split_proxy.py сам переводит в
+# туннель после первого неудачного прямого соединения (лог AUTO-TUNNEL).
+youtube.com
+youtu.be
+ytimg.com
+googlevideo.com
+ggpht.com
+youtube-nocookie.com
+x.com
+twitter.com
+twimg.com
+facebook.com
+facebook.net
+fbcdn.net
+instagram.com
+cdninstagram.com
+whatsapp.com
+whatsapp.net
+linkedin.com
+licdn.com
+discord.com
+discordapp.com
+discordapp.net
+discord.gg
+bbc.com
+bbc.co.uk
+bbci.co.uk
+quora.com
+quoracdn.net
+medium.com
+snapchat.com
+sc-static.net
+soundcloud.com
+sndcdn.com
+canva.com
+coursera.org
+udemy.com
+udemycdn.com
+webmd.com
+veta.naver.com
+tivan.naver.com
+cookielaw.org
+doubleclick.net

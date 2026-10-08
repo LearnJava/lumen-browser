@@ -64,6 +64,12 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   globalThis.location = _lumen_make_worker_location(
     (scope.indexOf('://') !== -1) ? scope
       : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope)));
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // above (a service worker's scope URL doubles as its own location URL,
+  // per the comment just above).
+  if (typeof _lumen_make_worker_origin === 'function') {{
+    globalThis.origin = _lumen_make_worker_origin(globalThis.location.href);
+  }}
   // `isSecureContext` (BUG-766) — same rule as the other two worker
   // flavours; a service worker's scope URL doubles as its own location URL.
   if (typeof _lumen_worker_secure_context_for === 'function') {{
@@ -240,7 +246,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
       res.text().then(function(text) {{
         _lumen_sw_cache_put(self_cache._name || 'default', url,
           JSON.stringify({{method:'GET',status:res.status,statusText:res.statusText,headers:{{}}}}),
-          btoa(text));
+          btoa(unescape(encodeURIComponent(text))));
       }});
       return Promise.resolve();
     }},
@@ -679,7 +685,7 @@ fn install_sw_globals_v8(
     // `importScripts` (this file, not `worker.rs`) unnarrowed — its
     // constructor was never in scope for срез 13 either, so the whole call
     // path had no precheck at all. Reuses `worker::import_scripts_csp_blocked`
-    // rather than re-deriving the `data:`/`blob:lumen/` skip logic — same
+    // rather than re-deriving the `data:`/`blob:` skip logic — same
     // I/O-free precheck shape, different runtime.
     {
         let provider = fetch_provider.clone();
@@ -758,16 +764,13 @@ fn install_sw_globals_v8(
         )?;
     }
 
-    rt.register_native(
-        "atob",
-        into_v8_fn1(move |s: String| -> Option<String> {
-            base64_decode(&s).and_then(|b| String::from_utf8(b).ok())
-        }),
-    )?;
-    rt.register_native(
-        "btoa",
-        into_v8_fn1(move |s: String| -> String { base64_encode(s.as_bytes()) }),
-    )?;
+    // BUG-1193: the same HTML LS §8.3 `atob`/`btoa` as the dedicated worker
+    // (binary strings, forgiving-base64, `InvalidCharacterError`). The throwing
+    // wrapper needs `DOMException`, which `install_worker_scope_globals_v8`
+    // below provides — it is only looked up at call time.
+    rt.register_native_scoped("_lumen_atob_impl", Box::new(crate::worker::atob_native_v8))?;
+    rt.register_native_scoped("_lumen_btoa_impl", Box::new(crate::worker::btoa_native_v8))?;
+    rt.eval(crate::worker::WORKER_ATOB_BTOA_SHIM)?;
 
     // `ServiceWorkerGlobalScope` is a `WorkerGlobalScope` too, so it gets the
     // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
@@ -1212,6 +1215,31 @@ mod tests_v8 {
         assert_eq!(
             rt.eval("globalThis.__abLen").unwrap(),
             lumen_core::JsValue::Number(json_text.len() as f64)
+        );
+    }
+
+    /// BUG-1193: SW `atob`/`btoa` follow HTML LS §8.3 like the dedicated worker's.
+    #[test]
+    fn sw_atob_btoa_follow_html_spec() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+        rt.eval(
+            "function thr(f) { try { f(); return 'no'; } catch (e) { return e.name; } }
+             globalThis.__r = [
+               atob(btoa('\\xff')) === '\\xff',
+               atob('YQ==') === 'a',
+               thr(function() { atob('YQ==YQ=='); }),
+               thr(function() { atob('!!!'); }),
+               thr(function() { btoa('\\u0100'); }),
+             ].join('|');",
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__r").unwrap(),
+            lumen_core::JsValue::String(
+                "true|true|InvalidCharacterError|InvalidCharacterError|InvalidCharacterError".into()
+            )
         );
     }
 

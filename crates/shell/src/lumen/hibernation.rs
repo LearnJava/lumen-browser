@@ -101,6 +101,7 @@ impl Lumen {
         if let Ok(Some(data)) = self.t2_store.fetch(tab_id as i64) {
             self.scroll_x = data.scroll_x;
             self.scroll_y = data.scroll_y;
+            self.issue_scroll_command();
             self.form_state = tab_lifecycle::deserialize_form_state(&data.form_state_json);
             let _ = self.t2_store.delete(tab_id as i64);
         }
@@ -178,6 +179,16 @@ impl Lumen {
         // Computed up front: `&mut self.ls_storage` below would otherwise
         // conflict with this `&self` method call as a later call argument.
         let cookie_jar = self.active_cookie_jar();
+        let image_hook_ctx = tab_lifecycle::hibernate::RestoreImageHookCtx {
+            generation: self.load_generation,
+            proxy: self.load_proxy.clone(),
+            dedup: Arc::clone(&self.stream_images_requested),
+            target: self.target_color_space(),
+            viewport: {
+                let v = self.relayout_viewport().unwrap_or(Size { width: 1280.0, height: 720.0 });
+                (v.width, v.height)
+            },
+        };
         let (document_arc, js_ctx) = tab_lifecycle::hibernate::restore_js_context(
             &data.url,
             doc,
@@ -189,6 +200,7 @@ impl Lumen {
             cookie_banner_dismiss,
             deterministic,
             Some(cookie_jar),
+            Some(image_hook_ctx),
         );
 
         let layout_source = LayoutSource {
@@ -247,6 +259,7 @@ impl Lumen {
         self.sync_engine_js_state();
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
+        self.issue_scroll_command();
         self.content_height = content_height_of(&self.display_list);
         self.content_width = content_width_of(&self.display_list);
 

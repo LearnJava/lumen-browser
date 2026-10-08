@@ -86,9 +86,11 @@ const GENERIC_SENSOR_SHIM: &str = r#"
         'Failed to construct SensorErrorEvent: member error is not of type DOMException.'
       );
     }
-    this.type = String(type);
+    EventBase.call(this, type, init);
     this.error = error;
   }
+  SensorErrorEvent.prototype = Object.create(EventBase.prototype);
+  SensorErrorEvent.prototype.constructor = SensorErrorEvent;
 
   // ── Sensor base class (W3C Generic Sensor §8) ─────────────────────────────
   //
@@ -259,7 +261,7 @@ const GENERIC_SENSOR_SHIM: &str = r#"
   // type: 'accelerometer' | 'gyroscope' | 'magnetometer' | 'ambient-light' |
   //       'absolute-orientation' | 'relative-orientation'
   // payload: object with {x,y,z} or {quaternion:[x,y,z,w]} or {illuminance}
-  globalThis._lumen_sensor_deliver_reading = function(type, payload) {
+  __lumen_C._lumen_sensor_deliver_reading = function(type, payload) {
     // Reserved for Phase 1 shell integration.
     // Future: iterate active sensor instances matching `type`, apply payload,
     // set _hasReading=true, _timestamp=performance.now(), fire 'reading' event.
@@ -306,7 +308,11 @@ mod tests {
     /// covered by the `generic_sensor_*` tests in `dom.rs`, which run against
     /// the real install.
     const STUBS: &str = r#"
-        function Event(type) { this.type = String(type); this.target = null; }
+        function Event(type, init) {
+            this.type = String(type); this.target = null;
+            this.bubbles = !!(init && init.bubbles); this.cancelable = !!(init && init.cancelable);
+        }
+        Event.prototype.stopPropagation = function() {};
         globalThis.Event = Event;
         function EventTarget() {
             Object.defineProperty(this, '_listeners', { value: Object.create(null), writable: true });
@@ -500,6 +506,19 @@ mod tests {
         });
     }
 
+    /// BUG-761: `interface SensorErrorEvent : Event` — the object has to carry
+    /// the `Event` prototype chain and members, with `bubbles`/`cancelable`
+    /// read from the init dictionary by the base constructor.
+    #[test]
+    fn sensor_error_event_is_an_event() {
+        with_generic_sensor_and_dom_exception(|rt| {
+            check(
+                rt,
+                "var err = new DOMException('x', 'NotAllowedError');                  var e = new SensorErrorEvent('error', {error: err, bubbles: true});                  SensorErrorEvent.prototype instanceof Event && e instanceof Event                  && e.constructor === SensorErrorEvent && e.type === 'error'                  && e.error === err && e.bubbles === true && e.cancelable === false                  && typeof e.stopPropagation === 'function' && e.target === null",
+            );
+        });
+    }
+
     #[test]
     fn sensor_has_reading_false_initially() {
         with_generic_sensor(|rt| {
@@ -602,7 +621,7 @@ mod tests {
     #[test]
     fn lumen_sensor_deliver_reading_is_function() {
         with_generic_sensor(|rt| {
-            check(rt, "typeof globalThis._lumen_sensor_deliver_reading === 'function'");
+            check(rt, "typeof __lumen_C._lumen_sensor_deliver_reading === 'function'");
         });
     }
 }

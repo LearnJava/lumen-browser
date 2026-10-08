@@ -137,7 +137,7 @@ pub trait RequestFilter: Send + Sync {
     /// вести себя как `should_block`: type/party-ограниченные правила
     /// срабатывают консервативно (блокируют), как при полном игнорировании
     /// опций до Phase 2.
-    fn should_block_ctx(&self, url: &Url, _ctx: &RequestContext) -> Option<String> {
+    fn should_block_ctx(&self, url: &Url, _ctx: &RequestContext<'_>) -> Option<String> {
         self.should_block(url)
     }
 }
@@ -174,7 +174,7 @@ pub enum ResourceType {
 /// правила тогда срабатывают консервативно (блокируют) — так сохраняется
 /// до-Phase-2 поведение для путей, которые не знают тип ресурса.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct RequestContext {
+pub struct RequestContext<'a> {
     /// Тип ресурса запроса; `None` — неизвестен.
     pub resource_type: Option<ResourceType>,
     /// `Some(true)` — third-party (хост запроса вне registrable-домена
@@ -188,11 +188,17 @@ pub struct RequestContext {
     /// такие правила НЕ срабатывать, снимая массовый over-block голых доменов
     /// (`example.com`, `github.com`) узкими regex-правилами easylist (BUG-292).
     pub is_top_level: bool,
+    /// ASCII-хост (lowercase) документа, от имени которого идёт запрос, —
+    /// «страница» в смысле опции ABP `$domain=a.com|~b.com`, которая
+    /// ограничивает правило запросами с перечисленных сайтов (BUG-1146).
+    /// `None` — документ неизвестен, `domain=`-правило тогда срабатывает
+    /// консервативно, как и type/party-правила.
+    pub document_host: Option<&'a str>,
 }
 
-impl RequestContext {
-    /// Контекст без информации: `resource_type`/`third_party` = `None`,
-    /// `is_top_level` = `false`. Заставляет `should_block_ctx` вести себя как
+impl RequestContext<'_> {
+    /// Контекст без информации: `resource_type`/`third_party`/`document_host`
+    /// = `None`, `is_top_level` = `false`. Заставляет `should_block_ctx` вести себя как
     /// `should_block` (консервативный блок для type/party-правил).
     pub fn unknown() -> Self {
         Self::default()
@@ -2342,8 +2348,32 @@ pub trait JsFetchProvider: Send + Sync {
     /// element has none. Any other destination is never blocked. Default
     /// implementation never blocks, matching `HttpClient` with no policy
     /// installed.
-    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, integrity: &str) -> Result<()> {
-        let _ = (destination, url, nonce, integrity);
+    ///
+    /// `parser_inserted` (BUG-568): a `<script src>` that `document.write()`
+    /// wrote is parser-inserted even though the shim loads it, and
+    /// `'strict-dynamic'` must not admit it on trust (CSP3 §6.7.1.1 step 2) —
+    /// only a script another script created with the DOM API inherits that
+    /// trust.
+    fn check_element_src(
+        &self,
+        destination: &str,
+        url: &str,
+        nonce: &str,
+        integrity: &str,
+        parser_inserted: bool,
+    ) -> Result<()> {
+        let _ = (destination, url, nonce, integrity, parser_inserted);
+        Ok(())
+    }
+
+    /// `script-src` inline check for a `<script>` without `src` that
+    /// `document.write()` wrote (BUG-568), before its text runs —
+    /// the same rule the shell applies to the page's own inline scripts: an
+    /// `'unsafe-inline'`, a nonce matching `nonce` or a hash of `body` admits
+    /// it. A block is reported as `Error::CspElementSrcBlocked` with
+    /// `blocked_uri` `"inline"`. Default implementation never blocks.
+    fn check_inline_script(&self, nonce: &str, body: &str) -> Result<()> {
+        let _ = (nonce, body);
         Ok(())
     }
 
@@ -3614,12 +3644,10 @@ pub trait PushBackend: Send + Sync {
 /// generation and dedup set all captured at construction) and hands an
 /// `Arc<dyn ImageLoadHook>` to `V8JsRuntime::with_image_load_hook`.
 ///
-/// Scope: only the plain `src` attribute on `<img>`, only for the runtime
-/// built for the top-level document's own parser/inline scripts
-/// (`run_scripts_with_dom`'s primary call site). `srcset`/`<picture>`
-/// selection, iframes and bfcache-thaw runtimes are not wired — those keep
-/// relying on the post-relayout sweep ([`Self::queue_image_load`]'s caller
-/// doc comment has no bearing on them), same as before this trait existed.
+/// Scope: `src`/`srcset`/`sizes` on `<img>` and `<source>` mutation under a
+/// `<picture>` — the URL is chosen by the same picker the relayout sweep uses
+/// (BUG-1148). Wired for the top-level document, `<iframe>` sub-documents and
+/// tabs restored from hibernation.
 /// Срез 2 added subtree insertion (`appendChild`/`insertBefore` of an
 /// already-`src`-bearing `<img>`, and `innerHTML` parsed straight from
 /// markup) — see `queue_pending_img_loads` in `lumen-js`'s `dom_core.rs`.
@@ -3633,6 +3661,13 @@ pub trait ImageLoadHook: Send + Sync {
     /// DOM walk that dispatches `load`/`error`, so the implementation has to
     /// remember which node asked for `raw_src`.
     fn queue_image_load(&self, nid: u32, raw_src: &str);
+
+    /// BUG-1148: layout viewport (CSS px) for the `sizes`/`<source media>`
+    /// picker, so a `srcset` candidate chosen here matches the one the
+    /// relayout sweep picks (same key → the dedup set skips the second).
+    fn viewport(&self) -> (f32, f32) {
+        (1280.0, 720.0)
+    }
 }
 
 // ============================================================================
@@ -3778,7 +3813,7 @@ pub trait BrowserSession: Send {
     ///
     /// Creates a `{entryType, name, startTime, duration}` entry and merges in any
     /// extra properties from `detail_json` (an optional JSON object string).
-    /// Notifies all matching `PerformanceObserver` callbacks synchronously.
+    /// Queues delivery to every matching `PerformanceObserver` (one task, BUG-648).
     ///
     /// Use for entry types without a dedicated binding: 'longtask', 'element',
     /// 'event', 'navigation', etc.
@@ -5137,7 +5172,7 @@ pub trait AudioPlaybackProvider: Send + Sync {
     /// Fetch and decode audio from `url`.
     ///
     /// Runs in the background; query `ready_state(handle)` to monitor progress.
-    /// `url` may be `http(s)://`, `data:`, or `blob:lumen/…`.
+    /// `url` may be `http(s)://`, `data:`, or `blob:…`.
     fn load(&self, handle: u64, url: &str);
 
     /// Start or resume playback.  No-op if already playing.

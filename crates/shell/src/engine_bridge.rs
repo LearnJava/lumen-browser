@@ -31,6 +31,14 @@ pub(crate) struct EngineCommit {
     /// Время off-thread вычисления (style + layout + DL build) в мс — для
     /// `ENGINE_SUMMARY` / `[engine] relayout … (off-thread)`.
     pub(crate) compute_ms: f32,
+    /// BUG-935 S80: стили полного каскада этого прохода — только под
+    /// `LUMEN_BUG935_M4_SWAP`; кладутся в `Lumen::page_prev_cascade_styles`
+    /// после применения коммита, чтобы следующий тик инкрементального рестайла
+    /// не стартовал с холодного кэша (полный каскад на UI-потоке, 0,6–2 с).
+    pub(crate) cascade_styles: Option<lumen_layout::counters::CascadeStyles>,
+    /// Интерактивное состояние (hover/focus/active), под которым посчитаны
+    /// `cascade_styles` — парное `Lumen::page_prev_interactive`.
+    pub(crate) interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
     /// BUG-935 S41: `apply_relayout_result`'s JS-geometry-collection block
     /// (`collect_computed_styles` и Co.), precomputed here on the engine
     /// thread — S37-S40 found it the dominant cost of every commit, already
@@ -176,6 +184,20 @@ pub(crate) fn route_query_js<R: Send + 'static>(
             .query(move |state| state.js.as_ref().map(read))
             .flatten(),
         None => js.map(read),
+    }
+}
+
+/// THREAD-9: кладёт результат `take_navigate_request` в почтовый ящик
+/// (`Lumen::js_nav_inbox`) из движковой задачи. `None` ящик не трогает, чтобы
+/// пустое чтение не стёрло ещё не забранный запрос.
+pub(crate) fn deposit_js_navigate(
+    inbox: &Mutex<Option<crate::JsNavigateRequest>>,
+    nav: Option<crate::JsNavigateRequest>,
+) {
+    if let Some(nav) = nav
+        && let Ok(mut slot) = inbox.lock()
+    {
+        *slot = Some(nav);
     }
 }
 

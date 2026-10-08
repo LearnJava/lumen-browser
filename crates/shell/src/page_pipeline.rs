@@ -97,12 +97,14 @@ pub(crate) fn render_bytes(
     // onto the parsed document next to `csp_header` — see
     // `page_source::referrer_policy_header`.
     referrer_policy_header: Option<&str>,
+    // BUG-1156: `Referer` the navigation sent → `document.referrer`.
+    document_referrer: Option<&str>,
     // BUG-1118: see `parse_and_layout`'s doc comment on the same parameter —
     // forwarded straight through.
     dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, dynamic_image_hook_ctx)?;
-    let display_list = paint_ordered(&parsed.layout);
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, document_referrer, dynamic_image_hook_ctx)?;
+    let display_list = crate::display_list_metrics::paint_ordered_in(&parsed.layout, viewport);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
         parsed.document.lock().unwrap().len(),
@@ -382,6 +384,9 @@ impl LoadedPage {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
                 used_line_height: 16.0 * 1.2,
+                grid_baselines: None,
+                fieldset_legend: None,
+                subgrid_tracks: None,
                 style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
@@ -457,6 +462,9 @@ pub(crate) struct ParsedPage {
     /// See [`LoadedPage::prescript_layout_rects`] — same snapshot, carried
     /// through this intermediate shape on its way there.
     pub(crate) prescript_layout_rects: Option<std::collections::HashMap<u32, [f32; 4]>>,
+    /// Измеритель текста, которым собран `layout`: headless-снимок досчитывает им
+    /// layout после `load`/rAF-обработчиков страницы (`dump_mode::settle_after_load`).
+    pub(crate) measurer: lumen_paint::MultiFontMeasurer,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -737,10 +745,18 @@ fn build_page_cascade(
         (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies)
     };
 
-    let sheet = {
+    let mut sheet = {
         let _s = lumen_core::trace::span("parse-css", "parse");
         lumen_css_parser::parse(&css)
     };
+    // CSS Color L5 §5.3: ICC bytes for `color(--name …)`.
+    crate::subresources::load_sheet_color_profiles(
+        &mut sheet,
+        &effective_base(doc, base),
+        sink,
+        cookie_jar.clone(),
+        crate::resource_base::document_referrer_policy(doc),
+    );
 
     // CSSOM-1 срез 2: параллельный per-элементный реестр — не участвует в
     // каскаде выше, читает те же `<link>`-байты из уже прогретого
@@ -826,7 +842,7 @@ pub(crate) struct JsLayoutSnapshot {
     /// (BUG-464/BUG-477) — same tree `rects` was collected from.
     pub(crate) tree: Arc<LayoutBox>,
     /// `node index -> property -> serialized computed value`.
-    pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    pub(crate) styles: std::collections::HashMap<u32, lumen_layout::StyleMap>,
     /// CSSOM-6 (BUG-490): `(node index, pseudo name) -> property -> serialized
     /// computed value` — backs `getComputedStyle(el, pseudoElt)`.
     pub(crate) pseudo_styles:
@@ -943,6 +959,8 @@ pub(crate) fn parse_and_layout(
     // GAP-REFERRER срез 3: see `render_bytes`'s doc comment on this same
     // parameter — stamped onto the document right next to `csp_header`.
     referrer_policy_header: Option<&str>,
+    // BUG-1156: `Referer` the navigation sent → `document.referrer`.
+    document_referrer: Option<&str>,
     // BUG-1118: bundles this navigation's `Lumen::load_generation`, its
     // shared `Lumen::stream_images_requested` dedup set and `Lumen::load_proxy`
     // — everything the immediate `<img src>` fetch hook built below
@@ -998,6 +1016,7 @@ pub(crate) fn parse_and_layout(
     // by `resource_base::document_referrer_policy` at each point that needs
     // the resolved policy.
     doc.set_referrer_policy_header(referrer_policy_header.map(str::to_owned));
+    doc.set_document_referrer(document_referrer.map(str::to_owned));
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
@@ -1222,6 +1241,7 @@ pub(crate) fn parse_and_layout(
         cross_origin_isolated,
         target,
         page_base: base.clone(),
+        image_hook_channel: dynamic_image_hook_ctx.as_ref().map(|c| (c.generation, c.proxy.clone())),
     };
     // BUG-1118: built from the still-owned `doc` (about to move into
     // `run_scripts_with_dom` below), same one-shot CSP/referrer-policy read
@@ -1239,6 +1259,7 @@ pub(crate) fn parse_and_layout(
                 target,
                 referrer_policy,
                 ctx,
+                viewport: (viewport.width, viewport.height),
             }) as Arc<dyn lumen_core::ext::ImageLoadHook>
         });
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
@@ -1261,12 +1282,17 @@ pub(crate) fn parse_and_layout(
         &ext_scripts,
         classic_scripts,
         deferred_scripts,
-        false,
+        // BUG-1178: страница верхнего уровня без `<script>` тоже получает рантайм —
+        // `eval` автоматизации и расширения читают DOM через JS (Chrome: `window`
+        // есть всегда).
+        true,
         parse_time_snapshot,
         cascade.stylesheet_nodes.clone(),
         parse_time_stylesheet,
         dynamic_image_hook,
         cookie_jar.clone(),
+        // BUG-1198: a page has no ancestors.
+        None,
     );
     // PERF-14: headless has no event loop to settle the `fetch()` requests
     // the scripts just started — do it here, before the post-script cascade
@@ -1462,12 +1488,21 @@ pub(crate) fn parse_and_layout(
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
+    let mut intrinsic_written: Vec<u32> = Vec::new();
     let (images, animated_gifs, lazy_pairs, blocked_by_img_src, cross_origin_img_urls) = {
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
-        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target)
+        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target, &mut intrinsic_written)
     };
+    // BUG-935 срез 94: скрипты уже могли взять базис инкрементального каскада (флаш на
+    // `getComputedStyle`/`offsetWidth`) — дописанные только что `width`/`height` в нём не видны.
+    #[cfg(feature = "v8")]
+    if !intrinsic_written.is_empty()
+        && let Some(js) = &js_ctx
+    {
+        js.note_shell_attr_writes(&intrinsic_written);
+    }
     // GAP-CSPENF срез 4: `securitypolicyviolation` for every `img-src`-blocked
     // URL. `blocked_by_img_src` came back from a fetch pass that ran before
     // this runtime existed (parallel, off-thread), so this is the first point
@@ -1852,6 +1887,7 @@ pub(crate) fn parse_and_layout(
         frames,
         frame_env,
         prescript_layout_rects,
+        measurer,
     })
 }
 

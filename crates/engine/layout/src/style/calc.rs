@@ -225,6 +225,10 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Rem(v) => (2, *v),
         Length::Ch(v) => (3, *v),
         Length::Ex(v) => (4, *v),
+        Length::Lh(v) => (16, *v),
+        Length::Rlh(v) => (17, *v),
+        Length::Rex(v) => (18, *v),
+        Length::Rch(v) => (19, *v),
         Length::Percent(v) => (5, *v),
         Length::Vh(v) => (6, *v),
         Length::Vw(v) => (7, *v),
@@ -236,7 +240,7 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Cqb(v) => (13, *v),
         Length::Cqmin(v) => (14, *v),
         Length::Cqmax(v) => (15, *v),
-        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => {
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => {
             return None;
         }
     })
@@ -251,6 +255,10 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         Length::Rem(_) => Length::Rem(v),
         Length::Ch(_) => Length::Ch(v),
         Length::Ex(_) => Length::Ex(v),
+        Length::Lh(_) => Length::Lh(v),
+        Length::Rlh(_) => Length::Rlh(v),
+        Length::Rex(_) => Length::Rex(v),
+        Length::Rch(_) => Length::Rch(v),
         Length::Percent(_) => Length::Percent(v),
         Length::Vh(_) => Length::Vh(v),
         Length::Vw(_) => Length::Vw(v),
@@ -268,7 +276,7 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         // path in prod code for a case that can only be a logic error here,
         // not attacker/page-controlled input (docs/conventions.md — no
         // panic!/unwrap in production code).
-        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => {
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => {
             template.clone()
         }
     }
@@ -1043,13 +1051,18 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     let length = match unit {
         "px" => Length::Px(value),
         "rem" => Length::Rem(value),
+        "rlh" => Length::Rlh(value),
+        "rcap" => Length::Rem(value * 0.7),
+        "rex" => Length::Rex(value),
+        "rch" => Length::Rch(value),
+        "ric" => Length::Rem(value),
         // `ch`/`ex` carry their own variants (resolved against real font metrics
         // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
         "ch" => Length::Ch(value),
         "ex" => Length::Ex(value),
         "em" => Length::Em(value),
         "cap" => Length::Em(value * 0.7),
-        "lh" => Length::Em(value * 1.2),
+        "lh" => Length::Lh(value),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),
         "vmin" => Length::Vmin(value),

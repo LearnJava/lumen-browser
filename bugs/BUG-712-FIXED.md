@@ -48,7 +48,7 @@ pure Phase 0 JS shim per the module doc comment, `webgpu.rs:900`):
   Firefox/Chrome expose as `navigator.gpu` is an instance of `GPU`, per
   spec (`[Exposed=(Window, DedicatedWorker), SecureContext] interface GPU`);
   here it's a bare object literal, same class of defect as
-  [BUG-711](BUG-711-OPEN.md) (WebGL context has no
+  [BUG-711](BUG-711-FIXED.md) (WebGL context has no
   `WebGLRenderingContext` identity either) but on the entry point of a
   *different* subsystem, so not a duplicate.
 * By contrast, every other WebGPU interface *is* constructor/prototype-based
@@ -119,6 +119,6 @@ decision — the file's own doc comment (`webgpu.rs:3`) describes
 `cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
 — чист. `scripts/scoped-test.sh` дал два красных теста, оба посторонние:
 `credentials::tests::create_and_get_through_installed_provider` (TOCTOU-флак
-[BUG-759](BUG-759-OPEN.md), прошёл на повторном запуске в изоляции) и
+[BUG-759](BUG-759-FIXED.md), прошёл на повторном запуске в изоляции) и
 `cases::snapshot_cpu::cpu_snapshots_match_references` (чужой дрейф эталонов
 [BUG-1008](BUG-1008-OPEN.md)). Только JS-шим, пиксели не затронуты.

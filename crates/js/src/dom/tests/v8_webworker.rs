@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -17,6 +17,24 @@ fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
 }
 
 // ── Web Worker tests (WHATWG Web Workers §4) ─────────────────────────────
+
+/// Pumps the page's (shared) workers until `cond` evaluates to `true`, up to a
+/// 10 s deadline. A fixed sleep before one `pump_*` flakes when isolate start-up
+/// is slower than the pause (BUG-1111: parallel `scoped-test.sh` load).
+fn pump_until(rt: &V8JsRuntime, cond: &str, shared: bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if shared {
+            rt.pump_shared_workers();
+        } else {
+            rt.pump_workers();
+        }
+        if bool_eval(rt, cond) || std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
 
 #[test]
 fn worker_class_exists() {
@@ -102,14 +120,12 @@ fn worker_terminate_removes_from_registry() {
 
 #[test]
 fn worker_roundtrip_message_via_pump() {
-    use std::time::Duration;
     let rt = v8_runtime_with_dom(make_doc());
     // Worker script: echo back any message with a 'reply' wrapper.
     let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(%7Breply%3Ae.data%7D)%3B%7D";
     rt.eval(&format!("var w = new Worker('{}'); var received = null; w.onmessage = function(e){{received=e.data.reply;}}; w.postMessage(42);", script)).unwrap();
     // Give the worker thread time to process the message.
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "received !== null", false);
     let result = rt.eval("received").unwrap();
     assert_eq!(result, lumen_core::JsValue::Number(42.0));
 }
@@ -151,7 +167,6 @@ fn worker_import_scripts_preserves_strict_global_declarations() {
 
 #[test]
 fn worker_add_event_listener_fires_on_pump() {
-    use std::time::Duration;
     let rt = v8_runtime_with_dom(make_doc());
     let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(e.data%20*%202)%3B%7D";
     rt.eval(&format!(
@@ -162,8 +177,7 @@ fn worker_add_event_listener_fires_on_pump() {
         script
     ))
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "got !== null", false);
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::Number(14.0));
 }
@@ -279,7 +293,6 @@ fn worker_message_port_transfer_worker_to_page_round_trip() {
 
 #[test]
 fn worker_top_level_exception_fires_parent_onerror() {
-    use std::time::Duration;
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
         "var w = new Worker('data:text/javascript,throw new Error(\"boom\")'); \
@@ -288,8 +301,7 @@ fn worker_top_level_exception_fires_parent_onerror() {
     )
     .unwrap();
     // Give the worker thread time to run its top-level script and fail.
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "errEvent !== null", false);
     assert!(bool_eval(&rt, "errEvent !== null"));
     assert!(bool_eval(&rt, "errEvent.type === 'error'"));
     assert!(bool_eval(&rt, "errEvent.message === 'boom'"));
@@ -297,7 +309,6 @@ fn worker_top_level_exception_fires_parent_onerror() {
 
 #[test]
 fn worker_onmessage_handler_exception_fires_parent_onerror() {
-    use std::time::Duration;
     let rt = v8_runtime_with_dom(make_doc());
     let script = "data:text/javascript,onmessage%20%3D%20function(e)%7Bthrow%20new%20Error(%27boom2%27)%3B%7D";
     rt.eval(&format!(
@@ -308,15 +319,13 @@ fn worker_onmessage_handler_exception_fires_parent_onerror() {
         script
     ))
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "errEvent !== null", false);
     assert!(bool_eval(&rt, "errEvent !== null"));
     assert!(bool_eval(&rt, "errEvent.message === 'boom2'"));
 }
 
 #[test]
 fn worker_data_url_base64_script() {
-    use std::time::Duration;
     // base64("postMessage('hello');") = "cG9zdE1lc3NhZ2UoJ2hlbGxvJyk7"
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
@@ -325,15 +334,13 @@ fn worker_data_url_base64_script() {
                  w.onmessage = function(e){ got = e.data; };",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "got !== null", false);
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::String("hello".into()));
 }
 
 #[test]
 fn worker_blob_url_script() {
-    use std::time::Duration;
     let rt = v8_runtime_with_dom(make_doc());
     // Create a blob URL from a JS Blob and use it as the worker script.
     rt.eval(
@@ -346,10 +353,39 @@ fn worker_blob_url_script() {
                  w.postMessage(10);",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "res !== null", false);
     let result = rt.eval("res").unwrap();
     assert_eq!(result, lumen_core::JsValue::Number(11.0));
+}
+
+/// BUG-1197: a blob URL carries its creator's origin, so a worker started from
+/// one has the page's tuple origin — not the opaque one `blob:lumen/N` gave it
+/// (WPT `origin-from-worker.window.html`, tuple-origin subtest).
+#[test]
+fn worker_from_blob_url_has_the_creating_page_origin() {
+    use std::time::Duration;
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "_lumen_location_update('http://localhost:18300/origin/page.html'); \
+                 var blob = new Blob([\"postMessage([location.origin, Origin.from(globalThis).opaque, \
+                   Origin.from(globalThis).isSameOrigin(Origin.from('http://localhost:18300/'))]);\"], \
+                  {type:'text/javascript'}); \
+                 var w = new Worker(URL.createObjectURL(blob)); \
+                 var res = null; \
+                 w.onmessage = function(e){ res = JSON.stringify(e.data); };",
+    )
+    .unwrap();
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(25));
+        rt.pump_workers();
+        if rt.eval("res !== null").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+    }
+    assert_eq!(
+        rt.eval("res").unwrap(),
+        lumen_core::JsValue::String(r#"["http://localhost:18300",false,true]"#.into())
+    );
 }
 
 // ── BUG-364: external (http/https) Worker/SharedWorker script URLs ──────
@@ -405,12 +441,12 @@ fn v8_runtime_with_dom_and_fetch(
     provider: Arc<dyn lumen_core::ext::JsFetchProvider>,
 ) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(
         doc,
         "https://example.com/page.html",
         Some(provider),
-        None, None, None, None, None, None, None, None, false)
+        None, None, None, None, None, None, None, None, false, None)
     .unwrap();
     rt
 }
@@ -882,7 +918,6 @@ fn detached_stylesheet_link_loads_only_once_connected() {
 
 #[test]
 fn worker_external_url_fetches_and_runs_script() {
-    use std::time::Duration;
     let provider = Arc::new(FixedFetch { status: 200, body: "postMessage('remote');" });
     let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
     // Relative URL — must resolve against the page URL before fetching.
@@ -892,8 +927,7 @@ fn worker_external_url_fetches_and_runs_script() {
                  w.onmessage = function(e){ got = e.data; };",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "got !== null", false);
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::String("remote".into()));
 }
@@ -902,7 +936,6 @@ fn worker_external_url_fetches_and_runs_script() {
 /// after redirects, not the constructor URL the script was fetched from.
 #[test]
 fn worker_external_url_redirect_updates_its_own_location() {
-    use std::time::Duration;
     let provider = Arc::new(RedirectingScriptFetch {
         body: "postMessage(location.href);",
         final_url: "https://example.com/final.js",
@@ -914,8 +947,7 @@ fn worker_external_url_redirect_updates_its_own_location() {
                  w.onmessage = function(e){ got = e.data; };",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_workers();
+    pump_until(&rt, "got !== null", false);
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::String("https://example.com/final.js".into()));
 }
@@ -944,7 +976,6 @@ fn worker_external_url_fetch_failure_fires_onerror() {
 
 #[test]
 fn shared_worker_external_url_connects_and_echoes() {
-    use std::time::Duration;
     let provider = Arc::new(FixedFetch {
         status: 200,
         body: "onconnect = function(e){ e.ports[0].onmessage = function(ev){ e.ports[0].postMessage(ev.data + 1); }; };",
@@ -957,8 +988,7 @@ fn shared_worker_external_url_connects_and_echoes() {
                  sw.port.postMessage(41);",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_shared_workers();
+    pump_until(&rt, "got !== null", true);
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::Number(42.0));
 }
@@ -968,7 +998,6 @@ fn shared_worker_external_url_connects_and_echoes() {
 /// constructor URL the script was fetched from.
 #[test]
 fn shared_worker_external_url_redirect_updates_its_own_location() {
-    use std::time::Duration;
     let provider = Arc::new(RedirectingScriptFetch {
         body: "onconnect = function(e){ e.ports[0].postMessage(location.href); };",
         final_url: "https://example.com/final-sw.js",
@@ -980,8 +1009,7 @@ fn shared_worker_external_url_redirect_updates_its_own_location() {
                  sw.port.onmessage = function(e){ got = e.data; };",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-    rt.pump_shared_workers();
+    pump_until(&rt, "got !== null", true);
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::String("https://example.com/final-sw.js".into()));
 }
@@ -1101,7 +1129,7 @@ impl lumen_core::ext::JsFetchProvider for CspBlockedWorkerProvider {
 fn v8_runtime_with_csp_blocked_worker(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedWorkerProvider);
-    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 

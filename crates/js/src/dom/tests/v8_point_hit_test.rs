@@ -18,8 +18,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// `v8_elem_geometry_scroll.rs`'s own).
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -118,4 +118,25 @@ fn element_from_point_and_elements_from_point_agree_on_topmost() {
         "document.elementFromPoint(2, 2) === document.elementsFromPoint(2, 2)[0]"
     ).unwrap();
     assert_eq!(agree, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1202: a node inserted in the same tick is found by the hit test (the flush's own tree is
+/// used, not the stale embedder snapshot).
+#[test]
+fn element_from_point_finds_node_inserted_this_tick() {
+    let doc_arc = make_hit_test_doc();
+    let rt = v8_runtime_with_dom(Arc::clone(&doc_arc));
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("body { margin: 0; } button { display: block; width: 80px; height: 20px; }")));
+    rt.update_viewport_size(800.0, 600.0);
+    layout_and_push(&rt, &doc_arc);
+    let r = rt.eval(
+        "var b = document.createElement('button'); document.body.appendChild(b);
+         var r = b.getClientRects()[0];
+         var e = document.elementFromPoint(r.left + 2, r.top + 2);
+         (e ? e.localName : 'null') + '|' + document.elementsFromPoint(r.left + 2, r.top + 2).map(function(x){return x.localName;}).join('>')"
+    ).unwrap();
+    match r {
+        lumen_core::JsValue::String(s) => assert_eq!(s, "button|button>body>html"),
+        o => panic!("{o:?}"),
+    }
 }

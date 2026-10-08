@@ -241,6 +241,27 @@ const PAGES: &[&str] = &[
     // effect is glyph case + size, which diverges from Edge (rule #3); this
     // deterministic CPU snapshot is the regression gate for the synthesis.
     "150-font-variant-caps",
+    // CSS Backgrounds L3 §3.6 — background-attachment: fixed layers positioned
+    // against the 1024×720 viewport (scroll 0); gate for the emitter geometry.
+    // The scroll pinning itself is renderer-side and not visible at scroll 0.
+    "158-background-attachment",
+    // CSS Backgrounds L4 §3.8 — background-clip: text. Glyph-masked gradient/colour
+    // (PushMaskLayer alpha mask of the element's own and descendant text); the
+    // glyph shapes diverge from Edge (rule #3), so this deterministic CPU snapshot
+    // is the regression gate for the mask wiring.
+    "159-background-clip-text",
+    // HTML Rendering §15.3.13 — `<fieldset>` + rendered `<legend>`: legend на границе, рамка
+    // разорвана клиппингом вокруг него; без текста, поэтому и Edge совпадает на 0,00 %.
+    "160-fieldset-legend",
+    // GRID-VWM: grid в вертикальном `writing-mode` (столбцы по y, строки по x); без текста, Edge
+    // совпадает на 0,00 %.
+    "161-grid-vertical-writing-mode",
+    // CSS Fragmentation L3 §3.1 — `break-before/after: column` открывают новую колонку multicol;
+    // без текста, Edge совпадает на 0,00 %.
+    "162-multicol-forced-breaks",
+    // TABLE-HEIGHT: `height`/`min-height` таблицы делится по строкам (CSS 2.1 §17.5.3); без текста,
+    // Edge совпадает на 0,00 %.
+    "163-table-height",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

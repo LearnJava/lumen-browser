@@ -50,7 +50,7 @@
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Верхняя граница ожидания [`EngineThread::query`] (BUG-935 срез 6). `Task`
 /// исполняются по порядку (FIFO, без coalescing), поэтому замыкание `query`
@@ -61,7 +61,35 @@ use std::time::Duration;
 /// — с запасом над наблюдёнными full-relayout (146–2600мс, BUG-935 S3/S5),
 /// но много меньше `FETCH_READ_TIMEOUT`, так что таймаут гасит именно
 /// патологический хвост очереди, а не типичную нагрузку.
-const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Чем движковый поток занят прямо сейчас (BUG-1145): сообщение, которое он
+/// исполняет. Нужен, чтобы отказ по таймауту называл причину («поток занят
+/// `Task` из `page_load.rs:NN` уже 12 с»), а не выглядел как отсутствие
+/// JS-контекста.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineWork {
+    /// Коалесцированное задание `Run` (off-thread relayout).
+    Layout,
+    /// Синхронный `Readback` (relayout с ответом вызывающему).
+    Readback,
+    /// Упорядоченный `Task`, поставленный из `caller`.
+    Task(&'static std::panic::Location<'static>),
+}
+
+impl std::fmt::Display for EngineWork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Layout => f.write_str("layout job"),
+            Self::Readback => f.write_str("layout readback"),
+            Self::Task(caller) => write!(f, "task from {caller}"),
+        }
+    }
+}
+
+/// Слот «что исполняется и с какого момента»: движковый поток пишет его вокруг
+/// каждого сообщения пачки, UI-сторона читает через [`EngineThread::busy`].
+type BusySlot = Arc<Mutex<Option<(EngineWork, Instant)>>>;
 
 /// Задание/сигнал движковому потоку. Задания `Run` коалесцируются (latest-wins с
 /// generation-guard); `Readback` — request/reply по immutable-снимку, исполняется
@@ -145,6 +173,8 @@ pub struct EngineThread<C: Send + 'static, S: Send + 'static = ()> {
     tx: Sender<EngineMsg<C, S>>,
     /// Latest-wins слот, куда поток кладёт новейший исполненный коммит.
     latest: CommitSlot<C>,
+    /// Что поток исполняет сейчас (BUG-1145) — см. [`Self::busy`].
+    busy: BusySlot,
     /// Handle потока для join при shutdown.
     join: Option<JoinHandle<()>>,
 }
@@ -168,6 +198,8 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         let (tx, rx) = mpsc::channel::<EngineMsg<C, S>>();
         let latest: CommitSlot<C> = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&latest);
+        let busy = BusySlot::default();
+        let busy_writer = Arc::clone(&busy);
         let join = thread::Builder::new()
             .name("lumen-engine".to_owned())
             // BUG-987: layout рекурсивно спускается по дереву боксов на
@@ -175,8 +207,15 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
             // глубоких страницах (fandom+OneTrust и др.). 128 МБ резерва —
             // запас до итеративного обхода (см. BUGS.md BUG-987).
             .stack_size(128 * 1024 * 1024)
-            .spawn(move || engine_thread_main(&rx, &slot, initial))?;
-        Ok(Self { tx, latest, join: Some(join) })
+            .spawn(move || engine_thread_main(&rx, &slot, &busy_writer, initial))?;
+        Ok(Self { tx, latest, busy, join: Some(join) })
+    }
+
+    /// Что движковый поток исполняет прямо сейчас и сколько уже (BUG-1145);
+    /// `None` — поток простаивает на `recv()`.
+    pub fn busy(&self) -> Option<(EngineWork, Duration)> {
+        let guard = self.busy.lock().ok()?;
+        guard.map(|(work, since)| (work, since.elapsed()))
     }
 
     /// Ставит задание движковому потоку (fire-and-forget). `generation` —
@@ -273,6 +312,19 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         &self,
         job: impl FnOnce(&mut S) -> R + Send + 'static,
     ) -> Option<R> {
+        self.query_within(QUERY_TIMEOUT, job)
+    }
+
+    /// [`Self::query`] с собственным сроком ожидания. BUG-935 срез 87: UI-поток,
+    /// которому ответ нужен «если дёшево» (хэндл JS для нового `<iframe>`), не
+    /// должен стоять за секундным заданием соседа по FIFO — `None` по сроку, и
+    /// вызывающий повторит позже.
+    #[track_caller]
+    pub fn query_within<R: Send + 'static>(
+        &self,
+        timeout: Duration,
+        job: impl FnOnce(&mut S) -> R + Send + 'static,
+    ) -> Option<R> {
         let caller = std::panic::Location::caller();
         // Queue depth 1: ровно один ответ на одно задание.
         let (reply_tx, reply_rx) = mpsc::sync_channel::<R>(1);
@@ -290,7 +342,7 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         // Ограниченное ожидание (BUG-935 S6): `Err` — и `Disconnected`
         // (sender дропнут при shutdown), и `Timeout` (задание застряло в
         // очереди позади долгого синхронного соседа) — трактуются одинаково.
-        reply_rx.recv_timeout(QUERY_TIMEOUT).ok()
+        reply_rx.recv_timeout(timeout).ok()
     }
 }
 
@@ -328,6 +380,7 @@ impl<C: Send + 'static, S: Send + 'static> Drop for EngineThread<C, S> {
 fn engine_thread_main<C: Send + 'static, S: Send + 'static>(
     rx: &Receiver<EngineMsg<C, S>>,
     latest: &CommitSlot<C>,
+    busy: &BusySlot,
     mut state: S,
 ) {
     let mut applied_generation: u64 = 0;
@@ -344,7 +397,7 @@ fn engine_thread_main<C: Send + 'static, S: Send + 'static>(
         while let Ok(m) = rx.try_recv() {
             batch.push(m);
         }
-        if run_batch(batch, &mut applied_generation, latest, &mut state) {
+        if run_batch(batch, &mut applied_generation, latest, &mut state, busy) {
             return; // получен Shutdown
         }
     }
@@ -372,6 +425,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
     applied_generation: &mut u64,
     latest: &CommitSlot<C>,
     state: &mut S,
+    busy: &BusySlot,
 ) -> bool {
     if batch.iter().any(|m| matches!(m, EngineMsg::Shutdown)) {
         return true;
@@ -392,6 +446,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 // Исполняем только новейший `Run`; ранние/устаревшие роняем.
                 if Some(i) == newest_run {
                     *applied_generation = generation;
+                    set_busy(busy, Some(EngineWork::Layout));
                     let commit = job();
                     if let Ok(mut slot) = latest.lock() {
                         *slot = Some(commit);
@@ -402,6 +457,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 // Readback исполняется всегда; результат — напрямую вызывающему.
                 // `send` может вернуть `Err`, если тот отказался ждать — тогда
                 // молча роняем (queue depth 1, никогда не блокирует поток).
+                set_busy(busy, Some(EngineWork::Readback));
                 let commit = job();
                 let _ = reply.send(commit);
             }
@@ -422,6 +478,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 // этот call site в лог — S21/S22 могли видеть долгую строку, но не
                 // могли сказать, какой из вызывающих её поставил.
                 let log_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+                set_busy(busy, Some(EngineWork::Task(caller)));
                 job(state);
                 if let Some(t0) = log_t0 {
                     eprintln!(
@@ -434,7 +491,16 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
             EngineMsg::Shutdown => {}
         }
     }
+    set_busy(busy, None);
     false
+}
+
+/// Публикует в `busy` текущее сообщение пачки (BUG-1145); `None` — пачка
+/// исполнена, поток уходит обратно на `recv()`.
+fn set_busy(busy: &BusySlot, work: Option<EngineWork>) {
+    if let Ok(mut slot) = busy.lock() {
+        *slot = work.map(|w| (w, Instant::now()));
+    }
 }
 
 /// Индекс задания, которое должно победить в дренированной пачке (latest-wins +
@@ -518,7 +584,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         // Пачка relayout 1 и 2 — исполняется gen 2, поколение продвигается.
-        let shutdown = run_batch(vec![run(1), run(2)], &mut applied, &latest, &mut ());
+        let shutdown = run_batch(vec![run(1), run(2)], &mut applied, &latest, &mut (), &BusySlot::default());
         assert!(!shutdown);
         assert_eq!(applied, 2);
         assert_eq!(latest.lock().unwrap().take(), Some(2));
@@ -529,7 +595,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 5;
         // Единственное задание устарело (gen 3 < 5) — слот пуст, поколение не падает.
-        let shutdown = run_batch(vec![run(3)], &mut applied, &latest, &mut ());
+        let shutdown = run_batch(vec![run(3)], &mut applied, &latest, &mut (), &BusySlot::default());
         assert!(!shutdown);
         assert_eq!(applied, 5);
         assert!(latest.lock().unwrap().is_none());
@@ -541,7 +607,7 @@ mod tests {
         let mut applied = 0;
         // Десять заданий подряд — исполняется ровно одно, новейшее (queue depth 1).
         let batch: Vec<EngineMsg<u64, ()>> = (1..=10).map(run).collect();
-        run_batch(batch, &mut applied, &latest, &mut ());
+        run_batch(batch, &mut applied, &latest, &mut (), &BusySlot::default());
         assert_eq!(applied, 10);
         assert_eq!(latest.lock().unwrap().take(), Some(10));
     }
@@ -564,7 +630,7 @@ mod tests {
         };
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
-        run_batch(vec![mk(1), mk(2), mk(3)], &mut applied, &latest, &mut ());
+        run_batch(vec![mk(1), mk(2), mk(3)], &mut applied, &latest, &mut (), &BusySlot::default());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(latest.lock().unwrap().take(), Some(3));
     }
@@ -575,7 +641,7 @@ mod tests {
         let mut applied = 0;
         // Shutdown в пачке — сигнал выхода; задание при этом не исполняется.
         let shutdown =
-            run_batch(vec![run(1), EngineMsg::Shutdown], &mut applied, &latest, &mut ());
+            run_batch(vec![run(1), EngineMsg::Shutdown], &mut applied, &latest, &mut (), &BusySlot::default());
         assert!(shutdown);
         assert!(latest.lock().unwrap().is_none());
     }
@@ -593,7 +659,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         let (msg, rx) = readback_msg(77);
-        let shutdown = run_batch(vec![msg], &mut applied, &latest, &mut ());
+        let shutdown = run_batch(vec![msg], &mut applied, &latest, &mut (), &BusySlot::default());
         assert!(!shutdown);
         assert_eq!(rx.recv().ok(), Some(77));
         assert_eq!(applied, 0, "readback не двигает applied_generation");
@@ -608,7 +674,7 @@ mod tests {
         let mut applied = 0;
         let (msg, rx) = readback_msg(500);
         let batch = vec![run(1), msg, run(2)];
-        run_batch(batch, &mut applied, &latest, &mut ());
+        run_batch(batch, &mut applied, &latest, &mut (), &BusySlot::default());
         assert_eq!(applied, 2);
         assert_eq!(latest.lock().unwrap().take(), Some(2));
         assert_eq!(rx.recv().ok(), Some(500));
@@ -623,7 +689,7 @@ mod tests {
         let (m1, rx1) = readback_msg(10);
         let (m2, rx2) = readback_msg(20);
         let (m3, rx3) = readback_msg(30);
-        run_batch(vec![m1, m2, m3], &mut applied, &latest, &mut ());
+        run_batch(vec![m1, m2, m3], &mut applied, &latest, &mut (), &BusySlot::default());
         assert_eq!(rx1.recv().ok(), Some(10));
         assert_eq!(rx2.recv().ok(), Some(20));
         assert_eq!(rx3.recv().ok(), Some(30));
@@ -636,7 +702,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         let (msg, rx) = readback_msg(9);
-        let shutdown = run_batch(vec![msg, EngineMsg::Shutdown], &mut applied, &latest, &mut ());
+        let shutdown = run_batch(vec![msg, EngineMsg::Shutdown], &mut applied, &latest, &mut (), &BusySlot::default());
         assert!(shutdown);
         assert!(rx.recv().is_err(), "reply-канал должен быть дропнут");
     }
@@ -654,7 +720,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         let mut state: u64 = 100;
-        let shutdown = run_batch(vec![add_task(5)], &mut applied, &latest, &mut state);
+        let shutdown = run_batch(vec![add_task(5)], &mut applied, &latest, &mut state, &BusySlot::default());
         assert!(!shutdown);
         assert_eq!(state, 105);
         assert_eq!(applied, 0, "task не двигает applied_generation");
@@ -674,6 +740,7 @@ mod tests {
             &mut applied,
             &latest,
             &mut state,
+            &BusySlot::default(),
         );
         assert_eq!(state, 6, "все три Task исполнены, ни один не коалесцирован");
     }
@@ -689,7 +756,7 @@ mod tests {
         fn mk(c: char) -> EngineMsg<String, String> {
             EngineMsg::Task { caller: std::panic::Location::caller(), job: Box::new(move |s: &mut String| s.push(c)) }
         }
-        run_batch(vec![mk('a'), mk('b'), mk('c')], &mut applied, &latest, &mut log);
+        run_batch(vec![mk('a'), mk('b'), mk('c')], &mut applied, &latest, &mut log, &BusySlot::default());
         assert_eq!(log, "abc");
     }
 
@@ -700,7 +767,7 @@ mod tests {
         let mut applied = 0;
         let mut state: u64 = 42;
         let shutdown =
-            run_batch(vec![add_task(1), EngineMsg::Shutdown], &mut applied, &latest, &mut state);
+            run_batch(vec![add_task(1), EngineMsg::Shutdown], &mut applied, &latest, &mut state, &BusySlot::default());
         assert!(shutdown);
         assert_eq!(state, 42, "shutdown отменяет исполнение Task");
     }
@@ -720,7 +787,7 @@ mod tests {
             },
             EngineMsg::Run { generation: 2, job: Box::new(|| 2) },
         ];
-        run_batch(batch, &mut applied, &latest, &mut state);
+        run_batch(batch, &mut applied, &latest, &mut state, &BusySlot::default());
         assert_eq!(applied, 2);
         assert_eq!(latest.lock().unwrap().take(), Some(2));
         assert_eq!(state, 7);
@@ -784,6 +851,18 @@ mod tests {
     }
 
     #[test]
+    fn query_within_gives_up_at_its_own_deadline() {
+        // BUG-935 срез 87: UI-поток, которому хэндл нужен «если дёшево», ждёт
+        // сотые доли секунды, а не `QUERY_TIMEOUT`, — и свободный поток отвечает.
+        let engine = EngineThread::<u64, u64>::spawn_with_state(7).expect("spawn engine thread");
+        assert_eq!(engine.query_within(Duration::from_secs(2), |s| *s), Some(7));
+        engine.task(|_| thread::sleep(Duration::from_millis(300)));
+        let t0 = std::time::Instant::now();
+        assert_eq!(engine.query_within(Duration::from_millis(20), |s| *s), None);
+        assert!(t0.elapsed() < Duration::from_millis(200), "ждали дольше собственного срока");
+    }
+
+    #[test]
     fn task_mutates_engine_owned_state() {
         // End-to-end: движковый поток владеет состоянием `u64`; `task` мутирует
         // его off-thread, `query` читает результат. Проверяет, что состояние
@@ -813,5 +892,31 @@ mod tests {
         let engine = EngineThread::<u64, u64>::spawn().expect("spawn engine thread");
         engine.task(|s| *s += 7);
         assert_eq!(engine.query(|s| *s), Some(7));
+    }
+
+    #[test]
+    fn busy_names_running_task_and_clears_when_idle() {
+        // BUG-1145: пока `Task` исполняется, `busy()` называет его call site —
+        // этим отказ `eval` по таймауту объясняет, чем занят поток.
+        let engine = EngineThread::<u64, u64>::spawn_with_state(0).expect("spawn engine thread");
+        assert_eq!(engine.busy(), None, "свежий поток простаивает");
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        engine.task(move |_| {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv().expect("task started");
+        let (work, _) = engine.busy().expect("busy while the task runs");
+        assert!(
+            matches!(work, EngineWork::Task(loc) if loc.file().ends_with("engine_thread.rs")),
+            "busy должен указывать на постановщика задания, а не на обёртку: {work}"
+        );
+        release_tx.send(()).expect("release task");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while engine.busy().is_some() {
+            assert!(Instant::now() < deadline, "поток не вернулся в простой");
+            thread::yield_now();
+        }
     }
 }

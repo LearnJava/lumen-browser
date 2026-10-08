@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -84,6 +84,7 @@ fn resource_timing_observer_notified() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['resource']});
                 _lumen_record_resource_timing('https://example.com/fetch.json', 'fetch', 300, 15);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].initiatorType === 'fetch' && got[0].duration === 15
                 "#
     ).unwrap();
@@ -214,6 +215,7 @@ fn performance_observer_callback_takes_three_arguments() {
                     argc = arguments.length; opts = options;
                 }).observe({type: 'mark'});
                 performance.mark('m');
+                _lumen_tick_timers();
                 argc === 3 && opts !== null && opts.droppedEntriesCount === 0
                 "#,
         )
@@ -236,9 +238,12 @@ fn dropped_entries_count_reported_once_per_observe() {
                 });
                 po.observe({type: 'resource'});
                 _lumen_record_resource_timing('https://example.com/b.js', 'script', 20, 1);
+                _lumen_tick_timers();
                 _lumen_record_resource_timing('https://example.com/c.js', 'script', 30, 1);
                 _lumen_tick_timers();
-                counts.length === 2 && counts[0] === 1 && counts[1] === undefined
+                // Both a.js and b.js are dropped by the time the queued callback
+                // runs — the same «2» `droppedentriescount.any.js` asserts.
+                counts.length === 2 && counts[0] === 2 && counts[1] === undefined
                 "#,
         )
         .unwrap();
@@ -259,6 +264,7 @@ fn dropped_entries_count_zero_for_an_unbounded_type() {
                     got = options.droppedEntriesCount;
                 }).observe({type: 'mark'});
                 performance.mark('m');
+                _lumen_tick_timers();
                 got === 0
                 "#,
         )
@@ -296,13 +302,13 @@ fn shell_delivered_rows_become_resource_entries() {
     let r = rt
         .eval(
             r#"
-                var origin = performance.timeOrigin;
+                var t0 = performance.timeOrigin;
                 _lumen_deliver_resource_timings(JSON.stringify([
                     { url: 'https://example.com/i.png', initiatorType: 'img',
-                      startMs: origin + 40, durationMs: 12, status: 200,
+                      startMs: t0 + 40, durationMs: 12, status: 200,
                       decodedBodySize: 64, encodedBodySize: 64 },
                     { url: 'https://example.com/early.css', initiatorType: 'css',
-                      startMs: origin - 500, durationMs: 3, status: 200 }
+                      startMs: t0 - 500, durationMs: 3, status: 200 }
                 ]));
                 var all = performance.getEntriesByType('resource');
                 all.length === 2 && all[0].startTime === 40 && all[0].initiatorType === 'img' &&
@@ -350,6 +356,7 @@ fn deliver_perf_entry_notifies_observer() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['navigation']});
                 _lumen_deliver_perf_entry('navigation', 'self', 100.0, 60.0, null);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].entryType === 'navigation'
                 "#
     ).unwrap();
@@ -393,6 +400,7 @@ fn nav_timing_observer_receives_navigation_entry() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['navigation']});
                 _lumen_deliver_perf_entry('navigation', 'https://example.com/', 0.0, 350.0, null);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].entryType === 'navigation' && got[0].duration === 350
                 "#
     ).unwrap();
@@ -432,7 +440,8 @@ fn nav_timing_buffered_replay() {
                 _lumen_deliver_perf_entry('navigation', 'https://buffered.test/', 0.0, 500.0, null);
                 var got = [];
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
-                po.observe({entryTypes: ['navigation'], buffered: true});
+                po.observe({type: 'navigation', buffered: true});
+                _lumen_tick_timers();
                 got.length === 1 && got[0].name === 'https://buffered.test/'
                 "#
     ).unwrap();
@@ -447,11 +456,11 @@ fn performance_timing_before_any_navigation_falls_back_to_zero() {
     let r = rt.eval(
         r#"
                 var t = performance.timing;
-                var origin = Math.round(performance.timeOrigin);
+                var t0 = Math.round(performance.timeOrigin);
                 // navigationStart/domLoading are always known (they're just
                 // timeOrigin); every other milestone falls back to the spec's
                 // own "hasn't happened yet" value of 0.
-                t.navigationStart === origin && t.domLoading === origin &&
+                t.navigationStart === t0 && t.domLoading === t0 &&
                     t.fetchStart === 0 && t.loadEventEnd === 0
                 "#
     ).unwrap();
@@ -471,14 +480,14 @@ fn performance_timing_derives_from_the_same_navigation_entry_as_l2() {
                         redirectCount: 0, type: 'navigate',
                     }));
                 var t = performance.timing;
-                var origin = Math.round(performance.timeOrigin);
-                t.navigationStart === origin &&
-                    t.domInteractive === origin + 40 &&
-                    t.domContentLoadedEventStart === origin + 40 &&
-                    t.domContentLoadedEventEnd === origin + 45 &&
-                    t.domComplete === origin + 100 &&
-                    t.loadEventStart === origin + 100 &&
-                    t.loadEventEnd === origin + 120 &&
+                var t0 = Math.round(performance.timeOrigin);
+                t.navigationStart === t0 &&
+                    t.domInteractive === t0 + 40 &&
+                    t.domContentLoadedEventStart === t0 + 40 &&
+                    t.domContentLoadedEventEnd === t0 + 45 &&
+                    t.domComplete === t0 + 100 &&
+                    t.loadEventStart === t0 + 100 &&
+                    t.loadEventEnd === t0 + 120 &&
                     t.loadEventEnd >= t.domComplete
                 "#
     ).unwrap();
@@ -553,9 +562,9 @@ fn performance_to_json_includes_timing_and_navigation() {
                         redirectCount: 0, type: 'navigate',
                     }));
                 var j = performance.toJSON();
-                var origin = Math.round(performance.timeOrigin);
+                var t0 = Math.round(performance.timeOrigin);
                 typeof j.timing === 'object' && typeof j.navigation === 'object' &&
-                    j.timing.domComplete === origin + 20 && j.navigation.type === 0
+                    j.timing.domComplete === t0 + 20 && j.navigation.type === 0
                 "#
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -836,7 +845,10 @@ fn dom_node_count_at_max_after_prefill() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         // Verify prefill worked
         assert_eq!(d.node_count(), lumen_dom::MAX_DOM_NODES);
@@ -856,7 +868,10 @@ fn dom_create_element_throws_quota_exceeded_when_full() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         Arc::new(Mutex::new(d))
     };
@@ -882,7 +897,10 @@ fn dom_create_text_node_throws_quota_exceeded_when_full() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         Arc::new(Mutex::new(d))
     };
@@ -904,7 +922,10 @@ fn dom_create_comment_throws_quota_exceeded_when_full() {
         use lumen_dom::{Document, QualName};
         let mut d = Document::new();
         while d.node_count() < lumen_dom::MAX_DOM_NODES {
-            d.create_element(QualName::html("div"));
+            // Attached: detached unreferenced nodes would be reclaimed on demand (BUG-1160).
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
         }
         Arc::new(Mutex::new(d))
     };
@@ -1022,4 +1043,47 @@ fn chrome_runtime_get_url() {
     assert_eq!(v, lumen_core::JsValue::String(
         "chrome-extension://lumen-extension/icons/icon.png".into()
     ));
+}
+
+#[test]
+fn dom_create_element_reclaims_detached_garbage_at_limit() {
+    // BUG-1160: a script that builds and drops nodes in one synchronous job
+    // (Range-mutations-*) used to hit MAX_DOM_NODES with almost no live nodes;
+    // the 30 s shell GC tick never gets a turn inside the loop.
+    let rt = v8_runtime_with_dom(Arc::new(Mutex::new(lumen_dom::Document::new())));
+    let r = rt.eval(
+        r#"
+                var made = 0, caught = '';
+                try { for (; made < 120000; made++) { document.createElement('div'); } }
+                catch (e) { caught = e.name; }
+                caught + ':' + made
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(":120000".into()));
+}
+
+#[test]
+fn dom_create_element_still_throws_when_limit_is_all_live() {
+    // The on-demand reclaim must not free attached nodes: a document that
+    // really holds MAX_DOM_NODES live nodes keeps raising QuotaExceededError.
+    let doc = {
+        use lumen_dom::{Document, QualName};
+        let mut d = Document::new();
+        while d.node_count() < lumen_dom::MAX_DOM_NODES {
+            let n = d.create_element(QualName::html("div"));
+            let root = d.root();
+            d.append_child(root, n);
+        }
+        Arc::new(Mutex::new(d))
+    };
+    let rt = v8_runtime_with_dom(doc);
+    let r = rt.eval(
+        r#"
+                var caught = '';
+                try { document.createElement('p'); document.createElement('p'); }
+                catch (e) { caught = e.name; }
+                caught
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
 }

@@ -1,5 +1,6 @@
 use super::*;
 use super::block_flow_trampoline::{self, DispatchOutcome};
+use super::layout_cache::{finalize_block_height, lay_out_cache_checked};
 
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
@@ -57,191 +58,6 @@ pub(crate) fn lay_out_with_used_size(
     );
 }
 
-/// BUG-341 S36 — the layout-result cache's one choke point, shared by
-/// [`lay_out`] (`used_size_override: None`) and [`lay_out_with_used_size`]
-/// (`used_size_override: Some(..)`, `lay_out_flex`'s three re-layout call
-/// sites). Both wrappers pass `outer_floats: None, parent_justify_items:
-/// Auto` unconditionally into `lay_out_inner` — the block-flow normal-child
-/// recursion is the one `lay_out_inner` call site that threads real
-/// floats/justify-items and is therefore never intercepted here, same
-/// exclusion S32 established.
-#[allow(clippy::too_many_arguments)]
-fn lay_out_cache_checked(
-    b: &mut LayoutBox,
-    start_x: f32,
-    start_y: f32,
-    available_width: f32,
-    available_height: Option<f32>,
-    measurer: Option<&dyn TextMeasurer>,
-    viewport: Size,
-    pcb: Rect,
-    hp: &dyn HyphenationProvider,
-    in_block_flow: bool,
-    used_size_override: Option<UsedSizeOverride>,
-) {
-    // BUG-802: this wrapper is the one entry point every layout pass starts
-    // from, so it is where a pass is delimited for the probe-height memo.
-    let _pass = LayoutPassGuard::enter();
-    // BUG-341 S40: the same box, at the same origin, with the same inputs,
-    // already holds the answer — skip the whole recursive descent instead of
-    // recomputing it into a copy. See `LayoutInPlaceKey`'s doc comment for why
-    // this is a different mechanism from S32/S36/S38's layout-result cache and
-    // not another policy variant of it.
-    let in_place_key = (layout_in_place_reuse_enabled()
-        && cacheable_for_layout_result_cache(b))
-    .then(|| LayoutInPlaceKey {
-        node: b.node,
-        role: std::mem::discriminant(&b.origin.role),
-        start_x_bits: start_x.to_bits(),
-        start_y_bits: start_y.to_bits(),
-        width_bits: available_width.to_bits(),
-        height_bits: available_height.map(f32::to_bits),
-        viewport_w_bits: viewport.width.to_bits(),
-        viewport_h_bits: viewport.height.to_bits(),
-        pcb_x_bits: pcb.x.to_bits(),
-        pcb_y_bits: pcb.y.to_bits(),
-        pcb_w_bits: pcb.width.to_bits(),
-        pcb_h_bits: pcb.height.to_bits(),
-        in_block_flow,
-        measurer_ptr: measurer
-            .map(|m| m as *const dyn TextMeasurer as *const () as usize)
-            .unwrap_or(0),
-        hp_ptr: hp as *const dyn HyphenationProvider as *const () as usize,
-        used_size_override: UsedSizeOverrideBits::from(used_size_override.as_ref()),
-    });
-    if let Some(key) = in_place_key.as_ref()
-        && layout_in_place_hit(b, key)
-    {
-        return;
-    }
-    if layout_result_cache_enabled() && cacheable_for_layout_result_cache(b) {
-        let key = LayoutResultKey {
-            node: b.node,
-            width_bits: available_width.to_bits(),
-            height_bits: available_height.map(f32::to_bits),
-            viewport_w_bits: viewport.width.to_bits(),
-            viewport_h_bits: viewport.height.to_bits(),
-            pcb_x_bits: pcb.x.to_bits(),
-            pcb_y_bits: pcb.y.to_bits(),
-            pcb_w_bits: pcb.width.to_bits(),
-            pcb_h_bits: pcb.height.to_bits(),
-            in_block_flow,
-            measurer_ptr: measurer
-                .map(|m| m as *const dyn TextMeasurer as *const () as usize)
-                .unwrap_or(0),
-            hp_ptr: hp as *const dyn HyphenationProvider as *const () as usize,
-            used_size_override: UsedSizeOverrideBits::from(used_size_override.as_ref()),
-        };
-        let hit = LAYOUT_RESULT_CACHE.with(|c| {
-            c.borrow().get(&key).and_then(|e| {
-                if Arc::ptr_eq(&e.style, &b.style) && crate::incremental::kind_layout_eq(&e.result.kind, &b.kind) {
-                    Some((e.result.clone(), e.start_x, e.start_y))
-                } else {
-                    None
-                }
-            })
-        });
-        if let Some((mut result, cached_x, cached_y)) = hit {
-            crate::incremental::translate_subtree(&mut result, start_x - cached_x, start_y - cached_y);
-            *b = result;
-            LAYOUT_RESULT_CACHE_STATS.with(|c| {
-                let mut v = c.get();
-                v.hits += 1;
-                c.set(v);
-            });
-            return;
-        }
-
-        // Cache miss: compute normally, tracking whether the computation
-        // touched `content-visibility: auto` anywhere in this subtree (see
-        // `CV_AUTO_TOUCHED`'s doc comment).
-        let outer_touched = CV_AUTO_TOUCHED.with(|c| c.replace(false));
-        lay_out_inner(
-            b, start_x, start_y, available_width, available_height,
-            measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
-            used_size_override,
-        );
-        let touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
-        CV_AUTO_TOUCHED.with(|c| c.set(outer_touched || touched_here));
-        if !touched_here {
-            // BUG-341 S38: `Eager` always materializes (S36's original
-            // policy); `Lazy` defers the subtree clone until a key's second
-            // sighting confirms style-stability, per `LayoutResultCacheMode`'s
-            // doc comment — the clone S37 measured at ~1.7μs/node is wasted
-            // on the ~9% of keys this fixture's own census found never
-            // recur at all.
-            let deferred = match layout_result_cache_mode() {
-                LayoutResultCacheMode::Lazy => {
-                    let confirmed_repeat = LAYOUT_RESULT_CACHE_SEEN.with(|c| {
-                        c.borrow().get(&key).map(|prev_style| Arc::ptr_eq(prev_style, &b.style)).unwrap_or(false)
-                    });
-                    if confirmed_repeat {
-                        LAYOUT_RESULT_CACHE_SEEN.with(|c| {
-                            c.borrow_mut().remove(&key);
-                        });
-                        false
-                    } else {
-                        LAYOUT_RESULT_CACHE_SEEN.with(|c| {
-                            c.borrow_mut().insert(key, Arc::clone(&b.style));
-                        });
-                        true
-                    }
-                }
-                LayoutResultCacheMode::Eager | LayoutResultCacheMode::Off => false,
-            };
-            if !deferred {
-                LAYOUT_RESULT_CACHE.with(|c| {
-                    c.borrow_mut().insert(
-                        key,
-                        LayoutResultEntry {
-                            style: Arc::clone(&b.style),
-                            start_x,
-                            start_y,
-                            result: b.clone(),
-                        },
-                    );
-                });
-            }
-            LAYOUT_RESULT_CACHE_STATS.with(|c| {
-                let mut v = c.get();
-                v.misses += 1;
-                if deferred {
-                    v.deferred += 1;
-                }
-                c.set(v);
-            });
-        } else {
-            LAYOUT_RESULT_CACHE_STATS.with(|c| {
-                let mut v = c.get();
-                v.poisoned += 1;
-                c.set(v);
-            });
-        }
-        // BUG-341 S40: both mechanisms can be active at once (the cache is
-        // `Off` in production, so in practice only this branch's `else` runs) —
-        // record the in-place witness on this path too, so enabling the cache
-        // for an A/B does not silently disable in-place reuse.
-        if let Some(key) = in_place_key {
-            record_layout_in_place(b, key, touched_here);
-        }
-        return;
-    }
-    // BUG-341 S40: track `content-visibility: auto` across this subtree the
-    // same way the cache branch above does — a subtree whose result depends on
-    // the scroll offset must not be recorded as reusable. The flag is restored
-    // to "outer OR here" so an ancestor's own recording sees it too.
-    let outer_cv_touched = CV_AUTO_TOUCHED.with(|c| c.replace(false));
-    lay_out_inner(
-        b, start_x, start_y, available_width, available_height,
-        measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
-        used_size_override,
-    );
-    let cv_touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
-    CV_AUTO_TOUCHED.with(|c| c.set(outer_cv_touched || cv_touched_here));
-    if let Some(key) = in_place_key {
-        record_layout_in_place(b, key, cv_touched_here);
-    }
-}
 
 /// CSS 2.1 §9.5 — same as [`lay_out`] but threads `outer_floats`: the float
 /// context of an *enclosing* block formatting context, present only when `b` is
@@ -258,7 +74,7 @@ fn lay_out_cache_checked(
 /// `used_size_override` — see [`UsedSizeOverride`]; `None` for every call site
 /// except `lay_out_with_used_size`'s wrapper (`lay_out_flex`'s re-layout passes).
 #[allow(clippy::too_many_arguments)]
-fn lay_out_inner(
+pub(super) fn lay_out_inner(
     b: &mut LayoutBox,
     start_x: f32,
     start_y: f32,
@@ -279,99 +95,85 @@ fn lay_out_inner(
     );
 }
 
-/// LAYOUT-2 срез 1: computes `b`'s used height from `content_height` (the block-
-/// flow/multicol/table content extent) — CSS 2.1 §10.6.3 explicit height,
-/// §10.6.7 aspect-ratio-derived, CSS Box Sizing L4 §5 size-containment fallback,
-/// CSS Basic UI L4 §4.4 field-sizing override, and the §10.4 min/max-height
-/// clamp. Shared by the plain block-flow branch (dispatched inline before
-/// LAYOUT-2, now via the explicit-stack driver in `block_flow_trampoline`) and
-/// the multicol branch (`lay_out_multicol_children`'s caller), which both need
-/// the exact same finishing sequence applied to two different `content_height`
-/// sources. Extracted verbatim — no behavior change from the pre-LAYOUT-2 inline
-/// version.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn finalize_block_height(
-    b: &mut LayoutBox,
-    s: &ComputedStyle,
-    em: f32,
-    available_height: Option<f32>,
-    viewport: Size,
-    padding_top: f32,
-    padding_bottom: f32,
-    size_contained: bool,
-    field_intrinsic: Option<(f32, f32)>,
-    content_height: f32,
-) {
-    // Явная высота (CSS height: Npx) перекрывает авто-высоту по содержимому.
-    // box-sizing работает симметрично width: content-box прибавляет
-    // padding+border, border-box оставляет h как итоговую высоту.
-    b.rect.height = if let Some(h_len) = &s.height {
-        if let Some(h) = resolve_block_size(h_len, em, available_height, viewport) {
-            let specified = match s.box_sizing {
-                BoxSizing::ContentBox => h
-                    + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width,
-                BoxSizing::BorderBox => h.max(
-                    padding_top + padding_bottom
-                        + s.border_top_width + s.border_bottom_width,
-                ),
-            };
-            // CSS 2.1 §17.5.3: the `height` of a table cell is a minimum — the cell
-            // grows to fit content taller than the specified height (unlike a regular
-            // block, where overflow just spills). Without this the cell clamps to the
-            // specified border-box height and content overflows into the inter-row
-            // border-spacing gap, so row pitch is short by the overflow amount and the
-            // error accumulates down the table (BUG-177).
-            if s.display == Display::TableCell {
-                let content_box = content_height
-                    + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width;
-                specified.max(content_box)
-            } else {
-                specified
-            }
-        } else {
-            content_height + padding_top + padding_bottom
-                + s.border_top_width + s.border_bottom_width
+
+/// Font-relative-unit contexts for one box (CSS Values L4 §5.1.1): the real
+/// `ch`/`ex` metrics of its font and its used line-height (`lh`). Restores the
+/// parent's values on drop, keeping the thread-locals balanced across the
+/// recursive layout walk. Without a measurer the contexts are cleared, so
+/// `ch`/`ex`/`lh` fall back to the spec `0.5em`/`1.2em` assumption.
+///
+/// Trampolines resolve a box's block-size *after* `dispatch_box` has returned,
+/// so their `run` entry points re-enter this context for the box they finish.
+pub(super) struct FontContext {
+    prev_ch_ex: Option<(f32, f32)>,
+    prev_lh: Option<f32>,
+}
+
+impl FontContext {
+    pub(super) fn enter(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Self {
+        let _prof = lumen_core::profile::scope_detail("lo_chex");
+        let ch_ex = measurer.map(|m| {
+            let fs = b.style.font_size.max(0.0);
+            (
+                m.char_width_with_families('0', fs, &b.style.font_family),
+                m.x_height_px(fs),
+            )
+        });
+        // `lh`: `used_line_height` is the measurer-resolved value; fall back to
+        // the cascaded ratio when unresolved (BUG-1051).
+        let lh = measurer.map(|_| {
+            if b.used_line_height > 0.0 { b.used_line_height } else { b.style.font_size * b.style.line_height }
+        });
+        Self {
+            prev_ch_ex: crate::style::push_ch_ex_context(ch_ex),
+            prev_lh: crate::style::push_lh_context(lh),
         }
-    } else if let Some((aw, ah)) = s.aspect_ratio
-        && aw > 0.0 && ah > 0.0
-    {
-        // CSS Sizing L4 §6.1: height auto + aspect-ratio → derive from width.
-        // Phase 0: ratio applied in border-box space.
-        (b.rect.width * ah / aw).max(0.0)
-    } else {
-        // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
-        // suppresses children's contribution to auto height — the box uses
-        // contain-intrinsic-height (or 0 when `none`/unset) instead.
-        let ch = contained_content_height(size_contained, s, em, viewport, content_height);
-        ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
-    };
-    // CSS Basic UI L4 §4.4 — field-sizing: content height override.
-    // When s.height was not set by UA (field_intrinsic is Some), replace the
-    // zero content_height with the padding-box height from the measurement.
-    if let Some((_, ph)) = field_intrinsic
-        && s.height.is_none()
-    {
-        b.rect.height = ph + s.border_top_width + s.border_bottom_width;
     }
-    // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с width: max
-    // сначала, потом min → «min побеждает max». Content оверфлоу-ит коробку
-    // если min режет ниже — это правильное поведение CSS.
-    let outer_vert = |v: f32| match s.box_sizing {
-        BoxSizing::ContentBox => v + padding_top + padding_bottom
-            + s.border_top_width + s.border_bottom_width,
-        BoxSizing::BorderBox => v,
-    };
-    if let Some(max_len) = &s.max_height
-        && let Some(max_h) = resolve_block_size(max_len, em, available_height, viewport)
-    {
-        b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
+}
+
+impl Drop for FontContext {
+    fn drop(&mut self) {
+        crate::style::pop_ch_ex_context(self.prev_ch_ex);
+        crate::style::pop_lh_context(self.prev_lh);
     }
-    if let Some(min_len) = &s.min_height
-        && let Some(min_h) = resolve_block_size(min_len, em, available_height, viewport)
-    {
-        b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
+}
+
+/// `rlh`/`rex`/`rch`: metrics of the root element's font, published by the
+/// outermost layout call below the (anonymous) document box and held for the
+/// whole walk, trampolines included.
+struct RootFontGuard(Option<Option<(f32, f32, f32)>>);
+
+impl RootFontGuard {
+    fn enter(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Self {
+        // The document node's own box (index 0) is anonymous — its font is the UA
+        // default, not `<html>`'s — so measure its first rendered child instead.
+        // Block-flow trampolines reach `<html>` through `dispatch_box` directly,
+        // so only the call on the document box can hold the guard for the walk.
+        let src = if b.node.index() == 0 {
+            b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
+        } else {
+            Some(b)
+        };
+        Self(match (measurer, src, crate::style::root_font_metrics()) {
+            (Some(m), Some(src), None) => {
+                let fs = src.style.font_size.max(0.0);
+                let lh = if src.used_line_height > 0.0 { src.used_line_height } else { fs * src.style.line_height };
+                Some(crate::style::push_root_font_metrics(Some((
+                    lh,
+                    m.char_width_with_families('0', fs, &src.style.font_family),
+                    m.x_height_px(fs),
+                ))))
+            }
+            _ => None,
+        })
+    }
+}
+
+impl Drop for RootFontGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.0 {
+            crate::style::pop_root_font_metrics(prev);
+        }
     }
 }
 
@@ -399,6 +201,7 @@ fn lay_out_inner_impl(
     // recursing, and `block_flow_trampoline::run` drives it — and every further
     // plain-block descendant it meets — on an explicit heap stack instead of
     // the native call stack (`<div>`×20000 no longer overflows it).
+    let _root_font = RootFontGuard::enter(b, measurer);
     match dispatch_box(
         b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
         in_block_flow, outer_floats, parent_justify_items, used_size_override,
@@ -410,31 +213,98 @@ fn lay_out_inner_impl(
         // LAYOUT-2 срез 3: the flex dispatch arm's item-placement loop, same
         // shape as the block-flow case above — see `flex_trampoline::run`.
         DispatchOutcome::NeedsFlexLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::flex_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 4: the grid dispatch arm's probe + final-placement
         // passes, same shape as the flex case above — see `grid_trampoline::run`.
         DispatchOutcome::NeedsGridLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::grid_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 6: the table dispatch arm's per-cell placement pass,
         // same shape as the flex/grid cases above — see `table_trampoline::run`.
         DispatchOutcome::NeedsTableLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::table_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 7: the multicol dispatch arm's per-segment placement
         // pass, same shape as the flex/grid/table cases above — see
         // `multicol_trampoline::run`.
         DispatchOutcome::NeedsMulticolLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::multicol_trampoline::run(b, init, measurer, viewport, hp);
         }
         // LAYOUT-2 срез 8: the vertical-writing-mode dispatch arm's per-child
         // stacking pass, same shape as the multicol case above — see
         // `vertical_trampoline::run`.
         DispatchOutcome::NeedsVerticalLoop(init) => {
+            let _font_ctx = FontContext::enter(b, measurer);
             super::vertical_trampoline::run(b, init, measurer, viewport, hp);
         }
     }
+}
+
+/// The style a box is laid out with: its own `Arc` when there is no
+/// [`UsedSizeOverride`] (the overwhelming majority — an `Arc` bump, not a deep
+/// copy, see BUG-341 S12), otherwise a locally cloned `ComputedStyle` with the
+/// override applied. `b.style` itself is never touched (BUG-341 S34).
+fn style_with_used_size(style: &Arc<ComputedStyle>, used_size_override: Option<UsedSizeOverride>) -> Arc<ComputedStyle> {
+    let Some(ov) = used_size_override else {
+        return Arc::clone(style);
+    };
+    let mut owned = (**style).clone();
+    // BUG-736: an intrinsic-hint width/height is a presentational fallback for
+    // ordinary block/inline layout, not an authored size — a flex item must see
+    // `auto` here so its used size comes from this override plus `aspect_ratio`
+    // instead of the raw intrinsic pixels.
+    if ov.clear_intrinsic_hint {
+        if owned.width_is_intrinsic_hint {
+            owned.width = None;
+        }
+        if owned.height_is_intrinsic_hint {
+            owned.height = None;
+        }
+    }
+    if let Some(bs) = ov.box_sizing {
+        owned.box_sizing = bs;
+    }
+    if let Some(w) = ov.width {
+        owned.width = Some(Length::Px(w));
+    }
+    if let Some(h) = ov.height {
+        owned.height = Some(Length::Px(h));
+    }
+    Arc::new(owned)
+}
+
+/// BUG-1242 — how far a clean box moves to land where a fresh layout at `start_*` would
+/// put it, or `None` when its placement is not just `start + margin` (auto inline
+/// margins, a non-start `justify-self`, `position: relative`).
+fn clean_box_shift(
+    b: &LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    viewport: Size,
+    used_size_override: Option<&UsedSizeOverride>,
+    parent_justify_items: AlignValue,
+) -> Option<(f32, f32)> {
+    let s = &b.style;
+    let effective_justify =
+        if matches!(s.justify_self, AlignValue::Auto) { parent_justify_items } else { s.justify_self };
+    if s.margin_left.is_auto()
+        || s.margin_right.is_auto()
+        || matches!(effective_justify, AlignValue::Center | AlignValue::End)
+        || matches!(s.position, Position::Relative)
+    {
+        return None;
+    }
+    let em = s.font_size;
+    let cb = used_size_override.and_then(|ov| ov.percentage_base).unwrap_or(available_width);
+    let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
+    let margin_top = s.margin_top.resolve_or_zero(em, cb, viewport);
+    Some((start_x + margin_left - b.rect.x, start_y + margin_top - b.rect.y))
 }
 
 /// LAYOUT-2 срез 1: `pub(super)` so `block_flow_trampoline` can call it once per
@@ -470,6 +340,12 @@ pub(super) fn dispatch_box(
         b.node,
         pcb
     );
+    // Legend ставит только обычный блочный путь ниже; flex/grid/multicol-fieldset оставляют его
+    // обычным ребёнком, и рамка тогда рисуется целиком.
+    if let Some(fl) = &mut b.fieldset_legend {
+        fl.placed = false;
+        fl.border_inset = 0.0;
+    }
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
         return DispatchOutcome::Done;
@@ -480,40 +356,44 @@ pub(super) fn dispatch_box(
     // the existing rect to the new (start_x, start_y) without re-running layout.
     // The block-children loop in the parent already advanced child_y using the
     // existing height, so the position is consistent across siblings.
-    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+    //
+    // BUG-1242: `start_*` is the margin-box origin the parent hands down; the box's
+    // own `rect` sits `margin_left`/`margin_top` inside it (`lay_out_inner` below), so
+    // the shift is to `start + margin`, not to `start`. Placements the margins alone do
+    // not explain (auto margins, `justify-self`, a `position: relative` offset) are not
+    // reconstructed here — such a box is laid out for real.
+    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get())
+        && b.dirty.is_clean()
+        && let Some((dx, dy)) = clean_box_shift(b, start_x, start_y, available_width, viewport, used_size_override.as_ref(), parent_justify_items)
+    {
         let _prof = lumen_core::profile::scope_detail("lo_translate");
-        crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
+        crate::incremental::translate_subtree(b, dx, dy);
         return DispatchOutcome::Done;
+    }
+    // BUG-935 срез 65: a clean box whose placement is not `start + margin` (auto inline margins,
+    // `position: relative`, a centring `justify-self`) is laid out for real below — but its subtree
+    // is still the one `prev` laid out. A clean bit means "the whole subtree is reusable", and the
+    // graft honours a reuse claim by clearing the claimed root only (`REUSED_SUBTREE` is O(1) on
+    // purpose), so the boxes under it still carry the `SELF_SIZE` that `mark_subtree_dirty` gave
+    // every box of the fresh tree. Left alone they would each be laid out from scratch: on a
+    // `margin: 0 auto` page wrapper that is the whole document under it (7 800 boxes, 60 ms on
+    // `lenta.ru`) for a flush that changed one `<span>`. Clear one level — the children then
+    // translate like any clean child of a dirty parent, and a child that itself cannot be
+    // translated clears its own children the same way.
+    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+        for c in &mut b.children {
+            c.dirty = crate::incremental::DirtyBits::CLEAN;
+        }
     }
 
     record_layout_key_occurrence(b.node, start_x, start_y, available_width, available_height, &b.style, used_size_override.as_ref());
 
-    // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
-    // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`
-    // resolve against the actual font for this box and its descendants. The guard
-    // restores the parent's value on every return path, keeping the thread-local
-    // balanced across the recursive layout walk. Without a measurer the context is
-    // cleared, so ch/ex fall back to the spec `0.5em` assumption.
-    struct ChExGuard(Option<(f32, f32)>);
-    impl Drop for ChExGuard {
-        fn drop(&mut self) {
-            crate::style::pop_ch_ex_context(self.0);
-        }
-    }
-    let _ch_ex_guard = {
-        let _prof = lumen_core::profile::scope_detail("lo_chex");
-        let ch_ex = measurer.map(|m| {
-            let fs = b.style.font_size.max(0.0);
-            (
-                m.char_width_with_families('0', fs, &b.style.font_family),
-                m.x_height_px(fs),
-            )
-        });
-        ChExGuard(crate::style::push_ch_ex_context(ch_ex))
-    };
+    // `ch`/`ex`/`lh` contexts for this box and its descendants (see `FontContext`).
+    let _font_ctx = FontContext::enter(b, measurer);
 
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
-    // flow position starts below the expanded viewport and the shell hasn't
+    // lies outside the expanded viewport (starts below it, or — with a height
+    // known up front — ends above it) and the shell hasn't
     // ratcheted the node relevant, drop the children for this pass: the element
     // keeps its own box and paint emits nothing for the subtree. While skipped,
     // the element is size-contained, so its auto block-size collapses to the
@@ -533,7 +413,12 @@ pub(super) fn dispatch_box(
     }
     let cv_auto_skipped = b.style.content_visibility == crate::style::ContentVisibility::Auto
         && !b.children.is_empty()
-        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height);
+        && crate::content_visibility::cv_should_skip(
+            b.node,
+            start_y,
+            crate::content_visibility::cv_bottom_estimate(&b.style, start_y, viewport),
+            viewport.height,
+        );
     if cv_auto_skipped {
         b.children.clear();
     }
@@ -542,11 +427,25 @@ pub(super) fn dispatch_box(
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
     if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
         let _prof = lumen_core::profile::scope_detail("lo_svg");
-        // BUG-802: this path reads `available_height` in another function, so
-        // the flag cannot be maintained per resolution site here.
-        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        // BUG-802/BUG-341 S42: `lay_out_svg_root`'s only read of
+        // `available_height` (the CSS `height` resolution) goes through
+        // `resolve_block_size`, which maintains the flag per site.
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return DispatchOutcome::Done;
+    }
+
+    // A vertical-writing-mode grid container is not stacked as a block either: it goes to its
+    // own arm (GRID-VWM) — columns run along the physical y axis, rows along x.
+    if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && matches!(b.style.display, Display::Grid | Display::InlineGrid)
+    {
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        let vs = style_with_used_size(&b.style, used_size_override);
+        return super::grid_vertical::dispatch(
+            b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+            cv_auto_skipped,
+        );
     }
 
     // CSS Writing Modes L3 §3: vertical writing modes swap the block/inline axes.
@@ -556,8 +455,13 @@ pub(super) fn dispatch_box(
     // Glyph rotation is a paint concern — CPU rasterizer and wgpu renderer (live
     // default backend, ADR-017) both honor it, including the per-glyph `mixed`
     // CJK-upright/Latin-rotated split; femtovg (fallback backend) does not.
+    //
+    // A vertical-writing-mode flex container is not stacked as a block: it goes
+    // on to the flex arm below, whose axes come from `flex::flex_axes`
+    // (FLEX-VWM).
     if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && !matches!(b.style.display, Display::Flex | Display::InlineFlex)
     {
         // BUG-802: `available_height` is consumed inside `crate::vertical`,
         // out of reach of `resolve_block_size`'s per-site bookkeeping.
@@ -568,8 +472,10 @@ pub(super) fn dispatch_box(
         // deferred to `vertical_trampoline::run` so a chain of nested
         // vertical containers drives on an explicit heap stack instead of
         // recursing.
+        let vs = style_with_used_size(&b.style, used_size_override);
         let init = crate::vertical::build_vertical_init(
-            b, start_x, start_y, available_width, available_height, viewport, pcb,
+            b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb,
+            in_block_flow,
         );
         return DispatchOutcome::NeedsVerticalLoop(Box::new(init));
     }
@@ -587,38 +493,15 @@ pub(super) fn dispatch_box(
     // function, so its pointer identity survives this call unconditionally.
     let s = {
         let _prof = lumen_core::profile::scope_detail("lo_style_ref");
-        match used_size_override {
-            Some(ov) => {
-                let mut owned = (*b.style).clone();
-                // BUG-736: an intrinsic-hint width/height is a presentational
-                // fallback for ordinary block/inline layout, not an authored
-                // size — a flex item must see `auto` here so its used size
-                // comes from this override plus `aspect_ratio` instead of the
-                // raw intrinsic pixels.
-                if ov.clear_intrinsic_hint {
-                    if owned.width_is_intrinsic_hint {
-                        owned.width = None;
-                    }
-                    if owned.height_is_intrinsic_hint {
-                        owned.height = None;
-                    }
-                }
-                if let Some(bs) = ov.box_sizing {
-                    owned.box_sizing = bs;
-                }
-                if let Some(w) = ov.width {
-                    owned.width = Some(Length::Px(w));
-                }
-                if let Some(h) = ov.height {
-                    owned.height = Some(Length::Px(h));
-                }
-                Arc::new(owned)
-            }
-            None => Arc::clone(&b.style),
-        }
+        style_with_used_size(&b.style, used_size_override)
     };
     let em = s.font_size;
-    let cb = available_width;
+    // BUG-974: the percentage base can differ from the free space
+    // `available_width` otherwise represents (auto-margin/auto-width space) —
+    // see `UsedSizeOverride::percentage_base`'s doc comment.
+    let cb = used_size_override
+        .and_then(|ov| ov.percentage_base)
+        .unwrap_or(available_width);
 
     // CSS Box Sizing L4 §5 — the box is subject to size containment (its size is
     // computed as if it had no contents) when `contain: size` is set, when
@@ -724,7 +607,14 @@ pub(super) fn dispatch_box(
     //   - content-box: width — это размер контента, padding+border прибавляются;
     //   - border-box: width — общий размер вместе с padding+border.
     if let Some(w_len) = &s.width {
-        if w_len.is_intrinsic() {
+        if matches!(w_len, Length::Stretch) {
+            // CSS Sizing L4 §4.1 — `stretch`: the margin box fills the containing
+            // block, so the border box is `containing block − margins` whatever
+            // the box type (unlike `auto`, this also applies to replaced,
+            // inline-block and floated boxes). `box-sizing` is irrelevant: the
+            // value is a border-box size by construction.
+            b.rect.width = (available_width - margin_left - margin_right).max(0.0);
+        } else if w_len.is_intrinsic() {
             // CSS Intrinsic Sizing L3 §4 — min-content / max-content / fit-content.
             // max_content_outer_width / min_content_outer_width already include
             // the box's own padding+border (border-box width), so we assign directly.
@@ -772,7 +662,9 @@ pub(super) fn dispatch_box(
         BoxSizing::BorderBox => v,
     };
     if let Some(max_len) = &s.max_width {
-        let max_bb = if max_len.is_intrinsic() {
+        let max_bb = if matches!(max_len, Length::Stretch) {
+            Some((available_width - margin_left - margin_right).max(0.0))
+        } else if max_len.is_intrinsic() {
             Some(max_content_outer_width(b, measurer, viewport))
         } else {
             max_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v).max(0.0))
@@ -782,7 +674,14 @@ pub(super) fn dispatch_box(
         }
     }
     if let Some(min_len) = &s.min_width {
-        let min_bb = if min_len.is_intrinsic() {
+        let min_bb = if matches!(min_len, Length::Stretch) {
+            Some((available_width - margin_left - margin_right).max(0.0))
+        } else if matches!(min_len, Length::MinContent) {
+            // CSS Sizing L3 §4: `min-width: min-content` is the box's content-based minimum —
+            // its own `width` (even `0`, e.g. a fieldset's `min-inline-size`) must not stand in
+            // for it.
+            Some(min_content_outer_width_of_contents(b, measurer, viewport))
+        } else if min_len.is_intrinsic() {
             Some(min_content_outer_width(b, measurer, viewport))
         } else {
             min_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v.max(0.0)))
@@ -918,10 +817,11 @@ pub(super) fn dispatch_box(
     // pcb для потомков: если текущий элемент positioned — он сам CB для абсолютных детей.
     // CSS Containment L3: contain:layout и contain:paint тоже устанавливают containing block.
     // Высота ещё неизвестна, используем 0 — корректируем after layout.
-    let is_positioned = !matches!(s.position, Position::Static);
-    let contain_establishes_cb = s.contain.0
-        & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0 | ContainFlags::STRICT.0) != 0;
-    let children_pcb = if is_positioned || contain_establishes_cb {
+    // `is_positioned` here means "containing block of absolute descendants": a transform,
+    // filter, `contain: layout|paint`, … capture them just like `position` does
+    // (css-transforms-1 §2, css-contain-2 §3.2).
+    let is_positioned = super::multicol_abspos::establishes_abs_cb(&s);
+    let children_pcb = if is_positioned {
         // CSS Position L3 §2.2: CB for absolute descendants = padding edge of the element.
         Rect::new(
             b.rect.x + s.border_left_width,
@@ -951,13 +851,28 @@ pub(super) fn dispatch_box(
             viewport,
             pcb,
             hp,
+            // The enclosing vertical block's floats, already rebased to this run.
+            outer_floats,
+        );
+        return DispatchOutcome::Done;
+    }
+
+    // BUG-1263: a row of atomic inlines in a vertical writing mode flows down
+    // the inline axis and wraps into columns, not left-to-right.
+    if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::InlineBlockRow)
+    {
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        super::vertical_row::lay_out_vertical_inline_block_row(
+            b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
         );
         return DispatchOutcome::Done;
     }
 
     // InlineRun обрабатывается до основного match.
-    if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width } = &mut b.kind {
+    if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width, first_line_inset } = &mut b.kind {
         let row_continuation_width = *row_continuation_width;
+        let first_line_inset = *first_line_inset;
         if let Some(m) = measurer {
             // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
             // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
@@ -966,7 +881,7 @@ pub(super) fn dispatch_box(
             } else {
                 content_width
             };
-            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
+            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport) + first_line_inset;
             // UAX #9 P2–I2 once per paragraph, before any wrapping trial: the
             // result splits segments at embedding-level boundaries, and every
             // re-wrap (::first-line pass B, text-wrap: balance/pretty) must see
@@ -981,7 +896,38 @@ pub(super) fn dispatch_box(
                 } else {
                     segments
                 };
-            *lines = if let Some(fls) = first_line_style.as_deref() {
+            // CSS Shapes L1 §3 — beside a float with a `shape-outside` every line
+            // box gets its own band (see `inline_shape_wrap`); already aligned.
+            let shaped = if inline_shape_wrap::eligible(
+                &s,
+                first_line_style.is_some(),
+                row_continuation_width.is_some(),
+                outer_floats,
+                b.rect.y,
+            ) && let Some(fc) = outer_floats
+            {
+                Some(inline_shape_wrap::wrap_around_shapes(
+                    &inline_shape_wrap::ShapedRun {
+                        fc,
+                        segments,
+                        style: &s,
+                        left: b.rect.x,
+                        top: b.rect.y,
+                        width: content_width,
+                        line_h: step_line_height(b.used_line_height, s.line_height_step),
+                        text_indent: text_indent_px,
+                        viewport,
+                    },
+                    m,
+                    hp,
+                ))
+            } else {
+                None
+            };
+            let was_shaped = shaped.is_some();
+            *lines = if let Some(shaped_lines) = shaped {
+                shaped_lines
+            } else if let Some(fls) = first_line_style.as_deref() {
                 // CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
                 // Pass A: wrap ALL segments under the ::first-line style to find the
                 // true extent of the first formatted line (a larger ::first-line font
@@ -997,7 +943,7 @@ pub(super) fn dispatch_box(
                             // segment inherited — an inner `<b>`/`<em>` keeps its
                             // own metrics, so pass A measures the real glyphs.
                             fl_seg.style =
-                                crate::style::merge_pseudo_inherited(&seg.style, &s, fls);
+                                Arc::new(crate::style::merge_pseudo_inherited(&seg.style, &s, fls));
                         }
                         fl_seg
                     })
@@ -1044,8 +990,24 @@ pub(super) fn dispatch_box(
                 let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
                 // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
                 // wrapping is active (wrap_width is finite) and text actually wraps.
+                let clamp_balance = line_clamp_flow::balance_limit(&s, raw_lines.len());
                 if wrap_width.is_finite() {
                     match s.text_wrap_style {
+                        // CSS Overflow L4 §line-clamp: balancing happens after clamping, so only
+                        // the lines that stay visible are balanced and the rest follows greedily.
+                        TextWrapStyle::Balance if clamp_balance.is_some() => {
+                            let n = clamp_balance.unwrap_or(0);
+                            let kept: Vec<InlineFrag> = raw_lines[..n].iter().flatten().cloned().collect();
+                            let (head, _) = split_segments_at_first_line(
+                                segments, &kept, s.white_space.preserves_whitespace(),
+                            );
+                            let mut lines = balance_wrap(
+                                &head, wrap_width, raw_lines[..n].to_vec(), s.font_size, text_indent_px,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
+                            );
+                            lines.extend_from_slice(&raw_lines[n..]);
+                            lines
+                        }
                         TextWrapStyle::Balance => balance_wrap(
                             segments, wrap_width, raw_lines, s.font_size, text_indent_px,
                             viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
@@ -1095,7 +1057,9 @@ pub(super) fn dispatch_box(
                 all.extend(rest);
                 *lines = all;
             }
-            if let Some(cont_width) = split_at_row_width
+            if was_shaped {
+                // Aligned line by line inside each band.
+            } else if let Some(cont_width) = split_at_row_width
                 && lines.len() > 1
             {
                 let (first, rest) = lines.split_at_mut(1);
@@ -1107,11 +1071,11 @@ pub(super) fn dispatch_box(
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
             let line_h = step_line_height(b.used_line_height, s.line_height_step);
             apply_inline_vertical_align(lines, line_h);
-            // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
-            // Takes priority over text-overflow:ellipsis (both cannot apply simultaneously).
-            if let Some(n) = s.line_clamp.filter(|&n| n > 0) {
-                apply_line_clamp(lines, n, content_width, s.font_size, m);
-            } else if s.text_overflow == TextOverflow::Ellipsis
+            // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
+            // container flow (`line_clamp_flow`), not run by run; here it only takes priority
+            // over text-overflow:ellipsis (both cannot apply simultaneously).
+            if !s.line_clamp.is_some_and(|n| n > 0)
+                && s.text_overflow == TextOverflow::Ellipsis
                 && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
             {
                 // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
@@ -1129,7 +1093,7 @@ pub(super) fn dispatch_box(
                 // so it only supplies properties the fragment inherited; an inner
                 // `<b>`/`<em>`/`style="color:…"` keeps its own declarations.
                 if let Some(fls) = first_line_style {
-                    frag.style = crate::style::merge_pseudo_inherited(&frag.style, &s, fls);
+                    frag.style = Arc::new(crate::style::merge_pseudo_inherited(&frag.style, &s, fls));
                 }
             }
         }
@@ -1161,42 +1125,40 @@ pub(super) fn dispatch_box(
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
-                // For row flex, align-content needs the explicit container height (cross axis).
-                let flex_explicit_cross = if !matches!(
-                    s.flex_direction,
-                    FlexDirection::Column | FlexDirection::ColumnReverse
-                ) {
-                    s.height.as_ref()
-                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
-                        .map(|h| match s.box_sizing {
-                            BoxSizing::ContentBox => h,
-                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
-                                - s.border_top_width - s.border_bottom_width)
-                                .max(0.0),
+                // FLEX-VWM: which physical axis is main comes from `flex-direction`
+                // *and* `writing-mode`; in a vertical writing mode the container's
+                // inline size (physical height) is the definite one — an explicit
+                // `height`, else what is available — and its block size (physical
+                // width) is content-sized unless `width` is explicit.
+                let main_vertical = flex::flex_axes(&s).main_vertical;
+                let vertical_flex = !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb);
+                let frame_vert = padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width;
+                let explicit_height = s.height.as_ref()
+                    .and_then(|h| resolve_block_size(h, em, available_height, viewport))
+                    .map(|h| match s.box_sizing {
+                        BoxSizing::ContentBox => h,
+                        BoxSizing::BorderBox => (h - frame_vert).max(0.0),
+                    })
+                    .or_else(|| {
+                        (vertical_flex && s.display == Display::Flex).then(|| {
+                            (available_height.unwrap_or(viewport.height) - frame_vert).max(0.0)
                         })
-                } else {
-                    None
-                };
+                    });
+                // For row flex, align-content needs the explicit container height (cross axis).
+                let flex_explicit_cross = if !main_vertical { explicit_height } else { None };
                 // CSS Flexbox §9.7: for a column flex container with a definite
                 // main (block) size, free space is distributed to flex-grow items.
                 // Compute that definite content-box height here so `lay_out_flex`
                 // can grow children instead of collapsing them to flex-basis
                 // (BUG-104 — `.right-col` children with `flex:1` were height 0).
-                let flex_explicit_main = if matches!(
-                    s.flex_direction,
-                    FlexDirection::Column | FlexDirection::ColumnReverse
-                ) {
-                    s.height.as_ref()
-                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
-                        .map(|h| match s.box_sizing {
-                            BoxSizing::ContentBox => h,
-                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
-                                - s.border_top_width - s.border_bottom_width)
-                                .max(0.0),
-                        })
-                } else {
-                    None
-                };
+                let flex_explicit_main = if main_vertical { explicit_height } else { None };
+                let vertical = vertical_flex.then(|| flex::VerticalFlex {
+                    block_size_auto: s.width.is_none(),
+                    fill_inline_size: s.display == Display::Flex,
+                    frame_horiz: padding_left + padding_right
+                        + s.border_left_width + s.border_right_width,
+                });
                 // LAYOUT-2 срез 3: Steps 1–3/justify precompute run here
                 // (native — see `build_flex_init`'s doc comment for why), but
                 // the item-placement pass (and this container's own height +
@@ -1207,6 +1169,7 @@ pub(super) fn dispatch_box(
                     &mut b.children, &s, content_x, content_y, content_width,
                     flex_explicit_cross, flex_explicit_main, measurer, viewport, children_pcb, hp,
                     em, available_height, padding_top, padding_bottom, size_contained, is_positioned, pcb,
+                    vertical,
                 );
                 return DispatchOutcome::NeedsFlexLoop(init);
             }
@@ -1230,10 +1193,22 @@ pub(super) fn dispatch_box(
                 // right here) are deferred to `grid_trampoline::run` so a
                 // chain of nested grid containers drives on an explicit heap
                 // stack instead of recursing.
+                // Дорожки subgrid'а берёт `build_grid_init` из thread-local'ов (и очищает их), а
+                // paint'у они нужны для щелей `column-rule`/`row-rule` — подсмотреть заранее.
+                // Grid L2 §9: an explicit `row-gap`/`column-gap` of the subgrid replaces the parent's
+                // gutter between its tracks; the tracks its items (and the painter) see move by half
+                // of the difference.
+                crate::subgrid::apply_own_gaps(
+                    (!s.column_gap_normal)
+                        .then(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
+                    (!s.row_gap_normal)
+                        .then(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
+                );
+                b.subgrid_tracks = crate::subgrid::peek_tracks();
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
-                    size_contained,
+                    size_contained, is_positioned, pcb, measurer, None,
                 ) {
                     Some(init) => return DispatchOutcome::NeedsGridLoop(init),
                     None => {
@@ -1242,6 +1217,10 @@ pub(super) fn dispatch_box(
                         super::grid_trampoline::finish_container_height(
                             b, &s, em, available_height, padding_top, padding_bottom,
                             size_contained, viewport, 0.0,
+                        );
+                        // All children may be abs-positioned (not grid items).
+                        super::grid_trampoline::lay_out_abs(
+                            b, &s, is_positioned, pcb, content_x, content_y, measurer, viewport, hp,
                         );
                         return DispatchOutcome::Done;
                     }
@@ -1290,7 +1269,7 @@ pub(super) fn dispatch_box(
                     None => {
                         finalize_block_height(
                             b, &s, em, available_height, viewport, padding_top, padding_bottom,
-                            size_contained, field_intrinsic, 0.0,
+                            size_contained, field_intrinsic, 0.0, cb,
                         );
                         finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
                         return DispatchOutcome::Done;
@@ -1340,15 +1319,22 @@ pub(super) fn dispatch_box(
                 // the `finalize_block_height`/tail calls below this match, which
                 // `block_flow_trampoline::run` invokes itself once the frame (and
                 // every plain-block descendant it meets) is done.
+                // HTML Rendering §15.3.13: rendered legend встаёт на верхнюю границу, содержимое
+                // fieldset начинается ниже него.
+                let legend_extra = super::fieldset::place_rendered_legend(
+                    b, content_x, content_width, children_available_height, measurer, viewport,
+                    children_pcb, hp,
+                );
                 return DispatchOutcome::NeedsBlockFlowLoop(Box::new(block_flow_trampoline::BlockFlowInit {
                     fc,
                     container_right,
-                    child_y: content_y,
+                    child_y: content_y + legend_extra,
                     prev_block_mb: 0.0,
                     b_collapses_top,
                     b_collapses_bottom,
                     seen_inflow_child: false,
                     inside_marker_w: 0.0,
+                    inside_marker_h: 0.0,
                     abs_deferred: Vec::new(),
                     s,
                     em,
@@ -1388,11 +1374,30 @@ pub(super) fn dispatch_box(
             // в Edge, и TEST-02/04/21/56 (ряды пустых inline-block) уходят в FAIL
             // на 0.68 % при пороге 0.5 %. Измерено A/B, IFC-1. Строки с текстом
             // это не задевает: у прогона своё half-leading, и оно всегда больше.
-            let strut_descent = measurer.map_or(0.0, |m| {
-                m.descent_px_with_families(b.style.font_size, &b.style.font_family)
-            });
-            let strut_ascent = measurer.map_or(0.0, |m| {
-                m.ascent_px_with_families(b.style.font_size, &b.style.font_family)
+            // Blink округляет ascent/descent/lineGap шрифта до целых px и делит
+            // half-leading с floor на верхнюю сторону (FontHeight::AddLeading), так
+            // что нижняя половина получает остаток: descent' = round(d) +
+            // ceil(round(gap) / 2). Без округления реальный descent (Times: 3.46px)
+            // делал ряд картинок на ~0.5px ниже эталона Edge, и TEST-18 уходил на 15 %
+            // (BUG-782, FONTLOAD-10).
+            let (strut_ascent, strut_descent) = measurer.map_or((0.0, 0.0), |m| {
+                let fs = b.style.font_size;
+                let fam = &b.style.font_family;
+                let gap = m.line_gap_px_with_families(fs, fam).round();
+                let (sa, sd) = (
+                    m.ascent_px_with_families(fs, fam).round() + (gap / 2.0).floor(),
+                    m.descent_px_with_families(fs, fam).round() + (gap / 2.0).ceil(),
+                );
+                // Явное межстрочье короче content area (`line-height: 0`/`1`) сжимает
+                // strut с обеих сторон поровну (CSS 2.1 §10.8.1: отрицательное
+                // half-leading). Положительное не добавляется — см. выше, а
+                // `normal` не трогаем вовсе: он и есть content area.
+                let shrink = if b.style.line_height_is_normal {
+                    0.0
+                } else {
+                    ((sa + sd - b.used_line_height) / 2.0).max(0.0)
+                };
+                (sa - shrink, sd - shrink)
             });
             // Half x-height of the row's font: locates `vertical-align: middle`
             // relative to the baseline (CSS 2.1 §10.8.1).
@@ -1502,7 +1507,9 @@ pub(super) fn dispatch_box(
                 {
                     *row_continuation_width = Some(content_width);
                 }
-                lay_out(&mut child, place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp, false);
+                // CSS 2.1 §10.5: процент высоты atomic inline-уровня резолвится от
+                // высоты containing block-а строки, а не от анонимной строки (BUG-1227).
+                lay_out(&mut child, place_x, cur_y, child_avail, available_height, measurer, viewport, children_pcb, hp, false);
                 if matches!(child.kind, BoxKind::Skip) {
                     children.push(child);
                     metrics.push((0.0, 0.0));
@@ -1573,12 +1580,16 @@ pub(super) fn dispatch_box(
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_line_height,
+                            grid_baselines: None,
+                            fieldset_legend: None,
+                            subgrid_tracks: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {
                                 segments: Vec::new(),
                                 lines: vec![line],
                                 first_line_style: None,
                                 row_continuation_width: None,
+                                first_line_inset: 0.0,
                             },
                             children: Vec::new(),
                             col_span: 1,
@@ -1718,8 +1729,7 @@ pub(super) fn dispatch_box(
         // this box's real content origin and adopt its size as our own, so
         // this box behaves as one atomic inline-level unit in its parent's
         // `InlineBlockRow`/flex/grid context.
-        BoxKind::Ruby { base_count } => {
-            let base_count = *base_count;
+        BoxKind::Ruby { shape } => {
             let mut groups = std::mem::take(&mut b.children);
             for group in &mut groups {
                 lay_out(
@@ -1727,10 +1737,25 @@ pub(super) fn dispatch_box(
                     children_pcb, hp, false,
                 );
             }
-            let ruby_text_boxes = groups.split_off(base_count);
-            let base_boxes = groups;
-            let ruby = crate::ruby::RubyBox::from_style(&s, base_boxes, ruby_text_boxes);
-            let mut composed = crate::ruby::lay_out_ruby(&ruby);
+            let mut groups = groups.into_iter();
+            let segments: Vec<crate::ruby::RubySegment> = shape
+                .segments
+                .iter()
+                .map(|seg| crate::ruby::RubySegment {
+                    bases: groups.by_ref().take(seg.bases).collect(),
+                    levels: seg
+                        .levels
+                        .iter()
+                        .map(|level| crate::ruby::RubyLevel {
+                            annotations: groups.by_ref().take(level.annotations).collect(),
+                            position: level.position,
+                        })
+                        .collect(),
+                })
+                .collect();
+            let mut composed = crate::ruby::lay_out_ruby_segments(
+                segments, Arc::clone(&s), s.ruby_align, s.ruby_merge,
+            );
             crate::incremental::translate_subtree(&mut composed, content_x, content_y);
             b.rect.width = composed.rect.width + padding_left + padding_right
                 + s.border_left_width + s.border_right_width;
@@ -1781,7 +1806,7 @@ pub(super) fn dispatch_box(
             // explicit heap stack instead of recursing.
             let init = table::build_table_init(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb,
-                em, available_height, padding_top, padding_bottom,
+                em, available_height, padding_top, padding_bottom, hp,
             );
             return DispatchOutcome::NeedsTableLoop(init);
         }
@@ -1855,23 +1880,13 @@ pub(super) fn finish_after_match(
         };
         lay_out_abs_children(b, abs_deferred, measurer, viewport, my_pcb, hp);
     }
+    if is_positioned {
+        super::multicol_abspos::fix_out_of_flow_descendants(b, measurer, viewport, hp);
+    }
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
     if matches!(s.position, Position::Relative) {
-        let off_x = match &s.left {
-            LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-            LengthOrAuto::Auto => match &s.right {
-                LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-                LengthOrAuto::Auto => 0.0,
-            },
-        };
-        let off_y = match &s.top {
-            LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-            LengthOrAuto::Auto => match &s.bottom {
-                LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-                LengthOrAuto::Auto => 0.0,
-            },
-        };
+        let (off_x, off_y) = relative_offset(s, em, cb, viewport);
         if off_x != 0.0 || off_y != 0.0 {
             shift_tree(b, off_x, off_y);
         }
@@ -1880,4 +1895,28 @@ pub(super) fn finish_after_match(
     // bottom/left) are resolved from ComputedStyle in lib.rs::collect_sticky_rec()
     // after this pass. P3 calls collect_sticky_boxes() + compute_sticky_offset() to
     // apply scroll-driven paint transforms at render time.
+}
+
+/// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` от `left/right/top/bottom`.
+/// Бокс уже сдвинут на это значение (`shift_tree` в конце раскладки), а родительский поток
+/// обязан отсчитывать курсор от несмещённой позиции — §9.4.3 «не влияет на соседей».
+pub(crate) fn relative_offset(s: &ComputedStyle, em: f32, cb: f32, viewport: Size) -> (f32, f32) {
+    if !matches!(s.position, Position::Relative) {
+        return (0.0, 0.0);
+    }
+    let off_x = match &s.left {
+        LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
+        LengthOrAuto::Auto => match &s.right {
+            LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
+            LengthOrAuto::Auto => 0.0,
+        },
+    };
+    let off_y = match &s.top {
+        LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
+        LengthOrAuto::Auto => match &s.bottom {
+            LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
+            LengthOrAuto::Auto => 0.0,
+        },
+    };
+    (off_x, off_y)
 }

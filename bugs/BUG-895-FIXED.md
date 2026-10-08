@@ -40,7 +40,7 @@ child-before = function   child-after = function   child-replaceWith = function
 `the-dialog-element/dialog-focus-shadow.html`. Плюс
 `dom/nodes/ParentNode-append.html`/`-prepend.html`, где `document` — один из
 четырёх проверяемых узлов (эти два механизм
-`insertbefore-no-validation`/[BUG-894](BUG-894-OPEN.md) забирает раньше, как
+`insertbefore-no-validation`/[BUG-894](BUG-894-FIXED.md) забирает раньше, как
 причину, которая срабатывает первой).
 
 ## Что дальше

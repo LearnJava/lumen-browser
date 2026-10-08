@@ -57,11 +57,20 @@ use crate::srcset::{
 ///
 /// MIME-тип и реальные пиксельные размеры (после decode) — отдельная
 /// история, остаются работой image-pipeline-а.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PickedSource {
     pub url: String,
     pub intrinsic_width: Option<u32>,
     pub intrinsic_height: Option<u32>,
+    /// HTML LS §4.8.4.3.7 «pixel density descriptor»: `width_descriptor /
+    /// source_size_px` for the picked `Nw` candidate. `Some` only when the
+    /// candidate was chosen by the width-picker (an `Nw` descriptor matched
+    /// against `sizes`) — density-picker (`Nx`) and plain `src` fallbacks
+    /// carry `None`, since they need no size correction. The consumer
+    /// (`apply_intrinsic_size`) divides the raw decoded bitmap size by this
+    /// value to get the CSS-pixel size the `sizes` attribute actually asked
+    /// for — see BUG-969.
+    pub density_correction: Option<f32>,
 }
 
 /// Параметры picker-а.
@@ -164,6 +173,7 @@ pub fn pick_img_source(
         url: src.to_string(),
         intrinsic_width: None,
         intrinsic_height: None,
+        density_correction: None,
     };
     fill_intrinsic_dims(node, &mut picked);
     Some(picked)
@@ -262,20 +272,38 @@ fn pick_from_srcset(
     let has_width = candidates
         .iter()
         .any(|c: &SrcsetCandidate| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
-    let picked = if has_width {
+    if has_width {
         let source_size_px = match sizes {
             Some(s) => evaluate_sizes(&parse_sizes(s), viewport),
             None => viewport.width_px, // HTML5 §4.8.4.4 default = 100vw
         };
-        pick_best_for_width(&candidates, source_size_px, dpr)
+        let picked = pick_best_for_width(&candidates, source_size_px, dpr)?;
+        // Effective density (HTML5 §4.8.4.3.7): the same value
+        // `pick_best_for_width` used to select this candidate, recomputed
+        // here since the picker only returns the winning candidate, not its
+        // density. Guaranteed `Some` — a `Width` descriptor is `pick_best_for_width`'s
+        // only match arm, and `source_size_px` already passed its finite/positive
+        // check inside that call (otherwise it returned `None` above).
+        let density = match picked.descriptor {
+            SrcsetDescriptor::Width(w) => (w as f32) / source_size_px,
+            SrcsetDescriptor::Density(_) => unreachable!(
+                "pick_best_for_width only ever selects a Width-descriptor candidate"
+            ),
+        };
+        Some(PickedSource {
+            url: picked.url.clone(),
+            intrinsic_width: None,
+            intrinsic_height: None,
+            density_correction: Some(density),
+        })
     } else {
-        pick_best_for_density(&candidates, dpr)
-    };
-    picked.map(|c| PickedSource {
-        url: c.url.clone(),
-        intrinsic_width: None,
-        intrinsic_height: None,
-    })
+        pick_best_for_density(&candidates, dpr).map(|c| PickedSource {
+            url: c.url.clone(),
+            intrinsic_width: None,
+            intrinsic_height: None,
+            density_correction: None,
+        })
+    }
 }
 
 /// `type` matcher. `None` в supported_types — фильтр отключён; иначе
@@ -365,6 +393,39 @@ mod tests {
         let id = first_element(&doc, "img").unwrap();
         let picked = pick_img_source(&doc, id, viewport_1024(), 2.0).unwrap();
         assert_eq!(picked.url, "hi.png");
+        // BUG-969: `Nx` picks carry no density correction — that's a
+        // different, already-explicit hint, not `sizes`-derived.
+        assert_eq!(picked.density_correction, None);
+    }
+
+    // ──────── BUG-969: `Nw`-descriptor density correction ────────
+
+    #[test]
+    fn bug969_nw_pick_reports_effective_density() {
+        // sizes="400px" + candidate "100w" → density = 100/400 = 0.25.
+        let doc = parse(r#"<img srcset="s.png 100w" sizes="400px">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let picked = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert_eq!(picked.url, "s.png");
+        assert!((picked.density_correction.unwrap() - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bug969_nw_pick_no_sizes_uses_100vw_default() {
+        // No `sizes` → source-size falls back to 100vw = viewport width
+        // (1024). density = 512/1024 = 0.5.
+        let doc = parse(r#"<img srcset="s.png 512w">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let picked = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert!((picked.density_correction.unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bug969_plain_src_no_density_correction() {
+        let doc = parse(r#"<img src="cat.png">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let picked = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert_eq!(picked.density_correction, None);
     }
 
     #[test]

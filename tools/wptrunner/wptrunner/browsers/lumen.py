@@ -24,6 +24,7 @@ the static `executor_kwargs()` dict below.
 import errno
 import io
 import os
+import threading
 import time
 import traceback
 
@@ -32,7 +33,8 @@ import mozprocess
 from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_free_port, get_timeout_multiplier, require_arg  # noqa: F401
 from ..environment import wait_for_service
 from ..executors import executor_kwargs as base_executor_kwargs
-from ..executors.executorlumen import LumenRefTestExecutor, LumenTestharnessExecutor  # noqa: F401
+from ..executors.executorlumen import (  # noqa: F401
+    LumenCrashtestExecutor, LumenRefTestExecutor, LumenTestharnessExecutor)
 
 #: Prefix of the stderr line `crates/bidi-server/src/server.rs::spawn` prints
 #: once per process (ADR-024 §Access model, DEVX-15).
@@ -54,6 +56,35 @@ _LUMEN_TESTHARNESSREPORT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "..", "..", "..", "tests", "wpt", "resources", "testharnessreport.js"))
 
+#: Env var: `off` launches browsers without `_SPAWN_LOCK` (the old behaviour),
+#: for an A/B. Anything else (or unset) serializes the launch.
+SPAWN_LOCK_ENV = "LUMEN_WPT_SPAWN_LOCK"
+
+#: Serializes `ProcessHandler.run()` across the `TestRunnerManager` threads
+#: of one wptrunner process. On Windows mozprocess creates the child with
+#: `bInheritHandles=1` and no handle list (`processhandler.py`,
+#: `winprocess.CreateProcess(..., 1, ...)`), after `subprocess` has made the
+#: child ends of *this* launch's stdout/stderr pipes inheritable. A second
+#: manager launching its browser in that window inherits them too — so the
+#: first browser's stdout pipe has two writers. When the first browser is
+#: killed on a restart, its pipe gets no EOF while the second one lives,
+#: mozprocess's reader thread never ends, and `WebDriverBrowser.stop`'s
+#: `proc.kill(timeout=5)` waits it out: 6.1 s (12.1 s when the leak is
+#: two-deep) per restart instead of 0.1 s. Measured on the 2026-10-04 A/B
+#: logs: 14-18 of ~88 restarts per run, 7 managers. The whole `run()` is
+#: held — pipe creation through `CreateProcess` through closing the child
+#: ends — which is ~20 ms, so the launches themselves are not slowed.
+_SPAWN_LOCK = threading.Lock()
+
+
+def _start_process(proc):
+    """`proc.run()` under `_SPAWN_LOCK` (unless `SPAWN_LOCK_ENV` is `off`)."""
+    if os.environ.get(SPAWN_LOCK_ENV, "").strip().lower() in ("off", "none", "0"):
+        proc.run()
+        return
+    with _SPAWN_LOCK:
+        proc.run()
+
 __wptrunner__ = {
     "product": "lumen",
     "check_args": "check_args",
@@ -66,6 +97,7 @@ __wptrunner__ = {
     "executor": {
         "testharness": "LumenTestharnessExecutor",
         "reftest": "LumenRefTestExecutor",
+        "crashtest": "LumenCrashtestExecutor",
     },
 }
 
@@ -100,6 +132,12 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
         "ipc_mode": test_type == "reftest",
         "ca_cert_path": kwargs.get("ca_cert_path"),
         "forced_colors": os.environ.get("LUMEN_FORCED_COLORS") == "1",
+        # PERF-10: `LUMEN_NO_PAINT=1` -> `--no-paint` (DOM+JS+layout, no GPU
+        # backend). Same parent-env -> CLI-arg trick as above. Only for
+        # testharness: reftests need a real raster (`--ipc-server` ignores it
+        # anyway, see `make_command`), and a crashtest's verdict is "the whole
+        # pipeline did not crash" — skipping paint would hide paint crashes.
+        "no_paint": test_type == "testharness" and os.environ.get("LUMEN_NO_PAINT") == "1",
     }
 
 
@@ -226,7 +264,7 @@ class LumenBrowser(WebDriverBrowser):
     speaks BiDi itself, there is no separate driver process."""
 
     def __init__(self, logger, binary, ipc_mode=False, ca_cert_path=None,
-                 forced_colors=False, **kwargs):
+                 forced_colors=False, no_paint=False, **kwargs):
         env = dict(kwargs.pop("env", None) or {})
         if ca_cert_path:
             # BUG-785: the browser has no CLI flag for this, only an env var
@@ -245,6 +283,7 @@ class LumenBrowser(WebDriverBrowser):
         super().__init__(logger, binary=binary, webdriver_binary=binary, env=env or None, **kwargs)
         self.ipc_mode = ipc_mode
         self.forced_colors = forced_colors
+        self.no_paint = no_paint
 
     def make_command(self):
         if self.ipc_mode:
@@ -255,7 +294,8 @@ class LumenBrowser(WebDriverBrowser):
             # flag here would be silently ignored. Not forwarded on purpose.
             return [self.binary, "--ipc-server"]
         forced_colors_args = ["--forced-colors"] if self.forced_colors else []
-        return [self.binary, "--bidi-port", str(self.port), *forced_colors_args]
+        no_paint_args = ["--no-paint"] if self.no_paint else []
+        return [self.binary, "--bidi-port", str(self.port), *forced_colors_args, *no_paint_args]
 
     def create_output_handler(self, cmd):
         if self.ipc_mode:
@@ -279,7 +319,7 @@ class LumenBrowser(WebDriverBrowser):
             # BUG-961: see `_run_server_bidi`'s comment — same fix, same reason.
             bufsize=io.DEFAULT_BUFFER_SIZE)
         self.logger.info("Starting Lumen --ipc-server: %s" % " ".join(cmd))
-        self._proc.run()
+        _start_process(self._proc)
         self._output_handler.after_process_start(self._proc.pid)
         try:
             while (self._output_handler.ipc_port is None
@@ -356,7 +396,7 @@ class LumenBrowser(WebDriverBrowser):
 
         self.logger.info("Starting WebDriver: %s" % " ".join(cmd))
         try:
-            self._proc.run()
+            _start_process(self._proc)
         except OSError as e:
             if e.errno == errno.ENOENT:
                 raise OSError(

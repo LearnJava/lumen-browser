@@ -166,7 +166,7 @@ const REPORTING_API_SHIM: &str = r#"
   // type: string (e.g. 'csp-violation', 'deprecation', 'intervention', 'crash')
   // url: string — page URL at time of report
   // body_json: string — JSON-serialised report body (optional)
-  globalThis._lumen_deliver_report = function(type, url, body_json) {
+  __lumen_C._lumen_deliver_report = function(type, url, body_json) {
     var body = null;
     if (body_json) {
       try { body = JSON.parse(body_json); } catch (_) { body = body_json; }

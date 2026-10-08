@@ -134,6 +134,19 @@ fn bug736_column_flex_replaced_item_stretches_and_derives_height() {
     assert!((h - 170.19).abs() < 0.1, "height={h}");
 }
 
+/// BUG-1256: authored `height` with `width: auto` in a row container — the
+/// width is that height carried through the intrinsic ratio (Flexbox §9.2),
+/// not the raw intrinsic width. 30 × 725/852 inverse: 852×725 → 30 × 852/725.
+#[test]
+fn bug1256_row_flex_img_with_authored_height_transfers_width() {
+    let (w, h) = img_border_box(
+        r#"<div class="row"><img width="852" height="725" src="x.png"></div>"#,
+        ".row { display: flex; width: 600px; } img { height: 30px; width: auto; }",
+    );
+    assert!((w - 35.26).abs() < 0.1, "width={w}");
+    assert!((h - 30.0).abs() < 0.1, "height={h}");
+}
+
 // ── BUG-737: intrinsic width of a row flex container ──────────────────────
 
 /// Border-box widths of the direct children of the element with `id="outer"`.
@@ -290,26 +303,27 @@ fn bug740_auto_fill_falls_back_to_widest_child() {
     assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
 }
 
-/// Явное позиционирование ребёнка (`grid-column`) может увести его в
-/// колонку, отличную от предполагаемой раскладкой «по кругу», или создать
-/// перекрытие — та же осторожность, что и с auto-fill выше.
+/// Явное позиционирование ребёнка (`grid-column`): дорожки считаются по
+/// настоящему размещению (BUG-1318), а не по схеме «по кругу». Первый элемент
+/// уходит в колонку 2, второй встаёт в свободную колонку 1 — 40 + 40.
 #[test]
-fn bug740_explicit_item_placement_falls_back_to_widest_child() {
+fn bug740_explicit_item_placement_sums_the_real_tracks() {
     let css = format!(
         "{GRID_CSS} .inner > .leaf:first-child {{ grid-column: 2; }}"
     );
-    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+    assert_eq!(child_widths(GRID_HTML, &css), vec![80.0, 30.0]);
 }
 
-/// Колоночный поток (`grid-auto-flow: column`) не соответствует
-/// предположению «по кругу построчно» — тоже честный откат.
+/// Колоночный поток (`grid-auto-flow: column`) не соответствует предположению «по кругу
+/// построчно», поэтому ширину даёт настоящее размещение (GRID-BASELINE-2): каждый item
+/// получает свой неявный столбец — 40 + 40, а не самый широкий item.
 #[test]
-fn bug740_column_flow_falls_back_to_widest_child() {
+fn bug740_column_flow_sums_the_real_columns() {
     let css = GRID_CSS.replace(
         "grid-template-columns: auto auto;",
         "grid-template-columns: auto auto; grid-auto-flow: column;",
     );
-    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+    assert_eq!(child_widths(GRID_HTML, &css), vec![80.0, 30.0]);
 }
 
 /// Однoколоночный grid складывает элементы вертикально — как блок,
@@ -318,6 +332,40 @@ fn bug740_column_flow_falls_back_to_widest_child() {
 fn bug740_single_column_grid_stays_widest_child() {
     let css = GRID_CSS.replace("grid-template-columns: auto auto;", "grid-template-columns: auto;");
     assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+}
+
+// ── BUG-1317: именованное размещение не ломает shrink-to-fit при px-дорожках ──
+
+const NAMED_CSS: &str =
+    "#outer { display: flex; width: 600px; }      .inner { display: inline-grid; grid-template-columns: [x] 25px [y] 25px; }      .leaf { height: 10px; }      .tail { width: 30px; height: 10px; }";
+const NAMED_HTML: &str = r#"<div id="outer">
+    <div class="inner"><div class="leaf" style="grid-column:x"></div><div class="leaf" style="grid-column:y"></div></div>
+    <div class="tail"></div></div>"#;
+
+/// Именованные линии в `grid-column` разрешаются до расчёта: дорожки в px, поэтому
+/// ширина контейнера 50 при любом размещении (до BUG-1317 — вся доступная ширина).
+#[test]
+fn bug1317_named_lines_keep_shrink_to_fit() {
+    assert_eq!(child_widths(NAMED_HTML, NAMED_CSS), vec![50.0, 30.0]);
+}
+
+/// Область `grid-area: a` — неявные линии `a-start`/`a-end`.
+#[test]
+fn bug1317_named_areas_keep_shrink_to_fit() {
+    let css = NAMED_CSS.replace(
+        "grid-template-columns: [x] 25px [y] 25px;",
+        "grid-template-columns: 25px 25px; grid-template-areas: \"a b\";",
+    );
+    let html = NAMED_HTML.replace("grid-column:x", "grid-area:a").replace("grid-column:y", "grid-area:b");
+    assert_eq!(child_widths(&html, &css), vec![50.0, 30.0]);
+}
+
+/// Имя, которого нет среди линий, создаёт неявную колонку — её ширина
+/// берётся по содержимому элемента: 25 + 25 + 20.
+#[test]
+fn bug1317_unknown_name_is_not_in_explicit_grid() {
+    let html = NAMED_HTML.replace("grid-column:x", "grid-column:nope;width:20px");
+    assert_eq!(child_widths(&html, NAMED_CSS)[0], 70.0);
 }
 
 // ── BUG-738: out-of-flow дети не участвуют в intrinsic-ширине ─────────────
@@ -768,7 +816,7 @@ fn wrap_inline_run_soft_hyphen_breaks_word_on_manual() {
     //   avail = 60-20-10 = 30; "hy-"=30 ≤ 30 → break at pos 2.
     let seg = InlineSegment {
         text: "hi hy\u{00AD}phen".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -821,7 +869,7 @@ fn wrap_inline_run_hyphens_none_no_break_on_shy() {
     // Same segment, Hyphens::None → soft hyphen ignored, full word wraps to new line unbroken.
     let seg = InlineSegment {
         text: "hi hy\u{00AD}phen".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -876,7 +924,7 @@ fn shy_invisible_when_word_fits_on_line() {
     // "hy\u{AD}phen" → strip → "hyphen" = 6 chars × 10px = 60px; max_width=200 → fits.
     let seg = InlineSegment {
         text: "hy\u{00AD}phen".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -941,7 +989,7 @@ fn shy_rightmost_fitting_break_selected() {
     //   rightmost: "super"=50, 50+10(hyphen)=60 ≤ 60 → break → "super-" / "man".
     let seg = InlineSegment {
         text: "xx su\u{00AD}per\u{00AD}man".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1002,7 +1050,7 @@ fn shy_auto_mode_respects_shy_positions() {
     // Same geometry as shy_rightmost_fitting_break_selected but with Hyphens::Auto.
     let seg = InlineSegment {
         text: "xx su\u{00AD}per\u{00AD}man".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1066,7 +1114,7 @@ fn shy_manual_no_hyphen_when_no_shy_in_word() {
     //   → normal wrap: "longword" moves to next line intact, no hyphen.
     let seg = InlineSegment {
         text: "aa longword".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1217,7 +1265,7 @@ fn overflow_wrap_break_word_splits_long_word() {
     // overflow-wrap: break-word should split it across lines.
     let seg = InlineSegment {
         text: "Superlongword".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1290,7 +1338,7 @@ fn wrap_cjk(
 
     let seg = InlineSegment {
         text: text.to_string(),
-        style: ComputedStyle::root(),
+        style: std::sync::Arc::new(ComputedStyle::root()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1427,7 +1475,7 @@ fn word_break_break_all_breaks_at_current_position() {
     //   Emit "Wor" at end of line1, line2 = "ld".
     let seg = InlineSegment {
         text: "Hi World".to_string(),
-        style: style.clone(),
+        style: std::sync::Arc::new(style.clone()),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -1462,6 +1510,97 @@ fn word_break_break_all_breaks_at_current_position() {
     // Line 2 must have the remainder of "World".
     let line2_text: String = lines[1].iter().map(|f| f.text.as_str()).collect();
     assert!(!line2_text.is_empty(), "line2 must not be empty");
+}
+
+
+// ── BUG-1324: слово, начинающее строку, режется как и слово в середине ────
+
+/// Прогоняет `text` через `wrap_inline_run` при ширине `max_width` (Glyph8 —
+/// 8px на символ) и возвращает склеенный текст каждой строки.
+fn wrap_lines_glyph8(
+    text: &str,
+    max_width: f32,
+    hyphens: crate::style::Hyphens,
+    word_break: crate::style::WordBreak,
+) -> Vec<String> {
+    use lumen_core::ext::NullHyphenationProvider;
+    use super::super::{InlineSegment, PseudoKind, wrap_inline_run};
+    use crate::style::ComputedStyle;
+    use lumen_core::geom::Size;
+    use lumen_dom::NodeId;
+
+    let seg = InlineSegment {
+        text: text.to_string(),
+        style: std::sync::Arc::new(ComputedStyle::root()),
+        pre_space: 0.0,
+        post_space: 0.0,
+        is_element_box: false,
+        img_src: None,
+        img_is_lazy: false,
+        img_width: 0.0,
+        forced_break: false,
+        pseudo_kind: PseudoKind::None,
+        source_node: NodeId::from_index(0),
+        source_char_offset: 0,
+        bidi_level: 0,
+    };
+    let lines = wrap_inline_run(
+        &[seg], max_width, 16.0, 0.0,
+        Size::new(800.0, 600.0),
+        &Glyph8, hyphens, &NullHyphenationProvider,
+        crate::style::WhiteSpace::Normal,
+        word_break,
+        crate::style::OverflowWrap::Normal,
+        crate::style::LineBreak::Auto,
+    );
+    lines
+        .iter()
+        .map(|l| l.iter().map(|f| f.text.as_str()).collect::<String>())
+        .collect()
+}
+
+#[test]
+fn break_all_splits_word_that_starts_the_line() {
+    use crate::style::{Hyphens, WordBreak};
+    // 29 букв, ширина 8 символов: 8 + 8 + 8 + 5.
+    let word = "a".repeat(29);
+    let lines = wrap_lines_glyph8(&word, 64.0, Hyphens::Manual, WordBreak::BreakAll);
+    assert_eq!(lines, vec!["a".repeat(8), "a".repeat(8), "a".repeat(8), "a".repeat(5)]);
+}
+
+#[test]
+fn break_all_keeps_fitting_word_on_one_line() {
+    use crate::style::{Hyphens, WordBreak};
+    let lines = wrap_lines_glyph8("aaaaaaaa", 64.0, Hyphens::Manual, WordBreak::BreakAll);
+    assert_eq!(lines, vec!["aaaaaaaa"]);
+}
+
+#[test]
+fn soft_hyphen_breaks_word_that_starts_the_line() {
+    use crate::style::{Hyphens, WordBreak};
+    // `aaaa<shy>bbbbbbbbbbbbb`, ширина 8 символов: «aaaa-» влезает, остаток нет.
+    let lines = wrap_lines_glyph8(
+        "aaaa\u{00AD}bbbbbbbbbbbbb", 64.0, Hyphens::Manual, WordBreak::Normal,
+    );
+    assert_eq!(lines, vec!["aaaa-".to_string(), "b".repeat(13)]);
+}
+
+#[test]
+fn soft_hyphen_ignored_for_line_start_word_when_hyphens_none() {
+    use crate::style::{Hyphens, WordBreak};
+    let lines = wrap_lines_glyph8(
+        "aaaa\u{00AD}bbbbbbbbbbbbb", 64.0, Hyphens::None, WordBreak::Normal,
+    );
+    assert_eq!(lines, vec![format!("aaaa{}", "b".repeat(13))]);
+}
+
+#[test]
+fn unbreakable_line_start_word_overflows_without_empty_line() {
+    use crate::style::{Hyphens, WordBreak};
+    // Нет ни одной возможности переноса: слово остаётся одно на строке,
+    // пустой строки перед ним не появляется.
+    let lines = wrap_lines_glyph8(&"a".repeat(13), 64.0, Hyphens::Manual, WordBreak::Normal);
+    assert_eq!(lines, vec!["a".repeat(13)]);
 }
 
 
@@ -1522,7 +1661,8 @@ fn bug926_button_width_includes_author_padding() {
         "button { padding: 4px 12px; }",
         0,
     );
-    assert!((w - 50.0).abs() < 0.5, "button width={w}, expected 50 (24 + 24 padding + 2 border)");
+    // Author padding disables the native appearance (CSS UI L4), so the UA border is gone.
+    assert!((w - 48.0).abs() < 0.5, "button width={w}, expected 48 (24 + 24 padding, no UA border)");
 }
 
 /// An explicit CSS width still wins — the fit-content path must not override it.
@@ -1586,4 +1726,42 @@ fn bug926_widget_controls_keep_their_ua_width() {
     assert!((cb - 15.0).abs() < 0.5, "checkbox width={cb}, expected 15");
     let text = form_control_width(r#"<div><input type="text"></div>"#, "", 0);
     assert!((text - 176.0).abs() < 0.5, "text input width={text}, expected 176");
+}
+
+/// Фиксированные колонки не зависят от элементов: контейнер с явно размещёнными
+/// элементами (`grid-area`) так же широк, как сумма колонок и щелей (Grid L1 §11.5).
+#[test]
+fn grid_fixed_columns_with_explicit_placement_sum_to_container_width() {
+    let css = "#outer { display: flex; width: 600px; }         .inner { display: grid; grid-template-columns: repeat(2, 100px); gap: 20px; }         .tail { width: 30px; height: 10px; }";
+    let html = r#"<div id="outer"><div class="inner">
+        <div style="grid-area: 1/2/2/3"></div><div style="grid-area: 1/1/2/2"></div></div>
+        <div class="tail"></div></div>"#;
+    assert_eq!(child_widths(html, css), vec![220.0, 30.0]);
+}
+
+/// Элемент, уходящий за явную сетку, создаёт неявную колонку — суммой фиксированных
+/// колонок это не посчитать, остаётся прежнее правило.
+#[test]
+fn grid_item_beyond_explicit_columns_skips_fixed_sum() {
+    let css = "#outer { display: flex; width: 600px; }         .inner { display: grid; grid-template-columns: repeat(2, 100px); }         .tail { width: 30px; height: 10px; }";
+    let html = r#"<div id="outer"><div class="inner">
+        <div style="grid-column: 3; width: 40px"></div></div>
+        <div class="tail"></div></div>"#;
+    assert_ne!(child_widths(html, css)[0], 200.0);
+}
+
+/// `max-content` колонка берёт ширину содержимого, а не делит свободное место
+/// поровну, как `auto` (Grid L1 §11.5).
+#[test]
+fn grid_max_content_column_sizes_to_its_item() {
+    let doc = lumen_html_parser::parse(
+        r#"<div id="g"><div style="width: 50px; height: 10px"></div><div style="width: 20px; height: 10px"></div></div>"#,
+    );
+    let sheet = lumen_css_parser::parse(
+        "#g { display: grid; grid-template-columns: max-content max-content; width: 400px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let g = super::find_by_id_all(&root, &doc, "g").expect("#g box not found");
+    let items: Vec<_> = g.children.iter().filter(|c| !matches!(c.kind, super::super::BoxKind::Skip)).collect();
+    assert_eq!(items[1].rect.x - items[0].rect.x, 50.0);
 }

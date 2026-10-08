@@ -55,6 +55,8 @@ mod property_syntax;
 mod pseudo;
 mod quirks;
 mod restyle;
+mod restyle_cache;
+mod rule_roots;
 mod share_cache;
 mod share_safety;
 mod shorthand;
@@ -67,7 +69,7 @@ mod values;
 // Это центральный тип публичной поверхности крейта: `lib.rs` реэкспортирует его
 // наружу, а по репозиторию его зовут по старому пути `lumen_layout::style::
 // ComputedStyle`, поэтому реэкспорт обязателен (правило §2.1).
-pub use computed::ComputedStyle;
+pub use computed::{ComputedStyle, SvgColorInterpolation};
 // SPLIT-ST8: сама `apply_declaration` вместе со своим `match prop` уехала в
 // `style::apply`; вызыватели в этом файле остались на прежнем имени.
 use apply::apply_declaration;
@@ -156,7 +158,10 @@ use property_syntax::apply_property_initial_values;
 // is the only consumer outside `crate::style` — reachable only through this
 // re-export, since `syntax_string` itself stays private (§2.1).
 pub use syntax_string::validate_registered_property;
-pub use pseudo::{compute_pseudo_element_style, compute_selection_style, compute_target_text_style, merge_pseudo_inherited};
+pub use pseudo::{
+    compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
+    compute_view_transition_pseudo_style, merge_pseudo_inherited, ViewTransitionPart,
+};
 pub(in crate::style) use pseudo::pseudo_element_name;
 // Пост-каскадная `resolve_logical_properties` дописана в созданный ST-7
 // `style::logical` тем же батчем; её единственный вызыватель — `compute_style`.
@@ -187,6 +192,7 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 // three re-exports above — `selector_query::length_to_css`'s `Length::Calc`
 // arm is its only caller.
 pub(crate) use calc::calc_node_to_css;
+pub use parse::box_sides::canonical_specified_anchor;
 pub use values::length::{
     canonical_specified_length, canonical_specified_line_width, canonical_specified_sizing_length,
     canonical_specified_block_step_size, canonical_specified_overflow_clip_margin,
@@ -201,10 +207,10 @@ pub use values::length::{
 // вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::typography::{
     ColorScheme, CssContinue, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing,
-    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
-    ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
+    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
+    FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
-    TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform,
+    TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, resolve_match_parent,
     TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxOrient, WhiteSpace,
     WhiteSpaceCollapse, BoxShadow, text_font_features,
 };
@@ -217,14 +223,14 @@ pub use values::dynamic_range_limit::{DynamicRangeLimit, DynamicRangeLimitKeywor
 // module for the same reason as `dynamic_range_limit` above.
 pub use values::text_size_adjust::TextSizeAdjust;
 pub use values::box_model::{
-    BorderCollapse, BorderStyle, BoxSizing, BreakValue, ClearSide, EmptyCells, FillRule,
+    BorderCollapse, BorderStyle, BoxSizing, BreakValue, CaptionSide, ClearSide, EmptyCells, FillRule, TableLayout,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,
     StrokeLinecap, StrokeLinejoin, SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPaintOrder,
     VerticalAlign,
 };
 pub use values::timing::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
-    CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction,
+    CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction, TransitionBehavior,
     parse_css_wide_keyword,
 };
 // SPLIT-ST17. Хвост типов значений — содержимое/списки/перенос/интерактивность
@@ -236,10 +242,21 @@ pub use values::timing::{
 // (`pub mod style` в `lib.rs`; `style::apply::*` и другие крейты зовут их по
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
+pub(crate) use values::rule_computed::insert_gap_rule_computed;
+pub use values::grid_cssom::canonical_specified_grid;
+pub use values::text_cssom::canonical_specified_text;
+pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
+pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
+pub use values::rule_anim::{
+    GapRuleOverride, PAINTED_GAP_RULE_PROPERTIES, gap_rule_computed_css, gap_rule_endpoint_css,
+    transition_token_covers,
+};
+pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
     FieldSizing, Hyphens, LineBreak, ListStylePosition,
     ListStyleType, OverflowAnchor, OverflowClipMarginBox, OverflowWrap, PointerEvents, Quotes, Resize,
+    RuleBreak, RuleInset, RuleInsets, RuleOverlap, RuleVisibilityItems,
     ScrollMarkerGroup, ScrollMarkerGroupMode, ScrollMarkerGroupPlacement, ScrollTargetGroup,
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };
@@ -249,7 +266,7 @@ pub use container::{
 };
 pub use values::scroll::{
     FontSizeAdjust, OffsetRotate, OverscrollBehavior, PrintColorAdjust, ScrollBehavior,
-    ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
+    ScrollInitialTarget, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
     ScrollSnapType, ShapeOutside, TextOrientation, UserSelect, WritingMode,
 };
 pub use values::background::{
@@ -258,16 +275,16 @@ pub use values::background::{
     ObjectFit, ParsedGradient, RadialShape, RadialSize, radial_gradient_radii,
 };
 pub use values::flexgrid::{
-    AlignValue, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat,
-    GridTrackSize, MasonryAutoFlow, ObjectPosition, PositionComponent, RepeatCount,
-    TextWrapMode, TextWrapStyle,
+    AlignValue, ContentAlignExtra, ContentSide, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow,
+    GridLine, GridRepeat, GridTrackSize, MasonryAutoFlow, NameFill, ObjectPosition, PositionComponent,
+    RepeatCount, RepeatLineNames, TextWrapMode, TextWrapStyle,
 };
 // `parse_auto_repeat` была `pub(crate)` в доноре (зовёт только `style::apply::layout`
 // внутри крейта, не публичная поверхность наружу) — реэкспорт сужен так же.
-pub(crate) use values::flexgrid::parse_auto_repeat;
+pub(crate) use values::flexgrid::{parse_auto_repeat, parse_subgrid_name_fill, parse_track_line_names};
 // `parse_position_component` тоже была приватной в доноре, но её зовёт
 // сосед `style::apply::motion` — реэкспорт сужен до `crate::style`.
-pub(in crate::style) use values::flexgrid::parse_position_component;
+pub(in crate::style) use values::flexgrid::{parse_position_axis, parse_position_component};
 pub use values::transform::{
     BackfaceVisibility, ClipPath, FilterFn, GradientStop, MaskComposite, MaskLayer, MaskMode,
     ShapeValue, TransformFn, TransformStyle,
@@ -298,19 +315,21 @@ use parse::font_size::{FontSizeBasis, apply_font_size};
 // внутри `style.rs` нет (правило §2.1).
 pub use env::{
     clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active,
-    forced_colors_active, pop_ch_ex_context, print_media_active, push_ch_ex_context,
+    forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
     set_animated_heights, set_cq_context, set_forced_colors, set_interactive_state,
     set_print_media, StyleEnvSnapshot,
 };
 pub(crate) use env::{animated_height_for, animated_heights_active};
+pub use rule_roots::restyle_roots_for_rule_changes;
+pub use restyle_cache::RestyleIndexCache;
 pub use restyle::{
-    restyle_node_index, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
-    restyle_state_index, NodeChange, NodeRestyleIndex, StateRestyleIndex,
+    restyle_node_index, restyle_node_index_shared, restyle_state_index_owned, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
+    restyle_roots_for_node_changes, restyle_roots_for_node_changes_with_basis, restyle_state_index, NodeChange, NodeRestyleIndex, OwnedNodeChange, RestyleRoots, StateRestyleIndex,
 };
 // `CONTAINER_CQ`/`FONT_CH_EX` читает `style::values::length` по старому пути
 // `crate::style::…` (SPLIT-ST9): это реэкспорт, а не импорт, — своих вызывателей
 // в `style.rs` у обеих нет.
-pub(in crate::style) use env::{CONTAINER_CQ, FONT_CH_EX};
+pub(in crate::style) use env::{CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS};
 // `media_context_from_viewport` перестала быть нужна и производственному
 // `style.rs`, и его реэкспорту — `style::cascade_index` (SPLIT-ST18) зовёт её
 // напрямую по пути `crate::style::env::media_context_from_viewport`, минуя это
@@ -330,6 +349,8 @@ use env::media_context_from_viewport;
 // потомок) — тот же реэкспорт, суженный до `crate::style`.
 // `complex_has_host`/`matches_slotted_complex` вызывает только сам `style.rs`.
 pub(crate) use matching::matches_complex;
+#[cfg(test)]
+pub(crate) use matching::matches_complex_reference;
 pub(in crate::style) use matching::matches_simple;
 use matching::{complex_has_host, matches_slotted_complex};
 
@@ -342,8 +363,8 @@ use matching::{complex_has_host, matches_slotted_complex};
 use presentational::{
     apply_align_presentational_hint, apply_background_image_presentational_hint,
     apply_bgcolor_presentational_hint, apply_bordercolor_presentational_hint,
-    apply_cellspacing_presentational_hint, apply_font_element_presentational_hints,
-    apply_image_presentational_hints, apply_svg_presentational_hints,
+    apply_cellspacing_presentational_hint, apply_dir_presentational_hint,
+    apply_font_element_presentational_hints, apply_image_presentational_hints, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint,
 };
 // Вызывателя внутри производственного `style.rs` у неё нет — только
@@ -356,10 +377,12 @@ use presentational::{
 use presentational::parse_legacy_color_html_attr;
 use quirks::{apply_quirks_html_height, apply_quirks_line_height, apply_quirks_table_reset};
 use ua::{
-    apply_ua_body_margin, apply_ua_dialog_display, apply_ua_form_controls,
+    apply_ua_body_margin, apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls,
     apply_ua_form_controls_field_sizing_clear, apply_ua_heading_style, apply_ua_hidden,
-    apply_ua_hr_style, apply_ua_inert, apply_ua_table_cell_padding, apply_ua_text_decoration,
-    default_display, strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,
+    apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_text_decoration,
+    default_display, is_appearance_disabling_property, is_disableable_widget,
+    strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,
     ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align, ua_white_space,
 };
 pub use ua::ua_form_element_colors;

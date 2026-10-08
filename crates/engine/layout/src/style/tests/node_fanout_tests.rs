@@ -115,31 +115,85 @@
     }
 
     #[test]
-    fn has_anywhere_in_the_sheet_widens_to_the_whole_document() {
+    fn has_names_the_ancestors_it_can_flip_not_the_whole_document() {
         // BUG-349: `:has()` binds an ancestor's match to a descendant's state,
         // and that ancestor can sit arbitrarily far above the mutated node's
-        // parent — parent-only widening (S17's pre-BUG-349 fallback) is not
-        // enough to catch it, so the root-set must cover the whole document.
+        // parent. BUG-935 s58: the root-set names exactly the ancestors that
+        // could match a `:has()`-carrying compound (`ul` here), plus the usual
+        // `#a` itself — not the document.
         let doc = fixture();
         let sheet = parse_css("ul:has(.item) { color: green; }");
         let index = restyle_node_index(&doc, &sheet);
-        assert!(index.is_conservative(), ":has() anywhere must force the conservative path");
+        assert!(!index.is_conservative(), "`:has()` has its own reach analysis");
         assert!(index.has_has_dependency(), ":has() anywhere must set the has-dependency flag");
         let a = doc.find_by_id("a").expect("#a");
-        assert_eq!(
-            roots(&doc, &sheet, a, "data-x"),
-            [doc.root()].into_iter().collect::<HashSet<_>>(),
-            "a `:has()`-affected ancestor can be more than one level up, so the whole \
-             document must widen, not just #a's parent",
-        );
+        let got = roots(&doc, &sheet, a, "class");
+        assert!(got.contains(&a));
+        assert!(!got.contains(&doc.root()), "the document must not be the root: {got:?}");
+        let uls: Vec<_> = got.iter().filter(|&&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")).collect();
+        assert_eq!(uls.len(), 1, "the `ul` ancestor that could match `ul:has(.item)` is a root: {got:?}");
     }
 
     #[test]
-    fn has_far_above_the_mutated_node_is_caught_by_the_document_wide_widening() {
+    fn a_write_no_has_argument_reads_does_not_reach_the_has_subject() {
+        // BUG-1211: `data-*`/`aria-*`/`style` writes and class tokens that no `:has()` argument names
+        // cannot flip `ul:has(.item)`; the ancestor is not a root (cnn.com's script writes ~30
+        // `data-zjs-*` attributes per link and read `innerText` after each).
+        let doc = fixture();
+        let sheet = parse_css("ul:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        let a = doc.find_by_id("a").expect("#a");
+        let has_ul = |got: &HashSet<NodeId>| got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul"));
+        for attr in ["data-x", "aria-label", "style"] {
+            let got = roots(&doc, &sheet, a, attr);
+            assert!(!has_ul(&got), "`{attr}` write must not make the `ul` a root: {got:?}");
+        }
+        let from = |name: &'static str, old: &'static str| {
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::AttrFrom { name, old })], &index)
+        };
+        // `#a` keeps `item`; only `foo` came off, which no `:has()` argument names.
+        assert!(!has_ul(&from("class", "item foo")), "an unrelated class token write must not reach the `ul`");
+        assert!(has_ul(&from("class", "")), "gaining `item` can flip `ul:has(.item)`");
+        // A plain `class` write without the old value, and attributes read through pseudo-classes, stay wide.
+        assert!(has_ul(&roots(&doc, &sheet, a, "class")));
+        assert!(has_ul(&roots(&doc, &sheet, a, "disabled")));
+    }
+
+    #[test]
+    fn an_attribute_a_has_argument_names_still_reaches_the_has_subject() {
+        let doc = fixture();
+        let sheet = parse_css("ul:has([data-x]) { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let got = roots(&doc, &sheet, a, "data-x");
+        assert!(got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")), "{got:?}");
+        let got = roots(&doc, &sheet, a, "data-y");
+        assert!(!got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul")), "{got:?}");
+    }
+
+    #[test]
+    fn a_class_attribute_selector_in_has_flips_only_when_its_match_changes() {
+        // BUG-1211: `:has([class*="video"])` reads the whole `class` value, but a write that leaves its
+        // match as it was (`foo` -> `foo bar`) cannot flip the `ul`.
+        let doc = fixture();
+        let sheet = parse_css(r#"ul:has([class*="video"]) { color: green; }"#);
+        let index = restyle_node_index(&doc, &sheet);
+        let a = doc.find_by_id("a").expect("#a");
+        let has_ul = |got: &HashSet<NodeId>| got.iter().any(|&n| doc.get(n).element_name().is_some_and(|q| q.local == "ul"));
+        let from = |old: &'static str| {
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::AttrFrom { name: "class", old })], &index)
+        };
+        // `#a` is now `item`: neither it nor `item foo` contains `video`.
+        assert!(!has_ul(&from("item foo")), "match stays false on both sides");
+        assert!(has_ul(&from("item video")), "`video` came off: the match flipped");
+        assert!(has_ul(&roots(&doc, &sheet, a, "class")), "old value unknown: stay wide");
+    }
+
+    #[test]
+    fn has_far_above_the_mutated_node_is_caught() {
         // The exact shape BUG-349 documents: `article:has(.expanded)` reacts to
-        // a class toggle on a node several levels below `<article>`, which the
-        // old parent-only widening (still correct for plain sibling-reach
-        // selectors) could never reach.
+        // a class toggle on a node several levels below `<article>`, which a
+        // parent-only widening (still correct for plain sibling-reach selectors)
+        // could never reach.
         let doc = parse_html(
             r#"<article id="art">
                 <section><div><span id="leaf" class="collapsed"></span></div></section>
@@ -150,23 +204,78 @@
         let art = doc.find_by_id("art").expect("#art");
         let index = restyle_node_index(&doc, &sheet);
         let got = restyle_root_set_for_node_change(&doc, [(leaf, NodeChange::Attr("class"))], &index);
-        assert_eq!(got, [doc.root()].into_iter().collect::<HashSet<_>>());
-        assert!(
-            got.contains(&doc.root()) && doc.root() != art,
-            "the whole-document root-set must cover #art even though it is three levels \
-             above #leaf, well outside #leaf's parent's subtree",
-        );
+        assert_eq!(got, [leaf, art].into_iter().collect::<HashSet<_>>());
     }
 
     #[test]
-    fn nth_child_of_selector_disables_narrowing() {
+    fn a_has_subject_followed_by_a_sibling_combinator_widens_to_its_parent() {
+        // `.card:has(.x) + .after` — `.after` restyles when `.card`'s result flips,
+        // and it is not in `.card`'s subtree.
+        let doc = parse_html(
+            r#"<div id="wrap"><div class="card" id="c"><i id="leaf"></i></div><p class="after"></p></div>"#,
+        );
+        let sheet = parse_css(".card:has(.x) + .after { color: red; }");
+        let leaf = doc.find_by_id("leaf").expect("#leaf");
+        let wrap = doc.find_by_id("wrap").expect("#wrap");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_root_set_for_node_change(&doc, [(leaf, NodeChange::Attr("class"))], &index);
+        assert!(got.contains(&wrap), "{got:?}");
+    }
+
+    #[test]
+    fn a_forward_sibling_has_argument_reaches_previous_siblings_of_ancestors() {
+        // `.a:has(+ .b)` flips when `.b` (a later sibling of `.a`) changes.
+        let doc = parse_html(r#"<div><i class="a" id="a"></i><i class="b" id="b"></i></div>"#);
+        let sheet = parse_css(".a:has(+ .b) { color: red; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let b = doc.find_by_id("b").expect("#b");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_root_set_for_node_change(&doc, [(b, NodeChange::Attr("class"))], &index);
+        assert!(got.contains(&a), "{got:?}");
+    }
+
+    #[test]
+    fn has_with_a_shadow_root_in_the_document_still_widens_to_the_whole_document() {
+        let mut doc = fixture();
+        let host = doc.find_by_id("a").expect("#a");
+        doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let sheet = parse_css("ul:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative());
+        let got = restyle_root_set_for_node_change(&doc, [(host, NodeChange::Attr("class"))], &index);
+        assert_eq!(got, [doc.root()].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn nth_child_of_selector_it_cannot_model_disables_narrowing() {
         // `:nth-child(2 of .item)` makes one element's match depend on which of
         // its *siblings* carry `.item` — sibling reach with no combinator to
-        // see it.
+        // see it. An `S` that reads more than the sibling's own attributes (a
+        // pseudo-class, a combinator) is not modelled: the whole sheet widens.
+        let doc = fixture();
+        for css in ["li:nth-child(2 of .item:checked) { color: green; }", "li:nth-child(2 of ul .item) { color: green; }"] {
+            let sheet = parse_css(css);
+            let index = restyle_node_index(&doc, &sheet);
+            assert!(index.is_conservative(), "{css}: must force the conservative path");
+        }
+    }
+
+    #[test]
+    fn nth_child_of_a_simple_selector_sends_a_flipping_write_to_the_parent() {
+        // BUG-1211: `S` = `.item` is decided by the sibling's own `class`, so only a write that can
+        // flip it reaches the siblings (the parent is the root); anything else narrows to the node.
         let doc = fixture();
         let sheet = parse_css("li:nth-child(2 of .item) { color: green; }");
         let index = restyle_node_index(&doc, &sheet);
-        assert!(index.is_conservative(), ":nth-child(… of …) must force the conservative path");
+        assert!(!index.is_conservative());
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        let one = |change| restyle_root_set_for_node_change(&doc, [(a, change)], &index);
+        let only = |n: NodeId| [n].into_iter().collect::<HashSet<_>>();
+        assert_eq!(one(NodeChange::Attr("data-x")), only(a));
+        assert_eq!(one(NodeChange::AttrFrom { name: "class", old: "item loaded" }), only(a));
+        assert_eq!(one(NodeChange::AttrFrom { name: "class", old: "loaded" }), only(menu));
+        assert_eq!(one(NodeChange::Attr("class")), only(menu));
     }
 
     #[test]
@@ -203,4 +312,48 @@
         let a = doc.find_by_id("a").expect("#a");
         let menu = doc.find_by_id("menu").expect("#menu");
         assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    /// BUG-935 срез 74: an index built over a shared sheet (the one the same-tick flush keeps from
+    /// one flush to the next) answers every question like the one that borrows it — sibling reach,
+    /// `:has()`, structure, the ancestor readers of a `class` write — and keeps answering after the
+    /// borrowed sheet's own scope has ended.
+    #[test]
+    fn a_shared_index_answers_like_a_borrowed_one() {
+        let sheets = [
+            ".item { color: black; }",
+            "[data-x=\"1\"] + .item { color: green; }",
+            "ul:has(.item) { color: green; } .item:first-child + .item { color: red; }",
+            "#menu.open .item { color: blue; } .a ~ .b { color: red; } @media (min-width: 1px) { .item:checked + li { color: red; } }",
+        ];
+        for text in sheets {
+            let doc = fixture();
+            let shared = std::sync::Arc::new(parse_css(text));
+            let kept = restyle_node_index_shared(&doc, &shared);
+            drop(shared);
+            let sheet = parse_css(text);
+            let borrowed = restyle_node_index(&doc, &sheet);
+            let (a, menu) = (doc.find_by_id("a").expect("#a"), doc.find_by_id("menu").expect("#menu"));
+            for attr in ["data-x", "checked", "class", "id"] {
+                let change = [(a, NodeChange::AttrFrom { name: attr, old: "x" })];
+                assert_eq!(
+                    restyle_root_set_for_node_change(&doc, change, &kept),
+                    restyle_root_set_for_node_change(&doc, change, &borrowed),
+                    "{text} / {attr}",
+                );
+            }
+            let change = [(menu, NodeChange::ChildList)];
+            assert_eq!(
+                restyle_roots_for_node_changes(&doc, change, &kept).shallow,
+                restyle_roots_for_node_changes(&doc, change, &borrowed).shallow,
+                "{text} / child list",
+            );
+            assert_eq!(kept.sibling_source_count(), borrowed.sibling_source_count(), "{text}");
+            assert_eq!(kept.has_has_dependency(), borrowed.has_has_dependency(), "{text}");
+            assert_eq!(
+                kept.affected_descendants(&doc, menu, "class", Some("")),
+                borrowed.affected_descendants(&doc, menu, "class", Some("")),
+                "{text} / readers",
+            );
+        }
     }

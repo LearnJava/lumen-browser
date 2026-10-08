@@ -10,6 +10,10 @@
 //!
 //! # TCP сокет (для отладки через netcat):
 //! cargo run -p lumen-mcp -- --port 7777 [URL]
+//!
+//! # stdio-мост к живому окну (DEVX-18):
+//! lumen-mcp --attach <port> --token-file <path>
+//! lumen-mcp --launch [--lumen <path>] [URL] [-- <флаги lumen>]
 //! ```
 
 use std::net::TcpListener;
@@ -19,6 +23,14 @@ use lumen_mcp::{McpServer, StdioTransport, TcpTransport};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    match lumen_mcp::bridge::parse_args(&raw_args) {
+        Ok(Some(mode)) => std::process::exit(lumen_mcp::bridge::run(mode)),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("lumen-mcp: {e}");
+            std::process::exit(2);
+        }
+    }
     let (port, url) = parse_args(&raw_args);
 
     let mut session = InProcessSession::new();

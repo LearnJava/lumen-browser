@@ -790,7 +790,7 @@ fn import_fixture_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-fn null_sink() -> Arc<dyn EventSink> {
+pub(super) fn null_sink() -> Arc<dyn EventSink> {
     Arc::new(StdoutEventSink)
 }
 
@@ -937,6 +937,100 @@ fn inline_css_imports_media_gate() {
     );
     assert!(!out.contains(".print-only{}"), "print-only @import must be skipped for screen");
     assert!(out.contains(".a{}"));
+}
+
+/// `@import url(x) layer(name)` — Cascade L5 §6.5: правила импортированного
+/// листа оказываются в layer-е `name`, а `@font-face` из него остаётся глобальным.
+#[test]
+fn inline_css_imports_wraps_sheet_in_named_layer() {
+    let dir = import_fixture_dir("layer_named");
+    std::fs::write(
+        dir.join("b.css"),
+        "p { color: red; } @font-face { font-family: Imp; src: url(i.woff2); }",
+    )
+    .unwrap();
+    let base = ResourceBase::File(dir.join("a.css"));
+    let (out, _blocked) = inline_css_imports(
+        "@import url(b.css) layer(lib);\np { color: blue; }", &base, &null_sink(), None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
+        None,
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
+    let sheet = lumen_css_parser::parse(&out);
+    assert_eq!(sheet.layer_order, vec!["lib".to_string()]);
+    assert_eq!(sheet.layers.len(), 1);
+    assert_eq!(sheet.layers[0].name, "lib");
+    assert_eq!(sheet.layers[0].rules.len(), 1, "imported rule must be layered");
+    assert_eq!(sheet.rules.len(), 1, "importer's own rule stays unlayered");
+    assert_eq!(sheet.font_faces.len(), 1, "@font-face is not layer-scoped");
+    assert!(out.ends_with("p { color: blue; }"), "BUG-743: result ends with the source text");
+}
+
+/// Голый `layer` — анонимный layer.
+#[test]
+fn inline_css_imports_wraps_sheet_in_anonymous_layer() {
+    let dir = import_fixture_dir("layer_anon");
+    std::fs::write(dir.join("b.css"), "p { color: red; }").unwrap();
+    let base = ResourceBase::File(dir.join("a.css"));
+    let (out, _blocked) = inline_css_imports(
+        "@import url(b.css) layer;", &base, &null_sink(), None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
+        None,
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
+    let sheet = lumen_css_parser::parse(&out);
+    assert_eq!(sheet.layers.len(), 1);
+    assert!(sheet.layers[0].name.starts_with("__anon_"));
+    assert!(sheet.rules.is_empty());
+}
+
+/// `supports(<false>)` отключает импорт, `supports(<true>)` — нет.
+#[test]
+fn inline_css_imports_supports_gate() {
+    let dir = import_fixture_dir("supports");
+    std::fs::write(dir.join("b.css"), ".gated{}").unwrap();
+    let base = ResourceBase::File(dir.join("a.css"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+    let run = |text: &str| {
+        inline_css_imports(
+            text, &base, &null_sink(), None, &ctx,
+            &mut std::collections::HashSet::new(), 0,
+            lumen_encoding::Encoding::Utf8,
+            None,
+            lumen_network::ReferrerPolicy::default_policy(),
+        )
+        .0
+    };
+    assert!(!run("@import url(b.css) supports(not (display: block));\n.a{}").contains(".gated{}"));
+    assert!(run("@import url(b.css) supports(display: block);\n.a{}").contains(".gated{}"));
+}
+
+/// Layer импорта участвует в каскаде: unlayered-правило импортирующего листа
+/// побеждает layered-правило импортированного даже при меньшей специфичности.
+#[test]
+fn inline_css_imports_layer_loses_to_unlayered_in_cascade() {
+    let dir = import_fixture_dir("layer_cascade");
+    std::fs::write(dir.join("b.css"), "#x { color: red; }").unwrap();
+    let base = ResourceBase::File(dir.join("a.css"));
+    let (out, _blocked) = inline_css_imports(
+        "@import url(b.css) layer(lib);\np { color: blue; }", &base, &null_sink(), None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
+        None,
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
+    let doc = lumen_html_parser::parse("<p id=x>t</p>");
+    let sheet = lumen_css_parser::parse(&out);
+    let p = doc.get(doc.body().unwrap()).children[0];
+    let style = lumen_layout::compute_style(
+        &doc, p, &sheet, &lumen_layout::ComputedStyle::root(), Size::new(800.0, 600.0), false,
+    );
+    assert_eq!(style.color, lumen_layout::Color { r: 0, g: 0, b: 255, a: 255 });
 }
 
 /// Отсутствующий импортируемый файл не валит рендер — текст возвращается,

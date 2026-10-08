@@ -3,7 +3,7 @@
 //! column-rules/position:sticky и position:fixed/list marker rendering/
 //! background-blend-mode/BoxModelOverlay/MaskMode + PushMaskLayer/
 //! PushScrollLayer/DrawScrollbar/PageBreak и print display list/
-//! strip_background_graphics/DrawCrossFade. Перенесено байт-в-байт из
+//! apply_print_color_adjust/DrawCrossFade. Перенесено байт-в-байт из
 //! `display_list.rs` без дедента (приём ST-1/DL-1).
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-3).
 
@@ -832,6 +832,249 @@ use lumen_dom::NodeId;
         assert_eq!(rules.len(), 0, "no column-count/width → no separators");
     }
 
+    #[test]
+    fn column_rule_separates_overflow_columns() {
+        // `column-fill:auto` + a definite height: 400px of content in 100px columns spills
+        // into overflow columns past `column-count` (Multicol L1 §7.1) — every column gets a rule.
+        let dl = build(
+            r#"<div style="width:100px;height:100px;columns:2;column-fill:auto;column-gap:10px;
+                           column-rule:10px solid gold">
+                 <div style="height:400px;background:cyan"></div>
+               </div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        // 4 columns of 45px (content 400px / 100px) → 3 separators, not column-count - 1 = 1.
+        assert_eq!(rules.len(), 3, "got {}", rules.len());
+    }
+
+    #[test]
+    fn column_rule_cap_inset_shortens_the_line() {
+        // CSS Gap Decorations L1 §3.3: `column-rule-inset: 4px` trims 4px off both block ends.
+        let dl = build(
+            r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;
+                           column-rule:10px solid gold;column-rule-inset:4px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 1);
+        let DisplayCommand::DrawBorder { rect, .. } = rules[0] else { panic!("DrawBorder") };
+        assert!((rect.height - 92.0).abs() < 0.01 && (rect.y - 4.0).abs() < 0.01, "rect {rect:?}");
+    }
+
+    // ── CSS Multicol L2 rows of columns: column + row rules (WPT css-gaps/multicol 004/014/034) ──
+
+    fn row_rule_cmds(dl: &DisplayList) -> Vec<(f32, f32, f32, f32)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, widths: [0.0, 0.0, h, 0.0], .. } if *h > 0.0 => {
+                    Some((rect.x, rect.y, rect.width, rect.height))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn col_rule_rects(dl: &DisplayList) -> Vec<(f32, f32, f32, f32)> {
+        let mut v: Vec<_> = column_rule_cmds(dl)
+            .into_iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, .. } => Some((rect.x, rect.y, rect.width, rect.height)),
+                _ => None,
+            })
+            .collect();
+        v.sort_by(|a, b| (a.1, a.0).partial_cmp(&(b.1, b.0)).unwrap());
+        v
+    }
+
+    const ROWS_CSS: &str = "width:200px;column-count:3;column-width:60px;column-gap:10px;row-gap:10px;        column-height:60px;column-wrap:wrap;column-fill:auto;column-rule:4px solid blue;row-rule:4px solid gold;";
+    const SIX_P: &str = r#"<p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p>
+                           <p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p>"#;
+
+    #[test]
+    fn multicol_rows_draw_column_rules_per_row_and_a_row_rule() {
+        // multicol-gap-decorations-004: two rows → 2 column gaps × 2 rows of column rules and
+        // one row rule through the 10px row gap (y 60..70, rule 4px centred at y 63).
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}">{SIX_P}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        assert_eq!(cols.len(), 4, "{cols:?}");
+        assert_eq!((cols[0].0, cols[0].1, cols[0].3), (63.0, 0.0, 60.0));
+        assert_eq!((cols[2].0, cols[2].1, cols[2].3), (63.0, 70.0, 60.0));
+        let rows = row_rule_cmds(&dl);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!((rows[0].0, rows[0].1, rows[0].2, rows[0].3), (0.0, 63.0, 200.0, 4.0));
+    }
+
+    #[test]
+    fn multicol_rows_hide_rules_next_to_empty_cells() {
+        // Four items: row 2 holds one. `normal` column visibility is `between` — no column rule
+        // in row 2; the row rule stays whole (`normal` = `all` for rows).
+        let html = r#"<p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p><p style="height:60px;margin:0"></p>
+                      <p style="height:60px;margin:0"></p>"#;
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}">{html}</div>"#), "");
+        assert_eq!(col_rule_rects(&dl).len(), 2, "only row 1 has two filled neighbours");
+        assert_eq!(row_rule_cmds(&dl).len(), 1);
+    }
+
+    #[test]
+    fn multicol_rows_row_rule_break_intersection_cuts_at_column_gaps() {
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}row-rule-break:intersection">{SIX_P}</div>"#), "");
+        let rows = row_rule_cmds(&dl);
+        assert_eq!(rows.len(), 3, "one piece per column: {rows:?}");
+        assert_eq!((rows[0].0, rows[0].2), (0.0, 60.0));
+    }
+
+    #[test]
+    fn multicol_rows_overlap_join_paints_a_crossing_once() {
+        // multicol-gap-decorations-033: `row-rule-inset: overlap-join` extends every piece of a cut
+        // row rule over the column gaps; neighbouring pieces must not overlap (a translucent rule
+        // would be blended twice). The union of the pieces is the whole 200px line.
+        let css = format!("{ROWS_CSS}row-rule-break:intersection;row-rule-inset:overlap-join;");
+        let dl = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let mut xs: Vec<(f32, f32)> = row_rule_cmds(&dl).iter().map(|r| (r.0, r.2)).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(!xs.is_empty());
+        let mut end = xs[0].0;
+        for (x, w) in &xs {
+            assert!(*x >= end - 0.01, "pieces overlap: {xs:?}");
+            end = x + w;
+        }
+    }
+
+    #[test]
+    fn multicol_rows_negative_junction_inset_pieces_are_merged_in_order() {
+        // multicol-gap-decorations-039: a junction inset far below zero moves the start of a later
+        // piece of a cut row rule before the start of an earlier one (piece 2 starts at -140, piece 1
+        // at -50). The pieces are still merged so each point is painted once, and the union is
+        // [-140, 340] (the first column piece alone would leave [-140, -50] out).
+        let css = format!("{ROWS_CSS}row-rule-break:intersection;row-rule-inset-junction-start:-210px;row-rule-inset-junction-end:-210px;row-rule-inset-cap-start:-50px;row-rule-inset-cap-end:-50px;");
+        let dl = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let mut xs: Vec<(f32, f32)> = row_rule_cmds(&dl).iter().map(|r| (r.0, r.2)).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(!xs.is_empty());
+        assert!((xs[0].0 + 140.0).abs() < 0.01, "union starts at -140: {xs:?}");
+        let mut end = xs[0].0;
+        for (x, w) in &xs {
+            assert!(*x >= end - 0.01, "pieces overlap: {xs:?}");
+            end = x + w;
+        }
+        assert!((end - 340.0).abs() < 0.01, "union ends at 340: {xs:?}");
+    }
+
+    #[test]
+    fn multicol_rows_split_by_a_spanner_get_a_rule_band_each() {
+        // multicol-gap-decorations-002: `p p <spanner 18px> p×6`, 60px columns → band 1 (balanced,
+        // 40px), the spanner (no rule, no row gap), band 2 (the 2px rest of the row), then the
+        // row gap at y 60..70 with the only row rule, then the last row.
+        let p = r#"<p style="height:60px;margin:0"></p>"#;
+        let html = format!(
+            r#"{p}{p}<div style="column-span:all;height:18px;margin:0"></div>{p}{p}{p}{p}{p}{p}"#
+        );
+        let dl = build(&format!(r#"<div style="{ROWS_CSS}height:200px;">{html}</div>"#), "");
+        let rows = row_rule_cmds(&dl);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!((rows[0].1, rows[0].3), (63.0, 4.0), "gap under the first row, not under the spanner");
+        let cols = col_rule_rects(&dl);
+        // Column rules: band 1 (y 0..40), band 2 (y 58..60) and the rows below — two gaps each.
+        assert_eq!((cols[0].1, cols[0].3), (0.0, 40.0), "{cols:?}");
+        assert!(cols.iter().any(|c| (c.1, c.3) == (58.0, 2.0)), "{cols:?}");
+    }
+
+    #[test]
+    fn multicol_spanner_cuts_column_rules_into_bands_without_column_height() {
+        // `p p <spanner 20px> p p p`, 3 columns, `column-fill: auto`, no `column-height`: both `p`
+        // stack in column 1, so the spanner sits at y 100..120; the rules of the band above stop at
+        // it, the band below starts under it (Multicol L1 §6.1).
+        let p = r#"<p style="height:50px;margin:0"></p>"#;
+        let html = format!(r#"{p}{p}<div style="column-span:all;height:20px;margin:0"></div>{p}{p}{p}"#);
+        let css = "width:200px;height:200px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto;                   column-rule:4px solid blue;";
+        let dl = build(&format!(r#"<div style="{css}">{html}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        assert!(!cols.is_empty(), "{cols:?}");
+        assert!(cols.iter().all(|c| c.1 + c.3 <= 100.01 || c.1 >= 119.99), "a rule crosses the spanner: {cols:?}");
+        assert!(cols.iter().any(|c| c.1 == 0.0) && cols.iter().any(|c| c.1 >= 119.99), "{cols:?}");
+    }
+
+    #[test]
+    fn multicol_spanner_with_column_rule_break_none_keeps_one_rule_through_it() {
+        let p = r#"<p style="height:50px;margin:0"></p>"#;
+        let html = format!(r#"{p}{p}<div style="column-span:all;height:20px;margin:0"></div>{p}{p}{p}"#);
+        let css = "width:200px;height:200px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto;                   column-rule:4px solid blue;column-rule-break:none;";
+        let dl = build(&format!(r#"<div style="{css}">{html}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        assert!(cols.iter().any(|c| c.1 == 0.0 && c.3 > 150.0), "{cols:?}");
+    }
+
+    #[test]
+    fn multicol_spanner_does_not_cut_rules_of_overflow_columns() {
+        // multicol-gap-decorations-027: 3 columns in a 200px box, six 100px items under a 5px
+        // spanner in a 205px container -> six columns, the three gaps past the content box are
+        // full-height rules (the spanner is only as wide as the content box).
+        let p = r#"<p style="height:100px;margin:0"></p>"#;
+        let html = format!(r#"{p}<div style="column-span:all;height:5px;margin:0"></div>{p}{p}{p}{p}{p}{p}"#);
+        let css = "width:200px;height:205px;column-count:3;column-width:60px;column-gap:10px;column-fill:auto;column-rule:5px solid blue;rule-visibility-items:all;";
+        let dl = build(&format!(r#"<div style="{css}">{html}</div>"#), "");
+        let cols = col_rule_rects(&dl);
+        let past: Vec<_> = cols.iter().filter(|c| c.0 > 200.0).collect();
+        assert_eq!(past.len(), 3, "{cols:?}");
+        assert!(past.iter().all(|c| c.1 == 0.0 && c.3 == 205.0), "{past:?}");
+        assert!(cols.iter().filter(|c| c.0 < 200.0).all(|c| c.1 + c.3 <= 100.01 || c.1 >= 104.99), "{cols:?}");
+    }
+
+    #[test]
+    fn multicol_without_column_height_ignores_column_wrap() {
+        let dl = build(
+            r#"<div style="width:100px;height:100px;columns:2;column-gap:10px;column-wrap:wrap;
+                           column-rule:10px solid gold;background:white"></div>"#,
+            "",
+        );
+        assert_eq!(column_rule_cmds(&dl).len(), 1);
+        assert!(row_rule_cmds(&dl).is_empty());
+    }
+
+    #[test]
+    fn multicol_rows_rtl_deals_column_rule_list_from_the_right() {
+        // multicol-gap-decorations-multi-value-direction: under `direction: rtl` the first column
+        // gap (and the first list value) is the rightmost one.
+        let colour_of = |dl: &DisplayList| -> Vec<(f32, u8, u8)> {
+            col_rule_rects(dl)
+                .iter()
+                .take(2)
+                .map(|r| {
+                    let c = column_rule_cmds(dl)
+                        .into_iter()
+                        .find_map(|c| match c {
+                            DisplayCommand::DrawBorder { rect, colors, .. } if rect.x == r.0 && rect.y == r.1 => Some(colors[1]),
+                            _ => None,
+                        })
+                        .expect("rule");
+                    (r.0, c.r, c.b)
+                })
+                .collect()
+        };
+        let css = format!("{ROWS_CSS}column-rule-color:rgb(255,0,0),rgb(0,0,255);");
+        let ltr = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let rtl = build(&format!(r#"<div style="{css}direction:rtl">{SIX_P}</div>"#), "");
+        assert_eq!(colour_of(&ltr), vec![(63.0, 255, 0), (133.0, 0, 255)]);
+        assert_eq!(colour_of(&rtl), vec![(63.0, 0, 255), (133.0, 255, 0)]);
+    }
+
+    #[test]
+    fn multicol_rows_rtl_row_rule_inset_start_is_the_right_end() {
+        // multicol-gap-decorations-direction-inset: `row-rule-inset-start: 10px` trims the
+        // inline-start end of every piece — the left one in ltr, the right one in rtl.
+        let css = format!("{ROWS_CSS}row-rule-break:intersection;row-rule-inset-start:10px;row-rule-inset-end:0px;");
+        let ltr = build(&format!(r#"<div style="{css}">{SIX_P}</div>"#), "");
+        let rtl = build(&format!(r#"<div style="{css}direction:rtl">{SIX_P}</div>"#), "");
+        let xs = |dl: &DisplayList| row_rule_cmds(dl).iter().map(|r| (r.0, r.2)).collect::<Vec<_>>();
+        assert_eq!(xs(&ltr), vec![(10.0, 50.0), (80.0, 50.0), (150.0, 50.0)]);
+        assert_eq!(xs(&rtl), vec![(0.0, 50.0), (70.0, 50.0), (140.0, 50.0)]);
+        // Whole (un-cut) row rule: the cap inset sits at the right edge under rtl.
+        let css = format!("{ROWS_CSS}row-rule-inset-start:10px;row-rule-inset-end:0px;");
+        let rtl = build(&format!(r#"<div style="{css}direction:rtl">{SIX_P}</div>"#), "");
+        assert_eq!(xs(&rtl), vec![(0.0, 190.0)]);
+    }
+
     // ── position:sticky display list tests ──────────────────────────────────
 
     #[test]
@@ -947,6 +1190,397 @@ use lumen_dom::NodeId;
             assert!((rect.x - 138.0).abs() < 0.5, "sep_x expected ~138, got {}", rect.x);
             assert!((*rule_w - 4.0).abs() < 0.01, "rule width expected 4, got {}", rule_w);
         }
+    }
+
+    // ── CSS Gap Decorations L1: column-rule / row-rule in flex/grid ────────
+
+    fn horizontal_rule_cmds(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        // Row rules are emitted as DrawBorder with widths=[0, 0, rule_h, 0].
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { widths: [0.0, 0.0, h, 0.0], .. } if *h > 0.0))
+            .collect()
+    }
+
+    const GRID_2X2: &str = r#"<div style="display:grid;grid-template-columns:100px 100px;
+        grid-template-rows:50px 50px;gap:20px;width:220px;height:120px;{}">
+        <div></div><div></div><div></div><div></div></div>"#;
+
+    #[test]
+    fn grid_row_rule_emits_one_horizontal_segment() {
+        let html = GRID_2X2.replace("{}", "row-rule:2px solid red");
+        let dl = build(&html, "");
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 1, "grid 2x2 → one row gap");
+        assert_eq!(column_rule_cmds(&dl).len(), 0, "row-rule alone must not draw vertical rules");
+    }
+
+    #[test]
+    fn grid_column_rule_emits_one_vertical_segment() {
+        let html = GRID_2X2.replace("{}", "column-rule:2px solid red");
+        let dl = build(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1, "grid 2x2 → one column gap");
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 0, "column-rule alone must not draw horizontal rules");
+    }
+
+    #[test]
+    fn grid_rule_shorthand_emits_both_axes() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red");
+        let dl = build(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1);
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 1);
+    }
+
+    #[test]
+    fn grid_axes_use_independent_styles() {
+        let html = GRID_2X2.replace("{}", "column-rule:4px solid red;row-rule:2px dashed blue");
+        let dl = build(&html, "");
+        let cols = column_rule_cmds(&dl);
+        let rows = horizontal_rule_cmds(&dl);
+        assert_eq!((cols.len(), rows.len()), (1, 1));
+        if let DisplayCommand::DrawBorder { widths: [_, w, _, _], styles, .. } = cols[0] {
+            assert!((*w - 4.0).abs() < 0.01);
+            assert_eq!(styles[1], BorderStyle::Solid);
+        }
+        if let DisplayCommand::DrawBorder { widths: [_, _, h, _], styles, .. } = rows[0] {
+            assert!((*h - 2.0).abs() < 0.01);
+            assert_eq!(styles[2], BorderStyle::Dashed);
+        }
+    }
+
+    #[test]
+    fn rule_overlap_decides_which_axis_paints_on_top() {
+        fn axis_order(overlap: &str) -> Vec<bool> {
+            let html = GRID_2X2.replace("{}", &format!("rule:2px solid red;rule-overlap:{overlap}"));
+            let dl = build(&html, "");
+            // `true` = a vertical (column) rule, `false` = a horizontal (row) rule.
+            dl.iter()
+                .filter_map(|c| match c {
+                    DisplayCommand::DrawBorder { widths: [0.0, w, 0.0, 0.0], .. } if *w > 0.0 => Some(true),
+                    DisplayCommand::DrawBorder { widths: [0.0, 0.0, h, 0.0], .. } if *h > 0.0 => Some(false),
+                    _ => None,
+                })
+                .collect()
+        }
+        assert_eq!(axis_order("row-over-column"), vec![true, false], "rows painted last");
+        assert_eq!(axis_order("column-over-row"), vec![false, true], "columns painted last");
+    }
+
+    #[test]
+    fn rule_inset_shortens_gap_segments_at_container_edges() {
+        // GRID_2X2 content box: 220×120 at x=0; column gap spans the full height,
+        // the row gap the full width.
+        let html = GRID_2X2.replace("{}", "rule:2px solid red;column-rule-inset:10px 20px;row-rule-inset:30px 5px");
+        let dl = build(&html, "");
+        let cols = column_rule_cmds(&dl);
+        let rows = horizontal_rule_cmds(&dl);
+        assert_eq!((cols.len(), rows.len()), (1, 1));
+        let (DisplayCommand::DrawBorder { rect: c, .. }, DisplayCommand::DrawBorder { rect: r, .. }) = (cols[0], rows[0])
+        else {
+            panic!("expected DrawBorder");
+        };
+        assert!((c.height - 90.0).abs() < 0.6, "120 - 10 - 20, got {}", c.height);
+        assert!((r.width - 185.0).abs() < 0.6, "220 - 30 - 5, got {}", r.width);
+        // Percentages and `overlap-join` resolve to 0 at a container edge.
+        let html = GRID_2X2.replace("{}", "rule:2px solid red;rule-inset:50%");
+        let dl = build(&html, "");
+        let DisplayCommand::DrawBorder { rect, .. } = column_rule_cmds(&dl)[0] else { panic!("expected DrawBorder") };
+        assert!((rect.height - 120.0).abs() < 0.6, "got {}", rect.height);
+    }
+
+    /// CSS Gap Decorations L1 §4.6: a list of values is dealt to the gaps in order.
+    #[test]
+    fn rule_value_lists_are_assigned_per_gap() {
+        let html = r#"<div style="display:grid;grid-template-columns:50px 50px 50px;gap:10px;
+            width:200px;height:20px;column-rule:{}"><div></div><div></div><div></div></div>"#;
+        let widths = |rule: &str| -> Vec<f32> {
+            let dl = build(&html.replace("{}", rule), "");
+            column_rule_cmds(&dl)
+                .iter()
+                .map(|c| match c {
+                    DisplayCommand::DrawBorder { widths: [_, w, _, _], .. } => *w,
+                    _ => unreachable!(),
+                })
+                .collect()
+        };
+        assert_eq!(widths("2px solid red, 4px solid red"), [2.0, 4.0]);
+        assert_eq!(widths("2px solid red, repeat(auto, 4px solid red, 6px solid red)"), [2.0, 4.0]);
+        // A `none` entry skips its gap but still consumes a value.
+        assert_eq!(widths("2px none, 6px solid red"), [6.0]);
+        assert_eq!(widths("repeat(2, 3px solid blue)"), [3.0, 3.0]);
+    }
+
+    #[test]
+    fn rule_inset_collapsing_a_segment_removes_it() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red;rule-inset:110px");
+        let dl = build(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len() + horizontal_rule_cmds(&dl).len(), 0);
+    }
+
+    /// 3×3 grid, дорожки 50px, щели 20px (190×190). `{style}` — свойства контейнера,
+    /// `{items}` — дети.
+    const GRID_3X3: &str = r#"<div style="display:grid;grid-template-columns:50px 50px 50px;        grid-template-rows:50px 50px 50px;gap:20px;width:190px;height:190px;{style}">{items}</div>"#;
+
+    fn grid3(style: &str, items: &str) -> String {
+        GRID_3X3.replace("{style}", style).replace("{items}", items)
+    }
+
+    /// Вертикальные куски колоночных правил: `(x, y, height)`, по x и y.
+    fn column_pieces(dl: &DisplayList) -> Vec<(i32, i32, i32)> {
+        let mut v: Vec<_> = column_rule_cmds(dl)
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, .. } => {
+                    Some((rect.x.round() as i32, rect.y.round() as i32, rect.height.round() as i32))
+                }
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    const CELL: &str = "<div></div>";
+
+    /// §3.2: элемент, пересекающий щель, прерывает её; `normal` в grid рвёт на «Т», `none` — нет.
+    #[test]
+    fn grid_rule_break_cuts_gap_at_spanning_item() {
+        // Элемент на колонки 1–2 в строке 2 закрывает колоночную щель 0 в этой строке.
+        let items = "<div style=\"grid-area:1/1\"></div><div style=\"grid-area:1/2\"></div><div style=\"grid-area:1/3\"></div>                     <div style=\"grid-area:2/1/3/3\"></div><div style=\"grid-area:2/3\"></div>                     <div style=\"grid-area:3/1\"></div><div style=\"grid-area:3/2\"></div><div style=\"grid-area:3/3\"></div>";
+        let dl = build(&grid3("column-rule:2px solid red", items), "");
+        let cols = column_pieces(&dl);
+        // Щель 0 (x=50..70) закрыта спаннером в строке 1 (y=70..120): остаются куски строк 0 и 2.
+        // Щель 1 (x=120..140) идёт сквозь всю высоту.
+        assert!(cols.iter().filter(|c| c.0 < 100).count() == 2, "{cols:?}");
+        assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 0 && c.2 == 50), "{cols:?}");
+        assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 140 && c.2 == 50), "{cols:?}");
+        assert!(cols.iter().any(|c| c.0 > 100 && c.2 == 190), "{cols:?}");
+        // `none` — линия идёт позади элемента.
+        let dl = build(&grid3("column-rule:2px solid red;column-rule-break:none", items), "");
+        assert_eq!(column_pieces(&dl).len(), 2, "none: две сплошные линии");
+    }
+
+    /// §3.4: `between` скрывает кусок щели рядом с пустой клеткой, `all` — нет.
+    #[test]
+    fn grid_rule_visibility_items_hides_next_to_empty_cells() {
+        // Пустая клетка: строка 2, колонка 3.
+        let items = "<div style=\"grid-area:1/1\"></div><div style=\"grid-area:1/2\"></div><div style=\"grid-area:1/3\"></div>                     <div style=\"grid-area:2/1\"></div><div style=\"grid-area:2/2\"></div>                     <div style=\"grid-area:3/1\"></div><div style=\"grid-area:3/2\"></div><div style=\"grid-area:3/3\"></div>";
+        let all = build(&grid3("column-rule:2px solid red;column-rule-break:none", items), "");
+        assert_eq!(column_pieces(&all).len(), 2);
+        let between = build(
+            &grid3("column-rule:2px solid red;column-rule-break:none;column-rule-visibility-items:between", items),
+            "",
+        );
+        // Щель 1 (колонки 2|3) в строке 2 касается пустой клетки → линия рвётся там.
+        let cols = column_pieces(&between);
+        assert_eq!(cols.iter().filter(|c| c.0 > 100).count(), 2, "{cols:?}");
+        assert_eq!(cols.iter().filter(|c| c.0 < 100).count(), 1, "{cols:?}");
+        let around = build(
+            &grid3("column-rule:2px solid red;column-rule-break:none;column-rule-visibility-items:around", items),
+            "",
+        );
+        assert_eq!(column_pieces(&around).len(), 2, "around: клетка слева занята");
+    }
+
+    /// §3.3: `junction`-отступ сдвигает концы кусков у стыка, `cap` — у края контейнера.
+    #[test]
+    fn grid_rule_inset_junction_applies_at_cuts() {
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3("column-rule:2px solid red;column-rule-break:intersection;column-rule-inset:0 / 5px", &items),
+            "",
+        );
+        let cols = column_pieces(&dl);
+        // Щель 0: 0..50 (cap-начало 0, junction-конец 5 → 45), 70..120 (5 с обеих сторон → 40), 140..190 (→ 45).
+        let mut g0: Vec<_> = cols.iter().filter(|c| c.0 < 100).map(|c| (c.1, c.2)).collect();
+        g0.sort();
+        assert_eq!(g0, vec![(0, 45), (75, 40), (145, 45)], "{cols:?}");
+    }
+
+    /// `overlap-join` заходит в стык на полширины щели плюс полширины линии.
+    #[test]
+    fn grid_rule_inset_overlap_join_extends_into_junction() {
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3(
+                "rule:4px solid red;column-rule-break:intersection;column-rule-inset:0 / overlap-join",
+                &items,
+            ),
+            "",
+        );
+        let cols = column_pieces(&dl);
+        // Внутренний кусок щели 0 (строка 1): 70..120 → продлён на 10 + 2 = 12px с каждой стороны.
+        assert!(cols.iter().any(|c| c.0 < 100 && c.1 == 58 && c.2 == 74), "{cols:?}");
+    }
+
+    /// grid-gap-decorations-081: `overlap-join` вытягивается на полширины *вычисленной* ширины
+    /// пересекающей оси, даже если её линия не рисуется (`row-rule-style: none`).
+    #[test]
+    fn grid_overlap_join_uses_computed_width_of_unpainted_cross_rule() {
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3(
+                "column-rule:4px solid red;row-rule-width:6px;column-rule-break:intersection;rule-inset:overlap-join",
+                &items,
+            ),
+            "",
+        );
+        let cols: Vec<_> = column_pieces(&dl).into_iter().filter(|c| c.0 < 100).map(|c| (c.1, c.2)).collect();
+        // Куски 0..50, 70..120, 140..190 → стыки (щели y=50..70, 120..140) дают по 10 + 3 = 13px.
+        assert_eq!(cols, vec![(0, 63), (57, 76), (127, 63)], "{cols:?}");
+    }
+
+    /// grid-gap-decorations-069: на стыке, где куска пересекающей щели нет (скрыт
+    /// `rule-visibility-items: between`), конец «висячий» — `overlap-join` его не вытягивает.
+    #[test]
+    fn grid_overlap_join_is_flush_where_cross_piece_is_hidden() {
+        // Нижний ряд пуст: строчная щель 1 (y=120..140) между рядом 1 и пустым рядом 2 скрыта.
+        let items = format!("{CELL}{CELL}{CELL}{CELL}{CELL}{CELL}");
+        let dl = build(
+            &grid3(
+                "rule:4px solid red;rule-visibility-items:between;rule-inset-junction:overlap-join",
+                &items,
+            ),
+            "",
+        );
+        let cols: Vec<_> = column_pieces(&dl).into_iter().filter(|c| c.0 < 100).map(|c| (c.1, c.2)).collect();
+        // Низ куска ряда 1 упирается в скрытую строчную щель — вровень (120), не 133.
+        assert!(cols.iter().any(|c| c.0 + c.1 == 120), "{cols:?}");
+        assert!(!cols.iter().any(|c| c.0 + c.1 == 133), "{cols:?}");
+    }
+
+    /// The ordered (stacking-context) path — the one the live window and
+    /// `--screenshot` use — must draw gap rules too, not only `walk`.
+    #[test]
+    fn grid_rules_drawn_by_ordered_path() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red").replace("<div></div>", "<div style=\"background:blue\"></div>");
+        let dl = super::ordered_build_scroll::build_ordered(&html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1, "ordered path: one column rule");
+        assert_eq!(horizontal_rule_cmds(&dl).len(), 1, "ordered path: one row rule");
+        // Rules sit inside the overflow clip, «just above the border» of the container and
+        // *under* the children (Gap Decorations L1 §2.1): before the children's fills.
+        let first_fill = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+        let last_rule = dl.iter().rposition(|c| matches!(c, DisplayCommand::DrawBorder { .. })).unwrap();
+        assert!(last_rule < first_fill, "gap rules must paint under the children");
+    }
+
+    /// Grid L2 §9: дорожки и щели subgrid'а — родительские, его собственный `column-gap`
+    /// раскладка не берёт. Правило subgrid'а должно лечь в щель родителя (subgrid-gap-decorations-001).
+    #[test]
+    fn subgrid_rules_follow_the_parent_gap_not_its_own() {
+        let cells = "<div style=\"height:20px\"></div>".repeat(6);
+        let html = format!(
+            "<div style=\"display:grid;grid-template-columns:repeat(3,100px);gap:10px\">             <div style=\"display:grid;grid-template-columns:subgrid;grid-column:1/-1;             column-gap:3px;column-rule:4px solid red\">{cells}</div></div>"
+        );
+        let dl = build(&html, "");
+        // Две щели родителя (x = 100..110 и 210..220): линия 4px по центру, 103 и 213.
+        let xs: Vec<i32> = column_pieces(&dl).iter().map(|c| c.0).collect();
+        assert_eq!(xs, vec![103, 213], "{xs:?}");
+    }
+
+    /// Grid L2 §9: subgrid с пустой дорожкой посередине — ни одна пара элементов не отстоит на
+    /// `gap`, но щели родителя по обе стороны пустой дорожки всё равно получают правила
+    /// (subgrid-gap-decorations-023/024).
+    #[test]
+    fn subgrid_rules_run_through_gaps_beside_an_empty_track() {
+        // Четыре колонки по 100px, щель 10px; элементы в колонках 1, 2 и 4. Щель 100..110 даёт
+        // пара элементов, а щели 210..220 и 320..330 к паре не примыкают (колонка 3 пуста).
+        let html = "<div style=\"display:grid;grid-template-columns:repeat(4,100px);gap:10px\">             <div style=\"display:grid;grid-template-columns:subgrid;grid-column:1/-1;column-rule:4px solid red\">             <div style=\"grid-column:1;grid-row:1;height:20px\"></div>             <div style=\"grid-column:2;grid-row:2;height:20px\"></div>             <div style=\"grid-column:4;grid-row:1;height:20px\"></div>             </div></div>";
+        let dl = build(html, "");
+        let xs: Vec<i32> = column_pieces(&dl).iter().map(|c| c.0).collect();
+        assert_eq!(xs, vec![103, 213, 323], "{xs:?}");
+    }
+
+    /// Элементы subgrid'а вплотную (gap родителя 0) при ненулевом собственном `column-gap`:
+    /// щель нулевая, правило по центру шва (subgrid-gap-decorations-014/018).
+    #[test]
+    fn subgrid_rules_sit_on_the_seam_when_the_parent_gap_is_zero() {
+        let html = "<div style=\"display:grid;grid-template-columns:repeat(2,100px)\">             <div style=\"display:grid;grid-template-columns:subgrid;grid-column:1/-1;column-gap:10px;column-rule:4px solid red\">             <div style=\"height:20px\"></div><div style=\"height:20px\"></div></div></div>";
+        let dl = build(html, "");
+        let xs: Vec<i32> = column_pieces(&dl).iter().map(|c| c.0).collect();
+        assert_eq!(xs, vec![98], "{xs:?}");
+    }
+
+    /// Gap Decorations L1 §2 + Writing Modes: в вертикальном `writing-mode` `column-rule` идёт по
+    /// инлайновой оси (физическая вертикаль) и рисуется горизонтальной линией, `row-rule` — по
+    /// блоковой и рисуется вертикальной (grid-gap-decorations-writing-mode).
+    #[test]
+    fn grid_rules_swap_axes_in_a_vertical_writing_mode() {
+        for mode in ["vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"] {
+            let html = format!(
+                "<div style=\"display:grid;grid-template:repeat(2,50px)/repeat(3,50px);gap:10px;                 width:110px;height:170px;writing-mode:{mode};column-rule:10px solid blue;                 row-rule:10px solid red\">{}</div>",
+                "<div></div>".repeat(6)
+            );
+            let dl = build(&html, "");
+            // Три колонки вдоль y (щели 50..60 и 110..120) → две горизонтальные синие линии.
+            let horizontal: Vec<(i32, i32, i32)> = horizontal_rule_cmds(&dl)
+                .iter()
+                .filter_map(|c| match c {
+                    DisplayCommand::DrawBorder { rect, .. } => {
+                        Some((rect.x.round() as i32, rect.y.round() as i32, rect.width.round() as i32))
+                    }
+                    _ => None,
+                })
+                .collect();
+            // Цвет решает, какое правило нарисовано: горизонтали — синее `column-rule`.
+            assert!(
+                horizontal_rule_cmds(&dl).iter().all(
+                    |c| matches!(c, DisplayCommand::DrawBorder { colors, .. } if colors[2].b == 255 && colors[2].r == 0)
+                ),
+                "{mode}: горизонтальные линии должны быть синими"
+            );
+            assert!(
+                column_rule_cmds(&dl).iter().all(
+                    |c| matches!(c, DisplayCommand::DrawBorder { colors, .. } if colors[1].r == 255 && colors[1].b == 0)
+                ),
+                "{mode}: вертикальная линия должна быть красной"
+            );
+            assert_eq!(horizontal.len(), 2, "{mode}: {horizontal:?}");
+            assert!(horizontal.iter().all(|h| h.2 == 110), "{mode}: линия на всю ширину {horizontal:?}");
+            let mut ys: Vec<i32> = horizontal.iter().map(|h| h.1).collect();
+            ys.sort();
+            assert_eq!(ys, vec![50, 110], "{mode}");
+            // Две строки вдоль x (щель 50..60) → одна вертикальная красная линия на всю высоту.
+            let vertical = column_pieces(&dl);
+            assert_eq!(vertical.len(), 1, "{mode}: {vertical:?}");
+            assert_eq!((vertical[0].0, vertical[0].1, vertical[0].2), (50, 0, 170), "{mode}");
+        }
+    }
+
+    /// flex-gap-decorations-033: `gap: 0` в wrap-flex — линия по центру шва соседних
+    /// элементов, а не потерянная щель.
+    const FLEX_WRAP_0GAP: &str = r#"<div style="display:flex;flex-wrap:wrap;width:150px;{}">
+        <div style="width:50px;height:50px"></div><div style="width:50px;height:50px"></div>
+        <div style="width:50px;height:50px"></div><div style="width:100px;height:50px"></div>
+        <div style="width:50px;height:50px"></div></div>"#;
+
+    #[test]
+    fn flex_rules_at_the_seams_when_gap_is_zero() {
+        let html = FLEX_WRAP_0GAP.replace("{}", "column-rule:10px solid red;row-rule:10px solid blue");
+        let dl = build(&html, "");
+        let cols: Vec<_> = column_pieces(&dl);
+        // Строка 1: швы x=50 и x=100; строка 2: шов x=100 (после элемента в 100px).
+        assert_eq!(cols, vec![(45, 0, 50), (95, 0, 50), (95, 50, 50)], "{cols:?}");
+        let rows = horizontal_rule_cmds(&dl);
+        assert_eq!(rows.len(), 1, "две строки → один шов, получили {}", rows.len());
+    }
+
+    #[test]
+    fn flex_rules_with_a_real_gap_do_not_count_touching_items() {
+        // `column-gap: 10px`: элементы вплотную (без зазора) — не щель; щель только настоящая.
+        let html = r#"<div style="display:flex;width:200px;column-gap:10px;column-rule:2px solid red">
+            <div style="width:50px;height:20px"></div><div style="width:50px;height:20px"></div></div>"#;
+        let dl = build(html, "");
+        assert_eq!(column_rule_cmds(&dl).len(), 1);
+    }
+
+    /// Gap Decorations L1 §2.1: rules are painted just above the container's border, under its
+    /// children — a translucent item shows the rule through it (flex-gap-decorations-033).
+    #[test]
+    fn gap_rules_paint_under_the_children() {
+        let html = GRID_2X2.replace("{}", "rule:2px solid red").replace("<div></div>", "<div style=\"background:blue\"></div>");
+        let dl = build(&html, "");
+        let first_fill = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+        let last_rule = dl.iter().rposition(|c| matches!(c, DisplayCommand::DrawBorder { .. })).unwrap();
+        assert!(last_rule < first_fill, "walk: gap rules must precede the children's fills");
     }
 
     // ── CSS Lists L3 §2.1 — list marker geometric rendering ─────────────────
@@ -1154,856 +1788,5 @@ use lumen_dom::NodeId;
         );
         let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply, .. })).count();
         assert_eq!(push_count, 2, "cycling: 3 layers but bottom-most suppressed → 2 PushBlendMode");
-    }
-
-    // ── BoxModelOverlay ──────────────────────────────────────────────────────
-
-    #[test]
-    fn box_model_overlay_serializes_all_four_boxes() {
-        use lumen_core::geom::Rect;
-        let dl = vec![DisplayCommand::BoxModelOverlay {
-            margin:  Rect::new(0.0,   0.0,  120.0, 100.0),
-            border:  Rect::new(10.0, 10.0,  100.0,  80.0),
-            padding: Rect::new(12.0, 12.0,   96.0,  76.0),
-            content: Rect::new(20.0, 20.0,   80.0,  60.0),
-        }];
-        let s = serialize_display_list(&dl);
-        assert!(s.starts_with("BoxModelOverlay"), "must start with command name");
-        assert!(s.contains("margin=(0,0,120,100)"),  "margin box");
-        assert!(s.contains("border=(10,10,100,80)"), "border box");
-        assert!(s.contains("padding=(12,12,96,76)"), "padding box");
-        assert!(s.contains("content=(20,20,80,60)"), "content box");
-    }
-
-    #[test]
-    fn box_model_overlay_zero_content_serializes() {
-        use lumen_core::geom::Rect;
-        let dl = vec![DisplayCommand::BoxModelOverlay {
-            margin:  Rect::new(0.0, 0.0, 50.0, 50.0),
-            border:  Rect::new(5.0, 5.0, 40.0, 40.0),
-            padding: Rect::new(7.0, 7.0, 36.0, 36.0),
-            content: Rect::new(10.0, 10.0, 0.0, 0.0), // collapsed content
-        }];
-        let s = serialize_display_list(&dl);
-        assert!(s.contains("BoxModelOverlay"), "collapsed content must still serialize");
-        assert!(s.contains("content=(10,10,0,0)"), "zero-size content rect");
-    }
-
-    // ── MaskMode + PushMaskLayer / PopMaskLayer ──────────────────────────────
-
-    #[test]
-    fn mask_mode_default_is_alpha() {
-        assert_eq!(MaskMode::default(), MaskMode::Alpha);
-    }
-
-    #[test]
-    fn push_mask_layer_alpha_serializes() {
-        use lumen_core::geom::Rect;
-        let dl = vec![
-            DisplayCommand::PushMaskLayer {
-                rect: Rect::new(10.0, 20.0, 100.0, 80.0),
-                mode: MaskMode::Alpha,
-            },
-            DisplayCommand::PopMaskLayer,
-        ];
-        let s = serialize_display_list(&dl);
-        assert!(s.contains("PushMaskLayer"), "must contain PushMaskLayer");
-        assert!(s.contains("(10.00, 20.00, 100.00, 80.00)"), "rect coords");
-        assert!(s.contains("Alpha"), "mode=Alpha");
-        assert!(s.contains("PopMaskLayer"), "must contain PopMaskLayer");
-    }
-
-    #[test]
-    fn push_mask_layer_luminance_serializes() {
-        use lumen_core::geom::Rect;
-        let dl = vec![
-            DisplayCommand::PushMaskLayer {
-                rect: Rect::new(0.0, 0.0, 200.0, 150.0),
-                mode: MaskMode::Luminance,
-            },
-            DisplayCommand::PopMaskLayer,
-        ];
-        let s = serialize_display_list(&dl);
-        assert!(s.contains("Luminance"), "mode=Luminance");
-    }
-
-    #[test]
-    fn push_mask_layer_roundtrip_kinds() {
-        use lumen_core::geom::Rect;
-        let rect = Rect::new(0.0, 0.0, 50.0, 50.0);
-        let dl = vec![
-            DisplayCommand::PushMaskLayer { rect, mode: MaskMode::Alpha },
-            DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } },
-            DisplayCommand::PopMaskLayer,
-        ];
-        // Verify the three-command sequence serializes in order.
-        let s = serialize_display_list(&dl);
-        let push_pos = s.find("PushMaskLayer").expect("no PushMaskLayer");
-        let fill_pos = s.find("FillRect").expect("no FillRect");
-        let pop_pos  = s.find("PopMaskLayer").expect("no PopMaskLayer");
-        assert!(push_pos < fill_pos, "PushMaskLayer before FillRect");
-        assert!(fill_pos < pop_pos,  "FillRect before PopMaskLayer");
-    }
-
-    #[test]
-    fn mask_mode_luminance_end_to_end_bakes_stops() {
-        let css = ".m { width:200px; height:200px; background:#e63946; \
-             mask-image: linear-gradient(to right, black, white); mask-mode: luminance; }";
-        let html = "<div class=\"m\"></div>";
-        // Plain builder.
-        let dl = build(html, css);
-        assert_baked_luma_stops(&dl, "build_display_list");
-
-        // Stacking-context-ordered builder (used by the CPU snapshot path) —
-        // mask-image makes the box a stacking context, so it goes through the
-        // bucket path, not `walk`.
-        let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
-        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
-        let st = StackingTree::build(&tree);
-        let order = PaintOrder::from_tree(&st);
-        let dl_ordered = build_display_list_ordered(&tree, &st, &order).0;
-        assert_baked_luma_stops(&dl_ordered, "build_display_list_ordered");
-    }
-
-    fn assert_baked_luma_stops(dl: &DisplayList, label: &str) {
-        let stops = dl.iter().find_map(|c| match c {
-            DisplayCommand::PushMaskLinearGradient { stops, .. } => Some(stops.clone()),
-            _ => None,
-        });
-        let stops = stops.unwrap_or_else(|| panic!("{label}: no PushMaskLinearGradient"));
-        assert_eq!(stops.first().map(|s| s.color.a), Some(0), "{label}: black → alpha 0");
-        assert_eq!(stops.last().map(|s| s.color.a), Some(255), "{label}: white → alpha 255");
-    }
-
-    #[test]
-    fn mask_stops_alpha_mode_unchanged() {
-        let stops = vec![
-            GradientStop {
-                color: Color { r: 0, g: 0, b: 0, a: 255 },
-                position: None,
-                ..Default::default()
-            },
-            GradientStop {
-                color: Color { r: 255, g: 255, b: 255, a: 255 },
-                position: None,
-                ..Default::default()
-            },
-        ];
-        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Alpha);
-        assert_eq!(out, stops, "alpha mode leaves stops untouched");
-    }
-
-    #[test]
-    fn mask_stops_luminance_bakes_alpha() {
-        // Black opaque → luma 0 → alpha 0; white opaque → luma 1 → alpha 255.
-        let stops = vec![
-            GradientStop {
-                color: Color { r: 0, g: 0, b: 0, a: 255 },
-                position: None,
-                ..Default::default()
-            },
-            GradientStop {
-                color: Color { r: 255, g: 255, b: 255, a: 255 },
-                position: None,
-                ..Default::default()
-            },
-        ];
-        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
-        assert_eq!(out[0].color.a, 0, "black stop becomes fully transparent");
-        assert_eq!(out[1].color.a, 255, "white stop stays fully opaque");
-        // RGB is preserved (only the alpha channel encodes the mask value).
-        assert_eq!(out[0].color.r, 0);
-        assert_eq!(out[1].color.r, 255);
-    }
-
-    #[test]
-    fn mask_stops_luminance_multiplies_source_alpha() {
-        // White at 50% alpha → luma 1 · 0.5 ≈ alpha 128.
-        let stops = vec![GradientStop {
-            color: Color { r: 255, g: 255, b: 255, a: 128 },
-            position: None,
-            ..Default::default()
-        }];
-        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
-        assert_eq!(out[0].color.a, 128, "luminance 1.0 keeps source alpha");
-    }
-
-    #[test]
-    fn mask_stops_luminance_green_weight() {
-        // Pure green opaque → luma 0.7152 → alpha ≈ 182.
-        let stops = vec![GradientStop {
-            color: Color { r: 0, g: 255, b: 0, a: 255 },
-            position: None,
-            ..Default::default()
-        }];
-        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
-        assert_eq!(out[0].color.a, 182, "0.7152·255 rounds to 182");
-    }
-
-    // ─── PushScrollLayer / PopScrollLayer tests ──────────────────────────────
-
-    #[test]
-    fn overflow_scroll_emits_push_scroll_layer() {
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px"><p>text</p></div>"#,
-            "",
-        );
-        let has_push = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
-        let has_pop  = dl.iter().any(|c| matches!(c, DisplayCommand::PopScrollLayer));
-        assert!(has_push, "overflow:scroll must emit PushScrollLayer");
-        assert!(has_pop,  "overflow:scroll must emit PopScrollLayer");
-    }
-
-    #[test]
-    fn overflow_scroll_no_push_clip_rect_for_scroll() {
-        // overflow:scroll should not fall back to PushClipRect for the scroll axis
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px"><p>text</p></div>"#,
-            "",
-        );
-        // There should be PushScrollLayer, not PushClipRect, for the scroll container itself.
-        let scroll_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushScrollLayer { .. })).count();
-        assert!(scroll_count >= 1, "expected at least one PushScrollLayer for overflow:scroll");
-    }
-
-    #[test]
-    fn overflow_hidden_emits_push_clip_rect_not_scroll_layer() {
-        let dl = build(
-            r#"<div style="overflow:hidden;width:100px;height:50px"><p>text</p></div>"#,
-            "",
-        );
-        let has_scroll = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
-        assert!(!has_scroll, "overflow:hidden must not emit PushScrollLayer");
-        // overflow:hidden still clips via PushClipRect
-        let has_clip = dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. }));
-        assert!(has_clip, "overflow:hidden must emit PushClipRect");
-    }
-
-    #[test]
-    fn scroll_layer_scroll_xy_defaults_zero() {
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px"><p>x</p></div>"#,
-            "",
-        );
-        if let Some(DisplayCommand::PushScrollLayer { scroll_x, scroll_y, .. }) =
-            dl.iter().find(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }))
-        {
-            assert_eq!(*scroll_x, 0.0, "initial scroll_x should be 0");
-            assert_eq!(*scroll_y, 0.0, "initial scroll_y should be 0");
-        } else {
-            panic!("PushScrollLayer not found");
-        }
-    }
-
-    #[test]
-    fn push_scroll_layer_serializes() {
-        use lumen_core::geom::Rect;
-        let dl = vec![
-            DisplayCommand::PushScrollLayer {
-                clip_rect: Rect::new(10.0, 20.0, 100.0, 50.0),
-                scroll_x: 5.0,
-                scroll_y: 15.0,
-            },
-            DisplayCommand::PopScrollLayer,
-        ];
-        let s = serialize_display_list(&dl);
-        assert!(s.contains("PushScrollLayer"), "serialized output must contain PushScrollLayer");
-        assert!(s.contains("PopScrollLayer"), "serialized output must contain PopScrollLayer");
-        assert!(s.contains("scroll=(5.00,15.00)"), "scroll offsets must appear in serialization");
-    }
-
-    #[test]
-    fn overflow_auto_emits_push_scroll_layer() {
-        // overflow:auto must produce PushScrollLayer just like overflow:scroll.
-        let dl = build(
-            r#"<div style="overflow:auto;width:100px;height:50px"><p>text</p></div>"#,
-            "",
-        );
-        let has_push = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
-        let has_pop  = dl.iter().any(|c| matches!(c, DisplayCommand::PopScrollLayer));
-        assert!(has_push, "overflow:auto must emit PushScrollLayer");
-        assert!(has_pop,  "overflow:auto must emit PopScrollLayer");
-    }
-
-    // ── DrawScrollbar ─────────────────────────────────────────────────────────
-
-    /// overflow:scroll with content taller than clip → vertical DrawScrollbar emitted.
-    #[test]
-    fn overflow_scroll_with_overflow_emits_draw_scrollbar_vertical() {
-        // div 100×50 with a 200px-tall child → content overflows vertically.
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px"><div style="height:200px"></div></div>"#,
-            "",
-        );
-        let bars: Vec<_> = dl
-            .iter()
-            .filter_map(|c| match c {
-                DisplayCommand::DrawScrollbar { vertical, .. } => Some(*vertical),
-                _ => None,
-            })
-            .collect();
-        assert!(!bars.is_empty(), "должен быть хотя бы один DrawScrollbar");
-        assert!(bars.contains(&true), "должен быть вертикальный DrawScrollbar");
-    }
-
-    /// overflow:scroll with content fitting inside → no DrawScrollbar (no overflow).
-    #[test]
-    fn overflow_scroll_without_overflow_no_draw_scrollbar() {
-        // div 100×200 with a 50px-tall child → no vertical overflow.
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:200px"><div style="height:50px"></div></div>"#,
-            "",
-        );
-        let bars = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
-            .count();
-        assert_eq!(bars, 0, "нет переполнения → нет DrawScrollbar");
-    }
-
-    /// DrawScrollbar thumb_rect is inside track_rect.
-    #[test]
-    fn draw_scrollbar_thumb_inside_track() {
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px"><div style="height:200px"></div></div>"#,
-            "",
-        );
-        let sb = dl
-            .iter()
-            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
-            .expect("должен быть вертикальный DrawScrollbar");
-        if let DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical: true, .. } = sb {
-            // Track right edge must be at right edge of clip (within padding box).
-            assert!(track_rect.width > 0.0, "track width > 0");
-            assert!(thumb_rect.height > 0.0, "thumb height > 0");
-            // Thumb must be inside track vertically.
-            assert!(
-                thumb_rect.y >= track_rect.y,
-                "thumb top must be >= track top"
-            );
-            assert!(
-                thumb_rect.y + thumb_rect.height <= track_rect.y + track_rect.height + 1.0,
-                "thumb bottom must be <= track bottom"
-            );
-        }
-    }
-
-    /// DrawScrollbar serialization round-trip.
-    #[test]
-    fn draw_scrollbar_serialize() {
-        let dl = vec![DisplayCommand::DrawScrollbar {
-            track_rect: Rect::new(90.0, 0.0, 12.0, 50.0),
-            thumb_rect: Rect::new(92.0, 5.0, 8.0, 20.0),
-            vertical: true,
-            thumb_color: SCROLLBAR_THUMB_COLOR,
-            track_color: SCROLLBAR_TRACK_COLOR,
-        }];
-        let s = serialize_display_list(&dl);
-        assert!(s.contains("DrawScrollbar"), "serialization must contain DrawScrollbar");
-        assert!(s.contains("vertical"), "serialization must mention orientation");
-    }
-
-    /// `scrollbar-width: none` suppresses DrawScrollbar while keeping scroll layer.
-    #[test]
-    fn scrollbar_width_none_no_draw_scrollbar() {
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-width:none"><div style="height:200px"></div></div>"#,
-            "",
-        );
-        let bars = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
-            .count();
-        assert_eq!(bars, 0, "scrollbar-width:none → нет DrawScrollbar");
-        // Scroll layer must still be present so content can scroll.
-        let has_scroll = dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
-        assert!(has_scroll, "scrollbar-width:none → scroll layer должен оставаться");
-    }
-
-    /// `scrollbar-width: thin` emits DrawScrollbar with narrower track (6px gutter).
-    #[test]
-    fn scrollbar_width_thin_narrow_track() {
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-width:thin"><div style="height:200px"></div></div>"#,
-            "",
-        );
-        let sb = dl
-            .iter()
-            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
-            .expect("thin scrollbar must emit DrawScrollbar");
-        if let DisplayCommand::DrawScrollbar { track_rect, .. } = sb {
-            assert!(
-                (track_rect.width - SCROLLBAR_WIDTH_THIN).abs() < 0.5,
-                "thin track width should be ~{} px, got {}",
-                SCROLLBAR_WIDTH_THIN,
-                track_rect.width
-            );
-        }
-    }
-
-    /// `scrollbar-color` wires custom thumb+track colors into DrawScrollbar.
-    #[test]
-    fn scrollbar_color_custom_colors() {
-        // red thumb, blue track
-        let dl = build(
-            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-color:red blue"><div style="height:200px"></div></div>"#,
-            "",
-        );
-        let sb = dl
-            .iter()
-            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
-            .expect("must emit DrawScrollbar");
-        if let DisplayCommand::DrawScrollbar { thumb_color, track_color, .. } = sb {
-            // Red thumb: r≈1.0, g≈0, b≈0
-            assert!(thumb_color[0] > 0.9, "thumb red channel must be ~1.0");
-            assert!(thumb_color[1] < 0.1, "thumb green channel must be ~0");
-            // Blue track: b≈1.0, r≈0
-            assert!(track_color[2] > 0.9, "track blue channel must be ~1.0");
-            assert!(track_color[0] < 0.1, "track red channel must be ~0");
-        }
-    }
-
-    /// overflow:hidden does not emit DrawScrollbar (no scroll layer).
-    #[test]
-    fn overflow_hidden_no_scrollbar() {
-        let dl = build(
-            r#"<div style="overflow:hidden;width:100px;height:50px"><div style="height:200px"></div></div>"#,
-            "",
-        );
-        let bars = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
-            .count();
-        assert_eq!(bars, 0, "overflow:hidden → нет DrawScrollbar");
-    }
-
-    // ── PageBreak / print display list ────────────────────────────────────────
-
-    /// split_at_page_breaks on empty input → one empty page.
-    #[test]
-    fn split_empty_yields_one_empty_page() {
-        let pages = split_at_page_breaks(vec![]);
-        assert_eq!(pages.len(), 1);
-        assert!(pages[0].is_empty());
-    }
-
-    /// split_at_page_breaks with no PageBreak → one page with all commands.
-    #[test]
-    fn split_no_breaks_single_page() {
-        use lumen_core::geom::Rect;
-        let cmds = vec![
-            DisplayCommand::FillRect {
-                rect: Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
-                color: Color { r: 255, g: 0, b: 0, a: 255 },
-            },
-            DisplayCommand::FillRect {
-                rect: Rect { x: 0.0, y: 10.0, width: 10.0, height: 10.0 },
-                color: Color { r: 0, g: 255, b: 0, a: 255 },
-            },
-        ];
-        let pages = split_at_page_breaks(cmds);
-        assert_eq!(pages.len(), 1);
-        assert_eq!(pages[0].len(), 2);
-    }
-
-    /// split_at_page_breaks with one PageBreak → two pages.
-    #[test]
-    fn split_one_break_two_pages() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 };
-        let cmds = vec![
-            DisplayCommand::FillRect { rect: r, color: Color { r: 255, g: 0, b: 0, a: 255 } },
-            DisplayCommand::PageBreak,
-            DisplayCommand::FillRect { rect: r, color: Color { r: 0, g: 0, b: 255, a: 255 } },
-        ];
-        let pages = split_at_page_breaks(cmds);
-        assert_eq!(pages.len(), 2);
-        assert_eq!(pages[0].len(), 1); // one FillRect on page 0
-        assert_eq!(pages[1].len(), 1); // one FillRect on page 1
-        // PageBreak itself must not appear in any page
-        for page in &pages {
-            assert!(!page.iter().any(|c| matches!(c, DisplayCommand::PageBreak)));
-        }
-    }
-
-    /// split_at_page_breaks with two PageBreaks → three pages, middle page empty.
-    #[test]
-    fn split_two_breaks_three_pages_middle_empty() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let cmds = vec![
-            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
-            DisplayCommand::PageBreak,
-            DisplayCommand::PageBreak,
-            DisplayCommand::FillRect { rect: r, color: Color { r: 4, g: 5, b: 6, a: 255 } },
-        ];
-        let pages = split_at_page_breaks(cmds);
-        assert_eq!(pages.len(), 3);
-        assert_eq!(pages[0].len(), 1);
-        assert_eq!(pages[1].len(), 0); // empty middle page
-        assert_eq!(pages[2].len(), 1);
-    }
-
-    /// build_print_display_list on zero pages → empty list.
-    #[test]
-    fn print_dl_empty_pages() {
-        let cmds = build_print_display_list(&[]);
-        assert!(cmds.is_empty());
-    }
-
-    // ── strip_background_graphics (CC-8) ────────────────────────────────────
-
-    /// `print_backgrounds = true` is a no-op: every command survives.
-    #[test]
-    fn strip_bg_keeps_all_when_enabled() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let mut pages = vec![vec![
-            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
-            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
-        ]];
-        strip_background_graphics(&mut pages, true);
-        assert_eq!(pages[0].len(), 2);
-    }
-
-    /// `print_backgrounds = false` removes solid background fills + gradients +
-    /// background images, but keeps text, borders and `<img>` foreground.
-    #[test]
-    fn strip_bg_removes_background_family_when_disabled() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let mut pages = vec![vec![
-            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
-            DisplayCommand::FillRoundedRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 }, radii: CornerRadii::default() },
-            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
-            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, radius_x: 2.5, radius_y: 2.5, stops: vec![], repeating: false },
-            DisplayCommand::DrawConicGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, from_angle_deg: 0.0, stops: vec![], repeating: false },
-            DisplayCommand::DrawBackgroundImage {
-                rect: r, origin_rect: r, src: "bg.png".to_owned(),
-                size: BackgroundSize::Auto, position: ObjectPosition::default(),
-                repeat: BackgroundRepeat::default(), image_rendering: ImageRendering::Auto,
-            },
-            DisplayCommand::DrawText {
-                rect: r, text: "hi".to_owned(), font_size: 12.0,
-                color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
-                font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
-                font_stretch: FontStretch::NORMAL,
-                font_variation_axes: vec![], font_features: vec![], tab_size: 0.0,
-                font_palette: None,
-                highlight_name: None, text_orientation: None,
-            },
-            DisplayCommand::DrawImage {
-                rect: r, src: "img.png".to_owned(), alt: String::new(),
-                object_fit: ObjectFit::Fill, object_position: ObjectPosition::default(),
-                image_rendering: ImageRendering::Auto,
-            },
-        ]];
-        strip_background_graphics(&mut pages, false);
-        assert_eq!(pages[0].len(), 2, "only DrawText + DrawImage survive");
-        assert!(matches!(pages[0][0], DisplayCommand::DrawText { .. }));
-        assert!(matches!(pages[0][1], DisplayCommand::DrawImage { .. }));
-    }
-
-    /// Filtering is applied per page across a multi-page job and keeps
-    /// `Push*`/`Pop*` nesting balanced (only leaf fills are dropped).
-    #[test]
-    fn strip_bg_per_page_and_balanced_nesting() {
-        use lumen_core::geom::Rect;
-        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
-        let mut pages = vec![
-            vec![
-                DisplayCommand::PushClipRect { rect: r },
-                DisplayCommand::FillRect { rect: r, color: Color { r: 9, g: 9, b: 9, a: 255 } },
-                DisplayCommand::PopClip,
-            ],
-            vec![
-                DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 1, b: 1, a: 255 } },
-            ],
-        ];
-        strip_background_graphics(&mut pages, false);
-        // Page 0: clip push/pop remain, the fill between them is gone.
-        assert_eq!(pages[0].len(), 2);
-        assert!(matches!(pages[0][0], DisplayCommand::PushClipRect { .. }));
-        assert!(matches!(pages[0][1], DisplayCommand::PopClip));
-        // Page 1: lone background fill removed → empty.
-        assert!(pages[1].is_empty());
-    }
-
-    /// Empty input slice is handled without panicking.
-    #[test]
-    fn strip_bg_empty_pages_noop() {
-        let mut pages: Vec<Vec<DisplayCommand>> = vec![];
-        strip_background_graphics(&mut pages, false);
-        assert!(pages.is_empty());
-    }
-
-    /// build_print_display_list on two pages inserts exactly one PageBreak.
-    #[test]
-    fn print_dl_two_pages_one_page_break() {
-        use lumen_layout::{paginate, PaginationContext};
-
-        let doc = lumen_html_parser::parse(
-            "<div style='height:600px;background:red'></div><div style='height:600px;background:blue'></div>",
-        );
-        let sheet = lumen_css_parser::parse("");
-        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 1200.0));
-
-        let ctx = PaginationContext {
-            page_width: 800.0,
-            page_height: 600.0,
-            margin_top: 0.0,
-            margin_bottom: 0.0,
-            margin_left: 0.0,
-            margin_right: 0.0,
-        };
-        let pages = paginate(&tree, &ctx);
-        // If content fits in one page or pagination yields 0/1 page, skip assertion
-        if pages.len() < 2 {
-            return;
-        }
-        let cmds = build_print_display_list(&pages);
-        let breaks = cmds.iter().filter(|c| matches!(c, DisplayCommand::PageBreak)).count();
-        assert_eq!(breaks, pages.len() - 1, "N pages → N-1 PageBreaks");
-    }
-
-    // ── Tests for build_print_display_list margin-box rendering ──────────
-
-    /// Page without page_box emits no margin-box DrawText commands.
-    #[test]
-    fn print_dl_no_page_box_no_margin_text() {
-        use lumen_layout::{paginate, PaginationContext};
-
-        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
-        let sheet = lumen_css_parser::parse("");
-        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
-        let ctx = PaginationContext {
-            page_width: 400.0,
-            page_height: 600.0,
-            margin_top: 0.0,
-            margin_bottom: 0.0,
-            margin_left: 0.0,
-            margin_right: 0.0,
-        };
-        let pages = paginate(&tree, &ctx);
-        assert!(!pages.is_empty());
-        // No page_box — no DrawText from margin boxes
-        let cmds = build_print_display_list(&pages);
-        let text_cmds: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).collect();
-        assert!(text_cmds.is_empty(), "no margin-box DrawText without page_box");
-    }
-
-    /// Page with a page_box containing bottom-center text emits a DrawText command.
-    #[test]
-    fn print_dl_page_box_bottom_center_emits_draw_text() {
-        use lumen_layout::{
-            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
-        };
-
-        struct Fixed8;
-        impl TextMeasurer for Fixed8 {
-            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
-        
-    /// FONTLOAD-14 (BUG-467, lumen-layout): `line-height: normal` now
-    /// resolves from real font metrics (ascent + descent + lineGap) instead
-    /// of a flat `1.2`. This measurer only fixes glyph width — restore the
-    /// pre-FONTLOAD-14 total (`1.2×size`) explicitly, since ascent(0.8)+
-    /// descent(0.2) defaults alone sum to `1.0×size` and would silently
-    /// change every hand-computed expectation below.
-    fn line_gap_px(&self, font_size_px: f32) -> f32 {
-        font_size_px * 0.2
-    }
-}
-
-        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
-        let sheet = lumen_css_parser::parse("");
-        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
-        let ctx = PaginationContext {
-            page_width: 400.0,
-            page_height: 600.0,
-            margin_top: 40.0,
-            margin_bottom: 40.0,
-            margin_left: 40.0,
-            margin_right: 40.0,
-        };
-        let mut pages = paginate(&tree, &ctx);
-        assert!(!pages.is_empty());
-
-        let props = PageProperties {
-            width: 400.0, height: 600.0,
-            orientation: "portrait".to_string(),
-            margin_top: 40.0, margin_bottom: 40.0,
-            margin_left: 40.0, margin_right: 40.0,
-        };
-        let mut page_box = PageBox::new(0, props);
-        page_box.layout_margin_boxes();
-        let label = "1 / 1";
-        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
-            mb.content = Some(label.to_string());
-            mb.layout_text(label, 10.0, 15.0, &Fixed8);
-        }
-        pages[0].page_box = Some(page_box);
-
-        let cmds = build_print_display_list(&pages);
-        let texts: Vec<&str> = cmds.iter().filter_map(|c| {
-            if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
-        }).collect();
-        assert!(texts.contains(&"1 / 1"), "expected '1 / 1' in DrawText, got: {:?}", texts);
-    }
-
-    /// Margin-box DrawText positioned at page-box coordinates (not inside content transform).
-    #[test]
-    fn print_dl_margin_box_text_absolute_position() {
-        use lumen_layout::{
-            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
-        };
-
-        struct Fixed8;
-        impl TextMeasurer for Fixed8 {
-            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
-        
-    /// FONTLOAD-14 (BUG-467, lumen-layout): `line-height: normal` now
-    /// resolves from real font metrics (ascent + descent + lineGap) instead
-    /// of a flat `1.2`. This measurer only fixes glyph width — restore the
-    /// pre-FONTLOAD-14 total (`1.2×size`) explicitly, since ascent(0.8)+
-    /// descent(0.2) defaults alone sum to `1.0×size` and would silently
-    /// change every hand-computed expectation below.
-    fn line_gap_px(&self, font_size_px: f32) -> f32 {
-        font_size_px * 0.2
-    }
-}
-
-        let doc = lumen_html_parser::parse("<div style='height:50px'></div>");
-        let sheet = lumen_css_parser::parse("");
-        let tree = lumen_layout::layout(&doc, &sheet, Size::new(200.0, 300.0));
-        let ctx = PaginationContext {
-            page_width: 200.0,
-            page_height: 300.0,
-            margin_top: 30.0,
-            margin_bottom: 30.0,
-            margin_left: 30.0,
-            margin_right: 30.0,
-        };
-        let mut pages = paginate(&tree, &ctx);
-
-        let props = PageProperties {
-            width: 200.0, height: 300.0,
-            orientation: "portrait".to_string(),
-            margin_top: 30.0, margin_bottom: 30.0,
-            margin_left: 30.0, margin_right: 30.0,
-        };
-        let mut page_box = PageBox::new(0, props);
-        page_box.layout_margin_boxes();
-        let label = "PG1";
-        // Use top-left-corner so we can predict coordinates: x=0, y=0
-        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::TopLeftCorner) {
-            mb.content = Some(label.to_string());
-            mb.layout_text(label, 10.0, 15.0, &Fixed8);
-        }
-        pages[0].page_box = Some(page_box);
-
-        let cmds = build_print_display_list(&pages);
-        let pg1_rect = cmds.iter().find_map(|c| {
-            if let DisplayCommand::DrawText { text, rect, .. } = c {
-                if text == "PG1" { Some(*rect) } else { None }
-            } else { None }
-        });
-        let rect = pg1_rect.expect("DrawText 'PG1' not found");
-        // TopLeftCorner is at page origin (0,0); fragment offset is 0,0 inside box
-        assert!(rect.x >= 0.0 && rect.x < 10.0, "x should be at page origin, got {}", rect.x);
-        assert!(rect.y >= 0.0 && rect.y < 10.0, "y should be at page origin, got {}", rect.y);
-    }
-
-    // ── Tests for DrawCrossFade ────────────────────────────────────────────
-
-    /// Конструкция DrawCrossFade сохраняет все поля без потерь.
-    #[test]
-    fn cross_fade_construction_preserves_fields() {
-        let cmd = DisplayCommand::DrawCrossFade {
-            dest: Rect::new(10.0, 20.0, 100.0, 50.0),
-            src_a: "first.png".to_string(),
-            src_b: "second.png".to_string(),
-            progress: 0.25,
-        };
-        if let DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } = &cmd {
-            assert!((dest.x - 10.0).abs() < f32::EPSILON);
-            assert!((dest.y - 20.0).abs() < f32::EPSILON);
-            assert!((dest.width - 100.0).abs() < f32::EPSILON);
-            assert!((dest.height - 50.0).abs() < f32::EPSILON);
-            assert_eq!(src_a, "first.png");
-            assert_eq!(src_b, "second.png");
-            assert!((progress - 0.25).abs() < f32::EPSILON);
-        } else {
-            panic!("expected DrawCrossFade variant");
-        }
-    }
-
-    /// serialize_display_list печатает все ключевые поля в детерминированном формате.
-    #[test]
-    fn cross_fade_serialize_includes_all_fields() {
-        let dl = vec![DisplayCommand::DrawCrossFade {
-            dest: Rect::new(0.0, 0.0, 200.0, 100.0),
-            src_a: "a.png".to_string(),
-            src_b: "b.png".to_string(),
-            progress: 0.5,
-        }];
-        let s = serialize_display_list(&dl);
-        assert!(s.starts_with("DrawCrossFade "), "should start with command name: {s}");
-        assert!(s.contains("(0.00, 0.00, 200.00, 100.00)"), "should contain dest rect: {s}");
-        assert!(s.contains(r#"a="a.png""#), "should contain src_a: {s}");
-        assert!(s.contains(r#"b="b.png""#), "should contain src_b: {s}");
-        assert!(s.contains("p=0.500"), "should contain progress: {s}");
-    }
-
-    /// Equality / Debug на варианте работают через производные —
-    /// важно для snapshot-тестов и assert_eq! в downstream-крейтах.
-    #[test]
-    fn cross_fade_equality_and_debug() {
-        let a = DisplayCommand::DrawCrossFade {
-            dest: Rect::new(1.0, 2.0, 3.0, 4.0),
-            src_a: "x".into(),
-            src_b: "y".into(),
-            progress: 0.75,
-        };
-        let b = a.clone();
-        assert_eq!(a, b, "Clone должен сохранять равенство");
-        let dbg = format!("{a:?}");
-        assert!(dbg.contains("DrawCrossFade"), "Debug должен включать имя варианта: {dbg}");
-        assert!(dbg.contains("0.75"), "Debug должен включать progress: {dbg}");
-
-        // Граничные значения: progress = 0.0 (только src_a) и 1.0 (только src_b)
-        // — оба валидны и различимы.
-        let zero = DisplayCommand::DrawCrossFade {
-            dest: Rect::new(0.0, 0.0, 10.0, 10.0),
-            src_a: "a".into(),
-            src_b: "b".into(),
-            progress: 0.0,
-        };
-        let one = DisplayCommand::DrawCrossFade {
-            dest: Rect::new(0.0, 0.0, 10.0, 10.0),
-            src_a: "a".into(),
-            src_b: "b".into(),
-            progress: 1.0,
-        };
-        assert_ne!(zero, one, "progress=0.0 и progress=1.0 — разные команды");
-    }
-
-    /// DrawCrossFade попадает в exhaustive-match киндов (защита от
-    /// «забыли добавить ветку при extension enum-а»).
-    #[test]
-    fn cross_fade_appears_in_kind_dispatch() {
-        let cmd = DisplayCommand::DrawCrossFade {
-            dest: Rect::new(0.0, 0.0, 1.0, 1.0),
-            src_a: "a".into(),
-            src_b: "b".into(),
-            progress: 0.5,
-        };
-        // Если когда-нибудь матч в `img_with_background_and_border_paints_in_order`
-        // перестанет включать DrawCrossFade — компилятор не пропустит код.
-        // Здесь просто smoke-проверяем сериализацию через публичный API.
-        let s = serialize_display_list(std::slice::from_ref(&cmd));
-        assert!(s.contains("DrawCrossFade"));
     }
 

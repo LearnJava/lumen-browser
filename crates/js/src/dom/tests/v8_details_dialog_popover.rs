@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -1354,4 +1354,201 @@ fn reveal_target_itself_is_checked_too() {
                  _lumen_ancestor_revealing_algorithm(p.__nid__); \
                  !p.hasAttribute('hidden')"
     ));
+}
+
+// ── Interest Invokers (GAP-INTERESTINVOKER) ─────────────────────────────────
+
+fn install_interest_invoker(rt: &V8JsRuntime, target_html: &str) {
+    rt.eval(&format!(
+        "document.body.insertAdjacentHTML('beforeend', {target_html:?}); \
+         var ibtn = document.createElement('button'); \
+         ibtn.id = 'ibtn'; \
+         ibtn.setAttribute('interestfor', 'itarget'); \
+         ibtn.setAttribute('style', 'interest-delay: 0s'); \
+         document.body.appendChild(ibtn); \
+         var other = document.createElement('button'); \
+         other.id = 'other'; \
+         document.body.appendChild(other);"
+    )).unwrap();
+    // The test runtime has no layout, so publish the cascade snapshot the
+    // shim's `getComputedStyle` read of the delays would get from it.
+    let nid = match rt.eval("ibtn.__nid__").unwrap() {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("unexpected nid: {other:?}"),
+    };
+    let props: std::collections::HashMap<String, String> = [
+        ("interest-delay-start".to_string(), "0s".to_string()),
+        ("interest-delay-end".to_string(), "0s".to_string()),
+    ].into_iter().collect();
+    rt.update_computed_styles(std::collections::HashMap::from([(nid, props)]));
+}
+
+#[test]
+fn interest_for_element_reflects_attribute_and_property() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_interest_invoker(&rt, "<div id='itarget'></div>");
+    assert!(bool_eval(&rt,
+        "var b = document.getElementById('ibtn'); \
+         var ok1 = b.interestForElement === document.getElementById('itarget'); \
+         var d = document.createElement('div'); document.body.appendChild(d); \
+         b.interestForElement = d; \
+         ok1 && b.interestForElement === d && b.getAttribute('interestfor') === '' \
+         && HTMLAnchorElement.prototype.hasOwnProperty('interestForElement') \
+         && HTMLAreaElement.prototype.hasOwnProperty('interestForElement')"));
+}
+
+#[test]
+fn interest_for_element_rejects_non_element() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var a = document.createElement('a'); var threw = false; \
+         try { a.interestForElement = {}; } catch (e) { threw = e instanceof TypeError; } \
+         threw"));
+}
+
+#[test]
+fn interest_event_constructor_validates_source() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var e = new InterestEvent('interest'); \
+         var el = document.getElementById('main'); \
+         var e2 = new InterestEvent('interest', { source: el }); \
+         var threw = false; \
+         try { new InterestEvent('x', { source: {} }); } catch (err) { threw = err instanceof TypeError; } \
+         e.source === null && e2.source === el && threw \
+         && Object.prototype.toString.call(e) === '[object InterestEvent]'"));
+}
+
+#[test]
+fn focus_shows_and_blur_loses_interest() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_interest_invoker(&rt, "<div id='itarget' popover></div>");
+    rt.eval(
+        "var log = []; var t = document.getElementById('itarget'); \
+         t.addEventListener('interest', function(e) { \
+             log.push('interest:' + (e.source === document.getElementById('ibtn')) + ':' + e.cancelable); }); \
+         t.addEventListener('loseinterest', function(e) { log.push('lose:' + e.cancelable); }); \
+         document.getElementById('ibtn').focus(); _lumen_tick_timers();",
+    ).unwrap();
+    assert!(bool_eval(&rt,
+        "var b = document.getElementById('ibtn'); \
+         log.join(',') === 'interest:true:true' && b.matches(':interest-source') \
+         && t.matches(':interest-target') && t.matches(':popover-open') \
+         && !b.matches(':interest-target')"));
+    rt.eval("document.getElementById('other').focus(); _lumen_tick_timers();").unwrap();
+    assert!(bool_eval(&rt,
+        "log.join(',') === 'interest:true:true,lose:true' \
+         && !document.getElementById('ibtn').matches(':interest-source') \
+         && !t.matches(':interest-target') && !t.matches(':popover-open')"));
+}
+
+#[test]
+fn cancelled_interest_event_shows_nothing() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_interest_invoker(&rt, "<div id='itarget' popover></div>");
+    rt.eval(
+        "document.getElementById('itarget').addEventListener('interest', function(e) { e.preventDefault(); }); \
+         document.getElementById('ibtn').focus(); _lumen_tick_timers();",
+    ).unwrap();
+    assert!(bool_eval(&rt,
+        "!document.getElementById('ibtn').matches(':interest-source') \
+         && !document.getElementById('itarget').matches(':popover-open')"));
+}
+
+#[test]
+fn escape_loses_interest_without_cancel() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_interest_invoker(&rt, "<div id='itarget'></div>");
+    rt.eval(
+        "var log = []; var t = document.getElementById('itarget'); \
+         t.addEventListener('loseinterest', function(e) { e.preventDefault(); log.push(e.cancelable); }); \
+         document.getElementById('ibtn').focus(); _lumen_tick_timers(); \
+         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));",
+    ).unwrap();
+    assert!(bool_eval(&rt,
+        "log.join(',') === 'false' && !document.getElementById('ibtn').matches(':interest-source')"));
+}
+
+#[test]
+fn closing_target_popover_loses_interest() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_interest_invoker(&rt, "<div id='itarget' popover></div>");
+    rt.eval("document.getElementById('ibtn').focus(); _lumen_tick_timers(); \
+             document.getElementById('itarget').hidePopover();").unwrap();
+    assert!(bool_eval(&rt,
+        "!document.getElementById('ibtn').matches(':interest-source') \
+         && !document.getElementById('itarget').matches(':interest-target') \
+         && document.activeElement === document.getElementById('ibtn')"));
+}
+
+#[test]
+fn interest_delay_style_round_trips_through_cssom() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var d = document.createElement('div'); \
+         d.style.interestDelayStart = '123ms'; \
+         var a = d.style.interestDelayStart === '123ms'; \
+         d.style.interestDelayStart = '-1s'; \
+         var b = d.style.interestDelayStart === '123ms'; \
+         d.style.interestDelayStart = '0'; \
+         var c = d.style.interestDelayStart === '123ms'; \
+         d.style.interestDelay = 'normal 0.23s'; \
+         a && b && c && d.style.interestDelayStart === 'normal' \
+         && d.style.interestDelayEnd === '0.23s'"));
+}
+
+
+#[test]
+fn nested_interest_chain_keeps_outer_invoker_and_popover() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_interest_invoker(&rt,
+        "<div id='itarget' popover><a id='mid' href='#' interestfor='inner'>m</a></div>\
+         <div id='inner' popover><button id='innerbtn'>b</button></div>");
+    let mid = match rt.eval("document.getElementById('mid').__nid__").unwrap() {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("unexpected nid: {other:?}"),
+    };
+    let props: std::collections::HashMap<String, String> = [
+        ("interest-delay-start".to_string(), "0s".to_string()),
+        ("interest-delay-end".to_string(), "0s".to_string()),
+    ].into_iter().collect();
+    let ibtn = match rt.eval("ibtn.__nid__").unwrap() {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("unexpected nid: {other:?}"),
+    };
+    rt.update_computed_styles(std::collections::HashMap::from([(ibtn, props.clone()), (mid, props)]));
+    rt.eval("ibtn.focus(); _lumen_tick_timers(); \
+             document.getElementById('mid').focus(); _lumen_tick_timers(); \
+             document.getElementById('innerbtn').focus(); _lumen_tick_timers();").unwrap();
+    assert!(bool_eval(&rt,
+        "ibtn.matches(':interest-source') && document.getElementById('mid').matches(':interest-source') \
+         && document.getElementById('itarget').matches(':popover-open') \
+         && document.getElementById('inner').matches(':popover-open')"));
+    rt.eval("document.getElementById('other').focus(); _lumen_tick_timers();").unwrap();
+    assert!(bool_eval(&rt,
+        "!ibtn.matches(':interest-source') && !document.getElementById('mid').matches(':interest-source') \
+         && !document.getElementById('itarget').matches(':popover-open') \
+         && !document.getElementById('inner').matches(':popover-open')"));
+}
+
+#[test]
+fn nested_auto_popover_stays_open_and_closes_before_its_ancestor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("document.body.insertAdjacentHTML('beforeend', \
+             '<div id=\"outerp\" popover><div id=\"innerp\" popover></div></div><div id=\"sib\" popover></div>'); \
+             var order = []; \
+             ['outerp', 'innerp'].forEach(function(id) { \
+                 document.getElementById(id).addEventListener('beforetoggle', function(e) { \
+                     if (e.newState === 'closed') order.push(id); }); }); \
+             document.getElementById('outerp').showPopover(); \
+             document.getElementById('innerp').showPopover();").unwrap();
+    assert!(bool_eval(&rt,
+        "document.getElementById('outerp').matches(':popover-open') \
+         && document.getElementById('innerp').matches(':popover-open')"));
+    rt.eval("document.getElementById('outerp').hidePopover();").unwrap();
+    assert!(bool_eval(&rt,
+        "order.join(',') === 'innerp,outerp' && !document.getElementById('innerp').matches(':popover-open')"));
+    // An unrelated auto popover still closes the others.
+    rt.eval("document.getElementById('outerp').showPopover(); document.getElementById('sib').showPopover();").unwrap();
+    assert!(bool_eval(&rt, "!document.getElementById('outerp').matches(':popover-open')"));
 }

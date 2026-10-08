@@ -2,7 +2,7 @@
 
 **Owner:** P1 (layout-engine performance).
 **Blocks:** CC-14 (chrome default flip), CC-15 (legacy-chrome removal).
-**Bug:** [BUG-341](../../bugs/BUG-341-OPEN.md).
+**Bug:** [BUG-341](../../bugs/BUG-341-FIXED.md).
 **Branch:** `p1-bug341-incremental-restyle`.
 
 This is the design brief for the work BUG-341's "Fix scope note" gestured at. It

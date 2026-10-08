@@ -22,8 +22,14 @@ pub(crate) fn install_service_worker(
     fp_sw_net: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_sw: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
+    page_origin: String,
 ) -> JsResult<()> {
     // ── Service Worker / Cache Storage ───────────────────────────────────────
+    //
+    // BUG-674: every native below keys on `page_origin` — derived by
+    // `install_dom` from the document URL — and none takes an origin argument.
+    // These natives are plain `window` properties, so a JS-supplied origin let
+    // any script read and write another origin's registrations and caches.
     {
         // SW registrations: origin+scope+scriptUrl stored in-memory.
         // Key: (origin, scope) → script_url
@@ -38,9 +44,11 @@ pub(crate) fn install_service_worker(
         let cache_data: Arc<Mutex<CacheMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         let sw = Arc::clone(&sw_regs);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_register",
-            move |origin: String, scope: String, script_url: String| {
+            move |scope: String, script_url: String| {
+                let origin = o.clone();
                 sw.lock().unwrap().insert((origin, scope), script_url);
             }
         );
@@ -80,26 +88,31 @@ pub(crate) fn install_service_worker(
         }
 
         let sw = Arc::clone(&sw_regs);
+        let o = page_origin.clone();
         reg!(scope, ctx, store,
             "_lumen_sw_has_registration",
-            move |origin: String| -> bool {
-                sw.lock().unwrap().keys().any(|(o, _)| *o == origin)
+            move || -> bool {
+                sw.lock().unwrap().keys().any(|(k, _)| *k == o)
             }
         );
 
         let sw = Arc::clone(&sw_regs);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_unregister",
-            move |origin: String, scope: String| {
+            move |scope: String| {
+                let origin = o.clone();
                 sw.lock().unwrap().remove(&(origin, scope));
             }
         );
 
-        // Persistence bindings — forward to SwBackend when provided.
+        // Persistence bindings — forward to SwBackend when provided. The shell
+        // builds the backend already bound to this document's origin
+        // (`SwStore::new(backend, origin)`), so neither native takes one.
         let sw_be = sw_backend.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_persist",
-            move |_origin: String, snapshot: String| {
+            move |snapshot: String| {
                 if let Some(ref be) = sw_be {
                     be.save(&snapshot);
                 }
@@ -109,12 +122,12 @@ pub(crate) fn install_service_worker(
         let sw_be2 = sw_backend.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_load",
-            move |_origin: String| -> Option<String> {
+            move || -> Option<String> {
                 sw_be2.as_ref().and_then(|be| be.load())
             }
         );
 
-        // _lumen_sw_activate_script(origin, scope, script_text) — PH3-20: SW fetch interception.
+        // _lumen_sw_activate_script(scope, script_text) — PH3-20: SW fetch interception.
         // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
         // Spawns a dedicated V8 thread for the SW (Ph3 V8 migration S10 —
         // `spawn_sw_worker_v8`, replacing the QuickJS-only `spawn_sw_worker` this
@@ -128,7 +141,9 @@ pub(crate) fn install_service_worker(
             let fp_sw = fp_sw_net.clone();
             let idb_sw = idb_sw.clone();
             let det_sw = determinism.clone();
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
+            let o = page_origin.clone();
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String| {
+                let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
                         origin.clone(),
@@ -147,11 +162,13 @@ pub(crate) fn install_service_worker(
         // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_put",
             // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{...}}
             // Grouped into one string to stay within rquickjs 5-arg IntoJsFunc limit.
-            move |origin: String, cache_name: String, url: String, meta_json: String, body: Vec<u8>| {
+            move |cache_name: String, url: String, meta_json: String, body: Vec<u8>| {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_put(&origin, &cache_name, &url, &meta_json, &body);
                 } else {
@@ -169,9 +186,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match",
-            move |origin: String, cache_name: String, url: String| -> Option<Vec<u8>> {
+            move |cache_name: String, url: String| -> Option<Vec<u8>> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match(&origin, &cache_name, &url).map(|(_, body)| body)
                 } else {
@@ -187,10 +206,12 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match_info",
             // Returns the raw meta_json stored at put time (already JSON-encoded).
-            move |origin: String, cache_name: String, url: String| -> Option<String> {
+            move |cache_name: String, url: String| -> Option<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match(&origin, &cache_name, &url).map(|(meta, _)| meta)
                 } else {
@@ -206,9 +227,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match_any",
-            move |origin: String, url: String| -> Option<Vec<u8>> {
+            move |url: String| -> Option<Vec<u8>> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match_any(&origin, &url).map(|(_, body)| body)
                 } else {
@@ -226,9 +249,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match_any_info",
-            move |origin: String, url: String| -> Option<String> {
+            move |url: String| -> Option<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match_any(&origin, &url).map(|(meta, _)| meta)
                 } else {
@@ -246,9 +271,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_delete",
-            move |origin: String, cache_name: String, url: String| -> bool {
+            move |cache_name: String, url: String| -> bool {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_delete(&origin, &cache_name, &url)
                 } else {
@@ -266,9 +293,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_keys",
-            move |origin: String, cache_name: String| -> Vec<String> {
+            move |cache_name: String| -> Vec<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_keys(&origin, &cache_name).into_iter().map(|(u, _)| u).collect()
                 } else {
@@ -284,9 +313,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_keys_full",
-            move |origin: String, cache_name: String| -> String {
+            move |cache_name: String| -> String {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     let pairs = be.cache_keys(&origin, &cache_name);
                     let items: Vec<String> = pairs
@@ -314,9 +345,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_has",
-            move |origin: String, cache_name: String| -> bool {
+            move |cache_name: String| -> bool {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_has(&origin, &cache_name)
                 } else {
@@ -331,9 +364,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_delete_cache",
-            move |origin: String, cache_name: String| -> bool {
+            move |cache_name: String| -> bool {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_delete_cache(&origin, &cache_name)
                 } else if let Some(caches) = cd.lock().unwrap().get_mut(&origin) {
@@ -346,9 +381,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_names",
-            move |origin: String| -> Vec<String> {
+            move || -> Vec<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_names(&origin)
                 } else {
@@ -400,6 +437,7 @@ pub(crate) fn install_fetch(
         let fp_media = fetch_provider.clone();
         let fp_media_uir = fetch_provider.clone();
         let fp_element = fetch_provider.clone();
+        let fp_inline_script = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
@@ -803,7 +841,7 @@ pub(crate) fn install_fetch(
             // (BUG-1116) first asks for the bytes a `<link rel=preload>` hint
             // already fetched — `fetch_preloaded` — and goes to the network only
             // when there are none. A page `fetch()` has an empty destination and
-            // never does.
+            // does so only for a hint the shim matched (BUG-1151, `|preloaded`).
             let am_start = Arc::clone(&async_map);
             reg!(scope, ctx, store, 
                 "_lumen_fetch_async_start",
@@ -820,9 +858,13 @@ pub(crate) fn install_fetch(
                         .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
                     let map = Arc::clone(&am_start);
                     let headers = pairs_from_flat(headers);
-                    let (mode, destination) = load.split_once('|').unwrap_or(("", ""));
-                    let (mode, destination) = (mode.to_owned(), destination.to_owned());
-                    let use_preloaded = !destination.is_empty() && method == "GET" && !has_body;
+                    let mut load_parts = load.splitn(3, '|');
+                    let mode = load_parts.next().unwrap_or("").to_owned();
+                    let destination = load_parts.next().unwrap_or("").to_owned();
+                    // BUG-1151: the shim matched a page `fetch()` to a `<link
+                    // rel=preload as=fetch>` hint (third segment `preloaded`).
+                    let hinted = load_parts.next() == Some("preloaded");
+                    let use_preloaded = (!destination.is_empty() || hinted) && method == "GET" && !has_body;
                     std::thread::spawn(move || {
                         let preloaded = if use_preloaded { provider.fetch_preloaded(&url) } else { None };
                         let res = match preloaded {
@@ -935,6 +977,54 @@ pub(crate) fn install_fetch(
             let am_free = Arc::clone(&async_map);
             reg!(scope, ctx, store, "_lumen_fetch_async_free", move |id: u32| {
                 am_free.lock().unwrap().remove(&id);
+            });
+
+            // _lumen_fetch_async_wait_text(handle, timeout_ms)
+            //   → ["ok", status, finalUrl, bodyText] | ["csp", blockedUri, originalPolicy]
+            //   | ["net"] | ["abort"] | ["timeout"]
+            //
+            // BUG-568: the one blocking consumer of an async fetch. A parser-
+            // blocking `<script src>` written by `document.write()` must run
+            // before the writing script's caller continues (HTML LS §13.2.6.4.4,
+            // «pending parsing-blocking script»), so the shim starts the fetch
+            // the moment the element is written — requests of several written
+            // scripts overlap on the wire — and then waits for each here, in
+            // order, once the writing script has returned. The body goes back
+            // as text (UTF-8, lossy) straight away: the script is evaluated
+            // from it and no `Response` is ever built, so nothing needs the
+            // shared `FetchCache` slot. On timeout the request is aborted; the
+            // handle is left for `_lumen_fetch_async_free` either way.
+            let am_wait = Arc::clone(&async_map);
+            reg!(scope, ctx, store, "_lumen_fetch_async_wait_text", move |id: u32, timeout_ms: u32| -> Vec<String> {
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(u64::from(timeout_ms));
+                loop {
+                    {
+                        let mut map = am_wait.lock().unwrap();
+                        let Some(s) = map.get_mut(&id) else { return vec!["net".to_owned()] };
+                        match s.outcome.take() {
+                            Some(AsyncOutcome::Ok { status, url, body, .. }) => {
+                                return vec![
+                                    "ok".to_owned(),
+                                    status.to_string(),
+                                    url,
+                                    String::from_utf8_lossy(&body).into_owned(),
+                                ];
+                            }
+                            Some(AsyncOutcome::CspBlocked { blocked_uri, original_policy }) => {
+                                return vec!["csp".to_owned(), blocked_uri, original_policy];
+                            }
+                            Some(AsyncOutcome::Aborted) => return vec!["abort".to_owned()],
+                            Some(AsyncOutcome::NetError) => return vec!["net".to_owned()],
+                            None => {}
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            s.token.abort();
+                            return vec!["timeout".to_owned()];
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
             });
         }
 
@@ -1134,7 +1224,7 @@ pub(crate) fn install_fetch(
             });
         }
 
-        // _lumen_check_element_src(destination, url, nonce, integrity)
+        // _lumen_check_element_src(destination, url, nonce, integrity, parser_inserted)
         //   → [] | [effectiveDirective, blockedUri, originalPolicy]
         // BUG-1175: `script-src`/`style-src` pre-check for a `<script src>`/
         // `<link rel=stylesheet>`/`@import` that a script inserted. The shim's
@@ -1146,9 +1236,9 @@ pub(crate) fn install_fetch(
         {
             let fp = fp_element;
             reg!(scope, ctx, store, "_lumen_check_element_src",
-                move |destination: String, url: String, nonce: String, integrity: String| -> Vec<String> {
+                move |destination: String, url: String, nonce: String, integrity: String, parser_inserted: bool| -> Vec<String> {
                     let Some(ref provider) = fp else { return Vec::new() };
-                    match provider.check_element_src(&destination, &url, &nonce, &integrity) {
+                    match provider.check_element_src(&destination, &url, &nonce, &integrity, parser_inserted) {
                         Err(lumen_core::error::Error::CspElementSrcBlocked {
                             directive,
                             blocked_uri,
@@ -1157,6 +1247,27 @@ pub(crate) fn install_fetch(
                         _ => Vec::new(),
                     }
                 });
+        }
+
+        // _lumen_check_inline_script(nonce, body)
+        //   → [] | [effectiveDirective, "inline", originalPolicy]
+        // BUG-568: `script-src` for the inline `<script>` `document.write()`
+        // wrote — the shell judges only the markup's own inline scripts, so
+        // without this a written one would run under any policy. Same return
+        // shape as `_lumen_check_element_src`.
+        {
+            let fp = fp_inline_script;
+            reg!(scope, ctx, store, "_lumen_check_inline_script", move |nonce: String, body: String| -> Vec<String> {
+                let Some(ref provider) = fp else { return Vec::new() };
+                match provider.check_inline_script(&nonce, &body) {
+                    Err(lumen_core::error::Error::CspElementSrcBlocked {
+                        directive,
+                        blocked_uri,
+                        original_policy,
+                    }) => vec![directive, blocked_uri, original_policy],
+                    _ => Vec::new(),
+                }
+            });
         }
 
         // _lumen_upgrade_insecure_url(url) → String

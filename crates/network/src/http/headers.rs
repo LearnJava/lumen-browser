@@ -12,13 +12,13 @@ use std::collections::VecDeque;
 /// See ADR-007 §«Per-profile HTTP configs» for the rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HttpProfile {
-    /// Chrome 130+ — default for compatibility. Matches current stable Chrome.
+    /// Chrome — default for compatibility. Matches current stable Chrome (`chrome_major!`).
     Chrome,
     /// Firefox 130+ — minimal header set, different SETTINGS than Chrome.
     Firefox,
     /// Safari 18+ — minimal headers (Sec-* subset), conservative SETTINGS.
     Safari,
-    /// Edge 130+ — similar to Chrome but with distinct alpn/extension ordering.
+    /// Edge — same major as Chrome, similar to Chrome but with distinct alpn/extension ordering.
     Edge,
     /// Tor Browser — Tor-native TLS fingerprint + minimal headers.
     TorBrowser,
@@ -42,7 +42,7 @@ pub enum HttpProfile {
 /// 5. Accept
 /// 6. Accept-Encoding
 /// 7. Accept-Language
-/// 8. DNT
+/// 8. DNT (Strict only)
 /// 9. Sec-Fetch-Site
 /// 10. Sec-Fetch-Mode
 /// 11. Sec-Fetch-Dest
@@ -159,7 +159,7 @@ pub fn build_request_headers(
 
     match profile {
         HttpProfile::Chrome | HttpProfile::Strict => {
-            // Chrome 130+ HTTP/1.1 header order
+            // Chrome HTTP/1.1 header order
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
@@ -174,8 +174,13 @@ pub fn build_request_headers(
 
             headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
 
-            // DNT (Do Not Track) — Chrome sends by default
-            headers.add("DNT", "1");
+            // DNT (Do Not Track) — Strict only. Stock Chrome does not send it;
+            // `DNT: 1` next to a Chrome UA is an impossible combination that
+            // Akamai answers with 403/RST_STREAM (BUG-1113). Strict opts into
+            // explicit privacy signals, so it keeps DNT next to Sec-GPC.
+            if profile == HttpProfile::Strict {
+                headers.add("DNT", "1");
+            }
 
             // Sec-GPC (Global Privacy Control) — Strict only; plain Chrome has
             // no native GPC, so it stays in the privacy-signal group next to
@@ -217,11 +222,11 @@ pub fn build_request_headers(
             headers.add("Connection", "keep-alive");
         }
         HttpProfile::Edge => {
-            // Edge 130+ HTTP/1.1 header order (similar to Chrome with minor differences)
+            // Edge HTTP/1.1 header order (similar to Chrome with minor differences)
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
-            headers.add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0");
+            headers.add("User-Agent", super::EDGE_USER_AGENT);
             // Edge (Chromium) sends the same document `Accept` as Chrome (RP-7).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
 
@@ -414,6 +419,27 @@ mod tests {
     }
 
     #[test]
+    fn test_chromium_user_agents_share_one_major() {
+        // BUG-1113: the Chrome and Edge UAs were separate literals and both
+        // drifted to Chrome/130; one `chrome_major!()` now feeds both.
+        let major = format!("Chrome/{}.0.0.0", super::super::CHROME_MAJOR);
+        assert!(super::super::CHROME_USER_AGENT.contains(&major));
+        assert!(super::super::EDGE_USER_AGENT.contains(&major));
+        assert!(super::super::EDGE_USER_AGENT.ends_with(&format!("Edg/{}.0.0.0", super::super::CHROME_MAJOR)));
+        let edge = build_request_headers("example.com", "", "", HttpProfile::Edge);
+        assert!(edge.contains(&format!("User-Agent: {}\r\n", super::super::EDGE_USER_AGENT)));
+    }
+
+    #[test]
+    fn test_h2_chrome_fingerprint_has_no_dnt() {
+        // H2 derives from the H1 block, so the BUG-1113 DNT removal must hold there too.
+        let hdrs = h2_fingerprint_headers(HttpProfile::Chrome, "gzip");
+        assert!(hdrs.iter().all(|(k, _)| k != "dnt"));
+        let strict = h2_fingerprint_headers(HttpProfile::Strict, "gzip");
+        assert!(strict.iter().any(|(k, v)| k == "dnt" && v == "1"));
+    }
+
+    #[test]
     fn test_h2_fingerprint_headers_omit_accept_encoding_when_empty() {
         let hdrs = h2_fingerprint_headers(HttpProfile::Chrome, "");
         assert!(hdrs.iter().all(|(k, _)| k != "accept-encoding"));
@@ -572,7 +598,7 @@ mod tests {
     fn test_strict_profile_keeps_chrome_privacy_header_order() {
         // Sec-GPC joins the privacy-signal group: after DNT, before Sec-Fetch-*.
         let headers = build_request_headers("example.com", "", "", HttpProfile::Strict);
-        let dnt = headers.find("DNT: 1").expect("Strict keeps Chrome's DNT");
+        let dnt = headers.find("DNT: 1").expect("Strict sends DNT");
         let gpc = headers.find("Sec-GPC: 1").expect("Strict sends GPC");
         let fetch = headers.find("Sec-Fetch-Site").expect("Strict keeps Sec-Fetch-*");
         assert!(dnt < gpc && gpc < fetch, "Sec-GPC must sit between DNT and Sec-Fetch-*");

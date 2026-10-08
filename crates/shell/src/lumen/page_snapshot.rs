@@ -120,6 +120,12 @@ impl Lumen {
             ),
             reader_original_source: self.reader_original_source.take(),
             cert_info: self.cert_info.take(),
+            // BUG-1214: per-tab generation/base travel with the tab exactly
+            // like every other per-page field above — a background tab's
+            // streaming load must still be validated against ITS OWN
+            // generation while it isn't `self` anymore.
+            load_generation: self.load_generation,
+            document_base: self.document_base.take(),
         };
         // ADR-016 M2.2d: активная вкладка отдала свой JS-хэндл в снапшот
         // (`js_ctx.take()` выше) → `js_present` сбрасывается вместе с ним.
@@ -137,6 +143,8 @@ impl Lumen {
         self.pending_images = snap.pending_images;
         self.page_font_registry = snap.page_font_registry;
         self.web_fonts = snap.web_fonts;
+        // BUG-1154: набор запрошенных источников принадлежал другой вкладке.
+        self.requested_web_fonts.clear();
         self.source = snap.source;
         self.runtime = snap.runtime;
         self.animation_scheduler = snap.animation_scheduler;
@@ -154,6 +162,7 @@ impl Lumen {
         self.hint = snap.hint;
         self.scroll_y = snap.scroll_y;
         self.scroll_x = snap.scroll_x;
+        self.issue_scroll_command();
         self.content_height = snap.content_height;
         self.content_width = snap.content_width;
         self.layout_source = snap.layout_source;
@@ -243,6 +252,10 @@ impl Lumen {
         self.current_history_state_json = snap.current_history_state_json;
         self.reader_original_source = snap.reader_original_source;
         self.cert_info = snap.cert_info;
+        // BUG-1214: restore this tab's own generation/base, not the
+        // outgoing tab's — matches every other per-page field above.
+        self.load_generation = snap.load_generation;
+        self.document_base = snap.document_base;
         // ADR-016 M2.2c-2b: зеркалим хэндл + DOM восстановленной вкладки в поток.
         self.sync_engine_js_state();
         // Notify platform bridge with the restored tab's accessibility tree.

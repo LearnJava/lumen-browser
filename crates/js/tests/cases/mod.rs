@@ -10,15 +10,23 @@
 #![allow(dead_code)]
 
 mod activation_target;
+mod bug1147_frame_facade_style;
+mod bug1208_window_origin;
+mod bug1083_textdecoder_stream_bom;
 mod bug518_mixin_cssom;
 mod bug534_highlight_api;
 mod bug569_img_decode;
 mod bug576_options_collection_add;
 mod bug581_table_api;
+mod bug865_passive_listener;
+mod bug949_scroll_read;
+mod bug954_insert_cycle;
 mod bug786_srez25_pi_api;
+mod gap_origin_api;
 mod indexed_db;
 mod link_activation;
 mod no_automation_markers;
+mod object1_content_document;
 mod speech_api;
 mod v8_eval;
 mod v8_smoke;

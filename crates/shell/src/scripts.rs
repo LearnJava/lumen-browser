@@ -751,6 +751,10 @@ pub(crate) fn run_scripts_with_dom(
     // see one store. `None` (headless dump/PDF, opaque-origin frames) keeps
     // `document.cookie` empty.
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    // BUG-1198: связи фрейма с предками, регистрируемые до первой строки
+    // его скрипта (`frame_ancestry.rs`). `None` у всех, кроме
+    // `frames::spawn_frame`.
+    ancestry: Option<&crate::frame_ancestry::FrameAncestry<'_>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // GAP-NAVCTX срез 5 (BUG-797): taken unconditionally, before either early
     // return below — see `window_messaging::take_pending_opener`'s doc
@@ -783,6 +787,9 @@ pub(crate) fn run_scripts_with_dom(
         })
         .collect();
 
+    // BUG-1156: read before `doc` moves into the Arc — `document.referrer` seed.
+    #[cfg(feature = "v8")]
+    let document_referrer = doc.document_referrer().map(str::to_owned);
     let doc_arc = Arc::new(Mutex::new(doc));
 
     if !always_runtime && scripts.is_empty() && deferred_scripts.is_empty() && extra_scripts.is_empty()
@@ -806,6 +813,7 @@ pub(crate) fn run_scripts_with_dom(
         match lumen_js::v8_runtime::V8JsRuntime::new() {
             Ok(mut rt) => {
                 rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
+                rt = rt.with_document_referrer(document_referrer);
                 if deterministic.enabled {
                     rt.set_deterministic_mode(true, deterministic.rng_seed, deterministic.monotonic_clock);
                 }
@@ -822,8 +830,20 @@ pub(crate) fn run_scripts_with_dom(
                 if let Some(jar) = cookie_jar {
                     rt = rt.with_cookie_jar(Arc::new(lumen_storage::CookieJarProvider::new(jar)));
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated) {
+                // BUG-1208: `window.origin`/`self.origin` inherit the
+                // parent's origin for a non-sandboxed `about:blank`/
+                // `about:srcdoc` sub-document (HTML LS §7.4.1) — every other
+                // caller (real-URL document, opaque-sandboxed frame, or the
+                // top-level page, which has no `ancestry` at all) computes
+                // its own origin from `page_url` alone.
+                let origin_inherit_from = ancestry
+                    .filter(|a| !a.opaque && page_url.starts_with("about:"))
+                    .map(|a| a.parent_url);
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated, origin_inherit_from) {
                     eprintln!("JS DOM init failed: {e}");
+                }
+                if let Some(ancestry) = ancestry {
+                    ancestry.register(&doc_arc, &rt);
                 }
                 // CSSOM-1 срез 3: seed document.styleSheets/element.sheet
                 // before the first script line runs (BUG-443 spec order —
@@ -845,7 +865,7 @@ pub(crate) fn run_scripts_with_dom(
                     rt.update_layout_rects(snap.rects);
                     rt.update_client_rects(snap.client_rects);
                     rt.update_hit_test_tree(snap.tree);
-                    rt.update_computed_styles(snap.styles);
+                    rt.update_style_maps(snap.styles);
                     rt.update_pseudo_computed_styles(snap.pseudo_styles);
                     rt.update_custom_properties(snap.customs);
                     rt.update_viewport_size(snap.viewport.0, snap.viewport.1);

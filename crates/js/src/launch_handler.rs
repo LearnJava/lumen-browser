@@ -26,7 +26,7 @@ const LAUNCH_HANDLER_SHIM: &str = r#"
 
   // Phase 0 native hook — no-op; shell delivers real params in Phase 1.
   if (typeof _lumen_deliver_launch_params === 'undefined') {
-    globalThis._lumen_deliver_launch_params = function(_url, _filesJson) {};
+    __lumen_C._lumen_deliver_launch_params = function(_url, _filesJson) {};
   }
 
   // WICG Launch Handler §3.1 — LaunchParams.
@@ -89,7 +89,7 @@ const LAUNCH_HANDLER_SHIM: &str = r#"
 
   // §3.3: _lumen_deliver_launch_params(targetURL, filesJson) — called by shell.
   // filesJson is a JSON array of file name strings (Phase 0: names only).
-  globalThis._lumen_deliver_launch_params = function(targetURL, filesJson) {
+  __lumen_C._lumen_deliver_launch_params = function(targetURL, filesJson) {
     var files = [];
     if (filesJson) {
       try {

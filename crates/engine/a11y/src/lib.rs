@@ -165,16 +165,52 @@ pub fn build_ax_tree(doc: &Document, root_id: NodeId, flat_tree: &FlatTree) -> A
     }
 }
 
+/// Role and accessible name of one DOM element (BUG-1014: WebDriver
+/// `Get Computed Role` / `Get Computed Label`).
+///
+/// The role is read from the node's place in the built tree, because explicit
+/// `role=` validity depends on the parent context. An element the tree omits
+/// (inside an `aria-hidden` subtree) is resolved standalone, without a parent.
+pub fn computed_role_and_name(doc: &Document, node_id: NodeId, flat_tree: &FlatTree) -> (String, String) {
+    fn find(node: &AXNode, id: NodeId) -> Option<&AXNode> {
+        if node.node_id == id {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find(c, id))
+    }
+    let tree = build_ax_tree(doc, doc.root(), flat_tree);
+    match find(&tree.root, node_id) {
+        Some(n) => (n.role.as_str().to_owned(), n.name.clone()),
+        None => (resolve_role(doc, node_id, None).as_str().to_owned(), names::compute_name(doc, node_id)),
+    }
+}
+
+/// Composed children of `node_id` with every `<slot>` replaced by what is
+/// assigned to it: a slot is `display: contents` and has no role, so its
+/// content belongs to the slot's own parent — the UA slots of `<select>`/
+/// `<details>` (GAP-UASHADOWSLOT) included, whose options and summary must
+/// stay direct children of the listbox / group.
+fn push_composed_children(doc: &Document, node_id: NodeId, flat_tree: &FlatTree, out: &mut Vec<NodeId>) {
+    for &child in flat_tree.children_of(doc, node_id) {
+        if matches!(&doc.get(child).data, NodeData::Element { name, .. } if name.local == "slot") {
+            push_composed_children(doc, child, flat_tree, out);
+        } else {
+            out.push(child);
+        }
+    }
+}
+
 fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat_tree: &FlatTree) -> AXNode {
     let node = doc.get(node_id);
     let state = compute_state(doc, node_id, node);
-    let role = resolve_role(node, parent_role);
+    let role = resolve_role(doc, node_id, parent_role);
     let name = names::compute_name(doc, node_id);
     let description = names::compute_description(doc, node_id);
     let placeholder = node.get_attr("placeholder").unwrap_or("").to_owned();
 
     // Use flat_tree to get composed children (respects shadow DOM boundaries and slot assignments)
-    let composed_children = flat_tree.children_of(doc, node_id);
+    let mut composed_children = Vec::new();
+    push_composed_children(doc, node_id, flat_tree, &mut composed_children);
     let children = composed_children
         .iter()
         .filter(|&&child_id| {
@@ -277,7 +313,8 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat
     AXNode { node_id, role, name, description, placeholder, state, children, controls, owns, flow_to, details }
 }
 
-fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
+fn resolve_role(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> AXRole {
+    let node = doc.get(node_id);
     // Step 1: Check explicit role attribute and validate against parent context.
     if let Some(role_attr) = node.get_attr("role") {
         // The `role` attribute is a space-separated list; take the first valid value.
@@ -290,8 +327,8 @@ fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
             }
         }
     }
-    // Step 2: Fall back to implicit role from HTML tag.
-    implicit_role(node)
+    // Step 2: Fall back to implicit role from the tag (HTML-AAM / SVG-AAM).
+    implicit_role(doc, node_id)
 }
 
 fn compute_state(doc: &Document, node_id: NodeId, node: &lumen_dom::Node) -> AXState {

@@ -367,7 +367,7 @@ const SEAL_FILE_NATIVES: &str = r#"
     '_lumen_writable_close', '_lumen_writable_from_token'
   ];
   for (var i = 0; i < names.length; i++) {
-    try { delete globalThis[names[i]]; } catch (e) {}
+    try { delete __lumen_C[names[i]]; } catch (e) {}
   }
 })();
 "#;
@@ -495,8 +495,8 @@ window.File = File;
 // A token-backed File clones by sharing the same read grant rather than
 // copying bytes: the underlying data lives on disk (or nowhere, for a
 // programmatically-built `_content` File), not in this object.
-if (globalThis.__lumen_platform_cloners) {
-  globalThis.__lumen_platform_cloners.register(
+if (__lumen_C.__lumen_platform_cloners) {
+  __lumen_C.__lumen_platform_cloners.register(
     function(v) { return v instanceof File; },
     function(v) {
       var clone = new File([], v.name, { type: v.type, lastModified: v.lastModified });
@@ -523,7 +523,7 @@ function makeTokenFile(name, token, size, type, lastModified) {
 // same context and has no other way to reach `FILE_TOKENS`. Non-enumerable and
 // configurable — `install_dom` deletes it once that shim has captured it, so the
 // page never observes it (BUG-371 point 1).
-Object.defineProperty(globalThis, '__lumen_fs_internal', {
+Object.defineProperty(__lumen_C, '__lumen_fs_internal', {
   value: { makeTokenFile: makeTokenFile },
   writable: true, enumerable: false, configurable: true
 });
@@ -550,7 +550,7 @@ if (typeof Symbol !== 'undefined' && Symbol.iterator) {
 window.FileList = FileList;
 
 // ── nid → FileList map (persists across _lumen_make_element calls) ────────────
-window._lumen_file_lists = {};
+__lumen_C._lumen_file_lists = {};
 
 // ── Deliver from shell after OS dialog closes ─────────────────────────────────
 // Called via eval_js: _lumen_deliver_file_list(nid, '[{name,token,size,...}]')
@@ -558,7 +558,7 @@ window._lumen_file_lists = {};
 // so filesJson carries opaque 128-bit hex tokens rather than raw path strings.
 // A page calling this itself gains nothing: a token it did not receive is
 // unguessable, and one from another origin is rejected Rust-side (BUG-371).
-window._lumen_deliver_file_list = function(nid, filesJson) {
+__lumen_C._lumen_deliver_file_list = function(nid, filesJson) {
   var infos;
   try { infos = JSON.parse(filesJson); } catch(e) { infos = []; }
   if (!Array.isArray(infos)) infos = [];
@@ -568,7 +568,7 @@ window._lumen_deliver_file_list = function(nid, filesJson) {
       f.name || '', f.token, f.size || 0, f.mime_type || '', f.last_modified_ms || 0);
   });
 
-  window._lumen_file_lists[nid] = new FileList(objs);
+  __lumen_C._lumen_file_lists[nid] = new FileList(objs);
 
   // Sync value attribute (HTML LS §4.10.5.1.16.3 — display name only)
   _lumen_set_attr(nid, 'value', objs.length > 0 ? objs[0].name : '');
@@ -580,12 +580,12 @@ window._lumen_deliver_file_list = function(nid, filesJson) {
 
 // ── Patch _lumen_make_element to expose .files on <input type="file"> ─────────
 var _origMakeElement = _lumen_make_element;
-window._lumen_make_element = function(nid) {
+__lumen_C._lumen_make_element = function(nid) {
   var el = _origMakeElement(nid);
   if (el && _lumen_get_attr(nid, 'type') === 'file') {
     Object.defineProperty(el, 'files', {
       get: function() {
-        return window._lumen_file_lists[nid] || new FileList([]);
+        return __lumen_C._lumen_file_lists[nid] || new FileList([]);
       },
       set: function() {},  // read-only per spec
       configurable: true
@@ -687,7 +687,7 @@ mod v8_tests {
         function _lumen_get_attr(nid, name) { return undefined; }
         function _lumen_dispatch_bubble(nid, type) {}
         function _lumen_make_element(nid) { return {__nid__: nid}; }
-        window._lumen_make_element = _lumen_make_element;
+        __lumen_C._lumen_make_element = _lumen_make_element;
         function btoa(str) {
           var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
           var result = '', i = 0;
@@ -857,9 +857,9 @@ mod v8_tests {
         assert!(
             js_bool(
                 &rt,
-                "typeof globalThis.__lumen_file_read_text === 'undefined' && \
-                 typeof globalThis.__lumen_file_read_base64 === 'undefined' && \
-                 typeof globalThis.__lumen_fs_internal === 'undefined' && \
+                "typeof __lumen_C.__lumen_file_read_text === 'undefined' && \
+                 typeof __lumen_C.__lumen_file_read_base64 === 'undefined' && \
+                 typeof __lumen_C.__lumen_fs_internal === 'undefined' && \
                  Object.getOwnPropertyNames(globalThis).indexOf('__lumen_file_read_text') < 0"
             ),
             "natives must be gone from the global object after sealing"

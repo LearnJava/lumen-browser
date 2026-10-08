@@ -118,6 +118,16 @@ fn role_select_multiple_listbox() {
 }
 
 #[test]
+fn ua_slot_adds_no_node_between_select_and_options() {
+    // GAP-UASHADOWSLOT: the options reach the listbox through the UA slot,
+    // which is `display: contents` and so has no accessibility node of its own.
+    let tree = build_tree("<select multiple><option>A</option><option>B</option></select>");
+    let lb = find_role_dfs(&tree.root, AXRole::ListBox).expect("listbox");
+    let roles: Vec<_> = lb.children.iter().map(|c| c.role).collect();
+    assert_eq!(roles, [AXRole::Option, AXRole::Option]);
+}
+
+#[test]
 fn role_table_row_cell() {
     let tree = build_tree("<table><tr><td>Cell</td></tr></table>");
     assert!(find_role_dfs(&tree.root, AXRole::Table).is_some(), "expected Table");
@@ -1364,6 +1374,65 @@ fn role_graphics_object_is_transparent_for_child_context() {
     assert_eq!(item.name, "item");
 }
 
+// ── SVG-AAM implicit roles (BUG-686) ─────────────────────────────────────────
+
+#[test]
+fn svg_root_is_graphics_document_and_bare_shape_stays_generic() {
+    // The probe from the bug report: without SVG-AAM mapping both nodes were Generic.
+    let tree = build_tree(r#"<svg><circle cx="5" cy="5" r="4"></circle></svg>"#);
+    let svg = find_role_dfs(&tree.root, AXRole::GraphicsDocument).expect("<svg> → graphics-document");
+    assert_eq!(svg.children.len(), 1, "circle stays in the tree as a child");
+    assert_eq!(svg.children[0].role, AXRole::Generic, "unlabelled shape is not a graphics-symbol");
+}
+
+#[test]
+fn svg_labelled_shapes_are_graphics_symbols() {
+    // SVG-AAM §5.1.2: a label, a description or a <title>/<desc> child includes the shape.
+    for shape in ["circle", "ellipse", "line", "path", "polygon", "polyline", "rect"] {
+        let tree = build_tree(&format!(
+            r#"<svg><{shape} aria-label="a"></{shape}><{shape}><title>b</title></{shape}><{shape}><desc>c</desc></{shape}><{shape} tabindex="0"></{shape}><{shape}><title> </title></{shape}></svg>"#
+        ));
+        let svg = find_role_dfs(&tree.root, AXRole::GraphicsDocument).expect("graphics-document");
+        let roles: Vec<AXRole> = svg.children.iter().map(|c| c.role).collect();
+        assert_eq!(
+            roles,
+            [AXRole::GraphicsSymbol, AXRole::GraphicsSymbol, AXRole::GraphicsSymbol, AXRole::GraphicsSymbol, AXRole::Generic],
+            "<{shape}>: whitespace-only <title> must not include the element"
+        );
+    }
+}
+
+#[test]
+fn svg_a_is_link_with_href_or_xlink_href_else_group() {
+    let tree = build_tree(
+        r##"<svg><a href="#">x</a><a xlink:href="#">y</a><a>z</a></svg>"##,
+    );
+    let svg = find_role_dfs(&tree.root, AXRole::GraphicsDocument).expect("graphics-document");
+    let roles: Vec<AXRole> = svg.children.iter().map(|c| c.role).collect();
+    assert_eq!(roles, [AXRole::Link, AXRole::Link, AXRole::Group]);
+    // The HTML `a` without href keeps its HTML-AAM mapping — dispatch is by namespace.
+    let html = build_tree("<a>z</a>");
+    assert!(find_role_dfs(&html.root, AXRole::Group).is_none(), "HTML <a> must not become a group");
+}
+
+#[test]
+fn svg_g_and_foreign_object_are_groups_only_when_included() {
+    let tree = build_tree(
+        r#"<svg><g aria-label="l"></g><g></g><foreignObject aria-label="f"></foreignObject><foreignObject></foreignObject></svg>"#,
+    );
+    let svg = find_role_dfs(&tree.root, AXRole::GraphicsDocument).expect("graphics-document");
+    let roles: Vec<AXRole> = svg.children.iter().map(|c| c.role).collect();
+    assert_eq!(roles, [AXRole::Group, AXRole::Generic, AXRole::Group, AXRole::Generic]);
+}
+
+#[test]
+fn svg_image_is_img_and_use_is_graphics_object_when_labelled() {
+    let tree = build_tree(r##"<svg><image></image><use href="#s" aria-label="u"></use><use href="#s"></use></svg>"##);
+    let svg = find_role_dfs(&tree.root, AXRole::GraphicsDocument).expect("graphics-document");
+    let roles: Vec<AXRole> = svg.children.iter().map(|c| c.role).collect();
+    assert_eq!(roles, [AXRole::Img, AXRole::GraphicsObject, AXRole::Generic]);
+}
+
 // ── DPUB-ARIA roles (BUG-764) ────────────────────────────────────────────────
 
 #[test]
@@ -1424,4 +1493,33 @@ fn role_doc_bibliography_is_transparent_for_child_context() {
     let item = find_role_dfs(&tree.root, AXRole::ListItem)
         .expect("listitem nested in a doc-bibliography must still resolve against the list");
     assert_eq!(item.name, "ref");
+}
+
+// ── computed_role_and_name (BUG-1014) ────────────────────────────────────────
+
+#[test]
+fn computed_role_and_name_by_node() {
+    let doc = parse(r#"<button id=b aria-label="Save">x</button><div id=d role=alert>hi</div>
+        <div aria-hidden=true><a id=h href="/">Link</a></div>"#);
+    let flat_tree = build_flat_tree(&doc);
+    let by_id = |id: &str| {
+        let mut stack = vec![doc.root()];
+        while let Some(n) = stack.pop() {
+            if doc.get(n).get_attr("id") == Some(id) {
+                return n;
+            }
+            stack.extend(doc.get(n).children.iter().copied());
+        }
+        panic!("no #{id}")
+    };
+    assert_eq!(
+        lumen_a11y::computed_role_and_name(&doc, by_id("b"), &flat_tree),
+        ("button".to_owned(), "Save".to_owned())
+    );
+    assert_eq!(lumen_a11y::computed_role_and_name(&doc, by_id("d"), &flat_tree).0, "alert");
+    // Inside aria-hidden: absent from the tree, resolved standalone.
+    assert_eq!(
+        lumen_a11y::computed_role_and_name(&doc, by_id("h"), &flat_tree),
+        ("link".to_owned(), "Link".to_owned())
+    );
 }

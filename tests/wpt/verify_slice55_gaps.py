@@ -21,7 +21,7 @@ injects, plus any `[JS error]`/`script error:` line on stderr.
   onload="go()">` never fires `onload` — every `test()` call lives inside
   `go()`, so the harness never registers a single test, let alone completes
   one. This is a live re-measurement of
-  [BUG-798](../../bugs/BUG-798-OPEN.md) (`<object data>`/`<embed src>` never
+  [BUG-798](../../bugs/BUG-798-FIXED.md) (`<object data>`/`<embed src>` never
   fetch, never dispatch `load`/`error`), NOT a new defect — but the existing
   `embed-object-no-load` mechanism in `timeout_audit.py` failed to classify
   this specific id, because its second half of the `mode="all"` pair only

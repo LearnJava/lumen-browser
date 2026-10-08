@@ -193,6 +193,17 @@ use super::*;
         assert_eq!(s.font_family, vec!["Arial".to_string()]);
     }
 
+    // ── BUG-1011: percentage width/height attribute on replaced elements ──
+
+    #[test]
+    fn dimension_hint_percent_on_iframe_and_img() {
+        let s = doc_root_child_style("<iframe width=\"50%\" height=\"100\"></iframe>");
+        assert_eq!(s.width, Some(Length::Percent(50.0)));
+        assert_eq!(s.height, Some(Length::Px(100.0)));
+        let s = doc_root_child_style("<img width=\"25%\">");
+        assert_eq!(s.width, Some(Length::Percent(25.0)));
+    }
+
     // ── BUG-603: apply_background_image_presentational_hint ──────────────
 
     #[test]
@@ -1140,10 +1151,105 @@ use super::*;
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
-        if let OffsetRotate::Angle(rad) = style.offset_rotate {
-            assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        // Углы offset-rotate хранятся в градусах (их ждёт motion_path).
+        if let OffsetRotate::Angle(deg) = style.offset_rotate {
+            assert!((deg - 90.0).abs() < 1e-3, "deg={deg}");
         } else {
             panic!("expected OffsetRotate::Angle");
+        }
+    }
+
+    #[test]
+    fn offset_rotate_auto_angle_and_reverse_angle() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let rot = |css: &str| {
+            let sheet = lumen_css_parser::parse(css);
+            compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false).offset_rotate
+        };
+        let near = |r: OffsetRotate, want: f32| match r {
+            OffsetRotate::AutoAngle(a) => assert!((a - want).abs() < 1e-3, "a={a}"),
+            other => panic!("expected AutoAngle, got {other:?}"),
+        };
+        near(rot("div { offset-rotate: auto 30deg; }"), 30.0);
+        near(rot("div { offset-rotate: 30deg auto; }"), 30.0);
+        near(rot("div { offset-rotate: reverse 30deg; }"), 210.0);
+        near(rot("div { offset-rotate: 0.25turn auto; }"), 90.0);
+    }
+
+    fn offset_style(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn offset_shorthand_path_distance_rotate_anchor() {
+        let st = offset_style(
+            r#"div { offset: path("M 0 0 L 100 0") 30px 45deg / left top; }"#,
+        );
+        assert_eq!(st.offset_path.as_deref(), Some(r#"path("M 0 0 L 100 0")"#));
+        assert_eq!(st.offset_distance, Length::Px(30.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::Angle(45.0));
+        let a = st.offset_anchor.expect("anchor");
+        assert_eq!(a.x, PositionComponent::Percent(0.0));
+        assert_eq!(a.y, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn offset_shorthand_orders_and_position_prefix() {
+        // rotate перед distance; ведущая offset-position разбирается и отбрасывается.
+        let st = offset_style(r#"div { offset: left top ray(90deg closest-side) reverse 10px; }"#);
+        assert_eq!(st.offset_path.as_deref(), Some("ray(90deg closest-side)"));
+        assert_eq!(st.offset_distance, Length::Px(10.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::Reverse);
+        assert_eq!(st.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_shorthand_resets_omitted_longhands() {
+        let st = offset_style(
+            r#"div { offset-distance: 50px; offset-rotate: 10deg; offset-anchor: 0 0; offset: none; }"#,
+        );
+        assert_eq!(st.offset_path, None);
+        assert_eq!(st.offset_distance, Length::Px(0.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::Auto);
+        assert_eq!(st.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_shorthand_invalid_ignored() {
+        let st = offset_style(
+            r#"div { offset-distance: 7px; offset: path("M 0 0 L 1 1") bogus; }"#,
+        );
+        assert_eq!(st.offset_path, None);
+        assert_eq!(st.offset_distance, Length::Px(7.0));
+    }
+
+    #[test]
+    fn offset_shorthand_percent_distance_and_auto_angle() {
+        let st = offset_style(r#"div { offset: path("M 0 0 L 1 1") 25% auto 90deg; }"#);
+        assert_eq!(st.offset_distance, Length::Percent(25.0));
+        assert_eq!(st.offset_rotate, OffsetRotate::AutoAngle(90.0));
+    }
+
+    #[test]
+    fn offset_rotate_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        for css in [
+            "div { offset-rotate: bogus; }",
+            "div { offset-rotate: auto reverse; }",
+            "div { offset-rotate: 10deg 20deg; }",
+            "div { offset-rotate: auto 10deg 20deg; }",
+        ] {
+            let sheet = lumen_css_parser::parse(css);
+            let st = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(st.offset_rotate, OffsetRotate::Auto, "{css}");
         }
     }
 
@@ -1396,4 +1502,84 @@ use super::*;
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.overflow_x, Overflow::Visible);
         assert_eq!(style.overflow_y, Overflow::Visible);
+    }
+
+    // ── HTML LS §15.3.6: атрибут `dir` (BUG-1321) ────────────────────────────
+
+    /// Стиль первого ребёнка `<body>` для `html` (с `css` как author-листом).
+    fn dir_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let el = doc.get(doc.body().unwrap()).children[0];
+        compute_style(&doc, el, &sheet, &root, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn dir_attr_rtl_sets_direction_and_isolate() {
+        let s = dir_style("<div dir=rtl>abc</div>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Isolate);
+    }
+
+    #[test]
+    fn dir_attr_ltr_and_case_insensitive() {
+        let s = dir_style("<p dir=LTR>x</p>", "");
+        assert_eq!(s.direction, Direction::Ltr);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Isolate);
+        assert_eq!(dir_style("<p dir=RtL>x</p>", "").direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn dir_attr_invalid_is_ignored() {
+        let s = dir_style("<div dir=sideways>abc</div>", "");
+        assert_eq!(s.direction, Direction::Ltr);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn dir_attr_bdo_is_isolate_override() {
+        let s = dir_style("<bdo dir=rtl>abc</bdo>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::IsolateOverride);
+    }
+
+    #[test]
+    fn dir_attr_auto_follows_first_strong_character() {
+        // Иврит — R; латиница — L; цифры/пробелы — слабые, пропускаются.
+        assert_eq!(dir_style("<div dir=auto>\u{5d0}\u{5d1}\u{5d2}</div>", "").direction, Direction::Rtl);
+        assert_eq!(dir_style("<div dir=auto> 123 \u{5d0}b</div>", "").direction, Direction::Rtl);
+        assert_eq!(dir_style("<div dir=auto>abc \u{5d0}</div>", "").direction, Direction::Ltr);
+        // Без сильных символов — ltr.
+        assert_eq!(dir_style("<div dir=auto>123</div>", "").direction, Direction::Ltr);
+        // Сильный символ во вложенном элементе тоже считается.
+        assert_eq!(dir_style("<div dir=auto><b>\u{5d0}</b></div>", "").direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn dir_attr_auto_skips_isolated_descendants() {
+        // Потомок с собственным `dir` и `<bdi>` изолированы от родителя.
+        let s = dir_style("<div dir=auto><span dir=ltr>\u{5d0}</span>abc</div>", "");
+        assert_eq!(s.direction, Direction::Ltr);
+        let s = dir_style("<div dir=auto><bdi>abc</bdi>\u{5d0}</div>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+        let s = dir_style("<div dir=auto><script>var a</script>\u{5d0}</div>", "");
+        assert_eq!(s.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn dir_attr_author_css_wins_and_child_inherits() {
+        let s = dir_style("<div dir=rtl>abc</div>", "div { direction: ltr; unicode-bidi: normal; }");
+        assert_eq!(s.direction, Direction::Ltr);
+        assert_eq!(s.unicode_bidi, UnicodeBidi::Normal);
+
+        let doc = lumen_html_parser::parse("<div dir=rtl><span>x</span></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.direction, Direction::Rtl, "direction inherits");
+        assert_eq!(span_style.unicode_bidi, UnicodeBidi::Normal, "unicode-bidi does not");
     }

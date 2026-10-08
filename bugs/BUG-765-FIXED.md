@@ -99,9 +99,9 @@ lumen-js --all-targets --features v8-backend` чист; workspace-clippy цел�
 
 * [BUG-399](BUG-399-FIXED.md) — источник истины (`window.isSecureContext`);
   эта заявка — прямой остаток от его закрытия.
-* [BUG-766](BUG-766-OPEN.md) — в `WorkerGlobalScope` самого флага нет, так что
+* [BUG-766](BUG-766-FIXED.md) — в `WorkerGlobalScope` самого флага нет, так что
   гейт в воркере будет нечем питать.
-* [BUG-669](BUG-669-OPEN.md) — `wakelock-insecure-context.any.html` формально
+* [BUG-669](BUG-669-FIXED.md) — `wakelock-insecure-context.any.html` формально
   PASS, но по неверной причине (`WakeLock` не выставлен вовсе): после гейта
   причина станет верной, тест — по-прежнему зелёным.
 * [BUG-682](BUG-682-FIXED.md), [BUG-709](BUG-709-FIXED.md) — категории, чей

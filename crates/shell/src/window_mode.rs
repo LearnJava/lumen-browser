@@ -29,6 +29,134 @@ pub(crate) fn run_window_mode(
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
     automation_mode: bool,
 ) -> ExitCode {
+    // Streaming pipeline: окно создаётся немедленно, загрузка стартует
+    // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
+    let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
+    // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
+    // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
+    // UI-потока умирают на ~790 уровнях вложенности. winit по умолчанию
+    // отказывается строить event loop вне главного потока процесса; на
+    // Wayland/X11 это разрешается явным `with_any_thread`. Флаг выставляется
+    // обоим бэкендам: какой из них живой, решается в рантайме.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
+            &mut event_loop_builder,
+            true,
+        );
+        winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
+            &mut event_loop_builder,
+            true,
+        );
+    }
+    let event_loop = match event_loop_builder.build() {
+        Ok(el) => el,
+        Err(err) => {
+            eprintln!("Не удалось создать event loop: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let load_proxy = event_loop.create_proxy();
+    // ADR-032: состояние `Lumen` живёт на потоке браузера, главный поток —
+    // только переходник winit. `LUMEN_NO_BROWSER_THREAD=1` — прежняя схема.
+    if browser_thread::browser_thread_disabled() {
+        return run_window_mode_inner(
+            source,
+            event_sink,
+            blocked_log,
+            network_log,
+            initial_scroll,
+            no_scrollbar,
+            maximized,
+            forced_colors,
+            deterministic,
+            viewport_override,
+            automation_handle,
+            automation_cmd_tx,
+            automation_rx,
+            automation_mode,
+            load_proxy,
+            LoopMode::Direct(event_loop),
+            None,
+        );
+    }
+    let (ui_tx, ui_rx) = std::sync::mpsc::channel::<browser_thread::UiMsg>();
+    let scroll_shared = wheel_scroll::ScrollShared::new(ui_tx.clone());
+    let browser_scroll_shared = Arc::clone(&scroll_shared);
+    let guard_proxy = load_proxy.clone();
+    let spawned = std::thread::Builder::new()
+        .name("lumen-browser".to_owned())
+        .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
+        .spawn(move || {
+            // Любой выход потока (в том числе паника) гасит цикл главного потока.
+            let _exit_main = browser_thread::ExitMainOnDrop(guard_proxy);
+            run_window_mode_inner(
+                source,
+                event_sink,
+                blocked_log,
+                network_log,
+                initial_scroll,
+                no_scrollbar,
+                maximized,
+                forced_colors,
+                deterministic,
+                viewport_override,
+                automation_handle,
+                automation_cmd_tx,
+                automation_rx,
+                automation_mode,
+                load_proxy,
+                LoopMode::Thread(ui_rx),
+                Some(browser_scroll_shared),
+            )
+        });
+    let browser = match spawned {
+        Ok(h) => h,
+        Err(err) => {
+            eprintln!("Не удалось создать поток браузера: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let forwarder = browser_thread::MainForwarder {
+        tx: ui_tx,
+        wheel: wheel_scroll::WheelRouter::new(scroll_shared),
+    };
+    let mut forwarder = forwarder;
+    if let Err(err) = event_loop.run_app(&mut forwarder) {
+        eprintln!("Ошибка event loop: {err}");
+        return ExitCode::FAILURE;
+    }
+    browser.join().unwrap_or(ExitCode::FAILURE)
+}
+
+/// Где крутится цикл: на главном потоке (прежняя схема) или на потоке браузера.
+enum LoopMode {
+    Direct(EventLoop<LoadEvent>),
+    Thread(std::sync::mpsc::Receiver<browser_thread::UiMsg>),
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+fn run_window_mode_inner(
+    source: PageSource,
+    event_sink: Arc<dyn EventSink>,
+    blocked_log: Arc<std::sync::Mutex<panels::shields_panel::BlockedLog>>,
+    network_log: Arc<std::sync::Mutex<devtools::network_panel::NetworkLog>>,
+    initial_scroll: (f32, f32),
+    no_scrollbar: bool,
+    maximized: bool,
+    forced_colors: bool,
+    deterministic: deterministic::DetConfig,
+    viewport_override: Option<(f32, f32)>,
+    automation_handle: AutomationHandle,
+    automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
+    automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
+    automation_mode: bool,
+    load_proxy: EventLoopProxy<LoadEvent>,
+    mode: LoopMode,
+    scroll_shared: Option<Arc<wheel_scroll::ScrollShared>>,
+) -> ExitCode {
+    let browser_proxy = load_proxy.clone();
     println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
@@ -62,6 +190,12 @@ pub(crate) fn run_window_mode(
     lumen_js::set_audio_playback_provider(std::sync::Arc::new(
         platform::audio_player::PlatformAudioPlayer::new(),
     ));
+
+    // Public Suffix List for `Origin.prototype.isSameSite()` (GAP-ORIGIN):
+    // lumen-storage owns the table but depends on lumen-js, so it is handed
+    // over here instead of linked. Process-global; before any JS context starts.
+    #[cfg(feature = "v8")]
+    lumen_js::set_public_suffix_list(std::sync::Arc::new(lumen_storage::PslProvider::new()));
 
     // Wire Screen Wake Lock API to the platform backend (PH3-13).
     // Prevents the display from sleeping while JS holds an active WakeLockSentinel.
@@ -130,34 +264,6 @@ pub(crate) fn run_window_mode(
             .ok();
     }
 
-    // Streaming pipeline: окно создаётся немедленно, загрузка стартует
-    // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
-    let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
-    // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
-    // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
-    // UI-потока умирают на ~790 уровнях вложенности. winit по умолчанию
-    // отказывается строить event loop вне главного потока процесса; на
-    // Wayland/X11 это разрешается явным `with_any_thread`. Флаг выставляется
-    // обоим бэкендам: какой из них живой, решается в рантайме.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
-            &mut event_loop_builder,
-            true,
-        );
-        winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
-            &mut event_loop_builder,
-            true,
-        );
-    }
-    let event_loop = match event_loop_builder.build() {
-        Ok(el) => el,
-        Err(err) => {
-            eprintln!("Не удалось создать event loop: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let load_proxy = event_loop.create_proxy();
     // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
     // Created by main() (not here) so front-ends spawned before the window
     // exists (bidi_spawn) already hold a valid handle — see call site.
@@ -229,6 +335,7 @@ pub(crate) fn run_window_mode(
         pending_images: Vec::new(),
         page_font_registry: Arc::new(lumen_font::FontRegistry::new()),
         web_fonts: Vec::new(),
+        requested_web_fonts: std::collections::HashSet::new(),
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
@@ -246,7 +353,7 @@ pub(crate) fn run_window_mode(
         chrome_settings_section: "general".to_owned(),
         chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         chrome_transition_scheduler: TransitionScheduler::new(),
-        chrome_prev_styles: HashMap::new(),
+        chrome_prev_styles: Default::default(),
         chrome_content_area_detached: None,
         chrome_floating_detached: Vec::new(),
         chrome_floating_dl: None,
@@ -254,18 +361,20 @@ pub(crate) fn run_window_mode(
         chrome_float_drag: None,
         chrome_float_last_press: None,
         chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
+        chrome_restyle_indexes: lumen_layout::style::RestyleIndexCache::default(),
         chrome_prev_interactive: (None, None, None),
         chrome_prev_viewport: None,
         chrome_prev_forced_colors: false,
         chrome_dl_content_hash: None,
         chrome_layout_generation: 0,
+        chrome_emit_cache: lumen_paint::SubtreeEmitCache::new(),
         chrome_overlay_frame_cache: None,
         chrome_anim_frame: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
         starting_style_tracker: StartingStyleTracker::new(),
-        prev_styles: HashMap::new(),
+        prev_styles: Default::default(),
         page_prev_cascade_styles: None,
         page_prev_interactive: (None, None, None),
         anim_frame: None,
@@ -309,6 +418,12 @@ pub(crate) fn run_window_mode(
         scroll_drag: None,
         frame_scroll_drag: None,
         scroll_anim: None,
+        scroll_shared,
+        scroll_link: None,
+        scroll_snapshot_sent: None,
+        scroll_adopted_gen: 0,
+        scroll_cmd_epoch: 0,
+        scroll_cmd_containers: Vec::new(),
         momentum_anim: None,
         touchpad_vel: (0.0, 0.0),
         touchpad_vel_time_ms: 0.0,
@@ -316,6 +431,12 @@ pub(crate) fn run_window_mode(
         layout_source: None,
         pending_reload: Rc::new(Cell::new(false)),
         pending_js_navigate: None,
+        js_nav_inbox: Arc::new(std::sync::Mutex::new(None)),
+        click_proceed_inbox: Arc::new(std::sync::Mutex::new(Vec::new())),
+        pending_clicks: Vec::new(),
+        next_click_proceed_id: 0,
+        pending_submits: Vec::new(),
+        js_url_inbox: Arc::new(std::sync::Mutex::new(Vec::new())),
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
@@ -337,6 +458,9 @@ pub(crate) fn run_window_mode(
         engine_thread: spawn_engine_thread_if_enabled(),
         engine_job_generation: 0,
         engine_applied_generation: 0,
+        m4_swap_backoff: 0,
+        m4_swap_penalty: 0,
+        m4_full_cost_ms: None,
         ime_composing: None,
         bfcache: BfCache::new(16),
         frozen_styles: HashMap::new(),
@@ -383,6 +507,8 @@ pub(crate) fn run_window_mode(
         js_present: false,
         raf_pending_flag: None,
         dom_dirty_flag: None,
+        navigate_listeners_flag: None,
+        dom_touched_drain: None,
         pseudo_styles_needed_flag: None,
         custom_props_needed_flag: None,
         computed_styles_needed_flag: None,
@@ -416,12 +542,15 @@ pub(crate) fn run_window_mode(
         frame_nav_requests: Vec::new(),
         pending_new_frames: Vec::new(),
         pending_frame_load_dispatch: Vec::new(),
+        frame_scan_retry: false,
         video_gif_store,
         text_track_store,
         image_cache: lumen_image::ImageDecodeCache::new(),
         automation_rx,
         automation_cmd_tx,
         pending_waits: Vec::new(),
+        pending_evals: Vec::new(),
+        automation_tab: None,
         input_rx,
         input_tx,
         focused_node: None,
@@ -434,6 +563,7 @@ pub(crate) fn run_window_mode(
         frame_date_picker_month: 0,
         frame_select_dropdown: None,
         text_drag: None,
+        doc_select: None,
         active_frame: None,
         downloads: download::DownloadManager::open_history(
             adblock::browser_data_dir().join("downloads.db"),
@@ -652,9 +782,18 @@ pub(crate) fn run_window_mode(
     if !app.deterministic.enabled && !config::global().no_persistent_state {
         app.update_ui.start_check(false);
     }
-    if let Err(err) = event_loop.run_app(&mut app) {
-        eprintln!("Ошибка event loop: {err}");
-        return ExitCode::FAILURE;
+    match mode {
+        LoopMode::Direct(event_loop) => {
+            if let Err(err) = event_loop.run_app(&mut app) {
+                eprintln!("Ошибка event loop: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+        LoopMode::Thread(ui_rx) => {
+            let handle = MainHandle::remote(browser_proxy);
+            app.run_browser_loop(&handle, &ui_rx);
+            app.on_exiting();
+        }
     }
     // UPD-9: «Перезапустить и обновить» already swapped the binaries and
     // saved the session; start the new one only after this process has let

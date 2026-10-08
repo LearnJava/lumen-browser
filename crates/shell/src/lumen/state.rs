@@ -49,10 +49,14 @@ pub(crate) struct Lumen {
     /// scroll, JS DOM mutation) — без хранения здесь resize-relayout терял бы
     /// web-метрики и откатывался к Inter.  Очищается на каждой навигации.
     pub(crate) web_fonts: Vec<LoadedWebFont>,
+    /// BUG-1154: ключи уже запрошенных `@font-face url()`-источников страницы —
+    /// дедупликация между первичной сборкой и `refresh_dynamic_css`. Очищается
+    /// на навигации вместе с `web_fonts`.
+    pub(crate) requested_web_fonts: std::collections::HashSet<String>,
     pub(crate) source: PageSource,
     pub(crate) event_sink: Arc<dyn EventSink>,
     pub(crate) modifiers: ModifiersState,
-    pub(crate) window: Option<Arc<Window>>,
+    pub(crate) window: Option<Arc<lumen_paint::SurfaceWindow>>,
     /// Physical size of the last `WindowEvent::Resized` that actually ran a
     /// relayout (BUG-996). Windows re-delivers `WM_SIZE` for a top-level
     /// window the shell considers unresponsive (DWM/ghost-window hang probes:
@@ -158,7 +162,7 @@ pub(crate) struct Lumen {
     /// pass — needed by [`Self::chrome_transition_scheduler`]'s `sync()` to
     /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
     /// chrome tree.
-    pub(crate) chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
+    pub(crate) chrome_prev_styles: crate::layout_walk::StyleMap,
     /// BUG-341 S5/S22: what the previous pass's [`take_content_area`] removed
     /// from [`Self::chrome_layout`].
     ///
@@ -217,6 +221,10 @@ pub(crate) struct Lumen {
     /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
     /// compare against the wrong reference.
     pub(crate) chrome_prev_cascade_styles: lumen_layout::CascadeStyles,
+    /// PERF-16 срез 4: the state and node restyle indexes of the chrome's stylesheet, kept from
+    /// pass to pass — the sheet is parsed once, so scanning it twice per interaction was pure
+    /// repetition. See [`lumen_layout::style::RestyleIndexCache`].
+    pub(crate) chrome_restyle_indexes: lumen_layout::style::RestyleIndexCache,
     /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
     /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
     /// a hover/focus/active transition can compute its conservative dirty
@@ -248,6 +256,10 @@ pub(crate) struct Lumen {
     /// [`ChromeOverlayFrameCache`]'s doc comment for why "unconditional" (not
     /// "only when bytes changed") is the correct, safe choice here.
     pub(crate) chrome_layout_generation: u64,
+    /// PERF-16 срез 2: кэш emit display list по поддереву для хрома — между проходами
+    /// [`Self::relayout_chrome_host`] неизменившиеся куски воспроизводятся копированием
+    /// (`LUMEN_NO_EMIT_CACHE=1` выключает).
+    pub(crate) chrome_emit_cache: lumen_paint::SubtreeEmitCache,
     /// BUG-405 срез 50: the last `RedrawRequested`'s assembled chrome overlay
     /// segment, reused verbatim on a later frame when nothing that shapes it
     /// has changed — see [`ChromeOverlayFrameCache`]'s own doc comment.
@@ -280,7 +292,7 @@ pub(crate) struct Lumen {
     pub(crate) starting_style_tracker: StartingStyleTracker,
     /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
     /// для определения изменившихся свойств. Обновляется после каждого layout.
-    pub(crate) prev_styles: HashMap<NodeId, ComputedStyle>,
+    pub(crate) prev_styles: crate::layout_walk::StyleMap,
     /// BUG-341 S7: `CounterMap::styles()` cascade cache from the last
     /// [`Self::try_relayout_raf_incremental`] call that took the restyle-aware
     /// path (`layout_mutation_incremental_restyle`) — the `RestyleDelta::prev_styles`
@@ -411,7 +423,10 @@ pub(crate) struct Lumen {
     /// последним layout-проходом из-за `content-visibility: auto` вне расширенного
     /// viewport. top_y — страница-координаты (scroll 0) схлопнутого бокса.
     /// Обновляется в `refresh_cv_state` после каждой смены `layout_box`.
-    pub(crate) cv_skipped: Vec<(NodeId, f32)>,
+    /// Третье поле — оценка нижней границы (`lumen_layout::cv_bottom_estimate`,
+    /// `INFINITY` если высота до layout неизвестна): бокс, пропущенный выше
+    /// вьюпорта, должен вернуться в работу при скролле вверх.
+    pub(crate) cv_skipped: Vec<(NodeId, f32, f32)>,
     /// Ratchet-набор auto-узлов, ставших relevant (вошли в расширенный viewport
     /// при скролле): прокидывается в layout через `set_cv_relevant`, такие узлы
     /// больше не пропускаются. Сбрасывается при загрузке страницы.
@@ -534,6 +549,20 @@ pub(crate) struct Lumen {
     /// ненулевой скоростью от тачпада. Тикается через `advance_momentum`
     /// в `RedrawRequested`. `None` — нет активной инерции.
     pub(crate) momentum_anim: Option<momentum_anim::MomentumAnim>,
+    /// ADR-032, срез 3: общее с главным и рендер-потоком состояние прокрутки
+    /// страницы; `None` — без потока браузера.
+    pub(crate) scroll_shared: Option<Arc<crate::wheel_scroll::ScrollShared>>,
+    /// Ручка к рендер-потоку, через которую усыновляется его смещение.
+    pub(crate) scroll_link: Option<crate::render_thread::RenderLink>,
+    /// Последний опубликованный снимок прокрутки (публикуем только изменения).
+    pub(crate) scroll_snapshot_sent: Option<crate::wheel_scroll::ScrollSnapshot>,
+    /// Поколение смещения рендер-потока, которое поток браузера усыновил.
+    pub(crate) scroll_adopted_gen: u64,
+    /// Эпоха программных прокруток потока браузера (ADR-032, правило 7).
+    pub(crate) scroll_cmd_epoch: u64,
+    /// Контейнеры, записанные программно с последней обратной связью текущей
+    /// эпохи: устаревшая связь их смещений не применяет.
+    pub(crate) scroll_cmd_containers: Vec<u32>,
     /// Мгновенная скорость тачпада от последних `PixelDelta`-событий
     /// (CSS px / ms). Обновляется EWMA-фильтром. Используется при
     /// `TouchPhase::Ended` для запуска `momentum_anim`.
@@ -555,6 +584,23 @@ pub(crate) struct Lumen {
     /// захваченный во время выполнения скриптов страницы. Обрабатывается
     /// в `about_to_wait` после первого рендера загруженной страницы.
     pub(crate) pending_js_navigate: Option<JsNavigateRequest>,
+    /// THREAD-9: почтовый ящик навигационных запросов JS. Движковая задача
+    /// кладёт сюда результат `take_navigate_request` сама (UI-поток не ждёт
+    /// ответа блокирующим `query`), `about_to_wait` переносит его в
+    /// `pending_js_navigate`. Последний запрос перекрывает предыдущий — как и
+    /// прежняя запись `pending_js_navigate = Some(..)`.
+    pub(crate) js_nav_inbox: Arc<std::sync::Mutex<Option<JsNavigateRequest>>>,
+    /// THREAD-9 срез 6: ответы движка «клик не отменён» (`id`, proceed).
+    pub(crate) click_proceed_inbox: Arc<std::sync::Mutex<Vec<(u64, bool)>>>,
+    /// THREAD-9 срез 6: клики, ждущие ответа движка (`id` → контекст активации).
+    pub(crate) pending_clicks: Vec<(u64, crate::lumen::click::PendingClick)>,
+    pub(crate) next_click_proceed_id: u64,
+    /// То же для `submit`-события формы: (`id`, форма, submitter, страница, момент).
+    pub(crate) pending_submits: Vec<(u64, NodeId, NodeId, String, std::time::Instant)>,
+    /// THREAD-9 срез 6: результаты `javascript:` URL (клик, `location.href=`),
+    /// вычисленные движковой задачей; `about_to_wait` превращает каждый в
+    /// `navigate_replace`. Попадает только строковое значение завершения.
+    pub(crate) js_url_inbox: Arc<std::sync::Mutex<Vec<String>>>,
     /// Proxy для отправки LoadEvent из background-потока загрузки в event loop.
     pub(crate) load_proxy: EventLoopProxy<LoadEvent>,
     /// Инкрементальный HTML-парсер — активен во время streaming load.
@@ -693,6 +739,17 @@ pub(crate) struct Lumen {
     /// `relayout()` выставляет их равными (off-thread задание не ждётся);
     /// `poll_engine_commit` продвигает это поле применённым `commit.generation`.
     pub(crate) engine_applied_generation: u64,
+    /// BUG-935 S80/S85: сколько следующих rAF-тиков отдаётся off-thread после
+    /// дорогого on-thread тика (см. `M4_TICK_BUDGET_MS`).
+    pub(crate) m4_swap_backoff: u8,
+    /// BUG-935 S85: длина отката при следующем превышении бюджета подряд
+    /// (0 — последний on-thread тик уложился в бюджет).
+    pub(crate) m4_swap_penalty: u8,
+    /// BUG-935 S86: стоимость последнего тика с полным каскадом (on-thread
+    /// без `restyle` или off-thread коммит), мс. `None` — на этой странице
+    /// полный тик ещё не мерили: предсказанный «полный» rAF-тик уходит
+    /// off-thread, а не блокирует UI-поток неизвестной (на ria.ru ~1 с) ценой.
+    pub(crate) m4_full_cost_ms: Option<f32>,
     /// ADR-016 M2.2: монотонный номер async-relayout задания. Растёт при каждой
     /// постановке off-thread задания (`submit_relayout_job`) **и** при каждом
     /// синхронном `relayout()` — так результат уже поставленного, но ещё не
@@ -847,6 +904,13 @@ pub(crate) struct Lumen {
     /// trigger an asynchronous relayout after an off-thread rAF turn mutated the
     /// DOM, instead of a synchronous read blocked behind that turn.
     pub(crate) dom_dirty_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// THREAD-9 срез 5: UI-сторонний клон флага «есть слушатель `navigate`»
+    /// (только под движковым потоком; `None` — слушатель считается есть).
+    pub(crate) navigate_listeners_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-935 S80: UI-сторонний сброс набора затронутых узлов (`js_ctx` под
+    /// движковым потоком пуст). `None` — нет JS или нет движкового потока.
+    /// Срез 81: читатель с собственной отметкой эпохи, трекер не сбрасывает.
+    pub(crate) dom_touched_drain: Option<crate::persistent_js::DomTouchedDrain>,
     /// BUG-935 S43: UI-side lock-free clone of the JS runtime's "page has
     /// read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path" flag. `None` before the first push (or a
@@ -1018,6 +1082,11 @@ pub(crate) struct Lumen {
     /// поток — [`Lumen::dispatch_pending_frame_loads`] опустошает эту очередь
     /// на СЛЕДУЮЩЕМ тике `about_to_wait`, не в момент скана.
     pub(crate) pending_frame_load_dispatch: Vec<crate::lumen::frame_dynamic::PendingFrameLoad>,
+    /// BUG-935 срез 87: последний [`Lumen::poll_dynamic_frames`] не смог взять
+    /// документ (его держал движковый поток) — скан надо повторить на ближайшем
+    /// проходе `pump_raf_engine_thread`, иначе вставленный скриптом `<iframe>`
+    /// остался бы без загрузки до следующей мутации DOM.
+    pub(crate) frame_scan_retry: bool,
     /// Shared GIF-video store — same Arc used by JS native bindings (PH3-12).
     ///
     /// The shell owns the Arc; JS bindings hold clones captured at context
@@ -1054,6 +1123,17 @@ pub(crate) struct Lumen {
     /// depends on), so a wait is queued here and re-checked once per frame in
     /// `about_to_wait` until it is satisfied or its deadline passes.
     pub(crate) pending_waits: Vec<PendingWait>,
+    /// `AutomationCommand::Eval` requests queued on the engine thread and not
+    /// yet answered (BUG-1145) — polled in `about_to_wait` like `pending_waits`.
+    pub(crate) pending_evals: Vec<PendingEval>,
+    /// Stable id of the tab the automation client addresses — the one its
+    /// last `Navigate`/`NewTab` loaded (BUG-1199). `None` until the first
+    /// such command: automation then simply follows the active tab.
+    ///
+    /// A page-driven `window.open()` activates the popup and parks this tab
+    /// in `bg_tabs`, where its runtime keeps ticking; without the id, `Eval`
+    /// polled the popup and the test page's harness results were never read.
+    pub(crate) automation_tab: Option<usize>,
     /// Receiver side of the input injection channel (ADR-007 §8C).
     ///
     /// Drained each `about_to_wait`; commands are processed through the same
@@ -1135,6 +1215,11 @@ pub(crate) struct Lumen {
     /// this struct (`scroll_drag`, `panel_resize`, `dnd_state`) already
     /// follows.
     pub(crate) text_drag: Option<super::text_drag_select::TextDragTarget>,
+    /// Mouse-drag selection over ordinary page text in progress — armed by
+    /// [`super::doc_select::Lumen::begin_doc_select`] on a left press, extended
+    /// on `CursorMoved`, disarmed on release (the selection itself stays in
+    /// `Document::selection`). Carries the `user-select: contain` scope.
+    pub(crate) doc_select: Option<super::doc_select::DocSelectDrag>,
     /// `(индекс фрейма, узел ЕГО документа)` под НАЖАТОЙ кнопкой мыши внутри
     /// содержимого фрейма — `:active` под-документа (BUG-480 срез 23).
     ///

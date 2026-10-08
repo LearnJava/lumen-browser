@@ -37,6 +37,11 @@ pub(crate) enum PageSource {
         /// consult (address bar, history, automation, `iframe` navigation —
         /// not covered by this slice).
         upgrade_insecure_requests: bool,
+        /// BUG-1156: final `Referer` of this navigation (initiator URL with the
+        /// referrer policy already applied). `None` for user-initiated
+        /// navigations (address bar, history, automation). Also seeds the new
+        /// document's `document.referrer`.
+        referrer: Option<String>,
     },
     /// `about:blank` — пустой документ без сетевого запроса (HTML spec §7.5).
     /// `url_str()` возвращает "about:blank" для адресной строки и истории.
@@ -70,7 +75,7 @@ impl PageSource {
     /// оставляет `body` невыраженным в каждом из десятка call-site-ов, где
     /// тела заведомо нет (адресная строка, история, вкладки, автоматизация).
     pub(crate) fn url(url: impl Into<String>) -> Self {
-        PageSource::Url { url: url.into(), body: None, upgrade_insecure_requests: false }
+        PageSource::Url { url: url.into(), body: None, upgrade_insecure_requests: false, referrer: None }
     }
 
     /// Set the `Upgrade-Insecure-Requests: 1` request flag (GAP-CSPENF срез
@@ -82,6 +87,15 @@ impl PageSource {
     pub(crate) fn with_uir_header(mut self, flag: bool) -> Self {
         if let PageSource::Url { upgrade_insecure_requests, .. } = &mut self {
             *upgrade_insecure_requests = flag;
+        }
+        self
+    }
+
+    /// BUG-1156: attach the `Referer` (already policy-filtered) of a
+    /// page-initiated navigation — no-op on every non-`Url` variant.
+    pub(crate) fn with_referrer(mut self, value: Option<String>) -> Self {
+        if let PageSource::Url { referrer, .. } = &mut self {
+            *referrer = value;
         }
         self
     }
@@ -205,6 +219,7 @@ impl PageSource {
                 cache_control_no_store: false,
                 csp_header: Vec::new(),
                 referrer_policy_header: None,
+                document_referrer: None,
                 report_to_endpoints: HashMap::new(),
                 sync_xhr_document_policy: None,
                 sync_xhr_permissions_policy: None,
@@ -222,6 +237,7 @@ impl PageSource {
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
                     referrer_policy_header: None,
+                document_referrer: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
@@ -230,7 +246,7 @@ impl PageSource {
                     cert_info: None,
                 })
             }
-            PageSource::Url { url, body, upgrade_insecure_requests } => {
+            PageSource::Url { url, body, upgrade_insecure_requests, referrer } => {
                 use lumen_core::url::Url;
                 use lumen_network::{
                     BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
@@ -250,7 +266,8 @@ impl PageSource {
                 }
                 let client = crate::config::global()
                     .apply_http(builder)
-                    .with_connection_site(&crate::config::connection_site(&lumen_url));
+                    .with_connection_site(&crate::config::connection_site(&lumen_url))
+                    .with_navigation_referrer(referrer.clone());
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
@@ -283,6 +300,7 @@ impl PageSource {
                     cache_control_no_store: cache_control_no_store(&resp_headers),
                     csp_header: content_security_policy_header(&resp_headers),
                     referrer_policy_header: referrer_policy_header(&resp_headers),
+                    document_referrer: referrer.clone(),
                     report_to_endpoints: report_to_endpoints(&resp_headers),
                     sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
                     sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
@@ -301,6 +319,7 @@ impl PageSource {
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
                     referrer_policy_header: None,
+                document_referrer: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
@@ -319,6 +338,7 @@ impl PageSource {
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
                     referrer_policy_header: None,
+                document_referrer: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
@@ -349,7 +369,7 @@ impl PageSource {
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
         on_chunk: lumen_network::PageChunkSink<'_>,
     ) -> Result<RawPage, Box<dyn Error>> {
-        let PageSource::Url { url, body, upgrade_insecure_requests } = self else {
+        let PageSource::Url { url, body, upgrade_insecure_requests, referrer } = self else {
             return self.load_bytes(sink, cookie_jar);
         };
         use lumen_core::url::Url;
@@ -371,7 +391,8 @@ impl PageSource {
         }
         let client = crate::config::global()
             .apply_http(builder)
-            .with_connection_site(&crate::config::connection_site(&lumen_url));
+            .with_connection_site(&crate::config::connection_site(&lumen_url))
+            .with_navigation_referrer(referrer.clone());
         let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links, cert_info } =
             client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
@@ -397,6 +418,7 @@ impl PageSource {
             cache_control_no_store: cache_control_no_store(&resp_headers),
             csp_header: content_security_policy_header(&resp_headers),
             referrer_policy_header: referrer_policy_header(&resp_headers),
+                    document_referrer: referrer.clone(),
             report_to_endpoints: report_to_endpoints(&resp_headers),
             sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
             sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
@@ -428,7 +450,7 @@ impl PageSource {
         // `app/user_event.rs` where both are threaded from `self`.
         let push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>> = None;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -459,6 +481,8 @@ pub(crate) struct RawPage {
     /// stamped onto the parsed [`Document`] next to `csp_header` for the same
     /// reason — `None` for every non-network source, same as `csp_header`.
     pub(crate) referrer_policy_header: Option<String>,
+    /// BUG-1156: the `Referer` this navigation sent — becomes `document.referrer`.
+    pub(crate) document_referrer: Option<String>,
     /// `{group name -> endpoint URLs}` resolved from the response's
     /// `Report-To` header(s) (GAP-CSPENF срез 59, see `report_to_endpoints`).
     /// Stamped onto the parsed [`Document`] next to `csp_header` — a CSP
@@ -768,6 +792,13 @@ pub(crate) fn page_source_for_automation_url(url: &str) -> PageSource {
 /// caller surfaces a clear diagnostic instead of loading the file. `file→file`
 /// (a local page opening another local page) and non-web openers are allowed.
 pub(crate) fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<PageSource, String> {
+    // BUG-1268: `about:blank` is not a network resource — `PageSource::url`
+    // sent it to the fetcher, which failed it as `unsupported scheme: about`
+    // and left that error on the tab (`window.open()` / `win.location =
+    // 'about:blank'`).
+    if url == "about:blank" {
+        return Ok(PageSource::AboutBlank);
+    }
     if !url.starts_with("file://") {
         return Ok(PageSource::url(url));
     }
@@ -786,6 +817,13 @@ pub(crate) fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn js_navigation_to_about_blank_is_not_a_network_fetch() {
+        let opener = PageSource::url("http://localhost/");
+        assert!(matches!(resolve_js_navigation("about:blank", &opener), Ok(PageSource::AboutBlank)));
+        assert!(matches!(resolve_js_navigation("http://x/", &opener), Ok(PageSource::Url { .. })));
+    }
 
     #[test]
     fn javascript_url_code_extracts_source() {

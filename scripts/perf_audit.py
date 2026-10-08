@@ -464,7 +464,11 @@ class Mcp:
         resp = json.loads(line)
         if resp.get("error") is not None:
             raise RuntimeError(f"{method}: {resp['error']}")
-        return resp.get("result") or {}
+        result = resp.get("result") or {}
+        # MCP: сбой инструмента приходит как isError-результат, не JSON-RPC-ошибка (BUG-1246)
+        if result.get("isError"):
+            raise RuntimeError(f"{method}: {result.get("content")}")
+        return result
 
     def tool(self, name: str, arguments: dict) -> dict:
         return self.call("tools/call", {"name": name, "arguments": arguments})
@@ -1474,12 +1478,21 @@ def main() -> None:
     ap.add_argument("--dwell", type=float, default=3.0, help="live: секунд показывать каждый сайт (default 3)")
     ap.add_argument("--scroll-ticks", type=int, default=4, help="live: щелчков скролла вниз/вверх (default 4)")
     ap.add_argument("--env", action="append", default=[], help="KEY=VAL в окружение lumen (повторяемый), напр. LUMEN_MEM_REPORT=1")
+    ap.add_argument("--proxy", help="live: HTTP-прокси, через который идёт lumen (напр. scripts/split_proxy.py мимо VPN). "
+                    "Прокси берётся из `proxy = URL` в data/fingerprint.toml рядом с lumen.exe: флаг CLI `--proxy` "
+                    "движок сейчас игнорирует (OnceLock профиля занят раньше разбора флага). Скрипт проверяет файл "
+                    "и пишет URL в results.json")
     args = ap.parse_args()
     for kv in args.env:
         k, _, v = kv.partition("=")
         EXTRA_ENV[k] = v
 
     exe = find_exe(args.exe)
+    if args.proxy:
+        fp = exe.parent / "data" / "fingerprint.toml"
+        txt = fp.read_text(encoding="utf-8") if fp.exists() else ""
+        if not re.search(r"(?m)^\s*proxy\s*=\s*\"?" + re.escape(args.proxy) + r"\"?\s*$", txt):
+            sys.exit(f"--proxy {args.proxy}: в {fp} нет строки `proxy = {args.proxy}` — lumen пойдёт мимо прокси")
     sites = load_corpus(Path(args.corpus), args.only)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = OUT_ROOT / stamp
@@ -1499,7 +1512,7 @@ def main() -> None:
         (out_dir / "results.json").write_text(
             json.dumps(
                 {"date": stamp, "commit": commit, "exe": str(exe), "mode": mode,
-                 "timeout_s": args.timeout, "results": results},
+                 "timeout_s": args.timeout, "proxy": args.proxy, "results": results},
                 ensure_ascii=False,
                 indent=1,
             ),

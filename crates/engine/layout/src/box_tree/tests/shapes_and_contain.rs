@@ -96,6 +96,7 @@ fn float_context_path_left_float() {
     let mut fc = super::super::FloatContext::new();
     fc.shape_polygons.push(super::super::ShapePolygon {
         top_y: 0.0, bottom_y: 100.0, is_left: true, points: pts,
+        margin: 0.0, bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
 }
@@ -122,6 +123,7 @@ fn float_context_polygon_left_float() {
     fc.shape_polygons.push(super::super::ShapePolygon {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
         points: vec![(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)],
+        margin: 0.0, bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
     // Outside float range: falls back to default.
@@ -156,7 +158,7 @@ fn float_context_ellipse_left_float() {
     let mut fc = super::super::FloatContext::new();
     fc.shape_ellipses.push(super::super::ShapeEllipse {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
-        cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0, bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
     assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
@@ -169,7 +171,7 @@ fn float_context_ellipse_right_float() {
     let mut fc = super::super::FloatContext::new();
     fc.shape_ellipses.push(super::super::ShapeEllipse {
         top_y: 0.0, bottom_y: 100.0, is_left: false,
-        cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0, bound_x: f32::NEG_INFINITY,
     });
     assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
 }
@@ -224,6 +226,8 @@ fn float_context_inset_left_float_sharp() {
     fc.shape_insets.push(super::super::ShapeInset {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
         left_x: 10.0, right_x: 90.0, radius: 0.0,
+        corner_top: 0.0, corner_bottom: 100.0,
+        bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(0.0, 0.0) - 90.0).abs() < 0.01);
     assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
@@ -238,6 +242,8 @@ fn float_context_inset_right_float_sharp() {
     fc.shape_insets.push(super::super::ShapeInset {
         top_y: 0.0, bottom_y: 100.0, is_left: false,
         left_x: 210.0, right_x: 290.0, radius: 0.0,
+        corner_top: 0.0, corner_bottom: 100.0,
+        bound_x: f32::NEG_INFINITY,
     });
     assert!((fc.right_edge_at(50.0, 400.0) - 210.0).abs() < 0.01);
 }
@@ -252,6 +258,8 @@ fn float_context_inset_rounded_corner() {
     fc.shape_insets.push(super::super::ShapeInset {
         top_y: 0.0, bottom_y: 100.0, is_left: true,
         left_x: 0.0, right_x: 100.0, radius: 20.0,
+        corner_top: 0.0, corner_bottom: 100.0,
+        bound_x: f32::INFINITY,
     });
     assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
     assert!((fc.left_edge_at(0.0, 0.0) - 80.0).abs() < 0.01);
@@ -271,6 +279,108 @@ fn inset_corner_inward_helper() {
     assert!((super::super::inset_corner_inward(0.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
     // Exactly at the bottom edge → full radius recession.
     assert!((super::super::inset_corner_inward(100.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
+}
+
+// ── CSS Shapes L1 §6.3 — shape-margin ─────────────────────────────────────
+
+use super::super::{FloatContext, FloatShapeGeom, register_shape_outside};
+
+/// A 100x100 left float at the origin: margin box == border box.
+fn left_geom() -> FloatShapeGeom {
+    FloatShapeGeom {
+        is_left: true, child_y: 0.0, top_y: 0.0, bot_y: 100.0,
+        box_left: 0.0, box_right: 100.0, center_x: 50.0, center_y: 50.0,
+    }
+}
+
+/// The same float on the right edge of a 400px container (x in [300, 400]).
+fn right_geom() -> FloatShapeGeom {
+    FloatShapeGeom {
+        is_left: false, child_y: 0.0, top_y: 0.0, bot_y: 100.0,
+        box_left: 300.0, box_right: 400.0, center_x: 350.0, center_y: 50.0,
+    }
+}
+
+#[test]
+fn shape_margin_zero_keeps_bare_polygon() {
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 0.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_grows_polygon_along_normal() {
+    // Hypotenuse x + y = 100: pushed out by 10px along its normal (1,1)/sqrt2
+    // it becomes x + y = 100 + 10*sqrt2, so at y = 50 the edge is at
+    // 50 + 14.142 = 64.142 (still inside the 100px margin box).
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 10.0);
+    let want = 50.0 + 10.0 * 2.0_f32.sqrt();
+    assert!((fc.left_edge_at(50.0, 0.0) - want).abs() < 0.05, "{}", fc.left_edge_at(50.0, 0.0));
+}
+
+#[test]
+fn shape_margin_never_exceeds_margin_box() {
+    // §6.3 note: the grown shape does not extend past the float's margin box.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 10.0);
+    // At y = 5 the bare edge is 95, grown ~109 -> clamped to the box edge 100.
+    assert!((fc.left_edge_at(5.0, 0.0) - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_vertex_disc_extends_past_polygon_top() {
+    // Vertex (50,20) of a triangle: a scanline 5px above it sits inside the
+    // 10px vertex disc, so the wrap edge exists there (bare polygon: none).
+    let pts = [(50.0_f32, 20.0), (90.0, 80.0), (10.0, 80.0)];
+    assert!(super::super::polygon_edge_x_at_y_margin(&pts, 15.0, 0.0, true).is_none());
+    let x = super::super::polygon_edge_x_at_y_margin(&pts, 15.0, 10.0, true).expect("disc");
+    assert!((x - (50.0 + (100.0_f32 - 25.0).sqrt())).abs() < 0.05, "{x}");
+}
+
+#[test]
+fn shape_margin_circle_becomes_larger_circle() {
+    // circle(30px) centred (50,50) + 10px margin == radius 40 at y = 50 -> 90.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "circle(30px)", &left_geom(), 10.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+    // Without margin it stays 80.
+    let mut fc0 = FloatContext::new();
+    register_shape_outside(&mut fc0, "circle(30px)", &left_geom(), 0.0);
+    assert!((fc0.left_edge_at(50.0, 0.0) - 80.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_ellipse_clamped_to_margin_box() {
+    // ellipse(40 40 at 50 50) + 20px margin = radius 60 -> 110, clamped to 100.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "ellipse(40px 40px at 50px 50px)", &left_geom(), 20.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_inset_grows_rect_and_rounds_corners() {
+    // inset(20px) on 100x100 = rect [20,80]^2; +10px margin = [10,90]^2 with
+    // a 10px corner radius. Flat band at y = 50 -> right edge 90; at the very
+    // top of the grown rect (y = 10) the corner recedes by the full radius.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "inset(20px)", &left_geom(), 10.0);
+    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+    assert!((fc.left_edge_at(10.0, 0.0) - 80.0).abs() < 0.01);
+    // Above the grown rect: no shape boundary (default).
+    assert!((fc.left_edge_at(5.0, 0.0) - 0.0).abs() < 0.01);
+}
+
+#[test]
+fn shape_margin_right_float_mirrors() {
+    // Right float, circle(30px) at (350,50) + 10px -> left edge 350 - 40 = 310.
+    let mut fc = FloatContext::new();
+    register_shape_outside(&mut fc, "circle(30px)", &right_geom(), 10.0);
+    assert!((fc.right_edge_at(50.0, 400.0) - 310.0).abs() < 0.01);
+    // Large margin clamps at the margin box's left edge (300).
+    let mut fc2 = FloatContext::new();
+    register_shape_outside(&mut fc2, "circle(30px)", &right_geom(), 40.0);
+    assert!((fc2.right_edge_at(50.0, 400.0) - 300.0).abs() < 0.01);
 }
 
 #[test]
@@ -327,6 +437,41 @@ fn content_visibility_auto_below_viewport_skips_children() {
     assert_eq!(skipped.len(), 1, "exactly one node recorded as skipped");
     assert_eq!(skipped[0].0, cv.node);
     assert!(skipped[0].1 >= 2000.0, "recorded top is the collapsed flow position");
+}
+
+#[test]
+fn content_visibility_auto_above_viewport_skips_children_when_height_is_known() {
+    // Scrolled to 5000: the auto box spans 3000..3100 (height from
+    // `contain-intrinsic-height`), well above 5000 − 300 * 0.5.
+    crate::content_visibility::set_cv_scroll(0.0, 5000.0);
+    crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    let html = r#"<div class="spacer"></div><div class="cv"><span>gone</span></div><div class="spacer"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        ".spacer { height: 3000px; }          .cv { content-visibility: auto; contain-intrinsic-height: 100px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+    let cv = find_cv_auto(&root).expect("auto box present in tree");
+    assert!(cv.children.is_empty(), "auto subtree above the viewport must be skipped");
+    assert_eq!(cv.rect.height, 100.0, "placeholder height keeps the page height stable");
+    crate::content_visibility::set_cv_scroll(0.0, 0.0);
+}
+
+#[test]
+fn content_visibility_auto_above_viewport_without_known_height_is_laid_out() {
+    // No height / placeholder: the bottom cannot be known before layout, so
+    // the box is not skipped from above.
+    crate::content_visibility::set_cv_scroll(0.0, 5000.0);
+    crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    let html = r#"<div class="spacer"></div><div class="cv"><span>kept</span></div><div class="spacer"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        ".spacer { height: 3000px; } .cv { content-visibility: auto; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+    let cv = find_cv_auto(&root).expect("auto box present in tree");
+    assert!(!cv.children.is_empty(), "unknown height ⇒ no above-viewport skip");
+    crate::content_visibility::set_cv_scroll(0.0, 0.0);
 }
 
 // ── contain-intrinsic-size under size containment (CSS Box Sizing L4 §5) ──
@@ -560,10 +705,10 @@ fn ifc1_text_before_inline_block_stays_on_one_line() {
         48.0,
         "trailing text follows the inline-block"
     );
-    // One line box: strut ascent 12.8 vs the 16px box's bottom margin edge →
-    // above = 16, below = max(strut 3.2, run 4.8) = 4.8.
+    // One line box: above = 16 (the 16px box's bottom margin edge), below =
+    // max(strut 5 — Blink rounding, BUG-782 —, run 4.8) = 5.
     assert!(
-        (row.rect.height - 20.8).abs() < 0.01,
+        (row.rect.height - 21.0).abs() < 0.01,
         "one line box expected, got h={}",
         row.rect.height
     );
@@ -616,7 +761,7 @@ fn ifc1_inline_block_with_text_shares_the_outer_baseline() {
     assert_eq!(ib.rect.y, runs[0].rect.y, "inner and outer text share a baseline");
     assert_eq!(runs[0].rect.y, runs[1].rect.y);
     assert!(
-        (row.rect.height - 19.2).abs() < 0.01,
+        (row.rect.height - 19.4).abs() < 0.01,
         "one line-height tall, got h={}",
         row.rect.height
     );
@@ -692,10 +837,10 @@ fn ifc2_image_shares_the_line_with_the_text_around_it() {
     assert_eq!(kids[0].rect.x - row.rect.x, 0.0);
     assert_eq!(kids[1].rect.x - row.rect.x, 24.0, "image follows the text");
     assert_eq!(kids[2].rect.x - row.rect.x, 48.0, "text follows the image");
-    // above = 16 (the image's bottom margin edge), below = max(strut 3.2,
-    // run 4.8) = 4.8.
+    // above = 16 (the image's bottom margin edge), below = max(strut 5 —
+    // Blink rounding, BUG-782 —, run 4.8) = 5.
     assert!(
-        (row.rect.height - 20.8).abs() < 0.01,
+        (row.rect.height - 21.0).abs() < 0.01,
         "one line box expected, got h={}",
         row.rect.height
     );
@@ -725,7 +870,7 @@ fn ifc2_image_sits_on_the_baseline_by_its_bottom_margin_edge() {
     assert_eq!(img.rect.y - row.rect.y, 0.0, "the tallest box opens the line");
     assert_eq!(run.rect.y - row.rect.y, 6.0, "text drops onto the shared baseline");
     assert!(
-        (row.rect.height - 24.8).abs() < 0.01,
+        (row.rect.height - 25.0).abs() < 0.01,
         "margin counts towards the line box, got h={}",
         row.rect.height
     );
@@ -930,3 +1075,89 @@ fn content_visibility_auto_skipped_keeps_explicit_height() {
     let _ = crate::content_visibility::take_cv_skipped();
 }
 
+
+// ── CSS Shapes L1 §3 — per-line wrapping of inline content around a shape ──
+
+/// Left edge (x relative to the container) and right extent of every line of
+/// the first `InlineRun` in the tree, as `(top_y, x0, x1)`.
+fn shaped_lines(css: &str) -> Vec<(f32, f32, f32)> {
+    let words = "aa ".repeat(60);
+    let html = format!(r#"<div><div class="f"></div><p>{words}</p></div>"#);
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Ifc8);
+    fn find(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+        if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find)
+    }
+    let run = find(&root).expect("InlineRun");
+    let super::super::BoxKind::InlineRun { lines, .. } = &run.kind else { unreachable!() };
+    let lh = run.used_line_height;
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let x0 = l.first().map_or(f32::NAN, |f| f.x);
+            let x1 = l.last().map_or(f32::NAN, |f| f.x + f.width);
+            (run.rect.y + i as f32 * lh, run.rect.x + x0, run.rect.x + x1)
+        })
+        .collect()
+}
+
+#[test]
+fn inline_text_follows_circle_contour_per_line() {
+    // 200×200 circle float (r = 100) in a 400px column: the band beside it
+    // widens with every line instead of staying at the rectangle's 200px.
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 200px; height: 200px; shape-outside: circle(100px); }",
+    );
+    let starts: Vec<f32> = lines.iter().filter(|l| l.0 < 200.0).map(|l| l.1).collect();
+    assert!(starts.len() >= 4, "text must run beside the float, got {starts:?}");
+    // A circle is widest at its equator and narrow at the poles: lines near
+    // the top/bottom start left of the equator-adjacent ones.
+    let mid = starts.len() / 2;
+    let widest = starts.iter().cloned().fold(f32::MIN, f32::max);
+    assert!(widest <= 8.0 + 200.0 + 0.5, "never past the margin box: {starts:?}");
+    assert!(starts[0] < starts[mid] - 1.0, "first line hugs the top of the circle: {starts:?}");
+    assert!(
+        starts[starts.len() - 1] < widest - 1.0,
+        "lines below the equator must recede again: {starts:?}"
+    );
+    // Single-width approximation would put every line at x = 208.
+    assert!(starts.iter().any(|&x| x < 207.0), "no line follows the contour: {starts:?}");
+}
+
+#[test]
+fn inline_text_beside_plain_float_keeps_rectangular_band() {
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 200px; height: 80px; }",
+    );
+    for l in lines.iter().filter(|l| l.0 < 80.0) {
+        assert!((l.1 - 208.0).abs() < 0.5, "plain float: line starts at the margin edge, got {l:?}");
+    }
+}
+
+#[test]
+fn inline_text_below_shape_widens_to_full_width() {
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 100px; height: 40px; shape-outside: circle(20px); }",
+    );
+    let last = lines.last().expect("lines");
+    assert!((last.1 - 8.0).abs() < 0.5, "line below the float starts at the left edge: {last:?}");
+}
+
+#[test]
+fn inline_text_follows_right_float_contour() {
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: right; width: 200px; height: 200px; shape-outside: circle(100px); }",
+    );
+    let ends: Vec<f32> = lines.iter().filter(|l| l.0 < 200.0).map(|l| l.2).collect();
+    assert!(ends.len() >= 4, "{ends:?}");
+    assert!(ends.iter().all(|&e| e <= 408.0 + 0.5), "stays inside the column: {ends:?}");
+    assert!(
+        ends.iter().cloned().fold(f32::MIN, f32::max) > ends.iter().cloned().fold(f32::MAX, f32::min) + 1.0,
+        "right edge must vary with the contour: {ends:?}"
+    );
+}

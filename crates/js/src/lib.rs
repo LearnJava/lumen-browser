@@ -12,7 +12,6 @@ pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
 pub mod import_attributes;
-pub mod import_meta;
 pub mod paint_worklet;
 pub mod gamepad;
 pub mod highlight_api;
@@ -38,6 +37,7 @@ pub mod documentpip_bindings;
 pub mod eye_dropper;
 pub mod dom;
 pub(crate) mod js_url;
+pub(crate) mod origin;
 pub mod filesystem_access;
 pub mod geolocation;
 pub mod heap_snapshot;
@@ -176,6 +176,7 @@ pub use credentials::set_credential_provider;
 pub use media_capture::set_audio_capture_provider;
 pub use screen_capture::set_screen_capture_provider;
 pub use audio_element::set_audio_playback_provider;
+pub use origin::set_public_suffix_list;
 pub use wake_lock::set_wake_lock_provider;
 pub use video_gif_store::{set_video_gif_store, VideoGifStore};
 pub use text_track_store::{set_text_track_store, CueData, TextTrackData, TextTrackStore};
@@ -188,7 +189,7 @@ pub use dom::{
 /// `lumen_layout::style::restyle_root_set_for_node_change`. Only compiled
 /// under `v8-backend` — see `v8_runtime::DomTouched`'s doc comment.
 #[cfg(feature = "v8-backend")]
-pub use v8_runtime::DomTouched;
+pub use v8_runtime::{attr_narrowing_enabled, child_list_narrowing_enabled, fresh_node_roots_enabled, DomChanges, DomTouched};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use surface_api::{global_privacy_control_enabled, set_global_privacy_control};

@@ -9,6 +9,190 @@
 //! перед `mod shapes_floats;`) без правок тел.
 
 use super::*;
+use super::grid::{resolve_grid_axis, GridAxis};
+
+/// max-content advance of a text run — all segments on one line (no wrapping).
+fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasurer>) -> f32 {
+    measurer.map_or(0.0, |m| {
+        segments.iter().map(|seg| {
+            let ls = seg.style.letter_spacing;
+            let fams = &seg.style.font_family;
+            let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
+            measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
+        }).sum()
+    })
+}
+
+/// Writing Modes L3 §7.3.1 (FLEX-VWM-4/5): the inline-axis room (physical height)
+/// of an orthogonal block `child` in a parent that gives it no definite height —
+/// it shrinks to its content (bounded by the viewport) instead of filling the
+/// initial containing block. `None` — `child` is not such a box (horizontal,
+/// authored `height`, not a plain block, or a flex container, which sizes
+/// itself from its items). `eff_w` is the base of the child's percentage margins.
+pub(crate) fn orthogonal_fit_content_height(
+    child: &LayoutBox,
+    eff_w: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
+    if matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || child.style.height.is_some()
+        || !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || matches!(child.style.display, Display::Flex | Display::InlineFlex)
+    {
+        return None;
+    }
+    // `max_content_outer_height` leaves out the box's own inline-axis margins,
+    // which `build_vertical_init` takes off the room it is given.
+    let cem = child.style.font_size;
+    let m_v = child.style.margin_top.resolve_or_zero(cem, eff_w, viewport)
+        + child.style.margin_bottom.resolve_or_zero(cem, eff_w, viewport);
+    Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport) + m_v))
+}
+
+/// max-content border-box **height** of a box in a vertical writing mode — its
+/// inline size (CSS Writing Modes L3 §3), the extent text advances along. The
+/// mirror of [`max_content_outer_width`]: an explicit `height` wins, a text run
+/// is its unwrapped advance, a block is its longest in-flow child. A child in
+/// the orthogonal (horizontal) mode has no inline size along y that is known
+/// without laying it out, so only its explicit `height` counts.
+pub(crate) fn max_content_outer_height(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pt = s.padding_top.resolve_or_zero(em, 0.0, viewport);
+    let pb = s.padding_bottom.resolve_or_zero(em, 0.0, viewport);
+    let frame = pt + pb + s.border_top_width + s.border_bottom_width;
+    if let Some(h_len) = &s.height
+        && !h_len.is_intrinsic()
+        && let Some(h) = h_len.resolve(em, None, viewport)
+    {
+        return match s.box_sizing {
+            BoxSizing::ContentBox => h + frame,
+            BoxSizing::BorderBox => h.max(frame),
+        }
+        .max(0.0);
+    }
+    let child_outer_height = |c: &LayoutBox| {
+        let cem = c.style.font_size;
+        let mt = c.style.margin_top.resolve_or_zero(cem, 0.0, viewport);
+        let mb = c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
+        let ch = if matches!(c.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+            && !matches!(c.kind, BoxKind::InlineRun { .. })
+        {
+            c.style
+                .height
+                .as_ref()
+                .and_then(|h| h.resolve(cem, None, viewport))
+                .unwrap_or(0.0)
+        } else {
+            max_content_outer_height(c, measurer, viewport)
+        };
+        ch + mt + mb
+    };
+    let content = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
+        // BUG-1263: a row of atomic inlines in a vertical mode is one unwrapped
+        // column — its inline size is the **sum** of the participants.
+        BoxKind::InlineBlockRow if is_vertical_mode(b) => b
+            .children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .map(|c| match c.kind {
+                BoxKind::InlineSpace => {
+                    measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size))
+                }
+                _ => child_outer_height(c),
+            })
+            .sum(),
+        // FLEX-VWM-5: a flex row in a vertical mode runs along y — its inline size is the
+        // **sum** of the items' contributions plus the gaps (CSS Flexbox L1 §9.9.1).
+        _ if is_vertical_mode(b)
+            && matches!(b.style.display, Display::Flex | Display::InlineFlex)
+            && super::flex::flex_axes(&b.style).main_vertical =>
+        {
+            let items: Vec<f32> = b
+                .children
+                .iter()
+                .filter(|c| contributes_to_intrinsic_width(c))
+                .map(child_outer_height)
+                .collect();
+            let gap = match s.flex_direction {
+                FlexDirection::Column | FlexDirection::ColumnReverse => s.row_gap.resolve(em, None, viewport),
+                _ => s.column_gap.resolve(em, None, viewport),
+            }
+            .unwrap_or(0.0)
+            .max(0.0);
+            items.iter().sum::<f32>() + gap * items.len().saturating_sub(1) as f32
+        }
+        _ => {
+            let longest = || {
+                b.children
+                    .iter()
+                    .filter(|c| contributes_to_intrinsic_width(c))
+                    .map(child_outer_height)
+                    .fold(0.0_f32, f32::max)
+            };
+            // GRID-VWM: столбцы вертикальной сетки идут по высоте — её inline-размер это
+            // сумма столбцов с промежутками, а не самый длинный элемент.
+            if is_vertical_mode(b) && is_grid_container(b) {
+                grid_col_intrinsic_sum(b, viewport, true, &|c| max_content_outer_height(c, measurer, viewport))
+                    .unwrap_or_else(longest)
+            } else {
+                longest()
+            }
+        }
+    };
+    let outer = content + frame;
+    // `max-height`/`min-height` of a vertical box bound its inline size.
+    let bound = |len: &Option<Length>| {
+        len.as_ref().filter(|l| !l.is_intrinsic()).and_then(|l| l.resolve(em, None, viewport)).map(|h| match s.box_sizing {
+            BoxSizing::ContentBox => h + frame,
+            BoxSizing::BorderBox => h.max(frame),
+        })
+    };
+    let outer = if is_vertical_mode(b) { outer.min(bound(&s.max_height).unwrap_or(f32::INFINITY)) } else { outer };
+    let outer = if is_vertical_mode(b) { outer.max(bound(&s.min_height).unwrap_or(0.0)) } else { outer };
+    outer.max(0.0)
+}
+
+/// A block container in a vertical `writing-mode` stacks its children along the
+/// physical x axis (CSS Writing Modes L3 §3), so its intrinsic *width* — the
+/// block size — is the **sum** of its children's, not the widest. A text run
+/// contributes its line box (one column per line; intrinsic sizing assumes a
+/// single line, so `used_line_height`).
+fn vertical_block_extent(
+    b: &LayoutBox,
+    viewport: Size,
+    child_outer_width: &dyn Fn(&LayoutBox) -> f32,
+) -> f32 {
+    b.children
+        .iter()
+        .filter(|c| contributes_to_intrinsic_width(c))
+        .map(|c| {
+            let cem = c.style.font_size;
+            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+            let w = match c.kind {
+                BoxKind::InlineRun { .. } => c.used_line_height,
+                _ => child_outer_width(c),
+            };
+            w + ml + mr
+        })
+        .sum()
+}
+
+fn is_vertical_mode(b: &LayoutBox) -> bool {
+    !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+}
+
+fn is_vertical_block(b: &LayoutBox) -> bool {
+    !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+}
 
 /// CSS Intrinsic Sizing L3 §4.1 / CSS 2.1 §10.3.7 — does `c` contribute to its
 /// parent's intrinsic (max-content / min-content / shrink-to-fit) width?
@@ -44,6 +228,20 @@ fn is_grid_container(b: &LayoutBox) -> bool {
     matches!(b.style.display, Display::Grid | Display::InlineGrid)
 }
 
+/// Does an item's column placement stay inside the explicit columns of `axis`
+/// (so it cannot create an implicit column)? Lines are resolved by the very
+/// routine placement uses (`resolve_grid_axis`), so numbers, `span`, line names
+/// and `grid-area` names all agree with what `lay_out_grid` will do.
+fn column_placement_in_explicit_grid(s: &ComputedStyle, axis: &GridAxis) -> bool {
+    let (start, end) = resolve_grid_axis(&s.grid_column_start, &s.grid_column_end, axis);
+    if start == 0 {
+        // Auto position: `end` carries the span (0 — one column).
+        end <= axis.n_tracks
+    } else {
+        end <= axis.last_line()
+    }
+}
+
 /// CSS Grid L1 §11.5 — intrinsic width contribution of a grid container:
 /// the sum of its columns' intrinsic widths plus `column-gap`, not the widest
 /// child (BUG-740).
@@ -56,20 +254,70 @@ fn is_grid_container(b: &LayoutBox) -> bool {
 /// column other than the round-robin one assumed here, or make columns
 /// overlap). `None` tells the caller to fall back to the pre-existing
 /// "widest child" rule instead of reporting a confidently wrong number.
-fn grid_col_intrinsic_sum(
+///
+/// `vertical` — сетка в вертикальном `writing-mode` (GRID-VWM): столбцы идут по
+/// физической высоте, поэтому поля элемента по inline-оси — верхнее и нижнее.
+pub(super) fn grid_col_intrinsic_sum(
     b: &LayoutBox,
     viewport: Size,
+    vertical: bool,
     per_item: &dyn Fn(&LayoutBox) -> f32,
 ) -> Option<f32> {
     let s = &b.style;
     if s.grid_template_col_auto_repeat.is_some() {
         return None;
     }
-    if matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense) {
+    // `grid-auto-flow: column` — items fill columns, not rows: the round-robin rule below
+    // does not apply and only the placement pass (`grid_col_sum_by_tracks`) can size it.
+    let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+    if column_flow && vertical {
         return None;
     }
     let template = &s.grid_template_columns;
     let n_cols = template.len();
+    // A container with no items (empty, or only out-of-flow children) is as
+    // wide as its fixed-length columns plus the gaps between them (Grid L1
+    // §7.1); any other track type has nothing to size it, so the caller's
+    // fallback applies.
+    let all_fixed = template.iter().all(|t| matches!(t, GridTrackSize::Length(_)));
+    // `grid-template-areas` wider than the template adds auto columns that this
+    // fixed-length sum knows nothing about.
+    let areas_cols = s.grid_template_areas.first().map_or(0, Vec::len);
+    let col_axis = GridAxis {
+        n_tracks: n_cols as u32,
+        names: &s.grid_template_col_line_names,
+        areas: &s.grid_template_areas,
+        is_col: true,
+        clamp: false,
+    };
+    let items_in_grid = areas_cols <= n_cols
+        && b.children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .all(|c| column_placement_in_explicit_grid(&c.style, &col_axis));
+    // Fixed-length columns do not depend on their items at all, so the same sum
+    // holds for a container whose items are placed explicitly, as long as no
+    // item reaches past the explicit grid (that would add an implicit column).
+    if n_cols >= 1 && all_fixed && items_in_grid {
+        let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+        let mut sum = gap * (n_cols - 1) as f32;
+        for t in template {
+            let GridTrackSize::Length(l) = t else { return None };
+            sum += l.resolve(s.font_size, None, viewport)?.max(0.0);
+        }
+        return Some(sum);
+    }
+    if !vertical
+        && let Some(sum) = grid_col_sum_by_tracks(b, viewport, &col_axis, per_item)
+    {
+        return Some(sum);
+    }
+    if column_flow {
+        return None;
+    }
+    if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
+        return None;
+    }
     if n_cols <= 1 || matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
         return None;
     }
@@ -98,12 +346,93 @@ fn grid_col_intrinsic_sum(
     for (k, c) in items.iter().enumerate() {
         let col = k % n_cols;
         let cem = c.style.font_size;
-        let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-        let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+        let (ml, mr) = if vertical {
+            (c.style.margin_top.resolve_or_zero(cem, 0.0, viewport), c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport))
+        } else {
+            (c.style.margin_left.resolve_or_zero(cem, 0.0, viewport), c.style.margin_right.resolve_or_zero(cem, 0.0, viewport))
+        };
         col_widths[col] = col_widths[col].max(per_item(c) + ml + mr);
     }
 
     Some(col_widths.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
+}
+
+/// CSS Grid L1 §11.5 / L2 §9 — the column sum of a grid whose items are placed
+/// explicitly or through a subgrid (BUG-1318): the placement and track-sizing
+/// passes `build_grid_init` runs, against an infinite width. `None` when the
+/// grid is not of that kind (every item auto-placed and none a subgrid — the
+/// round-robin rule in `grid_col_intrinsic_sum` covers it), when a track is not
+/// `auto` or a definite length, or when the axis is not plain row flow.
+fn grid_col_sum_by_tracks(
+    b: &LayoutBox,
+    viewport: Size,
+    col_axis: &GridAxis,
+    per_item: &dyn Fn(&LayoutBox) -> f32,
+) -> Option<f32> {
+    use super::grid::{grid_item_indices, place_grid_items};
+    use super::grid_auto_cols as gac;
+    let s = &b.style;
+    let template = &s.grid_template_columns;
+    if matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
+        return None;
+    }
+    let item_idxs = grid_item_indices(&b.children);
+    let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+    // `minmax(auto, <length>)` (BUG-1313): the track is as wide as its items' minimum
+    // contribution when that exceeds the length, which only the track pass knows.
+    let has_bounded_track = template.iter().any(|t| {
+        matches!(t, GridTrackSize::Minmax(min, max)
+            if matches!(**min, GridTrackSize::Auto) && matches!(**max, GridTrackSize::Length(_)))
+    });
+    let needs_tracks = column_flow
+        || has_bounded_track
+        || item_idxs.iter().any(|&i| {
+            let st = &b.children[i].style;
+            gac::is_col_subgrid(&b.children[i])
+                || !matches!(st.grid_column_start, GridLine::Auto)
+                || !matches!(st.grid_column_end, GridLine::Auto)
+        });
+    if !needs_tracks {
+        return None;
+    }
+    let row_axis = GridAxis {
+        n_tracks: s.grid_template_rows.len().max(s.grid_template_areas.len()) as u32,
+        names: &s.grid_template_row_line_names,
+        areas: &s.grid_template_areas,
+        is_col: false,
+        clamp: false,
+    };
+    let n_explicit = template.len().max(1);
+    let placements = place_grid_items(
+        &b.children,
+        &item_idxs,
+        s,
+        n_explicit,
+        s.grid_template_rows.len(),
+        col_axis,
+        &row_axis,
+    );
+    let n_cols = placements
+        .iter()
+        .map(|&(_, ce, _, _)| ce.saturating_sub(1) as usize)
+        .max()
+        .unwrap_or(1)
+        .max(n_explicit);
+    let kinds = gac::classify_col_tracks(template, &s.grid_auto_columns, n_cols, &|l| {
+        l.resolve(s.font_size, None, viewport)
+    })?;
+    let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+    let mut contribs = Vec::new();
+    let measure = |c: &LayoutBox| {
+        let w = per_item(c);
+        (w, w)
+    };
+    gac::collect_col_contributions(
+        &b.children, &item_idxs, &placements, &s.grid_template_col_line_names, n_cols, 0, 0.0, 0.0, viewport,
+        &measure, &mut contribs,
+    );
+    let (_, limit) = gac::base_and_limit(&kinds, &contribs, gap);
+    Some(limit.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
 }
 
 /// CSS Flexbox L1 §9.9 — intrinsic width contribution of a **row-direction**
@@ -197,8 +526,7 @@ pub(crate) fn preferred_inline_block_width(
                 .map(|seg| {
                     let ls = seg.style.letter_spacing;
                     let fams = &seg.style.font_family;
-                    let ts = seg.style.tab_size
-                        * m.char_width_with_families(' ', seg.style.font_size, fams);
+                    let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
                     measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
                 })
                 .sum()
@@ -241,6 +569,23 @@ pub(crate) fn preferred_inline_block_width(
         flex_row_intrinsic_sum(b, viewport, &|c| {
             preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
         })
+    } else if matches!(b.kind, BoxKind::InlineBlockRow) && is_vertical_mode(b) {
+        // BUG-1263: в вертикальном режиме ряд течёт вниз по inline-оси, так что
+        // по ширине (block-оси) он — одна колонка: самый широкий участник.
+        b.children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c) && !matches!(c.kind, BoxKind::InlineSpace))
+            .map(|c| {
+                let cw = match c.kind {
+                    BoxKind::InlineRun { .. } => c.used_line_height,
+                    _ => preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0),
+                };
+                let cem = c.style.font_size;
+                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                cw + ml + mr
+            })
+            .fold(0.0_f32, f32::max)
     } else if matches!(b.kind, BoxKind::InlineBlockRow) {
         let sum: f32 = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
             if matches!(c.kind, BoxKind::InlineSpace) {
@@ -257,7 +602,7 @@ pub(crate) fn preferred_inline_block_width(
         }).sum();
         sum
     } else if is_grid_container(b) {
-        grid_col_intrinsic_sum(b, viewport, &|c| {
+        grid_col_intrinsic_sum(b, viewport, false, &|c| {
             preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
         })
         .unwrap_or_else(block_flow)
@@ -333,18 +678,7 @@ pub(crate) fn max_content_outer_width(
         inflow_max.max(float_sum)
     };
     let content_w = match &b.kind {
-        BoxKind::InlineRun { segments, .. } => {
-            // max-content = all segments on one line (no wrapping).
-            measurer.map_or(0.0, |m| {
-                segments.iter().map(|seg| {
-                    let ls = seg.style.letter_spacing;
-                    let fams = &seg.style.font_family;
-                    let ts = seg.style.tab_size
-                        * m.char_width_with_families(' ', seg.style.font_size, fams);
-                    measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
-                }).sum()
-            })
-        }
+        BoxKind::InlineRun { segments, .. } => text_max_content(segments, measurer),
         BoxKind::InlineBlockRow => {
             b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {
@@ -368,8 +702,11 @@ pub(crate) fn max_content_outer_width(
         // Grid container: max-content is the sum of column max-content widths
         // + gaps (CSS Grid L1 §11.5), not the widest item — see BUG-740.
         _ if is_grid_container(b) => {
-            grid_col_intrinsic_sum(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
+            grid_col_intrinsic_sum(b, viewport, false, &|c| max_content_outer_width(c, measurer, viewport))
                 .unwrap_or_else(block_flow)
+        }
+        _ if is_vertical_block(b) => {
+            vertical_block_extent(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
         }
         _ => block_flow(),
     };
@@ -416,7 +753,7 @@ pub(crate) fn min_content_outer_width(
 /// nothing still has a content size suggestion of 0, and so may be shrunk below
 /// its preferred width. Descendants keep their own explicit widths; only the
 /// box's own preferred size is bypassed.
-fn min_content_outer_width_of_contents(
+pub(crate) fn min_content_outer_width_of_contents(
     b: &LayoutBox,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
@@ -449,7 +786,7 @@ fn min_content_outer_width_of_contents(
                     let ls = seg.style.letter_spacing;
                     let fams = &seg.style.font_family;
                     let fs = seg.style.font_size;
-                    let ts = seg.style.tab_size * m.char_width_with_families(' ', fs, fams);
+                    let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
                     let piece =
                         |t: &str| measure_text_w_families(t, fs, ls, ts, fams, m);
                     let no_wrap = seg.style.white_space.is_nowrap()
@@ -471,7 +808,7 @@ fn min_content_outer_width_of_contents(
                         // extend the previous stretch — deliberately not modelled,
                         // as before).
                         run = 0.0;
-                        for word in seg.text.split_whitespace() {
+                        for word in split_css_whitespace(&seg.text) {
                             best = best.max(piece(word));
                         }
                     }
@@ -505,13 +842,16 @@ fn min_content_outer_width_of_contents(
         // Grid container: columns can't share space, so min-content is the sum
         // of column min-content widths + gaps, not the widest item (BUG-740).
         _ if is_grid_container(b) => {
-            grid_col_intrinsic_sum(b, viewport, &|c| min_content_outer_width(c, measurer, viewport))
+            grid_col_intrinsic_sum(b, viewport, false, &|c| min_content_outer_width(c, measurer, viewport))
                 .unwrap_or_else(|| {
                     b.children.iter()
                         .filter(|c| contributes_to_intrinsic_width(c))
                         .map(|c| min_content_outer_width(c, measurer, viewport))
                         .fold(0.0_f32, f32::max)
                 })
+        }
+        _ if is_vertical_block(b) => {
+            vertical_block_extent(b, viewport, &|c| min_content_outer_width(c, measurer, viewport))
         }
         _ => {
             b.children.iter()
@@ -538,17 +878,34 @@ fn min_content_outer_width_of_contents(
 /// элемент обязан замереть на своём `max-width`/`max-height`, а не забирать
 /// всё свободное место строки. Величина внешняя, потому что гипотетические
 /// главные размеры в `lay_out_flex` тоже внешние.
-pub(crate) fn flex_item_max_main_outer(item: &LayoutBox, cb: f32, viewport: Size, is_column: bool) -> f32 {
+pub(crate) fn flex_item_max_main_outer(
+    item: &LayoutBox,
+    cb: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    is_column: bool,
+) -> f32 {
     let s = &item.style;
     let em = s.font_size;
     let max_len = if is_column { s.max_height.as_ref() } else { s.max_width.as_ref() };
     let Some(max_len) = max_len else {
         return f32::INFINITY;
     };
-    // Внутренние ключевые слова (`max-content` и родня) здесь не ограничивают:
-    // их разрешение требует измерения содержимого, а промах в бо́льшую сторону
-    // безопаснее, чем ложная заморозка элемента.
+    // Внутренние ключевые слова: по главной оси-ширине `min-content`/`max-content`
+    // измеряются по содержимому (граничная рамка — вместе с padding и border);
+    // остальные (`fit-content` и родня), как и высота, здесь не ограничивают —
+    // промах в бо́льшую сторону безопаснее, чем ложная заморозка элемента.
     if max_len.is_intrinsic() {
+        if !is_column && matches!(max_len, Length::MinContent | Length::MaxContent) {
+            let border_box = if matches!(max_len, Length::MinContent) {
+                min_content_outer_width(item, measurer, viewport)
+            } else {
+                max_content_outer_width(item, measurer, viewport)
+            };
+            let m_l = s.margin_left.resolve_or_zero(em, cb, viewport);
+            let m_r = s.margin_right.resolve_or_zero(em, cb, viewport);
+            return (border_box + m_l + m_r).max(0.0);
+        }
         return f32::INFINITY;
     }
     let Some(v) = max_len.resolve(em, Some(cb), viewport) else {
@@ -593,6 +950,19 @@ pub(crate) fn flex_auto_base_main_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
+    flex_auto_base_main_width_from(item, max_content_outer_width(item, measurer, viewport), cb, measurer, viewport)
+}
+
+/// [`flex_auto_base_main_width`] with the content size supplied by the caller
+/// instead of read off the item's max-content width — for an item whose width
+/// only a layout can tell (BUG-1264: columns of vertical text).
+pub(crate) fn flex_auto_base_main_width_from(
+    item: &LayoutBox,
+    content: f32,
+    cb: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
     let s = &item.style;
     let em = s.font_size;
     let pl = s.padding_left.resolve_or_zero(em, cb, viewport);
@@ -602,7 +972,7 @@ pub(crate) fn flex_auto_base_main_width(
         BoxSizing::ContentBox => v + pl + pr + s.border_left_width + s.border_right_width,
         BoxSizing::BorderBox => v,
     };
-    let mut base = max_content_outer_width(item, measurer, viewport);
+    let mut base = content;
     if let Some(max_len) = &s.max_width {
         let max_bb = if max_len.is_intrinsic() {
             Some(max_content_outer_width(item, measurer, viewport))
@@ -672,6 +1042,11 @@ pub(crate) fn flex_item_min_main_width(
                 .resolve(em, Some(cb), viewport)
                 .map_or(0.0, |v| outer_horiz(v.max(0.0)))
         };
+        // CSS Tables L3 §"used min width of table": a table is never narrower than
+        // its min-content width, whatever `min-width` says (FLEX-VWM-4).
+        if matches!(s.display, Display::Table | Display::InlineTable) {
+            return v.max(min_content_outer_width_of_contents(item, measurer, viewport)).max(0.0);
+        }
         return v.max(0.0);
     }
     if s.overflow_x != Overflow::Visible {
@@ -743,7 +1118,7 @@ pub(crate) fn form_control_fit_content_width(
         FormControlKind::Select { selected_text } => {
             let widget_fs = select_widget_font_size(em);
             let label_w = measurer.map_or(0.0, |m| {
-                let tab = s.tab_size * m.char_width_with_families(' ', widget_fs, &s.font_family);
+                let tab = super::inline_wrap::TabStops::of(s, m).unit;
                 measure_text_w_families(
                     selected_text,
                     widget_fs,

@@ -142,7 +142,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
                 return Err(Some(gate_url.to_owned()));
             }
         }
-        let (text, sheet_base, encoding) = fetch_stylesheet_text(
+        let (text, sheet_base, encoding) = fetch_stylesheet_for_cascade(
             href,
             base,
             sink,
@@ -309,6 +309,36 @@ fn fetch_stylesheet_text(
     }
 }
 
+/// [`fetch_stylesheet_text`] для каскада: относительные `url()` листа
+/// переписаны в абсолютные от URL самого листа (BUG-1127, CSS Values §4.3) —
+/// после склейки листов в один текст база каждого теряется, и шрифты/фоны
+/// резолвились бы от документа. Реестр CSSOM ([`build_stylesheet_node_registry`])
+/// берёт сырой текст, чтобы `cssText` сохранял запись автора.
+#[allow(clippy::too_many_arguments)] // same fetch context as `fetch_stylesheet_text`
+fn fetch_stylesheet_for_cascade(
+    href: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    link_charset_attr: Option<&str>,
+    referring_encoding: lumen_encoding::Encoding,
+    csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Option<(String, ResourceBase, lumen_encoding::Encoding)> {
+    let (text, sheet_base, encoding) = fetch_stylesheet_text(
+        href,
+        base,
+        sink,
+        cookie_jar,
+        link_charset_attr,
+        referring_encoding,
+        csp_gate,
+        referrer_policy,
+    )?;
+    let text = crate::css_url_rebase::rebase_css_urls(&text, &sheet_base);
+    Some((text, sheet_base, encoding))
+}
+
 /// Максимальная глубина вложенности `@import` (защита от рекурсии/циклов).
 const MAX_CSS_IMPORT_DEPTH: u32 = 16;
 
@@ -380,6 +410,13 @@ pub(crate) fn inline_css_imports(
         if !imp.media.matches(media_ctx) {
             continue;
         }
+        // CSS Cascade L5 §6.5: `supports(<condition>)` — ложное условие
+        // отключает импорт целиком, лист даже не запрашивается.
+        if let Some(cond) = &imp.supports
+            && !cond.evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
+        {
+            continue;
+        }
         // Цикл/дубликат: ключ = абсолютный резолв URL относительно текущего листа.
         let key = base.resolve_str(&imp.url);
         if !seen.insert(key.clone()) {
@@ -402,7 +439,7 @@ pub(crate) fn inline_css_imports(
                 continue;
             }
         }
-        let Some((text, imp_base, imp_encoding)) = fetch_stylesheet_text(
+        let Some((text, imp_base, imp_encoding)) = fetch_stylesheet_for_cascade(
             &imp.url,
             base,
             sink,
@@ -427,7 +464,19 @@ pub(crate) fn inline_css_imports(
             referrer_policy,
         );
         blocked.extend(nested_blocked);
-        prefix.push_str(&resolved);
+        // CSS Cascade L5 §6.5: `layer`/`layer(<name>)` помещает правила
+        // импортированного листа в cascade layer — оборачиваем текст в
+        // `@layer <name> { … }`. Имя уже проверено парсером (`is_layer_name`),
+        // так что в текст попадает только ident с точками.
+        match &imp.layer {
+            Some(lumen_css_parser::ImportLayer::Named(name)) => {
+                prefix.push_str(&format!("@layer {name} {{\n{resolved}\n}}"));
+            }
+            Some(lumen_css_parser::ImportLayer::Anonymous) => {
+                prefix.push_str(&format!("@layer {{\n{resolved}\n}}"));
+            }
+            None => prefix.push_str(&resolved),
+        }
         if !prefix.ends_with('\n') {
             prefix.push('\n');
         }

@@ -38,6 +38,243 @@ pub struct DomTouched {
     /// листов (`sheet_sync::SheetSync`) понимает, что DOM сдвинулся с его
     /// последней сверки, не заводя собственного флага в двадцати трёх нативах.
     pub(crate) epoch: u64,
+    /// BUG-1211: per-node touch generation — `node → epoch` at the node's
+    /// most recent tracked mutation, populated alongside `nodes` but, like
+    /// `epoch` itself, **never cleared** by [`V8JsRuntime::take_dom_touched`]
+    /// (a `HashMap` rather than `HashSet` specifically so repeat touches to
+    /// the same node update its value instead of being no-ops against a set
+    /// that already contains it). Lets a consumer that keeps its own
+    /// "basis" watermark (the engine thread's same-tick flush,
+    /// `crates/js/src/v8_runtime/style_flush.rs`) ask "what changed since
+    /// epoch N" without needing to drain — the drain here is reserved for
+    /// the page pipeline's own per-rAF-cycle cadence and draining it a
+    /// second time from the flush thread would blind that cycle to
+    /// mutations the flush already folded in (see `FlushHandles::
+    /// dom_touched`'s doc comment). Without this, a same-tick flush that
+    /// only peeks at the ever-growing `nodes` set re-widens its dirty-root
+    /// set to everything touched since the page loaded on every single
+    /// flush, defeating the whole point of the incremental path for the
+    /// read-after-mutate-in-a-loop pattern BUG-1211 is about.
+    pub(crate) touch_gen: HashMap<NodeId, u64>,
+    /// BUG-1211: `node → epoch` of the node's latest touch that is **not** a
+    /// plain attribute write (child-list change, `textContent`, dirty
+    /// value/checked…). Such a touch can reach siblings through
+    /// `:nth-child`/`:empty`/sibling combinators, so the same-tick flush
+    /// widens it to the parent. Never cleared, like [`Self::touch_gen`].
+    pub(crate) structural_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 60: `node → epoch` of the node's latest touch that changed *only its
+    /// child list* (`appendChild`/`removeChild`/`insertBefore` on it, `textContent`,
+    /// `innerHTML`). Such a touch is not in [`Self::structural_gen`]: the flush restyles
+    /// the node and its direct children instead of the parent's whole subtree
+    /// (`NodeChange::ChildList`). Never cleared, like [`Self::touch_gen`].
+    pub(crate) child_list_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 89: `node → epoch` of the node's latest child-list touch that no edit
+    /// record describes (`innerHTML`, `textContent`, a fragment, a log that outgrew
+    /// [`CHILD_EDIT_CAP`]). One after the basis reports the plain `ChildList`. Never cleared.
+    pub(crate) child_any_gen: HashMap<NodeId, u64>,
+    /// BUG-935 срез 89: `node → [(epoch, front, back)]`, one entry per insertion or removal of
+    /// an *element* child through `appendChild`/`insertBefore`/`removeChild`; `front`/`back` —
+    /// no element sibling stood before/after the edited node, so the edit could change which
+    /// element is first/last. Text nodes are not recorded: no `:first-child` counts them.
+    /// Lets the flush say which children a child-list change can have given a different
+    /// `:first-child`/`:last-child` answer ([`lumen_layout::style::NodeChange::ChildListEnds`]).
+    pub(crate) child_edits: HashMap<NodeId, Vec<(u64, bool, bool)>>,
+    /// BUG-1211: `node → attribute name → epoch` of the latest write to that
+    /// attribute through `setAttribute`/`removeAttribute`/inline `style`.
+    /// Lets the flush ask `restyle_root_set_for_node_change` which selectors
+    /// could react to *this* attribute (a `style` write rarely widens at all)
+    /// instead of treating every touch as `Unattributed`. Never cleared.
+    pub(crate) attr_gen: HashMap<NodeId, HashMap<Box<str>, u64>>,
+    /// BUG-935 срез 68: the values `class`/`id` had *before* each recent write, per node —
+    /// what lets the flush name the tokens that changed since its basis
+    /// ([`Self::value_before`]). Never cleared, like [`Self::attr_gen`]; bounded per
+    /// attribute by [`ValueLog`].
+    pub(crate) value_log: HashMap<(NodeId, LoggedAttr), ValueLog>,
+    /// BUG-935 срез 68: the epoch of the last drain ([`V8JsRuntime::take_dom_touched`]),
+    /// which empties [`Self::value_log`] along with the other per-node maps. A basis older
+    /// than this has writes the log no longer holds, so [`Self::value_before`] declines.
+    pub(crate) log_floor: u64,
+    /// BUG-935 срез 81: the epoch of the latest untracked mutation ([`Self::unattributed`]'s
+    /// moment). Unlike the flag it survives the drain and is never cleared, so a consumer
+    /// with its own watermark asks "was there one since epoch N" — the flag alone, which
+    /// nobody drains under the engine thread, stayed set for the page's whole life.
+    pub(crate) unattributed_gen: u64,
+}
+
+/// BUG-935 срез 89: child-list edits kept per node ([`DomTouched::child_edits`]); a node edited
+/// more often than this between two drains falls back to the plain `ChildList`.
+pub(crate) const CHILD_EDIT_CAP: usize = 32;
+
+/// BUG-935 срез 81: what [`V8JsRuntime::dom_changes_reader`] reports since its last call.
+#[derive(Debug, Default, Clone)]
+pub struct DomChanges {
+    /// Every node touched since the last read, with what the root-set may assume.
+    pub changes: Vec<(NodeId, lumen_layout::style::OwnedNodeChange)>,
+    /// An untracked mutation happened since the last read (or this is the first read) —
+    /// `changes` is not a safe root-set, the caller recascades everything.
+    pub unattributed: bool,
+}
+
+/// BUG-935 срез 68: the attributes whose old value [`DomTouched::value_log`] keeps — the
+/// two a selector reads by token (`.a`, `#a`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum LoggedAttr {
+    Class,
+    Id,
+}
+
+impl LoggedAttr {
+    pub(crate) fn of(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("class") {
+            Some(Self::Class)
+        } else if name.eq_ignore_ascii_case("id") {
+            Some(Self::Id)
+        } else {
+            None
+        }
+    }
+}
+
+/// BUG-935 срез 68: the last few writes to one attribute of one node, each with the value
+/// it replaced.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ValueLog {
+    /// `(epoch of the write, value before it)`, oldest first. `""` stands for "absent":
+    /// for a class list or an id the two mean the same thing to a selector.
+    writes: Vec<(u64, Box<str>)>,
+    /// The newest epoch whose entry was dropped for room. A question about a basis older
+    /// than this has lost the entry that would have answered it.
+    lost_through: u64,
+}
+
+impl ValueLog {
+    /// Entries kept per attribute: a node toggled in a loop keeps the last few writes, and
+    /// a flush whose basis predates them falls back to the deep path.
+    const CAP: usize = 4;
+
+    pub(crate) fn push(&mut self, epoch: u64, before: &str) {
+        if self.writes.len() == Self::CAP {
+            self.lost_through = self.writes.remove(0).0;
+        }
+        self.writes.push((epoch, before.into()));
+    }
+
+    /// The value at `basis_epoch`: what the first write after it replaced. `None` when no
+    /// write after the basis is on record, or when the entry for it was dropped.
+    pub(crate) fn value_at(&self, basis_epoch: u64) -> Option<&str> {
+        if basis_epoch < self.lost_through {
+            return None;
+        }
+        self.writes.iter().find(|(e, _)| *e > basis_epoch).map(|(_, v)| &**v)
+    }
+
+    /// BUG-935 срез 81: every value the attribute held after `basis_epoch` other than the
+    /// current one — the values each write after it replaced. `None` when an entry for it
+    /// was dropped. For a consumer whose real basis may lie anywhere between `basis_epoch`
+    /// and now: the style it holds was computed from one of these values or the current one.
+    pub(crate) fn values_since(&self, basis_epoch: u64) -> Option<impl Iterator<Item = &str>> {
+        (basis_epoch >= self.lost_through)
+            .then(|| self.writes.iter().filter(move |(e, _)| *e > basis_epoch).map(|(_, v)| &**v))
+    }
+}
+
+impl DomTouched {
+    /// BUG-935 срез 68: the value `name` (`class`/`id`) of `node` had when the epoch was
+    /// `basis_epoch`, if the log can say.
+    pub(crate) fn value_before(&self, node: NodeId, name: &str, basis_epoch: u64) -> Option<&str> {
+        if basis_epoch < self.log_floor {
+            return None;
+        }
+        self.value_log.get(&(node, LoggedAttr::of(name)?))?.value_at(basis_epoch)
+    }
+
+    /// BUG-935 срез 81: every node touched after `basis_epoch`, with what the root-set may
+    /// assume about the touch. Shared by the same-tick flush and the UI thread's on-thread
+    /// restyle (which used to report every node as `Unattributed`, so a `class` write on
+    /// `<html>` restyled the whole document there while the flush restyled a handful of
+    /// nodes). `child_list_narrowing` off reports a child-list touch as `Unattributed`.
+    ///
+    /// `exact_basis` — the styles being updated were computed at exactly `basis_epoch` (the
+    /// flush: its basis is taken under the document lock). Then a `class`/`id` write is
+    /// reported once, with its value at the basis. Otherwise (the UI thread reads before the
+    /// layout takes the document lock, and an off-thread commit's snapshot is later still) the
+    /// real basis lies somewhere after `basis_epoch`, and one `AttrFrom` per value held since
+    /// then is reported: a write toggled back (`"" → "a" → ""`) has an empty difference
+    /// against its first old value, yet the styles may have been computed with `a`.
+    pub fn changes_since(
+        &self,
+        basis_epoch: u64,
+        child_list_narrowing: bool,
+        exact_basis: bool,
+    ) -> Vec<(NodeId, lumen_layout::style::OwnedNodeChange)> {
+        let mut changes = Vec::new();
+        for (&n, &touch) in &self.touch_gen {
+            if touch <= basis_epoch {
+                continue;
+            }
+            let structural = self.structural_gen.get(&n).copied().unwrap_or(0) > basis_epoch;
+            // BUG-935 срез 68: a `class`/`id` write whose value at the basis is on record is
+            // reported with it, so the root-set can name the tokens that changed.
+            let mut named: Vec<lumen_layout::style::OwnedNodeChange> = Vec::new();
+            for (name, _) in self.attr_gen.get(&n).into_iter().flatten().filter(|&(_, &g)| g > basis_epoch) {
+                let olds: Option<Vec<&str>> = if exact_basis {
+                    self.value_before(n, name, basis_epoch).map(|old| vec![old])
+                } else {
+                    self.values_since(n, name, basis_epoch)
+                };
+                match olds {
+                    Some(olds) => {
+                        let mut seen = HashSet::new();
+                        named.extend(olds.into_iter().filter(|old| seen.insert(*old)).map(|old| {
+                            lumen_layout::style::OwnedNodeChange::AttrFrom { name: name.clone(), old: old.into() }
+                        }));
+                    }
+                    None => named.push(lumen_layout::style::OwnedNodeChange::Attr(name.clone())),
+                }
+            }
+            // BUG-935 срез 60: a touch that changed only the child list is its own kind of
+            // change — the node and its direct children are restyled, not the parent's subtree.
+            let child_list = self.child_list_gen.get(&n).copied().unwrap_or(0) > basis_epoch;
+            let child_list_any = self.child_any_gen.get(&n).copied().unwrap_or(0) > basis_epoch;
+            if structural || (child_list && !child_list_narrowing) || (named.is_empty() && !child_list) {
+                changes.push((n, lumen_layout::style::OwnedNodeChange::Unattributed));
+            } else {
+                if child_list && child_list_any {
+                    changes.push((n, lumen_layout::style::OwnedNodeChange::ChildList));
+                } else if child_list {
+                    let (mut front, mut back, mut edits) = (false, false, 0u32);
+                    for &(_, f, b) in self.child_edits.get(&n).into_iter().flatten().filter(|e| e.0 > basis_epoch) {
+                        front |= f;
+                        back |= b;
+                        edits += 1;
+                    }
+                    changes.push((n, lumen_layout::style::OwnedNodeChange::ChildListEnds { front, back, edits }));
+                }
+                changes.extend(named.into_iter().map(|c| (n, c)));
+            }
+        }
+        changes
+    }
+
+    /// BUG-935 срез 81: [`ValueLog::values_since`] for `name` (`class`/`id`) of `node`.
+    fn values_since(&self, node: NodeId, name: &str, basis_epoch: u64) -> Option<Vec<&str>> {
+        if basis_epoch < self.log_floor {
+            return None;
+        }
+        let vals: Vec<&str> = self.value_log.get(&(node, LoggedAttr::of(name)?))?.values_since(basis_epoch)?.collect();
+        (!vals.is_empty()).then_some(vals)
+    }
+
+    /// BUG-935 срез 81: whether an untracked mutation happened after `basis_epoch`.
+    pub fn unattributed_since(&self, basis_epoch: u64) -> bool {
+        self.unattributed_gen > basis_epoch
+    }
+
+    /// The epoch of the drain that started this tracker — for a drained tracker, the basis
+    /// of everything it holds.
+    pub fn log_floor(&self) -> u64 {
+        self.log_floor
+    }
 }
 
 /// Per-node snapshot of resolved CSS custom properties: node id → the map of
@@ -135,7 +372,7 @@ pub struct V8JsRuntime {
     /// does — the debt belongs to the document, not to the shell.
     pub(super) page_scroll_end_pending: Arc<Mutex<bool>>,
     /// Computed CSS styles per node, updated after each relayout by the shell.
-    pub(super) computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    pub(super) computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     /// CSSOM-6 (BUG-490): computed CSS styles per `(node, pseudo-element name)`
     /// (`"before"`/`"after"`/`"first-line"`/`"first-letter"`), updated alongside
     /// [`Self::computed_styles`] — backs `getComputedStyle(el, pseudoElt)`'s
@@ -196,6 +433,34 @@ pub struct V8JsRuntime {
     pub(super) computed_styles_needed: Arc<AtomicBool>,
     /// BUG-935 S44: mirrors [`super::style_flush::FlushHandles::computed_styles_collected`].
     pub(super) computed_styles_collected: Arc<AtomicBool>,
+    /// BUG-935 срез 58: mirrors [`super::style_flush::FlushHandles::incremental_flushes`].
+    pub(super) incremental_flushes: Arc<AtomicU64>,
+    /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_entries_kept`].
+    pub(super) style_entries_kept: Arc<AtomicU64>,
+    /// BUG-935 срез 59: mirrors [`super::style_flush::FlushHandles::style_skip_off`].
+    pub(super) style_skip_off: Arc<AtomicBool>,
+    /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_used`].
+    pub(super) shallow_roots_used: Arc<AtomicU64>,
+    /// BUG-935 срез 60: mirrors [`super::style_flush::FlushHandles::shallow_roots_off`].
+    pub(super) shallow_roots_off: Arc<AtomicBool>,
+    /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_used`].
+    pub(super) sheet_delta_used: Arc<AtomicU64>,
+    /// BUG-935 срез 64: mirrors [`super::style_flush::FlushHandles::sheet_delta_off`].
+    pub(super) sheet_delta_off: Arc<AtomicBool>,
+    /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_prune_off`].
+    pub(super) scope_prune_off: Arc<AtomicBool>,
+    /// BUG-935 срез 70: mirrors [`super::style_flush::FlushHandles::scope_pruned`].
+    pub(super) scope_pruned: Arc<AtomicU64>,
+    /// BUG-935 срез 78: mirrors [`super::style_flush::FlushHandles::released_evict_off`].
+    pub(super) released_evict_off: Arc<AtomicBool>,
+    /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_off`].
+    pub(super) scroll_rollup_off: Arc<AtomicBool>,
+    /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_served`].
+    pub(super) scroll_rollup_served: Arc<AtomicU64>,
+    /// BUG-935 срез 77: mirrors [`super::style_flush::FlushHandles::scroll_rollup_walked`].
+    pub(super) scroll_rollup_walked: Arc<AtomicU64>,
+    /// BUG-935 срез 74: mirrors [`super::style_flush::FlushHandles::node_index_builds`].
+    pub(super) node_index_builds: Arc<AtomicU64>,
     /// GAP-HLHITTEST: per-text-node fragment geometry backing
     /// `CSS.highlights.highlightsFromPoint()` — see
     /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
@@ -207,6 +472,8 @@ pub struct V8JsRuntime {
     /// cleared by [`Self::update_client_rects`] so fresh embedder geometry
     /// forces the next reader through a real flush.
     pub(super) text_frags_collected: Arc<AtomicBool>,
+    /// BUG-1202: mirrors [`super::style_flush::FlushHandles::hit_tree_stale`].
+    pub(super) hit_tree_stale: Arc<AtomicBool>,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
     /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
     /// geometry read can force a synchronous flush (see
@@ -273,6 +540,10 @@ pub struct V8JsRuntime {
     pub(super) pending_navigation_updates: Arc<Mutex<Vec<crate::dom::NavUpdate>>>,
     /// Queued by `_lumen_navigation_report_intercept` during `NavigateEvent` dispatch.
     pub(super) pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
+    /// THREAD-9 срез 5: страница когда-либо вешала обработчик `navigate` на
+    /// `window.navigation` (`addEventListener`/`onnavigate`). Липкий; без него
+    /// shell не диспатчит `NavigateEvent` и не читает intercept-результат.
+    pub(super) navigate_listeners: Arc<AtomicBool>,
     /// Fullscreen requests emitted by `element.requestFullscreen()` / `document.exitFullscreen()`.
     pub(super) fullscreen_requests: Arc<Mutex<Vec<crate::dom::FullscreenRequest>>>,
     /// CSS View Transitions L1 events emitted by `document.startViewTransition` (Ph3
@@ -356,6 +627,9 @@ pub struct V8JsRuntime {
     /// in via [`Self::with_cookie_jar`]. `None` (tests, headless, opaque-origin
     /// frames) leaves `document.cookie` reading `""` and ignoring writes.
     pub(super) cookie_jar: Option<Arc<dyn lumen_core::ext::CookieProvider>>,
+    /// BUG-1156: the referrer of the request that fetched this document —
+    /// backing store of `document.referrer`. `None` = no referrer (`''`).
+    pub(super) document_referrer: Option<String>,
     /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     pub(super) broadcast_channels: crate::broadcast_channel::BroadcastRegistry,
@@ -393,6 +667,13 @@ pub struct V8JsRuntime {
     /// SharedWorker parent-side reporting) — parallel to
     /// `shared_worker_outbox` but for the `error` event rather than `message`.
     pub(super) shared_worker_errors: crate::worker::WorkerErrorQueue,
+    /// `SharedWorker` client ports this page has ever connected (port id →
+    /// identity key), used only by [`Drop`] below (BUG-1000): unlike
+    /// `workers`, the shared-worker hub is process-global
+    /// (`crate::shared_worker::HUB_V8`), so a page going away does not by
+    /// itself disconnect anything there — this map is what lets `Drop` tell
+    /// the hub which ports belonged to it.
+    pub(super) shared_worker_client_ports: crate::shared_worker::SharedWorkerClientPorts,
     /// Cookie-banner auto-dismiss (7C.3) enable flag (Ph3 V8 migration S12b-G6,
     /// BUG-548). Defaults to `true`. Shell sets this from the user's
     /// `cookie_banner_dismiss` preference via [`Self::set_cookie_banner_dismiss`].
@@ -472,9 +753,24 @@ impl V8JsRuntime {
             custom_props_collected: Arc::new(AtomicBool::new(false)),
             computed_styles_needed: Arc::new(AtomicBool::new(false)),
             computed_styles_collected: Arc::new(AtomicBool::new(false)),
+            incremental_flushes: Arc::new(AtomicU64::new(0)),
+            style_entries_kept: Arc::new(AtomicU64::new(0)),
+            style_skip_off: Arc::new(AtomicBool::new(false)),
+            shallow_roots_used: Arc::new(AtomicU64::new(0)),
+            shallow_roots_off: Arc::new(AtomicBool::new(false)),
+            sheet_delta_used: Arc::new(AtomicU64::new(0)),
+            sheet_delta_off: Arc::new(AtomicBool::new(false)),
+            scope_prune_off: Arc::new(AtomicBool::new(false)),
+            scope_pruned: Arc::new(AtomicU64::new(0)),
+            released_evict_off: Arc::new(AtomicBool::new(false)),
+            scroll_rollup_off: Arc::new(AtomicBool::new(false)),
+            scroll_rollup_served: Arc::new(AtomicU64::new(0)),
+            scroll_rollup_walked: Arc::new(AtomicU64::new(0)),
+            node_index_builds: Arc::new(AtomicU64::new(0)),
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
+            hit_tree_stale: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
@@ -492,6 +788,7 @@ impl V8JsRuntime {
             nav_state: Arc::new(Mutex::new(String::from(r#"{"entries":[],"index":0}"#))),
             pending_navigation_updates: Arc::new(Mutex::new(Vec::new())),
             pending_nav_intercepted: Arc::new(Mutex::new(Vec::new())),
+            navigate_listeners: Arc::new(AtomicBool::new(false)),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
@@ -511,6 +808,7 @@ impl V8JsRuntime {
             image_load_hook: None,
             ss_store: None,
             cookie_jar: None,
+            document_referrer: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -521,6 +819,7 @@ impl V8JsRuntime {
             worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             shared_worker_errors: Arc::new(Mutex::new(Vec::new())),
+            shared_worker_client_ports: Arc::new(Mutex::new(HashMap::new())),
             cookie_banner_dismiss: AtomicBool::new(true),
             frame_docs: Arc::new(Mutex::new(crate::frame_bridge::FrameDocSlots::default())),
         })
@@ -530,6 +829,15 @@ impl V8JsRuntime {
     /// the next `install_dom`. Mirrors [`crate::QuickJsRuntime::set_cookie_banner_dismiss`].
     pub fn set_cookie_banner_dismiss(&self, enabled: bool) {
         self.cookie_banner_dismiss.store(enabled, Ordering::Relaxed);
+    }
+
+    /// This page's `SharedWorker` client-port map (BUG-1000) — `pub(crate)`
+    /// purely so `shared_worker.rs`'s own unit tests can install its bindings
+    /// against the runtime's *real* field instead of a throwaway one, and so
+    /// `drop(rt)` in those tests exercises the same path production code does.
+    #[cfg(test)]
+    pub(crate) fn shared_worker_client_ports_for_test(&self) -> crate::shared_worker::SharedWorkerClientPorts {
+        Arc::clone(&self.shared_worker_client_ports)
     }
 
     /// Shared handle to this runtime's `BroadcastChannel` registry, for the
@@ -746,6 +1054,13 @@ impl V8JsRuntime {
         self
     }
 
+    /// BUG-1156: seed `document.referrer` (HTML LS §3.1.2 "the document's
+    /// referrer"). Must be called before `install_dom` to take effect.
+    pub fn with_document_referrer(mut self, referrer: Option<String>) -> Self {
+        self.document_referrer = referrer;
+        self
+    }
+
     /// Attach the BUG-1118 immediate-`<img src>` fetch hook (see
     /// [`lumen_core::ext::ImageLoadHook`]). Must be called before
     /// `install_dom` to take effect (mirrors [`Self::with_sw_worker_store`]).
@@ -764,10 +1079,60 @@ impl V8JsRuntime {
     /// primitives since the last call, clearing it (and the `unattributed`
     /// flag) for the next cycle. See [`DomTouched`].
     pub fn take_dom_touched(&self) -> DomTouched {
-        let mut guard = self.dom_touched.lock().unwrap_or_else(|e| e.into_inner());
+        Self::drain_dom_touched(&self.dom_touched)
+    }
+
+    /// BUG-935 срез 94: the shell wrote presentational attributes into the document behind
+    /// the page's back (`apply_intrinsic_size` appends `width`/`height` to a decoded `<img>`).
+    /// Such a write is a cascade input like any other, but no JS primitive recorded it, so a
+    /// flush whose basis predates it kept the node's old style. Reported here as a plain
+    /// attribute write of `attr` on each node.
+    pub fn note_shell_attr_writes(&self, nodes: &[NodeId], attrs: &[&str]) {
+        for &node in nodes {
+            for &attr in attrs {
+                super::dom_helpers::record_dom_touch_attr(&self.dom_touched, node, attr, None);
+            }
+        }
+        // The same-tick flush skips a document nothing has marked stale.
+        if !nodes.is_empty() && !attrs.is_empty() {
+            self.flush_stale.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// BUG-935 S80: общий для [`Self::take_dom_touched`] и [`Self::dom_touched_drain`]
+    /// сброс набора затронутых узлов.
+    fn drain_dom_touched(touched: &Mutex<DomTouched>) -> DomTouched {
+        let mut guard = touched.lock().unwrap_or_else(|e| e.into_inner());
         // `epoch` survives the drain — see the field's doc comment.
         let epoch = guard.epoch;
-        std::mem::replace(&mut *guard, DomTouched { epoch, ..DomTouched::default() })
+        let unattributed_gen = guard.unattributed_gen;
+        std::mem::replace(&mut *guard, DomTouched { epoch, log_floor: epoch, unattributed_gen, ..DomTouched::default() })
+    }
+
+    /// BUG-935 S80: самостоятельный сброс набора затронутых узлов, который
+    /// можно держать на UI-потоке и звать без запроса к движковому потоку —
+    /// тот может быть занят JS страницы секундами, а блокирующий `query` ждал
+    /// бы его очередь. Держит только `Arc` на тот же мьютекс.
+    ///
+    /// BUG-935 срез 81: не сбрасывает трекер, а читает изменения после собственной
+    /// отметки (`changes_since`). Сброс стирал журнал значений и поколения, по которым
+    /// флаш движкового потока считает свои корни: запись между базисом флаша и сбросом
+    /// пропадала для флаша.
+    pub fn dom_changes_reader(&self) -> impl Fn() -> DomChanges + Send + Sync + 'static {
+        let touched = Arc::clone(&self.dom_touched);
+        let mark = Arc::new(Mutex::new(None::<u64>));
+        move || {
+            let t = touched.lock().unwrap_or_else(|e| e.into_inner());
+            let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
+            // Первое чтение не знает, что видел прошлый проход, — пусть каскад будет полным.
+            let Some(basis) = mark.replace(t.epoch) else {
+                return DomChanges { changes: Vec::new(), unattributed: true };
+            };
+            DomChanges {
+                changes: t.changes_since(basis, super::style_flush::child_list_narrowing_enabled(), false),
+                unattributed: t.unattributed_since(basis),
+            }
+        }
     }
 
     /// Returns `true` if `requestAnimationFrame` was called since the last call,
@@ -794,6 +1159,11 @@ impl V8JsRuntime {
         Arc::clone(&self.dom_dirty)
     }
 
+    /// THREAD-9 срез 5: lock-free ручка флага «есть слушатель `navigate`».
+    pub fn navigate_listeners_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.navigate_listeners)
+    }
+
     /// BUG-935 S43: shared, lock-free handle to [`Self::pseudo_styles_needed`].
     pub fn pseudo_styles_needed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.pseudo_styles_needed)
@@ -802,6 +1172,99 @@ impl V8JsRuntime {
     /// BUG-935 S43: shared, lock-free handle to [`Self::custom_props_needed`].
     pub fn custom_props_needed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.custom_props_needed)
+    }
+
+    /// BUG-935 срез 58: how many same-tick flushes took the incremental path
+    /// (as opposed to a full relayout) since the runtime was created.
+    pub fn incremental_flush_count(&self) -> u64 {
+        self.incremental_flushes.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 59: computed-style entries the same-tick flush left published
+    /// instead of rebuilding (see `ScopedCollection::keeps_computed_style`).
+    pub fn style_entries_kept_count(&self) -> u64 {
+        self.style_entries_kept.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 59: switch the computed-style reuse off for this runtime (what
+    /// `LUMEN_NO_STYLE_SKIP=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_style_skip_off(&self, off: bool) {
+        self.style_skip_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 60: shallow restyle roots the same-tick flush used — a child-list change
+    /// that restyled the container and its children instead of the parent's subtree.
+    pub fn shallow_roots_count(&self) -> u64 {
+        self.shallow_roots_used.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 60: switch the shallow roots off for this runtime (what
+    /// `LUMEN_NO_SHALLOW_ROOTS=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_shallow_roots_off(&self, off: bool) {
+        self.shallow_roots_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 64: restyle roots the same-tick flush took from a changed stylesheet — a
+    /// `<style>` inserted (or a sheet swapped) that the incremental path absorbed instead of
+    /// recascading the document.
+    pub fn sheet_delta_roots_count(&self) -> u64 {
+        self.sheet_delta_used.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 64: switch the stylesheet delta off for this runtime (what
+    /// `LUMEN_NO_SHEET_DELTA=1` does process-wide) — the baseline of a differential test.
+    #[doc(hidden)]
+    pub fn set_sheet_delta_off(&self, off: bool) {
+        self.sheet_delta_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 70: switch the pruning of unchanged subtrees inside a dirty root off for this
+    /// runtime (what `LUMEN_NO_SCOPE_PRUNE=1` does process-wide) — the baseline of a differential
+    /// test.
+    #[doc(hidden)]
+    pub fn set_scope_prune_off(&self, off: bool) {
+        self.scope_prune_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 78: entries in `layout_rects`, `client_rects`, `computed_styles`, `scroll_states`.
+    #[doc(hidden)]
+    pub fn published_cache_sizes(&self) -> [usize; 4] {
+        fn len<K, V>(m: &Mutex<HashMap<K, V>>) -> usize {
+            m.lock().unwrap_or_else(|e| e.into_inner()).len()
+        }
+        [len(&self.layout_rects), len(&self.client_rects), len(&self.computed_styles), len(&self.scroll_states)]
+    }
+
+    /// BUG-935 срез 78: evicts by the previous tree's dirty-area listing, as before the slice (differential tests).
+    #[doc(hidden)]
+    pub fn set_released_evict_off(&self, off: bool) {
+        self.released_evict_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 77: disables the scroll-extent rollup cache for this runtime (differential tests).
+    #[doc(hidden)]
+    pub fn set_scroll_rollup_off(&self, off: bool) {
+        self.scroll_rollup_off.store(off, Ordering::Relaxed);
+    }
+
+    /// BUG-935 срез 77: `(served from the cache, walked)` skipped subtrees, summed over flushes.
+    #[doc(hidden)]
+    pub fn scroll_rollup_counts(&self) -> (u64, u64) {
+        (self.scroll_rollup_served.load(Ordering::Relaxed), self.scroll_rollup_walked.load(Ordering::Relaxed))
+    }
+
+    /// BUG-935 срез 70: boxes the same-tick flush left alone inside a dirty root (summed over flushes).
+    #[doc(hidden)]
+    pub fn scope_pruned_count(&self) -> u64 {
+        self.scope_pruned.load(Ordering::Relaxed)
+    }
+
+    /// BUG-935 срез 74: how many times the same-tick flush scanned the stylesheet to build its restyle index.
+    #[doc(hidden)]
+    pub fn node_index_build_count(&self) -> u64 {
+        self.node_index_builds.load(Ordering::Relaxed)
     }
 
     /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].
@@ -831,6 +1294,7 @@ impl V8JsRuntime {
     /// [`Self::update_layout_rects`] wherever the shell pushes fresh geometry.
     pub fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>) {
         *self.hit_test_tree.lock().unwrap_or_else(|e| e.into_inner()) = Some(tree);
+        self.hit_tree_stale.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Update the current viewport dimensions.
@@ -997,6 +1461,12 @@ impl V8JsRuntime {
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     /// Mirrors [`crate::QuickJsRuntime::update_computed_styles`].
     pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
+        self.update_style_maps(styles.into_iter().map(|(node, props)| (node, props.into())).collect());
+    }
+
+    /// [`Self::update_computed_styles`] for the entries the layout collectors publish
+    /// ([`lumen_layout::StyleMap`]: a shared base plus the box's own overrides).
+    pub fn update_style_maps(&self, styles: HashMap<u32, lumen_layout::StyleMap>) {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
     }
 
@@ -1300,6 +1770,12 @@ impl V8JsRuntime {
     /// каждую навигацию, и `window[i]` разъехался бы с порядком документа.
     /// Сохранение ИНДЕКСА здесь и есть содержательная часть: вложенный
     /// browsing context при навигации остаётся тем же, меняется его документ.
+    ///
+    /// BUG-1198: `opaque` — у документа непрозрачное происхождение (`sandbox`
+    /// без `allow-same-origin`): его сообщения приходят с `origin === "null"`
+    /// и одной на документ идентичностью для `Origin.from(event)`. Повторная
+    /// регистрация того же `doc` эту идентичность сохраняет.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_frame_document(
         &self,
         host_nid: u32,
@@ -1307,6 +1783,7 @@ impl V8JsRuntime {
         url: String,
         name: Option<String>,
         accessible: bool,
+        opaque: bool,
         peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
     ) {
         let registry = Arc::clone(&self.frame_docs);
@@ -1318,6 +1795,7 @@ impl V8JsRuntime {
                 url,
                 name,
                 accessible,
+                opaque_id: opaque.then(crate::frame_bridge::next_opaque_origin_id),
                 peer,
             };
             crate::frame_bridge::upsert_binding(&mut reg, binding)
@@ -1366,6 +1844,7 @@ impl V8JsRuntime {
                     url,
                     name,
                     accessible,
+                    opaque_id: None,
                     peer,
                 });
         });
@@ -1398,6 +1877,7 @@ impl V8JsRuntime {
                     url,
                     name: None,
                     accessible,
+                    opaque_id: None,
                     peer,
                 });
         });
@@ -1612,6 +2092,13 @@ impl V8JsRuntime {
 
 impl Drop for V8JsRuntime {
     fn drop(&mut self) {
+        // BUG-1000: a dedicated `Worker` disconnects for free here — its
+        // `WorkerRegistry` is a plain field of `self` and drops with it,
+        // breaking each worker thread's channel. `SharedWorker`'s hub is
+        // process-global, so it needs an explicit nudge: tell it about every
+        // port this page ever opened, so a worker left with no other client
+        // notices and terminates itself instead of outliving the page.
+        crate::shared_worker::close_all_client_ports_v8(&self.shared_worker_client_ports);
         let _ = self.cmd_tx.send(V8Command::Shutdown);
         if let Some(handle) = self.js_thread.take() {
             let _ = handle.join();
@@ -1677,5 +2164,65 @@ impl V8JsRuntime {
 
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod value_log_tests {
+    use super::*;
+
+    fn touched_with(node: NodeId, writes: &[(u64, &str)]) -> DomTouched {
+        let mut t = DomTouched::default();
+        for &(epoch, before) in writes {
+            t.value_log.entry((node, LoggedAttr::Class)).or_default().push(epoch, before);
+        }
+        t
+    }
+
+    #[test]
+    fn the_value_at_a_basis_is_what_the_first_later_write_replaced() {
+        let n = NodeId::from_raw(3);
+        let t = touched_with(n, &[(5, "a"), (9, "a b"), (12, "b")]);
+        assert_eq!(t.value_before(n, "class", 4), Some("a"), "basis before every write");
+        assert_eq!(t.value_before(n, "class", 5), Some("a b"), "the write at the basis is already in it");
+        assert_eq!(t.value_before(n, "class", 10), Some("b"));
+        assert_eq!(t.value_before(n, "class", 12), None, "no write after the basis");
+        assert_eq!(t.value_before(n, "CLASS", 4), Some("a"), "attribute names compare case-insensitively");
+        assert_eq!(t.value_before(n, "style", 4), None, "only class and id are logged");
+    }
+
+    #[test]
+    fn a_basis_older_than_the_dropped_entries_gets_no_answer() {
+        let n = NodeId::from_raw(1);
+        let writes: Vec<(u64, &str)> = (1..=6).map(|e| (e * 10, "x")).collect();
+        let t = touched_with(n, &writes);
+        // Entries for epochs 10 and 20 were dropped for room.
+        assert_eq!(t.value_before(n, "class", 5), None);
+        assert_eq!(t.value_before(n, "class", 19), None);
+        assert_eq!(t.value_before(n, "class", 20), Some("x"));
+        assert_eq!(t.value_before(n, "class", 59), Some("x"));
+    }
+
+    /// BUG-935 срез 81: a basis that may lie later than the mark gets every value since it.
+    #[test]
+    fn every_value_since_a_mark_is_listed_unless_one_was_dropped() {
+        let n = NodeId::from_raw(4);
+        let t = touched_with(n, &[(5, "a"), (9, "a b"), (12, "b")]);
+        assert_eq!(t.values_since(n, "class", 4), Some(vec!["a", "a b", "b"]));
+        assert_eq!(t.values_since(n, "class", 9), Some(vec!["b"]));
+        assert_eq!(t.values_since(n, "class", 12), None, "no write after the mark");
+        let writes: Vec<(u64, &str)> = (1..=6).map(|e| (e * 10, "x")).collect();
+        let t = touched_with(n, &writes);
+        assert_eq!(t.values_since(n, "class", 19), None, "the entry for epoch 20 was dropped");
+        assert_eq!(t.values_since(n, "class", 20).map(|v| v.len()), Some(4));
+    }
+
+    #[test]
+    fn a_drain_makes_older_bases_unknown() {
+        let n = NodeId::from_raw(2);
+        let mut t = touched_with(n, &[(7, "a")]);
+        t.log_floor = 6;
+        assert_eq!(t.value_before(n, "class", 5), None, "the basis predates the drain");
+        assert_eq!(t.value_before(n, "class", 6), Some("a"));
     }
 }

@@ -51,7 +51,7 @@ const LOCAL_FONT_ACCESS_SHIM: &str = r#"(function() {
   // page script (BUG-378), and a name looked up at call time is a name page
   // script could shadow to feed the shim a font list of its own.
   function nat(name) {
-    return (typeof globalThis[name] === 'function') ? globalThis[name] : null;
+    return (typeof __lumen_C[name] === 'function') ? __lumen_C[name] : null;
   }
   var NAT_QUERY = nat('_lumen_local_fonts_query');
   var NAT_BLOB  = nat('_lumen_local_font_blob');
@@ -266,7 +266,7 @@ mod tests {
     /// Two fonts behind the Phase 1 natives, so the descriptor shape can be
     /// tested the only way a page can reach one: through `queryLocalFonts()`.
     const MOCK_NATIVES: &str = r#"
-        globalThis._lumen_local_fonts_query = function() {
+        __lumen_C._lumen_local_fonts_query = function() {
             return JSON.stringify([
                 { postscriptName: 'Arial-BoldMT', fullName: 'Arial Bold',
                   family: 'Arial', style: 'Bold' },
@@ -274,7 +274,7 @@ mod tests {
                   family: 'Inter', style: 'Regular' }
             ]);
         };
-        globalThis._lumen_local_font_blob = function(postscriptName) {
+        __lumen_C._lumen_local_font_blob = function(postscriptName) {
             return new Uint8Array([0, 1, 2]).buffer;
         };
     "#;
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn blob_rejects_without_the_native() {
         with_local_fonts_setup(
-            r#"globalThis._lumen_local_fonts_query = function() {
+            r#"__lumen_C._lumen_local_fonts_query = function() {
                  return JSON.stringify([{ postscriptName: 'Arial-BoldMT', family: 'Arial' }]);
                };"#,
             |rt| {
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn query_rejects_when_the_native_returns_garbage() {
         with_local_fonts_setup(
-            "globalThis._lumen_local_fonts_query = function() { return 'not json'; };",
+            "__lumen_C._lumen_local_fonts_query = function() { return 'not json'; };",
             |rt| {
                 let out = settle(rt, "queryLocalFonts()", "'unexpected'");
                 assert!(

@@ -8,8 +8,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -683,7 +683,7 @@ fn v8_runtime_with_slow_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> =
         Arc::new(SlowFetch { body: ahem_font_bytes() });
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -1391,7 +1391,7 @@ fn custom_element_create_element_not_defined_stays_plain() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt.eval(r#"
                 var el = document.createElement('x-not-defined-el');
-                (el instanceof HTMLElement) && !(el.__ceUpgraded__)
+                (el instanceof HTMLElement) && !(el.__nid__ in _lumen_ce_elements)
             "#).unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }

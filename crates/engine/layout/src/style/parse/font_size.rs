@@ -41,7 +41,7 @@ pub(in crate::style) fn apply_font_size(
     viewport: Size,
     is_quirks: bool,
 ) -> Option<FontSizeBasis> {
-    if decl.property != "font" && decl.property != "font-size" {
+    if decl.property != "font" && decl.property != "font-size" && decl.property != "all" {
         return None;
     }
     // CSS Variables L1 §3.3: нераскрываемый `var()` делает декларацию invalid at
@@ -76,6 +76,11 @@ pub(in crate::style) fn apply_font_size(
         };
         style.font_size = px;
         return Some(basis);
+    }
+    // Шортхенд `all` (CSS Cascade L4 §3.2) принимает только CSS-wide keyword-ы:
+    // размер из него взят выше, прочее значение — невалидная декларация.
+    if decl.property == "all" {
+        return None;
     }
     resolve_font_size(style, val, parent_fs, viewport, is_quirks)
 }
@@ -118,11 +123,15 @@ fn resolve_font_size(
     let (px, basis) = match &len {
         Length::Px(v) => (*v, FontSizeBasis::Absolute),
         Length::Em(v) => (*v * parent_fs, FontSizeBasis::ParentRelative),
-        Length::Rem(v) => (*v * ROOT_FONT_SIZE, FontSizeBasis::Absolute),
+        // `root_font_size` is already zoomed, like `parent_fs`.
+        Length::Rem(v) => (*v * style.root_font_size, FontSizeBasis::ParentRelative),
         // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
         // the *parent* font. Real ch/ex metrics for the parent are not available at
         // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
         Length::Ch(v) | Length::Ex(v) => (*v * 0.5 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Lh(v) => (*v * 1.2 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Rlh(v) => (*v * 1.2 * style.root_font_size, FontSizeBasis::ParentRelative),
+        Length::Rex(v) | Length::Rch(v) => (*v * 0.5 * style.root_font_size, FontSizeBasis::ParentRelative),
         Length::Percent(v) => (*v / 100.0 * parent_fs, FontSizeBasis::ParentRelative),
         Length::Vh(v) => (*v / 100.0 * viewport.height, FontSizeBasis::Absolute),
         Length::Vw(v) => (*v / 100.0 * viewport.width, FontSizeBasis::Absolute),
@@ -150,7 +159,7 @@ fn resolve_font_size(
             FontSizeBasis::ParentRelative,
         ),
         // Intrinsic keywords not meaningful for font-size — ignore.
-        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return None,
+        Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => return None,
     };
     style.font_size = px;
     Some(basis)
@@ -186,14 +195,18 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
         style.line_height_is_relative = false;
         style.line_height_is_normal = false;
         match &len {
-            Length::Px(v) => style.line_height = v / style.font_size,
+            Length::Px(v) => style.line_height = v * style.effective_zoom / style.font_size,
             Length::Em(v) => style.line_height = *v,
             Length::Rem(v) => {
-                style.line_height = v * ROOT_FONT_SIZE / style.font_size;
+                style.line_height = v * style.root_font_size / style.font_size;
             }
             Length::Percent(v) => style.line_height = v / 100.0,
             Length::Ch(_)
             | Length::Ex(_)
+            | Length::Lh(_)
+            | Length::Rlh(_)
+            | Length::Rex(_)
+            | Length::Rch(_)
             | Length::Vh(_)
             | Length::Vw(_)
             | Length::Vmin(_)
@@ -218,7 +231,7 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
                 }
             }
             // Intrinsic keywords not meaningful for line-height — ignore.
-            Length::MinContent | Length::MaxContent | Length::FitContent(_) => {}
+            Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => {}
         }
     }
 }
@@ -269,7 +282,8 @@ pub(in crate::style) fn is_font_size_token(tok: &str) -> bool {
     // целиком признавался невалидным shorthand-ом, а longhand
     // `font-size: calc(…)` с тем же значением работал.
     matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
-        | Length::Ch(_) | Length::Ex(_)
+        | Length::Ch(_) | Length::Ex(_) | Length::Lh(_)
+        | Length::Rlh(_) | Length::Rex(_) | Length::Rch(_)
         | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)
         | Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
         | Length::Cqmin(_) | Length::Cqmax(_)

@@ -100,16 +100,16 @@ fn test_server_config() -> Result<Arc<ServerConfig>, BoxError> {
     Ok(Arc::new(cfg))
 }
 
-/// Spawn a one-shot TLS server on loopback and return its port. The spawned
+/// Spawn a one-shot TLS server on loopback and return its port and join handle. The spawned
 /// thread performs exactly one handshake (`complete_io`) and exits; handshake
 /// errors on the server side (expected in the "untrusted" case, where the
 /// client aborts after seeing `UnknownIssuer`) are swallowed since only the
 /// client-side result is under test.
-fn spawn_test_server() -> Result<u16, BoxError> {
+fn spawn_test_server() -> Result<(u16, thread::JoinHandle<()>), BoxError> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let cfg = test_server_config()?;
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
             let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
             if let Ok(mut conn) = rustls::ServerConnection::new(cfg) {
@@ -117,7 +117,7 @@ fn spawn_test_server() -> Result<u16, BoxError> {
             }
         }
     });
-    Ok(port)
+    Ok((port, handle))
 }
 
 fn client_handshake(port: u16, root_store: RootCertStore) -> Result<(), BoxError> {
@@ -132,18 +132,19 @@ fn client_handshake(port: u16, root_store: RootCertStore) -> Result<(), BoxError
 
 #[test]
 fn handshake_fails_without_the_extra_ca() {
-    let port = spawn_test_server().unwrap();
+    let (port, server) = spawn_test_server().unwrap();
     // Built-in webpki roots only — mirrors every pre-fix call site, and the
     // exact BUG-785 symptom: WPT's self-signed CA is not in that bundle.
     let root_store = tls::trusted_root_store();
     let err = client_handshake(port, root_store).expect_err("self-signed cert must be rejected");
+    server.join().expect("server thread");
     let msg = format!("{err}");
     assert!(msg.contains("UnknownIssuer"), "expected UnknownIssuer, got: {msg}");
 }
 
 #[test]
 fn handshake_succeeds_once_the_cert_is_added_to_the_root_store() {
-    let port = spawn_test_server().unwrap();
+    let (port, server) = spawn_test_server().unwrap();
     let mut root_store = RootCertStore::empty();
     let certs: Vec<_> = rustls_pemfile::certs(&mut TEST_CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
@@ -152,4 +153,5 @@ fn handshake_succeeds_once_the_cert_is_added_to_the_root_store() {
     assert_eq!((added, rejected), (1, 0));
 
     client_handshake(port, root_store).expect("handshake must succeed once the CA is trusted");
+    server.join().expect("server thread");
 }

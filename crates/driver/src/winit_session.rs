@@ -1161,6 +1161,7 @@ impl BrowserSession for WinitSession {
             None,
             None,
             false,
+            None,
         )
         .map_err(|e| Error::Other(format!("install_dom: {e}")))?;
         let value = rt.eval(js).map_err(|e| Error::Other(format!("eval: {e}")))?;

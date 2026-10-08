@@ -12,8 +12,9 @@ use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::{
     BorderStyle, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
-    FontWeight, Length, LengthOrAuto, PointerEvents, VerticalAlign, WhiteSpace,
+    FontWeight, Length, LengthOrAuto, PointerEvents, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
 };
+use crate::style::AlignValue;
 
 // ──────────────── default display / declarations ────────────────
 
@@ -104,6 +105,10 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // own — only an attribute label — and must recurse so descendant option
         // styles are still computed).
         "option" => Display::None,
+        // HTML rendering §15.3.1 — `slot { display: contents; }`: a slot adds an
+        // inheritance step between the host and its slotted nodes, not a box.
+        // `<details>`' content slot is the one exception (`apply_ua_slot`).
+        "slot" => Display::Contents,
         _ => Display::Block,
     }
 }
@@ -206,17 +211,34 @@ pub(in crate::style) fn ua_font_size_factor(doc: &Document, node: NodeId) -> Opt
         _ => None,
     }
 }
-/// UA stylesheet: `vertical-align` для `<sub>` и `<sup>`.
-/// HTML5 §15.3.3: sub → Sub, sup → Super.
-pub(in crate::style) fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
+/// UA stylesheet: `vertical-align` для `<sub>`/`<sup>` (HTML5 §15.3.3: sub → Sub,
+/// sup → Super) и табличных элементов (HTML LS §15.3.8: `tbody, thead, tfoot, tr
+/// { vertical-align: middle }`, `td, th { vertical-align: inherit }`). Атрибут
+/// `valign` на них — presentational hint (§15.3.8): `top`/`middle`/`bottom`/
+/// `baseline` без учёта регистра. `inherited_va` — значение родителя для `inherit`.
+pub(in crate::style) fn ua_vertical_align(
+    doc: &Document,
+    node: NodeId,
+    inherited_va: VerticalAlign,
+) -> Option<VerticalAlign> {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return None;
     };
-    match name.local.as_str() {
-        "sub" => Some(VerticalAlign::Sub),
-        "sup" => Some(VerticalAlign::Super),
-        _ => None,
+    let tag = name.local.as_str();
+    match tag {
+        "sub" => return Some(VerticalAlign::Sub),
+        "sup" => return Some(VerticalAlign::Super),
+        "tbody" | "thead" | "tfoot" | "tr" | "td" | "th" => {}
+        _ => return None,
     }
+    let hinted = doc.get(node).get_attr("valign").and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+        "top" => Some(VerticalAlign::Top),
+        "middle" => Some(VerticalAlign::Middle),
+        "bottom" => Some(VerticalAlign::Bottom),
+        "baseline" => Some(VerticalAlign::Baseline),
+        _ => None,
+    });
+    Some(hinted.unwrap_or(if matches!(tag, "td" | "th") { inherited_va } else { VerticalAlign::Middle }))
 }
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
 /// получают bold по умолчанию (HTML §15.3.3).
@@ -249,6 +271,81 @@ pub(in crate::style) fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &
     style.margin_bottom = LengthOrAuto::Length(Length::Em(0.5));
     style.margin_left = LengthOrAuto::Auto;
     style.margin_right = LengthOrAuto::Auto;
+}
+/// UA stylesheet для `<fieldset>`/`<legend>` (HTML Rendering §15.3.13 «The fieldset and legend
+/// elements»): у fieldset `margin-inline: 2px`, `padding-block: .35em .625em`,
+/// `padding-inline: .75em`, `border: 2px groove` и `min-inline-size: min-content`; у legend
+/// `padding-inline: 2px`. Значения логические — на физические стороны их раскладывает
+/// `writing-mode`, унаследованный к этому моменту (собственный `writing-mode` fieldset'а
+/// из автор-CSS приходит позже UA-фазы и сюда не попадает). Автор перекрывает любое значение.
+pub(in crate::style) fn apply_ua_fieldset_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let vertical = !matches!(style.writing_mode, WritingMode::HorizontalTb);
+    match name.local.as_str() {
+        "fieldset" => {
+            let two = || LengthOrAuto::Length(Length::Px(2.0));
+            let (block_start, block_end, inline_side) =
+                (|| Length::Em(0.35), || Length::Em(0.625), || Length::Em(0.75));
+            if vertical {
+                style.margin_top = two();
+                style.margin_bottom = two();
+                // Блок-начало — справа у `rl`, слева у `lr`.
+                let rl = matches!(style.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
+                style.padding_right = if rl { block_start() } else { block_end() };
+                style.padding_left = if rl { block_end() } else { block_start() };
+                style.padding_top = inline_side();
+                style.padding_bottom = inline_side();
+                style.min_height = Some(Length::MinContent);
+            } else {
+                style.margin_left = two();
+                style.margin_right = two();
+                style.padding_top = block_start();
+                style.padding_bottom = block_end();
+                style.padding_left = inline_side();
+                style.padding_right = inline_side();
+                style.min_width = Some(Length::MinContent);
+            }
+            let groove = CssColor::Rgba(Color { r: 240, g: 240, b: 240, a: 255 });
+            style.border_top_width = 2.0;
+            style.border_right_width = 2.0;
+            style.border_bottom_width = 2.0;
+            style.border_left_width = 2.0;
+            style.border_top_style = BorderStyle::Groove;
+            style.border_right_style = BorderStyle::Groove;
+            style.border_bottom_style = BorderStyle::Groove;
+            style.border_left_style = BorderStyle::Groove;
+            style.border_top_color = groove;
+            style.border_right_color = groove;
+            style.border_bottom_color = groove;
+            style.border_left_color = groove;
+        }
+        "legend" => {
+            // `legend { text-align: start }` не наследуется от предка (`div[align=center] legend`
+            // остаётся у начала строки), а `legend[align]` — это `justify-self` (HTML Rendering
+            // §15.3.13): место legend на границе задаёт он, а не `text-align`. Значения
+            // сравниваются точно, без обрезки пробелов (`align="left "` недопустим).
+            style.text_align = TextAlign::Start;
+            if let Some(v) = doc.get(node).get_attr("align") {
+                style.justify_self = match v.to_ascii_lowercase().as_str() {
+                    "left" => AlignValue::Start,
+                    "center" => AlignValue::Center,
+                    "right" => AlignValue::End,
+                    _ => style.justify_self,
+                };
+            }
+            let pad = || Length::Px(2.0);
+            if vertical {
+                style.padding_top = pad();
+                style.padding_bottom = pad();
+            } else {
+                style.padding_left = pad();
+                style.padding_right = pad();
+            }
+        }
+        _ => {}
+    }
 }
 /// UA stylesheet для `<body>` (HTML Rendering §14.3.3): `body { margin: 8px }`.
 ///
@@ -471,6 +568,35 @@ pub(in crate::style) fn strip_ua_appearance_box_styling(doc: &Document, node: No
         _ => {}
     }
 }
+/// CSS UI L4 §appearance-disabling-properties: author declarations that turn a
+/// native widget (`appearance: auto`) into used `appearance: none`.
+pub(in crate::style) fn is_appearance_disabling_property(prop: &str) -> bool {
+    prop == "background"
+        || prop == "border"
+        || prop == "padding"
+        || prop.starts_with("background-")
+        || prop.starts_with("border-")
+        || prop.starts_with("padding-")
+}
+
+/// Widgets for which the disabling properties apply (HTML LS §15.5): everything
+/// except checkbox/radio/range inputs and dropdown `<select>`.
+pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> bool {
+    let n = doc.get(node);
+    let NodeData::Element { name, .. } = &n.data else { return false; };
+    match name.local.as_str() {
+        "button" | "textarea" | "meter" | "progress" => true,
+        "input" => !n.get_attr("type").is_some_and(|t| {
+            let t = t.trim();
+            ["checkbox", "radio", "range", "hidden"].iter().any(|k| t.eq_ignore_ascii_case(k))
+        }),
+        "select" => {
+            n.get_attr("multiple").is_some()
+                || n.get_attr("size").and_then(|v| v.trim().parse::<u32>().ok()).is_some_and(|v| v > 1)
+        }
+        _ => false,
+    }
+}
 /// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
 /// HTML5 §15.3.9: "dialog:not([open]) { display: none; }"
 pub(in crate::style) fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
@@ -537,6 +663,21 @@ pub(in crate::style) fn apply_ua_hidden(doc: &Document, node: NodeId, style: &mu
         style.content_visibility = ContentVisibility::Hidden;
     } else {
         style.display = Display::None;
+    }
+}
+/// UA stylesheet (HTML LS §15.5.4, GAP-UASHADOWSLOT): the content slot of a
+/// `<details>`' UA shadow tree — `::details-content` in the spec's own sheet —
+/// is `display: block`, and `content-visibility: hidden` while the element has
+/// no `open` attribute. That is what hides a closed `<details>`' content: the
+/// slot keeps a zero-size box, everything slotted into it is skipped.
+///
+/// The slot is keyed by [`lumen_dom::Document::ua_slot_role`], not by a selector: no
+/// author rule can name a node of a closed UA shadow tree.
+pub(in crate::style) fn apply_ua_slot(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let Some((lumen_dom::UaSlotRole::DetailsContent, host)) = doc.ua_slot_role(node) else { return };
+    style.display = Display::Block;
+    if doc.get(host).get_attr("open").is_none() {
+        style.content_visibility = ContentVisibility::Hidden;
     }
 }
 /// UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.

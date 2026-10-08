@@ -39,9 +39,7 @@ use glutin::context::{
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::prelude::*;
 use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface};
-use glutin_winit::GlWindow;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::Window;
 
 use lumen_core::ext::{FontProvider, NORMAL_STRETCH_PERCENT};
 use lumen_core::geom::Size;
@@ -580,6 +578,10 @@ pub struct FemtovgBackend {
     layer_stack_depth: usize,
     /// Стек смещений для position:sticky: (dy, dx).
     sticky_stack: Vec<(f32, f32)>,
+    /// CSS Backgrounds L3 §3.6 — depth of open `BeginFixedBackground`
+    /// brackets: inside one, background positioning geometry cancels the page
+    /// scroll (see [`DisplayCommand::BeginFixedBackground`]).
+    fixed_bg_depth: u32,
     /// Текущий scroll_y, обновляется в `render()` перед обходом content.
     scroll_y: f32,
     /// Текущий scroll_x, обновляется в `render()` перед обходом content.
@@ -1716,16 +1718,16 @@ fn crop_region_rgba(
 /// out horizontally at the local origin onto its vertical column at `dest`.
 ///
 /// Mirrors the CPU rasterizer's transform
-/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x, dest.y)`) and the wgpu
+/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x + dest.width, dest.y)`) and the wgpu
 /// renderer's `rotate_text_vertices_cw`: a point `(x, y)` maps to
-/// `(-y + dest.x, x + dest.y)`. Fed to `Canvas::set_transform`, which
+/// `(-y + dest.x + dest.width, x + dest.y)`. Fed to `Canvas::set_transform`, which
 /// *premultiplies* — so the rotation composes under whatever scale/translate
 /// the enclosing clip or transform layer already installed, instead of
 /// replacing it.
 fn rotate_cw_transform(dest: Rect) -> femtovg::Transform2D {
     // Transform2D is [a, b, c, d, e, f] with x' = a·x + c·y + e,
     // y' = b·x + d·y + f.
-    femtovg::Transform2D([0.0, 1.0, -1.0, 0.0, dest.x, dest.y])
+    femtovg::Transform2D([0.0, 1.0, -1.0, 0.0, dest.x + dest.width, dest.y])
 }
 
 impl FemtovgBackend {
@@ -1740,7 +1742,7 @@ impl FemtovgBackend {
     /// - glutin не может создать контекст или surface
     /// - femtovg не может инициализировать рендерер
     pub fn new(
-        window: Arc<Window>,
+        window: Arc<crate::SurfaceWindow>,
         font_bytes: Vec<u8>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let display_handle = window.display_handle()?.as_raw();
@@ -1780,9 +1782,14 @@ impl FemtovgBackend {
         };
 
         // Создаём surface из winit-окна.
-        let surface_attrs = window
-            .build_surface_attributes(SurfaceAttributesBuilder::<WindowSurface>::new())
-            .map_err(|e| format!("femtovg surface attrs: {e:?}"))?;
+        // Не `GlWindow::build_surface_attributes`: он читает `window_handle()` у
+        // самого winit-окна, а оно отдаётся только потоку-создателю (ADR-032).
+        let inner = window.inner_size();
+        let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+            window_handle,
+            std::num::NonZeroU32::new(inner.width.max(1)).unwrap_or(std::num::NonZeroU32::MIN),
+            std::num::NonZeroU32::new(inner.height.max(1)).unwrap_or(std::num::NonZeroU32::MIN),
+        );
         let gl_surface = unsafe {
             // SAFETY: surface_attrs совместим с gl_config.
             gl_display.create_window_surface(&gl_config, &surface_attrs)?
@@ -1837,6 +1844,7 @@ impl FemtovgBackend {
             fallback_chain: Vec::new(),
             layer_stack_depth: 0,
             sticky_stack: Vec::new(),
+            fixed_bg_depth: 0,
             scroll_y: 0.0,
             scroll_x: 0.0,
             page_offset: (0.0, 0.0),
@@ -3887,6 +3895,27 @@ impl FemtovgBackend {
 
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn render_command(&mut self, cmd: &DisplayCommand) {
+        // CSS Backgrounds L3 §3.6 — a gradient tile of a
+        // `background-attachment: fixed` layer is pure positioning geometry
+        // built at the scroll-0 viewport: undo the page scroll for it (before
+        // culling, so the cull sees its on-screen box). Its painting area is the
+        // enclosing `PushClip*`, already applied under the normal transform.
+        if self.fixed_bg_depth > 0
+            && matches!(
+                cmd,
+                DisplayCommand::DrawLinearGradient { .. }
+                    | DisplayCommand::DrawRadialGradient { .. }
+                    | DisplayCommand::DrawConicGradient { .. }
+            )
+        {
+            let depth = std::mem::replace(&mut self.fixed_bg_depth, 0);
+            self.canvas.save();
+            self.canvas.translate(self.scroll_x, self.scroll_y);
+            self.render_command(cmd);
+            self.canvas.restore();
+            self.fixed_bg_depth = depth;
+            return;
+        }
         // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
         // off-screen under the current transform. Structural commands return
         // `None` from `cull_rect` and always execute (stack balance).
@@ -3922,6 +3951,15 @@ impl FemtovgBackend {
                 if !radii.all_zero() && uniform_solid {
                     self.draw_rounded_border_ring(*rect, *widths, colors[0], *radii);
                 } else {
+                    // groove/ridge/inset/outset — общая геометрия `border_bevel`; эти стороны
+                    // закрашены здесь, ниже идут как `None`.
+                    let styles = &crate::border_bevel::paint_bevel_sides(
+                        *rect,
+                        *widths,
+                        *colors,
+                        *styles,
+                        |piece, color| self.draw_fill_rect(piece.x, piece.y, piece.width, piece.height, color),
+                    );
                     // Side rect order: [top, right, bottom, left]. Each side is rendered
                     // according to its `BorderStyle` (Solid → full quad, Dashed/Dotted →
                     // segment pattern, Double → two thin lines). Geometry mirrors the wgpu
@@ -4102,7 +4140,7 @@ impl FemtovgBackend {
             }
 
             // ── Scroll layer ────────────────────────────────────────────────
-            DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+            DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y, .. } => {
                 // BUG-337: capture the scrollport bound BEFORE this layer's own
                 // scroll translate joins the canvas transform, same convention
                 // as `push_sticky_bound` for the three `PushClip*` commands —
@@ -4154,7 +4192,20 @@ impl FemtovgBackend {
             DisplayCommand::DrawBackgroundImage {
                 rect, origin_rect, src, size, position, repeat, ..
             } => {
-                self.draw_background_image(rect, origin_rect, src, *size, position, *repeat);
+                // CSS Backgrounds L3 §3.6: a fixed layer's positioning area is
+                // the scroll-0 viewport — shift it by the page scroll so the
+                // picture stays put while `rect` (painting area) scrolls.
+                let origin = if self.fixed_bg_depth > 0 {
+                    Rect::new(
+                        origin_rect.x + self.scroll_x,
+                        origin_rect.y + self.scroll_y,
+                        origin_rect.width,
+                        origin_rect.height,
+                    )
+                } else {
+                    *origin_rect
+                };
+                self.draw_background_image(rect, &origin, src, *size, position, *repeat);
             }
 
             // ── Gradients ───────────────────────────────────────────────────
@@ -4944,6 +4995,12 @@ impl FemtovgBackend {
             // content is already at viewport-fixed coords, so no canvas offset.
             DisplayCommand::BeginFixedLayer | DisplayCommand::EndFixedLayer => {}
 
+            // ── Fixed background (CSS Backgrounds L3 §3.6) ───────────────────
+            DisplayCommand::BeginFixedBackground => self.fixed_bg_depth += 1,
+            DisplayCommand::EndFixedBackground => {
+                self.fixed_bg_depth = self.fixed_bg_depth.saturating_sub(1);
+            }
+
             // ── Page break (print only) ──────────────────────────────────────
             DisplayCommand::PageBreak => {}
         }
@@ -5037,6 +5094,7 @@ impl RenderBackend for FemtovgBackend {
         // Обновляем scroll context для sticky-вычислений.
         self.scroll_y = scroll_y;
         self.scroll_x = scroll_x;
+        self.fixed_bg_depth = 0;
         // ADR-016 M0.2: reset per-frame culling counters.
         self.cull_stats = (0, 0);
         // BUG-273 срез 2: advance the filter-cache LRU clock and reset the
@@ -5108,8 +5166,15 @@ impl RenderBackend for FemtovgBackend {
         // present assumes an un-scaled band; preview frames fall back to the direct
         // path, leaving the retained band intact for when preview ends). M3.2.1c-5:
         // and no overlay is nested under a compositing ancestor we cannot replay.
+        //
+        // CSS Backgrounds L3 §3.6: a `background-attachment: fixed` picture stays
+        // put while its element scrolls — the band's pixels depend on scroll
+        // non-linearly, so such a list always renders directly.
         let scroll_blit_active = self.scroll_blit
             && !matches!(overlay_plan, crate::NestedOverlayPlan::Fallback)
+            && !content
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::BeginFixedBackground))
             && self.viewport_css_w > 0.0
             && self.viewport_css_h > 0.0
             && (self.preview_scale - 1.0).abs() <= f32::EPSILON;
@@ -5603,13 +5668,13 @@ mod tests {
 
     #[test]
     fn rotate_cw_transform_matches_cpu_and_wgpu_mapping() {
-        // Both other backends implement `(x, y) -> (-y + dest.x, x + dest.y)`
-        // (tiny-skia `from_row(0, 1, -1, 0, dest.x, dest.y)` /
+        // Both other backends implement `(x, y) -> (-y + dest.x + dest.width, x + dest.y)`
+        // (tiny-skia `from_row(0, 1, -1, 0, dest.x + dest.width, dest.y)` /
         // `rotate_text_vertices_cw`). Any divergence here would place femtovg's
         // vertical runs somewhere the reference backends do not.
         let t = rotate_cw_transform(Rect::new(100.0, 40.0, 30.0, 260.0));
         for (x, y) in [(0.0, 0.0), (12.0, 5.0), (200.0, -8.0), (-3.0, 17.0)] {
-            let expected = (-y + 100.0, x + 40.0);
+            let expected = (-y + 130.0, x + 40.0);
             let got = map(&t, x, y);
             assert!(
                 (got.0 - expected.0).abs() < 1e-4 && (got.1 - expected.1).abs() < 1e-4,
@@ -5621,19 +5686,19 @@ mod tests {
     #[test]
     fn rotate_cw_transform_makes_the_run_flow_downwards_from_the_column_origin() {
         // The `Sideways` branch lays the run out at local `(0, 0)` and relies on
-        // the rotation to start it at the column's top-left and advance
+        // the rotation to start it at the column's top-right and advance
         // top→bottom, matching `wrap_inline_run_vertical`'s column placement.
         let dest = Rect::new(64.0, 12.0, 30.0, 260.0);
         let t = rotate_cw_transform(dest);
-        assert_eq!(map(&t, 0.0, 0.0), (dest.x, dest.y));
+        assert_eq!(map(&t, 0.0, 0.0), (dest.x + dest.width, dest.y));
         // Pen advance along local +X becomes downward movement in the column…
         let advanced = map(&t, 50.0, 0.0);
-        assert_eq!(advanced, (dest.x, dest.y + 50.0));
+        assert_eq!(advanced, (dest.x + dest.width, dest.y + 50.0));
         // …and the local baseline drop (+Y, glyph height) becomes leftward
-        // movement — the glyph body sits to the left of the column origin,
+        // movement — the glyph body sits to the left of the column's right edge,
         // which is why the `Sideways` branch feeds the swapped local rect
         // (width = rect.height, height = rect.width).
-        assert_eq!(map(&t, 0.0, 18.0), (dest.x - 18.0, dest.y));
+        assert_eq!(map(&t, 0.0, 18.0), (dest.x + dest.width - 18.0, dest.y));
     }
 
     // ─── ADR-016 M3.2.1b band geometry ──────────────────────────────────────

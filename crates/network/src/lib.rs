@@ -1266,6 +1266,75 @@ fn connect_h1(
     connect_inner(host, port, is_tls, resolver, tls_profile, socks5, read_timeout, true)
 }
 
+/// RFC 8305 "Connection Attempt Delay": how long to wait for an attempt
+/// before racing the next address.
+const HAPPY_EYEBALLS_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// BUG-1149: Happy Eyeballs (RFC 8305) TCP connect. Addresses are interleaved
+/// by family (first address's family first); the next attempt starts when the
+/// previous one fails or after `delay`, without cancelling it. The first
+/// established connection wins; losing attempts finish in their own threads
+/// and drop their socket. A single address connects inline.
+fn connect_happy_eyeballs(
+    addrs: &[std::net::SocketAddr],
+    timeout: std::time::Duration,
+    delay: std::time::Duration,
+) -> std::result::Result<TcpStream, String> {
+    match addrs {
+        [] => return Err("no addresses".to_owned()),
+        [a] => return TcpStream::connect_timeout(a, timeout).map_err(|e| format!("{a}: {e}")),
+        _ => {}
+    }
+    let first_v6 = addrs[0].is_ipv6();
+    let (same, other): (Vec<_>, Vec<_>) = addrs.iter().copied().partition(|a| a.is_ipv6() == first_v6);
+    let mut ordered = Vec::with_capacity(addrs.len());
+    let (mut si, mut oi) = (same.into_iter(), other.into_iter());
+    loop {
+        match (si.next(), oi.next()) {
+            (None, None) => break,
+            (a, b) => ordered.extend(a.into_iter().chain(b)),
+        }
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut pending = 0usize;
+    let mut next = 0usize;
+    let mut last_err = String::new();
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if next < ordered.len() {
+            let addr = ordered[next];
+            next += 1;
+            pending += 1;
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let r = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("{addr}: {e}"));
+                let _ = tx.send(r);
+            });
+        }
+        if pending == 0 {
+            return Err(last_err);
+        }
+        let wait = if next < ordered.len() {
+            delay
+        } else {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        };
+        match rx.recv_timeout(wait) {
+            Ok(Ok(s)) => return Ok(s),
+            Ok(Err(e)) => {
+                pending -= 1;
+                last_err = e;
+            }
+            Err(_) => {
+                if next >= ordered.len() {
+                    return Err(if last_err.is_empty() { "timed out".to_owned() } else { last_err });
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn connect_inner(
     host: &str,
@@ -1289,24 +1358,8 @@ fn connect_inner(
                 s5.host, s5.port
             )));
         }
-        let mut last_err: Option<Error> = None;
-        let mut tcp_opt: Option<TcpStream> = None;
-        for addr in &proxy_addrs {
-            match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
-                Ok(s) => {
-                    tcp_opt = Some(s);
-                    break;
-                }
-                Err(e) => {
-                    last_err = Some(Error::Network(format!("connect SOCKS5 proxy {addr}: {e}")));
-                }
-            }
-        }
-        let proxy_tcp = tcp_opt.ok_or_else(|| {
-            last_err.unwrap_or_else(|| {
-                Error::Network(format!("connect SOCKS5 proxy {}:{}: no addresses", s5.host, s5.port))
-            })
-        })?;
+        let proxy_tcp = connect_happy_eyeballs(&proxy_addrs, CONNECT_TIMEOUT, HAPPY_EYEBALLS_DELAY)
+            .map_err(|e| Error::Network(format!("connect SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
         // BUG-935 (S10): `socks5_connect` below does several `read_exact`
         // calls with no read timeout on the socket at all — a proxy that
         // accepts the TCP connect (passes `CONNECT_TIMEOUT`) but stalls
@@ -1334,23 +1387,8 @@ fn connect_inner(
                 "resolve {host}:{port}: no addresses"
             )));
         }
-        let mut last_err: Option<Error> = None;
-        let mut tcp_opt: Option<TcpStream> = None;
-        for addr in &addrs {
-            match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
-                Ok(s) => {
-                    tcp_opt = Some(s);
-                    break;
-                }
-                Err(e) => {
-                    last_err = Some(Error::Network(format!("connect {addr}: {e}")));
-                }
-            }
-        }
-        tcp_opt.ok_or_else(|| {
-            last_err
-                .unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
-        })?
+        connect_happy_eyeballs(&addrs, CONNECT_TIMEOUT, HAPPY_EYEBALLS_DELAY)
+            .map_err(|e| Error::Network(format!("connect {host}:{port}: {e}")))?
     };
 
     // BUG-307: without this, a server that accepts the TCP/TLS connection and
@@ -1594,6 +1632,40 @@ fn is_stale_error(err: &Error) -> bool {
         || msg.contains("os error 10054")
 }
 
+/// Ключ пула соединений для `fetch_single` (BUG-1209).
+///
+/// За HTTPS через HTTP-прокси после CONNECT-туннеля физическое соединение
+/// ведёт к целевому origin-у (TLS-сессия установлена к `host:port`), а не к
+/// прокси, поэтому ключуется реальным назначением — иначе `pool.acquire` по
+/// ключу прокси может отдать запросу к host-B TLS-сессию, поднятую для
+/// host-A (421 Misdirected Request, RFC 9110 §15.5.20; в худшем случае
+/// cookies/Authorization host-B уходят в чужой tunnel). Плоский (не-TLS)
+/// relay через прокси остаётся общим по адресу прокси: одно и то же
+/// TCP-соединение легитимно обслуживает любой `Host` через absolute-URI.
+fn pool_key_for_fetch(
+    via_http_proxy: bool,
+    is_tls: bool,
+    host: &str,
+    port: u16,
+    connect_host: &str,
+    connect_port: u16,
+    connect_is_tls: bool,
+) -> PoolKey {
+    if via_http_proxy && is_tls {
+        PoolKey {
+            host: host.to_owned(),
+            port,
+            is_tls: true,
+        }
+    } else {
+        PoolKey {
+            host: connect_host.to_owned(),
+            port: connect_port,
+            is_tls: connect_is_tls,
+        }
+    }
+}
+
 /// Один полный HTTP-запрос: acquire из пула (или connect), write_request,
 /// read_response, release. При попадании на stale pooled connection —
 /// однократный retry с свежим. Возвращает `Response` и в случае success
@@ -1707,192 +1779,181 @@ fn fetch_single(
         (host, port, is_tls)
     };
 
-    let key = PoolKey {
-        host: connect_host.to_owned(),
-        port: connect_port,
-        is_tls: connect_is_tls,
-    };
+    // BUG-1209: за HTTPS через HTTP-прокси после CONNECT-туннеля соединение
+    // привязано к конкретному целевому origin-у (TLS-сессия к host:port), а
+    // не к прокси — ключевать пул нужно реальным назначением, иначе
+    // следующий acquire отдаёт запросу к другому хосту чужую TLS-сессию
+    // (421 Misdirected Request, а в худшем случае утечка cookies/Authorization
+    // не туда).
+    let key = pool_key_for_fetch(effective_proxy.is_some(), is_tls, host, port, connect_host, connect_port, connect_is_tls);
 
     // HTTP/2 (PERF-13): every request to an origin shares one multiplexed
-    // connection. Only for direct/SOCKS5 routes — behind an HTTP proxy `key`
-    // names the proxy, not the origin a CONNECT tunnel leads to.
-    let h2_pool = if effective_proxy.is_none() { h2_pool } else { None };
+    // connection. Direct/SOCKS5 routes always qualify; behind an HTTP proxy
+    // only the TLS/CONNECT-tunnelled leg does — `key` above now names the
+    // real tunnelled origin, so pooling it is safe. The plain-HTTP relay leg
+    // never negotiates h2 (no TLS ALPN), so it is excluded either way.
+    let h2_pool = if effective_proxy.is_none() || is_tls { h2_pool } else { None };
     let scheme = if is_tls { "https" } else { "http" };
-    let mut reservation = None;
-    if let Some(h2p) = h2_pool {
-        let mut retried = false;
-        loop {
-            match h2p.acquire(&key) {
-                h2::pool::Acquire::Mux(mux) => {
-                    match h2_mux_request(&mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
-                        Ok(resp) => return Ok(resp),
-                        // Body larger than the peer's send window: not a failure, a
-                        // routing decision — retry the same request over HTTP/1.1,
-                        // where the body streams into the socket buffer.
-                        Err(e) if is_h2_body_window_error(&e.error) => {
-                            return fetch_single_h1_only(
-                                pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
-                                request_host_header, request_path, range, if_range, authorization,
-                                accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
-                            );
-                        }
-                        // The peer never processed it (GOAWAY, refused stream,
-                        // connection gone before any response): once more on
-                        // whatever connection the pool has or opens next.
-                        Err(e) if e.retryable && !retried => {
-                            h2p.evict(&key, &mux);
-                            retried = true;
-                        }
-                        Err(e) => return Err(e.error),
-                    }
+    let send = |mux: &h2::mux::H2Mux| {
+        h2_mux_request(mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body)
+    };
+    // BUG-1177: a request the peer certainly did not process (queued behind a
+    // dying connection, refused by GOAWAY, lost before any response) is sent
+    // again on a fresh connection — whether it found the connection in the
+    // pool or opened it itself — within one shared budget.
+    let mut resends_left = h2::pool::H2_RESEND_LIMIT;
+    let mut opened: Option<Arc<h2::mux::H2Mux>> = None;
+    let conn = loop {
+        let mut reservation = None;
+        if h2_pool.is_some() || opened.is_some() {
+            match h2::pool::send_resending(h2_pool, &key, opened.take(), &mut resends_left, &send) {
+                h2::pool::Sent::Done(Ok(resp)) => return Ok(resp),
+                // Body larger than the peer's send window: not a failure, a
+                // routing decision — retry the same request over HTTP/1.1,
+                // where the body streams into the socket buffer.
+                h2::pool::Sent::Done(Err(e)) if is_h2_body_window_error(&e.error) => {
+                    return fetch_single_h1_only(
+                        pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                        request_host_header, request_path, range, if_range, authorization,
+                        accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
+                    );
                 }
-                h2::pool::Acquire::Connect(r) => {
-                    reservation = Some(r);
-                    break;
-                }
-                h2::pool::Acquire::Direct => break,
+                h2::pool::Sent::Done(Err(e)) => return Err(e.error),
+                h2::pool::Sent::Connect(r) => reservation = r,
             }
         }
-    }
 
-    // Попытка 1: используем pooled connection, если он есть.
-    if let Some(pooled) = pool.acquire(&key) {
-        // Живое HTTP/1.1-соединение к origin-у — значит, h2 он не говорит.
+        // Попытка 1: используем pooled connection, если он есть.
+        if let Some(pooled) = pool.acquire(&key) {
+            // Живое HTTP/1.1-соединение к origin-у — значит, h2 он не говорит.
+            if let Some(r) = reservation.take() {
+                r.mark_http1();
+            }
+            match do_request(
+                pooled,
+                method,
+                request_host_header,
+                request_path,
+                range,
+                if_range,
+                authorization,
+                accept_encoding,
+                extra_headers,
+                http_profile,
+                stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
+                body,
+            ) {
+                Ok((resp, conn)) => {
+                    if !conn.closed {
+                        pool.release(key, conn);
+                    }
+                    return Ok(resp);
+                }
+                Err(e) if is_stale_error(&e) => {
+                    // Сервер успел закрыть idle-соединение — pooled умер. Дальше
+                    // упадём на ветку «новый connect»; pooled уже не возвращается.
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Попытка 2 (или 1, если пул был пуст): свежий connect.
+        let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
+
+        // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
+        #[allow(clippy::collapsible_if)]
+        if let Some(proxy) = effective_proxy {
+            if is_tls {
+                // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
+                let mut stream = conn.into_stream();
+                let connect_request = format!(
+                    "CONNECT {host}:{port} HTTP/1.1\r\n\
+                    Host: {host}:{port}\r\n\
+                    Connection: keep-alive\r\n"
+                );
+                let auth_header = if let Some(auth) = &proxy.auth {
+                    format!("Proxy-Authorization: Basic {auth}\r\n")
+                } else {
+                    String::new()
+                };
+                let full_request = format!("{}{}\r\n", connect_request, auth_header);
+
+                stream.write_all(full_request.as_bytes())
+                    .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
+                stream.flush()
+                    .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
+
+                // Читаем ответ на CONNECT (должен быть 200 OK).
+                let mut reader = BufReader::new(stream);
+                let mut status_line = String::new();
+                let n = reader.read_line(&mut status_line)
+                    .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
+                if n == 0 {
+                    return Err(Error::Network("EOF before CONNECT status line".to_owned()));
+                }
+
+                if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
+                    return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
+                }
+
+                // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line)
+                        .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
+                    if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
+                        break;
+                    }
+                }
+
+                // Теперь stream находится над HTTP-туннелем. Устанавливаем TLS.
+                let tunnel_stream = reader.into_inner();
+
+                // RawStream::Plain содержит TcpStream внутри.
+                let tcp = match tunnel_stream {
+                    RawStream::Plain(t) => t,
+                    _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
+                };
+
+                let server_name = ServerName::try_from(host.to_owned())
+                    .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+                let tls_config = tls_config_for_profile(tls_profile);
+                let mut tls_conn = ClientConnection::new(tls_config, server_name)
+                    .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+                let mut tcp_copy = tcp;
+                tls_conn.complete_io(&mut tcp_copy)
+                    .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
+
+                let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
+                let cert_info = cert_info_from_completed_handshake(&tls_conn);
+
+                conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
+                conn.is_h2 = is_h2;
+                conn.cert_info = cert_info;
+            }
+        }
+
+        // HTTP/2: hand the fresh connection to a multiplexer and share it via
+        // the pool (the reservation's waiters are parked on exactly this),
+        // then send on it through the same resending path as a pooled one.
+        if conn.is_h2 {
+            let cert_info = conn.cert_info.clone();
+            let h2 = h2::conn::H2Conn::connect_with_profile(conn.into_stream(), http_profile)?;
+            let mux = h2::mux::H2Mux::spawn(h2, cert_info)?;
+            opened = Some(match (reservation.take(), h2_pool) {
+                (Some(r), _) => r.fulfill(mux),
+                (None, Some(h2p)) => h2p.offer(&key, mux),
+                (None, None) => Arc::new(mux),
+            });
+            continue;
+        }
         if let Some(r) = reservation.take() {
             r.mark_http1();
         }
-        match do_request(
-            pooled,
-            method,
-            request_host_header,
-            request_path,
-            range,
-            if_range,
-            authorization,
-            accept_encoding,
-            extra_headers,
-            http_profile,
-            stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
-            body,
-        ) {
-            Ok((resp, conn)) => {
-                if !conn.closed {
-                    pool.release(key, conn);
-                }
-                return Ok(resp);
-            }
-            Err(e) if is_stale_error(&e) => {
-                // Сервер успел закрыть idle-соединение — pooled умер. Дальше
-                // упадём на ветку «новый connect»; pooled уже не возвращается.
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
-
-    // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
-    #[allow(clippy::collapsible_if)]
-    if let Some(proxy) = effective_proxy {
-        if is_tls {
-            // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
-            let mut stream = conn.into_stream();
-            let connect_request = format!(
-                "CONNECT {host}:{port} HTTP/1.1\r\n\
-                Host: {host}:{port}\r\n\
-                Connection: keep-alive\r\n"
-            );
-            let auth_header = if let Some(auth) = &proxy.auth {
-                format!("Proxy-Authorization: Basic {auth}\r\n")
-            } else {
-                String::new()
-            };
-            let full_request = format!("{}{}\r\n", connect_request, auth_header);
-
-            stream.write_all(full_request.as_bytes())
-                .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
-            stream.flush()
-                .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
-
-            // Читаем ответ на CONNECT (должен быть 200 OK).
-            let mut reader = BufReader::new(stream);
-            let mut status_line = String::new();
-            let n = reader.read_line(&mut status_line)
-                .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
-            if n == 0 {
-                return Err(Error::Network("EOF before CONNECT status line".to_owned()));
-            }
-
-            if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
-                return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
-            }
-
-            // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
-            loop {
-                let mut line = String::new();
-                let n = reader.read_line(&mut line)
-                    .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
-                if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
-                    break;
-                }
-            }
-
-            // Теперь stream находится над HTTP-туннелем. Устанавливаем TLS.
-            let tunnel_stream = reader.into_inner();
-
-            // RawStream::Plain содержит TcpStream внутри.
-            let tcp = match tunnel_stream {
-                RawStream::Plain(t) => t,
-                _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
-            };
-
-            let server_name = ServerName::try_from(host.to_owned())
-                .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
-
-            let tls_config = tls_config_for_profile(tls_profile);
-            let mut tls_conn = ClientConnection::new(tls_config, server_name)
-                .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
-
-            let mut tcp_copy = tcp;
-            tls_conn.complete_io(&mut tcp_copy)
-                .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
-
-            let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
-            let cert_info = cert_info_from_completed_handshake(&tls_conn);
-
-            conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
-            conn.is_h2 = is_h2;
-            conn.cert_info = cert_info;
-        }
-    }
-
-    // HTTP/2: hand the fresh connection to a multiplexer and share it via
-    // the pool (the reservation's waiters are parked on exactly this).
-    if conn.is_h2 {
-        let cert_info = conn.cert_info.clone();
-        let h2 = h2::conn::H2Conn::connect_with_profile(conn.into_stream(), http_profile)?;
-        let mux = h2::mux::H2Mux::spawn(h2, cert_info)?;
-        let mux = match (reservation.take(), h2_pool) {
-            (Some(r), _) => r.fulfill(mux),
-            (None, Some(h2p)) => h2p.offer(&key, mux),
-            (None, None) => Arc::new(mux),
-        };
-        return match h2_mux_request(&mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
-            Ok(resp) => Ok(resp),
-            // Same routing fallback as the pooled branch: a body that doesn't fit
-            // the peer's send window goes over HTTP/1.1 instead.
-            Err(e) if is_h2_body_window_error(&e.error) => fetch_single_h1_only(
-                pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
-                request_host_header, request_path, range, if_range, authorization,
-                accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
-            ),
-            Err(e) => Err(e.error),
-        };
-    }
-    if let Some(r) = reservation.take() {
-        r.mark_http1();
-    }
+        break conn;
+    };
 
     // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
     // SOCKS5 туннелирует до реального хоста, поэтому relative path.
@@ -2402,6 +2463,11 @@ fn fetch_with_redirect(
     extra_request_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
+    // BUG-1146: ASCII host of the document the request is made on behalf of
+    // (`HttpClient::document_context`), for EasyList `$domain=`. Unlike
+    // `top_level_site` it is the full host, not the registrable domain, so
+    // `domain=sub.example.com` can match. Propagated verbatim across hops.
+    document_host: Option<&str>,
     proxy: Option<&HttpProxy>,
     socks5_proxy: Option<&socks5::Socks5Proxy>,
     // Alt-Svc cache of the h3 dispatch path (RFC 7838); `Some` ⇔ HTTP/3 enabled.
@@ -2547,6 +2613,7 @@ fn fetch_with_redirect(
         resource_type: destination.map(destination_to_resource_type),
         third_party: top_level_site.map(|tls| !host_ascii.ends_with(tls) && host_ascii != tls),
         is_top_level,
+        document_host,
     };
     if let Some(f) = effective_filter
         && let Some(reason) = f.should_block_ctx(url, &filter_ctx)
@@ -2903,6 +2970,14 @@ fn fetch_with_redirect(
                 let next = url
                     .resolve(location)
                     .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
+                // BUG-1098: Fetch §4.4 HTTP-redirect fetch step «если scheme
+                // locationURL не HTTP(S) — network error». `data:`/`file:`
+                // выше обслуживаются без сети как стартовый URL, но как
+                // redirect-target они обязаны проваливаться, иначе сервер
+                // подсовывает странице содержимое «локальной» схемы.
+                if !matches!(next.scheme(), "http" | "https") {
+                    return Err(Error::Network(format!("unsupported scheme: {}", next.scheme())));
+                }
                 // Range пробрасывается в redirect-target: пользователь
                 // запросил range на исходном URL, ожидает тот же range от
                 // final-resource (это и есть смысл redirect для range-GET).
@@ -2935,6 +3010,7 @@ fn fetch_with_redirect(
                     "",
                     cookie_jar,
                     top_level_site,
+                    document_host,
                     proxy,
                     socks5_proxy,
                     h3_alt_svc,
@@ -3219,6 +3295,11 @@ pub struct HttpClient {
     /// scoped to a document (WebSocket dialers, most tests, worker fetch) —
     /// the hint fetch then falls back to a plain uncached GET.
     subresource_cache: Option<Arc<dyn lumen_core::ext::SubresourceCache>>,
+    /// BUG-1156: the final `Referer` value of a top-level navigation, already
+    /// computed by the shell from the initiator document's URL and referrer
+    /// policy. Sent only by [`Self::fetch_page`]/[`Self::fetch_page_streaming`];
+    /// `None` = user-initiated navigation (no `Referer`).
+    navigation_referrer: Option<String>,
 }
 
 impl HttpClient {
@@ -3258,6 +3339,7 @@ impl HttpClient {
             element_src_policy: None,
             sync_xhr_policy: (None, None),
             document_context: None,
+            navigation_referrer: None,
             subresource_cache: None,
         }
     }
@@ -3272,6 +3354,37 @@ impl HttpClient {
     pub fn with_document_context(mut self, referrer_url: Url, policy: ReferrerPolicy) -> Self {
         self.document_context = Some((referrer_url, policy));
         self
+    }
+
+    /// BUG-1156: attach the `Referer` a top-level navigation carries (the
+    /// value is final — policy already applied by the caller).
+    #[must_use]
+    pub fn with_navigation_referrer(mut self, referrer: Option<String>) -> Self {
+        self.navigation_referrer = referrer;
+        self
+    }
+
+    /// `Upgrade-Insecure-Requests` + `Referer` lines of a top-level navigation.
+    fn navigation_extra_headers(&self, send_uir_header: bool) -> String {
+        let mut h = String::new();
+        if send_uir_header {
+            h.push_str("Upgrade-Insecure-Requests: 1\r\n");
+        }
+        if let Some(r) = self.navigation_referrer.as_deref()
+            && !r.contains(['\r', '\n'])
+        {
+            h.push_str(&format!("Referer: {r}\r\n"));
+        }
+        h
+    }
+
+    /// ASCII host of the [`Self::with_document_context`] document — the page
+    /// EasyList `$domain=` rules are checked against (BUG-1146).
+    fn document_host(&self) -> Option<&str> {
+        self.document_context
+            .as_ref()
+            .map(|(doc_url, _)| doc_url.host_ascii_normalized())
+            .filter(|h| !h.is_empty())
     }
 
     /// Attach the document's CSP `connect-src` (or `default-src`) gate —
@@ -3827,6 +3940,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -3871,6 +3985,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -3949,6 +4064,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4143,6 +4259,7 @@ impl HttpClient {
                     &combined_extra_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.document_host(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4208,6 +4325,7 @@ impl HttpClient {
             &extra_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4330,6 +4448,7 @@ impl HttpClient {
             &extra,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -4397,7 +4516,7 @@ impl HttpClient {
     /// rewrite (that already happened before `url` reached this call, via
     /// `csp_enforce::upgrade_navigation_url` in the shell).
     pub fn fetch_page(&self, url: &Url, body: Option<&NavigationBody>, send_uir_header: bool) -> Result<PageResponse> {
-        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
+        let uir_header = self.navigation_extra_headers(send_uir_header);
         let req_body = body.map(|b| RequestBody {
             method: &b.method,
             content_type: &b.content_type,
@@ -4441,7 +4560,7 @@ impl HttpClient {
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
-                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
                     self.h3_pool(),
@@ -4478,8 +4597,8 @@ impl HttpClient {
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-            self.mixed_content.as_ref(), destination, None, uir_header,
-            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.mixed_content.as_ref(), destination, None, &uir_header,
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
             self.h3_pool(),
@@ -4519,7 +4638,7 @@ impl HttpClient {
         body: Option<&NavigationBody>,
         send_uir_header: bool,
     ) -> Result<PageResponse> {
-        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
+        let uir_header = self.navigation_extra_headers(send_uir_header);
         let req_body = body.map(|b| RequestBody {
             method: &b.method,
             content_type: &b.content_type,
@@ -4565,7 +4684,7 @@ impl HttpClient {
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
-                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
                     self.h3_pool(),
@@ -4605,8 +4724,8 @@ impl HttpClient {
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-            self.mixed_content.as_ref(), destination, None, uir_header,
-            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.mixed_content.as_ref(), destination, None, &uir_header,
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
             self.h3_pool(),
@@ -4675,6 +4794,7 @@ impl NetworkTransport for HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.document_host(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4716,6 +4836,7 @@ impl NetworkTransport for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4963,10 +5084,38 @@ impl JsFetchProvider for HttpClient {
     /// native `_lumen_check_element_src` binding before the shim's `fetch()` —
     /// same "not a single outgoing byte" shape as [`Self::check_media_src`].
     /// The URL is upgraded first, as `fetch_request_impl` will send it.
-    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, integrity: &str) -> Result<()> {
+    fn check_element_src(
+        &self,
+        destination: &str,
+        url: &str,
+        nonce: &str,
+        integrity: &str,
+        parser_inserted: bool,
+    ) -> Result<()> {
         let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
         let url = self.upgrade_insecure_requests_url(url);
-        self.element_src_gate(destination, &url, nonce, integrity)
+        self.element_src_gate(destination, &url, nonce, integrity, parser_inserted)
+    }
+
+    /// BUG-568: the inline `script-src` check for a `<script>`
+    /// `document.write()` wrote, against the same policies as
+    /// [`Self::check_element_src`].
+    fn check_inline_script(&self, nonce: &str, body: &str) -> Result<()> {
+        let Some((policies, _, original_policy)) = &self.element_src_policy else {
+            return Ok(());
+        };
+        let nonce = Some(nonce).filter(|n| !n.is_empty());
+        if policies
+            .iter()
+            .all(|policy| policy.inline_allows(&csp::CspDirective::ScriptSrc, nonce, body))
+        {
+            return Ok(());
+        }
+        Err(Error::CspElementSrcBlocked {
+            directive: "script-src-elem".to_owned(),
+            blocked_uri: "inline".to_owned(),
+            original_policy: original_policy.clone(),
+        })
     }
 
     /// GAP-CSPENF срез 51: `upgrade-insecure-requests` for `<audio src>` —
@@ -5547,8 +5696,17 @@ impl HttpClient {
     /// (BUG-1175) — same shape as [`Self::media_src_gate`], but the check is
     /// the element pre-request one: nonce (and, for a script, integrity and
     /// `'strict-dynamic'`) before the URL. Any destination other than
-    /// `script`/`style` passes.
-    fn element_src_gate(&self, destination: &str, url: &Url, nonce: &str, integrity: &str) -> Result<()> {
+    /// `script`/`style` passes. `parser_inserted` — a `<script src>` that
+    /// `document.write()` wrote (BUG-568), which `'strict-dynamic'` does not
+    /// admit.
+    fn element_src_gate(
+        &self,
+        destination: &str,
+        url: &Url,
+        nonce: &str,
+        integrity: &str,
+        parser_inserted: bool,
+    ) -> Result<()> {
         let Some((policies, self_origin, original_policy)) = &self.element_src_policy else {
             return Ok(());
         };
@@ -5558,7 +5716,7 @@ impl HttpClient {
                 let request = csp::ScriptRequestMetadata {
                     nonce,
                     integrity: Some(integrity).filter(|i| !i.is_empty()),
-                    parser_inserted: false,
+                    parser_inserted,
                 };
                 let blocked = policies
                     .iter()
@@ -5756,6 +5914,7 @@ impl HttpClient {
             &author_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -5806,7 +5965,12 @@ impl SseProvider for HttpClient {
         tab_id: TabId,
         sink: Arc<dyn EventSink>,
     ) -> Result<Box<dyn SseSession>> {
-        let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id)?;
+        let cookies = self.cookie_jar.as_ref().map(|jar| sse::SseCookies {
+            jar: Arc::clone(jar),
+            top_level_site: self.top_level_site.clone(),
+            document_host: self.document_host().map(str::to_owned),
+        });
+        let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id, cookies)?;
         Ok(Box::new(es))
     }
 }
@@ -6308,6 +6472,35 @@ impl FetchInterceptor for InMemoryFetchInterceptor {
 mod tests {
     use super::*;
     use lumen_core::ext::{HttpAuthChallenge, HttpCredentials};
+
+    /// BUG-1149: a refused first address must not delay the second by the OS
+    /// SYN-retry time; the second address wins immediately.
+    #[test]
+    fn happy_eyeballs_falls_through_to_working_address() {
+        let good = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let bad = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let bad_addr = bad.local_addr().unwrap();
+        drop(bad); // closed port → refused
+        let addrs = [bad_addr, good.local_addr().unwrap()];
+        let t = std::time::Instant::now();
+        let s = connect_happy_eyeballs(
+            &addrs,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(50),
+        )
+        .expect("second address must connect");
+        assert_eq!(s.peer_addr().unwrap(), good.local_addr().unwrap());
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn happy_eyeballs_all_refused_is_error() {
+        let bad = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = bad.local_addr().unwrap();
+        drop(bad);
+        assert!(connect_happy_eyeballs(&[a, a], std::time::Duration::from_secs(5), std::time::Duration::from_millis(50)).is_err());
+        assert!(connect_happy_eyeballs(&[], std::time::Duration::from_secs(1), std::time::Duration::from_millis(50)).is_err());
+    }
 
     // ── JsSseSessionImpl (HTML Living Standard §9.2) ─────────────────────────
 
@@ -7670,7 +7863,7 @@ mod tests {
             None,
             policy.to_owned(),
         );
-        <HttpClient as lumen_core::ext::JsFetchProvider>::check_element_src(&client, destination, url, nonce, "")
+        <HttpClient as lumen_core::ext::JsFetchProvider>::check_element_src(&client, destination, url, nonce, "", false)
     }
 
     #[test]
@@ -8224,6 +8417,20 @@ mod tests {
         server.join().unwrap();
     }
 
+    /// BUG-1098: redirect на `data:`/`mailto:` — network error, а не декодирование.
+    #[test]
+    fn redirect_to_non_http_scheme_is_network_error() {
+        for loc in ["data:,HI", "mailto:a@a.com"] {
+            let resp = format!("HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes();
+            let (port, server) = mock_http_server(1, move |_| resp.clone());
+            let client = HttpClient::new();
+            let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+            let err = client.fetch_page(&url, None, false).err().expect("redirect must fail");
+            assert!(format!("{err:?}").contains("unsupported scheme"), "{loc}: {err:?}");
+            server.join().unwrap();
+        }
+    }
+
     /// BUG-757: после редиректа наружу отдаётся адрес hop-а, который ответил
     /// 200, а не запрошенный. Это URL документа для shell (`location.*`,
     /// `document.baseURI`, база относительных подресурсов).
@@ -8257,6 +8464,27 @@ mod tests {
         assert_eq!(page.status, 403);
         assert_eq!(page.body, b"<html>forbidden</html>");
         server.join().unwrap();
+    }
+
+    /// BUG-1156: a top-level navigation sends the `Referer` the shell computed
+    /// (`with_navigation_referrer`) on `fetch_page` and `fetch_page_streaming`,
+    /// and none without it (user-initiated navigation).
+    #[test]
+    fn fetch_page_sends_navigation_referrer_only_when_attached() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(2, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "ok")
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/b?x=1")).unwrap();
+        HttpClient::new()
+            .with_navigation_referrer(Some("http://127.0.0.1:8767/a".to_owned()))
+            .fetch_page(&url, None, false)
+            .expect("fetch_page");
+        HttpClient::new().fetch_page(&url, None, false).expect("fetch_page");
+        server.join().unwrap();
+        let reqs = captured.lock().unwrap().clone();
+        assert!(reqs[0].contains("Referer: http://127.0.0.1:8767/a\r\n"), "{}", reqs[0]);
+        assert!(!reqs[1].to_ascii_lowercase().contains("referer:"), "{}", reqs[1]);
     }
 
     /// BUG-1114 — same contract for `fetch()`: Fetch §4.1 says an HTTP error
@@ -12795,6 +13023,49 @@ mod proxy_tests {
         let client = HttpClient::new().with_proxy(Arc::clone(&proxy));
         // Verify that the proxy was attached (no public accessor, so we just verify it doesn't crash)
         assert!(client.proxy.is_some());
+    }
+
+    // ── BUG-1209: pool key за HTTP-прокси ключуется целевым origin-ом ──────
+
+    #[test]
+    fn pool_key_direct_route_uses_target_host() {
+        // Без прокси ключ — всегда реальный (target) host:port, как раньше.
+        let key = pool_key_for_fetch(false, true, "a.example", 443, "a.example", 443, true);
+        assert_eq!(key.host, "a.example");
+        assert_eq!(key.port, 443);
+        assert!(key.is_tls);
+    }
+
+    #[test]
+    fn pool_key_https_over_proxy_uses_target_not_proxy() {
+        // За HTTP-прокси, после CONNECT-туннеля к TLS-хосту, ключ обязан
+        // называть реальный target — connect_host/connect_port здесь всегда
+        // адрес прокси (см. fetch_single), а ключ должен их игнорировать.
+        let key = pool_key_for_fetch(true, true, "a.example", 443, "proxy.local", 3128, false);
+        assert_eq!(key.host, "a.example");
+        assert_eq!(key.port, 443);
+        assert!(key.is_tls);
+    }
+
+    #[test]
+    fn pool_key_https_over_proxy_distinguishes_two_hosts() {
+        // Регрессия BUG-1209: два разных TLS-хоста за одним прокси не
+        // должны получить один и тот же ключ пула (иначе acquire() отдаёт
+        // TLS-сессию host-A запросу к host-B → 421 Misdirected Request).
+        let key_a = pool_key_for_fetch(true, true, "a.example", 443, "proxy.local", 3128, false);
+        let key_b = pool_key_for_fetch(true, true, "b.example", 443, "proxy.local", 3128, false);
+        assert_ne!(key_a, key_b);
+    }
+
+    #[test]
+    fn pool_key_plain_http_over_proxy_uses_proxy_address() {
+        // Обычный (не-TLS) relay через прокси остаётся общим по адресу
+        // прокси: одно TCP-соединение легитимно обслуживает разные Host
+        // через absolute-URI в строке запроса.
+        let key = pool_key_for_fetch(true, false, "a.example", 80, "proxy.local", 3128, false);
+        assert_eq!(key.host, "proxy.local");
+        assert_eq!(key.port, 3128);
+        assert!(!key.is_tls);
     }
 
     #[test]

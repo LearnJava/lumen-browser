@@ -175,10 +175,16 @@ mod v8_event_propagation;
 mod v8_ws_sse;
 
 #[cfg(feature = "v8-backend")]
+mod v8_websocket_sse;
+
+#[cfg(feature = "v8-backend")]
 mod v8_nav_url_storage;
 
 #[cfg(feature = "v8-backend")]
 mod v8_perf_observers;
+
+#[cfg(feature = "v8-backend")]
+mod v8_dom_observers;
 
 #[cfg(feature = "v8-backend")]
 mod v8_childnode_traversal;
@@ -236,6 +242,8 @@ mod v8_url_abort_clone_blob;
 #[cfg(feature = "v8-backend")]
 mod v8_page_visibility_beacon;
 #[cfg(feature = "v8-backend")]
+mod v8_bug568_document_write;
+#[cfg(feature = "v8-backend")]
 mod v8_event_classes;
 #[cfg(feature = "v8-backend")]
 mod v8_whatwg_streams;
@@ -269,16 +277,65 @@ mod v8_bug493_sheet_registry;
 mod v8_bug504_scroll_flush;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1238_scoped_collectors;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s58_has_flush;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s76_stand;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s78_released_evict;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s59_style_skip;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s60_shallow_roots;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s68_attr_local_roots;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s70_scope_prune;
+mod v8_bug935_s95_pseudo_custom_scope;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s74_node_index_cache;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s77_scroll_rollup_cache;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s64_sheet_delta;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s94_shell_attr_writes;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1245_inline_restyle;
+mod v8_bug1315_grid_cssom;
+mod v8_bug1325_css_text_cssom;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1316_document_parentnode;
+#[cfg(feature = "v8-backend")]
+mod v8_gap_rule_cssom;
+#[cfg(feature = "v8-backend")]
+mod v8_gap_rule_interp;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s61_positioned_skip;
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s62_translated_chain;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug935_s55_content_journal;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug975_scroll_request_sync;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug599_get_root_node;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1055_detached_insert;
+mod v8_bug894_insert_before_validity;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug630_image_load_events;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1118_srez2_subtree_img_load;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1148_srcset_img_load;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug552_document_metadata;
@@ -294,6 +351,7 @@ mod v8_bug560_sync_focus;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug589_window_exotic_object;
+mod v8_bug912_event_class_string;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug602_align_reflection;
@@ -383,10 +441,49 @@ mod v8_bug627_io_root;
 mod v8_bug628_io_take_records;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1131_io_entry;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug671_selection_interface;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1137_history_interface;
+#[cfg(feature = "v8-backend")]
+mod v8_soft_navigation_s1;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1138_html_document;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1139_message_target;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1143_barprop;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug863_cdata_section;
+mod v8_bug1162_xml_create_element;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1130_shadow_root_members;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1119_document_cookie;
+
+#[cfg(feature = "v8-backend")]
+mod v8_gap_uashadowslot;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1123_event_target_chain;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug688_touch_events;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1167_ce_wrapper_gc;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1207_ce_nested_insert;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1158_raw_text_inner_html;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug689_attr_nodes;

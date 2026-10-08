@@ -9,7 +9,7 @@ use crate::*;
 impl Lumen {
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn on_mouse_input(&mut self, event_loop: &ActiveEventLoop, state: ElementState, button: MouseButton) {
+    pub(crate) fn on_mouse_input(&mut self, event_loop: &MainHandle<'_>, state: ElementState, button: MouseButton) {
         // GAP-LAYOUTSHIFT: mark real user input for the CLS `had_input` flag
         // (Layout Instability L1 §3) — any button press counts, not just the
         // one that ends up hit-testing something.
@@ -899,6 +899,9 @@ impl Lumen {
                     // click above landed on a typeable field — `focused_node`/
                     // `focused_frame` are this click's outcome by now.
                     self.begin_text_drag_select(x_css, y_css);
+                    // CSS UI L4 §6.2: page-text drag selection with
+                    // `user-select` enforced; a field drag armed above wins.
+                    self.begin_doc_select(x_css, y_css);
                 }
             }
         } else {
@@ -943,33 +946,11 @@ impl Lumen {
                 let xu = (pos.x as f32) / dpr;
                 let yu = (pos.y as f32) / dpr;
                 let hit_nid = hov.index() as u32;
-                // Pointer Events L3 §4.1: route pointerup to capture target if active.
-                // ADR-016 M2.2c-2d: pre-dispatch capture-read через `route_query_js`
-                // (под флагом — блокирующий `query`; внешний `None` = ветка «без JS»
-                // → `hit_nid`, как прежний `and_then(...).unwrap_or(hit_nid)`).
-                let ptr_nid = route_query_js(
-                    self.engine_thread.as_ref(),
-                    self.js_ctx.as_ref(),
-                    |c| c.pointer_capture_nid(),
-                )
-                .flatten()
-                .unwrap_or(hit_nid);
                 // Buffered moves must fire ahead of pointerup.
                 self.flush_pointer_moves();
-                self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
-                self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
-                // Pointer Events L3 §4.1: implicit release on pointerup.
-                // Читается **после** уже маршрутизированных pointerup/mouseup
-                // eval-`task` — read-after-eval порядок сохранён.
-                if let Some(cap_nid) = route_query_js(
-                    self.engine_thread.as_ref(),
-                    self.js_ctx.as_ref(),
-                    |c| c.take_pointer_capture(),
-                )
-                .flatten()
-                {
-                    self.js_capture_event(cap_nid, "lostpointercapture");
-                }
+                // Pointer Events L3 §4.1: pointerup goes to the capture target, and
+                // the capture is released implicitly afterwards.
+                self.js_pointer_release(hit_nid, xu, yu);
             }
             // BUG-480 срез 16: отпускание над содержимым фрейма — парная
             // ветка к `pointerdown`/`mousedown` выше. Захват указателя
@@ -1051,6 +1032,7 @@ impl Lumen {
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —
             // the selection itself stays, only the drag tracking stops.
             self.text_drag = None;
+            self.doc_select = None;
             // Курсор был «зафиксирован» как Pointer пока тянули
             // thumb; теперь пересчитаем по hover-точке текущего
             // положения курсора (CursorMoved-event на release сам

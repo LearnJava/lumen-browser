@@ -39,8 +39,7 @@ use lumen_font::{
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, font_palette::FontPaletteSelection, style::TextOrientation};
-use winit::window::Window;
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, font_palette::FontPaletteSelection, style::TextOrientation};
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry, InsertOutcome};
 use crate::display_list::{
@@ -1162,6 +1161,10 @@ impl Renderer {
         let viewport_css_h = surface_h as f32 / dpr_f32;
         let viewport_css_w = surface_w as f32 / dpr_f32;
         let mut sticky_stack: Vec<(f32, f32)> = Vec::new();
+        // CSS Backgrounds L3 §3.6 — depth of open `BeginFixedBackground`
+        // brackets of the page list. Inside one, a background's positioning
+        // geometry is viewport-relative: the page scroll is cancelled for it.
+        let mut fixed_bg_depth: u32 = 0;
 
         // Compose-путь скролл-композитора: полоса страницы рисуется первым
         // op-ом level 0 (после LoadOp::Clear того же пасса) — под overlay,
@@ -1361,6 +1364,27 @@ impl Renderer {
             } else {
                 sticky_stack.last().copied().unwrap_or((-scroll_y, -scroll_x))
             };
+            // `background-attachment: fixed` (CSS Backgrounds L3 §3.6): the
+            // positioning area was emitted at the scroll-0 viewport, so adding
+            // the page scroll back keeps the picture still on screen. Gradient
+            // quads are pure positioning geometry (their painting area is the
+            // surrounding `PushClip*`, which keeps the normal offset); for a
+            // background image only `origin_rect` moves — see its arm.
+            let (fbg_dy, fbg_dx) = if fixed_bg_depth > 0 && !is_overlay {
+                (scroll_y, scroll_x)
+            } else {
+                (0.0, 0.0)
+            };
+            let (dy, dx) = if matches!(
+                cmd,
+                DisplayCommand::DrawLinearGradient { .. }
+                    | DisplayCommand::DrawRadialGradient { .. }
+                    | DisplayCommand::DrawConicGradient { .. }
+            ) {
+                (dy + fbg_dy, dx + fbg_dx)
+            } else {
+                (dy, dx)
+            };
             // BUG-771 (диагностика, `LUMEN_TEXT_SIG=2`): сама команда текста
             // overlay-а — чтобы отличить «шелл прислал другой список» от
             // «одну и ту же команду два пути нарисовали по-разному».
@@ -1471,6 +1495,24 @@ impl Renderer {
                     let r = translate_rect(*rect, dx, dy);
                     let fill_v_start = fill_vertices.len() as u32;
                     let circle_v_start = circle_vertices.len() as u32;
+
+                    // groove/ridge/inset/outset (общая геометрия `border_bevel`, как в CPU-растре):
+                    // эти стороны закрашены здесь и ниже идут как `None`. Со скруглением
+                    // угловые дуги остаются сплошными (объёмный стиль у скруглённой рамки — отдельный пробел).
+                    let styles_rest = crate::border_bevel::paint_bevel_sides(
+                        r,
+                        [*wt, *wr, *wb, *wl],
+                        [*ct, *cr, *cb, *cl],
+                        [*st, *sr, *sb, *sl],
+                        |piece, color| {
+                            push_fill_quad(
+                                &mut fill_vertices,
+                                piece,
+                                apply_alpha_to_color(color_to_array(&color), alpha),
+                            );
+                        },
+                    );
+                    let [st, sr, sb, sl] = &styles_rest;
 
                     if radii.all_zero() {
                         // CSS Backgrounds L3 §6.3 — прямоугольные рёбра без угловых дуг.
@@ -2412,7 +2454,7 @@ impl Renderer {
                     // `oarea` — positioning area (background-origin). Used for size/position math
                     //           per CSS Backgrounds L3 §3.5/3.5.2.
                     let area  = translate_rect(*rect, dx, dy);
-                    let oarea = translate_rect(*origin_rect, dx, dy);
+                    let oarea = translate_rect(*origin_rect, dx + fbg_dx, dy + fbg_dy);
                     let Some(gpu) = self.images.get(src) else { continue };
                     let img_w = gpu.width as f32;
                     let img_h = gpu.height as f32;
@@ -2448,14 +2490,8 @@ impl Renderer {
                     };
 
                     // Compute first tile origin from background-position relative to positioning area.
-                    let off_x = match position.x {
-                        PositionComponent::Px(px) => px,
-                        PositionComponent::Percent(p) => (oarea.width - tile_w) * p,
-                    };
-                    let off_y = match position.y {
-                        PositionComponent::Px(py) => py,
-                        PositionComponent::Percent(p) => (oarea.height - tile_h) * p,
-                    };
+                    let off_x = position.x.resolve(oarea.width - tile_w);
+                    let off_y = position.y.resolve(oarea.height - tile_h);
                     let tile_x0 = oarea.x + off_x;
                     let tile_y0 = oarea.y + off_y;
 
@@ -2653,7 +2689,7 @@ impl Renderer {
                 // CSS Overflow L3 §3.2 — PushScrollLayer: clip to padding-box + translate
                 // content by (-scroll_x, -scroll_y). Combines a PushClipRect and a 2D
                 // translation on the transform stack; PopScrollLayer unwinds both.
-                DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+                DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y, .. } => {
                     // Clip (same as PushClipRect, accounting for sticky dx/dy).
                     // Apply the accumulated transform so the clip lands in screen
                     // space (BUG-276 fix, missed here originally — BUG-335): the
@@ -2835,14 +2871,8 @@ impl Renderer {
                                         }
                                     }
                                 };
-                                let off_x = match info.position.x {
-                                    PositionComponent::Px(px) => px,
-                                    PositionComponent::Percent(p) => (area.width - tile_w) * p,
-                                };
-                                let off_y = match info.position.y {
-                                    PositionComponent::Px(py) => py,
-                                    PositionComponent::Percent(p) => (area.height - tile_h) * p,
-                                };
+                                let off_x = info.position.x.resolve(area.width - tile_w);
+                                let off_y = info.position.y.resolve(area.height - tile_h);
                                 let tile_x0 = area.x + off_x;
                                 let tile_y0 = area.y + off_y;
                                 let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match info.repeat {
@@ -3405,6 +3435,18 @@ impl Renderer {
                 // (ADR-016 M3.2.1c). No draw-time offset: fixed content is already
                 // at viewport-fixed coords, so these are pure no-ops here.
                 DisplayCommand::BeginFixedLayer | DisplayCommand::EndFixedLayer => {}
+                // CSS Backgrounds L3 §3.6 — `background-attachment: fixed`
+                // bracket; consumed by the offset computation above.
+                DisplayCommand::BeginFixedBackground => {
+                    if !is_overlay {
+                        fixed_bg_depth += 1;
+                    }
+                }
+                DisplayCommand::EndFixedBackground => {
+                    if !is_overlay {
+                        fixed_bg_depth = fixed_bg_depth.saturating_sub(1);
+                    }
+                }
                 // CSS Masking L1 §5 — PushMaskLayer: open an offscreen layer for mask content.
                 // The caller (emit_box) is responsible for ensuring the element content is
                 // isolated in the parent layer (e.g. via PushOpacity) before calling this.
@@ -5942,7 +5984,7 @@ use pipelines::{
 
 mod band_compose;
 #[cfg(test)]
-use band_compose::{band_blit_quads, band_geometry, ring_advance_plan, RingStrip};
+use band_compose::{band_blit_quads, band_geometry, dirty_strips, ring_advance_plan, RingStrip};
 
 mod frame_entry;
 

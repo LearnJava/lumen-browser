@@ -71,6 +71,15 @@ pub fn collect_image_requests(doc: &Document, viewport: Size) -> Vec<ImageReques
     out
 }
 
+/// BUG-1148: URL, который [`collect_image_requests`] выдал бы для одного
+/// `<img>` — тот же picker (`<picture>`/`srcset`/`sizes`/`src`), но без обхода
+/// всего документа. Нужен JS-рантайму, чтобы поставить загрузку сразу при
+/// мутации источника. Пустая строка — качать нечего.
+#[must_use]
+pub fn pick_image_request_url(doc: &Document, img_id: NodeId, viewport: Size) -> String {
+    resolve_image_source(doc, img_id, viewport).url
+}
+
 /// Обходит готовое layout-дерево и возвращает уникальные URL-ы из
 /// `background-image: url(...)` (CSS Backgrounds L3 §3.10) — те же ключи,
 /// что эмиттер кладёт в `DisplayCommand::DrawBackgroundImage.src`.
@@ -261,7 +270,22 @@ fn collect_bg_image_inner(root: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
 /// Живёт рядом с [`collect_image_requests`] (BUG-430): и шелл, и headless-драйвер
 /// сначала берут URL у picker-а, потом сообщают размеры декодированной картинки
 /// обратно в DOM — правило заполнения слотов обязано быть у обоих одно.
-pub fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height: u32) -> bool {
+///
+/// `viewport` — то же, что [`collect_image_requests`] уже получает: нужен,
+/// чтобы (BUG-969) повторно прогнать picker и узнать effective density
+/// выбранного `Nw`-кандидата `srcset`. `width`/`height` — сырой декодированный
+/// размер битмапа; когда density-correction применима (кандидат выбран по
+/// `Nw` + `sizes`, оба слота пустые), в пустой атрибут уходит `decoded /
+/// density`, а не сырое значение — HTML LS §4.8.4.3.7. Для `Nx`/голого `src`/
+/// не-`<img>` элементов picker отдаёт `density_correction = None`, и запись
+/// не меняется.
+pub fn apply_intrinsic_size(
+    doc: &mut Document,
+    node_id: NodeId,
+    width: u32,
+    height: u32,
+    viewport: Size,
+) -> bool {
     use lumen_dom::{Attribute, QualName};
     // OBJECT-1: у `<object>`/`<embed>` размер уходит в боковую таблицу
     // документа, а не в атрибуты — `object.width` отражает атрибут как есть.
@@ -269,6 +293,14 @@ pub fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, hei
         let url = url.to_string();
         return doc.set_embedded_image(node_id, &url, width, height);
     }
+    let density = resolve_image_source(doc, node_id, viewport).density_correction;
+    let (width, height) = match density {
+        Some(d) if d.is_finite() && d > 0.0 => (
+            ((width as f32) / d).round().max(1.0) as u32,
+            ((height as f32) / d).round().max(1.0) as u32,
+        ),
+        _ => (width, height),
+    };
     let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
         return false;
     };
@@ -452,6 +484,7 @@ pub(crate) fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Siz
             url: url.to_string(),
             intrinsic_width: Some(w),
             intrinsic_height: Some(h),
+            density_correction: None,
         };
     }
     let sizes_vp = SizesViewport {
@@ -474,6 +507,7 @@ pub(crate) fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Siz
             url: picked.url,
             intrinsic_width: picked.intrinsic_width,
             intrinsic_height: picked.intrinsic_height,
+            density_correction: picked.density_correction,
         };
     }
 
@@ -482,9 +516,15 @@ pub(crate) fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Siz
             url: picked.url,
             intrinsic_width: picked.intrinsic_width,
             intrinsic_height: picked.intrinsic_height,
+            density_correction: picked.density_correction,
         };
     }
 
     let raw_src = doc.get(img_id).get_attr("src").unwrap_or("").to_string();
-    ImageSource { url: raw_src, intrinsic_width: None, intrinsic_height: None }
+    ImageSource {
+        url: raw_src,
+        intrinsic_width: None,
+        intrinsic_height: None,
+        density_correction: None,
+    }
 }

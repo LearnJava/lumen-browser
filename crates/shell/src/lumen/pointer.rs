@@ -131,14 +131,23 @@ impl Lumen {
     }
 
     /// Dispatch a `pointermove` whose buffered intermediate samples are exposed
-    /// via `PointerEvent.getCoalescedEvents()` (Pointer Events L3 §4.1).
+    /// via `PointerEvent.getCoalescedEvents()` (Pointer Events L3 §4.1), followed
+    /// by the paired `mousemove` on `hit_nid`.
     /// `coalesced` holds CSS-pixel positions strictly older than
     /// `(x_css, y_css)`, oldest first; the dispatched event is appended last,
     /// per spec. Always dispatches with button=0/buttons=0 — the only caller
     /// is the plain-move flush path, which (like the rest of this file) does
     /// not track held-button state for hover/move events.
+    ///
+    /// Pointer Events L3 §4.1: an active pointer capture redirects `pointermove`
+    /// to the captured element. BUG-935 срез 88: the capture is read **inside**
+    /// the engine-thread task, right before the dispatch, instead of by a blocking
+    /// `route_query_js` on the UI thread — that query sat in the FIFO behind
+    /// whatever the engine thread was running (a ~1 s `maybe_flush`), and the
+    /// move flush runs on every `about_to_wait` tick with buffered samples. The
+    /// read and the dispatch stay in one task, so the order is unchanged.
     #[cfg(feature = "v8")]
-    fn js_pointer_event_coalesced(&self, nid: u32, x_css: f32, y_css: f32, coalesced: &[(f32, f32)]) {
+    fn js_pointer_move_captured(&self, hit_nid: u32, x_css: f32, y_css: f32, coalesced: &[(f32, f32)]) {
         let mut points_json = String::from("[");
         for (i, (cx, cy)) in coalesced.iter().enumerate() {
             if i > 0 {
@@ -147,14 +156,45 @@ impl Lumen {
             points_json.push_str(&format!("[{},{}]", *cx as i32, *cy as i32));
         }
         points_json.push(']');
-        let script = format!(
-            "_lumen_dispatch_pointer_event({}, 'pointermove', {}, {}, 0, 0, {}, {})",
-            nid,
-            x_css as i32, y_css as i32,
-            self.mod_flags(),
-            points_json,
-        );
-        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+        let flags = self.mod_flags();
+        let (x, y) = (x_css as i32, y_css as i32);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            let ptr_nid = js.pointer_capture_nid().unwrap_or(hit_nid);
+            js.eval_js(&format!(
+                "_lumen_dispatch_pointer_event({ptr_nid}, 'pointermove', {x}, {y}, 0, 0, {flags}, {points_json})"
+            ));
+            js.eval_js(&format!(
+                "_lumen_dispatch_mouse_event({hit_nid}, 'mousemove', {x}, {y}, 0, 0, {flags})"
+            ));
+        });
+    }
+
+    /// Left-button release: `pointerup` (to the capture target when a pointer
+    /// capture is active, else `hit_nid`), `mouseup` on `hit_nid`, then the
+    /// implicit release of the capture with `lostpointercapture` (Pointer Events
+    /// L3 §4.1).
+    ///
+    /// BUG-935 срез 88: one engine-thread task instead of two blocking
+    /// `route_query_js` reads around the dispatches — the UI thread no longer
+    /// waits in the engine FIFO on a click. The reads still happen in the same
+    /// order relative to the dispatches (capture read → pointerup/mouseup →
+    /// capture take → lostpointercapture).
+    #[cfg(feature = "v8")]
+    pub(crate) fn js_pointer_release(&self, hit_nid: u32, x_css: f32, y_css: f32) {
+        let flags = self.mod_flags();
+        let (x, y) = (x_css as i32, y_css as i32);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            let ptr_nid = js.pointer_capture_nid().unwrap_or(hit_nid);
+            js.eval_js(&format!(
+                "_lumen_dispatch_pointer_event({ptr_nid}, 'pointerup', {x}, {y}, 0, 0, {flags})"
+            ));
+            js.eval_js(&format!(
+                "_lumen_dispatch_mouse_event({hit_nid}, 'mouseup', {x}, {y}, 0, 0, {flags})"
+            ));
+            if let Some(cap_nid) = js.take_pointer_capture() {
+                js.eval_js(&format!("_lumen_dispatch_capture_event({cap_nid}, 'lostpointercapture')"));
+            }
+        });
     }
 
     /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
@@ -169,16 +209,6 @@ impl Lumen {
             nid, event_type,
             x_css as i32, y_css as i32,
         );
-        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
-    }
-
-    /// Dispatch a `gotpointercapture` or `lostpointercapture` event to DOM node `nid`.
-    ///
-    /// Calls `_lumen_dispatch_capture_event` (W3C Pointer Events L3 §4.1).
-    /// These events do not bubble per spec.  No-op when there is no JS context.
-    #[cfg(feature = "v8")]
-    pub(crate) fn js_capture_event(&self, nid: u32, event_type: &str) {
-        let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
@@ -236,18 +266,8 @@ impl Lumen {
             // Pointer Events L3 §4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
             let hit_nid = result.node.index() as u32;
-            // ADR-016 M2.2c-2d: pre-dispatch capture-read через `route_query_js`
-            // (под флагом — блокирующий `query`; `None` = «без JS» → `hit_nid`).
-            let ptr_nid = route_query_js(
-                self.engine_thread.as_ref(),
-                self.js_ctx.as_ref(),
-                |c| c.pointer_capture_nid(),
-            )
-            .flatten()
-            .unwrap_or(hit_nid);
             let coalesced = &samples[..samples.len() - 1];
-            self.js_pointer_event_coalesced(ptr_nid, x_css, y_css, coalesced);
-            self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
+            self.js_pointer_move_captured(hit_nid, x_css, y_css, coalesced);
         }
     }
 

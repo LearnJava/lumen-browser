@@ -51,7 +51,7 @@ MIDIConnectionEvent(...)'` usage — not affected.)
 Same class of defect already open for `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)), `Serial`/`SerialPort`
-([BUG-672](BUG-672-OPEN.md)) and `HIDManager`/`HIDDevice`
+([BUG-672](BUG-672-FIXED.md)) and `HIDManager`/`HIDDevice`
 ([BUG-713](BUG-713-OPEN.md)) — a forged instance, indistinguishable via
 `instanceof MIDIPort`/`instanceof MIDIAccess` etc. from one legitimately
 returned by `requestMIDIAccess()`. Fifth independent surface of the same
@@ -71,7 +71,7 @@ construction originated from the engine rather than page script.
 
 Fix scope: block public `new MIDIPort(...)`/`new MIDIInput(...)`/
 `new MIDIOutput(...)`/`new MIDIAccess(...)` (same guard pattern proposed for
-[BUG-672](BUG-672-OPEN.md)/[BUG-713](BUG-713-FIXED.md); worth fixing all five
+[BUG-672](BUG-672-FIXED.md)/[BUG-713](BUG-713-FIXED.md); worth fixing all five
 surfaces together once a guard helper exists — common root, same V8-port
 era). Does not require the infra gap (`WebIDLParser.js`/`idlharness.js`) to
 reproduce or verify — the live `--mcp-live-port` probe is sufficient.
@@ -102,4 +102,4 @@ inaccessible_bridge_mutation_does_not_mark_dirty` (флак, проходит в
 одиночном прогоне) и `cases::snapshot_cpu::cpu_snapshots_match_references`
 (чужой дрейф эталонов [BUG-1008](BUG-1008-OPEN.md), тот же набор из
 7 файлов); прогон не дошёл до `lumen-network` из-за известного гейта
-[BUG-805](BUG-805-OPEN.md). Только JS-шим, пиксели не затронуты.
+[BUG-805](BUG-805-FIXED.md). Только JS-шим, пиксели не затронуты.

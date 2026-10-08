@@ -253,7 +253,7 @@ mod tests {
         let doc = Arc::new(Mutex::new(Document::new()));
         // `install_dom` installs this module itself (v8_runtime.rs `install_v8!`),
         // along with the `URL`/`DOMException` the constructor depends on.
-        rt.install_dom(doc, "https://example.org/", None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "https://example.org/", None, None, None, None, None, None, None, None, None, false, None)
             .unwrap();
         f(&rt);
     }
@@ -368,7 +368,7 @@ mod ctor_validation_tests {
     fn runtime(url: &str) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, url, None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, url, None, None, None, None, None, None, None, None, None, false, None)
             .unwrap();
         rt
     }

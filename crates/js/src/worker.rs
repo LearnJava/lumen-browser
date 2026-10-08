@@ -11,7 +11,7 @@
 //! `V8JsRuntime::pump_workers()`, which delivers messages to the matching
 //! `Worker` instance in JS via `_lumen_deliver_worker_messages(msgs)`.
 //!
-//! **importScripts():** supported for `data:` and `blob:lumen/` URLs via
+//! **importScripts():** supported for `data:` and `blob:` URLs via
 //! `WorkerBlobStore` — a Rust-side `Arc<Mutex<HashMap<String, String>>>` that
 //! mirrors text blobs registered by `URL.createObjectURL()` on the main thread.
 //! The WORKER_SHIM wraps `URL.createObjectURL` to populate this store for any
@@ -104,7 +104,7 @@ pub type WorkerMessageQueue = Arc<Mutex<Vec<(u32, String)>>>;
 ///
 /// Populated on the main thread via `_lumen_register_worker_blob(url, text)`
 /// whenever `URL.createObjectURL` is called with a text/javascript Blob.
-/// Worker threads read this store to implement `importScripts('blob:lumen/…')`.
+/// Worker threads read this store to implement `importScripts('blob:…')`.
 pub type WorkerBlobStore = Arc<Mutex<HashMap<String, String>>>;
 
 /// Outbound port-message queue: messages posted by a `MessagePort` living
@@ -233,10 +233,15 @@ pub(crate) fn error_info_json_plain(message: &str, filename: &str, lineno: i32, 
 
 // ─── base64 helpers ───────────────────────────────────────────────────────────
 
-/// Decode standard base64 (RFC 4648 §4) to bytes.
+/// Infra "forgiving-base64 decode" — the algorithm behind `atob` (HTML LS
+/// §8.3) and `data:` URLs (Fetch §data: URLs).
 ///
-/// Returns `None` on any invalid character or bad padding. Whitespace is skipped
-/// so that multi-line base64 (as produced by some tools) is accepted.
+/// ASCII whitespace is stripped; padding is optional, but `=` is accepted only
+/// as one or two trailing characters of an input whose length is a multiple
+/// of 4. Returns `None` for a length ≡ 1 (mod 4) or any character outside the
+/// alphabet — including a `=` anywhere else (BUG-1133: this used to skip `=`
+/// everywhere and ignore the length). Same algorithm as the page-side `atob`
+/// in `shim/web_api_shim_mid_c.js`.
 fn b64_decode(encoded: &str) -> Option<Vec<u8>> {
     const INVALID: u8 = 0xFF;
     let table: [u8; 256] = {
@@ -250,14 +255,25 @@ fn b64_decode(encoded: &str) -> Option<Vec<u8>> {
         t
     };
 
-    let mut out = Vec::with_capacity(encoded.len() * 3 / 4);
+    let mut data: Vec<u8> = encoded
+        .bytes()
+        .filter(|b| !matches!(b, b'\t' | b'\n' | b'\x0C' | b'\r' | b' '))
+        .collect();
+    if data.len().is_multiple_of(4) {
+        for _ in 0..2 {
+            if data.last() == Some(&b'=') {
+                data.pop();
+            }
+        }
+    }
+    if data.len() % 4 == 1 {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(data.len() * 3 / 4);
     let mut buf = 0u32;
     let mut bits = 0u32;
-
-    for b in encoded.bytes() {
-        if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
-            continue;
-        }
+    for b in data {
         let v = table[b as usize];
         if v == INVALID {
             return None;
@@ -321,10 +337,11 @@ fn percent_decode(s: &str) -> String {
 ///
 /// Supported schemes:
 /// - `data:[type][;base64],<content>` — decoded inline; no network required.
-/// - `blob:lumen/<id>` — looked up in `blob_store`.
+/// - `blob:<origin>/<uuid>` — looked up in `blob_store` by the URL without
+///   its fragment (File API §8.3 «resolve a blob URL»).
 /// - anything else — a synchronous GET via `fetch_provider` (BUG-778's
 ///   WPT-RUN-6 extension: `importScripts()` previously only worked for
-///   `data:`/`blob:lumen/`, but the wrapper wptrunner builds for every
+///   `data:`/`blob:`, but the wrapper wptrunner builds for every
 ///   `.worker.html`/`.any.worker.html`/`.any.sharedworker.html` test opens
 ///   with `importScripts("/resources/testharness.js")`). `url` is expected
 ///   pre-resolved to absolute by the calling JS shim (`_lumen_worker_base_url`
@@ -348,8 +365,9 @@ pub(crate) fn resolve_import_url(
         } else {
             Some(percent_decode(content))
         }
-    } else if url.starts_with("blob:lumen/") {
-        blob_store.lock().unwrap().get(url).cloned()
+    } else if url.starts_with("blob:") {
+        let key = url.split('#').next().unwrap_or(url);
+        blob_store.lock().unwrap().get(key).cloned()
     } else {
         fetch_worker_script(fetch_provider, url).map(|(body, _final_url)| body)
     }
@@ -644,6 +662,12 @@ fn worker_global_shim(worker_id: u32) -> String {
     globalThis.location = _lumen_make_worker_location(
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }}
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // above.
+  if (typeof _lumen_make_worker_origin === 'function') {{
+    globalThis.origin = _lumen_make_worker_origin(
+      typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
+  }}
 
   // `isSecureContext` (BUG-766) — computed from the same
   // `_lumen_worker_location_url` `location` was just built from.
@@ -704,7 +728,7 @@ fn worker_global_shim(worker_id: u32) -> String {
     }}
     // Read by `run_worker_thread_v8` to tell "the scope reported this" from a
     // module *load* failure, which never reaches this function at all.
-    globalThis._lumen_worker_error_reported = true;
+    __lumen_C._lumen_worker_error_reported = true;
 
     if (_reportingError) {{ _lumen_worker_report_error(message, file, line, col); return; }}
     _reportingError = true;
@@ -736,7 +760,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   }}
   // The top-level script is evaluated by Rust (`eval_and_report_via`), which
   // can only reach a global.
-  globalThis._lumen_report_worker_exception = _lumen_report_worker_exception;
+  __lumen_C._lumen_report_worker_exception = _lumen_report_worker_exception;
 
   // postMessage(data[, transfer]) — send data back to the main thread.
   // BUG-868 GAP-WORKERSCOPE срез 2: when transfer contains MessagePort
@@ -807,7 +831,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // see `Worker.prototype.postMessage` (worker.rs, page side). `ports`
   // reifies to `ev.ports` in transfer order; a port reference embedded
   // inside `data` itself resolves to the same objects.
-  globalThis._lumen_worker_dispatch_message = function(data) {{
+  __lumen_C._lumen_worker_dispatch_message = function(data) {{
     var payload = data, ports = [];
     if (data && typeof data === 'object' && data.__lumen_msg__ === true) {{
       payload = data.data;
@@ -834,7 +858,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // message addressed to a `MessagePort` transferred into this worker
   // (BUG-868 GAP-WORKERSCOPE срез 2), not to the worker's own `onmessage` —
   // `json` is the raw JSON text of the cloned payload.
-  globalThis._lumen_worker_deliver_port_message = function(portId, json) {{
+  __lumen_C._lumen_worker_deliver_port_message = function(portId, json) {{
     if (typeof _lumenPortRegistry === 'undefined') return;
     var p = _lumenPortRegistry[portId];
     if (!p) return;
@@ -856,7 +880,7 @@ fn worker_global_shim(worker_id: u32) -> String {
 
   // importScripts(url1[, url2, …]) — WHATWG Web Workers §4.2.3.
   // Synchronously loads and evaluates one or more scripts. `data:`/
-  // `blob:lumen/` resolve locally; anything else is resolved against the
+  // `blob:` resolve locally; anything else is resolved against the
   // worker's own script URL (`_lumen_worker_base_url`, set at worker
   // creation — empty for a blob:/data: worker) and fetched over the network
   // (BUG-778 — previously only data:/blob: worked at all, and an http(s) URL
@@ -891,7 +915,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // Exposed so the shared net shim (`worker_net::WORKER_NET_SHIM`, evaluated
   // after this one) can route a throwing fetch/XHR
   // listener through the same reporting path (BUG-591 shape, BUG-778 scope).
-  globalThis._lumen_worker_exception_reporter = _lumen_report_worker_exception;
+  __lumen_C._lumen_worker_exception_reporter = _lumen_report_worker_exception;
 
   // close() — HTML LS §10.2.3 "close a worker" (BUG-778): discard further
   // queued tasks. `_lumen_worker_self_close` flips a shared flag that
@@ -901,7 +925,7 @@ fn worker_global_shim(worker_id: u32) -> String {
   // `WORKER_TIMERS_SHIM`'s task loop so a `close()` from inside a timer stops
   // the remaining due timers of that very flush rather than only the next one.
   globalThis.close = function() {{
-    globalThis._lumen_worker_closed = true;
+    __lumen_C._lumen_worker_closed = true;
     _lumen_worker_self_close();
   }};
 
@@ -967,7 +991,7 @@ const WORKER_RAF_SHIM: &str = include_str!("shim/worker_raf_shim.js");
 /// asserts exactly that, twice).
 #[cfg(feature = "v8-backend")]
 pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
-  if (typeof globalThis._lumen_parse_worker_options === 'function') return;
+  if (typeof __lumen_C._lumen_parse_worker_options === 'function') return;
 
   // `enum WorkerType` (HTML LS §10.2.6.1) and `enum RequestCredentials`
   // (Fetch §5.4) — an out-of-list value is a TypeError, not a fallback to the
@@ -990,7 +1014,7 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
   // the all-defaults dictionary, a non-object is a TypeError, and a member
   // explicitly set to `undefined` counts as absent (so it takes the default
   // rather than failing the enum check).
-  globalThis._lumen_parse_worker_options = function(options) {
+  __lumen_C._lumen_parse_worker_options = function(options) {
     var out = { type: 'classic', credentials: 'same-origin', name: '' };
     if (options === undefined || options === null) return out;
     if (typeof options !== 'object' && typeof options !== 'function') {
@@ -1008,12 +1032,12 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
   // the union sends null/undefined and every object to the dictionary, and
   // anything else (a string, a number, a boolean) to DOMString — i.e. the
   // legacy `new SharedWorker(url, 'my name')` spelling stays a name.
-  globalThis._lumen_parse_shared_worker_options = function(options) {
+  __lumen_C._lumen_parse_shared_worker_options = function(options) {
     if (options !== undefined && options !== null &&
         typeof options !== 'object' && typeof options !== 'function') {
       return { type: 'classic', credentials: 'same-origin', name: String(options) };
     }
-    return globalThis._lumen_parse_worker_options(options);
+    return __lumen_C._lumen_parse_worker_options(options);
   };
 })();
 "#;
@@ -1027,7 +1051,7 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
 ///   (native bindings installed by `install_worker_bindings_v8` above).
 /// - `_lumen_register_worker_blob` (native binding installed above — mirrors
 ///   text blobs into `WorkerBlobStore` so `importScripts` can load them).
-/// - `_object_url_store` (defined in WEB_API_SHIM for blob: URL resolution).
+/// - `_lumen_blob_url_entry` (defined in WEB_API_SHIM for blob: URL resolution).
 /// - `TextDecoder` (defined in WEB_API_SHIM for UTF-8 decoding of blob bytes).
 /// - `atob` (defined in WEB_API_SHIM for data: URLs with base64 encoding).
 #[cfg(feature = "v8-backend")]
@@ -1122,9 +1146,9 @@ const WORKER_SHIM: &str = r#"(function() {
     // is empty, as before.
     var scriptUrl = u;
 
-    if (u.startsWith('blob:lumen/')) {
+    if (u.startsWith('blob:')) {
       // Blob URL created via URL.createObjectURL(blob).
-      var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[u] : null;
+      var blob = (typeof _lumen_blob_url_entry === 'function') ? _lumen_blob_url_entry(u) : null;
       if (blob && blob._bytes) {
         // Decode UTF-8 bytes stored in the Blob.
         try {
@@ -1360,7 +1384,7 @@ const WORKER_SHIM: &str = r#"(function() {
   // the whole-runtime park for a page with a live Worker mirrors the existing
   // WebSocket/EventSource treatment, so such a page falls back to the
   // fresh-runtime-on-restore path, which does tear the old Worker down.
-  globalThis._lumen_has_active_worker = function() {
+  __lumen_C._lumen_has_active_worker = function() {
     for (var k in _workerRegistry) {
       if (Object.prototype.hasOwnProperty.call(_workerRegistry, k)) return true;
     }
@@ -1368,11 +1392,11 @@ const WORKER_SHIM: &str = r#"(function() {
   };
 
   // Also expose the serialization helper for use in tests and advanced callers.
-  globalThis._lumenSerializeWithTransfers = _lumenSerializeWithTransfers;
+  __lumen_C._lumenSerializeWithTransfers = _lumenSerializeWithTransfers;
 
   // Called by QuickJsRuntime::pump_workers() with an array of
   // { id: u32, json: String } objects representing messages from worker threads.
-  globalThis._lumen_deliver_worker_messages = function(msgs) {
+  __lumen_C._lumen_deliver_worker_messages = function(msgs) {
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
       var w = _workerRegistry[m.id];
@@ -1386,7 +1410,7 @@ const WORKER_SHIM: &str = r#"(function() {
   // on this page (BUG-868 GAP-WORKERSCOPE срез 2) — `id` here is a port id
   // from `_lumen_port_prepare_transfer`, not a worker id, so it is routed
   // through `_lumenPortRegistry` rather than `_workerRegistry`.
-  globalThis._lumen_deliver_port_messages = function(msgs) {
+  __lumen_C._lumen_deliver_port_messages = function(msgs) {
     if (typeof _lumenPortRegistry === 'undefined') return;
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
@@ -1403,7 +1427,7 @@ const WORKER_SHIM: &str = r#"(function() {
   // Called by V8JsRuntime::pump_workers() with an array of
   // { id: u32, json: {message, filename, lineno, colno} } objects representing
   // uncaught-exception reports from worker threads (BUG-591).
-  globalThis._lumen_deliver_worker_errors = function(errs) {
+  __lumen_C._lumen_deliver_worker_errors = function(errs) {
     for (var i = 0; i < errs.length; i++) {
       var m = errs[i];
       var w = _workerRegistry[m.id];
@@ -1429,7 +1453,7 @@ const WORKER_SHIM: &str = r#"(function() {
 /// `Worker` JS class into `rt`.
 ///
 /// Must be called after the core DOM shim so that `TextDecoder` and
-/// `_object_url_store` are available for blob-URL resolution in the constructor.
+/// `_lumen_blob_url_entry` are available for blob-URL resolution in the constructor.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]  // BUG-868 GAP-WORKERSCOPE срез 2 added port_queue
@@ -1675,7 +1699,7 @@ fn install_worker_constructor_v8(
 }
 
 /// GAP-CSPENF срез 28: would `provider`'s `worker-src`/`default-src` policy
-/// refuse `url` as an `importScripts()` target? `data:`/`blob:lumen/` URLs
+/// refuse `url` as an `importScripts()` target? `data:`/`blob:` URLs
 /// never reach the network in [`resolve_import_url`], so they need no gate —
 /// CSP source-list matching does not apply to them anyway (CSP3 §6.6.2.1
 /// treats `data:`/`blob:` as always non-matching hosts, but here it is
@@ -1687,7 +1711,7 @@ pub(crate) fn import_scripts_csp_blocked(
     provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
     url: &str,
 ) -> bool {
-    !(url.starts_with("data:") || url.starts_with("blob:lumen/"))
+    !(url.starts_with("data:") || url.starts_with("blob:"))
         && provider.is_some_and(|p| p.check_worker_src(url).is_err())
 }
 
@@ -1907,7 +1931,7 @@ fn run_worker_thread_v8(
         // uncaught top-level worker exception looked to the parent exactly like
         // a worker that never posts anything back).
         let reported = matches!(
-            rt.eval("!!globalThis._lumen_worker_error_reported"),
+            rt.eval("!!__lumen_C._lumen_worker_error_reported"),
             Ok(lumen_core::JsValue::Bool(true))
         );
         if !reported {
@@ -2249,7 +2273,7 @@ fn install_worker_globals_v8(
     // every subsequent `importScripts(url)` call inside an already-running
     // worker to reach the network unchecked (through the plain
     // `fetch_worker_script` branch of [`resolve_import_url`]). `data:`/
-    // `blob:lumen/` URLs bypass the check — they never touch the network in
+    // `blob:` URLs bypass the check — they never touch the network in
     // [`resolve_import_url`] either, so there is nothing for CSP to gate.
     // No `securitypolicyviolation` dispatch here: unlike the constructor
     // path (which runs on the parent's own JS runtime and already had a
@@ -2340,7 +2364,7 @@ pub(crate) const WORKER_ATOB_BTOA_SHIM: &str = r#"(function() {
 /// `DOM_EXCEPTION_POLYFILL`), so the throw itself cannot live in this
 /// native (BUG-1016 — this used to throw a plain `TypeError` here).
 #[cfg(feature = "v8-backend")]
-fn atob_native_v8(
+pub(crate) fn atob_native_v8(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
     rv: &mut v8::ReturnValue,
@@ -2350,7 +2374,9 @@ fn atob_native_v8(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    if let Some(s) = b64_decode(&encoded).and_then(|b| String::from_utf8(b).ok())
+    // `atob` yields a binary string — one Latin-1 code unit per byte, not
+    // UTF-8 (`atob(btoa('\xff'))` must round-trip).
+    if let Some(s) = b64_decode(&encoded).map(|b| b.into_iter().map(char::from).collect::<String>())
         && let Some(v) = v8::String::new(scope, &s)
     {
         rv.set(v.into());
@@ -2362,7 +2388,7 @@ fn atob_native_v8(
 /// [`atob_native_v8`] on why the throw for out-of-Latin1 input lives in
 /// [`WORKER_ATOB_BTOA_SHIM`], not here.
 #[cfg(feature = "v8-backend")]
-fn btoa_native_v8(
+pub(crate) fn btoa_native_v8(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
     rv: &mut v8::ReturnValue,
@@ -2427,6 +2453,20 @@ mod tests {
         assert!(b64_decode("!!!").is_none());
     }
 
+    /// BUG-1133: forgiving-base64 — padding optional, `=` only at the end.
+    #[test]
+    fn b64_decode_is_forgiving_base64() {
+        assert_eq!(b64_decode("YQ").unwrap(), b"a");
+        assert_eq!(b64_decode("YWI").unwrap(), b"ab");
+        assert_eq!(b64_decode("YQ==").unwrap(), b"a");
+        assert_eq!(b64_decode(" Y W\tI=\n").unwrap(), b"ab");
+        assert_eq!(b64_decode("").unwrap(), b"");
+        assert!(b64_decode("YWJjZ").is_none(), "length 1 mod 4");
+        assert!(b64_decode("YQ==YQ==").is_none(), "= in the middle");
+        assert!(b64_decode("YQ=").is_none(), "= without length multiple of 4");
+        assert!(b64_decode("YQ===").is_none());
+    }
+
     // ── percent_decode ─────────────────────────────────────────────────────────
 
     #[test]
@@ -2456,8 +2496,10 @@ mod tests {
     #[test]
     fn resolve_blob_url_from_store() {
         let store = make_store();
-        store.lock().unwrap().insert("blob:lumen/42".to_string(), "var x = 1;".to_string());
-        assert_eq!(resolve_import_url("blob:lumen/42", &store, None).unwrap(), "var x = 1;");
+        store.lock().unwrap().insert("blob:null/42".to_string(), "var x = 1;".to_string());
+        assert_eq!(resolve_import_url("blob:null/42", &store, None).unwrap(), "var x = 1;");
+        // File API §8.3: the fragment takes no part in the lookup.
+        assert_eq!(resolve_import_url("blob:null/42#f", &store, None).unwrap(), "var x = 1;");
     }
 
     #[test]
@@ -2485,6 +2527,23 @@ mod tests_v8 {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    /// Polls (up to 10 s) until the worker has posted something, instead of a
+    /// fixed pause that flakes under parallel load (BUG-1111).
+    fn wait_queue(queue: &WorkerMessageQueue) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while queue.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Same as [`wait_queue`] for the worker error queue.
+    fn wait_errors(errors: &WorkerErrorQueue) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while errors.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn v8_worker_shim_installs_without_error() {
         let rt = V8JsRuntime::new().unwrap();
@@ -2508,6 +2567,20 @@ mod tests_v8 {
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
         let encoded = rt.eval("btoa('hello')").unwrap();
         assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
+
+        // BUG-1133: forgiving-base64 and a Latin-1 binary result.
+        let r = rt
+            .eval(
+                "function t(f){try{return f();}catch(e){return 'THROW '+e.name;}} \
+                 [t(function(){return atob('YQ');}), t(function(){return atob('YWI');}), \
+                  t(function(){return atob('YWJjZ');}), t(function(){return atob('YQ==YQ==');}), \
+                  atob(btoa('\\xff')) === '\\xff'].join('|')",
+            )
+            .unwrap();
+        assert_eq!(
+            r,
+            lumen_core::JsValue::String("a|ab|THROW InvalidCharacterError|THROW InvalidCharacterError|true".into())
+        );
     }
 
     /// BUG-1086: Trusted Types (`self.trustedTypes`) is `[Exposed=(Window,Worker)]`
@@ -2839,7 +2912,6 @@ mod tests_v8 {
     /// `Worker_ErrorEvent_*`/`WorkerGlobalScope_ErrorEvent_*` tests.
     #[test]
     fn v8_worker_end_to_end_message_exception_runs_scope_onerror_then_reports() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -2867,7 +2939,7 @@ mod tests_v8 {
         );
 
         post_to_worker(&reg, worker_id, "\"boom\"".to_string());
-        std::thread::sleep(Duration::from_millis(400));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(
@@ -2890,7 +2962,6 @@ mod tests_v8 {
     /// module *load* failure and must stay quiet here.
     #[test]
     fn v8_worker_end_to_end_top_level_throw_runs_scope_handlers_once() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -2918,7 +2989,7 @@ mod tests_v8 {
             &Arc::new(Mutex::new(Vec::new())),
             &Arc::new(Mutex::new(0u32)), None, None,
         );
-        std::thread::sleep(Duration::from_millis(400));
+        wait_queue(&queue);
 
         let mut msgs: Vec<String> = drain_messages(&queue).into_iter().map(|(_, j)| j).collect();
         msgs.sort();
@@ -3024,6 +3095,8 @@ mod tests_v8 {
                    performance.mark('a'); performance.mark('b');\
                    var m = performance.measure('m', 'a', 'b');\
                    return m.entryType === 'measure' &&\
+                          m instanceof PerformanceMeasure &&\
+                          new PerformanceMark('c') instanceof PerformanceMark &&\
                           performance.getEntriesByType('mark').length === 2;\
                  })()",
             )
@@ -3037,7 +3110,6 @@ mod tests_v8 {
     /// TIMEOUT the three `hr-time` WPT files hit.
     #[test]
     fn v8_worker_end_to_end_performance_now() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3052,7 +3124,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3063,7 +3135,6 @@ mod tests_v8 {
 
     #[test]
     fn v8_worker_end_to_end_postmessage() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3075,7 +3146,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "21".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3091,7 +3162,6 @@ mod tests_v8 {
     /// this reported `object`/`function` was `undefined` for both.
     #[test]
     fn v8_worker_end_to_end_has_offscreen_canvas() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3103,19 +3173,20 @@ mod tests_v8 {
             .to_string();
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].0, worker_id);
-        assert_eq!(msgs[0].1, "\"function,function\"");
+        // BUG-753 срез 2: the native is an engine internal — the worker's shims see it,
+        // the worker's own script no longer does.
+        assert_eq!(msgs[0].1, "\"function,undefined\"");
 
         terminate_worker(&reg, worker_id);
     }
 
     #[test]
     fn v8_worker_import_scripts_via_data_url() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3133,7 +3204,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "34".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1);
@@ -3144,13 +3215,12 @@ mod tests_v8 {
 
     #[test]
     fn v8_worker_import_scripts_via_blob_url() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         // Pre-populate the blob store as the main thread would via createObjectURL.
         let store = make_store();
         store.lock().unwrap().insert(
-            "blob:lumen/helper".to_string(),
+            "blob:null/helper".to_string(),
             "function mul(a,b){return a*b;}".to_string(),
         );
 
@@ -3158,13 +3228,13 @@ mod tests_v8 {
         let nid = Arc::new(Mutex::new(0u32));
 
         let script =
-            "importScripts('blob:lumen/helper');\
+            "importScripts('blob:null/helper');\
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
         post_to_worker(&reg, worker_id, "7".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one reply");
@@ -3203,7 +3273,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let store = make_store();
         store.lock().unwrap().insert(
-            "blob:lumen/1".to_string(),
+            "blob:null/1".to_string(),
             "globalThis._ms1 = 10;".to_string(),
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
@@ -3212,7 +3282,7 @@ mod tests_v8 {
 
         rt.eval(
             "importScripts(\
-               'blob:lumen/1',\
+               'blob:null/1',\
                'data:text/javascript,globalThis._ms2 = 20;'\
              )"
         ).unwrap();
@@ -3340,7 +3410,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "1".to_string());
-        std::thread::sleep(Duration::from_millis(200));
+        wait_queue(&queue);
         post_to_worker(&reg, worker_id, "2".to_string());
         std::thread::sleep(Duration::from_millis(200));
 
@@ -3446,7 +3516,6 @@ mod tests_v8 {
     /// and the JS `Response` wrapper decodes the body back to text.
     #[test]
     fn v8_worker_fetch_reaches_provider_and_decodes_body() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3462,7 +3531,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one fetch()-derived reply: {msgs:?}");
@@ -3476,7 +3545,6 @@ mod tests_v8 {
     /// `semantics/xhr/*` test reads.
     #[test]
     fn v8_worker_xhr_send_reaches_provider() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3494,7 +3562,7 @@ mod tests_v8 {
         let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(300));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one XHR-derived reply: {msgs:?}");
@@ -3572,13 +3640,13 @@ mod tests_v8 {
         );
     }
 
-    /// `data:`/`blob:lumen/` targets never touch the network, so
+    /// `data:`/`blob:null/` targets never touch the network, so
     /// [`import_scripts_csp_blocked`] must not gate them even when the
     /// provider refuses every URL unconditionally.
     #[test]
     fn import_scripts_csp_blocked_skips_data_and_blob_urls() {
         assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "data:text/javascript,1"));
-        assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "blob:lumen/abc"));
+        assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "blob:null/abc"));
         assert!(import_scripts_csp_blocked(Some(&CspBlockedImportNet), "https://blocked.example/lib.js"));
     }
 
@@ -3705,7 +3773,7 @@ mod tests_v8 {
     #[test]
     fn v8_data_url_worker_keeps_its_href_but_has_no_base() {
         assert_eq!(worker_base_url("data:text/javascript,1"), "");
-        assert_eq!(worker_base_url("blob:lumen/7"), "");
+        assert_eq!(worker_base_url("blob:null/7"), "");
         assert_eq!(worker_base_url("https://example.test/w.js"), "https://example.test/w.js");
 
         let rt = V8JsRuntime::new().unwrap();
@@ -3823,7 +3891,6 @@ mod tests_v8 {
     /// ESM loader really runs on the worker thread over the same bridge.
     #[test]
     fn v8_module_worker_evaluates_static_import() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3849,7 +3916,7 @@ mod tests_v8 {
         );
 
         post_to_worker(&reg, worker_id, "0".to_string());
-        std::thread::sleep(Duration::from_millis(500));
+        wait_queue(&queue);
 
         let msgs = drain_messages(&queue);
         assert_eq!(
@@ -3868,7 +3935,6 @@ mod tests_v8 {
     /// state BUG-777 describes (a green test masking a missing feature).
     #[test]
     fn v8_classic_worker_still_rejects_an_import_statement() {
-        use std::time::Duration;
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let store = make_store();
@@ -3889,7 +3955,7 @@ mod tests_v8 {
             &Arc::new(Mutex::new(Vec::new())),
             &Arc::new(Mutex::new(0u32)), None, None,
         );
-        std::thread::sleep(Duration::from_millis(300));
+        wait_errors(&errors);
 
         let errs = drain_errors(&errors);
         assert_eq!(errs.len(), 1, "classic worker should report a parse error: {errs:?}");
@@ -4283,7 +4349,7 @@ mod tests_v8 {
             spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         let mut got: Vec<String> = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
         while Instant::now() < deadline && !got.iter().any(|m| m == "\"interval:2\"") {
             std::thread::sleep(Duration::from_millis(20));
             got.extend(drain_messages(&queue).into_iter().map(|(_, m)| m));

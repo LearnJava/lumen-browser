@@ -68,5 +68,5 @@ fix, out of scope (unrelated `pushstate`/encoding gaps).
 
 Remaining half of the same mixin — the **safe** `Document.parseHTML`/
 `ShadowRoot.prototype.setHTML` (sanitizer-backed, not "unsafe" passthrough) —
-tracked separately in [BUG-663](BUG-663-OPEN.md), which needs the
+tracked separately in [BUG-663](BUG-663-FIXED.md), which needs the
 config-object `Sanitizer` redesign first.

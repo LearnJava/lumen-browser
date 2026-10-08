@@ -105,7 +105,12 @@ class Isolate {
 // The raw ABI shape MSVC x64 actually generates for the C++-declared
 // signature above (see the module docs' "ABI wrinkle" section): the hidden
 // result-buffer pointer is the callback's first parameter, and every other
-// argument shifts one slot right.
+// argument shifts one slot right. Only MSVC x64 needs this: under the Itanium
+// C++ ABI (Linux/macOS, System V x86-64 and AArch64) the struct is trivially
+// copyable, so it is returned in registers and the callback has the plain
+// by-value shape. The Rust side picks the matching function per target
+// (`RawCallback` in `src/v8_runtime/codegen_hook.rs`); this trampoline stores
+// whatever pointer it gets, so the typedef below is only a spelling.
 using LumenRawCodegenCallback = void (*)(
     v8::ModifyCodeGenerationFromStringsResult* out, v8::Local<v8::Context>,
     v8::Local<v8::Value>, bool);

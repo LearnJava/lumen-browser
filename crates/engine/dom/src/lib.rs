@@ -30,6 +30,8 @@ pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_
 pub mod vtt;
 pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_tracks, parse_vtt};
 
+mod journal;
+use journal::ContentJournal;
 mod forms;
 pub use forms::{
     check_form_gate, check_validity_form, collect_dom_form_fields, element_validity,
@@ -42,7 +44,7 @@ use forms::collect_forms;
 mod selection;
 pub use selection::{
     delete_range, insert_paragraph_break, insert_text_at, locate_text_offset_range,
-    node_child_count, node_length, node_text_content, range_text, split_text_node,
+    node_child_count, node_length, node_text_content, range_text, range_text_filtered, split_text_node,
     DomPosition, Range, Selection,
 };
 
@@ -312,21 +314,34 @@ impl fmt::Display for ShadowRootMode {
 }
 
 /// Shape of the UA (user-agent) shadow tree a tag must be given on creation
-/// (BUG-604, HTML LS §4.8.11).
-///
-/// `<select>`/`<details>` (HTML LS §4.10.11/§4.11.1) also spec a UA shadow
-/// tree, but theirs contains a `<slot>` that light-tree children render
-/// through — giving them one for real needs `display: contents` to make the
-/// `<slot>` box itself disappear from the box tree (today `Display::Contents`
-/// is parsed/stored but laid out as `Block`, so a real `<slot>` would insert
-/// a spurious visible wrapper box around every `<select>`/`<details>`'s
-/// content on every page, a layout regression far outside this bug's blast
-/// radius). Deferred, reclassified into `GAP-UASHADOWSLOT`.
+/// (BUG-604, HTML LS §4.8.11; GAP-UASHADOWSLOT, HTML LS §15.5.4/§15.5.15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UaShadowKind {
     /// `<video>`/`<audio>` — shadow root has no `<slot>` at all, so light-tree
     /// children never appear in the flat tree.
     NoSlot,
+    /// `<select>` — one `<slot>` every light-tree child is assigned to. The
+    /// slot is `display: contents` (UA sheet), so it adds an inheritance
+    /// step, not a box.
+    Contents,
+    /// `<details>` — a summary slot taking the first `<summary>` child and a
+    /// content slot taking everything else; the content slot is what the UA
+    /// sheet hides while the element is closed.
+    Details,
+}
+
+/// Which `<slot>` of a UA shadow tree a node is — see
+/// [`Document::ua_slot_role`]. Layout's UA stylesheet keys off this: a slot
+/// the page can neither see nor style has no selector a UA rule could name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UaSlotRole {
+    /// The single slot of `<select>`.
+    SelectContents,
+    /// `<details>`' slot for its first `<summary>` child.
+    DetailsSummary,
+    /// `<details>`' slot for every other child (HTML LS §15.5.4: rendered
+    /// `display: block`, `content-visibility: hidden` while closed).
+    DetailsContent,
 }
 
 /// Which UA shadow tree, if any, `name` must be given on creation.
@@ -336,6 +351,8 @@ fn ua_shadow_kind(name: &QualName) -> Option<UaShadowKind> {
     }
     match name.local.as_str() {
         "video" | "audio" => Some(UaShadowKind::NoSlot),
+        "select" => Some(UaShadowKind::Contents),
+        "details" => Some(UaShadowKind::Details),
         _ => None,
     }
 }
@@ -530,6 +547,17 @@ pub struct Document {
     /// DOM children of the host. The flat tree (see `build_flat_tree`) uses
     /// this map to route layout traversal through shadow trees.
     shadow_roots: HashMap<NodeId, NodeId>,
+    /// UA shadow roots (GAP-UASHADOWSLOT) → their host: the subset of
+    /// `shadow_roots`' values [`Document::attach_ua_shadow_root`] built, as
+    /// opposed to ones a page attached. Keyed by the root, not the host, so a
+    /// later author `attachShadow` on the same host — which replaces the
+    /// host's `shadow_roots` entry — leaves the orphaned UA root recognisably
+    /// out of use ([`Document::ua_shadow_host`]).
+    ///
+    /// Positional slot assignment, the UA styling of the slots and "author
+    /// style sheets do not reach in" all hang off membership here.
+    #[serde(default)]
+    ua_shadow_roots: HashMap<NodeId, NodeId>,
     /// Maps each `<template>` element `NodeId` to its content `DocumentFragment` `NodeId`.
     ///
     /// The fragment is stored in the arena but is not a DOM child of the
@@ -677,6 +705,9 @@ pub struct Document {
     /// stay that way across tab hibernation.
     #[serde(default)]
     dirty_checkedness: HashMap<NodeId, bool>,
+    /// See [`ContentJournal`]. Not serialised.
+    #[serde(skip)]
+    content_journal: ContentJournal,
     /// `document.designMode` (HTML LS §6.6.3): when `true`, the whole document
     /// becomes an editing host even though no element carries an explicit
     /// `contenteditable` attribute — see [`find_editing_host`].
@@ -750,6 +781,8 @@ pub struct Document {
     /// `csp_header`.
     #[serde(default)]
     referrer_policy_header: Option<String>,
+    /// BUG-1156: see [`Document::document_referrer`].
+    document_referrer: Option<String>,
     /// Raw `content` of every `<meta name="referrer">` encountered, in tree
     /// order (GAP-REFERRER срез 3, spec §3/§8.3: a later meta overrides an
     /// earlier one and the response header). Appended by the HTML parser as
@@ -793,6 +826,7 @@ impl Document {
             mode: DocumentMode::default(),
             target_id: None,
             shadow_roots: HashMap::new(),
+            ua_shadow_roots: HashMap::new(),
             template_contents: HashMap::new(),
             selection: Selection::default(),
             composition: None,
@@ -809,6 +843,7 @@ impl Document {
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
+            content_journal: ContentJournal::default(),
             design_mode: false,
             character_set: default_character_set(),
             content_type: default_content_type(),
@@ -816,6 +851,7 @@ impl Document {
             report_to_endpoints: HashMap::new(),
             style_attr_csp_blocked: HashSet::new(),
             referrer_policy_header: None,
+            document_referrer: None,
             meta_referrer: Vec::new(),
         }
     }
@@ -901,6 +937,17 @@ impl Document {
     /// shell's `document_referrer_policy`.
     pub fn referrer_policy_header(&self) -> Option<&str> {
         self.referrer_policy_header.as_deref()
+    }
+
+    /// BUG-1156: the `Referer` the request that fetched this document carried
+    /// (HTML LS §3.1.2 "the document's referrer"); `document.referrer` reads it.
+    pub fn document_referrer(&self) -> Option<&str> {
+        self.document_referrer.as_deref()
+    }
+
+    /// Stamp the document's referrer — see [`Self::document_referrer`].
+    pub fn set_document_referrer(&mut self, referrer: Option<String>) {
+        self.document_referrer = referrer;
     }
 
     /// Set the document's `Referrer-Policy` response header text. Called
@@ -1040,12 +1087,14 @@ impl Document {
     /// forbids reflecting the IDL value into it, and it must keep holding the
     /// default value for `defaultValue`/`form.reset()`.
     pub fn set_control_value(&mut self, id: NodeId, value: impl Into<String>) {
+        self.content_journal.note(id);
         self.dirty_values.insert(id, value.into());
     }
 
     /// Drop the control's dirty value, so it falls back to its default —
     /// what `form.reset()` does to every control it owns (HTML LS §4.10.21.3).
     pub fn clear_control_value(&mut self, id: NodeId) {
+        self.content_journal.note(id);
         self.dirty_values.remove(&id);
     }
 
@@ -1076,6 +1125,7 @@ impl Document {
     /// The `checked` content attribute is deliberately left untouched: it
     /// stays the default that `defaultChecked`/`form.reset()` restore.
     pub fn set_control_checked(&mut self, id: NodeId, checked: bool) {
+        self.content_journal.note(id);
         self.dirty_checkedness.insert(id, checked);
     }
 
@@ -1083,6 +1133,7 @@ impl Document {
     /// `checked` attribute — what `form.reset()` does to every checkbox/radio
     /// it owns (HTML LS §4.10.21.3).
     pub fn clear_control_checked(&mut self, id: NodeId) {
+        self.content_journal.note(id);
         self.dirty_checkedness.remove(&id);
     }
 
@@ -1117,6 +1168,7 @@ impl Document {
     ///
     /// Shadow DOM spec §4.2 «Attaching a shadow root».
     pub fn attach_shadow(&mut self, host: NodeId, mode: ShadowRootMode) -> NodeId {
+        self.content_journal.note(host);
         let sr = self.alloc(NodeData::ShadowRoot { mode });
         self.shadow_roots.insert(host, sr);
         sr
@@ -1140,6 +1192,13 @@ impl Document {
             .iter()
             .find(|&(_, &sr)| sr == shadow_root)
             .map(|(&host, _)| host)
+    }
+
+    /// Every `(host, shadow root)` pair, in unspecified order — the cost is the host count, not
+    /// the arena size (PERF-16 срез 5: `build_shadow_sheets` used to ask `is_shadow_host` of every
+    /// node on every layout pass).
+    pub fn shadow_hosts(&self) -> impl Iterator<Item = (NodeId, NodeId)> + '_ {
+        self.shadow_roots.iter().map(|(&host, &sr)| (host, sr))
     }
 
     /// Whether `id` is a shadow host (has an attached shadow root).
@@ -1219,6 +1278,7 @@ impl Document {
 
     /// Bounds-checked [`Self::get_mut`]; see [`Self::try_get`].
     pub fn try_get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.content_journal.note(id);
         self.nodes.get_mut(id.index())
     }
 
@@ -1239,6 +1299,7 @@ impl Document {
         if !self.contains_id(id) {
             self.foreign_id_panic(id);
         }
+        self.content_journal.note(id);
         &mut self.nodes[id.index()]
     }
 
@@ -1405,6 +1466,13 @@ impl Document {
         NodeId::pack(index, 0)
     }
 
+    /// Arena slots in use — [`Self::node_count`] minus freed slots awaiting reuse
+    /// (BUG-1160). What [`MAX_DOM_NODES`] is measured against: a reclaimed slot
+    /// is free capacity, not a node.
+    pub fn live_node_count(&self) -> usize {
+        self.nodes.len() - self.free_slots.len()
+    }
+
     /// Number of nodes currently allocated in this document's arena (including the root).
     pub fn node_count(&self) -> usize {
         self.nodes.len()
@@ -1430,7 +1498,7 @@ impl Document {
     /// Called by the `_lumen_create_element` JS binding so that JS-driven DOM mutations
     /// cannot grow the tree beyond the safety limit.
     pub fn try_create_element(&mut self, name: QualName) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         let ua_shadow = ua_shadow_kind(&name);
@@ -1444,17 +1512,70 @@ impl Document {
         Ok(id)
     }
 
-    /// Attach the UA (user-agent) shadow tree HTML LS §4.8.11 requires every
-    /// `<video>`/`<audio>` instance to ship with, regardless of how the
-    /// element was created (parser or `createElement`).
+    /// Attach the UA (user-agent) shadow tree HTML LS requires every
+    /// `<video>`/`<audio>`/`<select>`/`<details>` instance to ship with,
+    /// regardless of how the element was created (parser, `createElement`,
+    /// `cloneNode`).
     ///
-    /// The shadow root has no `<slot>` at all: [`compute_slot_assignments`]
-    /// already drops any light-tree child that matches no `<slot>`, so an
-    /// empty shadow tree is sufficient to give `<video>`/`<audio>` children
-    /// the spec-required "never part of the flat tree" behavior for free.
+    /// `<video>`/`<audio>`: no `<slot>` at all — [`compute_slot_assignments`]
+    /// leaves every light-tree child unassigned, which is the spec-required
+    /// "never part of the flat tree". `<select>`/`<details>`: one or two
+    /// `<slot>`s, filled by position ([`ua_slot_assignments`]).
+    ///
+    /// The root is closed, so `Element.shadowRoot` never hands it to a page,
+    /// and the slots are allocated directly rather than through
+    /// [`Document::create_element`] — nothing here is a DOM mutation a page
+    /// could observe.
     fn attach_ua_shadow_root(&mut self, host: NodeId, kind: UaShadowKind) {
-        let UaShadowKind::NoSlot = kind;
-        self.attach_shadow(host, ShadowRootMode::Closed);
+        let sr = self.attach_shadow(host, ShadowRootMode::Closed);
+        self.ua_shadow_roots.insert(sr, host);
+        let slots = match kind {
+            UaShadowKind::NoSlot => 0,
+            UaShadowKind::Contents => 1,
+            UaShadowKind::Details => 2,
+        };
+        for _ in 0..slots {
+            let slot = self.alloc(NodeData::Element {
+                name: QualName::html("slot"),
+                attrs: Vec::new(),
+            });
+            self.append_child(sr, slot);
+        }
+    }
+
+    /// The host of `shadow_root` if it is a UA shadow root
+    /// ([`Document::attach_ua_shadow_root`]) that host still uses.
+    pub fn ua_shadow_host(&self, shadow_root: NodeId) -> Option<NodeId> {
+        let host = *self.ua_shadow_roots.get(&shadow_root)?;
+        (self.shadow_roots.get(&host) == Some(&shadow_root)).then_some(host)
+    }
+
+    /// Whether any shadow root in this document was attached by a page rather
+    /// than by [`Document::attach_ua_shadow_root`].
+    ///
+    /// UA shadow trees carry no style sheet, so the layout paths that stay
+    /// conservative around shadow-scoped styles (`:host`, `::slotted()`, a
+    /// shadow tree's own `<style>`) only need to when this is `true` — not on
+    /// every page that merely has a `<select>`.
+    pub fn has_author_shadow_roots(&self) -> bool {
+        self.shadow_roots.values().any(|sr| !self.ua_shadow_roots.contains_key(sr))
+    }
+
+    /// Which slot of a live UA shadow tree `id` is, together with its host.
+    ///
+    /// `None` for everything else, an author-built `<slot>` included, and for
+    /// a UA slot whose root an author `attachShadow` has since replaced.
+    pub fn ua_slot_role(&self, id: NodeId) -> Option<(UaSlotRole, NodeId)> {
+        let sr = self.nodes.get(id.index())?.parent?;
+        let host = self.ua_shadow_host(sr)?;
+        let first = self.get(sr).children.first() == Some(&id);
+        let role = match self.get(host).element_name()?.local.as_str() {
+            "select" => UaSlotRole::SelectContents,
+            "details" if first => UaSlotRole::DetailsSummary,
+            "details" => UaSlotRole::DetailsContent,
+            _ => return None,
+        };
+        Some((role, host))
     }
 
     /// Create a text node unconditionally. Used by the HTML parser — does **not**
@@ -1471,7 +1592,7 @@ impl Document {
     /// cannot grow the tree beyond the safety limit (BUG-418: unlike `createElement`,
     /// this path was previously ungated entirely).
     pub fn try_create_text(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         Ok(self.alloc(NodeData::Text(content.into())))
@@ -1491,7 +1612,7 @@ impl Document {
     /// cannot grow the tree beyond the safety limit (BUG-418: unlike `createElement`,
     /// this path was previously ungated entirely).
     pub fn try_create_comment(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         Ok(self.alloc(NodeData::Comment(content.into())))
@@ -1518,7 +1639,7 @@ impl Document {
         target: impl Into<String>,
         data: impl Into<String>,
     ) -> Result<NodeId, NodeLimitExceeded> {
-        if self.nodes.len() >= MAX_DOM_NODES {
+        if self.live_node_count() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
         Ok(self.alloc(NodeData::ProcessingInstruction {
@@ -1556,6 +1677,7 @@ impl Document {
         {
             return false;
         }
+        self.content_journal.note(id);
         self.embedded_images.insert(key, (url.to_string(), width, height));
         true
     }
@@ -1574,6 +1696,8 @@ impl Document {
     /// Record whether the `<object>`/`<embed>` `id`'s resource `url` is a
     /// document shown as a nested browsing context (OBJECT-1 срез 2). Returns
     /// `true` when the entry changed — the caller owes the page a relayout.
+    /// An SVG document is recorded as `false` (OBJECT-1 срез 5): it stays
+    /// scriptable, but the image pipeline paints it, not a frame box.
     pub fn set_embedded_document(&mut self, id: NodeId, url: &str, is_document: bool) -> bool {
         let key = id.index() as u32;
         if self
@@ -1583,6 +1707,7 @@ impl Document {
         {
             return false;
         }
+        self.content_journal.note(id);
         self.embedded_documents.insert(key, (url.to_string(), is_document));
         true
     }
@@ -1613,6 +1738,7 @@ impl Document {
     /// Overwrites any previous mapping. Caller must ensure `fragment` was
     /// created with [`create_fragment`][Self::create_fragment].
     pub fn set_template_content(&mut self, template: NodeId, fragment: NodeId) {
+        self.content_journal.note(template);
         self.template_contents.insert(template, fragment);
     }
 
@@ -1652,13 +1778,15 @@ impl Document {
 
     /// Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first.
     pub fn append_child(&mut self, parent: NodeId, child: NodeId) {
-        debug_assert!(parent != child, "cannot append a node to itself");
-        debug_assert!(
-            !self.is_self_or_ancestor(child, parent),
-            "DEVX-8a: append_child(parent={parent:?}, child={child:?}) would create a DOM cycle: \
-             child is already an ancestor of parent"
-        );
+        // BUG-954: a real check, not `debug_assert!` — in `dev-release` it compiled
+        // to nothing and the cycle hung the engine. The JS layer throws
+        // `HierarchyRequestError` before getting here; this is the backstop.
+        if self.is_self_or_ancestor(child, parent) {
+            return;
+        }
         self.detach(child);
+        self.content_journal.note(parent);
+        self.content_journal.note(child);
         self.nodes[child.index()].parent = Some(parent);
         self.nodes[parent.index()].children.push(child);
     }
@@ -1671,14 +1799,15 @@ impl Document {
     pub fn insert_after(&mut self, reference: NodeId, new_node: NodeId) {
         let parent = self.nodes[reference.index()].parent;
         if let Some(p) = parent {
-            debug_assert!(
-                !self.is_self_or_ancestor(new_node, p),
-                "DEVX-8a: insert_after(reference={reference:?}, new_node={new_node:?}) would create \
-                 a DOM cycle: new_node is already an ancestor of reference's parent"
-            );
+            // BUG-954: see `append_child` — refuse to build a cycle.
+            if self.is_self_or_ancestor(new_node, p) {
+                return;
+            }
         }
         self.detach(new_node);
         let Some(parent) = parent else { return };
+        self.content_journal.note(parent);
+        self.content_journal.note(new_node);
         let siblings = &mut self.nodes[parent.index()].children;
         let pos = siblings.iter().position(|&n| n == reference).unwrap_or(siblings.len() - 1);
         siblings.insert(pos + 1, new_node);
@@ -1696,6 +1825,8 @@ impl Document {
     pub fn detach(&mut self, node: NodeId) {
         let parent = self.nodes[node.index()].parent.take();
         if let Some(parent) = parent {
+            self.content_journal.note(parent);
+            self.content_journal.note(node);
             let siblings = &mut self.nodes[parent.index()].children;
             if let Some(pos) = siblings.iter().position(|&n| n == node) {
                 siblings.remove(pos);
@@ -1710,14 +1841,15 @@ impl Document {
     pub fn insert_before(&mut self, new_node: NodeId, reference: NodeId) {
         let parent = self.nodes[reference.index()].parent;
         if let Some(p) = parent {
-            debug_assert!(
-                !self.is_self_or_ancestor(new_node, p),
-                "DEVX-8a: insert_before(new_node={new_node:?}, reference={reference:?}) would create \
-                 a DOM cycle: new_node is already an ancestor of reference's parent"
-            );
+            // BUG-954: see `append_child` — refuse to build a cycle.
+            if self.is_self_or_ancestor(new_node, p) {
+                return;
+            }
         }
         self.detach(new_node);
         let Some(parent) = parent else { return };
+        self.content_journal.note(parent);
+        self.content_journal.note(new_node);
         let siblings = &mut self.nodes[parent.index()].children;
         let pos = siblings
             .iter()
@@ -1734,7 +1866,16 @@ impl Document {
     /// explicit re-attachment by the caller.
     pub fn deep_clone(&mut self, node: NodeId, deep: bool) -> NodeId {
         let data = self.nodes[node.index()].data.clone();
+        let ua_shadow = match &data {
+            NodeData::Element { name, .. } => ua_shadow_kind(name),
+            _ => None,
+        };
         let clone = self.alloc(data);
+        // The clone is a new element of the same tag, so it gets the UA
+        // shadow tree `create_element` would have given it.
+        if let Some(kind) = ua_shadow {
+            self.attach_ua_shadow_root(clone, kind);
+        }
         // DOM §4.4 clone: a CDATASection clones into a CDATASection (BUG-863).
         if self.is_cdata_section(node) {
             self.cdata_sections.insert(clone.index() as u32);
@@ -1934,6 +2075,7 @@ impl Document {
     pub fn reclaim_dead_nodes(&mut self, ids: &[NodeId]) {
         for &id in ids {
             self.shadow_roots.remove(&id);
+            self.ua_shadow_roots.remove(&id);
             self.template_contents.remove(&id);
             self.cdata_sections.remove(&(id.index() as u32));
             self.embedded_images.remove(&(id.index() as u32));
@@ -2233,6 +2375,18 @@ fn collect_anchors(doc: &Document, id: NodeId, out: &mut Vec<AnchorInfo>) {
 pub struct FlatTree {
     /// Nodes whose composed-tree children differ from their DOM children.
     overrides: HashMap<NodeId, Vec<NodeId>>,
+    /// `overridden[i]` — node index `i` has an entry in `overrides`.
+    ///
+    /// GAP-UASHADOWSLOT: every `<select>`/`<details>` now owns a UA shadow
+    /// tree, so `overrides` is non-empty on most real pages and on Lumen's
+    /// own chrome. An index check keeps [`FlatTree::children_of`] at the
+    /// cost BUG-341 S26 bought for shadow-free documents instead of one
+    /// SipHash per node per traversal.
+    overridden: Vec<bool>,
+    /// Composed-tree parent of every node whose composed parent is not its
+    /// DOM parent: a shadow root's children (→ the host) and a slot's
+    /// assigned nodes (→ the slot). See [`FlatTree::parent_of`].
+    parents: HashMap<NodeId, NodeId>,
 }
 
 impl FlatTree {
@@ -2247,7 +2401,7 @@ impl FlatTree {
         // `id` to find that out — one SipHash per node per traversal, and the
         // cascade, box build and a11y tree all traverse per pass. Measured at
         // ~13 ns a lookup over the chrome document's 828 elements.
-        if self.overrides.is_empty() {
+        if !self.overridden.get(id.index()).copied().unwrap_or(false) {
             return doc.get(id).children.as_slice();
         }
         self.overrides
@@ -2256,17 +2410,18 @@ impl FlatTree {
             .unwrap_or_else(|| doc.get(id).children.as_slice())
     }
 
-    /// Whether the composed tree *is* the DOM tree — no shadow host or slot
-    /// moves a node away from its DOM parent.
+    /// Composed-tree parent of `id`: the host for a shadow root or its child,
+    /// the slot for an assigned node, the DOM parent otherwise.
     ///
-    /// BUG-341 S27: a traversal that wants to ask "does this subtree contain
-    /// any of these nodes" cheaply does it by walking each of those nodes up to
-    /// the root, and `Node::parent` is the DOM parent. That answer is the
-    /// composed-tree answer exactly when this holds; a document with shadow
-    /// trees keeps the pre-S27 traversal instead of growing a composed-tree
-    /// parent index for a case Lumen's own chrome does not have.
-    pub fn is_plain(&self) -> bool {
-        self.overrides.is_empty()
+    /// A light-tree child no slot took is not in the composed tree at all;
+    /// for it this answers its DOM parent (the host), which is what a caller
+    /// collecting "every ancestor something could be under" wants — an
+    /// over-approximation, never a missed ancestor.
+    pub fn parent_of(&self, doc: &Document, id: NodeId) -> Option<NodeId> {
+        if self.parents.is_empty() {
+            return doc.get(id).parent;
+        }
+        self.parents.get(&id).copied().or_else(|| doc.get(id).parent)
     }
 }
 
@@ -2277,7 +2432,6 @@ impl FlatTree {
 ///
 /// Fast path: if the document has no shadow hosts, returns an empty `FlatTree`
 /// (every `children_of` call falls through to DOM children).
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn build_flat_tree(doc: &Document) -> FlatTree {
     if doc.shadow_roots.is_empty() {
         return FlatTree::default();
@@ -2285,13 +2439,10 @@ pub fn build_flat_tree(doc: &Document) -> FlatTree {
 
     let mut overrides: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
 
-    for i in 0..doc.len() {
-        let id = doc.node_id_at(i);
-        if !doc.is_shadow_host(id) {
-            continue;
-        }
-        let sr = doc.shadow_root_of(id).expect("shadow host has no root");
-
+    // Straight over the host map rather than over every arena slot asking
+    // `is_shadow_host`: with a UA shadow tree on every `<select>`/`<details>`
+    // this runs on most pages, and the host count is what it costs.
+    for (&id, &sr) in &doc.shadow_roots {
         // Shadow host's composed children = shadow root's DOM children.
         overrides.insert(id, doc.get(sr).children.clone());
 
@@ -2300,7 +2451,21 @@ pub fn build_flat_tree(doc: &Document) -> FlatTree {
         wire_slot_overrides(doc, sr, &slot_map, &mut overrides);
     }
 
-    FlatTree { overrides }
+    let mut overridden = vec![false; doc.len()];
+    // A shadow root is not in the composed tree itself, but a mutation of its
+    // child list is a change under its host.
+    let mut parents: HashMap<NodeId, NodeId> =
+        doc.shadow_roots.iter().map(|(&host, &sr)| (sr, host)).collect();
+    for (&parent, children) in &overrides {
+        overridden[parent.index()] = true;
+        for &child in children {
+            if doc.get(child).parent != Some(parent) {
+                parents.insert(child, parent);
+            }
+        }
+    }
+
+    FlatTree { overrides, overridden, parents }
 }
 
 /// Maps each `<slot>` NodeId to its assigned light-tree nodes.
@@ -2313,6 +2478,9 @@ type SlotAssignments = HashMap<NodeId, Vec<NodeId>>;
 /// children are dropped (they don't appear in the flat tree).
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAssignments {
+    if doc.ua_shadow_host(sr) == Some(host) {
+        return ua_slot_assignments(doc, host, sr);
+    }
     let mut slots: Vec<(NodeId, String)> = Vec::new();
     collect_slots(doc, sr, &mut slots);
 
@@ -2329,6 +2497,32 @@ fn compute_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAss
         // Children with no matching slot are not rendered in the flat tree.
     }
 
+    map
+}
+
+/// Slot assignment inside a UA shadow tree (GAP-UASHADOWSLOT).
+///
+/// By position, never by name — a `slot=""` attribute on a light-tree child
+/// means nothing to `<select>`/`<details>`. HTML LS §15.5.4: the summary slot
+/// "is expected to take the details element's first child summary element
+/// child, if any", the other slot takes the rest. No slot (`<video>`/
+/// `<audio>`) leaves every child unassigned.
+fn ua_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAssignments {
+    let children = &doc.get(host).children;
+    let mut map: SlotAssignments = HashMap::new();
+    match doc.get(sr).children.as_slice() {
+        [] => {}
+        [only] => {
+            map.insert(*only, children.clone());
+        }
+        [summary_slot, content_slot, ..] => {
+            let summary = children.iter().copied().find(|&c| {
+                matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "summary")
+            });
+            map.insert(*summary_slot, summary.into_iter().collect());
+            map.insert(*content_slot, children.iter().copied().filter(|&c| Some(c) != summary).collect());
+        }
+    }
     map
 }
 
@@ -2511,8 +2705,11 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
 
 /// `type="image/…"` на `<object>`/`<embed>` — автор обещал картинку.
 fn embedded_type_is_image(node: &Node) -> bool {
+    // OBJECT-1 срез 5: `image/svg+xml` — XML MIME-тип, то есть вложенный
+    // документ, а не картинка (HTML LS §4.8.7 шаг 4.9).
     node.get_attr("type")
         .map(str::trim)
+        .filter(|t| !t.eq_ignore_ascii_case("image/svg+xml"))
         .and_then(|t| t.get(..6))
         .is_some_and(|p| p.eq_ignore_ascii_case("image/"))
 }
@@ -3554,11 +3751,106 @@ mod tests {
     fn ordinary_elements_are_not_shadow_hosts() {
         let mut doc = Document::new();
         let div = doc.create_element(QualName::html("div"));
+        assert!(!doc.is_shadow_host(div));
+        assert!(!doc.has_author_shadow_roots());
+    }
+
+    /// `<details>` with `[summary?, other children…]` appended under the root.
+    fn details_with(doc: &mut Document, children: &[&str]) -> (NodeId, Vec<NodeId>) {
+        let details = doc.create_element(QualName::html("details"));
+        doc.append_child(doc.root(), details);
+        let kids = children
+            .iter()
+            .map(|&tag| {
+                let c = doc.create_element(QualName::html(tag));
+                doc.append_child(details, c);
+                c
+            })
+            .collect();
+        (details, kids)
+    }
+
+    #[test]
+    fn select_and_details_get_ua_shadow_root_with_slots() {
+        // GAP-UASHADOWSLOT: one slot for `<select>`, summary + content slot
+        // for `<details>` — none of them visible to a DOM traversal.
+        let mut doc = Document::new();
         let select = doc.create_element(QualName::html("select"));
         let details = doc.create_element(QualName::html("details"));
-        assert!(!doc.is_shadow_host(div));
-        assert!(!doc.is_shadow_host(select));
-        assert!(!doc.is_shadow_host(details));
+        for (host, slots) in [(select, 1), (details, 2)] {
+            let sr = doc.shadow_root_of(host).expect("UA shadow host");
+            assert_eq!(doc.ua_shadow_host(sr), Some(host));
+            assert_eq!(doc.get(sr).children.len(), slots);
+            assert!(doc.get(host).children.is_empty());
+        }
+        let roles: Vec<_> = [select, details]
+            .iter()
+            .flat_map(|&h| doc.get(doc.shadow_root_of(h).unwrap()).children.clone())
+            .map(|slot| doc.ua_slot_role(slot).map(|(role, _)| role))
+            .collect();
+        assert_eq!(
+            roles,
+            [Some(UaSlotRole::SelectContents), Some(UaSlotRole::DetailsSummary), Some(UaSlotRole::DetailsContent)]
+        );
+        assert!(!doc.has_author_shadow_roots());
+    }
+
+    #[test]
+    fn details_slots_take_first_summary_and_the_rest_by_position() {
+        let mut doc = Document::new();
+        let (details, kids) = details_with(&mut doc, &["p", "summary", "summary", "div"]);
+        // A `slot` attribute means nothing to a UA shadow tree.
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(kids[3]).data {
+            attrs.push(Attribute { name: QualName::html("slot"), value: "summary".into() });
+        }
+        let flat = build_flat_tree(&doc);
+        let slots = flat.children_of(&doc, details).to_vec();
+        assert_eq!(slots.len(), 2);
+        assert_eq!(flat.children_of(&doc, slots[0]), &[kids[1]]);
+        assert_eq!(flat.children_of(&doc, slots[1]), &[kids[0], kids[2], kids[3]]);
+        // The composed parent of a slotted node is its slot, of a slot its host.
+        assert_eq!(flat.parent_of(&doc, kids[1]), Some(slots[0]));
+        assert_eq!(flat.parent_of(&doc, slots[1]), Some(details));
+    }
+
+    #[test]
+    fn select_slot_takes_every_child() {
+        let mut doc = Document::new();
+        let select = doc.create_element(QualName::html("select"));
+        doc.append_child(doc.root(), select);
+        let a = doc.create_element(QualName::html("option"));
+        let b = doc.create_element(QualName::html("optgroup"));
+        doc.append_child(select, a);
+        doc.append_child(select, b);
+        let flat = build_flat_tree(&doc);
+        let [slot] = flat.children_of(&doc, select) else { panic!("one slot") };
+        assert_eq!(flat.children_of(&doc, *slot), &[a, b]);
+    }
+
+    #[test]
+    fn cloned_details_gets_its_own_ua_shadow_root() {
+        let mut doc = Document::new();
+        let (details, _) = details_with(&mut doc, &["summary"]);
+        let clone = doc.deep_clone(details, true);
+        let sr = doc.shadow_root_of(clone).expect("clone is a UA shadow host");
+        assert_ne!(Some(sr), doc.shadow_root_of(details));
+        assert_eq!(doc.ua_shadow_host(sr), Some(clone));
+        assert_eq!(doc.get(clone).children.len(), 1);
+    }
+
+    #[test]
+    fn author_shadow_root_replaces_ua_one() {
+        // A later `attachShadow` on the same host orphans the UA root: its slots
+        // lose their role and the author tree is assigned by name again.
+        let mut doc = Document::new();
+        let (details, _) = details_with(&mut doc, &[]);
+        let ua = doc.shadow_root_of(details).unwrap();
+        let ua_slot = doc.get(ua).children[0];
+        let author = doc.attach_shadow(details, ShadowRootMode::Open);
+        assert_eq!(doc.ua_shadow_host(ua), None);
+        assert_eq!(doc.ua_slot_role(ua_slot), None);
+        assert_eq!(doc.ua_shadow_host(author), None);
+        assert!(doc.has_author_shadow_roots());
     }
 
     #[test]
@@ -4938,23 +5230,28 @@ mod tests {
 
     /// OBJECT-1 срез 2: `<object data>`/`<embed src>` — кандидаты во вложенный
     /// документ; `type="image/…"`, пустой адрес и вердикт «не документ» —
-    /// нет.
+    /// нет. `type="image/svg+xml"` — XML-тип, кандидат (срез 5).
     #[test]
     fn collect_iframes_offers_object_and_embed_as_embedded_hosts() {
         let mut doc = Document::new();
         let obj = append_with_attrs(&mut doc, "object", &[("data", "a.html"), ("name", "o")]);
         let embed = append_with_attrs(&mut doc, "embed", &[("src", "b.txt")]);
-        append_with_attrs(&mut doc, "object", &[("data", "i.svg"), ("type", "image/svg+xml")]);
+        let svg = append_with_attrs(&mut doc, "object", &[("data", "i.svg"), ("type", "image/svg+xml")]);
+        append_with_attrs(&mut doc, "object", &[("data", "i.png"), ("type", "image/png")]);
         append_with_attrs(&mut doc, "object", &[("data", "  ")]);
         append_with_attrs(&mut doc, "embed", &[("data", "wrong-attr.html")]);
         let frames = collect_iframes(&doc);
         let got: Vec<(NodeId, Option<&str>, bool)> =
             frames.iter().map(|f| (f.node, f.src.as_deref(), f.embedded)).collect();
-        assert_eq!(got, vec![(obj, Some("a.html"), true), (embed, Some("b.txt"), true)]);
+        assert_eq!(
+            got,
+            vec![(obj, Some("a.html"), true), (embed, Some("b.txt"), true), (svg, Some("i.svg"), true)]
+        );
         assert_eq!(frames[0].name.as_deref(), Some("o"));
 
         assert!(doc.set_embedded_document(embed, "b.txt", false));
         assert!(!doc.set_embedded_document(embed, "b.txt", false), "тот же вердикт — не изменение");
+        doc.set_embedded_document(svg, "i.svg", false);
         let nodes: Vec<NodeId> = collect_iframes(&doc).iter().map(|f| f.node).collect();
         assert_eq!(nodes, vec![obj], "«не документ» больше не предлагается");
     }
@@ -6510,6 +6807,22 @@ mod tests {
         assert_eq!(doc.node_count(), MAX_DOM_NODES);
         let result = doc.try_create_element(QualName::html("p"));
         assert_eq!(result, Err(NodeLimitExceeded));
+    }
+
+    #[test]
+    fn try_create_element_ok_after_reclaim_frees_slots_at_limit() {
+        // BUG-1160: the cap counts live slots, not arena length — a reclaimed
+        // slot is free capacity again.
+        let mut doc = Document::new();
+        while doc.node_count() < MAX_DOM_NODES {
+            doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(doc.try_create_element(QualName::html("p")), Err(NodeLimitExceeded));
+        let dead = doc.dead_node_ids();
+        doc.reclaim_dead_nodes(&dead);
+        assert_eq!(doc.live_node_count(), MAX_DOM_NODES - dead.len());
+        assert!(doc.try_create_element(QualName::html("p")).is_ok());
+        assert_eq!(doc.node_count(), MAX_DOM_NODES, "freed slot reused, arena did not grow");
     }
 
     #[test]

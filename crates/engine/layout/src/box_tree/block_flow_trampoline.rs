@@ -1,5 +1,7 @@
 use super::*;
-use super::layout_dispatch::{dispatch_box, finalize_block_height, finish_after_match};
+use super::layout_cache::finalize_block_height;
+use super::line_clamp_flow;
+use super::layout_dispatch::{dispatch_box, finish_after_match, FontContext};
 
 /// LAYOUT-2 срез 1 — see `dispatch_box`'s doc comment (`layout_dispatch.rs`)
 /// for why this split exists. `Done` matches every dispatch arm that already
@@ -69,6 +71,9 @@ pub(super) struct BlockFlowInit {
     pub(super) b_collapses_bottom: bool,
     pub(super) seen_inflow_child: bool,
     pub(super) inside_marker_w: f32,
+    /// Line height of the pending inside marker — consumed together with
+    /// `inside_marker_w` when the first in-flow child is block-level.
+    pub(super) inside_marker_h: f32,
     pub(super) abs_deferred: Vec<(usize, f32, f32)>,
     pub(super) s: Arc<ComputedStyle>,
     pub(super) em: f32,
@@ -120,6 +125,9 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         rect: Rect::ZERO,
         style: Arc::clone(&slot.style),
         used_line_height: 0.0,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         kind: BoxKind::Skip,
         children: Vec::new(),
         col_span: 1,
@@ -236,6 +244,11 @@ fn step_child(
     let children_available_height = frame.init.children_available_height;
     let children_pcb = frame.init.children_pcb;
 
+    // Rendered legend уже стоит на границе fieldset (`place_rendered_legend`).
+    if frame.b.fieldset_legend.is_some_and(|l| l.placed && l.idx == i) {
+        return StepOutcome::Advance;
+    }
+
     if matches!(frame.b.children[i].style.position, Position::Absolute | Position::Fixed) {
         let child_y = frame.init.child_y;
         frame.init.abs_deferred.push((i, content_x, child_y));
@@ -264,8 +277,7 @@ fn step_child(
         } else {
             measurer.map_or(0.0, |m| {
                 let fams = &child.style.font_family;
-                let ts = child.style.tab_size
-                    * m.char_width_with_families(' ', em, fams);
+                let ts = super::inline_wrap::TabStops::of(&child.style, m).unit;
                 measure_text_w_families(
                     &marker_text, em, child.style.letter_spacing, ts, fams, m,
                 )
@@ -293,6 +305,7 @@ fn step_child(
                     line_h.round(),
                 );
                 frame.init.inside_marker_w = marker_w.round();
+                frame.init.inside_marker_h = line_h.round();
                 // Do NOT advance child_y — marker is inline with content.
             }
         }
@@ -325,17 +338,39 @@ fn step_child(
         return StepOutcome::Advance;
     }
 
+    // CSS Lists L3 §2.4 — `list-style-position: inside`: the marker is an
+    // inline box at the start of the principal box's first line.
+    //  * first in-flow child is an inline run → the marker shares line 0:
+    //    that line alone is inset by the marker width (`first_line_inset`,
+    //    like `text-indent`), wrapped lines return to the content edge;
+    //  * first in-flow child is block-level → the marker sits alone in an
+    //    anonymous line box above it, so the block starts one marker line
+    //    lower at the full content width (margins do not collapse through
+    //    the marker's line box);
+    //  * anything else (inline-block row, replaced) keeps the historical
+    //    horizontal shift of the child.
+    let inside_marker_w = std::mem::take(&mut frame.init.inside_marker_w);
+    let inside_marker_h = std::mem::take(&mut frame.init.inside_marker_h);
+    let mut marker_shift = 0.0;
+    if inside_marker_w > 0.0 {
+        let child = &mut frame.b.children[i];
+        match &mut child.kind {
+            BoxKind::InlineRun { first_line_inset, .. } => *first_line_inset = inside_marker_w,
+            BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table => {
+                frame.init.child_y += inside_marker_h;
+                frame.init.prev_block_mb = 0.0;
+                frame.init.seen_inflow_child = true;
+            }
+            _ => marker_shift = inside_marker_w,
+        }
+    }
     let child_y = frame.init.child_y;
     // Normal flow: narrow x/width for active floats.
     let flow_left  = frame.init.fc.left_edge_at(child_y, content_x);
     let flow_right = frame.init.fc.right_edge_at(child_y, container_right);
-    // Apply inside-marker indent to the first normal-flow content child.
-    let (mut eff_left, mut eff_w) = if frame.init.inside_marker_w > 0.0 {
-        let l = flow_left + frame.init.inside_marker_w;
-        frame.init.inside_marker_w = 0.0;
+    let (mut eff_left, mut eff_w) = {
+        let l = flow_left + marker_shift;
         (l, (flow_right - l).max(0.0))
-    } else {
-        (flow_left, (flow_right - flow_left).max(0.0))
     };
     // CSS 2.1 §9.5: a block-level box in normal flow is NOT narrowed by
     // floats — its width and margins resolve against the full containing
@@ -348,7 +383,16 @@ fn step_child(
     let mut outer_for_child: Option<&FloatContext> = None;
     {
         let child = &frame.b.children[i];
-        if (flow_left > content_x || flow_right < container_right)
+        // CSS Shapes L1 §3: a paragraph beside a float with a `shape-outside`
+        // spans the full containing block and wraps per line box against the
+        // contour (`inline_shape_wrap`) instead of the float's margin rectangle.
+        if matches!(child.kind, BoxKind::InlineRun { .. })
+            && frame.init.fc.shapes_bottom() > child_y
+        {
+            eff_left = content_x + marker_shift;
+            eff_w = (content_width - marker_shift).max(0.0);
+            outer_for_child = Some(&frame.init.fc);
+        } else if (flow_left > content_x || flow_right < container_right)
             && child.style.width.is_none()
             && matches!(child.kind, BoxKind::Block)
             && !establishes_bfc(child)
@@ -450,6 +494,16 @@ fn step_child(
 
     let justify_items = frame.init.s.justify_items;
     let child = &mut frame.b.children[i];
+    // Writing Modes L3 §7.3.1 (FLEX-VWM-4): an in-flow orthogonal block whose
+    // containing block has no definite height shrinks to its content along the
+    // inline axis (physical height) instead of filling the initial containing
+    // block. The root element is not one: its containing block is the ICB itself.
+    // A vertical flex container sizes itself from its items (`flex_trampoline`).
+    let children_available_height = if children_available_height.is_none() && !child_is_root_element && is_block {
+        super::intrinsic::orthogonal_fit_content_height(child, eff_w, measurer, viewport)
+    } else {
+        children_available_height
+    };
     match dispatch_box(
         child, eff_left, start_y, eff_w, children_available_height, measurer, viewport,
         children_pcb, hp, !child_is_root_element, outer_for_child, justify_items, None,
@@ -496,7 +550,12 @@ fn step_child(
         // LAYOUT-2 срез 8: a block-flow normal-flow child that is itself a
         // vertical-writing-mode container — same shape as the flex/grid/
         // table/multicol arms above.
-        DispatchOutcome::NeedsVerticalLoop(child_init) => {
+        DispatchOutcome::NeedsVerticalLoop(mut child_init) => {
+            // An orthogonal flow is an independent formatting context: its margins do
+            // not collapse with its own children's, and it encloses its floats.
+            child_init.collapses_start = false;
+            child_init.collapses_end = false;
+            child_init.encloses_floats = true;
             super::vertical_trampoline::run(child, child_init, measurer, viewport, hp);
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
@@ -528,6 +587,18 @@ fn place_float(
     let child = &mut frame.b.children[i];
 
     let cem = child.style.font_size;
+    // CSS 2.1 §10.3.5 shrink-to-fit applies to the float's *inline* size, which
+    // runs along y in a vertical writing mode: offer no more height than the
+    // box's max-content one (an auto-height vertical float used to fill it all).
+    let children_available_height = if !matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && child.style.height.is_none()
+        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+    {
+        let room = children_available_height.unwrap_or(viewport.height);
+        Some(room.min(max_content_outer_height(child, measurer, viewport)))
+    } else {
+        children_available_height
+    };
     // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
     // otherwise preferred content width, falling back to max-content
     // measurement for text-only floats (e.g. the ::first-letter drop-cap box,
@@ -547,6 +618,17 @@ fn place_float(
     // when squeezed next to prior floats, so it never dropped to a new line
     // under rule 8 below and poisoned every later `clear_y` computation that
     // depended on its true bottom edge (BUG-469).
+    // `lay_out` treats its `available_width` as the room for the margin box, so
+    // the shrink-to-fit border-box width has to be handed over with the
+    // float's horizontal margins added back.
+    // A bare text run (the `::first-letter` box) takes `available_width` as its
+    // own width, margins not included.
+    let probe_margins = if matches!(child.kind, BoxKind::InlineRun { .. }) {
+        0.0
+    } else {
+        child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport)
+            + child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport)
+    };
     let probe_w = if child.style.width.is_some() {
         content_width
     } else {
@@ -555,7 +637,7 @@ fn place_float(
                 let w = max_content_outer_width(child, measurer, viewport);
                 (w > 0.0).then_some(w)
             })
-            .map(|pw| pw.min(probe_avail))
+            .map(|pw| (pw + probe_margins).min(probe_avail))
             .unwrap_or(probe_avail)
     };
     lay_out(child, fc.left_edge_at(child_y, content_x), child_y, probe_w,
@@ -603,7 +685,7 @@ fn place_float(
                     let w = max_content_outer_width(child, measurer, viewport);
                     (w > 0.0).then_some(w)
                 })
-                .map(|pw| pw.min(avail_w))
+                .map(|pw| (pw + probe_margins).min(avail_w))
                 .unwrap_or(avail_w)
         };
         lay_out(child, avail_left, child_y, w,
@@ -617,6 +699,11 @@ fn place_float(
     let fw  = child.rect.width;
     let fh  = child.rect.height;
 
+    // The trial layout put the float at the left edge of the line; its
+    // descendants are absolute, so every move of the float box below has to
+    // carry the subtree along (a right float otherwise left its text behind
+    // at the container's left edge).
+    let laid_out_at = (child.rect.x, child.rect.y);
     match child.style.float_side {
         FloatSide::Left => {
             let lx = fc.left_edge_at(child_y, content_x);
@@ -626,40 +713,9 @@ fn place_float(
             let bot_y  = top_y + fh + fmb;
             let right_edge = lx + fml + fw + fmr;
             fc.add_left(bot_y, right_edge);
-            // CSS Shapes L1 — wire shape-outside for left float.
-            // Margin-box origin: (lx, child_y). Points are float-local.
-            if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
-                if let Some(r) = parse_circle_px(sv) {
-                    let cx = child.rect.x + fw / 2.0;
-                    let cy = top_y + fh / 2.0;
-                    fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
-                } else if let Some(local_pts) = parse_shape_path_px(sv)
-                    .or_else(|| parse_shape_polygon_px(sv))
-                {
-                    let pts = local_pts.into_iter()
-                        .map(|(px, py)| (px + lx, py + child_y))
-                        .collect();
-                    fc.shape_polygons.push(ShapePolygon {
-                        top_y, bottom_y: bot_y, is_left: true, points: pts,
-                    });
-                } else if let Some((rx, ry, ecx, ecy)) = parse_shape_ellipse_px(sv) {
-                    fc.shape_ellipses.push(ShapeEllipse {
-                        top_y, bottom_y: bot_y, is_left: true,
-                        cx: ecx + lx, cy: ecy + child_y, rx, ry,
-                    });
-                } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
-                    // Reference box = margin box: origin (lx, child_y), width
-                    // fml+fw+fmr, bottom bot_y.
-                    let shape_top = (child_y + it).min(bot_y);
-                    let shape_bot = (bot_y - ib).max(shape_top);
-                    fc.shape_insets.push(ShapeInset {
-                        top_y: shape_top, bottom_y: shape_bot, is_left: true,
-                        left_x: lx + il,
-                        right_x: lx + fml + fw + fmr - ir,
-                        radius: irad,
-                    });
-                }
-            }
+            wire_shape_outside(fc, child, true, ShapeBoxes {
+                child_y, top_y, bot_y, box_left: lx, box_right: right_edge,
+            }, content_width, viewport);
         }
         FloatSide::Right => {
             let rx = fc.right_edge_at(child_y, container_right);
@@ -669,42 +725,68 @@ fn place_float(
             let bot_y  = top_y + fh + fmb;
             let left_edge = rx - fmr - fw - fml;
             fc.add_right(bot_y, left_edge);
-            // CSS Shapes L1 — wire shape-outside for right float.
-            // Margin-box origin: (left_edge, child_y). Points are float-local.
-            if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
-                if let Some(r) = parse_circle_px(sv) {
-                    let cx = child.rect.x + fw / 2.0;
-                    let cy = top_y + fh / 2.0;
-                    fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
-                } else if let Some(local_pts) = parse_shape_path_px(sv)
-                    .or_else(|| parse_shape_polygon_px(sv))
-                {
-                    let pts = local_pts.into_iter()
-                        .map(|(px, py)| (px + left_edge, py + child_y))
-                        .collect();
-                    fc.shape_polygons.push(ShapePolygon {
-                        top_y, bottom_y: bot_y, is_left: false, points: pts,
-                    });
-                } else if let Some((rx_e, ry_e, ecx, ecy)) = parse_shape_ellipse_px(sv) {
-                    fc.shape_ellipses.push(ShapeEllipse {
-                        top_y, bottom_y: bot_y, is_left: false,
-                        cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
-                    });
-                } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
-                    // Reference box = margin box: origin (left_edge, child_y),
-                    // right edge rx, bottom bot_y.
-                    let shape_top = (child_y + it).min(bot_y);
-                    let shape_bot = (bot_y - ib).max(shape_top);
-                    fc.shape_insets.push(ShapeInset {
-                        top_y: shape_top, bottom_y: shape_bot, is_left: false,
-                        left_x: left_edge + il,
-                        right_x: rx - ir,
-                        radius: irad,
-                    });
-                }
-            }
+            wire_shape_outside(fc, child, false, ShapeBoxes {
+                child_y, top_y, bot_y, box_left: left_edge, box_right: rx,
+            }, content_width, viewport);
         }
         FloatSide::None => unreachable!(),
+    }
+    // `position: relative` was already applied to the subtree by the trial
+    // layout; the new margin-box position has to carry it too.
+    let (rel_x, rel_y) = if matches!(child.style.position, Position::Relative) {
+        let rel = |a: &LengthOrAuto, b: &LengthOrAuto| match (a, b) {
+            (LengthOrAuto::Length(l), _) => l.resolve(cem, Some(content_width), viewport).unwrap_or(0.0),
+            (LengthOrAuto::Auto, LengthOrAuto::Length(r)) => -r.resolve(cem, Some(content_width), viewport).unwrap_or(0.0),
+            (LengthOrAuto::Auto, LengthOrAuto::Auto) => 0.0,
+        };
+        (rel(&child.style.left, &child.style.right), rel(&child.style.top, &child.style.bottom))
+    } else {
+        (0.0, 0.0)
+    };
+    let (final_x, final_y) = (child.rect.x + rel_x, child.rect.y + rel_y);
+    child.rect.x = laid_out_at.0;
+    child.rect.y = laid_out_at.1;
+    shift_tree(child, final_x - laid_out_at.0, final_y - laid_out_at.1);
+}
+
+/// Margin-box geometry of a just-placed float (see [`wire_shape_outside`]).
+struct ShapeBoxes {
+    child_y: f32,
+    top_y: f32,
+    bot_y: f32,
+    box_left: f32,
+    box_right: f32,
+}
+
+/// CSS Shapes L1 — record `child`'s `shape-outside` (grown by `shape-margin`,
+/// a percentage resolving against the containing block's inline size
+/// `cb_width`, §6.3) in the float context `fc`.
+fn wire_shape_outside(
+    fc: &mut FloatContext,
+    child: &LayoutBox,
+    is_left: bool,
+    bx: ShapeBoxes,
+    cb_width: f32,
+    viewport: Size,
+) {
+    let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside else {
+        return;
+    };
+    let margin = child.style.shape_margin
+        .resolve_or_zero(child.style.font_size, cb_width, viewport)
+        .max(0.0);
+    let g = FloatShapeGeom {
+        is_left,
+        child_y: bx.child_y,
+        top_y: bx.top_y,
+        bot_y: bx.bot_y,
+        box_left: bx.box_left,
+        box_right: bx.box_right,
+        center_x: child.rect.x + child.rect.width / 2.0,
+        center_y: bx.top_y + child.rect.height / 2.0,
+    };
+    if register_shape_outside(fc, sv, &g, margin) {
+        fc.mark_last_shaped(is_left);
     }
 }
 
@@ -721,6 +803,9 @@ fn finish_frame(
     hp: &dyn HyphenationProvider,
     bottom_cache: &mut MarginCollapseCache,
 ) {
+    // The block-size below may use `lh`/`ch`/`ex`; `dispatch_box`'s context for
+    // this box was dropped when it handed the children loop over to `run`.
+    let _font_ctx = FontContext::enter(&frame.b, measurer);
     // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this box
     // collapses its bottom margin (auto height, no bottom padding/border, no
     // BFC) and the last in-flow child is a collapsible block, that child's
@@ -745,16 +830,58 @@ fn finish_frame(
     } else {
         base
     };
+    // CSS Overflow L4 §line-clamp: the content ends at the bottom of the n-th line of the flow.
+    let auto_bound = line_clamp_flow::auto_bound(
+        &frame.init.s, frame.init.em, frame.init.available_height, viewport,
+        frame.init.padding_top, frame.init.padding_bottom, frame.init.content_y,
+    );
+    let clamp_cut = line_clamp_flow::find_cut(&frame.b, viewport, auto_bound);
+    let content_height = clamp_cut.map_or(content_height, |cut| {
+        (frame.b.rect.y + cut.line_bottom + cut.extra - frame.init.content_y).clamp(0.0, content_height)
+    });
 
     finalize_block_height(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.available_height, viewport,
         frame.init.padding_top, frame.init.padding_bottom, frame.init.size_contained,
-        frame.init.field_intrinsic, content_height,
+        frame.init.field_intrinsic, content_height, frame.init.cb,
     );
     finish_after_match(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
         frame.init.pcb, &frame.init.abs_deferred, measurer, viewport, hp,
     );
+    if let Some(cut) = clamp_cut {
+        line_clamp_flow::apply_cut(&mut frame.b, cut, viewport, measurer);
+    }
+}
+
+/// CSS 2.1 §10.3.3 — an over-constrained block-level box (a used width
+/// narrower than the room, neither horizontal margin `auto`) ignores
+/// `margin-left` when the *containing block's* `direction` is `rtl`, so the
+/// box sits against the right edge instead of the left. `lay_out_inner`
+/// places every such box at the left edge (it never sees the parent's
+/// direction), so the parent shifts the finished child here.
+fn align_rtl_overconstrained_child(frame: &mut Frame, idx: usize, viewport: Size) {
+    if frame.b.style.direction != crate::style::Direction::Rtl {
+        return;
+    }
+    let content_width = frame.init.content_width;
+    let right = frame.init.container_right;
+    let child = &mut frame.b.children[idx];
+    let cs = &child.style;
+    if !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || cs.margin_left.is_auto()
+        || cs.margin_right.is_auto()
+        || matches!(cs.position, Position::Absolute | Position::Fixed)
+        || !matches!(cs.justify_self, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch)
+        || !matches!(frame.init.s.justify_items, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch)
+    {
+        return;
+    }
+    let mr = cs.margin_right.resolve_or_zero(cs.font_size, content_width, viewport);
+    let dx = right - mr - child.rect.width - child.rect.x;
+    if dx.abs() > 0.01 {
+        shift_tree(child, dx, 0.0);
+    }
 }
 
 /// Runs right after a normal-flow child finishes — CSS 2.1 §8.3.1 margin
@@ -776,6 +903,7 @@ fn post_child_bookkeeping(
     }
     frame.init.seen_inflow_child = true;
     let content_width = frame.init.content_width;
+    align_rtl_overconstrained_child(frame, idx, viewport);
     // CSS 2.1 §8.3.1: the child's effective bottom margin is its own bottom
     // margin folded with any bottom margin escaping from its last-child chain
     // (collapse-through), mirroring `collapsed_mt` on the top edge. For
@@ -805,7 +933,9 @@ fn post_child_bookkeeping(
         frame.init.prev_block_mb = merged;
     } else {
         let child = &frame.b.children[idx];
-        frame.init.child_y = child.rect.y + child.rect.height + child_mb;
+        let (_, rel_dy) = super::layout_dispatch::relative_offset(
+            &child.style, child.style.font_size, content_width, viewport);
+        frame.init.child_y = child.rect.y - rel_dy + child.rect.height + child_mb;
         frame.init.prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
     }
     // CSS 2.1 §10.8 — inline-image line-box descent (the classic "image bottom

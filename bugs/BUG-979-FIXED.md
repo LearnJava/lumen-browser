@@ -79,9 +79,9 @@ assignments), so the thrown `TypeError` becomes an uncaught global error
 instead of a caught test-step `FAIL`; none of the four `async_test`s ever
 reaches `.done()`, and the harness only reports once its own internal
 timeout elapses — the same "hangs until the harness's own internal timeout"
-shape as [BUG-968](BUG-968-OPEN.md), not the fast-completion "corpus TIMEOUT
+shape as [BUG-968](BUG-968-FIXED.md), not the fast-completion "corpus TIMEOUT
 doesn't reproduce live" class documented in
-[BUG-961](BUG-961-FIXED.md)/[BUG-963](BUG-963-OPEN.md) for
+[BUG-961](BUG-961-FIXED.md)/[BUG-963](BUG-963-FIXED.md) for
 `console-log-large-array`/`canvas-with-padding`/`a.ping-functionality`.
 Matches the WPT-RUN-5/6 corpus TIMEOUT signature for this id.
 

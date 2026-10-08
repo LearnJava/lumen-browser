@@ -147,10 +147,66 @@ pub fn resolve_specifier_with(
     }
     // (4) Bare specifier — try import map
     if let Some(resolved) = import_map.resolve(name, Some(base)) {
+        // Значение карты — URL, разрешаемый от базового URL карты (документа):
+        // относительное значение иначе дошло бы до загрузчика строкой `./x.js`.
+        if !page_url.is_empty() {
+            if resolved.starts_with("./") || resolved.starts_with("../") {
+                return resolve_relative(page_url, &resolved);
+            }
+            if resolved.starts_with('/')
+                && let Some(abs) = resolve_from_origin(page_url, &resolved)
+            {
+                return abs;
+            }
+        }
         return resolved;
     }
     // Fall back to returning as-is
     name.to_owned()
+}
+
+/// HTML LS §8.1.5.5 «resolve a module specifier» — строгая форма для
+/// `import.meta.resolve()` (BUG-1135).
+///
+/// URL-подобный спецификатор (`/`, `./`, `../` — относительно базы, иначе
+/// абсолютный URL) разбирается WHATWG-парсером, затем import map получает
+/// нормализованную строку. `None` — голое имя без записи в import map: вызов
+/// обязан бросить `TypeError`, а не вернуть имя «как есть», как делает
+/// загрузочный [`resolve_specifier_with`].
+pub fn resolve_module_specifier(
+    page_url: &str,
+    import_map: &ImportMap,
+    base: &str,
+    name: &str,
+) -> Option<String> {
+    let effective_base = if base.is_empty() || base.starts_with("lumen://") {
+        page_url
+    } else {
+        base
+    };
+    let join = |reference: &str| {
+        lumen_core::url::Url::parse(effective_base)
+            .and_then(|b| b.resolve(reference))
+            .ok()
+            .map(|u| u.href_whatwg().to_owned())
+    };
+    let as_url = if name.starts_with('/') || name.starts_with("./") || name.starts_with("../") {
+        join(name)
+    } else {
+        lumen_core::url::Url::parse(name).ok().map(|u| u.href_whatwg().to_owned())
+    };
+    let normalized = as_url.as_deref().unwrap_or(name);
+    if let Some(mapped) = import_map.resolve(normalized, Some(base)) {
+        // Адреса import map хранятся как записаны в JSON; относительные
+        // разрешаются от базы документа (без документа — от базы модуля).
+        let map_base = if page_url.is_empty() { effective_base } else { page_url };
+        return lumen_core::url::Url::parse(map_base)
+            .and_then(|b| b.resolve(&mapped))
+            .ok()
+            .map(|u| u.href_whatwg().to_owned())
+            .or(Some(mapped));
+    }
+    as_url
 }
 
 // ── URL utilities ─────────────────────────────────────────────────────────────
@@ -231,6 +287,15 @@ fn normalize_path(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_import_map_value_resolves_against_page_url() {
+        // BUG-879: значение карты `./x.js` — URL относительно документа.
+        let map = ImportMap::parse(r#"{"imports":{"m":"./x.js","r":"/y.js"}}"#).unwrap();
+        let page = "https://page.example/a/b.html";
+        assert_eq!(resolve_specifier_with(page, &map, page, "m"), "https://page.example/a/x.js");
+        assert_eq!(resolve_specifier_with(page, &map, page, "r"), "https://page.example/y.js");
+    }
 
     #[test]
     fn root_relative_specifier_resolves_against_base_origin() {

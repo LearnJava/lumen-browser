@@ -7,6 +7,15 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа RN, батч RN-5).
 
 use super::*;
+use crate::band_diff::BandDiff;
+
+/// THREAD-11 (ADR-033): частичная инвалидация полосы. До замера среза 6
+/// включается `LUMEN_BAND_PARTIAL=1`; потом дефолт перевернётся.
+fn band_partial_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LUMEN_BAND_PARTIAL").is_ok_and(|v| v != "0"))
+}
 
 fn band_ring_enabled() -> bool {
     use std::sync::OnceLock;
@@ -68,6 +77,55 @@ pub(crate) fn ring_advance_plan(
         });
     }
     Some(strips)
+}
+
+/// План строчных пассов для грязных диапазонов внутри полосы (ADR-033, S4).
+///
+/// `rows` — документные Y в CSS px (с запасом на сглаживание, как отдаёт
+/// `band_diff`), `band_top_px`/`ring_base_px` — верх и база кольца полосы в
+/// целых device px. Диапазоны обрезаются полосой, округляются наружу до целых
+/// строк и склеиваются; больше 4 диапазонов или больше половины полосы —
+/// `None` (полная перерисовка дешевле и проще). Диапазон, разрезанный краем
+/// текстуры, отдаётся двумя пассами — как кромка кольца.
+pub(crate) fn dirty_strips(
+    rows: &[crate::band_diff::YRange],
+    band_h: u32,
+    ring_base_px: i64,
+    band_top_px: i64,
+    dpr: f32,
+) -> Option<Vec<RingStrip>> {
+    if band_h == 0 {
+        return None;
+    }
+    let h = i64::from(band_h);
+    let (lo, hi) = (band_top_px, band_top_px + h);
+    let mut spans: Vec<(i64, i64)> = Vec::new();
+    for r in rows {
+        let y0 = ((f64::from(r.top) * f64::from(dpr)).floor() as i64).max(lo);
+        let y1 = ((f64::from(r.bottom) * f64::from(dpr)).ceil() as i64).min(hi);
+        if y0 >= y1 {
+            continue;
+        }
+        match spans.last_mut() {
+            Some(last) if y0 <= last.1 => last.1 = last.1.max(y1),
+            _ => spans.push((y0, y1)),
+        }
+    }
+    let total: i64 = spans.iter().map(|(a, b)| b - a).sum();
+    if spans.len() > 4 || total * 2 > h {
+        return None;
+    }
+    let mut out = Vec::new();
+    for (y0, y1) in spans {
+        let count = (y1 - y0) as u64;
+        let row0 = (y0 - ring_base_px).rem_euclid(h) as u32;
+        let first = count.min(u64::from(band_h - row0));
+        out.push(RingStrip { row0, rows: first as u32, doc_y0: y0 });
+        if count > first {
+            out.push(RingStrip { row0: 0, rows: (count - first) as u32, doc_y0: y0 + first as i64 });
+        }
+    }
+    Some(out)
 }
 
 /// Квад блита полосы на Compose-кадре: `(прямоугольник в CSS px кадра, uv0,
@@ -233,6 +291,9 @@ impl Renderer {
             view,
             blit_bg,
             key: 0, // невалиден, пока Band-рендер не пройдёт
+            cmds: Vec::new(),
+            digests: Vec::new(),
+            generation: 0,
             band_top_css,
             // Свежая полоса перерисовывается целиком, то есть фаза кольца
             // нулевая: строка 0 текстуры держит документную строку `band_top`.
@@ -413,8 +474,10 @@ impl Renderer {
     /// Применим, когда кадр — чистая трансляция контента: оконный рендер,
     /// нет горизонтального скролла, скролл ДВИЖЕТСЯ (кадры «DL изменился,
     /// скролл тот же» — анимация, ввод — идут монолитом) и в контенте нет
-    /// `BeginStickyLayer` — единственной команды, чей результат зависит от
-    /// scroll_y нелинейно (sticky-кламп); всё остальное транслируется
+    /// `BeginStickyLayer` / `BeginFixedBackground` — команд, чей результат
+    /// зависит от scroll_y нелинейно (sticky-кламп; фон
+    /// `background-attachment: fixed` стоит, пока элемент едет); всё
+    /// остальное транслируется
     /// равномерно, включая fixed (см. BUG-159: fixed не получает спец-
     /// обработки в рендере — полоса воспроизводит его поведение бит-в-бит).
     ///
@@ -463,6 +526,14 @@ impl Renderer {
             .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
         {
             Some("sticky-слой в контенте")
+        } else if content
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::BeginFixedBackground))
+        {
+            // CSS Backgrounds L3 §3.6: картинка `background-attachment: fixed`
+            // стоит на месте, пока её элемент едет со страницей, — пиксели
+            // полосы зависят от scroll_y нелинейно, как у sticky.
+            Some("background-attachment: fixed в контенте")
         } else {
             None
         };
@@ -673,6 +744,124 @@ impl Renderer {
         Ok(Some(prefix_len))
     }
 
+    /// Рисует список в полосу пассами `(origin_css, строки)` с подменой depth
+    /// на полосный; depth возвращается и при ошибке.
+    pub(crate) fn render_band_passes(
+        &mut self,
+        list: &[DisplayCommand],
+        passes: Vec<(f32, Option<BandStrip>)>,
+        view: &wgpu::TextureView,
+        sw: u32,
+        band_h_px: u32,
+    ) -> Result<(), wgpu::SurfaceError> {
+        let (band_depth_t, band_depth_v) = self
+            .page_band
+            .as_ref()
+            .map(|b| (b.depth_t.clone(), b.depth_v.clone()))
+            .unwrap_or_else(|| create_depth_texture(&self.device, sw, band_h_px));
+        let saved_depth_t = self.depth_texture.replace(band_depth_t);
+        let saved_depth_v = self.depth_view.replace(band_depth_v);
+        let mut result = Ok(());
+        for (origin_css, strip) in passes {
+            result = self.render_impl(
+                list,
+                &[],
+                origin_css,
+                0.0,
+                RenderPassMode::Band { view: view.clone(), w_px: sw, h_px: band_h_px, strip },
+            );
+            if result.is_err() {
+                break;
+            }
+        }
+        self.depth_texture = saved_depth_t;
+        self.depth_view = saved_depth_v;
+        result
+    }
+
+    /// THREAD-11 S3/S4: ключ полосы сменился, а старая полоса ещё накрывает
+    /// вьюпорт — дифф старого и нового статичного списка решает, что делать:
+    /// изменения вне полосы — ключ принимается без пикселей (S3); внутри —
+    /// перерисовываются только грязные строки кольцевыми пассами (S4); иначе
+    /// ничего не трогаем, и вызывающий делает полный промах.
+    /// Размер и `content_generation` обязаны совпасть (ключ зависит и от них,
+    /// а дайджесты команд этого не видят).
+    fn try_partial_band(
+        &mut self,
+        content: &[DisplayCommand],
+        ranges: &[std::ops::Range<usize>],
+        key: u64,
+        scroll_y: f32,
+        prep: &ComposePrep,
+    ) -> Result<(), wgpu::SurfaceError> {
+        let ComposePrep { sw, dpr, band_h_px, band_h_css, vp_h_css, .. } = *prep;
+        let generation = self.content_generation;
+        let opaque_bg = self.canvas_bg.is_none_or(|c| c.a == 255);
+        let Some(b) = self.page_band.as_ref() else { return Ok(()) };
+        if b.key == 0
+            || b.key == key
+            || b.w_px != sw
+            || b.h_px != band_h_px
+            || b.generation != generation
+            || scroll_y < b.band_top_css
+            || scroll_y + vp_h_css > b.band_top_css + band_h_css
+        {
+            return Ok(());
+        }
+        let mut new_cmds = Vec::with_capacity(content.len());
+        let mut prev = 0usize;
+        for r in ranges {
+            new_cmds.extend_from_slice(&content[prev..r.start]);
+            prev = r.end;
+        }
+        new_cmds.extend_from_slice(&content[prev..]);
+        let new_digests: Vec<u64> = new_cmds.iter().map(crate::display_list::hash_one_command).collect();
+        let (band_top_css, ring_base_css) = (b.band_top_css, b.ring_base_css);
+        let view = b.view.clone();
+        let diff = crate::band_diff::diff_band(&b.cmds, &b.digests, &new_cmds, &new_digests);
+        let adopt = crate::band_diff::outside_band(&diff, band_top_css, band_top_css + band_h_css);
+        let strips = match &diff {
+            BandDiff::Rows(rows) if !adopt && opaque_bg => {
+                let row_of = |css: f32| {
+                    let px = css * dpr;
+                    ((px.round() - px).abs() < 1e-3).then_some(px.round() as i64)
+                };
+                row_of(ring_base_css).zip(row_of(band_top_css)).and_then(|(base, top)| {
+                    dirty_strips(rows, band_h_px, base, top, dpr)
+                })
+            }
+            _ => None,
+        };
+        if crate::frame_log_level() >= 2 {
+            let verdict = if adopt {
+                "adopt".to_string()
+            } else if let Some(s) = &strips {
+                format!("strips {}", s.iter().map(|x| x.rows).sum::<u32>())
+            } else {
+                "full".to_string()
+            };
+            eprintln!("[frame:wgpu] band-partial: {verdict} ({diff:?})");
+        }
+        if let Some(strips) = &strips {
+            let passes = strips
+                .iter()
+                .map(|s| {
+                    let origin_px = s.doc_y0 - i64::from(s.row0);
+                    (origin_px as f32 / dpr, Some(BandStrip { row0: s.row0, rows: s.rows }))
+                })
+                .collect();
+            self.render_band_passes(&new_cmds, passes, &view, sw, band_h_px)?;
+        } else if !adopt {
+            return Ok(());
+        }
+        if let Some(b) = self.page_band.as_mut() {
+            b.key = key;
+            b.cmds = new_cmds;
+            b.digests = new_digests;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn compose_page(
         &mut self,
@@ -716,6 +905,15 @@ impl Renderer {
                 ranges.len(),
                 content.len(),
             );
+        }
+
+        // THREAD-11 S3: ключ сменился, а изменённые строки лежат вне полосы
+        // (или список тот же) — пиксели полосы верны, ключ принимается без
+        // рендера. S5: тот же путь и для кадров с нестабильным ключом — мигающий
+        // список (карусель, ленивые картинки) обновляет полосу строками вместо
+        // монолитной отрисовки; при отказе (`full`) поведение прежнее.
+        if band_partial_enabled() {
+            self.try_partial_band(content, ranges, key, scroll_y, prep)?;
         }
 
         let fits = self.page_band.as_ref().is_some_and(|b| {
@@ -816,16 +1014,6 @@ impl Renderer {
                 v.extend_from_slice(&content[prev..]);
                 std::borrow::Cow::Owned(v)
             };
-            // Depth-attachment обязан совпадать по размеру с целью пасса —
-            // на время Band-рендера подменяем оконную depth-текстуру
-            // полосной из кэша (и возвращаем обратно, включая случай ошибки).
-            let (band_depth_t, band_depth_v) = self
-                .page_band
-                .as_ref()
-                .map(|b| (b.depth_t.clone(), b.depth_v.clone()))
-                .unwrap_or_else(|| create_depth_texture(&self.device, sw, band_h_px));
-            let saved_depth_t = self.depth_texture.replace(band_depth_t);
-            let saved_depth_v = self.depth_view.replace(band_depth_v);
             // Кольцо: пасс на кромку (два, если её разрезал край текстуры).
             // Полный промах — один пасс со `strip: None`, ровно как до среза 32.
             let passes: Vec<(f32, Option<BandStrip>)> = match &ring {
@@ -845,24 +1033,14 @@ impl Renderer {
                 Some(strips) => strips.iter().map(|s| s.rows).sum(),
                 None => band_h_px,
             };
-            let mut band_result = Ok(());
-            for (origin_css, strip) in passes {
-                band_result = self.render_impl(
-                    &static_content,
-                    &[],
-                    origin_css,
-                    0.0,
-                    RenderPassMode::Band { view: view.clone(), w_px: sw, h_px: band_h_px, strip },
-                );
-                if band_result.is_err() {
-                    break;
-                }
-            }
-            self.depth_texture = saved_depth_t;
-            self.depth_view = saved_depth_v;
+            let band_result = self.render_band_passes(&static_content, passes, &view, sw, band_h_px);
             band_result?;
             if let Some(b) = self.page_band.as_mut() {
                 b.key = key;
+                // THREAD-11 S2: список и дайджесты, которыми нарисована полоса.
+                b.digests = static_content.iter().map(crate::display_list::hash_one_command).collect();
+                b.generation = self.content_generation;
+                b.cmds = static_content.into_owned();
                 b.band_top_css = band_top_css;
                 if ring.is_none() {
                     // Полная перерисовка обнуляет фазу кольца: строка 0

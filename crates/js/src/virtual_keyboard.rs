@@ -25,10 +25,10 @@ const VIRTUAL_KEYBOARD_SHIM: &str = r#"
 (function() {
   // Phase 0 native hooks — no-op; shell installs real handlers in Phase 1.
   if (typeof _lumen_vk_show === 'undefined') {
-    globalThis._lumen_vk_show = function() {};
+    __lumen_C._lumen_vk_show = function() {};
   }
   if (typeof _lumen_vk_hide === 'undefined') {
-    globalThis._lumen_vk_hide = function() {};
+    __lumen_C._lumen_vk_hide = function() {};
   }
 
   // W3C Virtual Keyboard API §4.1 — VirtualKeyboard interface.
@@ -112,7 +112,7 @@ const VIRTUAL_KEYBOARD_SHIM: &str = r#"
 
   // §4.2: _lumen_fire_vk_geometry_change(x, y, width, height) — called by shell
   // when the platform VK geometry changes (Phase 1). Fires 'geometrychange' event.
-  globalThis._lumen_fire_vk_geometry_change = function(x, y, width, height) {
+  __lumen_C._lumen_fire_vk_geometry_change = function(x, y, width, height) {
     var vk = navigator.virtualKeyboard;
     vk.boundingRect = new DOMRect(x, y, width, height);
     var event = new Event('geometrychange');

@@ -15,10 +15,10 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true")
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true")
         .unwrap();
     rt.install_dom(
-        doc, "", None, None, None, None, None, None, None, None, None, false,
+        doc, "", None, None, None, None, None, None, None, None, None, false, None,
     )
     .unwrap();
     rt
@@ -944,4 +944,60 @@ fn tt_codegen_generator_function_constructor_of_string_throws_when_enforced() {
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1087: интерфейсы Trusted Types имеют WebIDL-форму.
+#[test]
+fn tt_interfaces_have_webidl_shape() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var f = trustedTypes; \
+             var ok = []; \
+             ok.push(typeof TrustedTypePolicyFactory === 'function'); \
+             ok.push(Object.prototype.toString.call(f) === '[object TrustedTypePolicyFactory]'); \
+             ok.push(f.constructor === TrustedTypePolicyFactory); \
+             ok.push(!Object.prototype.hasOwnProperty.call(f, 'createPolicy')); \
+             ok.push(TrustedTypePolicyFactory.prototype.createPolicy.length === 1); \
+             ok.push(TrustedTypePolicyFactory.prototype.getAttributeType.length === 2); \
+             ok.push(TrustedHTML.length === 0); \
+             ok.push(!Object.getOwnPropertyDescriptor(TrustedHTML, 'prototype').writable); \
+             ok.push(Object.getOwnPropertyDescriptor(TrustedHTML.prototype, 'toJSON').enumerable); \
+             ok.push(TrustedHTML.prototype.toJSON.name === 'toJSON'); \
+             ok.push(!Object.getOwnPropertyDescriptor(globalThis, 'TrustedHTML').enumerable); \
+             var p = f.createPolicy('n', { createHTML: function(s) { return s; } }); \
+             ok.push(Object.prototype.toString.call(p) === '[object TrustedTypePolicy]'); \
+             ok.push(!Object.prototype.hasOwnProperty.call(p, 'name') && p.name === 'n'); \
+             var t1 = false; try { p.createHTML(); } catch (e) { t1 = e instanceof TypeError; } ok.push(t1); \
+             var t2 = false; try { TrustedHTML.prototype.toString.call(null); } catch (e) { t2 = e instanceof TypeError; } ok.push(t2); \
+             var t3 = false; try { new TrustedHTML(); } catch (e) { t3 = e instanceof TypeError; } ok.push(t3); \
+             ok.join(',')",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true".into())
+    );
+}
+
+/// BUG-1206: a `<script>` inserted through the DOM under
+/// `require-trusted-types-for 'script'` without a default policy still runs —
+/// its text passed the TT check at the `text` sink, and executing the element
+/// is a Script compile, not an `eval` that the codegen hook would block.
+#[test]
+fn bug1206_inserted_script_runs_under_require_trusted_types() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+             var errs = []; \
+             window.addEventListener('error', function(e) { errs.push(String(e.message || e.error)); }); \
+             var p = trustedTypes.createPolicy('p', { createScript: function(x) { return x; } }); \
+             var sc = document.createElement('script'); \
+             sc.text = p.createScript('window.__ran = 1'); \
+             document.body.appendChild(sc); \
+             String(window.__ran) + '|' + errs.join(';')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("1|".into()));
 }

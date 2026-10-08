@@ -44,13 +44,15 @@ impl Lumen {
         // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
         // блокирующий `query` встаёт в очередь **после** него — read-after-eval
         // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
-        {
+        let listen = self.navigate_listeners_present();
+        if listen {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', {can_intercept}, false)"));
             });
         }
         if can_intercept
+            && listen
             && let Some(intercept) = route_query_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
@@ -195,13 +197,14 @@ impl Lumen {
     pub(crate) fn navigate_replace(&mut self, source: PageSource) {
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
-        {
+        let listen = self.navigate_listeners_present();
+        if listen {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 j.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
             });
         }
-        if let Some(intercept) = route_query_js(
+        if listen && let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             |j| j.take_nav_intercept_result(),
@@ -263,6 +266,34 @@ impl Lumen {
         .flatten()
     }
 
+    /// THREAD-9 срез 6: неблокирующий вариант [`Self::eval_javascript_url`] —
+    /// код считает движковая задача, строковый результат ложится в
+    /// `js_url_inbox`, навигацию делает [`Self::collect_js_url_inbox`]. Без
+    /// движкового потока задача идёт синхронно и ящик забирается сразу.
+    pub(crate) fn queue_javascript_url(&mut self, code: &str) {
+        let code = code.to_owned();
+        let inbox = Arc::clone(&self.js_url_inbox);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            if let Ok(Some(html)) = j.eval_js_completion(&code)
+                && let Ok(mut q) = inbox.lock()
+            {
+                q.push(html);
+            }
+        });
+        if self.engine_thread.is_none() {
+            self.collect_js_url_inbox();
+        }
+    }
+
+    /// THREAD-9 срез 6: заменяет текущий документ результатами `javascript:` URL.
+    pub(crate) fn collect_js_url_inbox(&mut self) {
+        let ready = self.js_url_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        for html in ready {
+            let current = self.current_display_url().to_owned();
+            self.navigate_replace(PageSource::Static { html, url: current });
+        }
+    }
+
     /// FRAME-4: consume one frame-only history step off the top of
     /// `nav_back` (`back = true`) or `nav_fwd` (`back = false`) — called only
     /// once the caller has confirmed the top entry carries `frame_target`.
@@ -312,10 +343,13 @@ impl Lumen {
         // BUG-639: the target entry's key, so `NavigateEvent.destination`
         // describes that entry (`key`/`id`/`index`/`getState()`).
         let dest_key = self.nav_back.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+        let listen = self.navigate_listeners_present();
+        if listen {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
         });
-        if let Some(intercept) = route_query_js(
+        }
+        if listen && let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             |j| j.take_nav_intercept_result(),
@@ -506,10 +540,13 @@ impl Lumen {
         // BUG-639: the target entry's key, so `NavigateEvent.destination`
         // describes that entry (`key`/`id`/`index`/`getState()`).
         let dest_key = self.nav_fwd.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+        let listen = self.navigate_listeners_present();
+        if listen {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
         });
-        if let Some(intercept) = route_query_js(
+        }
+        if listen && let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             |j| j.take_nav_intercept_result(),
@@ -736,6 +773,7 @@ impl Lumen {
             self.source = cur.source;
             self.scroll_x = cur.scroll_x;
             self.scroll_y = cur.scroll_y;
+            self.issue_scroll_command();
             self.display_url = cur.display_url;
             self.current_history_state_json =
                 cur.same_doc_state_json.unwrap_or_else(|| "null".to_string());
@@ -827,6 +865,23 @@ impl Lumen {
     /// No opt-in / no pending snapshot → the snapshot is simply dropped and
     /// the navigation already rendered without animation (срез 5's fallback
     /// is this function doing nothing).
+    /// Cross-fade duration/easing for a view transition starting now: the page's
+    /// `::view-transition-{old,group}(root)` `animation-*` declarations
+    /// ([`crate::view_transition::author_params`]), else the shell defaults.
+    /// Read from the live (post-navigation / post-callback) document, which is
+    /// the one whose pseudo-tree the spec animates.
+    pub(crate) fn view_transition_author_params(&self) -> (f64, lumen_layout::TimingFunction) {
+        let authored = self.layout_source.as_ref().zip(self.relayout_viewport()).and_then(|(ls, vp)| {
+            let doc = ls.document.lock().ok()?;
+            Some(crate::view_transition::author_params(&doc, &ls.stylesheet, vp, self.dark_mode))
+        });
+        let (duration, easing) = authored.unwrap_or((None, None));
+        (
+            duration.unwrap_or(crate::view_transition::DEFAULT_DURATION_MS),
+            easing.unwrap_or(lumen_layout::TimingFunction::Linear),
+        )
+    }
+
     pub(crate) fn maybe_reveal_mpa_view_transition(&mut self) {
         let Some(old_dl) = self.pending_mpa_view_transition_snapshot.take() else { return };
         let Some(ls) = self.layout_source.as_ref() else { return };
@@ -834,7 +889,8 @@ impl Lumen {
             return;
         }
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
-        self.view_transition = Some(ViewTransitionState { old_dl, start_ms: now_ms, duration_ms: 300.0 });
+        let (duration_ms, easing) = self.view_transition_author_params();
+        self.view_transition = Some(ViewTransitionState { old_dl, start_ms: now_ms, duration_ms, easing });
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }

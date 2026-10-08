@@ -49,6 +49,10 @@ pub(in crate::style) struct CascadeIndex {
     /// (0 when absent). Node-independent; used to be a linear string search of
     /// `layer_order` per block per node.
     pub(in crate::style) layer_order_pos: Vec<i32>,
+    /// Per `sheet.layers` block: whether its `@media`/`@supports` condition
+    /// (a group nested inside `@layer`, [`lumen_css_parser::LayerRule::condition`])
+    /// currently holds. Unconditional blocks are always `true`.
+    pub(in crate::style) layer_active: Vec<bool>,
     pub(in crate::style) media: Vec<RuleIndex>,
     pub(in crate::style) supports: Vec<RuleIndex>,
     /// Perf (docs/tasks/p3-cascade-perf.md Задача 1): whether each
@@ -70,16 +74,17 @@ pub(in crate::style) struct CascadeIndex {
     /// such rule — every page that is not Lumen's own chrome — all three were
     /// pure waste. Node-independent, so it is decided once per sheet here.
     pub(in crate::style) has_webkit_scrollbar_rules: bool,
-    /// BUG-341 S10 — whether any declaration in the sheet mentions `quote`
-    /// (`content: open-quote`, `quotes: …`). `counters::walk` probes
-    /// `::before`/`::after` on every node solely to keep the CSS Generated
-    /// Content L3 §3.2 quote-nesting counter continuous; with no quote
-    /// anywhere in the sheet that probe cannot produce a depth, so it is
-    /// skipped. Deliberately a substring test over raw declaration values: it
-    /// over-approximates (a `--quote-color` custom property arms it) and must,
-    /// because a `var()` can smuggle `open-quote` in from anywhere. `attr()`
-    /// arms it too: that value comes from the DOM, which a sheet-level
-    /// predicate cannot see.
+    /// BUG-341 S10 — whether any `content` or custom-property (`--*`)
+    /// declaration in the sheet mentions `quote` (`content: open-quote`).
+    /// `counters::walk` probes `::before`/`::after` on every node solely to
+    /// keep the CSS Generated Content L3 §3.2 quote-nesting counter
+    /// continuous; with no quote in the sheet that probe cannot produce a
+    /// depth, so it is skipped. A substring test over raw declaration values:
+    /// it over-approximates (a `--quote-color` custom property arms it) and
+    /// must, because a `var()` can smuggle `open-quote` in from a custom
+    /// property. BUG-935 S67: other properties are out (`background:
+    /// url(quote.svg)` armed lenta.ru's probe on all ~1 900 elements), and so
+    /// is `attr()` — it resolves to the attribute's text, never a keyword.
     has_quote_content: bool,
     /// BUG-341 S23 — every pseudo-element name the sheet uses as the **subject**
     /// of a selector, lowercased and deduplicated.
@@ -97,6 +102,37 @@ pub(in crate::style) struct CascadeIndex {
     /// pseudo-elements, and a linear `eq_ignore_ascii_case` scan over ≤10 short
     /// names beats hashing a `&str` (and needs no allocation at the call site).
     pseudo_subjects: Vec<Box<str>>,
+    /// BUG-935 срез 90 — [`RuleIndex`] over only the top-level rules that have a
+    /// pseudo-element in a selector's subject, reporting the same indices into
+    /// `sheet.rules` as [`Self::rules`].
+    ///
+    /// `compute_pseudo_element_style` runs for every rebuilt block box, twice
+    /// (`::before`, `::after`), and `matches_complex_for_pseudo` rejects any
+    /// selector whose subject carries no pseudo-element before looking at the
+    /// node — so the candidates of the general index (every rule keyed by the
+    /// node's tag/classes, plus all universal ones) were almost all thrown away
+    /// one by one. On ria.ru that probe was 86 % of the incremental box build
+    /// (4.3 of 5.0 s over a census run).
+    pub(in crate::style) pseudo_rules: RuleIndex,
+    /// The `@media` blocks that hold at least one pseudo-subject rule, with the
+    /// global rule index their first rule has in `compute_pseudo_element_style`'s
+    /// running numbering (`sheet.rules.len()` + the rules of every earlier media
+    /// block). Blocks without such a rule are not listed at all, so a sheet with
+    /// a hundred breakpoints costs the pseudo probe nothing for them.
+    pub(in crate::style) pseudo_media: Vec<PseudoBlockIndex>,
+    /// Likewise for `@supports` blocks; their base continues after the last media block.
+    pub(in crate::style) pseudo_supports: Vec<PseudoBlockIndex>,
+}
+
+/// One `@media`/`@supports` block's pseudo-subject rules — see
+/// [`CascadeIndex::pseudo_media`].
+pub(in crate::style) struct PseudoBlockIndex {
+    /// Position in `sheet.media_rules` / `sheet.supports_rules`.
+    pub(in crate::style) block: usize,
+    /// Global index of the block's first rule in the pseudo cascade's numbering.
+    pub(in crate::style) base: usize,
+    /// Candidates carry indices into the block's own `rules`.
+    pub(in crate::style) index: RuleIndex,
 }
 
 impl CascadeIndex {
@@ -106,6 +142,7 @@ impl CascadeIndex {
             layers: RuleIndex::empty(),
             layer_rules: Vec::new(),
             layer_order_pos: Vec::new(),
+            layer_active: Vec::new(),
             media: Vec::new(),
             supports: Vec::new(),
             active_media: Vec::new(),
@@ -113,6 +150,9 @@ impl CascadeIndex {
             has_webkit_scrollbar_rules: false,
             has_quote_content: false,
             pseudo_subjects: Vec::new(),
+            pseudo_rules: RuleIndex::empty(),
+            pseudo_media: Vec::new(),
+            pseudo_supports: Vec::new(),
         }
     }
 
@@ -148,6 +188,17 @@ impl CascadeIndex {
         let t = std::time::Instant::now();
         let active_media: Vec<bool> =
             sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect();
+        let layer_active: Vec<bool> = sheet
+            .layers
+            .iter()
+            .map(|l| match &l.condition {
+                None => true,
+                Some(lumen_css_parser::LayerCondition::Media(q)) => q.matches(media_ctx),
+                Some(lumen_css_parser::LayerCondition::Supports(c)) => {
+                    c.evaluate(SUPPORTED_PROPERTIES)
+                }
+            })
+            .collect();
         let active_supports: Vec<bool> = sheet
             .supports_rules
             .iter()
@@ -158,11 +209,8 @@ impl CascadeIndex {
         let t = std::time::Instant::now();
         let has_webkit_scrollbar_rules =
             all_rules(sheet).any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar));
-        let has_quote_content = all_rules(sheet).any(|r| {
-            r.declarations
-                .iter()
-                .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
-        });
+        let has_quote_content =
+            all_rules(sheet).any(|r| r.declarations.iter().any(declaration_can_yield_quote));
         let mut pseudo_subjects: Vec<Box<str>> = Vec::new();
         for rule in all_rules(sheet) {
             for selector in &rule.selectors {
@@ -173,6 +221,31 @@ impl CascadeIndex {
                 }
             }
         }
+        let has_pseudo_subject = |r: &Rule| r.selectors.iter().any(|s| selector_pseudo_subjects(s).next().is_some());
+        let pseudo_rules = RuleIndex::build_from_indexed(
+            sheet.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
+        );
+        let mut base = sheet.rules.len();
+        let mut pseudo_media = Vec::new();
+        for (block, m) in sheet.media_rules.iter().enumerate() {
+            if m.rules.iter().any(has_pseudo_subject) {
+                let index = RuleIndex::build_from_indexed(
+                    m.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
+                );
+                pseudo_media.push(PseudoBlockIndex { block, base, index });
+            }
+            base += m.rules.len();
+        }
+        let mut pseudo_supports = Vec::new();
+        for (block, sp) in sheet.supports_rules.iter().enumerate() {
+            if sp.rules.iter().any(has_pseudo_subject) {
+                let index = RuleIndex::build_from_indexed(
+                    sp.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
+                );
+                pseudo_supports.push(PseudoBlockIndex { block, base, index });
+            }
+            base += sp.rules.len();
+        }
         let predicates_ns = t.elapsed().as_nanos() as u64;
 
         let idx = Self {
@@ -180,6 +253,7 @@ impl CascadeIndex {
             layers,
             layer_rules,
             layer_order_pos,
+            layer_active,
             media,
             supports,
             active_media,
@@ -187,6 +261,9 @@ impl CascadeIndex {
             has_webkit_scrollbar_rules,
             has_quote_content,
             pseudo_subjects,
+            pseudo_rules,
+            pseudo_media,
+            pseudo_supports,
         };
         let stats = CascadeIndexStats {
             builds: 1,
@@ -239,6 +316,18 @@ fn selector_pseudo_subjects(selector: &ComplexSelector) -> impl Iterator<Item = 
         SimpleSelector::PseudoElement(kind) => Some(pseudo_element_name(kind)),
         _ => None,
     })
+}
+
+/// Whether `decl` can put a quote keyword into some element's `content` — see
+/// [`CascadeIndex::has_quote_content`].
+///
+/// Only `content` itself and custom properties qualify: `content` is the one
+/// property whose value becomes `ContentItem::OpenQuote`/`CloseQuote`, and a
+/// `var()` reaches it only through a `--*` declaration. A `quote` in any other
+/// value (`url(quote.svg)`, `font-family: Blockquote`) never gets there.
+fn declaration_can_yield_quote(decl: &lumen_css_parser::Declaration) -> bool {
+    (decl.property.eq_ignore_ascii_case("content") || decl.property.starts_with("--"))
+        && value_mentions_quote(&decl.value)
 }
 
 /// Case-insensitive `value.contains("quote")` without allocating — see

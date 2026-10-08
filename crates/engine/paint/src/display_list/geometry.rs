@@ -64,6 +64,9 @@ pub(crate) fn position_component_name(p: PositionComponent) -> String {
     match p {
         PositionComponent::Px(px) => format!("{px:.2}px"),
         PositionComponent::Percent(pc) => format!("{:.2}%", pc * 100.0),
+        PositionComponent::PercentPlusPx { percent, px } => {
+            format!("calc({:.2}% + {px:.2}px)", percent * 100.0)
+        }
     }
 }
 
@@ -279,14 +282,8 @@ pub(crate) fn bg_tile_geometry(
         (tile_w, tile_h)
     };
 
-    let off_x = match position.x {
-        PositionComponent::Px(px) => px,
-        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
-    };
-    let off_y = match position.y {
-        PositionComponent::Px(py) => py,
-        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
-    };
+    let off_x = position.x.resolve(oarea_w - tile_w);
+    let off_y = position.y.resolve(oarea_h - tile_h);
     let tile_x0 = oarea_x + off_x;
     let tile_y0 = oarea_y + off_y;
 
@@ -388,8 +385,12 @@ pub fn fit_image_quad(
 /// None уже фильтруется emit-side, но обрабатываем для устойчивости.
 pub(crate) fn border_style_short(s: BorderStyle) -> &'static str {
     match s {
-        BorderStyle::None => "n",
+        BorderStyle::None | BorderStyle::Hidden => "n",
         BorderStyle::Solid => "s",
+        BorderStyle::Groove => "gr",
+        BorderStyle::Ridge => "ri",
+        BorderStyle::Inset => "in",
+        BorderStyle::Outset => "ou",
         BorderStyle::Dashed => "da",
         BorderStyle::Dotted => "do",
         BorderStyle::Double => "db",

@@ -14,12 +14,12 @@
   // The API base URL of a worker is its script URL (HTML LS §10.2.2); the
   // FETCH_BODY_SHIM slice asks for it by the page's name (`new Request(url)`,
   // `Response.redirect`).
-  if (typeof globalThis._lumen_document_base_url !== 'function') {
-    globalThis._lumen_document_base_url = _base;
+  if (typeof __lumen_C._lumen_document_base_url !== 'function') {
+    __lumen_C._lumen_document_base_url = _base;
   }
 
   function _report(e) {
-    var r = globalThis._lumen_worker_exception_reporter;
+    var r = __lumen_C._lumen_worker_exception_reporter;
     if (typeof r === 'function') { try { r(e); } catch (_e) {} }
   }
 
@@ -62,6 +62,8 @@
   }
   ProgressEvent.prototype = Object.create(Event.prototype);
   ProgressEvent.prototype.constructor = ProgressEvent;
+  Object.defineProperty(ProgressEvent.prototype, Symbol.toStringTag,
+    { value: 'ProgressEvent', writable: false, enumerable: false, configurable: true });
   if (typeof globalThis.ProgressEvent !== 'function') globalThis.ProgressEvent = ProgressEvent;
 
   function XMLHttpRequestEventTarget() { EventTarget.call(this); }

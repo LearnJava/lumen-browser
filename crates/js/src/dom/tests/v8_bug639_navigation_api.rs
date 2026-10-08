@@ -20,7 +20,7 @@ fn runtime() -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt
@@ -291,7 +291,7 @@ fn navigate_state_is_attached_to_the_committed_entry() {
     two_entries(&rt);
     rt.eval("navigation.navigate('#1', { state: { v: 7 }, history: 'replace' }); true").unwrap();
     let q = rt.take_nav_updates();
-    assert!(q.iter().any(|(a, url, _, _)| matches!(a, NavAction::Replace) && url == "#1"));
+    assert!(q.iter().any(|(a, url, _, _)| matches!(a, NavAction::Replace) && url == "https://example.com/page.html#1"));
     set_state(
         &rt,
         &[("https://example.com/a", "nav-1"), ("https://example.com/page.html#1", "nav-3")],
@@ -386,7 +386,7 @@ fn prevent_default_aborts_signal_and_navigateerror_rejects_result() {
          navigation.onnavigateerror = () => __ev.push('navigateerror'); \
          globalThis.__r = navigation.navigate('?1'); \
          __r.committed.catch(e => { globalThis.__err = e.name; }); \
-         globalThis._lumen_navigation_report_intercept = () => {}; \
+         __lumen_C._lumen_navigation_report_intercept = () => {}; \
          _lumen_dispatch_navigate('push', 'http://example.test/?1', true, false); \
          _lumen_fire_navigate_error(); true",
     )
@@ -402,7 +402,7 @@ fn prevent_default_aborts_signal_and_navigateerror_rejects_result() {
 fn intercept_sets_transition_until_navigatesuccess() {
     let rt = runtime();
     rt.eval(
-        "globalThis._lumen_navigation_report_intercept = () => {}; \
+        "__lumen_C._lumen_navigation_report_intercept = () => {}; \
          navigation.onnavigate = e => e.intercept(); \
          _lumen_dispatch_navigate('push', 'http://example.test/#a', true, true); \
          globalThis.__tr = navigation.transition; \
@@ -416,4 +416,42 @@ fn intercept_sets_transition_until_navigatesuccess() {
          && __tr.to.url === 'http://example.test/#a'"
     ));
     assert!(bool_of(&rt, "navigation.transition === null && __done === true"));
+}
+
+// ── BUG-1075: navigate() resolves its URL against the document base ─────────
+
+#[test]
+fn navigate_resolves_relative_url_and_throws_syntax_error() {
+    let rt = runtime();
+    rt.eval(
+        "globalThis.__got = []; \
+\
+         navigation.navigate('#frag'); navigation.navigate('?q=1'); \
+         globalThis.__err = ''; \
+         try { navigation.navigate('https://example.com\0mozilla.org'); } \
+         catch (e) { __err = e.name; } true",
+    )
+    .unwrap();
+    let urls: Vec<String> = rt.take_nav_updates().into_iter().map(|(_, u, _, _)| u).collect();
+    assert_eq!(urls, ["https://example.com/page.html#frag", "https://example.com/page.html?q=1"]);
+    assert_eq!(str_of(&rt, "__err"), "SyntaxError");
+}
+
+/// THREAD-9 срез 5: флаг «есть слушатель `navigate`» липкий и ставится
+/// `addEventListener('navigate')` и `onnavigate`, но не другими событиями.
+#[test]
+fn navigate_listener_flag_set_by_listener_or_handler_only() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let rt = runtime();
+    let flag = rt.navigate_listeners_flag();
+    assert!(!flag.load(Relaxed));
+    rt.eval("navigation.addEventListener('currententrychange', () => {}); \
+             navigation.oncurrententrychange = () => {}; true").unwrap();
+    assert!(!flag.load(Relaxed));
+    rt.eval("navigation.addEventListener('navigate', () => {}); true").unwrap();
+    assert!(flag.load(Relaxed));
+    let rt2 = runtime();
+    let flag2 = rt2.navigate_listeners_flag();
+    rt2.eval("navigation.onnavigate = () => {}; true").unwrap();
+    assert!(flag2.load(Relaxed));
 }

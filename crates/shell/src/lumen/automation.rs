@@ -185,6 +185,26 @@ impl Lumen {
             Some(automation_ax_node(&ax_tree.root))
         }
 
+        /// Role and accessible name of the element a selector chain resolves to
+        /// (`AutomationCommand::ComputedA11y`, BUG-1014). Each selector after
+        /// the first is searched inside the previous match's shadow root.
+        /// `None` = no page or no such element.
+        pub(crate) fn automation_computed_a11y(&self, selectors: &[String]) -> Option<(String, String)> {
+            let source = self.layout_source.as_ref()?;
+            let doc = source.document.lock().ok()?;
+            let mut scope = doc.root();
+            let mut found = None;
+            for (i, sel) in selectors.iter().enumerate() {
+                let el = *lumen_layout::selector_query::query_all_within(&doc, scope, sel).first()?;
+                found = Some(el);
+                if i + 1 < selectors.len() {
+                    scope = doc.shadow_root_of(el)?;
+                }
+            }
+            let flat_tree = lumen_dom::build_flat_tree(&doc);
+            Some(lumen_a11y::computed_role_and_name(&doc, found?, &flat_tree))
+        }
+
         /// Box-model snapshot of the whole page for `AutomationCommand::LayoutSnapshot`
         /// (DEVX-14, wires `resource://layout` to the live window).
         ///
@@ -316,8 +336,13 @@ impl Lumen {
 
         /// Apply scroll delta with bounds clamping.
         pub(crate) fn scroll_by_delta(&mut self, dx: f32, dy: f32) {
+            // ADR-032, срез 3: база — смещение, которое уже набрал рендер-поток.
+            // Сам сдвиг уходит ему следующим кадром: смещение, заданное потоком
+            // браузера, помечено `ACK_BROWSER_SET` и главнее его собственного.
+            self.adopt_scroll_feedback();
             self.scroll_x = (self.scroll_x + dx).max(0.0);
             self.scroll_y = (self.scroll_y + dy).max(0.0);
+            self.issue_scroll_command();
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();
             }
@@ -360,6 +385,14 @@ impl Lumen {
             )
             .map_err(|e| format!("render_to_image_cpu: {e}"))?;
             lumen_image::encode_png_rgba8(&image).map_err(|e| format!("PNG encoding: {e}"))
+        }
+
+        /// Stable id of [`Self::automation_tab`] while a page-driven tab
+        /// switch (`window.open()`, `target=_blank`) keeps it parked in
+        /// `bg_tabs`; `None` when it is the active tab or no longer open
+        /// (BUG-1199).
+        pub(crate) fn automation_tab_in_background(&self) -> Option<usize> {
+            self.automation_tab.filter(|&id| self.tab_strip.inactive_index_of(id).is_some())
         }
 
     /// Return a cloneable [`InputSender`] for injecting synthetic input events.

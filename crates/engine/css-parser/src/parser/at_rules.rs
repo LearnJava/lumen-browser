@@ -53,18 +53,24 @@ pub struct FunctionParameter {
 
 /// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
 /// Color L5 §4. Declares a named custom colour profile referenced from
-/// `color(--name c1 c2 c3)`. Phase 0: descriptors are parsed and stored;
-/// actual ICC-based colour transform is deferred (layout treats the profile's
-/// channels as already-sRGB once a matching name is found).
+/// `color(--name c1 c2 c3)`. The descriptors are parsed here; the profile bytes
+/// are fetched by the embedder (the parser does no I/O) and attached with
+/// [`crate::Stylesheet::load_color_profiles`], after which layout compiles an
+/// ICC transform from them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColorProfileRule {
     /// Dashed-ident name, e.g. `--swop5c`. Used to match `color(--name ...)` values.
     pub name: String,
-    /// `src` descriptor — URL of the ICC profile resource (loading deferred).
+    /// `src` descriptor — URL of the ICC profile resource.
     pub src: Option<String>,
     /// `rendering-intent` descriptor — one of `relative-colorimetric` (default),
-    /// `absolute-colorimetric`, `perceptual`, `saturation`.
+    /// `absolute-colorimetric`, `perceptual`, `saturation`. Parsed and stored;
+    /// the transform always uses the profile's colorimetric path.
     pub rendering_intent: Option<String>,
+    /// Raw bytes of the fetched ICC profile. `None` until the embedder loads
+    /// it (or when the fetch failed) — CSS Color L5 §5.3: a colour referencing
+    /// a profile that "has not loaded" is an invalid colour.
+    pub data: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
@@ -176,117 +182,25 @@ pub struct Keyframe {
     pub declarations: Vec<Declaration>,
 }
 
-/// `@supports <condition> { rules }` блок — CSS Conditional Rules L3 §2.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupportsRule {
-    pub condition: SupportsCondition,
-    pub rules: Vec<Rule>,
-}
-
-/// Условие в `@supports (...)`. Грамматика:
-/// `<condition> = <negation> | <conjunction> | <disjunction> | <test>`
-/// `<negation>  = "not" <inside-parens>`
-/// `<conjunction> = <test> ("and" <test>)+`
-/// `<disjunction> = <test> ("or" <test>)+`
-/// `<test>       = "(" <property>: <value> ")" | "(" <condition> ")"`.
-///
-/// Phase 0: парсер также распознаёт `selector(<simple>)` (CSS Conditional
-/// L4) и сохраняет селектор как сырую строку.
-/// Функциональные тесты `font-tech(<font-tech>)` и
-/// `font-format(<font-format>)` (CSS Conditional L4 §4 / CSS Fonts L4 §4.3)
-/// тоже типизированы — evaluator сверяет аргумент со списком технологий и
-/// форматов шрифтов, поддержанных движком `lumen-font`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SupportsCondition {
-    /// `(prop: value)` — declaration test. Текущий supports-evaluator
-    /// проверяет, что `property` есть в списке known-property-имён,
-    /// не валидируя value (для Phase 0 этого достаточно — мы поддерживаем
-    /// конкретный набор properties, и tests типа `(display: grid)`
-    /// возвращают true, потому что мы парсим `display`, даже если
-    /// реального grid layout-а нет).
-    Decl { property: String, value: String },
-    Not(Box<SupportsCondition>),
-    And(Vec<SupportsCondition>),
-    Or(Vec<SupportsCondition>),
-    /// `selector(<sel>)` — CSS Conditional L4. Phase 0 не оценивает.
-    Selector(String),
-    /// `font-tech(<font-tech>)` — CSS Conditional L4 §4 / CSS Fonts L4 §4.3.
-    /// Хранит lowercase-ключевое слово технологии шрифта (например,
-    /// `variations`, `color-colrv1`, `features-opentype`). Evaluator
-    /// возвращает `true`, если технология реализована в `lumen-font`.
-    FontTech(String),
-    /// `font-format(<font-format>)` — CSS Conditional L4 §4 / CSS Fonts L4 §4.3.
-    /// Хранит lowercase-ключевое слово формата шрифта (например, `woff2`,
-    /// `opentype`, `truetype`). Кавычки legacy-строкового синтаксиса
-    /// (`font-format("woff2")`) снимаются при разборе. Evaluator возвращает
-    /// `true`, если формат декодируется движком `lumen-font`.
-    FontFormat(String),
-    /// Невалидный или нераспознанный тест — evaluator возвращает false.
-    Unknown,
-}
-
-/// Технологии шрифтов (`<font-tech>`, CSS Fonts L4 §4.3), которые
-/// `lumen-font` реально реализует: OpenType-фичи (GSUB/GPOS) и вариативные
-/// шрифты (fvar/gvar/avar/HVAR/MVAR). Цветные глифы (COLR/CPAL, sbix, CBDT,
-/// SVG-in-OpenType), палитры, AAT/Graphite-фичи и инкрементальная загрузка
-/// пока не поддержаны — см. `crates/engine/font/src/lib.rs` (заголовок).
-pub(crate) const SUPPORTED_FONT_TECH: &[&str] = &["features-opentype", "variations"];
-
-/// Форматы шрифтов (`<font-format>`, CSS Fonts L4 §4.3), которые
-/// `lumen-font` умеет декодировать: TrueType (glyf), OpenType (CFF/glyf +
-/// OT layout), WOFF1 (`decode_woff1`) и WOFF2 (`decode_woff2`). Контейнеры
-/// `collection` (.ttc), `embedded-opentype` (EOT) и `svg`-шрифты не
-/// поддержаны — см. `crates/engine/font/src/woff2.rs` и `lib.rs`.
-pub(crate) const SUPPORTED_FONT_FORMAT: &[&str] = &["opentype", "truetype", "woff", "woff2"];
-
-impl SupportsCondition {
-    /// Вычислить условие: вернуть `true`, если потребитель поддерживает
-    /// все объявления в условии. `known_properties` — список property-
-    /// имён, которые css-parser/layout распознают (например, `display`,
-    /// `color`, `grid-template-columns`).
-    ///
-    /// `Selector(<sel>)` (CSS Conditional L4 §4.2 `selector()`) парсится и
-    /// признаётся поддержанным, если каждая его часть распознаётся движком —
-    /// см. [`ComplexSelector::is_supported`]. Пустой/невалидный селектор → `false`.
-    /// `FontTech`/`FontFormat` сверяются со списками технологий и форматов,
-    /// которые реально реализует `lumen-font` ([`SUPPORTED_FONT_TECH`] /
-    /// [`SUPPORTED_FONT_FORMAT`]). `Unknown` → `false`.
-    pub fn evaluate(&self, known_properties: &[&str]) -> bool {
-        match self {
-            // CSS Variables L1 §2: a custom property accepts any token
-            // sequence as its value, so once a UA implements custom
-            // properties at all, `@supports (--x: <anything>)` must always
-            // be considered supported — it is never present in
-            // `known_properties` (a hand-written list of standard names).
-            Self::Decl { property, .. } if property.starts_with("--") => true,
-            Self::Decl { property, .. } => known_properties
-                .iter()
-                .any(|p| p.eq_ignore_ascii_case(property)),
-            Self::Not(c) => !c.evaluate(known_properties),
-            Self::And(cs) => cs.iter().all(|c| c.evaluate(known_properties)),
-            Self::Or(cs) => cs.iter().any(|c| c.evaluate(known_properties)),
-            Self::Selector(sel) => {
-                let list = parse_selector_list(sel);
-                !list.is_empty() && list.iter().all(ComplexSelector::is_supported)
-            }
-            Self::FontTech(tech) => SUPPORTED_FONT_TECH
-                .iter()
-                .any(|t| t.eq_ignore_ascii_case(tech)),
-            Self::FontFormat(fmt) => SUPPORTED_FONT_FORMAT
-                .iter()
-                .any(|f| f.eq_ignore_ascii_case(fmt)),
-            Self::Unknown => false,
-        }
-    }
-}
-
 /// `@layer name { rules }` блок.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerRule {
     /// Имя layer-а. Анонимный блок (`@layer { ... }`) получает имя
-    /// `__anon_<n>__` где `n` — порядковый номер.
+    /// `__anon_<n>__` где `n` — порядковый номер. Вложенный layer хранится
+    /// под полным dotted-именем (`outer.inner`, Cascade L5 §6.4.2).
     pub name: String,
     pub rules: Vec<Rule>,
+    /// `Some` — это правила условной группы (`@media`/`@supports`) внутри
+    /// layer-а: они участвуют в каскаде этого layer-а, только пока условие
+    /// истинно. `None` — безусловные правила блока.
+    pub condition: Option<LayerCondition>,
+}
+
+/// Условие группы правил внутри `@layer` — см. [`LayerRule::condition`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerCondition {
+    Media(MediaQuery),
+    Supports(SupportsCondition),
 }
 
 /// `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
@@ -299,6 +213,23 @@ pub struct ImportRule {
     /// matches. Пустой Vec в `clauses` (=default) трактуется как
     /// «всегда применять» (= `@import url("...")` без media-фильтра).
     pub media: MediaQuery,
+    /// `layer` / `layer(<name>)` — CSS Cascade L5 §6.5: правила импортируемого
+    /// листа попадают в указанный (или анонимный) cascade layer. `None` — без
+    /// модификатора, правила остаются unlayered.
+    pub layer: Option<ImportLayer>,
+    /// `supports(<condition>)` — CSS Cascade L5 §6.5: импорт применяется,
+    /// только если условие истинно (вычисляет вызывающая сторона через
+    /// [`SupportsCondition::evaluate`]). `None` — модификатора нет.
+    pub supports: Option<SupportsCondition>,
+}
+
+/// Значение модификатора `layer` у `@import` (CSS Cascade L5 §6.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportLayer {
+    /// Голый `layer` — анонимный layer.
+    Anonymous,
+    /// `layer(<name>)` — именованный layer (имя может быть dotted).
+    Named(String),
 }
 
 /// `@font-face { font-family: ...; src: url(...) format(...); ... }`
@@ -373,6 +304,14 @@ pub(crate) enum AtRuleOutcome {
         /// `@layer` remains unsupported (pre-existing gap, unrelated to this
         /// bug — see `parse_layer_at_rule`'s doc comment).
         mixin_rules: Vec<MixinRule>,
+        /// Прочее содержимое блока: `@media`/`@supports` (остаются за этим
+        /// layer-ом), вложенные `@layer` (имена относительные — префиксуются
+        /// именем внешнего) и layer-независимые at-rules (`@font-face`,
+        /// `@keyframes`, `@property`, …), которые вызывающая сторона
+        /// поднимает на верхний уровень. Нужно для `@import … layer(x)`:
+        /// импортируемый лист оборачивается в `@layer x { … }` и не должен
+        /// терять свои `@font-face`/`@keyframes`/`@property`.
+        nested: Vec<AtRuleOutcome>,
     },
     Supports(SupportsRule),
     Keyframes(KeyframesRule),
@@ -415,6 +354,85 @@ pub(crate) fn parse_keyframe_selectors(s: &str) -> Vec<f32> {
         }
     }
     out
+}
+
+/// Снимает `(`-группу с начала `s` (который начинается сразу ПОСЛЕ `(`):
+/// возвращает `(содержимое, остаток после закрывающей ')')`. Скобки внутри
+/// строк в кавычках не считаются.
+fn take_paren_group(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((&s[..i], &s[i + 1..]));
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+/// Разбор прелюдии `@import` после URL (CSS Cascade L5 §6.5):
+/// `[layer | layer(<name>)]? [supports(<condition>)]? <media-query-list>?`.
+/// Возвращает `(layer, supports, остаток-media)`; `None` — прелюдия невалидна
+/// (пустое/некорректное имя layer, незакрытая скобка), импорт отбрасывается.
+fn parse_import_prelude(
+    prelude: &str,
+) -> Option<(Option<ImportLayer>, Option<SupportsCondition>, &str)> {
+    let mut rest = prelude.trim_start();
+    let mut layer = None;
+    let mut supports = None;
+    if let Some(tail) = strip_prefix_ci(rest, "layer") {
+        if let Some(inner_start) = tail.strip_prefix('(') {
+            let (inner, after) = take_paren_group(inner_start)?;
+            let name = inner.trim();
+            if !is_layer_name(name) {
+                return None;
+            }
+            layer = Some(ImportLayer::Named(name.to_string()));
+            rest = after.trim_start();
+        } else if tail.is_empty() || tail.starts_with(char::is_whitespace) {
+            layer = Some(ImportLayer::Anonymous);
+            rest = tail.trim_start();
+        }
+    }
+    if let Some(tail) = strip_prefix_ci(rest, "supports(") {
+        let (inner, after) = take_paren_group(tail)?;
+        let inner = inner.trim();
+        // `supports(display: grid)` — голая декларация; всё остальное
+        // (`(…)`, `not …`, `selector(…)`) — уже `<supports-condition>`.
+        let is_declaration = match (inner.find(':'), inner.find('(')) {
+            (Some(colon), Some(paren)) => colon < paren,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        supports = Some(if is_declaration {
+            parse_supports_condition(&format!("({inner})"))
+        } else {
+            parse_supports_condition(inner)
+        });
+        rest = after.trim_start();
+    }
+    Some((layer, supports, rest))
+}
+
+/// `s.strip_prefix(prefix)` без учёта ASCII-регистра.
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then(|| &s[prefix.len()..])
 }
 
 /// Layer-имя — CSS-ident, опционально с точками (sub-layers через
@@ -506,246 +524,6 @@ pub(crate) fn split_top_level_commas(s: &str) -> Vec<&str> {
         out.push(&s[start..]);
     }
     out
-}
-
-/// Парсит `@supports`-условие из строки между `@supports` и `{`.
-///
-/// Грамматика (упрощённая): `<expr> = <term> (("and"|"or") <term>)*`,
-/// `<term> = "not"? <atom>`, `<atom> = "(" <inner> ")" | "selector(" sel ")"`,
-/// `<inner> = <expr> | <prop ":" value>`.
-///
-/// Phase 0 ограничения:
-/// - Mixing `and` и `or` на одном уровне не разрешено (per spec), но
-///   парсер lenient — берёт первый встретившийся combinator и применяет
-///   его ко всем term-ам этого уровня. Реалистичные tests этого не
-///   нарушают (`(a) and (b) and (c)` или `(a) or (b)`); смешанные — UB.
-/// - Нерекурсивный `selector(...)` хранит сырой селектор; реальный
-///   match — отложенная задача.
-pub fn parse_supports_condition(s: &str) -> SupportsCondition {
-    let s = s.trim();
-    if s.is_empty() {
-        return SupportsCondition::Unknown;
-    }
-    let bytes = s.as_bytes();
-    let mut pos = 0usize;
-    let result = parse_supports_expr(bytes, &mut pos);
-    skip_ws(bytes, &mut pos);
-    if pos < bytes.len() {
-        // Если что-то осталось — это синтаксическая ошибка; возвращаем
-        // частично разобранное (lenient).
-    }
-    result
-}
-
-/// Парсит значение `override-colors` из `@font-palette-values`.
-/// Формат: comma-separated `<u16-index> <color-string>` пары.
-/// CSS Fonts L4 §13.3. Хранит color как raw string — resolve через
-/// `parse_color` выполняется в layout при использовании palette.
-pub(crate) fn parse_override_colors(s: &str) -> Vec<(u16, String)> {
-    let mut result = Vec::new();
-    for pair in s.split(',') {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let mut parts = pair.splitn(2, char::is_whitespace);
-        if let (Some(idx_str), Some(color_str)) = (parts.next(), parts.next())
-            && let Ok(idx) = idx_str.trim().parse::<u16>()
-        {
-            let color = color_str.trim().to_string();
-            if !color.is_empty() {
-                result.push((idx, color));
-            }
-        }
-    }
-    result
-}
-
-pub(crate) fn skip_ws(b: &[u8], p: &mut usize) {
-    while *p < b.len() && b[*p].is_ascii_whitespace() {
-        *p += 1;
-    }
-}
-
-pub(crate) fn match_keyword_ci(b: &[u8], p: &mut usize, kw: &[u8]) -> bool {
-    skip_ws(b, p);
-    if *p + kw.len() > b.len() {
-        return false;
-    }
-    if !b[*p..*p + kw.len()].eq_ignore_ascii_case(kw) {
-        return false;
-    }
-    // Граница: следующий символ — не ident-char.
-    let after = *p + kw.len();
-    if after < b.len() {
-        let c = b[after];
-        if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' {
-            return false;
-        }
-    }
-    *p = after;
-    true
-}
-
-pub(crate) fn parse_supports_expr(b: &[u8], p: &mut usize) -> SupportsCondition {
-    let first = parse_supports_term(b, p);
-    skip_ws(b, p);
-    // Определяем combinator (если есть).
-    let saved = *p;
-    if match_keyword_ci(b, p, b"and") {
-        let mut terms = vec![first];
-        loop {
-            terms.push(parse_supports_term(b, p));
-            skip_ws(b, p);
-            let save = *p;
-            if !match_keyword_ci(b, p, b"and") {
-                *p = save;
-                break;
-            }
-        }
-        return SupportsCondition::And(terms);
-    }
-    *p = saved;
-    if match_keyword_ci(b, p, b"or") {
-        let mut terms = vec![first];
-        loop {
-            terms.push(parse_supports_term(b, p));
-            skip_ws(b, p);
-            let save = *p;
-            if !match_keyword_ci(b, p, b"or") {
-                *p = save;
-                break;
-            }
-        }
-        return SupportsCondition::Or(terms);
-    }
-    first
-}
-
-pub(crate) fn parse_supports_term(b: &[u8], p: &mut usize) -> SupportsCondition {
-    skip_ws(b, p);
-    if match_keyword_ci(b, p, b"not") {
-        let inner = parse_supports_atom(b, p);
-        return SupportsCondition::Not(Box::new(inner));
-    }
-    parse_supports_atom(b, p)
-}
-
-/// Если ввод в позиции `*p` начинается с функции `name` (case-insensitive),
-/// продвинуть `*p` за закрывающую `)` и вернуть содержимое скобок как строку.
-/// Иначе оставить `*p` без изменений и вернуть `None`. Учитывает вложенные
-/// скобки в аргументе (хотя для `font-tech`/`font-format` они не нужны).
-pub(crate) fn match_func_arg(b: &[u8], p: &mut usize, name: &[u8]) -> Option<String> {
-    let n = name.len();
-    if *p + n > b.len() || !b[*p..*p + n].eq_ignore_ascii_case(name) {
-        return None;
-    }
-    let start = *p + n;
-    let mut q = start;
-    let mut depth: i32 = 1;
-    while q < b.len() && depth > 0 {
-        match b[q] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 {
-            break;
-        }
-        q += 1;
-    }
-    let arg = std::str::from_utf8(&b[start..q]).unwrap_or("").to_string();
-    if q < b.len() && b[q] == b')' {
-        q += 1;
-    }
-    *p = q;
-    Some(arg)
-}
-
-pub(crate) fn parse_supports_atom(b: &[u8], p: &mut usize) -> SupportsCondition {
-    skip_ws(b, p);
-    // `font-tech( <font-tech> )` / `font-format( <font-format> )`
-    // (CSS Conditional L4 §4 / CSS Fonts L4 §4.3). Один ident-аргумент;
-    // у `font-format` допустим legacy-строковый синтаксис (кавычки снимаем).
-    if let Some(arg) = match_func_arg(b, p, b"font-tech(") {
-        return SupportsCondition::FontTech(arg.trim().to_ascii_lowercase());
-    }
-    if let Some(arg) = match_func_arg(b, p, b"font-format(") {
-        let unquoted = arg.trim().trim_matches(['"', '\'']).trim();
-        return SupportsCondition::FontFormat(unquoted.to_ascii_lowercase());
-    }
-    // `selector( ... )`
-    let saved = *p;
-    if *p + 9 <= b.len() && b[*p..*p + 9].eq_ignore_ascii_case(b"selector(") {
-        *p += 9;
-        let start = *p;
-        let mut depth: i32 = 1;
-        while *p < b.len() && depth > 0 {
-            match b[*p] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            *p += 1;
-        }
-        let sel_str = std::str::from_utf8(&b[start..*p]).unwrap_or("").trim().to_string();
-        if *p < b.len() && b[*p] == b')' {
-            *p += 1;
-        }
-        return SupportsCondition::Selector(sel_str);
-    }
-    *p = saved;
-    if *p < b.len() && b[*p] == b'(' {
-        *p += 1;
-        // Содержимое: может быть `<expr>` (nested condition) или
-        // `<prop>: <value>`. Различаем по наличию `:` на верхнем уровне.
-        let inner_start = *p;
-        let mut depth: i32 = 1;
-        while *p < b.len() && depth > 0 {
-            match b[*p] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            *p += 1;
-        }
-        let inner = std::str::from_utf8(&b[inner_start..*p]).unwrap_or("");
-        if *p < b.len() && b[*p] == b')' {
-            *p += 1;
-        }
-        // Determine: declaration or nested condition. Top-level `:`?
-        let inner_t = inner.trim();
-        let mut colon_pos: Option<usize> = None;
-        let inner_bytes = inner_t.as_bytes();
-        let mut d: i32 = 0;
-        for (i, &c) in inner_bytes.iter().enumerate() {
-            match c {
-                b'(' => d += 1,
-                b')' => d -= 1,
-                b':' if d == 0 => {
-                    colon_pos = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if let Some(idx) = colon_pos {
-            let property = inner_t[..idx].trim().to_string();
-            let value = inner_t[idx + 1..].trim().to_string();
-            if property.is_empty() {
-                return SupportsCondition::Unknown;
-            }
-            return SupportsCondition::Decl { property, value };
-        }
-        return parse_supports_condition(inner_t);
-    }
-    SupportsCondition::Unknown
 }
 
 impl<'a> Parser<'a> {
@@ -886,6 +664,7 @@ impl<'a> Parser<'a> {
                 };
                 let mut rules = Vec::new();
                 let mut mixin_rules = Vec::new();
+                let mut nested = Vec::new();
                 loop {
                     self.skip_ws_and_comments();
                     match self.peek() {
@@ -906,8 +685,29 @@ impl<'a> Parser<'a> {
                             // other outcome here is exactly as
                             // position-correct as the old blanket
                             // `skip_at_rule()`.
-                            if let AtRuleOutcome::Mixin(m) = self.parse_at_rule() {
-                                mixin_rules.push(m);
+                            match self.parse_at_rule() {
+                                AtRuleOutcome::Mixin(m) => mixin_rules.push(m),
+                                // Layer-независимые at-rules поднимаются на
+                                // верхний уровень; `@media`/`@supports` и
+                                // вложенные `@layer` остаются за layer-ом
+                                // (см. `LayerState::register`).
+                                // `@container`/`@scope` внутри `@layer`
+                                // по-прежнему отбрасываются: у них нет
+                                // layer-привязки в каскаде.
+                                o @ (AtRuleOutcome::Property(_)
+                                | AtRuleOutcome::FontFace(_)
+                                | AtRuleOutcome::FontPaletteValues(_)
+                                | AtRuleOutcome::Keyframes(_)
+                                | AtRuleOutcome::CounterStyle(_)
+                                | AtRuleOutcome::Page(_)
+                                | AtRuleOutcome::ColorProfile(_)
+                                | AtRuleOutcome::Function(_)
+                                | AtRuleOutcome::ViewTransition(_)
+                                | AtRuleOutcome::LayerNames(_)
+                                | AtRuleOutcome::LayerBlock { .. }
+                                | AtRuleOutcome::Media(_)
+                                | AtRuleOutcome::Supports(_)) => nested.push(o),
+                                _ => {}
                             }
                         }
                         Some(_) => {
@@ -921,7 +721,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                AtRuleOutcome::LayerBlock { name, rules, mixin_rules }
+                AtRuleOutcome::LayerBlock { name, rules, mixin_rules, nested }
             }
             _ => AtRuleOutcome::None,
         }
@@ -1090,6 +890,7 @@ impl<'a> Parser<'a> {
             name,
             src,
             rendering_intent,
+            data: None,
         })
     }
 
@@ -1223,21 +1024,22 @@ impl<'a> Parser<'a> {
         // URL: либо `url("...")` / `url('...')` / `url(...)`, либо просто `"..."` / `'...'`.
         let url = self.parse_import_url()?;
         self.skip_ws_and_comments();
-        // Опциональный media-query до `;`.
-        let media_start = self.pos;
+        // Прелюдия до `;`: `[layer | layer(<name>)]? [supports(<cond>)]? <media>?`.
+        let prelude_start = self.pos;
         while let Some(c) = self.peek() {
             if c == ';' || c == '}' || c == '{' {
                 break;
             }
             self.consume();
         }
-        let media_str = self.input[media_start..self.pos].trim();
-        let media = parse_media_query(media_str);
+        let prelude = self.input[prelude_start..self.pos].trim();
         // Сжираем `;` если есть.
         if self.peek() == Some(';') {
             self.consume();
         }
-        Some(ImportRule { url, media })
+        let (layer, supports, media_str) = parse_import_prelude(prelude)?;
+        let media = parse_media_query(media_str);
+        Some(ImportRule { url, media, layer, supports })
     }
 
     /// Парсит URL для `@import` — `url("...")`, `url(...)`, или `"..."`/`'...'`.
@@ -1330,66 +1132,6 @@ impl<'a> Parser<'a> {
             }
         }
         Some(MediaRule { query, rules })
-    }
-
-    /// Парсит тело `@supports <condition> { rules }` — CSS Conditional Rules L3 §2.
-    /// Берёт сырую condition-строку до `{` (с балансировкой `(`/`)`),
-    /// затем парсит её через [`parse_supports_condition`]. Тело — обычные
-    /// rules до `}`. Возвращает `None` если структура нарушена.
-    pub(crate) fn parse_supports_rule(&mut self) -> Option<SupportsRule> {
-        self.skip_ws_and_comments();
-        let cond_start = self.pos;
-        let mut depth: i32 = 0;
-        while let Some(c) = self.peek() {
-            if c == '(' {
-                depth += 1;
-            } else if c == ')' {
-                depth -= 1;
-            } else if c == '{' && depth == 0 {
-                break;
-            } else if c == ';' && depth == 0 {
-                // BUG-793: top-level `;` (outside parens) closes the at-rule
-                // without a block per CSS Syntax L3 §5.4.2 — stop here
-                // instead of scanning past it into the next rule's block.
-                break;
-            }
-            self.consume();
-        }
-        if self.peek() == Some(';') {
-            self.consume();
-            return None;
-        }
-        if self.peek() != Some('{') {
-            return None;
-        }
-        let cond_str = self.input[cond_start..self.pos].trim();
-        let condition = parse_supports_condition(cond_str);
-        self.consume(); // '{'
-        let mut rules = Vec::new();
-        loop {
-            self.skip_ws_and_comments();
-            match self.peek() {
-                None => break,
-                Some('}') => {
-                    self.consume();
-                    break;
-                }
-                Some('@') => {
-                    // Nested @-правила внутри @supports пока skip.
-                    self.skip_at_rule();
-                }
-                Some(_) => {
-                    let before = self.pos;
-                    if let Some((rule, nested, _)) = self.parse_rule() {
-                        rules.push(rule);
-                        rules.extend(nested);
-                    } else if self.pos == before {
-                        self.consume();
-                    }
-                }
-            }
-        }
-        Some(SupportsRule { condition, rules })
     }
 
     /// Парсит тело `@keyframes <name> { <frame>* }` — CSS Animations L1 §3.

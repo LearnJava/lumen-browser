@@ -142,25 +142,26 @@ impl Lumen {
                 // BUG-341 S7: computed once per pass, not once per axis — the
                 // stylesheet/shadow-DOM shape doesn't change between the three
                 // hover/focus/active calls below.
-                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+                // PERF-16 срез 4: and kept from pass to pass, the sheet being the same one.
+                let (state_index, node_index) = self.chrome_restyle_indexes.indexes(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_hover,
                     new_interactive.0,
-                    &state_index,
+                    state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_focus,
                     new_interactive.1,
-                    &state_index,
+                    state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_active,
                     new_interactive.2,
-                    &state_index,
+                    state_index,
                 ));
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
                 // interactive-state one above — `touched` is empty on a pure
@@ -169,11 +170,10 @@ impl Lumen {
                 // BUG-341 S17: the report names the mutated attributes, so the
                 // root-set can narrow each one to the node itself unless some
                 // selector reaches a sibling from a compound matching it.
-                let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
                     chrome_node_changes(&touched),
-                    &node_index,
+                    node_index,
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: std::mem::take(&mut self.chrome_prev_cascade_styles),
@@ -185,6 +185,7 @@ impl Lumen {
                     // document unstable the way S4-S15 had to — one changed
                     // omnibox character no longer costs all 318 boxes.
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    shallow_roots: Default::default(), point_roots: Default::default(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 // BUG-341 S15: reuse whole box subtrees from `prev` too, not
@@ -288,7 +289,7 @@ impl Lumen {
         // chrome_doc nodes in place rather than inserting/removing them, so
         // there are no "entering" nodes the way JS page mutation can produce.
         let now_s = self.epoch.elapsed().as_secs_f32();
-        let mut new_styles = HashMap::new();
+        let mut new_styles = crate::layout_walk::StyleMap::default();
         collect_box_styles(&layout, &mut new_styles);
         for (node, new_style) in &new_styles {
             if let Some(old_style) = self.chrome_prev_styles.get(node) {
@@ -296,7 +297,7 @@ impl Lumen {
             }
         }
         self.chrome_prev_styles = new_styles;
-        let dl = paint_ordered(&layout);
+        let dl = paint_ordered_cached(&layout, &mut self.chrome_emit_cache);
         // BUG-405 срез 48 (диагностика, п.85): не гейтит поведение — только
         // печать под `LUMEN_FRAME_LOG=2`. `hash_display_list` берёт `dl` как
         // overlay-лейн (content — пустой срез), тот же тотальный хэш, что уже
@@ -902,7 +903,7 @@ impl Lumen {
         &mut self,
         x_css: f32,
         y_css: f32,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) -> bool {
         if !self.point_over_chrome(x_css, y_css) {
             return false;
@@ -945,7 +946,7 @@ impl Lumen {
         &mut self,
         nid: NodeId,
         action: lumen_chrome::ChromeAction,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         use lumen_chrome::ChromeAction;
         match action {
@@ -1746,7 +1747,7 @@ pub(crate) fn chrome_node_changes(
 /// tree back exactly as it was — which is what lets the next pass take the
 /// live tree as its `prev` basis instead of the pipeline copying a pristine
 /// one aside on every frame (that copy was the largest single item left in an
-/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
+/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-FIXED.md`).
 pub(crate) fn take_content_area(
     lb: &mut LayoutBox,
     node: lumen_dom::NodeId,

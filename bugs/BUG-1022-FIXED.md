@@ -37,8 +37,8 @@ Baseline `html/semantics` не закоммичен — `.ini`-файлы, за�
 
 ## Почему это важно
 
-Тот же класс находки, что [BUG-1003](BUG-1003-OPEN.md)/[BUG-1004](BUG-1004-OPEN.md)/
-[BUG-1005](BUG-1005-OPEN.md)/[BUG-1011](BUG-1011-OPEN.md) («N `--check` подряд без изменений
+Тот же класс находки, что [BUG-1003](BUG-1003-FIXED.md)/[BUG-1004](BUG-1004-CANNOT-REPRODUCE.md)/
+[BUG-1005](BUG-1005-FIXED.md)/[BUG-1011](BUG-1011-OPEN.md) («N `--check` подряд без изменений
 между ними дают N разных наборов регрессий»), но на самой крупной пока категории, где это
 воспроизведено (2223 id) — растущий, а не колеблющийся счётчик регрессий (6/19/27) наводит
 на нагрузочную/ресурсную гипотезу (утечка портов/хендлов/памяти между последовательными
@@ -142,7 +142,7 @@ OK→ERROR между тремя `--check`-прогонами): в изоляц�
 `fetch/api/redirect/redirect-schemes.any.html` [`redirects 1`] регрессировал ОДИНАКОВО во всех
 трёх прогонах (включая невалидный из-за обрыва раннера) и трижды воспроизведён изолированно
 `run_smoke.py` — не отнесён к этому классу, заведён отдельно как
-[BUG-1098](BUG-1098-OPEN.md) (детерминированный дефект, не флап). Baseline `fetch` принят как
+[BUG-1098](BUG-1098-FIXED.md) (детерминированный дефект, не флап). Baseline `fetch` принят как
 записан первым `--update-expected`; TIMEOUT/NOTRUN-кластер `orb/tentative`/`metadata/generated`
 не перегенерирован — тот же случай, что `referrer-policy/4K*` часть 3, требует отдельной
 локализации вне бюджета этого среза.
@@ -232,7 +232,7 @@ sub.html` — детали в `docs/tasks/p2-test-track.md#test-3-срез-63-20
 вместо `in table body` и вкладывает каждую строку в ячейку предыдущей — DOM-цепочка
 глубиной ~131 000, `Maximum call stack size exceeded` и
 `thread 'lumen-pipeline' has overflowed its stack` → abort. Заведён
-[BUG-1155](BUG-1155-OPEN.md). Воспроизведение живым прогоном 2026-09-25
+[BUG-1155](BUG-1155-FIXED.md). Воспроизведение живым прогоном 2026-09-25
 (`run_report.py --all --root html/semantics/tabular-data --recursive --processes 6`,
 четыре прогона до фикса): в двух из четырёх вместе с `span-limits.html` упал сосед —
 `caption-methods.html` (прогон 1) и после первой половины фикса `sectionRowIndex.html`/

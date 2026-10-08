@@ -6,8 +6,8 @@ use crate::v8_runtime::V8JsRuntime;
 // V8 twin of the (removed) QuickJS `runtime_with_dom` helper.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -40,7 +40,7 @@ impl lumen_core::ext::JsFetchProvider for CaptureFetch {
 fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -95,7 +95,7 @@ fn v8_runtime_with_header_capture() -> (V8JsRuntime, Arc<CaptureHeadersFetch>) {
     let capture = Arc::new(CaptureHeadersFetch { seen: std::sync::Mutex::new(String::new()) });
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::clone(&capture) as _;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     (rt, capture)
 }
 
@@ -232,7 +232,7 @@ impl lumen_core::ext::JsFetchProvider for AlwaysCspBlockedFetch {
 fn v8_runtime_with_csp_blocked_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(AlwaysCspBlockedFetch);
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -315,7 +315,7 @@ impl lumen_core::ext::JsFetchProvider for EchoUrlFetch {
 fn v8_runtime_with_echo_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(EchoUrlFetch);
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None).unwrap();
     rt
 }
 
@@ -917,6 +917,24 @@ fn text_decoder_stream_closes_its_readable_side() {
     assert_eq!(r, lumen_core::JsValue::String("hi/false undefined/true".into()));
 }
 
+/// BUG-1084: a chunk that is not an ArrayBuffer/ArrayBufferView must reject
+/// `write()` with a `TypeError`; views with offset and other views decode.
+#[test]
+fn text_decoder_stream_rejects_non_buffer_source_chunk() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var out = [];                  ['str', null, undefined, 7, {}, [1]].forEach(function(bad, i) {                      var w = new TextDecoderStream().writable.getWriter();                      w.write(bad).then(function() { out.push(i + ':ok'); },                                        function(e) { out.push(i + ':' + (e instanceof TypeError)); });                  });                  var t2 = new TextDecoderStream();                  var buf = new Uint8Array([120, 104, 105, 121]);                  t2.writable.getWriter().write(new DataView(buf.buffer, 1, 2));                  t2.readable.getReader().read().then(function(r) { out.push('v:' + r.value); });"
+    ).unwrap();
+    for _ in 0..8 {
+        rt.eval("0").unwrap();
+    }
+    let r = rt.eval("out.slice().sort().join(' ')").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("0:true 1:true 2:true 3:true 4:true 5:true v:hi".into())
+    );
+}
+
 #[test]
 fn transform_stream_has_readable_and_writable() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -1201,6 +1219,131 @@ fn fetch_resolves_root_relative_url_against_document_origin() {
     assert_eq!(calls[0].0, "https://example.com/common/blank.html");
 }
 
+// ── BUG-1126: `blob:` URLs are answered from the blob URL store ─────────────
+
+#[test]
+fn fetch_blob_url_reads_the_blob_without_the_network() {
+    let capture = CaptureFetch::new();
+    let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+    rt.eval(
+        "var out = null;          var u = URL.createObjectURL(new Blob(['window.__blobRan = 42;'], {type: 'text/javascript'}));          fetch(u + '#frag').then(function(r) {              out = [r.status, r.statusText, r.url === u + '#frag', r.headers.get('content-type'), r.headers.get('content-length')];              return r.text();          }).then(function(t) { out.push(t); });",
+    )
+    .unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+    let r = rt.eval("JSON.stringify(out)").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            r#"[200,"OK",true,"text/javascript","22","window.__blobRan = 42;"]"#.into()
+        )
+    );
+    assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");
+}
+
+#[test]
+fn fetch_revoked_blob_url_and_non_get_are_network_errors() {
+    let rt = v8_runtime_with_fetch(CaptureFetch::new());
+    rt.eval(
+        "var errs = [];          var u = URL.createObjectURL(new Blob(['x']));          fetch(u, {method: 'POST'}).catch(function(e) { errs.push(e instanceof TypeError); });          URL.revokeObjectURL(u);          fetch(u).catch(function(e) { errs.push(e instanceof TypeError); });",
+    )
+    .unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+    let r = rt.eval("JSON.stringify(errs)").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("[true,true]".into()));
+}
+
+#[test]
+fn inserted_script_with_blob_src_runs_and_fires_load() {
+    let capture = CaptureFetch::new();
+    let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+    rt.eval(
+        "var ev = null;          var s = document.createElement('script');          s.src = URL.createObjectURL(new Blob(['window.__blobRan = 42;'], {type: 'text/javascript'}));          s.onload = function() { ev = 'load'; }; s.onerror = function() { ev = 'error'; };          document.body.appendChild(s);",
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        if rt.eval("ev !== null").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rt.eval("JSON.stringify([ev, globalThis.__blobRan])").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(r#"["load",42]"#.into()));
+    assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");
+}
+
+/// BUG-1128: each inserted classic script gets its `load` right after its own
+/// body runs (HTML LS §4.12.1.1), before the next queued script executes —
+/// SystemJS reads `System.register` of «the script that just loaded» there.
+#[test]
+fn inserted_scripts_interleave_execution_and_load() {
+    let rt = v8_runtime_with_fetch(CaptureFetch::new());
+    rt.eval(
+        "var RES = [];          ['m1', 'm2', 'm3', 'm4'].forEach(function(n) {              var s = document.createElement('script');              s.src = URL.createObjectURL(new Blob(['globalThis.__last = \"' + n + '\";'], {type: 'text/javascript'}));              s.async = true;              s.addEventListener('load', function() { RES.push(n + '<-' + globalThis.__last); globalThis.__last = null; });              s.addEventListener('error', function() { RES.push(n + ':error'); });              document.head.appendChild(s);          });",
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        if rt.eval("RES.length === 4").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rt.eval("JSON.stringify(RES)").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(r#"["m1<-m1","m2<-m2","m3<-m3","m4<-m4"]"#.into()));
+}
+
+/// BUG-1129: an external script a body script inserts delays the window's
+/// `load` until its own `load` (HTML LS §4.12.1.1) — the shell's
+/// `complete`/`pageshow` pair arriving earlier waits for it, in that order.
+#[test]
+fn inserted_script_delays_window_load() {
+    let rt = v8_runtime_with_fetch(CaptureFetch::new());
+    rt.eval(
+        "window.ORDER = [];          var s = document.createElement('script');          s.src = URL.createObjectURL(new Blob(['globalThis.__exec = [\"m1\"];'], {type: 'text/javascript'}));          s.onload = function() { ORDER.push('script-load'); };          document.head.appendChild(s);          window.addEventListener('load', function() {              ORDER.push('window-load ' + document.readyState + ' exec=' + JSON.stringify(globalThis.__exec || []));          });          window.addEventListener('pageshow', function() { ORDER.push('pageshow'); });          _lumen_apply_ready_state('interactive');          _lumen_apply_ready_state('complete');          _lumen_fire_page_lifecycle('pageshow', false);          ORDER.push('shell-done ' + document.readyState);",
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        if rt.eval("ORDER.length === 4").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rt.eval("JSON.stringify(ORDER)").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            r#"["shell-done interactive","script-load","window-load complete exec=[\"m1\"]","pageshow"]"#.into()
+        )
+    );
+}
+
+#[test]
+fn xhr_blob_url_loads_in_sync_and_async_mode() {
+    let capture = CaptureFetch::new();
+    let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+    rt.eval(
+        "var u = URL.createObjectURL(new Blob(['{\"a\":1}'], {type: 'application/json'}));          var s = new XMLHttpRequest(); s.open('GET', u, false); s.send();          var syncOut = [s.status, s.responseText, s.getResponseHeader('content-type')];          var asyncOut = null;          var x = new XMLHttpRequest(); x.open('GET', u); x.responseType = 'json';          x.onload = function() { asyncOut = [x.status, x.response.a, x.responseURL === u]; };          x.send();          var bad = null;          var y = new XMLHttpRequest(); y.open('GET', 'blob:null/00000000-0000-4000-8000-000000000000');          y.onerror = function() { bad = 'error'; }; y.send();",
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        if rt.eval("asyncOut !== null && bad !== null").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rt.eval("JSON.stringify([syncOut, asyncOut, bad])").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            r#"[[200,"{\"a\":1}","application/json"],[200,1,true],"error"]"#.into()
+        )
+    );
+    assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");
+}
+
 #[test]
 fn request_constructor_absolutizes_relative_url() {
     let rt = v8_runtime_with_fetch(CaptureFetch::new());
@@ -1231,7 +1374,7 @@ impl lumen_core::ext::JsFetchProvider for RedirectingFetch {
 fn fetch_response_url_and_redirected_reflect_the_final_url_after_redirect() {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(RedirectingFetch);
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt.eval(
         "fetch('https://example.com/start.txt').then(function(r) { \
@@ -1384,6 +1527,20 @@ fn text_encoder_stream_encodes_string() {
 }
 
 #[test]
+fn text_encoder_lone_surrogate_becomes_fffd_and_stream_joins_pair() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "Array.from(new TextEncoder().encode('\\ud800')).join() === '239,191,189'          && Array.from(new TextEncoder().encode('\\ud800a')).join() === '239,191,189,97'"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    rt.eval(
+        "var out = [];          var tes = new TextEncoderStream();          var w = tes.writable.getWriter(); var rd = tes.readable.getReader();          w.write('\\ud83d'); w.write('\\udca9'); w.write('a'); w.close();          (function pump() { rd.read().then(function(r) { if (!r.done) { out.push(Array.from(r.value).join()); pump(); } }); })();"
+    ).unwrap();
+    let r = rt.eval("out.join('|') === '240,159,146,169|97'").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn byte_length_queuing_strategy() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
@@ -1414,4 +1571,75 @@ fn readable_stream_from_array() {
     ).unwrap();
     let r = rt.eval("done").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-684: every Streams interface object called without `new` throws a
+/// TypeError instead of running with `this === globalThis` and leaking the
+/// fields it sets (`TransformStream()` used to leave `readable`/`writable`
+/// behind as globals).
+#[test]
+fn stream_constructors_require_new() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var names = ['ReadableStream', 'WritableStream', 'TransformStream', \
+                      'ReadableStreamDefaultReader', 'ReadableStreamBYOBReader', \
+                      'WritableStreamDefaultWriter', 'TextDecoderStream', 'TextEncoderStream', \
+                      'CompressionStream', 'DecompressionStream', \
+                      'ByteLengthQueuingStrategy', 'CountQueuingStrategy', \
+                      'ReadableStreamDefaultController', 'ReadableByteStreamController', \
+                      'ReadableStreamBYOBRequest', 'WritableStreamDefaultController', \
+                      'TransformStreamDefaultController']; \
+         var bad = names.filter(function(n) { \
+           try { globalThis[n]({}); return true; } \
+           catch (e) { return !(e instanceof TypeError); } \
+         }); \
+         var leaked = ['readable', 'writable', '_rs_state', '_ws_state', '_ts_ctrl', 'highWaterMark'] \
+           .filter(function(k) { return Object.prototype.hasOwnProperty.call(globalThis, k); }); \
+         bad.concat(leaked).join(',')",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(String::new()));
+}
+
+/// The guard keys on `new.target`, so the subclasses that share the
+/// TransformStream body, and page-defined `class extends`, still construct.
+#[test]
+fn stream_subclasses_still_construct() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "class MyTS extends TransformStream {} \
+         class MyRS extends ReadableStream {} \
+         var a = new TextDecoderStream(), b = new TextEncoderStream(), \
+             c = new CompressionStream('gzip'), d = new DecompressionStream('deflate'), \
+             e = new MyTS(), f = new MyRS(); \
+         [a, b, c, d, e].every(function(t) { \
+           return t instanceof TransformStream && t.readable instanceof ReadableStream \
+             && t.writable instanceof WritableStream; \
+         }) && f instanceof ReadableStream && f.locked === false",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1204: controllers and `ReadableStreamBYOBRequest` have no public
+/// constructor — `new X(...)` from a page throws "Illegal constructor", while
+/// the streams themselves still build their controllers internally.
+#[test]
+fn stream_controllers_have_illegal_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var names = ['ReadableStreamDefaultController', 'ReadableByteStreamController', \
+                      'ReadableStreamBYOBRequest', 'WritableStreamDefaultController', \
+                      'TransformStreamDefaultController']; \
+         var bad = names.filter(function(n) { \
+           try { new globalThis[n]({}); return true; } \
+           catch (e) { return !(e instanceof TypeError) || e.message !== 'Illegal constructor'; } \
+         }); \
+         var rs = new ReadableStream({ start: function(c) { c.enqueue(1); } }); \
+         var bs = new ReadableStream({ type: 'bytes' }); \
+         var ws = new WritableStream({}); \
+         var ts = new TransformStream({}); \
+         var rs2 = new ReadableStream({ start: function(c) { \
+           try { new ReadableStreamDefaultController(rs); bad.push('inside'); } catch (e) {} } }); \
+         bad.join(',')",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(String::new()));
 }

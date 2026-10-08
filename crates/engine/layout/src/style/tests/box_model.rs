@@ -25,11 +25,24 @@ use super::*;
 
     #[test]
     fn border_width_shorthand_1_value() {
-        let s = style_for("border-width: 5px");
+        let s = style_for("border-width: 5px; border-style: solid");
         assert!((s.border_top_width - 5.0).abs() < 0.01);
         assert!((s.border_right_width - 5.0).abs() < 0.01);
         assert!((s.border_bottom_width - 5.0).abs() < 0.01);
         assert!((s.border_left_width - 5.0).abs() < 0.01);
+    }
+
+    /// CSS Backgrounds L3 §4.2: `border-style: none|hidden` → вычисленная ширина стороны 0.
+    #[test]
+    fn border_width_is_zero_without_a_border_style() {
+        let s = style_for("border-width: 5px 6px 7px 8px");
+        assert_eq!(
+            (s.border_top_width, s.border_right_width, s.border_bottom_width, s.border_left_width),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        // Стиль только у одной стороны оставляет ширину только ей.
+        let s = style_for("border-width: 5px; border-left-style: solid");
+        assert_eq!((s.border_left_width, s.border_top_width), (5.0, 0.0));
     }
 
     #[test]
@@ -37,6 +50,25 @@ use super::*;
         let s = style_for("border-style: dashed");
         assert_eq!(s.border_top_style, BorderStyle::Dashed);
         assert_eq!(s.border_bottom_style, BorderStyle::Dashed);
+    }
+
+    #[test]
+    fn border_style_accepts_groove_ridge_inset_outset() {
+        let s = style_for("border-style: groove ridge inset outset");
+        assert_eq!(s.border_top_style, BorderStyle::Groove);
+        assert_eq!(s.border_right_style, BorderStyle::Ridge);
+        assert_eq!(s.border_bottom_style, BorderStyle::Inset);
+        assert_eq!(s.border_left_style, BorderStyle::Outset);
+        let s = style_for("border: 6px ridge #c00");
+        assert_eq!(s.border_left_style, BorderStyle::Ridge);
+        assert!((s.border_left_width - 6.0).abs() < 0.01);
+        let s = style_for("border-left: 4px outset red");
+        assert_eq!(s.border_left_style, BorderStyle::Outset);
+        let s = style_for("border-block-start-style: groove");
+        assert_eq!(s.border_top_style, BorderStyle::Groove);
+        // `hidden` у `border-style` по-прежнему не разбирается.
+        let s = style_for("border-style: hidden");
+        assert_eq!(s.border_top_style, BorderStyle::None);
     }
 
     #[test]
@@ -60,8 +92,31 @@ use super::*;
     }
 
     #[test]
+    fn border_shorthands_keep_functional_colour_with_spaces_as_one_token() {
+        // `rgba(0, 0, 255, 0.5)` has spaces inside the parentheses: a plain
+        // whitespace split cut it into `rgba(0,` / `0,` / ... and dropped the colour.
+        let half_blue = Color { r: 0, g: 0, b: 255, a: 128 };
+        let s = style_for("border: 10px solid rgba(0, 0, 255, 0.5)");
+        assert!((s.border_left_width - 10.0).abs() < 0.01);
+        assert_eq!(s.border_left_style, BorderStyle::Solid);
+        assert_eq!(s.border_left_color, CssColor::Rgba(half_blue));
+        let s = style_for("border-right: 10px rgba(0, 0, 255, 0.5) solid");
+        assert!((s.border_right_width - 10.0).abs() < 0.01);
+        assert_eq!(s.border_right_style, BorderStyle::Solid);
+        assert_eq!(s.border_right_color, CssColor::Rgba(half_blue));
+    }
+
+    #[test]
+    fn outline_shorthand_keeps_functional_colour_with_spaces_as_one_token() {
+        let s = style_for("outline: 4px solid rgba(255, 0, 0, 0.5)");
+        assert!((s.outline_width - 4.0).abs() < 0.01);
+        assert_eq!(s.outline_style, OutlineStyle::Solid);
+        assert_eq!(s.outline_color, OutlineColor::Color(Color { r: 255, g: 0, b: 0, a: 128 }));
+    }
+
+    #[test]
     fn border_per_side_width_properties() {
-        let s = style_for("border-left-width: 4px; border-right-width: 6px");
+        let s = style_for("border-left-width: 4px; border-right-width: 6px; border-style: solid");
         assert!((s.border_left_width - 4.0).abs() < 0.01);
         assert!((s.border_right_width - 6.0).abs() < 0.01);
         assert!((s.border_top_width - 0.0).abs() < 0.01);
@@ -310,10 +365,10 @@ use super::*;
 
     #[test]
     fn object_position_invalid_value_keeps_default() {
-        // 3 token-а — пока не поддерживаем; декларация ignored.
+        // 5 token-ов не образуют валидный `<position>`; декларация ignored.
         let s = cascade_at(
             "<img>",
-            "img { object-position: left 10px top; }",
+            "img { object-position: left 10px top 5px 7px; }",
             &[0],
         );
         // initial-value сохранён.
@@ -345,6 +400,27 @@ use super::*;
         let pc = PositionComponent::Px(15.0);
         assert!((pc.resolve(0.0) - 15.0).abs() < f32::EPSILON);
         assert!((pc.resolve(1000.0) - 15.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn position_component_resolve_percent_plus_px() {
+        // `right 10px` → 100% - 10px от свободного места.
+        let pc = PositionComponent::PercentPlusPx { percent: 1.0, px: -10.0 };
+        assert!((pc.resolve(100.0) - 90.0).abs() < f32::EPSILON);
+        assert!((pc.resolve(-40.0) - (-50.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn quad_position_resolves_against_free_space() {
+        // `right 10px bottom 20px`, область 200×100, тайл 20×20 → (170, 60).
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: right 10px bottom 20px; }",
+            &[0],
+        );
+        let pos = s.background_layers[0].position;
+        assert!((pos.x.resolve(200.0 - 20.0) - 170.0).abs() < 1e-3);
+        assert!((pos.y.resolve(100.0 - 20.0) - 60.0).abs() < 1e-3);
     }
 
     // -------- vertical-align (CSS 2.1 §10.8.1) --------
@@ -492,6 +568,37 @@ use super::*;
     }
 
     // === clip-rule parsing (SVG §14.3.4) ===
+
+    // BUG-1094 — SVG 2 geometry / painting CSS properties.
+    #[test]
+    fn svg_geometry_properties_parse_and_resolve_em() {
+        use crate::style::Length;
+        assert_eq!(ts_prop("cx", "-10px").svg_cx, Length::Px(-10.0));
+        assert_eq!(ts_prop("cy", "0.5em").svg_cy, Length::Px(8.0));
+        assert_eq!(ts_prop("x", "40%").svg_x, Length::Percent(40.0));
+        assert_eq!(ts_prop("r", "calc(10px + 0.5em)").svg_r, Length::Px(18.0));
+        // Negative `r` is invalid: the declaration is dropped.
+        assert_eq!(ts_prop("r", "-1px").svg_r, Length::Px(0.0));
+        assert_eq!(ts_prop("r", "-10%").svg_r, Length::Px(0.0));
+    }
+
+    #[test]
+    fn svg_rx_ry_accept_auto_and_reject_negative() {
+        use crate::style::{Length, LengthOrAuto};
+        assert_eq!(ts_prop("rx", "auto").svg_rx, LengthOrAuto::Auto);
+        assert_eq!(ts_prop("ry", "10px").svg_ry, LengthOrAuto::Length(Length::Px(10.0)));
+        assert_eq!(ts_prop("rx", "-1px").svg_rx, LengthOrAuto::Auto);
+    }
+
+    #[test]
+    fn svg_color_interpolation_and_path_length() {
+        use crate::style::SvgColorInterpolation as C;
+        assert_eq!(ComputedStyle::root().svg_color_interpolation, C::Srgb);
+        assert_eq!(ts_prop("color-interpolation", "linearRGB").svg_color_interpolation, C::LinearRgb);
+        assert_eq!(ts_prop("color-interpolation", "none").svg_color_interpolation, C::Srgb);
+        assert_eq!(ts_prop("path-length", "100").svg_path_length, Some(100.0));
+        assert_eq!(ts_prop("path-length", "none").svg_path_length, None);
+    }
 
     #[test]
     fn clip_rule_default_is_nonzero() {

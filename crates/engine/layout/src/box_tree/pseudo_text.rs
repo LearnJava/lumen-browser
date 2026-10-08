@@ -36,7 +36,7 @@ pub(crate) fn apply_first_letter_style(
                 let own_style = segments[i].style.clone();
                 segments[i].text = first_text;
                 segments[i].style =
-                    crate::style::merge_pseudo_inherited(&own_style, inherited, &fl_style);
+                    Arc::new(crate::style::merge_pseudo_inherited(&own_style, inherited, &fl_style));
                 let rest = InlineSegment {
                     text: rest_text,
                     style: own_style,
@@ -57,9 +57,9 @@ pub(crate) fn apply_first_letter_style(
                 segments.insert(i + 1, rest);
             } else {
                 // Single-char or empty segment: just layer the pseudo style on.
-                segments[i].style = crate::style::merge_pseudo_inherited(
+                segments[i].style = Arc::new(crate::style::merge_pseudo_inherited(
                     &segments[i].style, inherited, &fl_style,
-                );
+                ));
             }
             return;
         }
@@ -145,8 +145,11 @@ pub(crate) fn extract_first_letter_float(
             node,
             rect: Rect::ZERO,
             used_line_height: inner_style.font_size * inner_style.line_height,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: Arc::new(inner_style),
-            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None },
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -159,6 +162,9 @@ pub(crate) fn extract_first_letter_float(
             node,
             rect: Rect::ZERO,
             used_line_height: outer_style.font_size * outer_style.line_height,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
@@ -262,14 +268,17 @@ pub(crate) fn extract_initial_letter(
         inner_style.text_indent = Length::Px(0.0);
         inner_style.initial_letter_size = 1.0;
         inner_style.initial_letter_sink = 0;
-        seg.style = inner_style.clone();
+        seg.style = Arc::new(inner_style.clone());
 
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
             used_line_height: inner_style.font_size * inner_style.line_height,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: Arc::new(inner_style),
-            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None },
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None, first_line_inset: 0.0 },
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -291,6 +300,9 @@ pub(crate) fn extract_initial_letter(
             node,
             rect: Rect::ZERO,
             used_line_height: outer_style.font_size * outer_style.line_height,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
@@ -374,7 +386,7 @@ fn apply_first_line_pseudo_styles_inner(
             for frag in first_line.iter_mut() {
                 if frag.is_first_line {
                     frag.style =
-                        crate::style::merge_pseudo_inherited(&frag.style, &base, &fl_style);
+                        Arc::new(crate::style::merge_pseudo_inherited(&frag.style, &base, &fl_style));
                 }
             }
         }
@@ -403,12 +415,12 @@ fn apply_first_line_pseudo_styles_inner(
 }
 
 /// Byte offsets of each whitespace-separated word start in `text`
-/// (same word boundaries as `str::split_whitespace`).
+/// (same word boundaries as `split_css_whitespace`).
 fn word_start_offsets(text: &str) -> Vec<usize> {
     let mut starts = Vec::new();
     let mut in_word = false;
     for (i, c) in text.char_indices() {
-        if c.is_whitespace() {
+        if is_wrap_whitespace(c) {
             in_word = false;
         } else if !in_word {
             starts.push(i);
@@ -423,7 +435,7 @@ fn word_start_offsets(text: &str) -> Vec<usize> {
 ///
 /// `line0` is the first line produced by the ::first-line wrap pass; its frags
 /// appear in segment order and never span segments, so consumption is counted
-/// word-by-word with the same boundaries as `str::split_whitespace` (matching
+/// word-by-word with the same boundaries as `split_css_whitespace` (matching
 /// `wrap_inline_run`). A partially consumed segment is split at the word
 /// boundary: the head keeps the segment's `pre_space` (its inline box opened on
 /// line 0, `post_space` → 0), the tail keeps `post_space` (`pre_space` → 0,
@@ -480,7 +492,7 @@ pub(crate) fn split_segments_at_first_line(
             }
             continue;
         }
-        let mut need = frag.text.split_whitespace().count();
+        let mut need = split_css_whitespace(&frag.text).count();
         while need > 0 && idx < segments.len() {
             let seg = &segments[idx];
             if seg.img_src.is_some() || seg.forced_break {
@@ -489,7 +501,7 @@ pub(crate) fn split_segments_at_first_line(
                 words_taken = 0;
                 continue;
             }
-            let total = seg.text.split_whitespace().count();
+            let total = split_css_whitespace(&seg.text).count();
             let avail = total.saturating_sub(words_taken);
             if avail <= need {
                 need -= avail;
@@ -583,12 +595,16 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             node: child.node,
             rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
             used_line_height: base_h,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: child.style.clone(),
             kind: BoxKind::InlineRun {
                 segments: rest_segs,
                 lines: rest_lines,
                 first_line_style: None,
                 row_continuation_width: None,
+                first_line_inset: 0.0,
             },
             children: Vec::new(),
             col_span: 1,
@@ -609,6 +625,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             lines: vec![line0],
             first_line_style: None,
             row_continuation_width: None,
+            first_line_inset: 0.0,
         };
         // BUG-432: tag the box so paint can tell it from an ordinary anonymous
         // inline run and draw the pseudo-element's own background. Every other

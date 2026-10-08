@@ -31,7 +31,7 @@ use crate::style::{
     expand_vars_and_env, parse_css_wide_keyword, ComputedStyle, CssWideKeyword, FontWeight,
 };
 
-use css_wide::apply_css_wide_keyword;
+use css_wide::{apply_all_shorthand, apply_css_wide_keyword};
 
 /// Применить одну декларацию каскада к `style`.
 ///
@@ -136,7 +136,15 @@ pub(in crate::style) fn apply_declaration(
     // revert) применимы к любому свойству. Делается ДО property-specific
     // парсинга, чтобы не дублировать проверку в 30+ branch-ах.
     if let Some(kw) = parse_css_wide_keyword(val) {
-        apply_css_wide_keyword(style, prop, kw, inherited, ua_baseline);
+        if prop == "all" {
+            apply_all_shorthand(style, kw, inherited, ua_baseline);
+        } else {
+            apply_css_wide_keyword(style, prop, kw, inherited, ua_baseline);
+        }
+        return;
+    }
+    // `all` принимает только CSS-wide keyword-ы — иное значение невалидно.
+    if prop == "all" {
         return;
     }
     if layout::apply_decl_layout(style, prop, val, em_basis, viewport, is_quirks) {

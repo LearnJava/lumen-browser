@@ -7,10 +7,10 @@
   // an independent `setInterval`, so a page's `<audio>`/`<video>` elements
   // all resolve their load/error state in one fixed, deterministic order per
   // tick rather than racing each other's decoder thread's real response time.
-  if (!globalThis._lumen_media_pumps) {
-    globalThis._lumen_media_pumps = [];
-    globalThis._lumen_pump_media = function() {
-      var arr = globalThis._lumen_media_pumps;
+  if (!__lumen_C._lumen_media_pumps) {
+    __lumen_C._lumen_media_pumps = [];
+    __lumen_C._lumen_pump_media = function() {
+      var arr = __lumen_C._lumen_media_pumps;
       for (var i = arr.length - 1; i >= 0; i--) {
         var keep;
         try { keep = arr[i](); } catch (e) { keep = false; }
@@ -159,7 +159,7 @@
   // NETWORK_EMPTY invokes the media load algorithm. Answers false while the
   // parent is not a media element, which keeps the element tracked for a later
   // re-parenting — the same contract `_lumen_track_start_load` has.
-  globalThis._lumen_media_source_inserted = function (nid) {
+  __lumen_C._lumen_media_source_inserted = function (nid) {
     if (typeof _lumen_get_parent !== 'function' || typeof _lumen_u2n !== 'function') return false;
     var mediaNid = _lumen_u2n(_lumen_get_parent(nid));
     if (mediaNid === null) return false;
@@ -475,14 +475,14 @@
   }
 
   // The three URL shapes a `<track src>` can carry. `blob:` and `data:` are read
-  // locally because `fetch()` has no branch for either — a `blob:lumen/` URL
-  // would be handed to the network layer and fail — and every test under
+  // locally: `fetch()` has no `data:` branch, and a `blob:` body is already in
+  // the store as text-ready bytes — every test under
   // `webvtt/parsing/cue-text-parsing/` builds its track with createObjectURL.
   // Both are matched on the *raw* attribute, before base resolution: neither is
   // a URL `_url_resolve` has any business rewriting.
   function readTrackBody(url) {
-    if (url.indexOf('blob:lumen/') === 0) {
-      var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[url] : null;
+    if (url.indexOf('blob:') === 0) {
+      var blob = (typeof _lumen_blob_url_entry === 'function') ? _lumen_blob_url_entry(url) : null;
       if (!blob || !blob._bytes) return Promise.reject(new Error('object URL is not registered'));
       try { return Promise.resolve(new TextDecoder().decode(new Uint8Array(blob._bytes))); }
       catch (e) { return Promise.reject(e); }
@@ -602,7 +602,7 @@
     }, 0);
     return true;
   }
-  globalThis._lumen_track_start_load = startTrackLoad;
+  __lumen_C._lumen_track_start_load = startTrackLoad;
 
   // The parser's half of the same model (BUG-804). A <track> written by the
   // HTML parser never passes through the insertion hook in `dom.rs` — that one
@@ -653,7 +653,7 @@
       if (typeof _lumen_resource_track === 'function') _lumen_resource_track(nid, 'track');
     }
   }
-  globalThis._lumen_track_elements_scan = scanTrackElements;
+  __lumen_C._lumen_track_elements_scan = scanTrackElements;
 
   // A media element's list of text tracks exists from the moment the ELEMENTS
   // do: §4.8.11.1 adds a `<track>`'s text track when the track element is
@@ -976,7 +976,7 @@
       // BUG-1033: poll on the shared media pump (same fixed per-tick order
       // as `audio_element.rs`'s `pollLoad`) until the shell has decoded the
       // GIF, instead of an independent `setInterval`.
-      globalThis._lumen_media_pumps.push(function() {
+      __lumen_C._lumen_media_pumps.push(function() {
         if (gen !== _generation) return false;
         if (!__lumen_video_ready(nid)) return true;
         _gifBacked = true;
@@ -1009,7 +1009,7 @@
       if (!isFfmpegSrc(src)) return false;
       __lumen_video_ffmpeg_load(nid, src);
       // BUG-1033: same shared-pump model as `startGifLoad` above.
-      globalThis._lumen_media_pumps.push(function() {
+      __lumen_C._lumen_media_pumps.push(function() {
         if (gen !== _generation) return false;
         // GAP-MEDIADECODE срез 9: a corrupted/undecodable container never
         // reaches `playback`, so `__lumen_video_ready` alone would poll

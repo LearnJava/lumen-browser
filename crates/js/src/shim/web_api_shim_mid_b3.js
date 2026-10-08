@@ -64,6 +64,50 @@ function _lumen_fire_media_src_violation(csp) {
     }
 }
 
+// HTML LS §4.6.9 "Hyperlink auditing" — one independent fire-and-forget POST
+// per space-separated URL in a `ping` attribute, run when the hyperlink is
+// activated (`_lumen_run_activation_behavior`'s A/AREA branch). Reuses the
+// PERF-14 async fetch bridge instead of a bespoke native binding so the
+// request runs off-thread, is gated by the same `connect-src` CSP check as
+// every other outgoing request, and the Resource Timing entry (initiatorType
+// 'ping') is only recorded once the real round trip completes — WPT's
+// `a.ping-functionality.html` asserts `entry.duration` against the target
+// endpoint's own artificial delay, so recording it at dispatch time (before
+// the response exists) would be wrong.
+function _lumen_fire_hyperlink_ping(nid, targetHref) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'ping'));
+    if (raw === null) return;
+    var tokens = String(raw).split(/[ \t\n\r\f]+/).filter(function(t) { return t !== ''; });
+    if (tokens.length === 0) return;
+    var base = _lumen_document_base_url();
+    var from = '';
+    try { from = String(location.href); } catch (e) {}
+    var to = String(targetHref || '');
+    var body = Array.from(new TextEncoder().encode('PING'));
+    for (var i = 0; i < tokens.length; i++) {
+        var pingUrl;
+        try { pingUrl = _url_resolve(tokens[i], base); } catch (e) { continue; }
+        (function(pingUrl) {
+            var startMs = performance.now();
+            var handle = _lumen_fetch_async_start(
+                pingUrl, 'POST', 'text/ping', body, true,
+                ['ping-from', from, 'ping-to', to], '|ping'
+            );
+            if (!handle) return;
+            _lumen_fetch_track(function() {
+                var st = _lumen_fetch_async_poll(handle);
+                if (st === 0) return false;
+                if (st === 1 && _lumen_fetch_async_commit(handle)) {
+                    _lumen_record_resource_timing(pingUrl, 'ping', startMs, performance.now() - startMs,
+                        { status: _lumen_fetch_get_status(), decodedBodySize: 0, encodedBodySize: 0, contentType: '' });
+                }
+                _lumen_fetch_async_free(handle);
+                return true;
+            });
+        })(pingUrl);
+    }
+}
+
 function _perf_rt_record_fetch(url, initiator, startMs, status) {
     if (typeof _lumen_record_resource_timing !== 'function') return;
     var len = 0;
@@ -122,6 +166,33 @@ function _lumen_fetch_pump() {
     return _lumen_fetch_inflight.length;
 }
 
+// BUG-1151, HTML LS §4.6.7 «consume a preloaded resource»: `<link rel=preload
+// as=fetch>` hints seen on this page, URL → credentials mode their request
+// carried (`crossorigin` absent = `no-cors`, which a `cors` fetch() can never
+// take). A hint is used by at most one fetch().
+var _lumen_fetch_hints = {};
+
+function _lumen_fetch_hint_register(url, crossorigin) {
+    if (crossorigin === null || crossorigin === undefined) return;
+    _lumen_fetch_hints[url] =
+        (String(crossorigin).trim().toLowerCase() === 'use-credentials') ? 'include' : 'same-origin';
+}
+
+// True when this `fetch()` matches a registered hint (URL, `cors` mode,
+// credentials mode) and carries nothing the hint's request could not have had:
+// GET, no body, no author headers, default cache mode. The hint is spent either way.
+function _lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders) {
+    var want = _lumen_fetch_hints[url];
+    if (want === undefined) return false;
+    if (method !== 'GET' || hasBody || authorHeaders.length !== 0) return false;
+    var req = (typeof input === 'object' && input) ? input : null;
+    var mode = (init && init.mode) || (req && req.mode) || 'cors';
+    var creds = (init && init.credentials) || (req && req.credentials) || 'same-origin';
+    var cache = (init && init.cache) || (req && req.cache) || 'default';
+    delete _lumen_fetch_hints[url];
+    return mode === 'cors' && creds === want && cache === 'default';
+}
+
 function _lumen_fetch(input) {
     var init = arguments[1];
     try {
@@ -149,6 +220,18 @@ function _lumen_fetch(input) {
             ? init._lumenInitiatorType : 'fetch';
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
+
+        // Fetch §4.2 «scheme fetch», `blob`: the bytes live in the page's blob
+        // URL store, not behind a socket — before BUG-1126 the URL went to the
+        // network layer and died there as «unsupported scheme». Only GET is
+        // allowed; a revoked URL is a network error.
+        if (url.slice(0, 5) === 'blob:') {
+            var blobEntry = _lumen_blob_url_entry(url);
+            if (!blobEntry || method !== 'GET') {
+                return Promise.reject(new TypeError('fetch: network error for ' + url));
+            }
+            return Promise.resolve(_lumen_response_from_blob(blobEntry, url));
+        }
 
         // Fetch §5.4 keepalive flag: request survives page unload (Beacon semantics).
         // Phase 0: accepted syntactically; detachment from page lifecycle is Phase 2.
@@ -290,6 +373,11 @@ function _lumen_fetch(input) {
                     _fetchLoad = (init && init._lumenModule) ? 'cors|script' : 'no-cors|script';
                 } else {
                     _fetchLoad = ((init && typeof init.mode === 'string') ? init.mode : '') + '|';
+                    // BUG-1151: a plain page `fetch()` may consume a
+                    // `<link rel=preload as=fetch>` hint's bytes (third segment).
+                    if (_lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders)) {
+                        _fetchLoad += '|preloaded';
+                    }
                 }
                 var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders, _fetchLoad);
                 if (!handle) {

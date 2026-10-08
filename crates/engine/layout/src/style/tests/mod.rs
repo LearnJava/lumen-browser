@@ -60,14 +60,18 @@
     mod timeline;
     mod ua;
     mod values;
+    mod attr_mixins_scroll;
     // Хвостовые модули style.rs, перенесённые батчем SPLIT-ST2: у каждого своё
     // авторское имя, поэтому они не сведены к темам будущих ST-3…ST-18, как выше.
     mod anchor_positioning_tests;
     mod block_step_tests;
     mod dynamic_range_limit_tests;
     mod gap_rule_tests;
+    mod grid_cssom_tests;
+    mod text_cssom_tests;
     mod masonry_auto_flow_tests;
     mod node_fanout_tests;
+    mod restyle_cache_tests;
     mod rule_index_regression;
     mod shadow_dom_selectors;
     mod share_cache;
@@ -207,7 +211,7 @@
 
     #[test]
     fn ruby_properties_initial_values() {
-        // Без объявлений — initial по спеке: over / space-around / separate.
+        // Без объявлений — initial по спеке: alternate / space-around / separate.
         let sheet = lumen_css_parser::parse("p { color: red; }");
         let doc = lumen_html_parser::parse("<p>Hi</p>");
         let pid = doc.get(doc.body().unwrap()).children[0];
@@ -219,9 +223,37 @@
             Size::new(800.0, 600.0),
             false,
         );
-        assert_eq!(st.ruby_position, RubyPosition::Over);
+        assert_eq!(st.ruby_position, RubyPosition::AlternateOver);
         assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
         assert_eq!(st.ruby_merge, RubyMerge::Separate);
+    }
+
+    #[test]
+    fn ruby_position_full_grammar() {
+        // GAP-RUBYBOX-2: `[ alternate || [ over | under ] ] | inter-character`.
+        for (css, want) in [
+            ("over", RubyPosition::Over),
+            ("under", RubyPosition::Under),
+            ("alternate", RubyPosition::AlternateOver),
+            ("alternate over", RubyPosition::AlternateOver),
+            ("over alternate", RubyPosition::AlternateOver),
+            ("alternate under", RubyPosition::AlternateUnder),
+            ("under alternate", RubyPosition::AlternateUnder),
+            ("inter-character", RubyPosition::InterCharacter),
+        ] {
+            let sheet = lumen_css_parser::parse(&format!("p {{ ruby-position: {css}; }}"));
+            let doc = lumen_html_parser::parse("<p>Hi</p>");
+            let pid = doc.get(doc.body().unwrap()).children[0];
+            let st = compute_style(
+                &doc,
+                pid,
+                &sheet,
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+                false,
+            );
+            assert_eq!(st.ruby_position, want, "ruby-position: {css}");
+        }
     }
 
     #[test]
@@ -249,10 +281,9 @@
 
     #[test]
     fn ruby_properties_invalid_values_ignored() {
-        // Невалидные (и неподдерживаемый inter-character) значения игнорируются,
-        // остаются initial; alternate парсится как over.
+        // Невалидные значения игнорируются, остаются initial.
         let sheet = lumen_css_parser::parse(
-            "p { ruby-position: inter-character; ruby-align: bogus; ruby-merge: 42; }",
+            "p { ruby-position: over under; ruby-align: bogus; ruby-merge: 42; }",
         );
         let doc = lumen_html_parser::parse("<p>Hi</p>");
         let pid = doc.get(doc.body().unwrap()).children[0];
@@ -264,7 +295,7 @@
             Size::new(800.0, 600.0),
             false,
         );
-        assert_eq!(st.ruby_position, RubyPosition::Over);
+        assert_eq!(st.ruby_position, RubyPosition::AlternateOver);
         assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
         assert_eq!(st.ruby_merge, RubyMerge::Separate);
     }

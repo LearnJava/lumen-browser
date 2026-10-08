@@ -11,7 +11,7 @@
   // the same `_lumen_parse_url` the page's `location` uses, so an opaque URL
   // (a `data:`/`blob:` worker) degrades the same way there as here instead of
   // throwing.
-  globalThis._lumen_make_worker_location = function(url) {
+  __lumen_C._lumen_make_worker_location = function(url) {
     var p = _lumen_parse_url(String(url == null ? '' : url));
     var loc = Object.create(WorkerLocation.prototype);
     _LOC_MEMBERS.forEach(function(name) {
@@ -22,6 +22,17 @@
       });
     });
     return loc;
+  };
+
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — a worker has no
+  // `about:`-inheritance case (unlike a page's non-sandboxed `about:blank`/
+  // `about:srcdoc` document), so its realm origin is always its own script
+  // URL's origin, same as `location.origin` above; `''` (no authority — an
+  // opaque origin like `data:`/`blob:`) serializes as the literal `"null"`
+  // per HTML LS §7.1.1, matching `location.origin`'s own BUG-1208 fix.
+  __lumen_C._lumen_make_worker_origin = function(url) {
+    var p = _lumen_parse_url(String(url == null ? '' : url));
+    return p.origin === '' ? 'null' : p.origin;
   };
 
   // BUG-766: `isSecureContext` (WindowOrWorkerGlobalScope mixin,
@@ -106,7 +117,7 @@
     if (scheme === 'https' || scheme === 'wss' || scheme === 'file') return true;
     return _lumen_worker_host_is_loopback(parts.hostname);
   }
-  globalThis._lumen_worker_secure_context_for = function(url) {
+  __lumen_C._lumen_worker_secure_context_for = function(url) {
     return _lumen_worker_url_is_potentially_trustworthy(
       _lumen_parse_url(String(url == null ? '' : url)));
   };
@@ -147,7 +158,7 @@
   // Called by each flavour's own globals shim with its interface name — the
   // flavour is not knowable here, and a scope must not claim to be one of the
   // other two.
-  globalThis._lumen_define_worker_scope = function(name) {
+  __lumen_C._lumen_define_worker_scope = function(name) {
     var Ctor = function() { throw new TypeError('Illegal constructor'); };
     Object.defineProperty(Ctor, 'name', { value: name, configurable: true });
     Object.setPrototypeOf(Ctor.prototype, WorkerGlobalScope.prototype);

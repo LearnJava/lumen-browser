@@ -256,6 +256,13 @@ pub enum PseudoClass {
     /// определяет, что элемент **может быть** popover-ом, но открытое
     /// состояние — runtime-only.
     PopoverOpen,
+    /// `:interest-source` (Interest Invokers, WHATWG HTML PR #11006) —
+    /// `interestfor`-инвокер, у которого сейчас показан интерес. Runtime-only:
+    /// JS-шим ставит `data-lumen-interest-source`.
+    InterestSource,
+    /// `:interest-target` — цель показанного интереса
+    /// (`data-lumen-interest-target`).
+    InterestTarget,
     /// `:current` (CSS Selectors L4 §11.4.1) — element, представляющий
     /// текущий «момент» в timed-text потоке (например, активный WebVTT cue
     /// при видео-воспроизведении). Phase 0 без timed-text runtime — всегда
@@ -402,6 +409,23 @@ pub enum PseudoElementKind {
     /// `inline-end`/`block-end`/`*` (lower-cased); validity of the argument
     /// itself is checked by `pseudo_element_is_valid`, not here.
     ScrollButton(String),
+    /// `::view-transition` (CSS View Transitions L1 §6.1) — the root of the
+    /// view-transition pseudo-tree, originating from the document element.
+    ViewTransition,
+    /// `::view-transition-group(<name>)` (CSS View Transitions L1 §6.2) — the
+    /// morphing group of the captured element named `<name>`. The argument is
+    /// the `view-transition-name` it targets or `*` (every name); stored as
+    /// written (names are case-sensitive `<custom-ident>`s).
+    ViewTransitionGroup(String),
+    /// `::view-transition-image-pair(<name>)` (CSS View Transitions L1 §6.3) —
+    /// the isolating container holding the old and new snapshots of a group.
+    ViewTransitionImagePair(String),
+    /// `::view-transition-old(<name>)` (CSS View Transitions L1 §6.4) — the
+    /// snapshot of the element as it was before the DOM update.
+    ViewTransitionOld(String),
+    /// `::view-transition-new(<name>)` (CSS View Transitions L1 §6.5) — the
+    /// live representation of the element after the DOM update.
+    ViewTransitionNew(String),
     /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
     /// Хранится имя для диагностики.
     Unknown(String),
@@ -709,6 +733,8 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::Fullscreen => ":fullscreen".into(),
         PseudoClass::Modal => ":modal".into(),
         PseudoClass::PopoverOpen => ":popover-open".into(),
+        PseudoClass::InterestSource => ":interest-source".into(),
+        PseudoClass::InterestTarget => ":interest-target".into(),
         PseudoClass::Current => ":current".into(),
         PseudoClass::Past => ":past".into(),
         PseudoClass::Future => ":future".into(),
@@ -750,6 +776,11 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::ScrollMarker => "::scroll-marker".into(),
         PseudoElementKind::ScrollMarkerGroup => "::scroll-marker-group".into(),
         PseudoElementKind::ScrollButton(dir) => format!("::scroll-button({dir})"),
+        PseudoElementKind::ViewTransition => "::view-transition".into(),
+        PseudoElementKind::ViewTransitionGroup(n) => format!("::view-transition-group({n})"),
+        PseudoElementKind::ViewTransitionImagePair(n) => format!("::view-transition-image-pair({n})"),
+        PseudoElementKind::ViewTransitionOld(n) => format!("::view-transition-old({n})"),
+        PseudoElementKind::ViewTransitionNew(n) => format!("::view-transition-new({n})"),
         PseudoElementKind::Unknown(name) => format!("::{name}"),
     }
 }
@@ -1154,6 +1185,22 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn parse_simple_selector(&mut self) -> Option<SimpleSelector> {
         match self.peek()? {
+            // Selectors §6.3: `*|name` / `|name` — префикс пространства имён.
+            // `@namespace` не поддержан, поэтому префикс отбрасывается:
+            // wptrunner генерирует `:root > *|body:nth-child(2)` для клика.
+            '*' if self.peek_at(1) == Some('|') && self.peek_at(2) != Some('=') => {
+                self.consume();
+                self.consume();
+                self.parse_simple_selector()
+            }
+            '|' if matches!(self.peek_at(1), Some(c) if c == '*' || c == '\\' || is_ident_start(c)) => {
+                // `|E` — элемент без пространства имён; у HTML-элементов его нет,
+                // компаунд не должен совпасть ни с чем. `|` не может быть именем
+                // тега, так что `Type("|")` — заведомо пустое множество.
+                self.consume();
+                self.parse_simple_selector()?;
+                Some(SimpleSelector::Type("|".to_string()))
+            }
             '*' => {
                 self.consume();
                 Some(SimpleSelector::Universal)
@@ -1168,7 +1215,15 @@ impl<'a> Parser<'a> {
             }
             '[' => self.parse_attr_selector(),
             ':' => self.parse_pseudo(),
-            c if is_ident_start(c) || c == '\\' => Some(SimpleSelector::Type(self.parse_ident()?)),
+            c if is_ident_start(c) || c == '\\' => {
+                let name = self.parse_ident()?;
+                // `ns|E`: `@namespace` не поддержан, а необъявленный префикс
+                // по Namespaces §6.3 — невалидный селектор.
+                if self.peek() == Some('|') && self.peek_at(1) != Some('=') {
+                    return None;
+                }
+                Some(SimpleSelector::Type(name))
+            }
             _ => None,
         }
     }
@@ -1351,6 +1406,7 @@ impl<'a> Parser<'a> {
                 "picker-icon" => PseudoElementKind::PickerIcon,
                 "scroll-marker" => PseudoElementKind::ScrollMarker,
                 "scroll-marker-group" => PseudoElementKind::ScrollMarkerGroup,
+                "view-transition" => PseudoElementKind::ViewTransition,
                 _ => PseudoElementKind::Unknown(name),
             };
             return Some(SimpleSelector::PseudoElement(pe));
@@ -1395,6 +1451,8 @@ impl<'a> Parser<'a> {
             "fullscreen" => PseudoClass::Fullscreen,
             "modal" => PseudoClass::Modal,
             "popover-open" => PseudoClass::PopoverOpen,
+            "interest-source" => PseudoClass::InterestSource,
+            "interest-target" => PseudoClass::InterestTarget,
             "current" => PseudoClass::Current,
             "past" => PseudoClass::Past,
             "future" => PseudoClass::Future,
@@ -1661,6 +1719,41 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoElementKind::ScrollButton(arg))
+            }
+            "view-transition-group"
+            | "view-transition-image-pair"
+            | "view-transition-old"
+            | "view-transition-new" => {
+                // CSS View Transitions L1 §6.2–6.5: the argument is a
+                // `<custom-ident>` (the `view-transition-name` to target) or
+                // `*`. The CSS-wide keywords and `none` are not valid
+                // `<custom-ident>`s here (`none` is excluded from
+                // `view-transition-name`'s ident too). The L2 `name.class`
+                // form needs `view-transition-class`, which is not modeled —
+                // it is rejected like any other trailing junk.
+                self.skip_ws_and_comments();
+                let arg = if self.peek() == Some('*') {
+                    self.consume();
+                    "*".to_string()
+                } else {
+                    self.parse_ident().unwrap_or_default()
+                };
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')')
+                    || arg.is_empty()
+                    || matches!(
+                        arg.to_ascii_lowercase().as_str(),
+                        "none" | "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "default"
+                    )
+                {
+                    return None;
+                }
+                Some(match name_lower {
+                    "view-transition-group" => PseudoElementKind::ViewTransitionGroup(arg),
+                    "view-transition-image-pair" => PseudoElementKind::ViewTransitionImagePair(arg),
+                    "view-transition-old" => PseudoElementKind::ViewTransitionOld(arg),
+                    _ => PseudoElementKind::ViewTransitionNew(arg),
+                })
             }
             _ => None,
         }

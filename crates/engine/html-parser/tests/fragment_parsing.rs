@@ -239,3 +239,37 @@ fn bogus_end_tag_inside_svg_is_ignored() {
     let shape = shape_with_context("<svg><g></g></svg>x", Namespace::Html, "div");
     assert_eq!(shape, ["<svg>(<g>)", "#text\"x\""]);
 }
+
+/// BUG-1155: контекст `<tbody>`/`<tr>`/`<table>` стартует в своём insertion
+/// mode (§13.4 шаг 6), а не в `in body` — соседние `<tr>` не вкладываются
+/// друг в друга через `<td>`.
+#[test]
+fn table_contexts_start_in_their_own_insertion_mode() {
+    let rows = shape_with_context("<tr><td><tr><td><tr><td>", Namespace::Html, "tbody");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    let cells = shape_with_context("<td>a<td>b", Namespace::Html, "tr");
+    assert_eq!(cells.len(), 2, "{cells:?}");
+    let table = shape_with_context("<tr><td>x", Namespace::Html, "table");
+    assert_eq!(table.len(), 1, "{table:?}");
+}
+
+// BUG-1158: `script.innerHTML = 'a<e'` — контекст script/style — RAWTEXT,
+// textarea/title — RCDATA; раньше `<e` уходил в тег и тело обрезалось.
+#[test]
+fn raw_text_context_keeps_lt_as_text() {
+    for local in ["script", "style", "xmp"] {
+        assert_eq!(
+            shape_with_context("for(a=0;a<e;a++){}&amp;", Namespace::Html, local),
+            vec!["#text\"for(a=0;a<e;a++){}&amp;\""],
+            "{local}"
+        );
+    }
+}
+
+#[test]
+fn rcdata_context_decodes_references_but_keeps_tags_as_text() {
+    assert_eq!(
+        shape_with_context("a<b>&amp;c", Namespace::Html, "textarea"),
+        vec!["#text\"a<b>&c\""]
+    );
+}

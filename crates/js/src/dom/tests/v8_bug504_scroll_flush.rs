@@ -58,8 +58,8 @@ fn make_scroll_doc() -> (Arc<Mutex<Document>>, u32) {
 
 fn v8_runtime_with_scroll_flush(doc: Arc<Mutex<Document>>, main_nid: u32) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
         "#main { width: 20px; height: 20px; overflow: auto; } \
@@ -111,4 +111,36 @@ fn scroll_top_survives_unrelated_same_tick_style_flush() {
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(12.0));
+}
+
+/// BUG-935 S56: the flush publishes its own tree (scroll offsets restored on it)
+/// as the next flush's basis instead of a copy taken before the restore. A chain
+/// of incremental flushes — unrelated sibling, then the scroller's own content —
+/// must keep reporting the offsets, not let them decay to the box-build default.
+#[test]
+fn scroll_offsets_survive_a_chain_of_incremental_flushes() {
+    let (doc, main_nid) = make_scroll_doc();
+    let rt = v8_runtime_with_scroll_flush(doc, main_nid);
+    let r = rt
+        .eval(
+            "(function() {
+                var mover = document.getElementById('mover');
+                var main = document.getElementById('main');
+                var out = [];
+                for (var i = 0; i < 3; i++) {
+                    mover.style.color = i % 2 ? 'blue' : 'red';
+                    out.push(main.scrollLeft, main.scrollTop);
+                }
+                main.firstChild.style.height = '220px';
+                out.push(main.scrollLeft, main.scrollTop);
+                mover.style.color = 'green';
+                out.push(main.scrollLeft, main.scrollTop);
+                return out.join(',');
+            })()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("15,12,15,12,15,12,15,12,15,12".into())
+    );
 }

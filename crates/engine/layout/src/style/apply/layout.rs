@@ -11,13 +11,14 @@
 //! семантики не несёт, потому что все метки уникальны.
 
 use crate::style::{
-    AlignValue,
+    AlignValue, ContentSide,
     BlockStepAlign,
     BlockStepInsert,
     BlockStepRound,
     BorderCollapse,
     BorderStyle,
     BoxSizing,
+    CaptionSide,
     ClearSide,
     ComputedStyle,
     ContainFlags,
@@ -30,6 +31,7 @@ use crate::style::{
     FlexDirection,
     FlexWrap,
     FloatSide,
+    TableLayout,
     GridAutoFlow,
     GridLine,
     GridTrackSize,
@@ -40,11 +42,15 @@ use crate::style::{
     ObjectPosition,
     Position,
     Resize,
+    RuleBreak,
+    RuleList,
+    RuleOverlap,
+    RuleVisibilityItems,
     ScrollMarkerGroup,
     ScrollTargetGroup,
     ShapeOutside,
     parse_aspect_ratio_value,
-    parse_auto_repeat,
+    parse_auto_repeat, parse_subgrid_name_fill, parse_track_line_names,
     parse_grid_template_areas,
     parse_length_q,
     parse_overflow_clip_margin,
@@ -52,26 +58,30 @@ use crate::style::{
     parse_sizing_length,
     resolve_block_step_size,
 };
+use crate::style::calc::looks_like_function_call;
 use crate::style::parse::box_sides::{
     parse_anchor_size_func,
-    parse_border_style_opt,
+    parse_rule_style_opt,
     parse_break_value,
+    parse_line_width,
     parse_inset_area_keyword,
     parse_margin_shorthand,
     parse_padding_shorthand,
-    resolve_box_length,
     set_inset_side,
     set_margin_side,
     set_padding_side,
     split_box_tokens,
 };
-use crate::style::parse::color::parse_css_color_legacy;
+use crate::style::parse::color::parse_css_color_keep_srgb_form;
+use crate::style::values::length::split_top_level_ws;
+use crate::style::values::misc::RuleInsetProp;
 use crate::style::shorthand::{
     apply_flex_flow_shorthand,
     apply_flex_shorthand,
     apply_grid_area_shorthand,
     apply_grid_line_shorthand,
-    find_slash,
+    apply_grid_shorthand,
+    apply_grid_template_shorthand,
     parse_contain_intrinsic_one,
     parse_contain_intrinsic_size,
 };
@@ -193,9 +203,13 @@ pub(in crate::style) fn apply_decl_layout(
                 style.grid_template_columns = GridTrackSize::parse_track_list(val, is_quirks);
                 // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
                 style.grid_template_col_auto_repeat = parse_auto_repeat(val.trim());
+                style.grid_template_col_line_names = parse_track_line_names(val, is_quirks);
+                style.grid_template_col_subgrid_fill = parse_subgrid_name_fill(val);
             } else {
+                style.grid_template_col_subgrid_fill = None;
                 style.grid_template_columns = Vec::new();
                 style.grid_template_col_auto_repeat = None;
+                style.grid_template_col_line_names = Vec::new();
             }
         }
         "grid-template-rows" => {
@@ -203,9 +217,13 @@ pub(in crate::style) fn apply_decl_layout(
                 style.grid_template_rows = GridTrackSize::parse_track_list(val, is_quirks);
                 // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
                 style.grid_template_row_auto_repeat = parse_auto_repeat(val.trim());
+                style.grid_template_row_line_names = parse_track_line_names(val, is_quirks);
+                style.grid_template_row_subgrid_fill = parse_subgrid_name_fill(val);
             } else {
+                style.grid_template_row_subgrid_fill = None;
                 style.grid_template_rows = Vec::new();
                 style.grid_template_row_auto_repeat = None;
+                style.grid_template_row_line_names = Vec::new();
             }
         }
         "grid-template-areas" => {
@@ -236,43 +254,12 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "grid-template" => {
-            // CSS Grid L1 §7.4: shorthand for grid-template-rows / -columns / -areas.
-            // Phase 0: treat as "rows / columns" split if `/` present; else columns only.
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("none") {
-                style.grid_template_columns = Vec::new();
-                style.grid_template_rows = Vec::new();
-                style.grid_template_col_auto_repeat = None;
-                style.grid_template_row_auto_repeat = None;
-            } else if let Some(pos) = find_slash(trimmed) {
-                let rows_s = trimmed[..pos].trim();
-                let cols_s = trimmed[pos + 1..].trim();
-                style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
-                style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
-                style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
-                style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
-            } else {
-                style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
-                style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
-            }
+            // CSS Grid L1 §7.4: невалидное значение — декларация игнорируется.
+            apply_grid_template_shorthand(val, style, is_quirks);
         }
         "grid" => {
-            // CSS Grid L1 §8.2: shorthand. Phase 0: delegate to grid-template.
-            let trimmed = val.trim();
-            if !trimmed.eq_ignore_ascii_case("none") {
-                // Parse same as grid-template for rows / columns split.
-                if let Some(pos) = find_slash(trimmed) {
-                    let rows_s = trimmed[..pos].trim();
-                    let cols_s = trimmed[pos + 1..].trim();
-                    style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
-                    style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
-                    style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
-                    style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
-                } else {
-                    style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
-                    style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
-                }
-            }
+            // CSS Grid L1 §8.2: сбрасывает явную и неявную сетку целиком.
+            apply_grid_shorthand(val, style, is_quirks);
         }
         // CSS Grid Layout L1 — item placement properties.
         "grid-column-start" => {
@@ -309,7 +296,7 @@ pub(in crate::style) fn apply_decl_layout(
         }
         "width" => {
             // CSS Anchor Positioning L1 §4 — intercept `anchor-size()` before normal sizing.
-            if let Some(func) = parse_anchor_size_func(val) {
+            if let Some(func) = parse_anchor_size_func(val, is_quirks) {
                 style.anchor_size_w = Some(func);
             } else {
                 // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
@@ -324,7 +311,7 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "height" => {
-            if let Some(func) = parse_anchor_size_func(val) {
+            if let Some(func) = parse_anchor_size_func(val, is_quirks) {
                 style.anchor_size_h = Some(func);
             } else {
                 style.height = parse_sizing_length(val, is_quirks);
@@ -381,42 +368,45 @@ pub(in crate::style) fn apply_decl_layout(
                 style.max_height = Some(len);
             }
         }
-        // CSS Logical Properties L1 — min/max inline-size / block-size.
-        // Phase 0: horizontal-tb writing mode maps these to physical properties.
-        "min-inline-size" => {
-            if val.trim() == "auto" {
-                style.min_width = None;
+        // CSS Logical Properties L1 §2 — min/max inline-size / block-size.
+        // Stored logically; `resolve_logical_properties` maps them onto
+        // min/max-width/height by `writing-mode` after the cascade.
+        "min-inline-size" | "min-block-size" => {
+            let parsed = if val.trim() == "auto" {
+                Some(None)
             } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
-                style.min_width = Some(len);
+                Some(Some(len))
+            } else {
+                None
+            };
+            if let Some(v) = parsed {
+                let sizes = style.logical_min_max_sizes.get_or_insert_with(Default::default);
+                if prop == "min-inline-size" {
+                    sizes.min_inline = v;
+                } else {
+                    sizes.min_block = v;
+                }
             }
         }
-        "max-inline-size" => {
-            if val.trim() == "none" {
-                style.max_width = None;
+        "max-inline-size" | "max-block-size" => {
+            let parsed = if val.trim() == "none" {
+                Some(None)
             } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
-                style.max_width = Some(len);
-            }
-        }
-        "min-block-size" => {
-            if val.trim() == "auto" {
-                style.min_height = None;
-            } else if let Some(len) = parse_sizing_length(val, is_quirks)
-                && !matches!(&len, Length::Px(v) if *v < 0.0)
-            {
-                style.min_height = Some(len);
-            }
-        }
-        "max-block-size" => {
-            if val.trim() == "none" {
-                style.max_height = None;
-            } else if let Some(len) = parse_sizing_length(val, is_quirks)
-                && !matches!(&len, Length::Px(v) if *v < 0.0)
-            {
-                style.max_height = Some(len);
+                Some(Some(len))
+            } else {
+                None
+            };
+            if let Some(v) = parsed {
+                let sizes = style.logical_min_max_sizes.get_or_insert_with(Default::default);
+                if prop == "max-inline-size" {
+                    sizes.max_inline = v;
+                } else {
+                    sizes.max_block = v;
+                }
             }
         }
         "overflow" => {
@@ -499,68 +489,36 @@ pub(in crate::style) fn apply_decl_layout(
                 style.shape_image_threshold = n.clamp(0.0, 1.0);
             }
         }
-        "row-gap" => {
+        "row-gap" | "grid-row-gap" => {
             // Typed Length — % = % cb_height, резолвится при layout.
             // Отрицательные значения запрещены (CSS Multi-column §3.4).
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
+            // `grid-row-gap` — устаревший алиас (CSS Grid L1 §7.3). `normal` = 0 для строк.
+            if let Some(gap) = parse_gap_value(val, is_quirks) {
+                style.row_gap_normal = gap.is_none();
+                style.row_gap = gap.unwrap_or(Length::Px(0.0));
             }
         }
-        "column-gap" => {
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
+        "column-gap" | "grid-column-gap" => {
+            // `grid-column-gap` — устаревший алиас (CSS Grid L1 §7.3). `normal` — начальное
+            // значение: 0 во flex/grid, `1em` в multicol (`ComputedStyle::multicol_column_gap`).
+            if let Some(gap) = parse_gap_value(val, is_quirks) {
+                style.column_gap_normal = gap.is_none();
+                style.column_gap = gap.unwrap_or(Length::Px(0.0));
             }
         }
-        "grid-column-gap" => {
-            // CSS Grid L1 §7.3: legacy alias for column-gap (deprecated).
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
-            }
-        }
-        "grid-row-gap" => {
-            // CSS Grid L1 §7.3: legacy alias for row-gap (deprecated).
-            if let Some(len) = parse_length_q(val, is_quirks) {
-                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                };
-            }
-        }
-        "gap" => {
+        "gap" | "grid-gap" => {
             // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
-            // = row).
-            let clamp_gap = |len: Length| -> Length {
-                if matches!(&len, Length::Px(v) if *v < 0.0) {
-                    Length::Px(0.0)
-                } else {
-                    len
-                }
-            };
+            // = row). `grid-gap` — устаревший алиас (CSS Grid L1 §7.3).
             let parts: Vec<&str> = val.split_whitespace().collect();
             if !parts.is_empty()
-                && let Some(row) = parse_length_q(parts[0], is_quirks)
+                && let Some(row) = parse_gap_value(parts[0], is_quirks)
             {
-                let col = if parts.len() >= 2 {
-                    parse_length_q(parts[1], is_quirks)
-                } else {
-                    Some(row.clone())
-                };
+                let col = if parts.len() >= 2 { parse_gap_value(parts[1], is_quirks) } else { Some(row.clone()) };
                 if let Some(c) = col {
-                    style.row_gap = clamp_gap(row);
-                    style.column_gap = clamp_gap(c);
+                    style.row_gap_normal = row.is_none();
+                    style.row_gap = row.unwrap_or(Length::Px(0.0));
+                    style.column_gap_normal = c.is_none();
+                    style.column_gap = c.unwrap_or(Length::Px(0.0));
                 }
             }
         }
@@ -568,6 +526,18 @@ pub(in crate::style) fn apply_decl_layout(
             // CSS Tables L2 §17.6 — `border-collapse: separate | collapse`.
             if let Some(v) = BorderCollapse::parse(val.trim()) {
                 style.border_collapse = v;
+            }
+        }
+        "caption-side" => {
+            // CSS Tables L2 §17.4.1 — `caption-side: top | bottom`.
+            if let Some(v) = CaptionSide::parse(val.trim()) {
+                style.caption_side = v;
+            }
+        }
+        "table-layout" => {
+            // CSS Tables L2 §17.5.2 — `table-layout: auto | fixed`.
+            if let Some(v) = TableLayout::parse(val.trim()) {
+                style.table_layout = v;
             }
         }
         "empty-cells" => {
@@ -617,10 +587,34 @@ pub(in crate::style) fn apply_decl_layout(
                 style.column_width = Some(len);
             }
         }
+        "column-height" => {
+            // CSS Multi-column L2 §4.2: auto | <length [0,∞]>.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.column_height = None;
+            } else if let Some(len) = parse_length_q(trimmed, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.column_height = Some(len);
+            }
+        }
+        "column-wrap" => {
+            // CSS Multi-column L2 §4.4: auto | nowrap | wrap.
+            match val.trim().to_ascii_lowercase().as_str() {
+                "auto" | "wrap" => style.column_wrap_nowrap = false,
+                "nowrap" => style.column_wrap_nowrap = true,
+                _ => {}
+            }
+        }
         "columns" => {
             // CSS Multi-column L1 §3.4 shorthand: <column-width> || <column-count>.
             // Любой токен может быть `auto`. Length → width, integer → count.
-            let parts: Vec<&str> = val.split_whitespace().collect();
+            // CSS Multi-column L2 §4.5: `[ <column-width> || <column-count> ] [ / <column-height> ]?`.
+            let (head, height) = match val.split_once('/') {
+                Some((h, t)) => (h, Some(t.trim())),
+                None => (val, None),
+            };
+            let parts: Vec<&str> = head.split_whitespace().collect();
             let mut count: Option<u32> = None;
             let mut width: Option<Length> = None;
             let mut had_width = false;
@@ -644,102 +638,67 @@ pub(in crate::style) fn apply_decl_layout(
                     had_width = true;
                 }
             }
-            if had_width || had_count {
+            let height_len = match height {
+                None => Some(None),
+                Some(h) if h.eq_ignore_ascii_case("auto") => Some(None),
+                Some(h) => parse_length_q(h, is_quirks)
+                    .filter(|l| !matches!(l, Length::Px(v) if *v < 0.0))
+                    .map(Some),
+            };
+            if (had_width || had_count) && let Some(h) = height_len {
                 style.column_width = width;
                 style.column_count = count;
+                style.column_height = h;
             }
         }
-        "column-rule-width" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.column_rule_width = px.max(0.0);
-            }
+        // CSS Multi-column L1 §4 + CSS Gap Decorations L1 §3: `column-rule*` / `row-rule*`
+        // / `rule*`. `column_rule_*` — одни и те же поля для multicol и для вертикальных
+        // линий flex/grid; `row_rule_*` — горизонтальные линии между строками.
+        "column-rule" | "column-rule-width" | "column-rule-style" | "column-rule-color"
+        | "row-rule" | "row-rule-width" | "row-rule-style" | "row-rule-color" | "rule"
+        | "rule-width" | "rule-style" | "rule-color" => {
+            apply_gap_rule_declaration(style, prop, val, em_basis, viewport, is_quirks);
         }
-        "column-rule-style" => {
-            style.column_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
-        }
-        "column-rule-color" => {
-            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
-                style.column_rule_color = c;
-            }
-        }
-        "column-rule" => {
-            // Shorthand: <width> || <style> || <color>. Любой порядок.
-            let mut rest = val.trim().to_string();
-            let mut color_set = false;
-            // Color может содержать пробелы (rgba(...)), но в Phase 0 — простой
-            // word-by-word проход.
-            for tok in val.split_whitespace() {
-                if let Some(s) = parse_border_style_opt(tok) {
-                    style.column_rule_style = s;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
+        // CSS Gap Decorations L1 §3.2 / §3.4 / §3.5: `*-rule-break`, `*-rule-visibility-items`
+        // (one keyword; `rule-*` shorthand sets both axes) and `rule-overlap`.
+        "column-rule-break" | "row-rule-break" | "rule-break" => {
+            if let Some(v) = RuleBreak::parse(val) {
+                if prop != "row-rule-break" {
+                    style.column_rule_break = v;
                 }
-                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
-                    && px >= 0.0
-                {
-                    style.column_rule_width = px;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
-                }
-                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
-                    style.column_rule_color = c;
-                    color_set = true;
-                    rest = rest.replacen(tok, "", 1);
+                if prop != "column-rule-break" {
+                    style.row_rule_break = v;
                 }
             }
-            // Если в rest осталось что-то с скобками (`rgba(...)`) — пытаемся
-            // парсить как цвет.
-            let rest = rest.trim();
-            if !rest.is_empty()
-                && !color_set
-                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
+        }
+        "column-rule-visibility-items" | "row-rule-visibility-items" | "rule-visibility-items" => {
+            if let Some(v) = RuleVisibilityItems::parse(val) {
+                if prop != "row-rule-visibility-items" {
+                    style.column_rule_visibility_items = v;
+                }
+                if prop != "column-rule-visibility-items" {
+                    style.row_rule_visibility_items = v;
+                }
+            }
+        }
+        "rule-overlap" => {
+            if let Some(v) = RuleOverlap::parse(val) {
+                style.rule_overlap = v;
+            }
+        }
+        // CSS Gap Decorations L1 §3.3: `*-rule-inset*` (восемь longhand-ов + шортхенды).
+        p if RuleInsetProp::of(p).is_some() => {
+            if let Some(rp) = RuleInsetProp::of(p)
+                && let Some(values) = rp.parse(val, is_quirks)
             {
-                style.column_rule_color = c;
-            }
-        }
-        // CSS Gap Decorations L1 — visual rules inside flex/grid/multicol gaps.
-        "gap-rule-width" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.gap_rule_width = px.max(0.0);
-            }
-        }
-        "gap-rule-style" => {
-            style.gap_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
-        }
-        "gap-rule-color" => {
-            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
-                style.gap_rule_color = c;
-            }
-        }
-        "gap-rule" => {
-            // Shorthand: <width> || <style> || <color>. Any order (mirrors column-rule).
-            let mut rest = val.trim().to_string();
-            let mut color_set = false;
-            for tok in val.split_whitespace() {
-                if let Some(s) = parse_border_style_opt(tok) {
-                    style.gap_rule_style = s;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
+                for (slot, v) in values {
+                    if rp.cols {
+                        *style.column_rule_inset.slot_mut(slot) = v.clone();
+                    }
+                    if rp.rows {
+                        *style.row_rule_inset.slot_mut(slot) = v;
+                    }
                 }
-                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
-                    && px >= 0.0
-                {
-                    style.gap_rule_width = px;
-                    rest = rest.replacen(tok, "", 1);
-                    continue;
-                }
-                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
-                    style.gap_rule_color = c;
-                    color_set = true;
-                    rest = rest.replacen(tok, "", 1);
-                }
-            }
-            let rest = rest.trim();
-            if !rest.is_empty()
-                && !color_set
-                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
-            {
-                style.gap_rule_color = c;
             }
         }
         "column-span" => {
@@ -801,55 +760,25 @@ pub(in crate::style) fn apply_decl_layout(
         // CSS Box Alignment L3 — alignment свойства. Парсятся как одно
         // значение (полная грамматика с baseline-fallback и safe/unsafe —
         // отложена).
-        "align-items" => {
-            if let Some(v) = AlignValue::parse(val) {
-                style.align_items = v;
-            }
-        }
-        "align-self" => {
-            if let Some(v) = AlignValue::parse(val) {
-                style.align_self = v;
-            }
-        }
-        "align-content" => {
-            if let Some(v) = AlignValue::parse(val) {
-                style.align_content = v;
-            }
-        }
-        "justify-items" => {
-            if let Some(v) = AlignValue::parse(val) {
-                style.justify_items = v;
-            }
-        }
-        "justify-self" => {
-            if let Some(v) = AlignValue::parse(val) {
-                style.justify_self = v;
-            }
-        }
-        "justify-content" => {
-            if let Some(v) = AlignValue::parse(val) {
-                style.justify_content = v;
-            }
-        }
+        "align-items" => set_align_items(style, val),
+        "align-self" => set_align_self(style, val),
+        "align-content" => set_align_content(style, val),
+        "justify-items" => set_justify_items(style, val),
+        "justify-self" => set_justify_self(style, val),
+        "justify-content" => set_justify_content(style, val),
         // Shorthand: `place-items: <align-items> [<justify-items>]?`
         "place-items" => {
-            let parts: Vec<&str> = val.split_whitespace().collect();
-            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
-                style.align_items = a;
-                style.justify_items = parts
-                    .get(1)
-                    .and_then(|s| AlignValue::parse(s))
-                    .unwrap_or(a);
+            let parts = place_tokens(val);
+            if let Some(a) = parts.first() {
+                set_align_items(style, a);
+                set_justify_items(style, parts.get(1).unwrap_or(a));
             }
         }
         "place-self" => {
-            let parts: Vec<&str> = val.split_whitespace().collect();
-            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
-                style.align_self = a;
-                style.justify_self = parts
-                    .get(1)
-                    .and_then(|s| AlignValue::parse(s))
-                    .unwrap_or(a);
+            let parts = place_tokens(val);
+            if let Some(a) = parts.first() {
+                set_align_self(style, a);
+                set_justify_self(style, parts.get(1).unwrap_or(a));
             }
         }
         "position" => {
@@ -1086,13 +1015,10 @@ pub(in crate::style) fn apply_decl_layout(
             };
         }
         "place-content" => {
-            let parts: Vec<&str> = val.split_whitespace().collect();
-            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
-                style.align_content = a;
-                style.justify_content = parts
-                    .get(1)
-                    .and_then(|s| AlignValue::parse(s))
-                    .unwrap_or(a);
+            let parts = place_tokens(val);
+            if let Some(a) = parts.first() {
+                set_align_content(style, a);
+                set_justify_content(style, parts.get(1).unwrap_or(a));
             }
         }
         "margin" => {
@@ -1197,6 +1123,247 @@ pub(in crate::style) fn apply_decl_layout(
     }
     true
 }
+
+/// Ось, к которой относится декларация `*-rule*`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuleAxis {
+    Column,
+    Row,
+}
+
+/// Одна `<line-width> || <line-style> || <color>`-тройка шортхенда `*-rule`.
+/// `None` у компонента — он не задан и сбрасывается в initial.
+#[derive(Clone)]
+struct RuleTriplet {
+    width: Option<f32>,
+    style: Option<BorderStyle>,
+    color: Option<crate::style::CssColor>,
+}
+
+/// Токены значения `place-items`/`place-self`: слова через пробел, но
+/// `first baseline` / `last baseline` — один токен (CSS Box Alignment L3 §6.1).
+/// `align-items` and its siblings: the keyword goes to the `AlignValue`, the
+/// `safe` overflow position and the writing-mode relativity of `start`/`end`/
+/// `self-start`/`self-end` to [`ContentAlignExtra`] (shared by the longhands
+/// and the `place-*` shorthands).
+/// CSS Box Alignment L3 §8.1 — `<length-percentage [0,∞)> | normal`. `Some(None)` is `normal`,
+/// `Some(Some(len))` a length (negative ones clamp to 0), `None` an invalid value.
+fn parse_gap_value(val: &str, is_quirks: bool) -> Option<Option<Length>> {
+    if val.trim().eq_ignore_ascii_case("normal") {
+        return Some(None);
+    }
+    let len = parse_length_q(val, is_quirks)?;
+    Some(Some(if matches!(&len, Length::Px(v) if *v < 0.0) { Length::Px(0.0) } else { len }))
+}
+
+fn set_align_items(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.align_items = v;
+        let e = &mut style.content_align_extra;
+        (e.items_safe, e.items_wm, e.items_own) = (safe, wm, AlignValue::is_self_relative(val));
+    }
+}
+
+fn set_align_self(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.align_self = v;
+        let e = &mut style.content_align_extra;
+        (e.self_safe, e.self_wm, e.self_own) = (safe, wm, AlignValue::is_self_relative(val));
+    }
+}
+
+fn set_align_content(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.align_content = v;
+        style.content_align_extra.align_safe = safe;
+        style.content_align_extra.align_wm = wm;
+    }
+}
+
+fn set_justify_items(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
+        style.justify_items = v;
+        let e = &mut style.content_align_extra;
+        (e.justify_items_safe, e.justify_items_own, e.justify_items_side) =
+            (safe, AlignValue::is_self_relative(val), None);
+    } else if let Some((side, safe)) = AlignValue::parse_self_side(val) {
+        style.justify_items = if side == ContentSide::Left { AlignValue::Start } else { AlignValue::End };
+        let e = &mut style.content_align_extra;
+        (e.justify_items_safe, e.justify_items_own, e.justify_items_side) = (safe, false, Some(side));
+    }
+}
+
+fn set_justify_self(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, _)) = AlignValue::parse_with_overflow(val) {
+        style.justify_self = v;
+        let e = &mut style.content_align_extra;
+        (e.justify_self_safe, e.justify_self_own, e.justify_self_side) =
+            (safe, AlignValue::is_self_relative(val), None);
+    } else if let Some((side, safe)) = AlignValue::parse_self_side(val) {
+        style.justify_self = if side == ContentSide::Left { AlignValue::Start } else { AlignValue::End };
+        let e = &mut style.content_align_extra;
+        (e.justify_self_safe, e.justify_self_own, e.justify_self_side) = (safe, false, Some(side));
+    }
+}
+
+fn set_justify_content(style: &mut ComputedStyle, val: &str) {
+    if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
+        style.justify_content = v;
+        let e = &mut style.content_align_extra;
+        (e.justify_safe, e.justify_wm, e.justify_side) = (safe, wm, None);
+    } else if let Some(side) = AlignValue::parse_content_side(val) {
+        // `left`/`right`: the flex container resolves the side against its
+        // axes; until then it reads as `start`/`end`.
+        style.justify_content = match side {
+            ContentSide::Left => AlignValue::Start,
+            ContentSide::Right => AlignValue::End,
+        };
+        let e = &mut style.content_align_extra;
+        (e.justify_safe, e.justify_wm, e.justify_side) = (false, false, Some(side));
+    }
+}
+
+fn place_tokens(val: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = val.split_whitespace().peekable();
+    while let Some(t) = it.next() {
+        let is_baseline_prefix = t.eq_ignore_ascii_case("first") || t.eq_ignore_ascii_case("last");
+        let is_overflow_prefix = t.eq_ignore_ascii_case("safe") || t.eq_ignore_ascii_case("unsafe");
+        if is_baseline_prefix && it.peek().is_some_and(|n| n.eq_ignore_ascii_case("baseline")) {
+            it.next();
+            out.push(format!("{t} baseline"));
+        } else if is_overflow_prefix && it.peek().is_some() {
+            let next = it.next().unwrap_or_default();
+            out.push(format!("{t} {next}"));
+        } else {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+/// Разбор значения шортхенда `column-rule` / `row-rule` / `rule`:
+/// `<line-width> || <line-style> || <color>` в любом порядке. Повтор
+/// компонента или нераспознанный токен делает всю декларацию невалидной
+/// (CSS Cascade L4 §7) — тогда `None`, ничего не применяется.
+fn parse_rule_triplet(
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> Option<RuleTriplet> {
+    let mut t = RuleTriplet { width: None, style: None, color: None };
+    let tokens = split_top_level_ws(val);
+    if tokens.is_empty() {
+        return None;
+    }
+    for tok in tokens {
+        if let Some(s) = parse_rule_style_opt(tok) {
+            if t.style.replace(s).is_some() {
+                return None;
+            }
+        } else if let Some(px) = parse_line_width(tok, em_basis, viewport, is_quirks)
+            && px >= 0.0
+        {
+            if t.width.replace(px).is_some() {
+                return None;
+            }
+        } else {
+            let c = parse_css_color_keep_srgb_form(tok, is_quirks)?;
+            if t.color.replace(c).is_some() {
+                return None;
+            }
+        }
+    }
+    Some(t)
+}
+
+/// `column-rule*` / `row-rule*` / `rule*` (CSS Multi-column L1 §4, CSS Gap
+/// Decorations L1 §3). `rule*` задаёт обе оси сразу. Поля `column_rule_*`
+/// общие для multicol-контейнера и вертикальных линий flex/grid.
+fn apply_gap_rule_declaration(
+    style: &mut ComputedStyle,
+    prop: &str,
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) {
+    let (axes, part): (&[RuleAxis], &str) = match prop {
+        "rule" => (&[RuleAxis::Column, RuleAxis::Row], ""),
+        "rule-width" => (&[RuleAxis::Column, RuleAxis::Row], "width"),
+        "rule-style" => (&[RuleAxis::Column, RuleAxis::Row], "style"),
+        "rule-color" => (&[RuleAxis::Column, RuleAxis::Row], "color"),
+        "column-rule" => (&[RuleAxis::Column], ""),
+        "column-rule-width" => (&[RuleAxis::Column], "width"),
+        "column-rule-style" => (&[RuleAxis::Column], "style"),
+        "column-rule-color" => (&[RuleAxis::Column], "color"),
+        "row-rule" => (&[RuleAxis::Row], ""),
+        "row-rule-width" => (&[RuleAxis::Row], "width"),
+        "row-rule-style" => (&[RuleAxis::Row], "style"),
+        "row-rule-color" => (&[RuleAxis::Row], "color"),
+        _ => return,
+    };
+    let v = val.trim();
+    // `<line-width>` не бывает отрицательной, но результат `calc()`/`min()`/… зажимается
+    // в 0 (CSS Values L4 §10.1), а не отбрасывает значение: `calc(10px - 0.5em)` → `0px`.
+    let width_item = |t: &str| {
+        let px = parse_line_width(t, em_basis, viewport, is_quirks)?;
+        (px >= 0.0 || looks_like_function_call(t.trim())).then(|| px.max(0.0))
+    };
+    let style_item = parse_rule_style_opt;
+    let color_item = |t: &str| parse_css_color_keep_srgb_form(t.trim(), is_quirks);
+    // CSS Gap Decorations L1 §4.4: шортхенд — список `<gap-rule>` (с `repeat()`); каждый
+    // элемент раскладывается в три списка одинаковой формы, пропущенное — initial.
+    let mut width_list = None;
+    let mut style_list = None;
+    let mut color_list = None;
+    match part {
+        "" => {
+            let item = |t: &str| parse_rule_triplet(t, em_basis, viewport, is_quirks);
+            let Some(list) = RuleList::parse(v, &item) else { return };
+            width_list = Some(list.map(|t| t.width.unwrap_or(3.0)));
+            style_list = Some(list.map(|t| t.style.unwrap_or(BorderStyle::None)));
+            color_list = Some(list.map(|t| t.color.unwrap_or(crate::style::CssColor::CurrentColor)));
+        }
+        "width" => match RuleList::parse(v, &width_item) {
+            Some(l) => width_list = Some(l),
+            None => return,
+        },
+        "style" => match RuleList::parse(v, &style_item) {
+            Some(l) => style_list = Some(l),
+            None => return,
+        },
+        _ => match RuleList::parse(v, &color_item) {
+            Some(l) => color_list = Some(l),
+            None => return,
+        },
+    }
+    for axis in axes {
+        let (w, st, c) = match axis {
+            RuleAxis::Column => (
+                &mut style.column_rule_width,
+                &mut style.column_rule_style,
+                &mut style.column_rule_color,
+            ),
+            RuleAxis::Row => (
+                &mut style.row_rule_width,
+                &mut style.row_rule_style,
+                &mut style.row_rule_color,
+            ),
+        };
+        if let Some(l) = &width_list {
+            *w = l.clone();
+        }
+        if let Some(l) = &style_list {
+            *st = l.clone();
+        }
+        if let Some(l) = &color_list {
+            *c = l.clone();
+        }
+    }
+}
+
 
 /// CSS Rhythmic Sizing L1 §3.1 (BUG-517): `block-step` shorthand — `[
 /// <'block-step-size'> || <'block-step-insert'> || <'block-step-align'> ||

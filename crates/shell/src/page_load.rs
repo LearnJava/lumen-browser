@@ -134,7 +134,9 @@ impl Lumen {
                         if let Some(src) = self.layout_source.as_ref() {
                             let mut doc = src.document.lock().unwrap();
                             let node_id = NodeId::from_index(nid as usize);
-                            apply_intrinsic_size(&mut doc, node_id, first.width, first.height);
+                            if apply_intrinsic_size(&mut doc, node_id, first.width, first.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                                self.note_shell_attr_writes(vec![nid]);
+                            }
                         }
                         eprintln!(
                             "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
@@ -165,7 +167,9 @@ impl Lumen {
                                 if let Some(src) = self.layout_source.as_ref() {
                                     let mut doc = src.document.lock().unwrap();
                                     let node_id = NodeId::from_index(nid as usize);
-                                    apply_intrinsic_size(&mut doc, node_id, img.width, img.height);
+                                    if apply_intrinsic_size(&mut doc, node_id, img.width, img.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                                        self.note_shell_attr_writes(vec![nid]);
+                                    }
                                 }
                                 eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
                                 let (w, h) = (img.width, img.height);
@@ -215,7 +219,9 @@ impl Lumen {
             if let Some(src) = self.layout_source.as_ref() {
                 let mut doc = src.document.lock().unwrap();
                 let node_id = NodeId::from_index(nid as usize);
-                apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
+                if apply_intrinsic_size(&mut doc, node_id, image.width, image.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                    self.note_shell_attr_writes(vec![nid]);
+                }
             }
             let (w, h) = (image.width, image.height);
             if let Some(r) = self.renderer.as_mut() {
@@ -358,7 +364,9 @@ impl Lumen {
                     if let Some(src_ref) = self.layout_source.as_ref() {
                         let mut doc = src_ref.document.lock().unwrap();
                         let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                        apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height);
+                        if apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                            self.note_shell_attr_writes(vec![nid]);
+                        }
                     }
                     eprintln!(
                         "video GIF: загружен nid={nid} ({}×{}, {} кадров)",
@@ -496,8 +504,19 @@ impl Lumen {
                 |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
             );
 
+            // BUG-692: FFmpeg-путь `<video src>` — та же перезапись схемы
+            // (`upgrade-insecure-requests`, Fetch §4.1 шаг 5), что у GIF-пути
+            // выше; ключ `load_failures`/лог остаются на сыром `src`.
+            let upgraded = self.layout_source.as_ref().and_then(|ls| {
+                let doc = ls.document.lock().unwrap();
+                let root = doc.root();
+                let (policy, _) = crate::csp_enforce::document_csp_policy(&doc, root)?;
+                crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(&src))
+            });
+            let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
+
             let bytes = match crate::subresources::fetch_video_bytes(
-                &src,
+                fetch_url,
                 &base,
                 &self.event_sink,
                 Some(self.active_cookie_jar()),
@@ -551,7 +570,9 @@ impl Lumen {
             if let Some(src_ref) = self.layout_source.as_ref() {
                 let mut doc = src_ref.document.lock().unwrap();
                 let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                apply_intrinsic_size(&mut doc, node_id, width, height);
+                if apply_intrinsic_size(&mut doc, node_id, width, height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                    self.note_shell_attr_writes(vec![nid]);
+                }
             }
             let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
             eprintln!("video FFmpeg: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
@@ -758,6 +779,20 @@ impl Lumen {
     /// at the call site so `redraw_requested.rs` does not need a feature gate.
     #[cfg(not(feature = "ffmpeg-video"))]
     pub(crate) fn tick_video_ffmpegs(&mut self, _elapsed_ms: u64) {}
+
+    /// CSS Scroll Snap L2 §4 — применить `scroll-initial-target: nearest` к свежей
+    /// странице: прокрутить контейнеры внутри `layout_box` и перерисовать display
+    /// list (`LoadedPage` собран с нулевыми смещениями). Возвращает смещение
+    /// вьюпорта страницы, уже зажатое по размеру документа.
+    fn apply_initial_scroll_targets(&self, page: &mut LoadedPage) -> Option<(f32, f32)> {
+        let vp = self.relayout_viewport()?;
+        let res = lumen_layout::apply_scroll_initial_targets(&mut page.layout_box, vp)?;
+        page.display_list = crate::display_list_metrics::paint_ordered_in(&page.layout_box, vp);
+        let (px, py) = res.page?;
+        let max_y = (content_height_of(&page.display_list) - vp.height).max(0.0);
+        let max_x = (content_width_of(&page.display_list) - vp.width).max(0.0);
+        Some((px.clamp(0.0, max_x), py.clamp(0.0, max_y)))
+    }
 
     /// Same-page fragment navigation: update `:target` CSS state and scroll to
     /// the target element. `fragment` is the id without the leading `#`; an empty
@@ -1018,7 +1053,8 @@ impl Lumen {
             self.stream_layout_seeded = false;
             self.stream_builder = None;
             self.load_generation = self.load_generation.wrapping_add(1);
-            self.start_streaming_load(self.load_generation);
+            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.start_streaming_load(tab_id, self.load_generation);
             // E2E-1: поток загрузки уже получил свой клон источника вместе с
             // телом — значит POST отправлен ровно один раз. Стираем тело из
             // `self.source` здесь, а не в отдельной ветке каждого места, где
@@ -1114,6 +1150,7 @@ impl Lumen {
                 // entirely — invalidate so the next `try_relayout_raf_incremental`
                 // doesn't diff a stale cache against this fresh tree.
                 self.page_prev_cascade_styles = None;
+                self.m4_full_cost_ms = None;
                 self.layout_box = Some(page.layout_box);
                 // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
                 self.cv_relevant.clear();
@@ -1199,6 +1236,7 @@ impl Lumen {
                 let (rx, ry) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
                 self.scroll_x = rx;
                 self.scroll_y = ry;
+                self.issue_scroll_command();
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
@@ -1375,7 +1413,11 @@ impl Lumen {
     ///
     /// `generation` (U-1) метит каждое испускаемое событие; `user_event`
     /// отбрасывает события устаревшего поколения, если навигацию успели сменить.
-    pub(crate) fn start_streaming_load(&self, generation: u64) {
+    /// `tab_id` (BUG-1214) — id вкладки, чья навигация это, снятый в момент
+    /// запуска: события маршрутизируются к ЭТОЙ вкладке (`self`, если она всё
+    /// ещё активна, иначе `bg_tabs[tab_id]`) независимо от того, какая вкладка
+    /// активна к моменту прихода события — см. [`Lumen::apply_load_event_for_tab`].
+    pub(crate) fn start_streaming_load(&self, tab_id: usize, generation: u64) {
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
@@ -1462,7 +1504,7 @@ impl Lumen {
                         // UI-поток резолвит картинки/шрифты частичного DOM от
                         // своей копии базы — сообщаем ему новую (BUG-757).
                         let _ = chunk_proxy
-                            .send_event(LoadEvent::DocumentBase(base.clone(), generation));
+                            .send_event(LoadEvent::DocumentBase(base.clone(), tab_id, generation));
                     }
                     if !header_csp.as_ref().is_some_and(|(hop, _)| hop == hop_url.as_str()) {
                         let policies = crate::page_source::content_security_policy_header(headers)
@@ -1477,12 +1519,13 @@ impl Lumen {
                         &base,
                         header_csp.as_ref().map_or(&[][..], |(_, p)| p),
                         &chunk_proxy,
+                        tab_id,
                         generation,
                         &sink_prefetch,
                         cj_prefetch.as_ref(),
                         &media_ctx,
                     );
-                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation));
+                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation));
                 };
                 match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
                     Ok(r) => r,
@@ -1499,10 +1542,11 @@ impl Lumen {
                                     url.clone(),
                                     host,
                                     cert_err.clone(),
+                                    tab_id,
                                     generation,
                                 ))
                             }
-                            _ => proxy.send_event(LoadEvent::LoadError(e.to_string(), generation)),
+                            _ => proxy.send_event(LoadEvent::LoadError(e.to_string(), tab_id, generation)),
                         };
                         return;
                     }
@@ -1512,7 +1556,7 @@ impl Lumen {
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), generation));
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), tab_id, generation));
                         return;
                     }
                 };
@@ -1526,12 +1570,13 @@ impl Lumen {
                         &raw.base,
                         &[],
                         &proxy,
+                        tab_id,
                         generation,
                         &sink,
                         cj_prefetch.as_ref(),
                         &media_ctx,
                     );
-                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation)).is_err() {
+                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation)).is_err() {
                         return; // event loop завершён
                     }
                     pos = end;
@@ -1542,10 +1587,10 @@ impl Lumen {
             // Финальные hint-ы из буферизованного хвоста сканера.
             let tail = preload_scanner.end();
             if !tail.is_empty() {
-                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone(), generation));
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone(), tab_id, generation));
             }
 
-            let _ = proxy.send_event(LoadEvent::LoadDone(Box::new(raw), generation));
+            let _ = proxy.send_event(LoadEvent::LoadDone(Box::new(raw), tab_id, generation));
         });
         if let Err(err) = spawned {
             eprintln!("не удалось запустить поток стриминговой загрузки: {err}");
@@ -1579,7 +1624,7 @@ impl Lumen {
             ),
             _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
         };
-        let dl = paint_ordered(&layout);
+        let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
@@ -1698,6 +1743,19 @@ impl Lumen {
         self.spawn_image_requests(requests, csp_gate);
     }
 
+    /// BUG-935 срез 94: сообщить трекеру мутаций страницы, что оболочка дописала
+    /// `width`/`height` узлам `nids` (`apply_intrinsic_size`) — иначе флаш движкового
+    /// потока не знает о записи и оставляет узлам стиль, посчитанный без неё.
+    /// Задача встаёт в очередь движка после записи в DOM и раньше следующего флаша.
+    pub(crate) fn note_shell_attr_writes(&self, nids: Vec<u32>) {
+        if nids.is_empty() {
+            return;
+        }
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.note_shell_attr_writes(&nids);
+        });
+    }
+
     /// BUG-735: разнести intrinsic-размеры уже декодированных картинок по `<img>`
     /// живого документа и, если DOM от этого изменился, запросить релейаут.
     ///
@@ -1743,6 +1801,8 @@ impl Lumen {
         // `createImageBitmap` до сих пор не видел (регистрация была только
         // одноразовым проходом по снапшоту разбора, см. `page_pipeline.rs`).
         let mut bitmap_regs: Vec<(u32, Arc<lumen_image::Image>)> = Vec::new();
+        // BUG-935 срез 94: узлы, которым этот проход дописал `width`/`height`.
+        let mut written: Vec<u32> = Vec::new();
         let changed = {
             let Some(src) = self.layout_source.as_ref() else { return };
             let Ok(mut doc) = src.document.lock() else { return };
@@ -1760,13 +1820,19 @@ impl Lumen {
                 // OBJECT-1: `<object>`/`<embed>` получают размер, но не
                 // image-события — `load`/`error` им шлёт JS-шим.
                 if req.embedded_content {
-                    if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
-                        changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                    if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url)
+                        && apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport)
+                    {
+                        changed = true;
+                        written.push(nid);
                     }
                     continue;
                 }
                 if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
-                    changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                    if apply_intrinsic_size(&mut doc, req.node_id, w, h, viewport) {
+                        changed = true;
+                        written.push(nid);
+                    }
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
                         fires.push((nid, Some((w, h))));
                         if let Some(image) = self.stream_image_pixels.get(&req.url) {
@@ -1839,6 +1905,9 @@ impl Lumen {
         // каскада. Кэш инкрементального рестайла (BUG-341) знает только о
         // мутациях, пришедших из JS, поэтому мутацию со стороны шелла ему нужно
         // объявить сбросом кэша — иначе стиль `<img>` переиспользуется прежний.
+        // То же для базиса флаша движкового потока (BUG-935 срез 94): ему мутацию
+        // объявляют записью атрибутов в трекере.
+        self.note_shell_attr_writes(written);
         self.page_prev_cascade_styles = None;
         self.relayout_raf_dirty();
     }
@@ -1856,6 +1925,43 @@ impl Lumen {
         match &self.document_base {
             Some((base, generation)) if *generation == self.load_generation => Some(base.clone()),
             _ => self.source.resource_base(),
+        }
+    }
+
+    /// BUG-1214: is `tab_id` the CURRENTLY active tab (the one `self`'s
+    /// per-page fields actually represent right now)? Every streaming
+    /// `LoadEvent` handler in `user_event.rs` gates its `self`-mutation on
+    /// this before checking `generation` — checking generation alone is not
+    /// enough once two tabs can stream concurrently, because
+    /// `self.load_generation` only ever describes the ACTIVE tab, and a
+    /// background tab's generation happening to coincide is possible after
+    /// `wrapping_add` wraps around (vanishingly unlikely, but `tab_id` is the
+    /// correct invariant regardless — see [`LoadEvent::EarlyPreloadHints`]).
+    pub(crate) fn is_active_tab(&self, tab_id: usize) -> bool {
+        self.tab_strip.tabs.get(self.tab_strip.active).is_some_and(|t| t.id == tab_id)
+    }
+
+    /// BUG-1214: a streaming `LoadEvent` arrived for a tab that is no longer
+    /// `self` (`window.open()` or a manual tab switch moved it to
+    /// `bg_tabs` mid-load). Before this fix such an event was either
+    /// silently dropped by the single process-wide `load_generation` check
+    /// (starving the background tab's navigation, `bugs/BUG-1214-OPEN.md`'s
+    /// original symptom) — or, under a naive keyed-generation patch, wrongly
+    /// applied to `self`'s fields, corrupting the tab that IS active
+    /// instead. Neither is acceptable: this tab's own `PageSnapshot` in
+    /// `bg_tabs` is not being live-updated field-by-field (that would need
+    /// every `LoadEvent` arm duplicated against a `PageSnapshot`, the
+    /// "полная архитектурная переделка" the bug asks for at full scope);
+    /// instead the background tab is marked for a full `reload()` the moment
+    /// it becomes active again (`switch_tab` already checks this exact flag
+    /// for the unrelated queue_task/UserInteraction reload case) — the
+    /// in-flight network fetch's bytes are discarded, but the navigation
+    /// itself is no longer silently lost, and — critically — the active
+    /// tab's own DOM/stream state is never touched by a load event that
+    /// isn't its own.
+    pub(crate) fn mark_bg_tab_needs_reload(&mut self, tab_id: usize) {
+        if let Some(snap) = self.bg_tabs.get(&tab_id) {
+            snap.pending_reload.set(true);
         }
     }
 
@@ -1993,7 +2099,7 @@ impl Lumen {
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
+    pub(crate) fn apply_loaded_page(&mut self, mut page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.set_js_ctx(None);
         self.layout_source = new_layout_source;
@@ -2010,6 +2116,13 @@ impl Lumen {
         if let Some((state_json, display_url)) = self.pending_post_reload_traversal.take() {
             self.apply_post_reload_traversal(state_json, display_url);
         }
+        // CSS Scroll Snap L2 §4: `scroll-initial-target: nearest` — прокрутить цели в
+        // видимость до первого paint. Back/forward-восстановление позиции главнее.
+        let initial_page_scroll = if self.pending_restore_scroll.is_none() {
+            self.apply_initial_scroll_targets(&mut page)
+        } else {
+            None
+        };
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
@@ -2183,9 +2296,10 @@ impl Lumen {
         // просят восстановить прежний scroll-offset через `pending_restore_scroll`,
         // т.к. навигация теперь асинхронна и сброс происходит здесь, в LoadDone,
         // а не сразу после `reload()`. Координаты докламплятся при первом redraw.
-        let (restore_x, restore_y) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
+        let (restore_x, restore_y) = self.pending_restore_scroll.take().unwrap_or(initial_page_scroll.unwrap_or((0.0, 0.0)));
         self.scroll_x = restore_x;
         self.scroll_y = restore_y;
+        self.issue_scroll_command();
         self.scroll_drag = None;
         self.frame_scroll_drag = None;
         self.scroll_anim = None;
@@ -2196,6 +2310,7 @@ impl Lumen {
         self.frame_text_cursor.clear();
         self.frame_text_selection_anchor.clear();
         self.text_drag = None;
+        self.doc_select = None;
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;
@@ -2307,12 +2422,177 @@ impl Lumen {
         // relayout_with_web_fonts uses only fonts for the current page.
         self.page_font_registry = page.font_registry.clone();
         self.web_fonts.clear();
+        self.requested_web_fonts.clear();
 
         // PH3-19: spawn one background thread per pending @font-face url() source.
         // Each thread fetch+decodes the font and sends FontLoaded; the handler
         // registers it in page_font_registry, rebuilds MultiFontMeasurer, and
         // triggers a relayout — FOUT (Flash Of Unstyled Text) swap pattern.
-        if !page.pending_web_fonts.is_empty() {
+        self.spawn_web_font_fetches(page.pending_web_fonts);
+
+        // Reset CPU image cache for the new page (10E.4 scroll-discard).
+        self.image_cache.clear();
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_font_provider(Some(Arc::clone(&page.font_registry) as Arc<dyn lumen_core::FontProvider>));
+            // Warm the curated system-font fallback chain once, now that a
+            // FontProvider (this page's FontRegistry, which wraps the system
+            // font index) is available. Loads emoji / CJK / RTL / Indic / Thai
+            // faces into the renderer so the codepoint cascade can resolve
+            // glyphs Inter lacks. One-time: the faces persist across pages and
+            // the curated families are system fonts identical for every page.
+            if !self.fallbacks_preloaded {
+                r.preload_curated_fallbacks();
+                self.fallbacks_preloaded = true;
+            }
+            r.clear_images();
+            for (src, image) in &page.images {
+                // BUG-272 срез 17: share the Arc; raw_images no longer deep-copies.
+                if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
+                    eprintln!("Картинка {src} не зарегистрирована: {err}");
+                }
+                self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
+            }
+        } else {
+            self.pending_images = page.images;
+        }
+        if let Some(w) = self.window.as_ref() {
+            w.set_title(&window_title(self.title.as_deref()));
+            w.request_redraw();
+        }
+        // Register lazy images with JS so _lumen_deliver_lazy_images can check them
+        // on subsequent redraws (scroll, resize) via proximity threshold.
+        //
+        // After registration we run an immediate proximity check: push fresh
+        // layout rects into JS, fire the IntersectionObserver, drain and fetch.
+        // Without this, above-the-fold `loading="lazy"` images (most cards on
+        // sites like lenta.ru) never load on first paint — `relayout()` is the
+        // only other path that delivers observers, and it only runs on
+        // scroll/resize/zoom, not on the initial load. (BUG-163)
+        // ADR-016 M2.2c-2d: lazy-image регистрация + immediate proximity check через
+        // `route_query_js` — снимаем прямое `self.js_ctx`-обращение. Вся упорядоченная
+        // последовательность (register → push rects/viewport → deliver observers →
+        // deliver lazy → drain requests) обёрнута в **один** `route_query_js`, чтобы под
+        // флагом (`LUMEN_ENGINE_THREAD=1`) она исполнилась атомарно **в порядке** на
+        // движковом потоке (value-read `take_lazy_image_requests` после void-push
+        // сохраняет read-after-write), блокируя лишь ради одного результата. Owned-данные
+        // (`owned_pairs`/`geom`) собираются на UI-потоке до маршрутизации (замыкание
+        // `Send + 'static`); гейт `self.js_present` держит сбор геометрии
+        // JS-гейтнутым — байт-идентично флаг-офф (`route_query_js(…, Some(js), …)` =
+        // синхронный вызов по UI-хэндлу).
+        // THREAD-9 срез 4: запросы lazy-картинок больше не ждут движок блокирующим
+        // `route_query_js` — задача кладёт их в `pending_lazy_image_reqs`, их забирает
+        // `drain_pending_lazy_image_reqs` в `about_to_wait` (и просит перерисовку).
+        #[cfg(feature = "v8")]
+        if self.js_present {
+            let owned_pairs: Vec<(u32, String)> =
+                page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
+            type LazyImageGeom = (
+                HashMap<u32, [f32; 4]>,
+                HashMap<u32, Vec<[f32; 4]>>,
+                Arc<lumen_layout::LayoutBox>,
+                f32,
+                f32,
+            );
+            let geom: Option<LazyImageGeom> = if !owned_pairs.is_empty() {
+                self.layout_box.as_ref().and_then(|lb_ref| {
+                    self.layout_source
+                        .as_ref()
+                        .and_then(|ls| ls.document.lock().ok())
+                        .map(|doc_guard| {
+                            let viewport = self.renderer.as_ref().map_or_else(
+                                || Size::new(1024.0, 720.0),
+                                |r| {
+                                    let s = r.viewport_size();
+                                    Size::new(s.width, s.height)
+                                },
+                            );
+                            (
+                                collect_layout_rects(lb_ref, &doc_guard),
+                                collect_client_rects(lb_ref, &doc_guard),
+                                Arc::new(lb_ref.clone()),
+                                viewport.width,
+                                viewport.height,
+                            )
+                        })
+                })
+            } else {
+                None
+            };
+            // GAP-LAYOUTSHIFT: refresh the CLS baseline with this (possibly
+            // newer) rect snapshot too — cheap, and keeps it from going
+            // stale relative to whatever the lazy-image registration below
+            // just changed. Done here, before `geom` moves into the closure.
+            // срез 5: shift-flavoured geometry, not `geom`'s gBCR rects — see
+            // `collect_layout_shift_rects`'s doc-comment.
+            if geom.is_some()
+                && let Some(lb_ref) = self.layout_box.as_ref()
+            {
+                self.prev_layout_shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
+            }
+            let reqs_slot = Arc::clone(&self.pending_lazy_image_reqs);
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                let pairs: Vec<(u32, &str)> =
+                    owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
+                js.register_lazy_images(&pairs);
+                if let Some((rects, client_rects, hit_test_tree, vw, vh)) = geom {
+                    js.update_layout_rects(rects);
+                    js.update_client_rects(client_rects);
+                    js.update_hit_test_tree(hit_test_tree);
+                    js.update_viewport_size(vw, vh);
+                    js.deliver_layout_observers();
+                    js.deliver_lazy_images();
+                    let reqs = js.take_lazy_image_requests();
+                    if !reqs.is_empty()
+                        && let Ok(mut slot) = reqs_slot.lock()
+                    {
+                        slot.extend(reqs);
+                    }
+                }
+            });
+        }
+        // JS may have requested navigation via location.href= etc.
+        self.pending_js_navigate = page.js_navigate;
+        // HTML LS §8.2.3 — all resources loaded: readyState → "complete" + window.load event.
+        // HTML LS §8.6 — `pageshow` fires right after `load`. `persisted=true`
+        // only when this page was restored from bfcache (set by navigate_back/
+        // navigate_forward); a fresh load fires `persisted=false`.
+        let pageshow_persisted = std::mem::take(&mut self.pending_pageshow_persisted);
+        // ADR-016 M2.2c-2d: pageshow-lifecycle void-вызовы через `route_task_js` —
+        // снимаем прямое `self.js_ctx`-обращение. Оба чистый fire-and-forget без
+        // синхронного чтения результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`)
+        // уходят off-UI-thread одним `task` (порядок сохранён), без флага (по
+        // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично прежнему.
+        #[cfg(feature = "v8")]
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            // BUG-640: `domComplete`/`loadEventStart` share the "before"
+            // instant, `loadEventEnd` is the "after" one.
+            crate::nav_timing::record_load_start();
+            js.notify_window_loaded();
+            crate::nav_timing::record_load_end();
+            js.fire_page_lifecycle("pageshow", pageshow_persisted);
+        });
+        #[cfg(not(feature = "v8"))]
+        let _ = pageshow_persisted;
+
+        // Rebuild accessibility tree and push to OS platform bridge (O-5).
+        self.update_platform_ax_tree();
+
+        // If zoom or <meta viewport initial-scale> is active, relayout with the
+        // correct effective viewport. The initial load used the raw physical size.
+        let zoom = self.zoom_factor;
+        let meta_scale = self.layout_source.as_ref().map(meta_initial_scale).unwrap_or(1.0);
+        if (zoom - 1.0).abs() > 0.001 || (meta_scale - 1.0).abs() > 0.001 {
+            self.relayout();
+        }
+    }
+
+    /// PH3-19 / BUG-1154: запускает фоновую загрузку `@font-face url()`-источников
+    /// (CSP `font-src`-гейт, `upgrade-insecure-requests`, результат —
+    /// `LoadEvent::FontLoaded`). Зовётся из `apply_loaded_page` для первичной
+    /// сборки и из `refresh_dynamic_css` для правил, появившихся после загрузки
+    /// (поздно вставленный `<style>`); уже запрошенные источники пропускаются.
+    pub(crate) fn spawn_web_font_fetches(&mut self, pending: Vec<PendingWebFont>) {
+        if !pending.is_empty() {
             let base_opt = self.document_resource_base();
             // GAP-CSPENF срез 19: `font-src`/`default-src` против `@font-face
             // url()` — последний из трёх производителей среза 4 (`img-src`/
@@ -2327,7 +2607,7 @@ impl Lumen {
             // синхронный и на главном потоке, поэтому решение «фетчить или
             // нет» принимается тут же, до `std::thread::spawn`.
             let csp_gate = self.layout_source.as_ref().and_then(|src| {
-                let doc = src.document.lock().unwrap();
+                let doc = src.document.lock().ok()?;
                 let root = doc.root();
                 crate::csp_enforce::document_csp_policy(&doc, root)
             });
@@ -2335,10 +2615,22 @@ impl Lumen {
             // captured before the detached thread below the same way it is.
             let referrer_policy = self.layout_source.as_ref().map_or_else(
                 lumen_network::ReferrerPolicy::default_policy,
-                |src| crate::resource_base::document_referrer_policy(&src.document.lock().unwrap()),
+                |src| {
+                    src.document.lock().map_or_else(
+                        |_| lumen_network::ReferrerPolicy::default_policy(),
+                        |d| crate::resource_base::document_referrer_policy(&d),
+                    )
+                },
             );
             let self_origin = base_opt.as_ref().and_then(|b| b.origin());
-            for pf in page.pending_web_fonts {
+            for pf in pending {
+                // BUG-1154: один и тот же источник (например, `<style>` с
+                // `@font-face` пересобирается при каждой правке документа) не
+                // должен порождать второй запрос.
+                let key = format!("{}|{}|{:?}|{}", pf.family, pf.weight, pf.style, pf.url);
+                if !self.requested_web_fonts.insert(key) {
+                    continue;
+                }
                 if let Some(base) = base_opt.clone() {
                     // GAP-CSPENF срез 48: `upgrade-insecure-requests`
                     // переписывает `http://` в `https://` до гейта
@@ -2422,166 +2714,36 @@ impl Lumen {
                 }
             }
         }
-
-        // Reset CPU image cache for the new page (10E.4 scroll-discard).
-        self.image_cache.clear();
-        if let Some(r) = self.renderer.as_mut() {
-            r.set_font_provider(Some(Arc::clone(&page.font_registry) as Arc<dyn lumen_core::FontProvider>));
-            // Warm the curated system-font fallback chain once, now that a
-            // FontProvider (this page's FontRegistry, which wraps the system
-            // font index) is available. Loads emoji / CJK / RTL / Indic / Thai
-            // faces into the renderer so the codepoint cascade can resolve
-            // glyphs Inter lacks. One-time: the faces persist across pages and
-            // the curated families are system fonts identical for every page.
-            if !self.fallbacks_preloaded {
-                r.preload_curated_fallbacks();
-                self.fallbacks_preloaded = true;
-            }
-            r.clear_images();
-            for (src, image) in &page.images {
-                // BUG-272 срез 17: share the Arc; raw_images no longer deep-copies.
-                if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
-                    eprintln!("Картинка {src} не зарегистрирована: {err}");
-                }
-                self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
-            }
-        } else {
-            self.pending_images = page.images;
-        }
-        if let Some(w) = self.window.as_ref() {
-            w.set_title(&window_title(self.title.as_deref()));
-            w.request_redraw();
-        }
-        // Register lazy images with JS so _lumen_deliver_lazy_images can check them
-        // on subsequent redraws (scroll, resize) via proximity threshold.
-        //
-        // After registration we run an immediate proximity check: push fresh
-        // layout rects into JS, fire the IntersectionObserver, drain and fetch.
-        // Without this, above-the-fold `loading="lazy"` images (most cards on
-        // sites like lenta.ru) never load on first paint — `relayout()` is the
-        // only other path that delivers observers, and it only runs on
-        // scroll/resize/zoom, not on the initial load. (BUG-163)
-        // ADR-016 M2.2c-2d: lazy-image регистрация + immediate proximity check через
-        // `route_query_js` — снимаем прямое `self.js_ctx`-обращение. Вся упорядоченная
-        // последовательность (register → push rects/viewport → deliver observers →
-        // deliver lazy → drain requests) обёрнута в **один** `route_query_js`, чтобы под
-        // флагом (`LUMEN_ENGINE_THREAD=1`) она исполнилась атомарно **в порядке** на
-        // движковом потоке (value-read `take_lazy_image_requests` после void-push
-        // сохраняет read-after-write), блокируя лишь ради одного результата. Owned-данные
-        // (`owned_pairs`/`geom`) собираются на UI-потоке до маршрутизации (замыкание
-        // `Send + 'static`); гейт `self.js_present` держит сбор геометрии
-        // JS-гейтнутым — байт-идентично флаг-офф (`route_query_js(…, Some(js), …)` =
-        // синхронный вызов по UI-хэндлу).
-        #[cfg(feature = "v8")]
-        let initial_lazy_reqs: Vec<(u32, String)> = if self.js_present {
-            let owned_pairs: Vec<(u32, String)> =
-                page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
-            type LazyImageGeom = (
-                HashMap<u32, [f32; 4]>,
-                HashMap<u32, Vec<[f32; 4]>>,
-                Arc<lumen_layout::LayoutBox>,
-                f32,
-                f32,
-            );
-            let geom: Option<LazyImageGeom> = if !owned_pairs.is_empty() {
-                self.layout_box.as_ref().and_then(|lb_ref| {
-                    self.layout_source
-                        .as_ref()
-                        .and_then(|ls| ls.document.lock().ok())
-                        .map(|doc_guard| {
-                            let viewport = self.renderer.as_ref().map_or_else(
-                                || Size::new(1024.0, 720.0),
-                                |r| {
-                                    let s = r.viewport_size();
-                                    Size::new(s.width, s.height)
-                                },
-                            );
-                            (
-                                collect_layout_rects(lb_ref, &doc_guard),
-                                collect_client_rects(lb_ref, &doc_guard),
-                                Arc::new(lb_ref.clone()),
-                                viewport.width,
-                                viewport.height,
-                            )
-                        })
-                })
-            } else {
-                None
-            };
-            // GAP-LAYOUTSHIFT: refresh the CLS baseline with this (possibly
-            // newer) rect snapshot too — cheap, and keeps it from going
-            // stale relative to whatever the lazy-image registration below
-            // just changed. Done here, before `geom` moves into the closure.
-            // срез 5: shift-flavoured geometry, not `geom`'s gBCR rects — see
-            // `collect_layout_shift_rects`'s doc-comment.
-            if geom.is_some()
-                && let Some(lb_ref) = self.layout_box.as_ref()
-            {
-                self.prev_layout_shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
-            }
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
-                let pairs: Vec<(u32, &str)> =
-                    owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
-                js.register_lazy_images(&pairs);
-                if let Some((rects, client_rects, hit_test_tree, vw, vh)) = geom {
-                    js.update_layout_rects(rects);
-                    js.update_client_rects(client_rects);
-                    js.update_hit_test_tree(hit_test_tree);
-                    js.update_viewport_size(vw, vh);
-                    js.deliver_layout_observers();
-                    js.deliver_lazy_images();
-                    return js.take_lazy_image_requests();
-                }
-                Vec::new()
-            })
-            .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        #[cfg(feature = "v8")]
-        if !initial_lazy_reqs.is_empty() {
-            self.fetch_and_register_lazy_images(initial_lazy_reqs);
-            // Images were registered after the request_redraw above — request
-            // another so the first paint actually shows them.
-            if let Some(w) = self.window.as_ref() {
-                w.request_redraw();
-            }
-        }
-        // JS may have requested navigation via location.href= etc.
-        self.pending_js_navigate = page.js_navigate;
-        // HTML LS §8.2.3 — all resources loaded: readyState → "complete" + window.load event.
-        // HTML LS §8.6 — `pageshow` fires right after `load`. `persisted=true`
-        // only when this page was restored from bfcache (set by navigate_back/
-        // navigate_forward); a fresh load fires `persisted=false`.
-        let pageshow_persisted = std::mem::take(&mut self.pending_pageshow_persisted);
-        // ADR-016 M2.2c-2d: pageshow-lifecycle void-вызовы через `route_task_js` —
-        // снимаем прямое `self.js_ctx`-обращение. Оба чистый fire-and-forget без
-        // синхронного чтения результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`)
-        // уходят off-UI-thread одним `task` (порядок сохранён), без флага (по
-        // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично прежнему.
-        #[cfg(feature = "v8")]
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
-            // BUG-640: `domComplete`/`loadEventStart` share the "before"
-            // instant, `loadEventEnd` is the "after" one.
-            crate::nav_timing::record_load_start();
-            js.notify_window_loaded();
-            crate::nav_timing::record_load_end();
-            js.fire_page_lifecycle("pageshow", pageshow_persisted);
-        });
-        #[cfg(not(feature = "v8"))]
-        let _ = pageshow_persisted;
-
-        // Rebuild accessibility tree and push to OS platform bridge (O-5).
-        self.update_platform_ax_tree();
-
-        // If zoom or <meta viewport initial-scale> is active, relayout with the
-        // correct effective viewport. The initial load used the raw physical size.
-        let zoom = self.zoom_factor;
-        let meta_scale = self.layout_source.as_ref().map(meta_initial_scale).unwrap_or(1.0);
-        if (zoom - 1.0).abs() > 0.001 || (meta_scale - 1.0).abs() > 0.001 {
-            self.relayout();
-        }
     }
+}
+
+/// BUG-1225: число render-blocking таблиц стилей из `<head>`, для которых
+/// preload-сканер уже запустил загрузку, а `CssLoaded` ещё не обработан
+/// event loop-ом: `(generation, счётчик)`. Пока оно ненулевое, streaming-кадр
+/// не публикуется — иначе на экране виден сырой HTML без CSS. Каждая
+/// посчитанная таблица шлёт `CssLoaded` ровно один раз (при сбое — пустой
+/// таблицей), поэтому счётчик не зависает.
+static STREAM_CSS_PENDING: std::sync::Mutex<(u64, usize)> = std::sync::Mutex::new((0, 0));
+
+pub(crate) fn stream_css_pending_add(generation: u64) {
+    let mut g = STREAM_CSS_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if g.0 != generation {
+        *g = (generation, 0);
+    }
+    g.1 += 1;
+}
+
+pub(crate) fn stream_css_pending_done(generation: u64) {
+    let mut g = STREAM_CSS_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if g.0 == generation {
+        g.1 = g.1.saturating_sub(1);
+    }
+}
+
+/// `true`, пока для навигации `generation` ждут таблицы стилей (см. выше).
+pub(crate) fn stream_css_pending(generation: u64) -> bool {
+    let g = STREAM_CSS_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    g.0 == generation && g.1 > 0
 }
 
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
@@ -2602,6 +2764,7 @@ fn feed_preload_and_emit(
     base: &ResourceBase,
     header_csp: &[lumen_network::csp::CspPolicy],
     proxy: &EventLoopProxy<LoadEvent>,
+    tab_id: usize,
     generation: u64,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
@@ -2613,7 +2776,7 @@ fn feed_preload_and_emit(
     if early.is_empty() {
         return;
     }
-    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
+    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), tab_id, generation));
     // BUG-1116: `preload`/`modulepreload`/`prefetch` hints warm the same
     // process-global cache as the stylesheet/script warm-up right below —
     // started here, as early as the streaming scanner sees them, so the
@@ -2654,16 +2817,19 @@ fn feed_preload_and_emit(
             eprintln!("  ⤷ preload пропущен (CSP): {resolved_str}");
             continue;
         }
+        if is_css {
+            stream_css_pending_add(generation);
+        }
         match base.resolve(raw_url) {
             // Local files: read is instant — no cache benefit. Only CSS needs a
             // CssLoaded event for the progressive frame; scripts are read in
             // `parse_and_layout`.
             ResolvedResource::File(path) => {
-                if is_css
-                    && let Ok(text) = std::fs::read_to_string(&path)
-                {
-                    let sheet = lumen_css_parser::parse(&text);
-                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                if is_css {
+                    let sheet = std::fs::read_to_string(&path)
+                        .map(|text| lumen_css_parser::parse(&text))
+                        .unwrap_or_default();
+                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                 }
             }
             ResolvedResource::Url(resolved) => {
@@ -2674,6 +2840,10 @@ fn feed_preload_and_emit(
                 std::thread::spawn(move || {
                     use lumen_core::url::Url;
                     let Ok(parsed) = Url::parse(&resolved) else {
+                        if is_css {
+                            let _ = proxy2.send_event(LoadEvent::CssLoaded(
+                                Box::default(), tab_id, generation));
+                        }
                         return;
                     };
                     let resource = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
@@ -2686,16 +2856,17 @@ fn feed_preload_and_emit(
                             })
                             .map_err(|e| e.to_string())
                     });
-                    if is_css
-                        && let Ok(resource) = resource
-                    {
+                    if is_css {
                         // Progressive preview frame only — the authoritative
                         // parse (BUG-509 fallback-encoding algorithm) happens
                         // later in `stylesheets::fetch_stylesheet_text` once
                         // the full document (and its own charset) is known.
-                        let sheet =
-                            lumen_css_parser::parse(&String::from_utf8_lossy(&resource.body[..]));
-                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                        // Сбой загрузки → пустая таблица: `CssLoaded` обязан
+                        // прийти ровно один раз (BUG-1225, счётчик ожидания).
+                        let sheet = resource
+                            .map(|r| lumen_css_parser::parse(&String::from_utf8_lossy(&r.body[..])))
+                            .unwrap_or_default();
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                     }
                 });
             }
@@ -2711,6 +2882,11 @@ fn feed_preload_and_emit(
 /// `IncrementalTreeBuilder::feed_bytes`; (2) `LoadDone` — все байты доступны,
 /// запускаем полный pipeline (CSS + изображения); (3) `LoadError` — ошибка fetch.
 pub(crate) enum LoadEvent {
+    /// ADR-032: поток браузера просит главный поток завершить цикл winit.
+    /// Обслуживается в `MainForwarder`, до `Lumen` не доходит.
+    MainExit,
+    /// ADR-032: создать окно на главном потоке (`ActiveEventLoop` есть только там).
+    MainCreateWindow(Box<crate::browser_thread::CreateWindowRequest>),
     /// No-op wake-up (SDC-2). `winit`'s `ControlFlow::Wait` genuinely parks
     /// the event loop until an OS window event, a scheduled `WaitUntil`
     /// deadline, or a proxied user event arrives — an `AutomationCommand`
@@ -2727,26 +2903,37 @@ pub(crate) enum LoadEvent {
     /// чтобы sink мог начать загружать CSS/шрифты ещё в процессе парсинга.
     /// Дедупликация с финальными хинтами из `LoadDone` — через
     /// `preload_dispatched` в `Lumen`.
-    /// Последнее поле — generation навигации (U-1): идентификатор load-цикла,
-    /// присвоенный в `reload`/`resumed`. `user_event` отбрасывает событие, если
-    /// его generation не совпадает с `Lumen::load_generation` — защита от
-    /// устаревших событий гонки навигаций (быстрый back/forward или клик по двум
-    /// ссылкам подряд), которые иначе подмешали бы DOM/CSS прошлой страницы.
-    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, u64),
+    /// Предпоследнее поле — id вкладки (BUG-1214), стриминг которой породил
+    /// событие: снят ОДИН раз в `reload`/`resumed` в момент запуска этой
+    /// навигации и не меняется, даже если пользователь переключит активную
+    /// вкладку, пока фоновый поток ещё грузит эту страницу. Последнее поле —
+    /// generation навигации (U-1): идентификатор load-цикла, присвоенный в
+    /// `reload`/`resumed`. `user_event` отбрасывает событие, если его
+    /// generation не совпадает с ожидаемым generation-ом ЭТОЙ вкладки —
+    /// защита от устаревших событий гонки навигаций (быстрый back/forward или
+    /// клик по двум ссылкам подряд), которые иначе подмешали бы DOM/CSS
+    /// прошлой страницы. До BUG-1214 сверка шла с единственным
+    /// process-wide `Lumen::load_generation`, поэтому вторая вкладка,
+    /// открытая тем же тиком `window.open()`, роняла ЛЮБОЕ событие первой —
+    /// `user_event` теперь сверяет generation вкладки `tab_id`, а не активной.
+    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, usize, u64),
     /// BUG-757: база документа стала известна и отличается от запрошенного
     /// адреса (сервер ответил редиректом). Отправляется из streaming-потока,
     /// как только тело потекло с финального hop-а — то есть ДО того, как
     /// частичный DOM начнёт заказывать картинки и шрифты, которые UI-поток
-    /// резолвит относительно базы. Последнее поле — generation навигации (U-1).
-    DocumentBase(ResourceBase, u64),
+    /// резолвит относительно базы. Предпоследнее поле — id вкладки, последнее —
+    /// generation навигации (U-1); см. [`Self::EarlyPreloadHints`] (BUG-1214).
+    DocumentBase(ResourceBase, usize, u64),
     /// Очередной chunk сырых байт HTML. UTF-8 границы не выравниваются —
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
-    /// code-point-ы внутри. Последнее поле — generation навигации (U-1).
-    HtmlChunk(Vec<u8>, u64),
+    /// code-point-ы внутри. Предпоследнее поле — id вкладки, последнее —
+    /// generation навигации (U-1); см. [`Self::EarlyPreloadHints`] (BUG-1214).
+    HtmlChunk(Vec<u8>, usize, u64),
     /// CSS загружен параллельным потоком для промежуточных streaming-кадров.
     /// Мёрджится в `Lumen::stream_sheet` и применяется в `paint_partial_dom`.
-    /// Последнее поле — generation навигации (U-1).
-    CssLoaded(Box<lumen_css_parser::Stylesheet>, u64),
+    /// Предпоследнее поле — id вкладки, последнее — generation навигации
+    /// (U-1); см. [`Self::EarlyPreloadHints`] (BUG-1214).
+    CssLoaded(Box<lumen_css_parser::Stylesheet>, usize, u64),
     /// PH1-2c: картинка `<img>` декодирована параллельным потоком во время
     /// streaming. Регистрируется в renderer-е по ключу `src` и вызывает redraw —
     /// картинки появляются по мере прихода, а не разом в финальном `LoadDone`.
@@ -2790,24 +2977,29 @@ pub(crate) enum LoadEvent {
         variation_settings: Vec<([u8; 4], f32)>,
         bytes: Vec<u8>,
     },
-    /// Все байты получены — для финального полного pipeline.
-    /// Последнее поле — generation навигации (U-1).
-    LoadDone(Box<RawPage>, u64),
-    /// Ошибка при загрузке страницы. Последнее поле — generation навигации (U-1).
-    LoadError(String, u64),
+    /// Все байты получены — для финального полного pipeline. Предпоследнее
+    /// поле — id вкладки, последнее — generation навигации (U-1); см.
+    /// [`Self::EarlyPreloadHints`] (BUG-1214).
+    LoadDone(Box<RawPage>, usize, u64),
+    /// Ошибка при загрузке страницы. Предпоследнее поле — id вкладки,
+    /// последнее — generation навигации (U-1); см. [`Self::EarlyPreloadHints`]
+    /// (BUG-1214).
+    LoadError(String, usize, u64),
     /// ph3-tls-hardening A6: the fetch failed because the TLS handshake's
     /// certificate did not verify (`lumen_core::error::Error::CertInvalid`,
     /// downcast out of the `Box<dyn Error>` the streaming/static fetch paths
     /// return before it collapses to a string). Routes to the cert
     /// interstitial instead of the generic `LoadError` path. Fields: full
     /// navigation URL, hostname (the key `tls::bypass::allow_host` needs for
-    /// "Proceed anyway"), the structured reason, and generation (U-1).
-    CertError(String, String, lumen_core::error::CertError, u64),
+    /// "Proceed anyway"), the structured reason, tab id, and generation (U-1);
+    /// see [`Self::EarlyPreloadHints`] (BUG-1214).
+    CertError(String, String, lumen_core::error::CertError, usize, u64),
     /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →
     /// layout) выполнен на фоновом потоке; готовый результат применяется на
-    /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Последнее
-    /// поле — generation навигации (U-1).
-    RenderDone(Box<RenderOutcome>, u64),
+    /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Предпоследнее
+    /// поле — id вкладки, последнее — generation навигации (U-1); см.
+    /// [`Self::EarlyPreloadHints`] (BUG-1214).
+    RenderDone(Box<RenderOutcome>, usize, u64),
     /// FRAME-4 срез 3: навигация ОДНОГО фрейма (клик по ссылке/сабмит формы/
     /// шаг истории внутри него) выполнена на фоновом потоке — та же сеть+
     /// парсинг+скрипты+layout, что раньше блокировали UI-поток целиком внутри

@@ -423,7 +423,7 @@ use super::*;
 
     /// CSSOM-9 (BUG-472): collects the snapshot for `html` and returns the
     /// entry of the element matching `sel`.
-    fn resolved_style_of(html: &str, css: &str, sel: &str) -> std::collections::HashMap<String, String> {
+    fn resolved_style_of(html: &str, css: &str, sel: &str) -> crate::StyleMap {
         let (doc, root) = lay_full_measured_with_doc(html, css);
         let nid = find_first_dom_node_by_selector(&doc, sel)
             .unwrap_or_else(|| panic!("{sel} must be findable in the DOM"))
@@ -433,8 +433,37 @@ use super::*;
             .unwrap_or_else(|| panic!("{sel} must have a computed-style entry"))
     }
 
-    fn prop<'a>(style: &'a std::collections::HashMap<String, String>, name: &str) -> &'a str {
+    fn prop<'a>(style: &'a crate::StyleMap, name: &str) -> &'a str {
         style.get(name).map_or("<absent>", String::as_str)
+    }
+
+    /// BUG-935 срез 72: the collector publishes an entry for every element, but serialises
+    /// the style only for the element a page reads — boxes, inline elements around text and
+    /// box-less elements alike.
+    #[test]
+    fn collector_leaves_unread_entries_unserialised() {
+        let doc = lumen_html_parser::parse(
+            "<html><body><div id=a style=\"padding:5%\"><p>x <b id=b><i>y</i></b></p></div><span id=c style=\"display:none\"></span></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("body{margin:0}");
+        let (root, counters) =
+            layout_measured_with_counters(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let styles = collect_computed_styles(&root, &doc, Some(&counters), Size::new(800.0, 600.0));
+        let idx = |sel: &str| find_first_dom_node_by_selector(&doc, sel).expect(sel).index() as u32;
+        // box (`div`, `p`), inline element around text (`b`, `i`) and box-less (`span`).
+        let elements = ["#a", "p", "#b", "i", "#c"].map(idx);
+        for e in elements {
+            assert!(!styles[&e].is_serialised(), "element {e}: nothing was read yet");
+        }
+        let a = idx("#a");
+        assert_eq!(styles[&a].get("padding-top").map(String::as_str), Some("40px"));
+        assert_eq!(styles[&a].get("computed:padding-top").map(String::as_str), Some("5%"));
+        assert!(styles[&a].is_serialised());
+        assert_eq!(
+            elements.iter().filter(|e| styles[e].is_serialised()).count(),
+            1,
+            "only the element that was read"
+        );
     }
 
     /// CSSOM-9 (BUG-472): CSSOM §6.7.2 — for a rendered element `width`/
@@ -528,6 +557,52 @@ use super::*;
             "#a",
         );
         assert_eq!(prop(&s, "top"), "10%", "static box keeps the computed inset");
+    }
+
+    /// CSSOM-9-S1 (BUG-472): percentage insets of `position: sticky` resolve against
+    /// the nearest scrollport (padding box of the closest scroll container, else the
+    /// viewport), not the containing block; `auto` stays `auto`.
+    #[test]
+    fn resolved_sticky_percent_insets_use_the_scrollport() {
+        let s = resolved_style_of(
+            "<html><body><div style=\"height:500px;overflow:hidden\"><div style=\"height:400px\">             <div id=a style=\"position:sticky;left:0;top:50%;height:100px\"></div></div></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "top"), "250px", "50% of the 500px overflow:hidden ancestor, not the 400px parent");
+        assert_eq!(prop(&s, "left"), "0px");
+        assert_eq!(prop(&s, "bottom"), "auto");
+
+        let s = resolved_style_of(
+            "<html><body><div style=\"height:400px\">             <div id=a style=\"position:sticky;top:50%;left:25%;height:100px\"></div></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "top"), "300px", "no scroll container: 50% of the 600px viewport");
+        assert_eq!(prop(&s, "left"), "200px", "25% of the 800px viewport width");
+    }
+
+    /// CSSOM-9-S2 (BUG-472): the containing block of `position: fixed` under an
+    /// ancestor with `transform` is that ancestor's padding box, not the viewport
+    /// (css-transforms-1 §2) — percentage insets resolve against it and `auto`
+    /// insets report used px. Mirrors `#container-for-fixed` of
+    /// `getComputedStyle-insets.js`: padding box 600x300.
+    #[test]
+    fn resolved_fixed_insets_use_transformed_ancestor_padding_box() {
+        let html = "<html><body><div id=c style=\"position:absolute;transform:scale(1);height:172px;width:344px;padding:64px 128px;border:solid;border-width:128px 256px;margin:256px 512px\"><div id=a style=\"position:fixed;top:10%;height:20px;width:20px\"></div></div></body></html>";
+        let s = resolved_style_of(html, "body{margin:0}", "#a");
+        assert_eq!(prop(&s, "top"), "30px", "10% of the 300px padding box, not the 600px viewport");
+        assert_eq!(prop(&s, "left"), "128px", "auto: static position, the container's left padding");
+        assert_eq!(prop(&s, "right"), "452px", "600 - 128 - 20");
+        assert_eq!(prop(&s, "bottom"), "250px", "300 - 30 - 20");
+
+        let html = "<html><body><div style=\"height:400px;contain:paint\"><div id=a style=\"position:fixed;top:10%;height:20px;width:20px\"></div></div></body></html>";
+        let s = resolved_style_of(html, "body{margin:0}", "#a");
+        assert_eq!(prop(&s, "top"), "40px", "contain: paint is a fixed containing block too: 10% of 400px");
+
+        let html = "<html><body><div style=\"height:400px\"><div id=a style=\"position:fixed;top:10%;height:20px;width:20px\"></div></div></body></html>";
+        let s = resolved_style_of(html, "body{margin:0}", "#a");
+        assert_eq!(prop(&s, "top"), "60px", "no transformed ancestor: 10% of the 600px viewport");
     }
 
     /// CSSOM-9 (BUG-472): a non-replaced inline element has no box of its own

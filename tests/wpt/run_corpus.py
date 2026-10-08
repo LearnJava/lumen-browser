@@ -46,6 +46,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -55,6 +56,7 @@ MANIFEST_PATH = os.path.join(METADATA_ROOT, "MANIFEST.json")
 DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, ".tmp", "wpt-corpus")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import browser_rss_cap  # noqa: E402
 import corpus_stats  # noqa: E402
 import heavy_lock  # noqa: E402
 import port_guard  # noqa: E402
@@ -180,8 +182,45 @@ def load_manifest() -> dict:
         return json.load(fh)
 
 
-def plan_shards(manifest: dict, categories: list) -> list:
+def parse_prefixes(text) -> list:
+    """`"css/css-flexbox, /css/css-grid/"` -> `["css/css-flexbox", "css/css-grid"]`.
+
+    Path prefixes relative to the WPT root, no leading or trailing slash. An
+    empty or `None` input is the empty list, i.e. "no filter".
+    """
+    if not text:
+        return []
+    return [p.strip().strip("/") for p in text.split(",") if p.strip().strip("/")]
+
+
+def _under(test_id: str, prefix: str) -> bool:
+    """Whether `test_id` is the path `prefix` or lies below it (a `?variant` of
+    the file counts too). `prefix` is a `parse_prefixes` entry."""
+    path = test_id.lstrip("/")
+    return path == prefix or path.startswith((prefix + "/", prefix + "?"))
+
+
+def id_selected(test_id: str, prefixes: list, exclude_prefixes: list) -> bool:
+    """The `--prefixes` / `--exclude-prefixes` filter: no `prefixes` means
+    everything; an exclusion always wins over an inclusion."""
+    if exclude_prefixes and any(_under(test_id, p) for p in exclude_prefixes):
+        return False
+    return not prefixes or any(_under(test_id, p) for p in prefixes)
+
+
+def plan_shards(manifest: dict, categories: list, prefixes: list = None,
+                exclude_prefixes: list = None) -> list:
     """Split the selected categories into runnable shards.
+
+    `prefixes` / `exclude_prefixes` (WPT-RUN-14) narrow the plan to a part of a
+    category — `css/css-flexbox` out of the 34 607-id `css`. The category is
+    still split exactly as without the filter, so shard names stay the ones a
+    full run would produce; a shard the filter only partly covers is then
+    re-cut along directories (`_narrow`) into pieces that are wholly inside the
+    selection, because wptrunner can only be pointed at a path prefix or an
+    explicit id list. Filtering the ids *before* the split would be wrong: a
+    selection of 1 400 ids would plan one shard named `css` with prefix `/css/`
+    and quietly run all 34 607.
 
     A shard is `{"name", "prefix", "ids", "auto_ids"}` where `prefix` is what
     gets passed to wptrunner as a positional test filter. Categories under
@@ -218,12 +257,18 @@ def plan_shards(manifest: dict, categories: list) -> list:
 
     shards = []
     dropped = 0
+    filtered = bool(prefixes or exclude_prefixes)
     for category in categories:
         ids = by_category.get(category)
         if not ids:
             print(f"warning: category not in manifest, skipped: {category}", file=sys.stderr)
             continue
-        for shard in _split([category], ids, automatable, long_tests):
+        planned = _split([category], ids, automatable, long_tests)
+        if filtered:
+            selected = {i for i in ids if id_selected(i, prefixes or [], exclude_prefixes or [])}
+            planned = [piece for shard in planned
+                       for piece in _narrow(shard, ids, selected, automatable, long_tests)]
+        for shard in planned:
             if shard["auto_ids"]:
                 shards.append(shard)
             else:
@@ -231,6 +276,62 @@ def plan_shards(manifest: dict, categories: list) -> list:
     if dropped:
         print(f"{dropped} shards hold only manual/visual tests — not planned "
               f"(wptrunner runs neither; they are not in the denominator)", file=sys.stderr)
+    return shards
+
+
+def _narrow(shard: dict, category_ids: list, selected: set, automatable: set,
+            long_tests: set) -> list:
+    """Cut one planned shard down to the part of it `selected` covers.
+
+    A shard wholly inside the selection comes back unchanged (same name, so a
+    filtered run's shards are a subset of the full run's). A shard wholly
+    outside comes back as nothing. A partly covered one is re-cut by directory:
+    a directory every id of which is selected becomes one prefix shard, a mixed
+    directory is descended into, and the files lying directly in a mixed
+    directory become one explicit-id `(bare)` shard (they cannot be addressed by
+    prefix without re-selecting their subdirectories).
+    """
+    if shard.get("test_ids"):
+        members = shard["test_ids"]
+    else:
+        members = [i for i in category_ids if i.startswith(shard["prefix"])]
+    chosen = [i for i in members if i in selected]
+    if not chosen:
+        return []
+    if len(chosen) == len(members):
+        return [shard]
+    if shard.get("test_ids"):
+        piece = _shard(shard["name"], None, chosen, automatable, long_tests)
+        piece["test_ids"] = sorted(chosen)
+        return [piece]
+    return _cover(shard["prefix"].strip("/").split("/"), members, selected,
+                  automatable, long_tests)
+
+
+def _cover(parts: list, ids: list, selected: set, automatable: set, long_tests: set) -> list:
+    """Exact cover of `selected ∩ ids` by prefix shards and one bare shard per
+    mixed directory — see `_narrow`."""
+    chosen = [i for i in ids if i in selected]
+    if not chosen:
+        return []
+    name = "/".join(parts)
+    if len(chosen) == len(ids):
+        return [_shard(name, f"/{name}/", ids, automatable, long_tests)]
+    depth = len(parts)
+    groups = {}
+    for test_id in ids:
+        segs = test_id.strip("/").split("/")
+        groups.setdefault(segs[depth] if len(segs) > depth + 1 else "", []).append(test_id)
+    shards = []
+    for key, group in sorted(groups.items()):
+        if key:
+            shards.extend(_cover(parts + [key], group, selected, automatable, long_tests))
+        else:
+            direct = sorted(i for i in group if i in selected)
+            if direct:
+                piece = _shard(f"{name} (bare)", None, direct, automatable, long_tests)
+                piece["test_ids"] = direct
+                shards.append(piece)
     return shards
 
 
@@ -290,6 +391,12 @@ def _shard(name: str, prefix, ids: list, automatable: set, long_tests: set) -> d
 
 
 def shard_report_path(out_dir: str, shard: dict) -> str:
+    # A batch (`plan_units`) keeps its own report out of `out_dir`'s top level:
+    # `load_results` reads every `*.json` there as a shard report, and the
+    # batch's verdicts reach it through the per-member files `split_batch`
+    # writes instead.
+    if shard.get("report_path"):
+        return shard["report_path"]
     return os.path.join(out_dir, shard["name"].replace("/", "__") + ".json")
 
 
@@ -397,7 +504,8 @@ def shard_timeout(shard: dict, base: int, per_id, processes: int = 1) -> int:
     return int(base + declared * BUDGET_SLACK / max(processes, 1))
 
 
-def https_ids(manifest: dict, scope: set = None) -> list:
+def https_ids(manifest: dict, scope: set = None, prefixes: list = None,
+              exclude_prefixes: list = None) -> list:
     """Every `.https.` test id.
 
     BUG-785 (fixed 2026-08-20) made these unreachable at the TLS layer,
@@ -414,7 +522,8 @@ def https_ids(manifest: dict, scope: set = None) -> list:
     return sorted({i for t, c, i in corpus_stats.iter_ids(manifest)
                    if ".https." in i
                    and t not in corpus_stats.NON_AUTOMATABLE_TYPES
-                   and (scope is None or c in scope)})
+                   and (scope is None or c in scope)
+                   and id_selected(i, prefixes or [], exclude_prefixes or [])})
 
 
 NO_TESTS_MARKERS = ("Unable to find any tests at the path(s)", "No tests ran")
@@ -496,10 +605,41 @@ def shard_produced_nothing(out_dir: str, shard: dict) -> bool:
     return not rescue_results(raw_path)
 
 
+def shard_targets(shard: dict) -> list:
+    """The positional test filters wptrunner gets for a shard or a batch."""
+    members = shard.get("members") or [shard]
+    targets = []
+    for member in members:
+        targets.extend(member["test_ids"] if member.get("test_ids") else [member["prefix"]])
+    return targets
+
+
+#: `--shared-queue`: how a shard's tests are handed to its `--processes`
+#: browsers. wptrunner's default (`testloader.SingleTestSource`) deals them out
+#: up front, `hash(test.id) % processes`, one fixed list per process — so a
+#: process that drew three 60 s TIMEOUTs runs a minute after the other six went
+#: idle, and the shard waits for it. Replaying the recorded test durations of
+#: the WPT-RUN-9 control runs through a shared queue instead (longest declared
+#: timeout first, which is what `TestQueueBuilder.make_queue` sorts by) cuts the
+#: test phase of the same shards by 20-30 % (`docs/tasks/p2-wpt-runner-throughput.md`
+#: §общая очередь). `run_smoke.py` turns the flag into wptrunner's
+#: `--fully-parallel --no-restart-on-new-group` plus a directory interleave
+#: (`run_smoke.SHARED_QUEUE_WPT_ARGS`, `interleave_by_directory`); named here
+#: rather than imported for the same reason as `SERVER_CONFIG_ENV` below.
+SHARED_QUEUE_ARGS = ("--lumen-shared-queue",)
+
+
 def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int,
-              exclude_file: str = None) -> dict:
-    """Run one shard as a subprocess; never raises on a failing shard."""
+              exclude_file: str = None, extra_env: dict = None, rss_cap=None,
+              shared_queue: bool = False) -> dict:
+    """Run one shard (or one batch of them, `plan_units`) as a subprocess;
+    never raises on a failing shard. `extra_env` carries the parallel lane's
+    server config (`run_smoke.SERVER_CONFIG_ENV`); `rss_cap` is the run's
+    `browser_rss_cap.BrowserRssCap`, used only to count the browsers it killed
+    under this shard. `shared_queue` — see `SHARED_QUEUE_ARGS`."""
+    attempt_pids = []
     report_path = shard_report_path(out_dir, shard)
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
     log_path = os.path.splitext(report_path)[0] + ".log"
     raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
     argv = [
@@ -519,7 +659,10 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         argv.append(f"--exclude-file={exclude_file}")
     if processes:
         argv.append(f"--processes={processes}")
-    argv.extend(shard["test_ids"] if shard.get("test_ids") else [shard["prefix"]])
+    if shared_queue:
+        argv.extend(SHARED_QUEUE_ARGS)
+    argv.extend(shard_targets(shard))
+    env = dict(os.environ, **extra_env) if extra_env else None
 
     # A shard that dies before its first test is worth one immediate second
     # attempt: it costs seconds, and the failure it recovers from is transient.
@@ -540,7 +683,8 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         started = time.time()
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
-                                     start_new_session=(os.name != "nt"))
+                                     start_new_session=(os.name != "nt"), env=env)
+            attempt_pids.append(proc.pid)
             try:
                 returncode = proc.wait(timeout=timeout)
                 outcome = "ran"
@@ -581,7 +725,380 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
              "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
     if log_says_port_conflict(log_path):
         state["port_conflict"] = True
+    if rss_cap is not None:
+        killed = sum(len(rss_cap.kills_under(pid)) for pid in attempt_pids)
+        if killed:
+            # The test that browser was running is reported CRASH by wptrunner;
+            # this is what tells such a CRASH apart from an engine crash.
+            state["rss_cap_kills"] = killed
     return state
+
+
+# --- WPT-RUN-9: batching small shards and running lanes in parallel ----------
+#
+# Measured on the 2026-08-20 corpus runs (`docs/wpt/runs/*.json`): 367 of 479
+# shards finished in under 120 s, 186 held at most 20 ids, and each of them
+# paid a full wptserve boot (~38 s, WPT-RUN-5 slice 15) for a median of 22-31 s
+# of work. wptrunner also caps its process count at the number of directories
+# a shard holds, so a small shard leaves most of `--processes` idle. And the
+# shards ran one after another on a machine whose CPU sat at ~1.2 busy threads
+# of 16 (PERF-10 slice 2): the wall clock is spent waiting on test timeouts.
+# Two independent remedies follow, both off by default:
+#
+# * `--batch-small N` runs consecutive small shards as one wptrunner process
+#   and splits the report back per shard afterwards (`split_batch`), so
+#   `state.json`, `--resume`, `score_audit.py` and every other reader still see
+#   exactly the shards `plan_shards` produced;
+# * `--parallel-shards K` runs K units at once, each lane on its own copy of the
+#   server ports (`lane_server_config`), which is what makes two wptserves on
+#   one machine possible at all.
+
+#: Shards at most this many automatable ids are candidates for a batch.
+BATCH_SMALL_DEFAULT = 150
+#: A `(bare)` shard is addressed by an explicit id list; past this many ids it
+#: is not batched, to keep the shard's command line bounded (Windows: 32 767
+#: characters for the whole command).
+BATCH_MAX_EXPLICIT_IDS = 50
+#: Port offset between lanes. Lane 0 keeps `config.json` as is; lane k adds
+#: k * LANE_PORT_STEP to every port. 18300…19000 + 1000·k stays clear of the
+#: Hyper-V excluded ranges seen on the dev machine (1077-1703, 11688-12782,
+#: 50000-50059) and of every port `lumen-network`'s bad-port list blocks.
+LANE_PORT_STEP = 1000
+#: Batches live here, inside `out_dir` but out of `load_results`' reach — it
+#: reads `out_dir/*.json` only, and a batch report there would be scored twice.
+BATCH_SUBDIR = "batches"
+#: Environment variable `run_smoke.py` reads a lane's server config from — the
+#: same name as `run_smoke.SERVER_CONFIG_ENV`, repeated rather than imported
+#: because importing `run_smoke` pulls in the whole of `wptrunner`.
+SERVER_CONFIG_ENV = "LUMEN_WPT_SERVER_CONFIG"
+
+
+def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
+    """Group shards into run units: big shards alone, small ones in batches.
+
+    A unit is a shard dict (run as before) or a batch: a shard-shaped dict with
+    `members` (the original shards, untouched), summed `ids`/`auto_ids`/
+    `long_ids` for the budget and a `report_path` under `BATCH_SUBDIR`. Small
+    shards are taken in plan order — neighbours are usually the same category —
+    and a batch closes once adding the next one would pass `max_ids`. Shards
+    that are not small, and a batch of one, stay as they were — with
+    `small == 0` the result is `shards` itself. Ordering is the caller's.
+    """
+    units, batch = [], []
+
+    def close():
+        if not batch:
+            return
+        if len(batch) == 1:
+            units.append(batch[0])
+        else:
+            first = batch[0]["name"].replace("/", "__").replace(" ", "_")
+            name = f"batch {first} +{len(batch) - 1}"
+            units.append({
+                "name": name, "prefix": None, "members": list(batch),
+                "ids": sum(s["ids"] for s in batch),
+                "auto_ids": sum(s.get("auto_ids", s["ids"]) for s in batch),
+                "long_ids": sum(s.get("long_ids", 0) for s in batch),
+                "report_path": os.path.join(out_dir, BATCH_SUBDIR,
+                                            f"{first}+{len(batch) - 1}.json"),
+            })
+        batch.clear()
+
+    for shard in shards:
+        batchable = (small > 0 and shard.get("auto_ids", shard["ids"]) <= small
+                     and len(shard.get("test_ids") or ()) <= BATCH_MAX_EXPLICIT_IDS)
+        if not batchable:
+            close()
+            units.append(shard)
+            continue
+        if batch and sum(s.get("auto_ids", s["ids"]) for s in batch) \
+                + shard.get("auto_ids", shard["ids"]) > max_ids:
+            close()
+        batch.append(shard)
+    close()
+    return units
+
+
+def member_owner(members: list):
+    """`test_id -> member shard name` for a batch, longest prefix first — the
+    same attribution rule `score_audit.shard_index` uses."""
+    explicit = {i: m["name"] for m in members for i in (m.get("test_ids") or ())}
+    prefixes = sorted(((m["prefix"], m["name"]) for m in members if m.get("prefix")),
+                      key=lambda pair: -len(pair[0]))
+
+    def owner(test_id: str):
+        if test_id in explicit:
+            return explicit[test_id]
+        for prefix, name in prefixes:
+            if test_id.startswith(prefix):
+                return name
+        return None
+    return owner
+
+
+def _repo_relative(path: str) -> str:
+    """`path` relative to the checkout, or absolute when it lies on another
+    drive (a scratch out-dir on Windows, where `relpath` raises)."""
+    try:
+        return os.path.relpath(path, REPO_ROOT)
+    except ValueError:
+        return os.path.abspath(path)
+
+
+def split_batch(batch: dict, state: dict, out_dir: str) -> list:
+    """Turn one finished batch back into per-shard states and reports.
+
+    Each member gets `out_dir/<name>.json` holding exactly its own results —
+    the file a solo run of that shard would have produced — so nothing
+    downstream can tell a batched shard from a solo one. Results come from the
+    batch's `wptreport.json`, or from its raw stream when the batch was killed
+    (`rescue_results`), in which case the members say `salvaged`.
+
+    A member's outcome is the batch's, with one refinement: a member with no
+    verdict at all in a batch that otherwise ran is `no-tests` and gets no
+    report file — writing an empty one would read as a hollow shard
+    (`score_audit`'s `shard-empty`), and `ran` would make `--resume` trust it.
+    Its executable ids, if it has any, still show up as lost in the accounting.
+    Seconds are the batch's wall clock shared out by result count, so the sum
+    over members is the batch's real cost.
+    """
+    report_path = shard_report_path(out_dir, batch)
+    results, salvaged = [], False
+    if not report_is_empty(report_path):
+        try:
+            with open(report_path, encoding="utf-8") as fh:
+                results = json.load(fh).get("results", [])
+        except (json.JSONDecodeError, OSError):
+            results = []
+    if not results:
+        raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
+        results = list(rescue_results(raw_path).values())
+        salvaged = bool(results)
+
+    owner = member_owner(batch["members"])
+    by_member = {m["name"]: [] for m in batch["members"]}
+    for result in results:
+        name = owner(result["test"])
+        if name in by_member:
+            by_member[name].append(result)
+
+    total = max(len(results), 1)
+    states = []
+    for member in batch["members"]:
+        mine = by_member[member["name"]]
+        member_path = os.path.join(out_dir, member["name"].replace("/", "__") + ".json")
+        outcome = state["outcome"]
+        if mine:
+            with open(member_path, "w", encoding="utf-8") as fh:
+                json.dump({"results": mine}, fh)
+        elif outcome == "ran":
+            outcome = "no-tests"
+        member_state = {
+            "name": member["name"], "prefix": member["prefix"], "ids": member["ids"],
+            "auto_ids": member.get("auto_ids"), "outcome": outcome,
+            "returncode": state["returncode"],
+            "seconds": round(state["seconds"] * len(mine) / total, 1),
+            "report": _repo_relative(member_path) if mine else None,
+            "batch": batch["name"],
+        }
+        if salvaged and mine:
+            member_state["salvaged"] = True
+        if state.get("port_conflict"):
+            member_state["port_conflict"] = True
+        if state.get("rss_cap_kills"):
+            # Counted per wptrunner process, so per batch: which member's test
+            # the killed browser was running is in `rss-cap-kills.jsonl` time
+            # order, not here.
+            member_state["batch_rss_cap_kills"] = state["rss_cap_kills"]
+        states.append(member_state)
+    return states
+
+
+def lane_server_config(lane: int, out_dir: str, base_path: str = None) -> str:
+    """Write lane `lane`'s server config and return its path (lane 0: None).
+
+    Only `ports` is written: `run_smoke` merges this file over the normal
+    `tests/wpt/config.json`, so everything else stays exactly as a solo run
+    has it. Every port of the base config moves by `lane * LANE_PORT_STEP`.
+    """
+    if lane == 0:
+        return None
+    with open(base_path or port_guard.CONFIG_PATH, encoding="utf-8") as fh:
+        base = json.load(fh)
+    ports = {}
+    for kind, values in (base.get("ports") or {}).items():
+        ports[kind] = [v + lane * LANE_PORT_STEP if isinstance(v, int) else v
+                       for v in values]
+    path = os.path.join(out_dir, BATCH_SUBDIR, f"lane{lane}-config.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"ports": ports}, fh, indent=2)
+    return path
+
+
+def lane_ports(config_path) -> list:
+    """The TCP ports a lane's wptserve binds — what its port guard checks."""
+    return port_guard.configured_ports(config_path or port_guard.CONFIG_PATH)
+
+
+def available_memory_gb():
+    """Free physical memory in GB, or None when psutil is not installed."""
+    try:
+        import psutil  # noqa: PLC0415 — optional, present in tests/wpt/.venv
+    except ImportError:
+        return None
+    return psutil.virtual_memory().available / 2**30
+
+
+class SharedHeavyLock:
+    """`heavy_lock` held while *any* lane runs, released when all are idle.
+
+    Taking it per unit, as the sequential loop does, cannot work with lanes:
+    on Windows `msvcrt.locking` refuses a second handle of the same process,
+    so lane 2 would sit out the 300 s courtesy timeout and then run unlocked
+    with a warning. Counting holders keeps the BUG-1029 courtesy — a build
+    waiting on `scripts/cargo-heavy.sh` still gets in whenever the run drains.
+    """
+
+    def __init__(self, owner: str):
+        self._owner = owner
+        self._count = 0
+        self._mutex = threading.Lock()
+        self._stack = None
+
+    def acquire(self):
+        with self._mutex:
+            if self._count == 0:
+                self._stack = contextlib.ExitStack()
+                self._stack.enter_context(heavy_lock.heavy_lock(self._owner))
+            self._count += 1
+
+    def release(self):
+        with self._mutex:
+            self._count -= 1
+            if self._count == 0 and self._stack is not None:
+                self._stack.close()
+                self._stack = None
+
+
+#: Poll interval of the memory gate, seconds.
+MEMORY_GATE_POLL = 10.0
+
+
+def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
+                       rss_cap=None) -> int:
+    """Run `units` on `args.parallel_shards` lanes pulling from one queue.
+
+    Each lane is a thread driving one `run_shard` subprocess at a time on its
+    own server ports (`lane_server_config`); verdicts cannot depend on the lane
+    because nothing but the port numbers differs (`--self-test` and the A/B in
+    `docs/tasks/p2-wpt-runner-throughput.md` WPT-RUN-9 check that). The queue is
+    ordered longest budget first, which bounds the makespan by the longest
+    shard instead of leaving it to whichever lane drew it last.
+
+    Two guards the sequential loop does not need:
+
+    * orphaned `lumen` processes are reaped once, before any lane starts —
+      between units it would be wrong, since the reaper counts every browser
+      under this process as `stale`, the running lanes' included;
+    * a memory gate: a lane does not start a unit while less than
+      `--min-free-gb` of physical memory is available and another lane is
+      running. Paging stretches exactly the wall-clock timeouts the verdicts
+      depend on (PERF-10 slice 2 measured 18-21 GB peak for one lane at
+      `--processes 7`, and hit WinError 1455 on a 2 GB page file).
+
+    Returns 0, or 1 when a lane had to stop because its ports were taken.
+    """
+    lanes = args.parallel_shards
+    if not args.no_port_guard:
+        port_guard.reap_lumen_orphans(own_pid=os.getpid())
+    configs = [lane_server_config(lane, args.out_dir) for lane in range(lanes)]
+
+    def budget_of(unit):
+        return shard_timeout(unit, args.shard_timeout_base, args.shard_timeout_per_id,
+                             args.processes)
+
+    queue = sorted(units, key=budget_of, reverse=True)
+    total = len(queue)
+    mutex = threading.Lock()
+    running = [0]
+    started = [0]
+    failures = []
+    shared_lock = SharedHeavyLock(f"run_corpus.py pid={os.getpid()} --parallel-shards {lanes}")
+
+    def take():
+        with mutex:
+            if failures or not queue:
+                return None, 0
+            started[0] += 1
+            return queue.pop(0), started[0]
+
+    def wait_for_memory(lane):
+        warned = False
+        while args.min_free_gb > 0:
+            free = available_memory_gb()
+            with mutex:
+                others = running[0]
+            if free is None or free >= args.min_free_gb or others == 0:
+                return
+            if not warned:
+                print(f"  lane {lane}: {free:.1f} GB free < --min-free-gb "
+                      f"{args.min_free_gb} with {others} lane(s) busy — waiting", flush=True)
+                warned = True
+            time.sleep(MEMORY_GATE_POLL)
+
+    def lane_main(lane):
+        config = configs[lane]
+        extra_env = {SERVER_CONFIG_ENV: config} if config else None
+        ports = lane_ports(config)
+        while True:
+            wait_for_memory(lane)
+            unit, index = take()
+            if unit is None:
+                return
+            if not args.no_port_guard:
+                try:
+                    port_guard.ensure_free(ports=ports, own_pid=os.getpid())
+                except port_guard.PortsBusy as exc:
+                    with mutex:
+                        failures.append(f"lane {lane}: {exc}")
+                        queue.insert(0, unit)
+                    return
+            budget = budget_of(unit)
+            print(f"[{index}/{total}] lane {lane}: {unit['name']}: {unit['ids']} ids "
+                  f"(budget {budget}s) started", flush=True)
+            with mutex:
+                running[0] += 1
+            shared_lock.acquire()
+            try:
+                state = run_shard(unit, binary, args.out_dir, args.processes, budget,
+                                  exclude_file, extra_env, rss_cap, args.shared_queue)
+            finally:
+                shared_lock.release()
+                with mutex:
+                    running[0] -= 1
+            with mutex:
+                finish(unit, state)
+            print(f"[{index}/{total}] lane {lane}: {unit['name']}: {state['outcome']} "
+                  f"in {state['seconds']}s", flush=True)
+
+    threads = [threading.Thread(target=lane_main, args=(lane,), daemon=True,
+                                name=f"lane{lane}") for lane in range(lanes)]
+    for thread in threads:
+        thread.start()
+        # Staggered start: wptserve boots and the first browser launches are
+        # the burst of the whole unit; overlapping K of them buys nothing.
+        time.sleep(2)
+    for thread in threads:
+        while thread.is_alive():
+            thread.join(timeout=1.0)
+    if failures:
+        for failure in failures:
+            print(failure, file=sys.stderr)
+        print(f"stopped with {len(queue)} unit(s) not run — rerun the same command with "
+              f"--resume", file=sys.stderr, flush=True)
+        return 1
+    return 0
 
 
 def results_from_raw_log(raw_path: str) -> dict:
@@ -671,6 +1188,10 @@ def load_results(out_dir: str) -> tuple:
         try:
             with open(path, encoding="utf-8") as fh:
                 report = json.load(fh)
+            if not isinstance(report, dict):
+                # Not a wptreport: a tool's own output kept next to the shards
+                # (`reftest_pixdiff.py` writes a list to `pixdiff.json`).
+                continue
             for result in report.get("results", []):
                 results[result["test"]] = result
             continue
@@ -844,7 +1365,8 @@ def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
 
 
 def score_reports(manifest: dict, out_dir: str, scope: set = None,
-                  shard_states: list = None) -> dict:
+                  shard_states: list = None, prefixes: list = None,
+                  exclude_prefixes: list = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
     Ids with no result score 0 — that is the whole point of scoring against the
@@ -861,6 +1383,8 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
         if test_type in corpus_stats.NON_AUTOMATABLE_TYPES:
             continue
         if scope is not None and category not in scope:
+            continue
+        if not id_selected(test_id, prefixes or [], exclude_prefixes or []):
             continue
         expected[test_id] = {"type": test_type, "category": category}
 
@@ -1013,7 +1537,7 @@ def _selftest() -> int:
             "css": {"a.html": leaf()},
             "encoding": {"e.html": leaf()},
         },
-        "crashtest": {"svg": {"c.html": leaf()}},
+        "aamtest": {"svg": {"c.html": leaf()}},
     }}
     shard_states = [
         {"name": "dom", "outcome": "ran"},
@@ -1029,7 +1553,7 @@ def _selftest() -> int:
     by_shard = {e["shard"]: (e["cause"], e["ids"]) for e in got["lost_by_shard"]}
     checks = [
         ("no-executor type counted apart", got["no_executor"] == 1
-         and got["no_executor_by_type"] == {"crashtest": 1}),
+         and got["no_executor_by_type"] == {"aamtest": 1}),
         ("no-executor id not blamed on its shard", "svg" not in by_shard),
         ("killed shard named with its cause", by_shard.get("css") == ("shard-killed", 1)),
         ("silent hole counted", got["lost_in_ran_shards"] == 1),
@@ -1040,11 +1564,185 @@ def _selftest() -> int:
         ("id with a verdict is not counted", got["by_type"].get("testharness") == 3),
     ]
     checks.extend(_selftest_resume())
+    checks.extend(_selftest_prefixes())
+    checks.extend(_selftest_batches())
+    checks.extend(_selftest_shared_queue())
+    with contextlib.redirect_stdout(io.StringIO()):
+        cap_status = browser_rss_cap._selftest()  # noqa: SLF001 — its own selftest
+    checks.append(("browser rss cap kills only an oversized lumen of this run",
+                   cap_status == 0))
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     failed = [label for label, ok in checks if not ok]
     print(f"selftest: {'PASS' if not failed else 'FAIL (' + ', '.join(failed) + ')'}")
     return 1 if failed else 0
+
+
+def _selftest_prefixes() -> list:
+    """Prove `--prefixes` / `--exclude-prefixes` on a hand-made manifest (WPT-RUN-14).
+
+    The property that matters is an exact cover: the planned shards must run
+    every selected id exactly once and nothing else. Both halves have a failure
+    that looks like success — a shard that is too wide silently runs (and scores
+    against) the rest of the category, and one that is too narrow loses ids that
+    then score 0 as if the engine failed them — so the plan is expanded back to
+    ids and compared as sets.
+    """
+    def leaf():
+        return ["hash", [None, {}]]
+
+    files = ["a/x/1.html", "a/x/2.html", "a/y/3.html", "a/y/z/4.html", "a/y/z/5.html",
+             "a/6.html", "a/xx/7.html", "b/8.html"]
+    tree = {}
+    for f in files:
+        node = tree
+        parts = f.split("/")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = leaf()
+    manifest = {"items": {"testharness": tree}}
+
+    def covered(shards):
+        ids = []
+        for s in shards:
+            if s.get("test_ids"):
+                ids.extend(s["test_ids"])
+            else:
+                ids.extend(f"/{f}" for f in files if f"/{f}".startswith(s["prefix"]))
+        return sorted(ids)
+
+    def plan(cats, inc, exc):
+        global SHARD_THRESHOLD
+        saved, SHARD_THRESHOLD = SHARD_THRESHOLD, 2   # force the category to split
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                return plan_shards(manifest, cats, parse_prefixes(inc), parse_prefixes(exc))
+        finally:
+            SHARD_THRESHOLD = saved
+
+    def ids_of(*names):
+        return sorted(f"/{f}" for f in files if f in names)
+
+    whole = plan(["a"], None, None)
+    one = plan(["a"], "a/y", None)
+    mixed = plan(["a"], "a/y/z", "a/y/z/5.html")
+    out = plan(["a"], "a", "a/y,a/6.html")
+    return [
+        ("prefixes: no filter plans what it always did",
+         covered(whole) == ids_of(*[f for f in files if f.startswith("a/")])),
+        ("prefixes: a directory is covered exactly, `a/x` does not leak into `a/xx`",
+         covered(plan(["a"], "a/x", None)) == ids_of("a/x/1.html", "a/x/2.html")),
+        ("prefixes: a directory with a subdirectory is covered exactly",
+         covered(one) == ids_of("a/y/3.html", "a/y/z/4.html", "a/y/z/5.html")),
+        ("prefixes: an exclusion inside a selection carves one id out",
+         covered(mixed) == ids_of("a/y/z/4.html")),
+        ("prefixes: exclusions win over the whole category",
+         covered(out) == ids_of("a/x/1.html", "a/x/2.html", "a/xx/7.html")),
+        ("prefixes: the filter never selects another category",
+         covered(plan(["a"], "b", None)) == []),
+        ("prefixes: a single file is addressable",
+         covered(plan(["a"], "a/y/3.html", None)) == ids_of("a/y/3.html")),
+        ("prefixes: a variant id belongs to its file",
+         id_selected("/a/y/3.html?x=1", ["a/y/3.html"], [])
+         and not id_selected("/a/y/3.htmlx", ["a/y/3.html"], [])),
+    ]
+
+
+def _selftest_shared_queue() -> list:
+    """`--shared-queue`: the flag this script passes is the one `run_smoke.py`
+    understands, and its directory interleave spreads neighbours apart while
+    keeping each directory's own order and every item exactly once."""
+    import run_smoke  # noqa: PLC0415 — pulls in wptrunner; only the selftest needs it
+
+    paths = ["/a/1.html", "/a/2.html", "/a/3.html", "/b/1.html", "/c/1.html", "/c/2.html"]
+    got = run_smoke.interleave_by_directory(paths, lambda p: p)
+    return [
+        ("shared queue: run_corpus passes the flag run_smoke parses",
+         SHARED_QUEUE_ARGS == (run_smoke.SHARED_QUEUE_FLAG,)),
+        ("shared queue: interleave round-robins directories",
+         got == ["/a/1.html", "/b/1.html", "/c/1.html", "/a/2.html", "/c/2.html", "/a/3.html"]),
+        ("shared queue: interleave keeps every item once", sorted(got) == sorted(paths)),
+    ]
+
+
+def _selftest_batches() -> list:
+    """Prove `--batch-small` and the lane configs of `--parallel-shards` (WPT-RUN-9).
+
+    The property that matters is that batching is invisible downstream: every
+    member ends up with the report and the state a solo run would have given
+    it, nothing is attributed to the wrong member (`/a/x/` must not take
+    `/a/xx/`), and a member with no verdict in a batch that ran is not passed
+    off as `ran`. Lanes must differ in ports and only in ports.
+    """
+    out_dir = tempfile.mkdtemp(prefix="lumen-batch-selftest-")
+    try:
+        shards = [
+            {"name": "big", "prefix": "/big/", "ids": 900, "auto_ids": 900, "long_ids": 0},
+            {"name": "a/x", "prefix": "/a/x/", "ids": 3, "auto_ids": 3, "long_ids": 0},
+            {"name": "a/xx", "prefix": "/a/xx/", "ids": 2, "auto_ids": 2, "long_ids": 1},
+            {"name": "a (bare)", "prefix": None, "ids": 1, "auto_ids": 1, "long_ids": 0,
+             "test_ids": ["/a/top.html"]},
+            {"name": "empty", "prefix": "/empty/", "ids": 4, "auto_ids": 4, "long_ids": 0},
+            {"name": "c", "prefix": "/c/", "ids": 5, "auto_ids": 5, "long_ids": 0},
+        ]
+        units = plan_units(shards, small=10, max_ids=10, out_dir=out_dir)
+        off = plan_units(shards, small=0, max_ids=10, out_dir=out_dir)
+        batch = units[1] if len(units) > 1 else {}
+        members = [m["name"] for m in batch.get("members", [])]
+
+        os.makedirs(os.path.dirname(shard_report_path(out_dir, batch)), exist_ok=True)
+        results = [{"test": t, "status": "OK", "subtests": []}
+                   for t in ("/a/x/1.html", "/a/xx/2.html", "/a/top.html")]
+        with open(shard_report_path(out_dir, batch), "w", encoding="utf-8") as fh:
+            json.dump({"results": results}, fh)
+        states = {s["name"]: s for s in split_batch(
+            batch, {"outcome": "ran", "returncode": 1, "seconds": 30.0}, out_dir)}
+        loaded, _recovered, _empty = load_results(out_dir)
+
+        def report_of(name):
+            path = shard_report_path(out_dir, {"name": name})
+            if not os.path.isfile(path):
+                return None
+            with open(path, encoding="utf-8") as fh:
+                return sorted(r["test"] for r in json.load(fh)["results"])
+
+        base = os.path.join(out_dir, "base-config.json")
+        with open(base, "w", encoding="utf-8") as fh:
+            json.dump({"ports": {"http": [18300, 18301], "dns": [None]}}, fh)
+        lane1 = lane_server_config(1, out_dir, base)
+        with open(lane1, encoding="utf-8") as fh:
+            lane1_cfg = json.load(fh)
+
+        return [
+            ("batch: big shard stays alone, small ones are grouped up to the cap",
+             [u["name"] for u in units][0] == "big"
+             and members == ["a/x", "a/xx", "a (bare)", "empty"]
+             and units[2]["name"] == "c"),
+            ("batch: off means the plan is untouched", off == shards),
+            ("batch: budget sums the members", batch.get("auto_ids") == 10
+             and batch.get("long_ids") == 1),
+            ("batch: wptrunner gets every member's filter",
+             shard_targets(batch) == ["/a/x/", "/a/xx/", "/a/top.html", "/empty/"]),
+            ("batch: its own report is out of load_results' reach",
+             os.path.dirname(shard_report_path(out_dir, batch)) != out_dir
+             and len(loaded) == 3),
+            ("batch: `/a/x/` does not take `/a/xx/`",
+             report_of("a/x") == ["/a/x/1.html"] and report_of("a/xx") == ["/a/xx/2.html"]),
+            ("batch: an explicit-id member gets its id",
+             report_of("a (bare)") == ["/a/top.html"]),
+            ("batch: a member with no verdict is no-tests and has no report",
+             states["empty"]["outcome"] == "no-tests" and report_of("empty") is None),
+            ("batch: members keep their own names and carry the batch",
+             set(states) == set(members)
+             and all(s["batch"] == batch["name"] for s in states.values())),
+            ("batch: wall clock is shared out, not multiplied",
+             abs(sum(s["seconds"] for s in states.values()) - 30.0) < 0.2),
+            ("lanes: lane 0 keeps config.json", lane_server_config(0, out_dir, base) is None),
+            ("lanes: lane 1 shifts every port and writes nothing else",
+             lane1_cfg == {"ports": {"http": [19300, 19301], "dns": [None]}}),
+        ]
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
 
 
 def _selftest_resume() -> list:
@@ -1104,13 +1802,57 @@ def main() -> int:
                         help="wptrunner --processes per shard (default: 7; six concurrent "
                              "`lumen` instances plus a shard's orphans pushed a 7.6 GB "
                              "Linux box into OOM — see kill_tree — pass a lower value "
-                             "on a machine that small)")
+                             "on a machine that small). With --parallel-shards 3 on a "
+                             "16-thread/32 GB box, 14 measured -16..-35%% wall with the "
+                             "score inside the noise (p2-wpt-runner-throughput.md "
+                             "§процессы на шард)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    parser.add_argument("--parallel-shards", type=int, default=1,
+                        help="run this many shards at once, each on its own copy of the wptserve "
+                             "ports (+1000 per lane) — WPT-RUN-9; memory, not CPU, is the limit: "
+                             "see --min-free-gb (default: 1, the old sequential run)")
+    parser.add_argument("--batch-small", type=int, default=0,
+                        help="run consecutive shards of at most this many automatable ids as one "
+                             "wptrunner process, split back per shard afterwards — saves a wptserve "
+                             f"boot per shard (suggested: {BATCH_SMALL_DEFAULT}; default: 0, off)")
+    parser.add_argument("--batch-max-ids", type=int, default=600,
+                        help="upper bound on automatable ids in one --batch-small batch (default: 600)")
+    parser.add_argument("--shared-queue", action="store_true",
+                        help="hand a shard's tests to its --processes browsers from one queue, "
+                             "longest declared timeout first, instead of wptrunner's fixed "
+                             "hash split — no process sits idle while another works off a "
+                             "pile of TIMEOUTs (see SHARED_QUEUE_ARGS; default: off)")
+    parser.add_argument("--paint", action="store_true",
+                        help="run testharness tests with the full paint pipeline. By default "
+                             "run_corpus sets LUMEN_NO_PAINT=1 (PERF-10): wptrunner passes "
+                             "`--no-paint` (DOM+JS+layout, no rasterisation) to testharness "
+                             "browsers only — reftests and crashtests always keep the full "
+                             "pipeline. Measured: same score, -14%% lumen CPU, -40%% mean RSS "
+                             "(docs/tasks/p2-wpt-runner-throughput.md §PERF-10)")
+    parser.add_argument("--min-free-gb", type=float, default=6.0,
+                        help="with --parallel-shards, a lane waits to start a shard while less "
+                             "physical memory than this is free and another lane is busy "
+                             "(default: 6; 0 disables the gate)")
+    parser.add_argument("--max-browser-gb", type=float, default=browser_rss_cap.DEFAULT_CAP_GB,
+                        help="kill a lumen of this run whose resident memory passes this many GB; "
+                             "wptrunner reports its test CRASH and restarts the browser "
+                             "(tests/wpt/browser_rss_cap.py — healthy browsers peak at ~1 GB, "
+                             "the few runaways at 15-25 GB and TIMEOUT with no subtests anyway; "
+                             f"default: {browser_rss_cap.DEFAULT_CAP_GB}, 0 disables)")
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=None,
                         help="flat per-id time budget, seconds; default is to derive the "
                              "budget from the declared per-test timeouts in the manifest "
                              "(see shard_timeout)")
+    parser.add_argument("--prefixes", default=None,
+                        help="comma-separated WPT path prefixes (e.g. css/css-flexbox) — run and score "
+                             "only the ids under them, within the selected categories; the "
+                             "category is implied when no --categories/--all is given "
+                             "(WPT-RUN-14). Use a dedicated --out-dir: the filter is recorded in "
+                             "state.json and --resume refuses a different one")
+    parser.add_argument("--exclude-prefixes", default=None,
+                        help="comma-separated WPT path prefixes to leave out of the selection "
+                             "(applies on top of --prefixes; an exclusion always wins)")
     parser.add_argument("--resume", action="store_true", help="skip shards that already produced a report")
     parser.add_argument("--retry-timeouts", action="store_true",
                         help="on --resume, run budget-killed shards again instead of keeping "
@@ -1136,6 +1878,14 @@ def main() -> int:
     if args.selftest:
         return _selftest()
 
+    # PERF-10: testharness without rasterisation unless `--paint`. The env var
+    # is inherited by every `run_smoke.py` subprocess (`run_shard` builds its
+    # env from `os.environ`); `browsers/lumen.py` turns it into `--no-paint`.
+    if args.paint:
+        os.environ.pop("LUMEN_NO_PAINT", None)
+    else:
+        os.environ["LUMEN_NO_PAINT"] = "1"
+
     binary = args.binary or os.path.join(REPO_ROOT, "target", os.environ.get("LUMEN_PROFILE", "release"), "lumen.exe")
     os.makedirs(args.out_dir, exist_ok=True)
     state_path = os.path.join(args.out_dir, "state.json")
@@ -1148,6 +1898,22 @@ def main() -> int:
             update_manifest()
 
     manifest = load_manifest()
+    prefixes = parse_prefixes(args.prefixes)
+    exclude_prefixes = parse_prefixes(args.exclude_prefixes)
+    if os.path.isfile(state_path):
+        with open(state_path, encoding="utf-8") as fh:
+            recorded = json.load(fh)
+        recorded_filter = (recorded.get("prefixes") or [], recorded.get("exclude_prefixes") or [])
+        if args.aggregate_only and not (prefixes or exclude_prefixes):
+            # Scoring an existing run: the filter belongs to the run, as the
+            # binary and the commit do.
+            prefixes, exclude_prefixes = recorded_filter
+        elif (args.resume or args.aggregate_only) and recorded_filter != (prefixes, exclude_prefixes):
+            print(f"{state_path} was written with --prefixes={recorded_filter[0]} "
+                  f"--exclude-prefixes={recorded_filter[1]}; this command asks for "
+                  f"{prefixes} / {exclude_prefixes}. Shards of the same name would cover "
+                  f"different ids — use a separate --out-dir", file=sys.stderr)
+            return 1
 
     # Provenance of an aggregate-only score belongs to the run that produced
     # the shards, not to the checkout that happens to be scoring them: the
@@ -1182,6 +1948,10 @@ def main() -> int:
     else:
         if args.all:
             categories = sorted({c for _t, c, _i in corpus_stats.iter_ids(manifest)})
+        elif prefixes and not (args.pilot or args.categories):
+            # `--prefixes css/css-flexbox` alone: the category is the first path
+            # component, nobody should have to say `--categories css` as well.
+            categories = sorted({p.split("/")[0] for p in prefixes})
         elif args.pilot:
             categories = list(PILOT_CATEGORIES)
         elif args.categories:
@@ -1190,14 +1960,14 @@ def main() -> int:
             print("pick a selection: --all, --pilot or --categories", file=sys.stderr)
             return 1
 
-        shards = plan_shards(manifest, categories)
+        shards = plan_shards(manifest, categories, prefixes, exclude_prefixes)
         print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids "
               f"({sum(s['auto_ids'] for s in shards)} automatable — the scored denominator), "
               f"--processes={args.processes}", flush=True)
 
         exclude_file = None
         if args.skip_https:
-            skipped = https_ids(manifest, set(categories))
+            skipped = https_ids(manifest, set(categories), prefixes, exclude_prefixes)
             exclude_file = os.path.join(args.out_dir, "exclude-https.txt")
             with open(exclude_file, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(skipped) + "\n")
@@ -1214,50 +1984,84 @@ def main() -> int:
             shard_states = resumable_states(previous, args.out_dir, args.retry_timeouts,
                                             budgets)
         done = {s["name"] for s in shard_states}
-
         for index, shard in enumerate(shards, 1):
             if shard["name"] in done:
                 print(f"[{index}/{len(shards)}] {shard['name']}: cached", flush=True)
-                continue
-            # A shard that cannot bind its own ports does not fail — it is
-            # answered by whatever holds them, and scores against files and
-            # route parameters that belong to a run nobody is watching
-            # (slice 18). Checking here rather than once at startup is what
-            # catches the leak this run leaves behind itself.
-            if not args.no_port_guard:
-                try:
-                    port_guard.ensure_free(own_pid=os.getpid())
-                except port_guard.PortsBusy as exc:
-                    print(f"\n{exc}", file=sys.stderr)
-                    print(f"stopped before shard {index}/{len(shards)} "
-                          f"({shard['name']}); {len(shard_states)} shards are "
-                          f"checkpointed — rerun the same command with --resume",
-                          file=sys.stderr, flush=True)
-                    return 1
-                # `kill_tree` reaps a timed-out shard's own `lumen` orphans
-                # immediately; this is the fallback for the ones it can't
-                # reach — a *previous, external* SIGKILL of this very process
-                # (session teardown, another OOM kill) skips `kill_tree`
-                # entirely, since a caught-nothing SIGKILL runs no Python at
-                # all (BUG-1029).
-                port_guard.reap_lumen_orphans(own_pid=os.getpid())
-            budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
-                                   args.processes)
-            print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
-            # BUG-1029 §3: held per shard, not for the whole (possibly
-            # multi-day, --resume'd) run — a shard's browsers are the memory
-            # spike, and releasing between shards lets a build waiting on
-            # scripts/cargo-heavy.sh get in during the gap instead of being
-            # starved for as long as this corpus run keeps going.
-            with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
-                state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
-            shard_states.append(state)
-            print(f" {state['outcome']} in {state['seconds']}s", flush=True)
-            # Checkpoint after every shard: a corpus run outlives the session
+        pending = [s for s in shards if s["name"] not in done]
+        units = plan_units(pending, args.batch_small, args.batch_max_ids, args.out_dir)
+        if len(units) != len(pending):
+            batches = [u for u in units if u.get("members")]
+            print(f"--batch-small {args.batch_small}: {sum(len(b['members']) for b in batches)} "
+                  f"small shards run as {len(batches)} batches — {len(units)} wptrunner "
+                  f"processes instead of {len(pending)}", flush=True)
+
+        def write_checkpoint():
+            # Checkpoint after every unit: a corpus run outlives the session
             # that started it, and must be resumable from wherever it stopped.
             with open(state_path, "w", encoding="utf-8") as fh:
                 json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
+                           "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
                            "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
+
+        def finish(unit, state):
+            """Record a finished unit — a batch as its member shards."""
+            states = split_batch(unit, state, args.out_dir) if unit.get("members") else [state]
+            shard_states.extend(states)
+            write_checkpoint()
+            return states
+
+        rss_cap = browser_rss_cap.BrowserRssCap(args.max_browser_gb, args.out_dir)
+        if rss_cap.start():
+            print(f"--max-browser-gb {args.max_browser_gb}: a lumen of this run above it is "
+                  f"killed (test -> CRASH), kills logged to {browser_rss_cap.KILLS_FILE}",
+                  flush=True)
+        else:
+            rss_cap = None
+        try:
+            if args.parallel_shards > 1:
+                status = run_units_parallel(units, binary, args, exclude_file, finish, rss_cap)
+                if status:
+                    return status
+            for index, shard in enumerate(units if args.parallel_shards <= 1 else [], 1):
+                # A shard that cannot bind its own ports does not fail — it is
+                # answered by whatever holds them, and scores against files and
+                # route parameters that belong to a run nobody is watching
+                # (slice 18). Checking here rather than once at startup is what
+                # catches the leak this run leaves behind itself.
+                if not args.no_port_guard:
+                    try:
+                        port_guard.ensure_free(own_pid=os.getpid())
+                    except port_guard.PortsBusy as exc:
+                        print(f"\n{exc}", file=sys.stderr)
+                        print(f"stopped before shard {index}/{len(units)} "
+                              f"({shard['name']}); {len(shard_states)} shards are "
+                              f"checkpointed — rerun the same command with --resume",
+                              file=sys.stderr, flush=True)
+                        return 1
+                    # `kill_tree` reaps a timed-out shard's own `lumen` orphans
+                    # immediately; this is the fallback for the ones it can't
+                    # reach — a *previous, external* SIGKILL of this very process
+                    # (session teardown, another OOM kill) skips `kill_tree`
+                    # entirely, since a caught-nothing SIGKILL runs no Python at
+                    # all (BUG-1029).
+                    port_guard.reap_lumen_orphans(own_pid=os.getpid())
+                budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
+                                       args.processes)
+                print(f"[{index}/{len(units)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
+                # BUG-1029 §3: held per shard, not for the whole (possibly
+                # multi-day, --resume'd) run — a shard's browsers are the memory
+                # spike, and releasing between shards lets a build waiting on
+                # scripts/cargo-heavy.sh get in during the gap instead of being
+                # starved for as long as this corpus run keeps going.
+                with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
+                    state = run_shard(shard, binary, args.out_dir, args.processes, budget,
+                                      exclude_file, rss_cap=rss_cap,
+                                      shared_queue=args.shared_queue)
+                finish(shard, state)
+                print(f" {state['outcome']} in {state['seconds']}s", flush=True)
+        finally:
+            if rss_cap is not None:
+                rss_cap.stop()
 
     # A run only gets to be scored against what it actually covered. The scope
     # is derived from the shards, not from the CLI selection, so a resumed or
@@ -1271,12 +2075,17 @@ def main() -> int:
     # itself as partial.
     all_categories = {c for t, c, _i in corpus_stats.iter_ids(manifest)
                       if t not in corpus_stats.NON_AUTOMATABLE_TYPES}
-    if scope and scope >= all_categories:
+    if scope and scope >= all_categories and not (prefixes or exclude_prefixes):
         scope = None
-    scored = score_reports(manifest, args.out_dir, scope, shard_states)
+    scored = score_reports(manifest, args.out_dir, scope, shard_states, prefixes,
+                           exclude_prefixes)
     if scope:
         print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
               f"(partial run — denominator covers only what was selected)")
+    if prefixes or exclude_prefixes:
+        print(f"filter: --prefixes {','.join(prefixes) or '(none)'}"
+              + (f" --exclude-prefixes {','.join(exclude_prefixes)}" if exclude_prefixes else "")
+              + " — the denominator is the ids under it, not the whole category")
     print_summary(scored, shard_states)
 
     # No silent caps: an intentionally unrun slice must be named in the same
@@ -1299,7 +2108,15 @@ def main() -> int:
             "commit": run_commit,
             "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "processes": args.processes,
+            "parallel_shards": getattr(args, "parallel_shards", 1),
+            "batch_small": getattr(args, "batch_small", 0),
+            "shared_queue": getattr(args, "shared_queue", False),
+            "no_paint": os.environ.get("LUMEN_NO_PAINT") == "1",
+            "max_browser_gb": getattr(args, "max_browser_gb", 0),
+            "rss_cap_kills": len(browser_rss_cap.load_kills(args.out_dir)),
             "scope": sorted(scope) if scope else "full-corpus",
+            "prefixes": prefixes,
+            "exclude_prefixes": exclude_prefixes,
             "shards": shard_states,
             "scored": scored,
         }

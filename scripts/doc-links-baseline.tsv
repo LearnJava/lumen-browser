@@ -40,14 +40,8 @@ BUGS-FIXED.md	bugs/BUG-932-OPEN.md	stale-status-suffix	bugs/BUG-932-FIXED.md
 BUGS-FIXED.md	bugs/BUG-937-OPEN.md	stale-status-suffix	bugs/BUG-937-FIXED.md
 BUGS-FIXED.md	bugs/BUG-975-OPEN.md	stale-status-suffix	bugs/BUG-975-FIXED.md
 BUGS-FIXED.md	bugs/BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
-BUGS.md	bugs/BUG-1010-OPEN.md	stale-status-suffix	bugs/BUG-1010-FIXED.md
-BUGS.md	bugs/BUG-1033-OPEN.md	stale-status-suffix	bugs/BUG-1033-FIXED.md
-BUGS.md	bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
-BUGS.md	bugs/BUG-504-OPEN.md	stale-status-suffix	bugs/BUG-504-FIXED.md
 BUGS.md	bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 BUGS.md	bugs/BUG-606-OPEN.md	stale-status-suffix	bugs/BUG-606-FIXED.md
-BUGS.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
-BUGS.md	bugs/BUG-723-OPEN.md	stale-status-suffix	bugs/BUG-723-FIXED.md
 CAPABILITIES.md	bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
 CAPABILITIES.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 CAPABILITIES.md	bugs/BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
@@ -119,7 +113,6 @@ bugs/BUG-1013-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-1015-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-1015-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-1017-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
-bugs/BUG-1022-OPEN.md	BUG-1033-OPEN.md	stale-status-suffix	bugs/BUG-1033-FIXED.md
 bugs/BUG-1023-FIXED.md	BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 bugs/BUG-1023-FIXED.md	BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 bugs/BUG-1024-FIXED.md	BUG-937-OPEN.md	stale-status-suffix	bugs/BUG-937-FIXED.md
@@ -127,7 +120,6 @@ bugs/BUG-1034-FIXED.md	BUG-1035-OPEN.md	stale-status-suffix	bugs/BUG-1035-FIXED.
 bugs/BUG-1035-FIXED.md	BUG-1034-OPEN.md	stale-status-suffix	bugs/BUG-1034-FIXED.md
 bugs/BUG-1044-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-1058-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
-bugs/BUG-1063-OPEN.md	BUG-1065-OPEN.md	stale-status-suffix	bugs/BUG-1065-FIXED.md
 bugs/BUG-1069-FIXED.md	BUG-1065-OPEN.md	stale-status-suffix	bugs/BUG-1065-FIXED.md
 bugs/BUG-237-OPEN.md	BUG-199-OPEN.md	stale-status-suffix	bugs/BUG-199-FIXED.md
 bugs/BUG-277-FIXED.md	BUG-247-OPEN.md	missing	
@@ -145,7 +137,7 @@ bugs/BUG-315-FIXED.md	BUG-310-OPEN.md	stale-status-suffix	bugs/BUG-310-FIXED.md
 bugs/BUG-316-FIXED.md	BUG-297-OPEN.md	stale-status-suffix	bugs/BUG-297-FIXED.md
 bugs/BUG-316-FIXED.md	BUG-311-OPEN.md	stale-status-suffix	bugs/BUG-311-FIXED.md
 bugs/BUG-317-FIXED.md	BUG-318-OPEN.md	stale-status-suffix	bugs/BUG-318-FIXED.md
-bugs/BUG-341-OPEN.md	BUG-349-OPEN.md	stale-status-suffix	bugs/BUG-349-FIXED.md
+bugs/BUG-341-FIXED.md	BUG-349-OPEN.md	stale-status-suffix	bugs/BUG-349-FIXED.md
 bugs/BUG-346-FIXED.md	BUG-554-OPEN.md	stale-status-suffix	bugs/BUG-554-FIXED.md
 bugs/BUG-347-FIXED.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-348-FIXED.md	BUG-428-OPEN.md	stale-status-suffix	bugs/BUG-428-FIXED.md
@@ -162,7 +154,6 @@ bugs/BUG-385-FIXED.md	BUG-751-OPEN.md	stale-status-suffix	bugs/BUG-751-FIXED.md
 bugs/BUG-390-FIXED.md	BUG-758-OPEN.md	stale-status-suffix	bugs/BUG-758-FIXED.md
 bugs/BUG-395-FIXED.md	BUG-762-OPEN.md	stale-status-suffix	bugs/BUG-762-FIXED.md
 bugs/BUG-405-FIXED.md	bugs/BUG-934-FIXED.md	wrong-relative-path	bugs/BUG-934-FIXED.md
-bugs/BUG-406-OPEN.md	BUG-274-OPEN.md	stale-status-suffix	bugs/BUG-274-FIXED.md
 bugs/BUG-412-FIXED.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 bugs/BUG-413-FIXED.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
 bugs/BUG-413-FIXED.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
@@ -193,7 +184,7 @@ bugs/BUG-467-OPEN.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-472-OPEN.md	BUG-465-OPEN.md	stale-status-suffix	bugs/BUG-465-FIXED.md
 bugs/BUG-474-FIXED.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 bugs/BUG-478-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
-bugs/BUG-479-FIXED.md	bugs/BUG-962-OPEN.md	wrong-relative-path	bugs/BUG-962-OPEN.md
+bugs/BUG-479-FIXED.md	bugs/BUG-962-OPEN.md	stale-status-suffix	bugs/BUG-962-FIXED.md
 bugs/BUG-480-OPEN.md	BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 bugs/BUG-480-OPEN.md	BUG-927-OPEN.md	stale-status-suffix	bugs/BUG-927-FIXED.md
 bugs/BUG-481-FIXED.md	bugs/BUG-875-FIXED.md	wrong-relative-path	bugs/BUG-875-FIXED.md
@@ -203,14 +194,12 @@ bugs/BUG-485-FIXED.md	BUG-539-OPEN.md	stale-status-suffix	bugs/BUG-539-FIXED.md
 bugs/BUG-487-FIXED.md	BUG-501-OPEN.md	stale-status-suffix	bugs/BUG-501-FIXED.md
 bugs/BUG-490-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-490-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
-bugs/BUG-493-OPEN.md	BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
 bugs/BUG-496-FIXED.md	BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
 bugs/BUG-503-FIXED.md	BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
 bugs/BUG-504-FIXED.md	BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
 bugs/BUG-504-FIXED.md	bugs/BUG-975-OPEN.md	stale-status-suffix	bugs/BUG-975-FIXED.md
 bugs/BUG-513-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-518-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
-bugs/BUG-519-OPEN.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-522-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-523-FIXED.md	BUG-504-OPEN.md	stale-status-suffix	bugs/BUG-504-FIXED.md
 bugs/BUG-523-FIXED.md	BUG-975-OPEN.md	stale-status-suffix	bugs/BUG-975-FIXED.md
@@ -227,24 +216,13 @@ bugs/BUG-556-FIXED.md	BUG-476-OPEN.md	stale-status-suffix	bugs/BUG-476-FIXED.md
 bugs/BUG-566-FIXED.md	BUG-1053-OPEN.md	stale-status-suffix	bugs/BUG-1053-FIXED.md
 bugs/BUG-573-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-577-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-584-OPEN.md	BUG-582-OPEN.md	stale-status-suffix	bugs/BUG-582-FIXED.md
 bugs/BUG-590-FIXED.md	bugs/BUG-871-OPEN.md	wrong-relative-path	bugs/BUG-871-OPEN.md
 bugs/BUG-599-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-604-OPEN.md	BUG-351-OPEN.md	stale-status-suffix	bugs/BUG-351-FIXED.md
 bugs/BUG-606-FIXED.md	BUG-1057-OPEN.md	stale-status-suffix	bugs/BUG-1057-FIXED.md
-bugs/BUG-618-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
-bugs/BUG-618-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-630-FIXED.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
 bugs/BUG-630-FIXED.md	BUG-569-OPEN.md	stale-status-suffix	bugs/BUG-569-FIXED.md
 bugs/BUG-631-FIXED.md	BUG-249-FIXED.md	missing	
-bugs/BUG-655-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
-bugs/BUG-655-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-655-OPEN.md	BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
 bugs/BUG-668-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
-bugs/BUG-670-OPEN.md	BUG-554-OPEN.md	stale-status-suffix	bugs/BUG-554-FIXED.md
-bugs/BUG-671-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
-bugs/BUG-671-OPEN.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
-bugs/BUG-671-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 bugs/BUG-676-FIXED.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-676-FIXED.md	BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
 bugs/BUG-676-FIXED.md	BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
@@ -253,17 +231,11 @@ bugs/BUG-676-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-678-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-678-OPEN.md	BUG-354-OPEN.md	stale-status-suffix	bugs/BUG-354-FIXED.md
 bugs/BUG-678-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-680-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-682-FIXED.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
 bugs/BUG-682-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-684-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
-bugs/BUG-686-OPEN.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
-bugs/BUG-691-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-693-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-694-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-700-FIXED.md	BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
 bugs/BUG-704-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
-bugs/BUG-705-OPEN.md	BUG-606-OPEN.md	stale-status-suffix	bugs/BUG-606-FIXED.md
 bugs/BUG-709-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-712-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-713-FIXED.md	BUG-615-OPEN.md	stale-status-suffix	bugs/BUG-615-FIXED.md
@@ -299,7 +271,6 @@ bugs/BUG-813-FIXED.md	BUG-905-OPEN.md	stale-status-suffix	bugs/BUG-905-FIXED.md
 bugs/BUG-821-FIXED.md	BUG-479-OPEN.md	stale-status-suffix	bugs/BUG-479-FIXED.md
 bugs/BUG-823-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
 bugs/BUG-828-FIXED.md	BUG-716-OPEN.md	stale-status-suffix	bugs/BUG-716-FIXED.md
-bugs/BUG-830-OPEN.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 bugs/BUG-831-FIXED.md	BUG-908-OPEN.md	stale-status-suffix	bugs/BUG-908-FIXED.md
 bugs/BUG-845-FIXED.md	BUG-844-OPEN.md	stale-status-suffix	bugs/BUG-844-FIXED.md
 bugs/BUG-849-FIXED.md	BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
@@ -315,11 +286,8 @@ bugs/BUG-926-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.m
 bugs/BUG-929-FIXED.md	BUG-452-OPEN.md	stale-status-suffix	bugs/BUG-452-FIXED.md
 bugs/BUG-938-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-961-FIXED.md	BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
-bugs/BUG-962-OPEN.md	bugs/BUG-479-FIXED.md	wrong-relative-path	bugs/BUG-479-FIXED.md
-bugs/BUG-965-OPEN.md	BUG-504-OPEN.md	stale-status-suffix	bugs/BUG-504-FIXED.md
 bugs/BUG-975-FIXED.md	bugs/BUG-475-FIXED.md	wrong-relative-path	bugs/BUG-475-FIXED.md
 bugs/BUG-975-FIXED.md	bugs/BUG-504-OPEN.md	stale-status-suffix	bugs/BUG-504-FIXED.md
-bugs/BUG-975-FIXED.md	bugs/BUG-965-OPEN.md	wrong-relative-path	bugs/BUG-965-OPEN.md
 bugs/BUG-977-FIXED.md	BUG-975-OPEN.md	stale-status-suffix	bugs/BUG-975-FIXED.md
 bugs/BUG-982-FIXED.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 bugs/BUG-983-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md

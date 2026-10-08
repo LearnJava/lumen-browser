@@ -130,6 +130,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            opaque_id: None,
             peer: Some(child_rt as Arc<dyn crate::frame_peer_bridge::FramePeerBridge>),
         });
         f(&parent_rt);
@@ -220,6 +221,24 @@ mod tests {
                 ));
             },
         );
+    }
+
+    #[test]
+    fn new_on_facade_constructor_builds_a_real_instance_not_a_stub() {
+        // BUG-1099: `new iframe.contentWindow.Worker(url)`.
+        with_parent_and_child("window.Ctor = function() { this.peer = true; };", true, |rt| {
+            use lumen_core::ext::JsRuntime as _;
+            rt.eval(
+                "globalThis.Ctor = function(a) { this.arg = a; }; \
+                 Ctor.prototype.stop = function() { return 'stopped'; };",
+            )
+            .unwrap();
+            assert!(eval_bool(
+                rt,
+                "var o = new (_lumen_frame_content_window(7).Ctor)(5); \
+                 o.arg === 5 && o.stop() === 'stopped'"
+            ));
+        });
     }
 
     #[test]

@@ -3,8 +3,11 @@
 //! Maps pixel coordinates to DOM positions (for mouse click → caret placement)
 //! and DOM ranges to pixel rectangles (for selection highlight rendering).
 
+use std::collections::HashSet;
+
 use lumen_core::geom::Rect;
-use lumen_dom::{DomPosition, Range};
+use lumen_dom::{DomPosition, NodeId, Range};
+use crate::style::UserSelect;
 use crate::{BoxKind, InlineFrag, LayoutBox, TextMeasurer};
 
 /// Find the caret position (DOM node + UTF-8 byte offset) closest to a pixel point.
@@ -60,9 +63,11 @@ fn caret_in_line(
     }
     let rel_x = x - b.rect.x;
     // Find first frag whose right edge is past rel_x; fall back to last frag.
+    // CSS UI L4 §6.2: `user-select: none` text is not a selection endpoint —
+    // a press on it starts no selection and a drag over it adds no caret stop.
     let mut frag = &line[0];
     for f in line {
-        if f.text.is_empty() {
+        if f.text.is_empty() || f.style.user_select == UserSelect::None {
             continue;
         }
         frag = f;
@@ -70,7 +75,7 @@ fn caret_in_line(
             break;
         }
     }
-    if frag.text.is_empty() {
+    if frag.text.is_empty() || frag.style.user_select == UserSelect::None {
         return None;
     }
     let frag_rel_x = (rel_x - frag.x).max(0.0);
@@ -116,7 +121,7 @@ fn collect_selection_rects(
         for (line_idx, line) in lines.iter().enumerate() {
             let line_y = b.rect.y + line_idx as f32 * line_h;
             for frag in line {
-                if frag.text.is_empty() {
+                if frag.text.is_empty() || frag.style.user_select == UserSelect::None {
                     continue;
                 }
                 let frag_end_byte = frag.source_char_offset + frag.text.len() as u32;
@@ -164,15 +169,20 @@ fn frag_selection_px(
         // Clamp: range may start before this frag (if same node, different word)
         range.start.offset.max(frag_start_byte).min(frag_end_byte) - frag_start_byte
     } else if !same_start && !same_end {
-        // Fully between start and end node — not handled in Phase 1
-        return (0.0, 0.0);
+        // Neither endpoint is in this node: selected whole only when the node
+        // lies between them in document order (arena order, the same
+        // approximation `lumen_dom::range_text` uses).
+        if !node_between(frag.source_node, range) {
+            return (0.0, 0.0);
+        }
+        0
     } else {
         0
     };
 
     let sel_end_in_frag = if same_end {
         range.end.offset.max(frag_start_byte).min(frag_end_byte) - frag_start_byte
-    } else if same_start {
+    } else if same_start || node_between(frag.source_node, range) {
         // Range extends past this frag's node — select to end of frag
         frag.text.len() as u32
     } else {
@@ -186,6 +196,118 @@ fn frag_selection_px(
     let px_start = x_at_byte(text, sel_start_in_frag as usize, font_size, measurer);
     let px_end = x_at_byte(text, sel_end_in_frag as usize, font_size, measurer);
     (px_start, px_end)
+}
+
+/// True when `node` lies strictly between the range's endpoint containers in
+/// document order (arena index order — see `lumen_dom::range_text`).
+pub fn node_between(node: NodeId, range: &Range) -> bool {
+    let (lo, hi) = (range.start.container.index(), range.end.container.index());
+    let i = node.index();
+    lo < i && i < hi
+}
+
+/// Text nodes whose rendered text has computed `user-select: none`
+/// (CSS UI L4 §6.2). The DOM carries no styles, so the shell hands this set to
+/// `lumen_dom::range_text_filtered` to leave such text out of a copied
+/// selection, matching what the highlight skips.
+pub fn user_select_none_text_nodes(root: &LayoutBox) -> HashSet<NodeId> {
+    fn walk(b: &LayoutBox, out: &mut HashSet<NodeId>) {
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            for frag in lines.iter().flatten() {
+                if frag.style.user_select == UserSelect::None && !frag.text.is_empty() {
+                    out.insert(frag.source_node);
+                    out.extend(frag.merged_sources.iter().map(|m| m.source_node));
+                }
+            }
+        }
+        for c in &b.children {
+            walk(c, out);
+        }
+    }
+    let mut out = HashSet::new();
+    walk(root, &mut out);
+    out
+}
+
+/// What a press on `user-select: all` / `contain` text pins down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectScope {
+    /// `user-select: all` — the press selects the whole element atomically.
+    All(Range),
+    /// `user-select: contain` — a drag that starts inside stays inside.
+    Contain(Range),
+}
+
+/// The `user-select: all` / `contain` scope under page point `(x, y)`, or
+/// `None` for ordinary (`auto`/`text`) text. The scope is the topmost box on
+/// the path to the hit text that declares the value (the property inherits, so
+/// every descendant computes to the same value), spanning all its text.
+pub fn select_scope_at_point(root: &LayoutBox, x: f32, y: f32) -> Option<SelectScope> {
+    fn text_span(b: &LayoutBox, first: &mut Option<DomPosition>, last: &mut Option<DomPosition>) {
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            for f in lines.iter().flatten() {
+                if f.text.is_empty() || f.img_src.is_some() {
+                    continue;
+                }
+                let (end_node, end_off) = match f.merged_sources.last() {
+                    Some(m) => (m.source_node, m.source_char_offset + (f.text.len() as u32 - m.text_byte)),
+                    None => (f.source_node, f.source_char_offset + f.text.len() as u32),
+                };
+                if first.is_none() {
+                    *first = Some(DomPosition { container: f.source_node, offset: f.source_char_offset });
+                }
+                *last = Some(DomPosition { container: end_node, offset: end_off });
+            }
+        }
+        for c in &b.children {
+            text_span(c, first, last);
+        }
+    }
+    fn hit_text(b: &LayoutBox, x: f32, y: f32) -> bool {
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            let line_h = b.used_line_height;
+            if line_h > 0.0 && !lines.is_empty() {
+                let rel_y = y - b.rect.y;
+                if rel_y >= 0.0 && rel_y < line_h * lines.len() as f32 && x >= b.rect.x {
+                    return true;
+                }
+            }
+        }
+        b.children.iter().any(|c| hit_text(c, x, y))
+    }
+    fn walk(b: &LayoutBox, x: f32, y: f32, scope: Option<&LayoutBox>) -> Option<SelectScope> {
+        let scope = scope.or_else(|| {
+            matches!(b.style.user_select, UserSelect::All | UserSelect::Contain).then_some(b)
+        });
+        if let BoxKind::InlineRun { .. } = &b.kind
+            && hit_text(b, x, y)
+        {
+            let s = scope?;
+            let (mut first, mut last) = (None, None);
+            text_span(s, &mut first, &mut last);
+            let range = Range { start: first?, end: last? };
+            return Some(if s.style.user_select == UserSelect::All {
+                SelectScope::All(range)
+            } else {
+                SelectScope::Contain(range)
+            });
+        }
+        b.children.iter().find_map(|c| walk(c, x, y, scope))
+    }
+    walk(root, x, y, None)
+}
+
+/// Clamp `pos` into `scope` (arena order, then byte offset) — the
+/// `user-select: contain` drag rule.
+pub fn clamp_to_range(pos: DomPosition, scope: &Range) -> DomPosition {
+    let key = |p: &DomPosition| (p.container.index(), p.offset);
+    if key(&pos) < key(&scope.start) {
+        scope.start
+    } else if key(&pos) > key(&scope.end) {
+        scope.end
+    } else {
+        pos
+    }
 }
 
 /// Compute x offset in pixels to the boundary before the character at `byte_offset`
@@ -255,7 +377,7 @@ mod tests {
             width,
             y_offset: 0.0,
             text: text.to_string(),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             padding_left: 0.0,
             padding_right: 0.0,
             is_element_box: false,
@@ -276,12 +398,16 @@ mod tests {
             node: NodeId::from_index(1),
             rect,
             used_line_height: style.font_size * style.line_height,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style,
             kind: BoxKind::InlineRun {
                 segments: vec![],
                 lines,
                 first_line_style: None,
                 row_continuation_width: None,
+                first_line_inset: 0.0,
             },
             children: vec![],
             col_span: 1,
@@ -579,5 +705,123 @@ mod tests {
     fn x_at_byte_mid_string() {
         // After "hel" = 30px
         assert!((x_at_byte("hello", 3, 16.0, &Fixed10) - 30.0).abs() < 0.01);
+    }
+
+    // ── CSS UI L4 §6.2 `user-select` ─────────────────────────────────────────
+
+    fn frag_with_select(text: &str, x: f32, node: NodeId, us: UserSelect) -> InlineFrag {
+        let mut f = make_frag(text, x, node, 0);
+        let mut st = ComputedStyle::root();
+        st.user_select = us;
+        f.style = std::sync::Arc::new(st);
+        f
+    }
+
+    fn two_frag_box(second: UserSelect) -> LayoutBox {
+        // "abc" (auto, node 2, x 0..30) then "xyz" (`second`, node 3, x 30..60).
+        make_inline_run_box(
+            Rect { x: 0.0, y: 0.0, width: 200.0, height: 19.2 },
+            vec![vec![
+                frag_with_select("abc", 0.0, NodeId::from_index(2), UserSelect::Auto),
+                frag_with_select("xyz", 30.0, NodeId::from_index(3), second),
+            ]],
+        )
+    }
+
+    fn pos(n: usize, off: u32) -> DomPosition {
+        DomPosition { container: NodeId::from_index(n), offset: off }
+    }
+
+    #[test]
+    fn caret_skips_user_select_none_text() {
+        let b = two_frag_box(UserSelect::None);
+        // x=45 is over "xyz" (none): no caret there, the press anchors nothing.
+        let p = caret_at_point(&b, 45.0, 5.0, &Fixed10);
+        // The scan falls back to the last selectable frag ("abc"), clamped to
+        // its end — never a position inside the `none` node.
+        assert_eq!(p.map(|p| p.container), Some(NodeId::from_index(2)));
+    }
+
+    #[test]
+    fn caret_none_when_only_user_select_none_text() {
+        let b = make_inline_run_box(
+            Rect { x: 0.0, y: 0.0, width: 200.0, height: 19.2 },
+            vec![vec![frag_with_select("abc", 0.0, NodeId::from_index(2), UserSelect::None)]],
+        );
+        assert_eq!(caret_at_point(&b, 5.0, 5.0, &Fixed10), None);
+    }
+
+    #[test]
+    fn selection_rects_omit_user_select_none_frag() {
+        let b = two_frag_box(UserSelect::None);
+        let range = Range { start: pos(2, 0), end: pos(3, 3) };
+        let rects = selection_rects(&b, &range, &Fixed10);
+        assert_eq!(rects.len(), 1, "only the selectable frag is highlighted: {rects:?}");
+        assert!((rects[0].x - 0.0).abs() < 0.01 && (rects[0].width - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn selection_rects_cover_user_select_text_frag() {
+        let b = two_frag_box(UserSelect::Text);
+        let range = Range { start: pos(2, 0), end: pos(3, 3) };
+        assert_eq!(selection_rects(&b, &range, &Fixed10).len(), 2);
+    }
+
+    #[test]
+    fn selection_rects_cover_node_between_endpoints() {
+        // Three nodes; the middle one has neither endpoint but sits between.
+        let b = make_inline_run_box(
+            Rect { x: 0.0, y: 0.0, width: 200.0, height: 19.2 },
+            vec![vec![
+                make_frag("aa", 0.0, NodeId::from_index(2), 0),
+                make_frag("bb", 20.0, NodeId::from_index(3), 0),
+                make_frag("cc", 40.0, NodeId::from_index(4), 0),
+            ]],
+        );
+        let range = Range { start: pos(2, 0), end: pos(4, 2) };
+        let rects = selection_rects(&b, &range, &Fixed10);
+        assert_eq!(rects.len(), 3, "middle node is fully selected: {rects:?}");
+    }
+
+    #[test]
+    fn none_text_nodes_collected_for_copy() {
+        let b = two_frag_box(UserSelect::None);
+        let set = user_select_none_text_nodes(&b);
+        assert!(set.contains(&NodeId::from_index(3)));
+        assert!(!set.contains(&NodeId::from_index(2)));
+    }
+
+    #[test]
+    fn select_scope_all_spans_the_whole_element() {
+        let mut b = two_frag_box(UserSelect::All);
+        // The box itself declares `all` (inherited by its frags).
+        let mut st = ComputedStyle::root();
+        st.user_select = UserSelect::All;
+        b.style = std::sync::Arc::new(st);
+        match select_scope_at_point(&b, 5.0, 5.0) {
+            Some(SelectScope::All(r)) => {
+                assert_eq!(r.start, pos(2, 0));
+                assert_eq!(r.end, pos(3, 3));
+            }
+            other => panic!("expected All scope, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_scope_contain_and_plain_text() {
+        let mut b = two_frag_box(UserSelect::Auto);
+        assert_eq!(select_scope_at_point(&b, 5.0, 5.0), None);
+        let mut st = ComputedStyle::root();
+        st.user_select = UserSelect::Contain;
+        b.style = std::sync::Arc::new(st);
+        assert!(matches!(select_scope_at_point(&b, 5.0, 5.0), Some(SelectScope::Contain(_))));
+    }
+
+    #[test]
+    fn clamp_to_range_pins_outside_positions() {
+        let scope = Range { start: pos(3, 2), end: pos(4, 5) };
+        assert_eq!(clamp_to_range(pos(2, 9), &scope), scope.start);
+        assert_eq!(clamp_to_range(pos(5, 0), &scope), scope.end);
+        assert_eq!(clamp_to_range(pos(3, 7), &scope), pos(3, 7));
     }
 }

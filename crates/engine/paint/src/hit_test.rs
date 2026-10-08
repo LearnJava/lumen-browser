@@ -14,8 +14,9 @@
 //!
 //! Hit-тест поочерёдно проверяет каждую группу; первое попадание возвращается.
 //! Внутри ребёнка спускаемся рекурсивно. Если все дети промахнулись — пробуем
-//! сам бокс. `pointer-events: none` пропускает бокс (но дети остаются
-//! hit-testable, как и в Chrome). `display: none` и `Skip`-боксы исключены
+//! сам бокс. `pointer-events: none` пропускает бокс; дети остаются
+//! hit-testable (свойство наследуется, так что без явного `auto` на ребёнке
+//! они тоже пропускаются, но `auto` на потомке возвращает его в игру). `display: none` и `Skip`-боксы исключены
 //! целиком вместе со своим поддеревом.
 //!
 //! Transform inversion: если бокс имеет CSS `transform`, forward-матрица для
@@ -39,7 +40,7 @@
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BoxKind, Cursor, Display, LayoutBox,
+    owns_paint_layer, paint_child_order, BoxKind, Cursor, Display, LayoutBox,
     Mat4, PointerEvents, TransformFn, UserSelect,
 };
 
@@ -125,13 +126,16 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     // нужно было бы только для опт-цели «не лезть в children без hit-rect».
     let mut positive: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
+    let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
-    for child in &b.children {
-        let creates_sc = box_can_own_stacking_context(child)
-            && creates_stacking_context(&child.style);
-        match (creates_sc, child.style.z_index) {
+    // `order` на flex/grid-детях меняет и paint order, а с ним и hit-test.
+    let order = paint_child_order(b);
+    let children = (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]);
+    for child in children {
+        match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
             (true, Some(z)) if z < 0 => negative.push((child, z)),
+            (true, _) => layer6.push(child),
             _ => in_flow.push(child),
         }
     }
@@ -148,14 +152,22 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
             return Some(hit);
         }
     }
-    // 2. in-flow + auto/0-z children в reverse DOM (фазы 3-6).
+    // 2. auto/0-z stacking contexts и positioned `z-index: auto` боксы (фаза 6) —
+    //    над in-flow потомками независимо от порядка в DOM.
+    for child in layer6.iter().rev() {
+        if let Some(mut hit) = hit_test_box(child_point, child) {
+            hit.path.push(b.node);
+            return Some(hit);
+        }
+    }
+    // 3. in-flow children в reverse DOM (фазы 3-5).
     for child in in_flow.iter().rev() {
         if let Some(mut hit) = hit_test_box(child_point, child) {
             hit.path.push(b.node);
             return Some(hit);
         }
     }
-    // 3. negative-z children (фаза 2).
+    // 4. negative-z children (фаза 2).
     for (child, _) in &negative {
         if let Some(mut hit) = hit_test_box(child_point, child) {
             hit.path.push(b.node);
@@ -167,10 +179,10 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if !rect_contains(b.rect, child_point) {
         return None;
     }
-    if matches!(b.style.pointer_events, PointerEvents::None) {
+    let (source_node, frag_pe) = find_inline_source(b, child_point);
+    if matches!(frag_pe.unwrap_or(b.style.pointer_events), PointerEvents::None) {
         return None;
     }
-    let source_node = find_inline_source(b, child_point);
     Some(HitTestResult {
         node: b.node,
         source_node,
@@ -205,13 +217,16 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 
     let mut positive: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
+    let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
-    for child in &b.children {
-        let creates_sc = box_can_own_stacking_context(child)
-            && creates_stacking_context(&child.style);
-        match (creates_sc, child.style.z_index) {
+    // `order` на flex/grid-детях меняет и paint order, а с ним и hit-test.
+    let order = paint_child_order(b);
+    let children = (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]);
+    for child in children {
+        match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
             (true, Some(z)) if z < 0 => negative.push((child, z)),
+            (true, _) => layer6.push(child),
             _ => in_flow.push(child),
         }
     }
@@ -220,6 +235,9 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 
     let start = out.len();
     for (child, _) in &positive {
+        hit_test_all_box(child_point, child, out);
+    }
+    for child in layer6.iter().rev() {
         hit_test_all_box(child_point, child, out);
     }
     for child in in_flow.iter().rev() {
@@ -235,10 +253,10 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
     if !rect_contains(b.rect, child_point) {
         return;
     }
-    if matches!(b.style.pointer_events, PointerEvents::None) {
+    let (source_node, frag_pe) = find_inline_source(b, child_point);
+    if matches!(frag_pe.unwrap_or(b.style.pointer_events), PointerEvents::None) {
         return;
     }
-    let source_node = find_inline_source(b, child_point);
     out.push(HitTestResult {
         node: b.node,
         source_node,
@@ -258,34 +276,43 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 /// фрагмент не попал под точку. `source_node == NodeId(0)` используется в
 /// layout как маркер анонимного/сгенерированного контента — такие узлы не
 /// несут реального DOM-предка и тоже заменяются на `b.node`.
-fn find_inline_source(b: &LayoutBox, point: Point) -> NodeId {
+///
+/// Вторым элементом — `pointer-events` фрагмента под точкой (`None`, если
+/// бокс не `InlineRun` или фрагмента нет): стиль самого инлайнового элемента,
+/// а не блок-контейнера.
+fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEvents>) {
     let BoxKind::InlineRun { lines, .. } = &b.kind else {
-        return b.node;
+        return (b.node, None);
     };
     let line_h = b.used_line_height;
     if line_h <= 0.0 || lines.is_empty() {
-        return b.node;
+        return (b.node, None);
     }
     let rel_y = point.y - b.rect.y;
     let line_idx = (rel_y / line_h).floor().max(0.0) as usize;
     let line = lines.get(line_idx).or_else(|| lines.last());
-    let Some(line) = line else { return b.node; };
+    let Some(line) = line else { return (b.node, None); };
     let rel_x = point.x - b.rect.x;
+    // `InlineRun` несёт стиль блок-контейнера, а `pointer-events` инлайнового
+    // элемента может отличаться (`<span style="pointer-events:auto">` внутри
+    // блока с `none`), поэтому значение берётся с попавшего под точку фрагмента.
     for frag in line {
         let start = frag.x - frag.padding_left;
         let end = frag.x + frag.width + frag.padding_right;
         if rel_x >= start && rel_x < end {
             let src = frag.source_node;
             if src.index() != 0 {
-                return src;
+                return (src, Some(frag.style.pointer_events));
             }
+            return (b.node, Some(frag.style.pointer_events));
         }
     }
     // Fallback: return source_node of the last frag on the line (closest to right edge).
-    if let Some(last) = line.last() && last.source_node.index() != 0 {
-        return last.source_node;
+    if let Some(last) = line.last() {
+        let src = if last.source_node.index() != 0 { last.source_node } else { b.node };
+        return (src, Some(last.style.pointer_events));
     }
-    b.node
+    (b.node, None)
 }
 
 /// `Rect::contains(Point)`. Включаем левую/верхнюю границы, исключаем
@@ -433,6 +460,33 @@ mod tests {
                 "outer может быть только ancestor в path, не target"
             );
         }
+    }
+
+    #[test]
+    fn pointer_events_none_is_inherited_by_child_box() {
+        // Наследуется: у .inner своей декларации нет, значит он тоже `none`
+        // и под курсором не остаётся ни одной цели, кроме предков вне outer.
+        let (doc, root) = build(
+            r#"<div class="outer"><div class="inner"></div></div>"#,
+            ".outer { pointer-events: none; } .inner { height: 50px; }",
+        );
+        let outer = by_class(&doc, "outer");
+        let inner = by_class(&doc, "inner");
+        if let Some(res) = hit_test(Point::new(10.0, 10.0), &root) {
+            assert_ne!(res.node, outer);
+            assert_ne!(res.node, inner, "унаследованный none: inner не цель");
+        }
+    }
+
+    #[test]
+    fn pointer_events_auto_child_is_target_inside_none_parent() {
+        let (doc, root) = build(
+            r#"<div class="outer"><div class="inner"></div></div>"#,
+            ".outer { pointer-events: none; } .inner { pointer-events: auto; height: 50px; }",
+        );
+        let inner = by_class(&doc, "inner");
+        let res = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(res.node, inner, "auto на потомке возвращает его в hit-тест");
     }
 
     #[test]
@@ -665,6 +719,24 @@ mod tests {
         let above_pos = nodes.iter().position(|&n| n == above).expect(".above hit");
         let below_pos = nodes.iter().position(|&n| n == below).expect(".below hit — sibling, not just ancestor");
         assert!(above_pos < below_pos, "выше по z-index — раньше в списке");
+    }
+
+    #[test]
+    fn grid_item_with_higher_order_is_topmost_in_hit_test() {
+        // BUG-1312: два grid-item в одной ячейке; `order:1` рисуется поверх `order:0`,
+        // хотя стоит раньше в DOM — значит, и клик достаётся ему.
+        let html = r#"<div class="g"><div class="hi"></div><div class="lo"></div></div>"#;
+        let css = "
+            .g { display: grid; width: 200px; height: 100px; }
+            .g > div { grid-area: 1 / 1; }
+            .hi { order: 1; }
+        ";
+        let (doc, root) = build(html, css);
+        let r = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(r.node, by_class(&doc, "hi"));
+        let nodes: Vec<_> = hit_test_all(Point::new(10.0, 10.0), &root).iter().map(|h| h.node).collect();
+        let pos = |n| nodes.iter().position(|&x| x == n).expect("hit");
+        assert!(pos(by_class(&doc, "hi")) < pos(by_class(&doc, "lo")));
     }
 
     #[test]

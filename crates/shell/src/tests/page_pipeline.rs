@@ -164,7 +164,7 @@ fn find_img(doc: &Document, id: NodeId) -> Option<NodeId> {
 fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
     let mut doc = lumen_html_parser::parse(html);
     let img = find_img(&doc, doc.root()).expect("img present");
-    apply_intrinsic_size(&mut doc, img, iw, ih);
+    apply_intrinsic_size(&mut doc, img, iw, ih, lumen_core::geom::Size::new(1024.0, 768.0));
     let NodeData::Element { attrs, .. } = &doc.get(img).data else {
         unreachable!()
     };
@@ -235,8 +235,9 @@ fn bug269_percentage_width_falls_back_to_intrinsic_height() {
 fn img_apply_twice(html: &str, iw: u32, ih: u32) -> (bool, bool) {
     let mut doc = lumen_html_parser::parse(html);
     let img = find_img(&doc, doc.root()).expect("img present");
-    let first = apply_intrinsic_size(&mut doc, img, iw, ih);
-    let second = apply_intrinsic_size(&mut doc, img, iw, ih);
+    let vp = lumen_core::geom::Size::new(1024.0, 768.0);
+    let first = apply_intrinsic_size(&mut doc, img, iw, ih, vp);
+    let second = apply_intrinsic_size(&mut doc, img, iw, ih, vp);
     (first, second)
 }
 
@@ -263,6 +264,41 @@ fn bug735_half_filled_reports_change_once() {
     let (first, second) = img_apply_twice(r#"<img src="p.png" width="240">"#, 120, 80);
     assert!(first);
     assert!(!second);
+}
+
+// ── BUG-969: `srcset` `Nw`-density correction ────────────────────────────
+//
+// HTML LS §4.8.4.3.7: the used size of a `Nw`-picked candidate is the
+// decoded bitmap size divided by its effective density
+// (`width_descriptor / sizes-resolved source size`), not the raw decode.
+
+#[test]
+fn bug969_nw_descriptor_density_corrects_raw_decode() {
+    // sizes="400px" + srcset "100w" → effective density = 100/400 = 0.25.
+    // A real 100×100 decode must land as 400×400, not 100×100.
+    let (w, h) = img_dims(r#"<img srcset="p.png 100w" sizes="400px">"#, 100, 100);
+    assert_eq!(w.as_deref(), Some("400"));
+    assert_eq!(h.as_deref(), Some("400"));
+}
+
+#[test]
+fn bug969_density_descriptor_unaffected() {
+    // `Nx` (pixel-density) form has no `sizes`-driven correction in scope —
+    // raw decode goes in unchanged, same as before this fix.
+    let (w, h) = img_dims(r#"<img srcset="p.png 1x, hi.png 2x">"#, 100, 100);
+    assert_eq!(w.as_deref(), Some("100"));
+    assert_eq!(h.as_deref(), Some("100"));
+}
+
+#[test]
+fn bug969_explicit_width_attr_wins_verbatim() {
+    // Author-declared `width` is never itself density-corrected — only the
+    // decoder-filled slot is. The other axis derives from the (ratio-
+    // invariant) corrected aspect ratio, same as BUG-269.
+    let (w, h) =
+        img_dims(r#"<img srcset="p.png 100w" sizes="400px" width="50">"#, 100, 100);
+    assert_eq!(w.as_deref(), Some("50"));
+    assert_eq!(h.as_deref(), Some("50"));
 }
 
 // ── BUG-171 этап 2: off-UI-thread финальный pipeline ────────────────────
@@ -781,11 +817,11 @@ fn collect_cv_auto_reports_every_auto_box_with_its_state() {
     let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
     let _ = lumen_layout::take_cv_skipped();
     let mut found = Vec::new();
-    collect_cv_auto(&lb, &mut found);
+    collect_cv_auto(&lb, Size::new(300.0, 300.0), &mut found);
     assert_eq!(found.len(), 2, "оба auto-бокса, а не только пропущенный");
     let states: Vec<bool> = found
         .iter()
-        .map(|&(_, top)| lumen_layout::cv_is_skipped(false, top, 0.0, 300.0))
+        .map(|&(_, top, bottom)| lumen_layout::cv_is_skipped(false, top, bottom, 0.0, 300.0))
         .collect();
     assert_eq!(states, vec![false, true], "первый во вьюпорте, второй под ним");
 }
@@ -803,10 +839,10 @@ fn collect_cv_auto_reports_an_empty_auto_box_by_position() {
     let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
     let _ = lumen_layout::take_cv_skipped();
     let mut found = Vec::new();
-    collect_cv_auto(&lb, &mut found);
+    collect_cv_auto(&lb, Size::new(300.0, 300.0), &mut found);
     assert_eq!(found.len(), 1, "пустой auto-бокс тоже наблюдается");
     assert!(
-        !lumen_layout::cv_is_skipped(false, found[0].1, 0.0, 300.0),
+        !lumen_layout::cv_is_skipped(false, found[0].1, found[0].2, 0.0, 300.0),
         "он в начале страницы — значит relevant, а не пропущен"
     );
 }
@@ -827,8 +863,38 @@ fn collect_cv_auto_reports_an_element_with_inline_content_once() {
     let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
     let _ = lumen_layout::take_cv_skipped();
     let mut found = Vec::new();
-    collect_cv_auto(&lb, &mut found);
+    collect_cv_auto(&lb, Size::new(300.0, 300.0), &mut found);
     assert_eq!(found.len(), 1, "один элемент — одна запись, анонимный бокс не в счёт");
+}
+
+#[test]
+fn cv_auto_box_above_the_viewport_is_skipped_and_returns_on_scroll_up() {
+    // CSS Contain L2 §4.1: relevance is symmetric — a box that scrolled out
+    // over the TOP of the viewport (plus slack) is no longer relevant either.
+    // Needs its height before layout, which `contain-intrinsic-height` gives.
+    let viewport = Size::new(300.0, 300.0);
+    let html = r#"<div class="spacer"></div><div class="cv"><span>x</span></div>
+                  <div class="spacer"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        ".spacer { height: 3000px; } \
+         .cv { content-visibility: auto; contain-intrinsic-height: 100px; }",
+    );
+    // Scrolled far below the .cv box (it spans 3000..3100).
+    lumen_layout::set_cv_scroll(0.0, 5000.0);
+    lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+    let lb = lumen_layout::layout(&doc, &sheet, viewport);
+    let skipped = lumen_layout::take_cv_skipped();
+    assert_eq!(skipped.len(), 1, "бокс выше вьюпорта пропущен");
+    let mut found = Vec::new();
+    collect_cv_auto(&lb, viewport, &mut found);
+    assert_eq!(found.len(), 1);
+    let (_, top, bottom) = found[0];
+    assert_eq!(bottom - top, 100.0, "плейсхолдер = contain-intrinsic-height");
+    assert!(lumen_layout::cv_is_skipped(false, top, bottom, 5000.0, 300.0));
+    // Scrolling back up brings it into the expanded band again.
+    assert!(!lumen_layout::cv_is_skipped(false, top, bottom, 2900.0, 300.0));
+    lumen_layout::set_cv_scroll(0.0, 0.0);
 }
 
 fn expect_resolved_url(base: &str, href: &str) -> String {
@@ -1207,6 +1273,12 @@ fn automation_bare_path_is_not_percent_decoded() {
 /// Run one page through the whole [`parse_and_layout`] pipeline with defaults.
 #[cfg(feature = "v8")]
 fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
+    parse_and_layout_with_referrer(html, None)
+}
+
+/// [`parse_and_layout_for_test`] for a document fetched with `Referer: referrer`.
+#[cfg(feature = "v8")]
+fn parse_and_layout_with_referrer(html: &str, referrer: Option<&str>) -> crate::page_pipeline::ParsedPage {
     parse_and_layout(
         html.as_bytes(),
         Some("text/html"),
@@ -1230,6 +1302,7 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
         None,
         None,
         None,
+        referrer,
         None,
     )
     .expect("pipeline must not fail on a well-formed page")
@@ -1314,12 +1387,17 @@ fn dom_event_dispatch_records_script_timing_for_loaf() {
          <script>\
          document.getElementById('btn').addEventListener('click', function(){});\
          document.getElementById('btn').dispatchEvent(new Event('click', {bubbles:true}));\
-         var found = _lumen_frame_scripts.filter(function(s){return s.invoker === 'BUTTON.click';});\
-         document.documentElement.setAttribute('data-n', String(found.length));\
          </script>\
          </body></html>",
     );
-    let n: i64 = probe_attr(&page, "data-n").parse().expect("data-n must be a number");
+    // `_lumen_frame_scripts` is an engine internal (BUG-753 срез 2): page script cannot
+    // read it, so the assertion goes through the runtime's own (internal) eval.
+    let js = page.js_ctx.as_ref().expect("persistent JS context");
+    let n: i64 = js
+        .eval_js_value("_lumen_frame_scripts.filter(function(s){return s.invoker === 'BUTTON.click';}).length")
+        .expect("eval")
+        .parse()
+        .expect("script-timing count must be a number");
     assert!(n >= 1, "expected a BUTTON.click script timing entry, got {n} matches");
 }
 
@@ -1369,6 +1447,36 @@ fn parse_time_script_overflow_clip_zeroes_scroll_request() {
     assert_eq!(probe_attr(&page, "data-scrollto"), "0,0");
     assert_eq!(probe_attr(&page, "data-scrollby"), "0,0");
     assert_eq!(probe_attr(&page, "data-direct"), "0,0");
+}
+
+/// BUG-553 срез 61: снимок `--screenshot` перед растеризацией шлёт `load` и гонит
+/// двойной `requestAnimationFrame`, поэтому страница, меняющая DOM из
+/// `<body onload>`, `window.onload` или rAF, снимается уже после правки (reftest-ы
+/// `css-gaps/*repaint-on-*`). Страница без скриптов layout не пересчитывает.
+#[cfg(feature = "v8")]
+#[test]
+fn screenshot_settle_runs_load_and_raf_then_relayouts() {
+    let height = |html: &str| {
+        let mut page = parse_and_layout_for_test(html);
+        let before = page.layout.rect.height;
+        crate::dump_mode::settle_after_load(&mut page, Size::new(1024.0, 20.0));
+        (before, page.layout.rect.height)
+    };
+    let grow = "document.getElementById('a').style.height='1000px';";
+    let (before, after) = height(&format!(
+        "<!DOCTYPE html><body style='margin:0' onload=\"{grow}\"><div id=a style='height:10px'></div></body>"
+    ));
+    assert!(after >= 1000.0, "<body onload>: {before} -> {after}");
+    let (before, after) = height(&format!(
+        "<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div>         <script>window.addEventListener('load',()=>{{{grow}}})</script></body>"
+    ));
+    assert!(after >= 1000.0, "window load: {before} -> {after}");
+    let (before, after) = height(&format!(
+        "<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div>         <script>requestAnimationFrame(()=>requestAnimationFrame(()=>{{{grow}}}))</script></body>"
+    ));
+    assert!(after >= 1000.0, "double rAF: {before} -> {after}");
+    let (before, after) = height("<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div></body>");
+    assert_eq!(before, after);
 }
 
 /// BUG-1120: внешний `<script defer src>` исполняется после конца разбора —
@@ -1847,4 +1955,16 @@ fn departure_candidate_false_when_cross_origin() {
     let opted_in = lumen_css_parser::parse("@view-transition { navigation: auto; }");
 
     assert!(!mpa_view_transition_departure_candidate(&from, &opted_in, &to));
+}
+
+/// BUG-1156: `document.referrer` of a document fetched with a `Referer`
+/// carries that value; without one it stays `''`.
+#[cfg(feature = "v8")]
+#[test]
+fn bug1156_document_referrer_is_seeded_from_navigation_referer() {
+    let html = "<html><body><script>document.documentElement.setAttribute('data-r', document.referrer);</script></body></html>";
+    let with = parse_and_layout_with_referrer(html, Some("http://127.0.0.1:8767/a"));
+    assert_eq!(probe_attr(&with, "data-r"), "http://127.0.0.1:8767/a");
+    let without = parse_and_layout_for_test(html);
+    assert_eq!(probe_attr(&without, "data-r"), "");
 }

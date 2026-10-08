@@ -18,6 +18,13 @@
 
 use crate::*;
 
+/// BUG-1077: `LUMEN_NO_DEMO_PANEL=1` скрывает плавающую dev-панель `#demoBar`
+/// (не рисуется и не ловит клики). Её нет в эталоне Edge, а в нижнем левом
+/// углу она закрывает страницу — `graphic_tests/run.py` ставит рычаг для живого окна.
+pub(crate) fn demo_panel_hidden() -> bool {
+    std::env::var_os("LUMEN_NO_DEMO_PANEL").is_some_and(|v| v != "0")
+}
+
 /// CC-18 срез 3: how close to the window edge a dragged panel may be pushed,
 /// in window CSS px. Same 4 px the design reference's own drag clamp uses
 /// (`Math.max(4, Math.min(innerWidth - width - 4, …))`, `docs/design/
@@ -219,6 +226,10 @@ impl Lumen {
     /// Cheap enough to call on every drag step: it walks two small subtrees,
     /// no layout and no cascade.
     pub(crate) fn rebuild_chrome_floating_dl(&mut self) {
+        if demo_panel_hidden() {
+            self.chrome_floating_dl = None;
+            return;
+        }
         let mut dl = lumen_paint::DisplayList::new();
         for detached in &self.chrome_floating_detached {
             match self.chrome_float_offsets.get(detached.panel_id).copied() {
@@ -250,6 +261,9 @@ impl Lumen {
         x_css: f32,
         y_css: f32,
     ) -> Option<(&'static str, lumen_paint::HitTestResult)> {
+        if demo_panel_hidden() {
+            return None;
+        }
         self.chrome_floating_detached.iter().rev().find_map(|d| {
             let (dx, dy) = self.floating_panel_offset(d.panel_id);
             let (px, py) = (x_css - dx, y_css - dy);
@@ -283,7 +297,7 @@ impl Lumen {
         &mut self,
         x_css: f32,
         y_css: f32,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) -> bool {
         let Some((panel_id, hit)) = self.floating_panel_hit(x_css, y_css) else { return false };
         match self.chrome_action_at(&hit) {

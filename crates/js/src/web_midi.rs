@@ -121,13 +121,16 @@ const WEB_MIDI_SHIM: &str = r#"
     [Symbol.iterator]() { return this._map.entries(); }
   }
 
+  class MIDIInputMap extends MIDIPortMap {}
+  class MIDIOutputMap extends MIDIPortMap {}
+
   // ── MIDIAccess (W3C Web MIDI L1 §4.1) ────────────────────────────────────
   class MIDIAccess extends _ETBase {
     constructor(brand, sysexEnabled) {
       if (brand !== BRAND) throw new TypeError('Illegal constructor');
       super();
-      this.inputs = new MIDIPortMap([]);
-      this.outputs = new MIDIPortMap([]);
+      this.inputs = new MIDIInputMap([]);
+      this.outputs = new MIDIOutputMap([]);
       this.sysexEnabled = !!sysexEnabled;
       this.onstatechange = null;
     }
@@ -158,13 +161,14 @@ const WEB_MIDI_SHIM: &str = r#"
   // ── Native binding stub for Phase 1 shell integration ─────────────────────
   // _lumen_midi_deliver_message(portId, data) — delivers an incoming MIDI
   // message from OS MIDI stack (CoreMIDI/WinMM/ALSA) to the MIDIInput port.
-  globalThis._lumen_midi_deliver_message = function(portId, data) { };
+  __lumen_C._lumen_midi_deliver_message = function(portId, data) { };
 
   // ── Exports ───────────────────────────────────────────────────────────────
   window.MIDIPort = MIDIPort;
   window.MIDIInput = MIDIInput;
   window.MIDIOutput = MIDIOutput;
-  window.MIDIPortMap = MIDIPortMap;
+  window.MIDIInputMap = MIDIInputMap;
+  window.MIDIOutputMap = MIDIOutputMap;
   window.MIDIAccess = MIDIAccess;
   window.MIDIMessageEvent = MIDIMessageEvent;
   window.MIDIConnectionEvent = MIDIConnectionEvent;
@@ -289,7 +293,9 @@ mod tests {
     fn midi_port_map_class_exported() {
         with_midi_api(|rt| {
             let ok = rt
-                .eval("typeof window.MIDIPortMap === 'function'")
+                .eval(
+                    "typeof window.MIDIInputMap === 'function'                      && typeof window.MIDIOutputMap === 'function'                      && typeof window.MIDIPortMap === 'undefined'",
+                )
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
@@ -339,7 +345,7 @@ mod tests {
     fn midi_deliver_binding_exists() {
         with_midi_api(|rt| {
             let ok = rt
-                .eval("typeof globalThis._lumen_midi_deliver_message === 'function'")
+                .eval("typeof __lumen_C._lumen_midi_deliver_message === 'function'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });

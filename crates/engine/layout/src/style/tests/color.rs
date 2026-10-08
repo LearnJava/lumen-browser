@@ -1111,7 +1111,7 @@ use crate::style::values::named_colors::NAMED_COLORS;
     }
 
     #[test]
-    fn print_color_adjust_not_inherited() {
+    fn print_color_adjust_inherited() {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
         let root = ComputedStyle::root();
@@ -1120,7 +1120,7 @@ use crate::style::values::named_colors::NAMED_COLORS;
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.print_color_adjust, PrintColorAdjust::Exact);
-        assert_eq!(span_style.print_color_adjust, PrintColorAdjust::Economy);
+        assert_eq!(span_style.print_color_adjust, PrintColorAdjust::Exact);
     }
 
     // ── color-contrast() (CSS Color L5 §11) ───────────────────────────────────
@@ -1250,6 +1250,162 @@ use crate::style::values::named_colors::NAMED_COLORS;
     fn color_fn_custom_profile_alpha() {
         let c = color_fn_srgb("color(--swop5c 0 0 0 / 0.5)");
         assert!(c.a >= 127 && c.a <= 128, "alpha={}", c.a);
+    }
+
+    // ── color() через загруженный `@color-profile` (CSS Color L5 §5.3) ─────────
+
+    /// sRGB-профиль, у которого красный и зелёный колорант поменяны местами
+    /// (WPT `css-color/support/swapped.icc`, тест `at-color-profile-001`).
+    const SWAPPED_ICC: &[u8] =
+        include_bytes!("../../../../../../tests/wpt/css/css-color/support/swapped.icc");
+
+    /// Лист с `@color-profile` из `rules`, байты профилей подставлены `icc`
+    /// (`None` — «не загрузился»).
+    fn sheet_with_profiles(rules: &str, icc: Option<&[u8]>) -> Stylesheet {
+        let mut sheet = lumen_css_parser::parse(rules);
+        sheet.load_color_profiles(|_| icc.map(|b| std::sync::Arc::new(b.to_vec())));
+        sheet
+    }
+
+    /// Снимает контекст профилей с потока: тестовые потоки переиспользуются,
+    /// и чужой контекст ломал бы тесты `color(--name …)` без листа.
+    struct ClearProfiles;
+    impl Drop for ClearProfiles {
+        fn drop(&mut self) {
+            crate::style::parse::color::sync_color_profiles(&Stylesheet::default());
+        }
+    }
+
+    fn profile_color(sheet: &Stylesheet, value: &str) -> Option<Color> {
+        crate::style::parse::color::sync_color_profiles(sheet);
+        match parse_css_color_legacy(value, false)? {
+            CssColor::Wide(f) => Some(f.to_srgb_color()),
+            CssColor::Rgba(c) => Some(c),
+            other => panic!("unexpected CssColor variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_profile_icc_transform_swaps_red_and_green() {
+        // WPT at-color-profile-001: `color(--foo 0.6 0 0)` через профиль с
+        // обменянными колорантами — зелёный #090 (0.6 → 153), красного нет.
+        let _g = ClearProfiles;
+        let sheet = sheet_with_profiles(
+            "@color-profile --foo { src: url(swapped.icc); }",
+            Some(SWAPPED_ICC),
+        );
+        let c = profile_color(&sheet, "color(--foo 0.6 0 0)").expect("loaded profile → valid colour");
+        assert!(near(c.r, 0, 2), "r = {}", c.r);
+        assert!(near(c.g, 153, 2), "g = {}", c.g);
+        assert!(near(c.b, 0, 2), "b = {}", c.b);
+        // Синий канал колорантами не затронут.
+        let b = profile_color(&sheet, "color(--foo 0 0 1)").unwrap();
+        assert!(near(b.b, 255, 2) && near(b.r, 0, 2) && near(b.g, 0, 2), "{b:?}");
+    }
+
+    #[test]
+    fn color_profile_alpha_and_percentages_survive_transform() {
+        let _g = ClearProfiles;
+        let sheet = sheet_with_profiles(
+            "@color-profile --foo { src: url(swapped.icc); }",
+            Some(SWAPPED_ICC),
+        );
+        let c = profile_color(&sheet, "color(--foo 60% 0% 0% / 0.5)").unwrap();
+        assert!(near(c.g, 153, 2), "g = {}", c.g);
+        assert!(c.a >= 127 && c.a <= 128, "a = {}", c.a);
+    }
+
+    #[test]
+    fn color_profile_unloaded_is_invalid() {
+        // §5.3: профиль объявлен, но не загрузился → цвет невалиден.
+        let _g = ClearProfiles;
+        let sheet = sheet_with_profiles("@color-profile --foo { src: url(missing.icc); }", None);
+        assert_eq!(profile_color(&sheet, "color(--foo 0.6 0 0)"), None);
+    }
+
+    #[test]
+    fn color_profile_undeclared_name_is_invalid() {
+        // Лист объявляет `--foo`, а цвет ссылается на `--bar`.
+        let _g = ClearProfiles;
+        let sheet = sheet_with_profiles(
+            "@color-profile --foo { src: url(swapped.icc); }",
+            Some(SWAPPED_ICC),
+        );
+        assert_eq!(profile_color(&sheet, "color(--bar 0.6 0 0)"), None);
+    }
+
+    #[test]
+    fn color_profile_garbage_bytes_is_invalid() {
+        let _g = ClearProfiles;
+        let sheet = sheet_with_profiles(
+            "@color-profile --foo { src: url(x.icc); }",
+            Some(b"not an icc profile"),
+        );
+        assert_eq!(profile_color(&sheet, "color(--foo 0.6 0 0)"), None);
+    }
+
+    #[test]
+    fn color_profile_channel_count_must_match_profile() {
+        // RGB-профиль принимает ровно 3 канала.
+        let _g = ClearProfiles;
+        let sheet = sheet_with_profiles(
+            "@color-profile --foo { src: url(swapped.icc); }",
+            Some(SWAPPED_ICC),
+        );
+        assert_eq!(profile_color(&sheet, "color(--foo 0.6 0 0 0)"), None);
+        assert_eq!(profile_color(&sheet, "color(--foo 0.6 0)"), None);
+        // Четыре токена, но четвёртый — alpha после слэша: 3 канала, валидно.
+        assert!(profile_color(&sheet, "color(--foo 0.6 0 0 / 1)").is_some());
+    }
+
+    #[test]
+    fn color_profile_last_rule_with_same_name_wins() {
+        // §5.3: при повторе имени побеждает последнее правило, ранние
+        // игнорируются — fetch зовётся только для последнего.
+        let mut sheet = lumen_css_parser::parse(
+            "@color-profile --foo { src: url(first.icc); } @color-profile --foo { src: url(second.icc); }",
+        );
+        let mut fetched = Vec::new();
+        sheet.load_color_profiles(|src| {
+            fetched.push(src.to_owned());
+            Some(std::sync::Arc::new(SWAPPED_ICC.to_vec()))
+        });
+        assert_eq!(fetched, ["second.icc"]);
+        assert!(sheet.color_profiles[0].data.is_none());
+        assert!(sheet.color_profiles[1].data.is_some());
+    }
+
+    #[test]
+    fn color_profile_context_follows_sheet_without_profiles() {
+        // Лист без `@color-profile` снимает контекст: прежний проход каналов sRGB.
+        let _g = ClearProfiles;
+        let with = sheet_with_profiles("@color-profile --foo { src: url(missing.icc); }", None);
+        assert_eq!(profile_color(&with, "color(--foo 1 0.5 0)"), None);
+        let c = profile_color(&Stylesheet::default(), "color(--foo 1 0.5 0)").unwrap();
+        assert_eq!((c.r, c.b), (255, 0));
+    }
+
+    #[test]
+    fn color_profile_end_to_end_through_cascade() {
+        // Каскад сам привязывает профили листа: `background-color` получает
+        // трансформированный цвет, а объявление с невалидным — отбрасывается.
+        let _g = ClearProfiles;
+        let doc = lumen_html_parser::parse("<div></div><p></p>");
+        let mut sheet = lumen_css_parser::parse(
+            "@color-profile --foo { src: url(swapped.icc); }              div { background-color: color(--foo 0.6 0 0); }              p { background-color: color(--nope 0.6 0 0); }",
+        );
+        sheet.load_color_profiles(|_| Some(std::sync::Arc::new(SWAPPED_ICC.to_vec())));
+        let root = ComputedStyle::root();
+        let kids = &doc.get(doc.body().unwrap()).children;
+        let vp = Size::new(800.0, 600.0);
+        let div = compute_style(&doc, kids[0], &sheet, &root, vp, false);
+        let Some(CssColor::Wide(w)) = div.background_color else {
+            panic!("div background: {:?}", div.background_color)
+        };
+        let c = w.to_srgb_color();
+        assert!(near(c.r, 0, 2) && near(c.g, 153, 2) && near(c.b, 0, 2), "{c:?}");
+        let p = compute_style(&doc, kids[1], &sheet, &root, vp, false);
+        assert_eq!(p.background_color, None, "undeclared profile → declaration dropped");
     }
 
     // ── ColorFloat.to_display (ph3-color-management Step 2) ────────────────────

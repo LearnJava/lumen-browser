@@ -53,7 +53,7 @@ impl Lumen {
     /// then creates a separate always-on-top winit window with its own render
     /// backend. On any window/backend failure, falls back to [`Self::pip`] so the
     /// feature still works without multi-surface support.
-    pub(crate) fn open_pip_os(&mut self, event_loop: &ActiveEventLoop, nid: u32) {
+    pub(crate) fn open_pip_os(&mut self, event_loop: &MainHandle<'_>, nid: u32) {
         use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
 
         let (video_rect, poster_url) = self
@@ -127,7 +127,7 @@ impl Lumen {
     /// `docs/tasks/ph3-picture-in-picture.md`. Unlike [`Self::open_pip_os`]
     /// there is no video overlay to fall back to on window/backend failure —
     /// this Phase 0 slice just logs and gives up.
-    pub(crate) fn open_pip_os_document(&mut self, event_loop: &ActiveEventLoop, width: f32, height: f32) {
+    pub(crate) fn open_pip_os_document(&mut self, event_loop: &MainHandle<'_>, width: f32, height: f32) {
         use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
 
         let cfg = if width > 0.0 && height > 0.0 {
@@ -169,7 +169,7 @@ impl Lumen {
         self.render_pip_os();
     }
 
-    /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
+    /// CC-7: tear down the OS PiP window. Releasing the last `Arc<lumen_paint::SurfaceWindow>` makes
     /// winit destroy the OS window and free its GPU surface; the overlay fallback
     /// (if it was used instead) is cleared too.
     pub(crate) fn close_pip_os(&mut self) {
@@ -247,7 +247,7 @@ impl Lumen {
     /// window/backend creation failure the request is simply dropped (the JS
     /// `requestWindow()` promise already resolved with a `PictureInPictureWindow`
     /// whose `.document` stays a JS-only mock either way, see `document_pip.rs`).
-    pub(crate) fn open_doc_pip_os(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
+    pub(crate) fn open_doc_pip_os(&mut self, event_loop: &MainHandle<'_>, width: u32, height: u32) {
         use panels::doc_pip_os_window::DocPipController;
         use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
 
@@ -295,7 +295,7 @@ impl Lumen {
     }
 
     /// Document Picture-in-Picture (slice 1): tear down the OS floating window.
-    /// Releasing the last `Arc<Window>` makes winit destroy the OS window and
+    /// Releasing the last `Arc<lumen_paint::SurfaceWindow>` makes winit destroy the OS window and
     /// free its GPU surface.
     pub(crate) fn close_doc_pip_os(&mut self) {
         self.doc_pip_os = None;

@@ -29,7 +29,7 @@ impl Lumen {
         self.animation_scheduler = animation_scheduler::AnimationScheduler::new();
         self.transition_scheduler = TransitionScheduler::new();
         self.starting_style_tracker = StartingStyleTracker::new();
-        self.prev_styles = HashMap::new();
+        self.prev_styles = crate::layout_walk::StyleMap::default();
         self.page_prev_cascade_styles = None;
         self.page_prev_interactive = (None, None, None);
         self.anim_frame = None;
@@ -41,6 +41,7 @@ impl Lumen {
         self.hint = hints::HintState::default();
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
+        self.issue_scroll_command();
         // ADR-016 M3.2: the retained scroll band belongs to the old page — drop
         // it so the next frame repaints instead of blitting stale pixels.
         self.scroll_cache.invalidate();
@@ -49,6 +50,9 @@ impl Lumen {
         self.layout_source = None;
         self.pending_reload = Rc::new(Cell::new(false));
         self.pending_js_navigate = None;
+        if let Ok(mut inbox) = self.js_nav_inbox.lock() {
+            *inbox = None;
+        }
         self.stream_builder = None;
         self.stream_last_paint = std::time::Instant::now();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
@@ -69,6 +73,7 @@ impl Lumen {
         self.frame_text_cursor = HashMap::new();
         self.frame_text_selection_anchor = HashMap::new();
         self.text_drag = None;
+        self.doc_select = None;
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;
@@ -202,7 +207,7 @@ impl Lumen {
     }
 
     /// Close the tab at `idx`. If it was the last tab, exits the app instead.
-    pub(crate) fn close_tab(&mut self, idx: usize, event_loop: &winit::event_loop::ActiveEventLoop) {
+    pub(crate) fn close_tab(&mut self, idx: usize, event_loop: &crate::browser_thread::MainHandle<'_>) {
         if self.tab_strip.len() == 1 {
             // Last tab — exit.
             event_loop.exit();
@@ -248,7 +253,7 @@ impl Lumen {
     pub(crate) fn exec_tab_menu_action(
         &mut self,
         action: tabs::context_menu::MenuAction,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         use tabs::context_menu::MenuAction;
         let idx = self.tab_context_menu.target_idx;
@@ -377,7 +382,7 @@ impl Lumen {
     fn move_tab_to_new_window(
         &mut self,
         idx: usize,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         if idx != self.tab_strip.active {
             self.switch_tab(idx);
@@ -495,13 +500,33 @@ impl Lumen {
             // could mutate a parked tab before this slice — so pick up the
             // dirty flag the same way a rAF turn's mutation does and force
             // one relayout before the stale layout gets painted.
-            if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_dom_dirty()
-            })
-            .unwrap_or(false)
-            {
+            // THREAD-9: под движковым потоком флаг читается lock-free через
+            // кэшированный атомик (его перекэшировал `restore_page_snapshot`
+            // выше), а не блокирующим `query` за очередью движка; тот же
+            // `swap(false)`, что у `take_dom_dirty`.
+            let dom_dirty = if self.engine_thread.is_some() {
+                self.take_dom_dirty_lockfree()
+            } else {
+                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.take_dom_dirty()
+                })
+                .unwrap_or(false)
+            };
+            if dom_dirty {
                 self.poll_dynamic_frames();
                 self.relayout_raf_dirty();
+            }
+            // BUG-1214: a streaming `LoadEvent` for THIS tab arrived while it
+            // sat backgrounded — its in-flight bytes were discarded rather
+            // than corrupting whatever tab was active at the time (see
+            // `Lumen::mark_bg_tab_needs_reload`). `pending_reload` just came
+            // back with the rest of the snapshot above; `take()` clears it so
+            // this fires once. Queued rather than called directly: `reload`
+            // wants a settled `self` (source/document already restored, not
+            // mid-restore), same reasoning as the queue_task/UserInteraction
+            // reload path this flag was originally built for.
+            if self.pending_reload.take() {
+                self.reload();
             }
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite

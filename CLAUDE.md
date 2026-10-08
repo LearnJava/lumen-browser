@@ -31,7 +31,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 1. `git pull origin main` first, before reading STATUS files or branching.
 2. "You are developer N" → continue your existing `p<N>-…` branch if there is one, else take the **first** line of `STATUS-PN.md`. Strictly top-down: the order encodes dependencies. If line 1 cannot start, say why and ask.
-3. Work in your pool slot: `cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-<task> | tail -1)"`. The branch is the reservation.
+3. Take the task: `cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` — fetches origin, refuses if any unmerged branch carries the task id, occupies the pool slot and pushes the branch. Only a branch **on origin** reserves.
 4. Every commit: gate → commit → `merge --no-ff` into `main` → push. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify` (also enforced by `.claude/settings.json`). CI is not awaited — watch `main` after the push.
 5. Commit message in Russian, subject under 80 chars, body says *why*. Stage explicit paths, never `git add -A`.
 
@@ -47,6 +47,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 - **Reply in Russian**, technical tone, no emoji unless the user uses them, no marketing text. Files as clickable markdown links labelled `path:line`.
 - Banned word: "Wikipedia" / "Википедия" — say "reference article" / "external page".
+- **Every turn ends either with the task declared done or with an ```` ```ask-user ```` block** — never a plain-text question ("confirm and I start"), and never a bare explanation while a decision is pending: after answering "what's the difference?" re-ask the open question as `ask-user`. Otherwise the session manager reads the turn as "stopped without declaring done", restarts the session and the user's answer is lost.
 
 ## Known gotchas — only traps that bite whatever the task is
 

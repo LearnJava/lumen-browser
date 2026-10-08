@@ -178,7 +178,7 @@ pub(crate) fn render_source_to_png(
         Some((w, h)) => Size::new(w, h),
         None => Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H),
     };
-    let parsed = parse_and_layout(
+    let mut parsed = parse_and_layout(
         &raw.bytes,
         raw.content_type.as_deref(),
         &raw.base,
@@ -208,9 +208,27 @@ pub(crate) fn render_source_to_png(
         &raw.report_to_endpoints,
         raw.sync_xhr_document_policy,
         raw.sync_xhr_permissions_policy,
-        raw.referrer_policy_header.as_deref(),
+        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
+
+    load_web_fonts_before_snapshot(&mut parsed, &raw.base, &event_sink, vp);
+    settle_after_load(&mut parsed, vp);
+
+    // Программные скроллы контейнеров, запрошенные скриптами страницы
+    // (`el.scrollBy()`/`scrollTo()`/`scrollTop = …`): живой цикл применяет их
+    // в `about_to_wait` через `set_scroll_position`, headless-путь их никогда
+    // не дренировал, и снимок показывал контейнер непрокрученным.
+    if let Some(js) = parsed.js_ctx.as_ref() {
+        for (nid, x, y) in js.take_scroll_requests() {
+            lumen_layout::set_scroll_position(
+                &mut parsed.layout,
+                lumen_dom::NodeId::from_index(nid as usize),
+                x,
+                y,
+            );
+        }
+    }
 
     // Полная высота страницы (контент может быть длиннее экрана), с потолком.
     let content_h = parsed
@@ -239,7 +257,7 @@ pub(crate) fn render_source_to_png(
 
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
-        let mut dl = paint_ordered(&parsed.layout);
+        let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
         // BUG-480 срез 15: содержимое под-документов фреймов — и здесь. Живой
         // путь вклеивает его в `Lumen::set_display_list` (срез 14), а `--dump-
         // display-list` — у себя; снимок собирает список сам и до этого среза
@@ -265,6 +283,100 @@ pub(crate) fn render_source_to_png(
     lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
 }
+
+/// BUG-1273: снимок делается «после `document.fonts.ready`» (так его берёт
+/// reftest-исполнитель WPT), а у однократного headless-пути нет цикла событий,
+/// куда приходит `LoadEvent::FontLoaded`. Поэтому `url()`-источники `@font-face`,
+/// которые `parse_and_layout` оставил в `pending_web_fonts`, грузятся здесь
+/// блокирующим fetch, регистрируются в реестре рендера и измерителе, и layout
+/// пересчитывается до снимка. Без веб-шрифтов функция ничего не делает.
+fn load_web_fonts_before_snapshot(
+    parsed: &mut crate::page_pipeline::ParsedPage,
+    base: &crate::ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    vp: Size,
+) {
+    if parsed.pending_web_fonts.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut parsed.pending_web_fonts);
+    let (csp_gate, referrer_policy) = {
+        let Ok(doc) = parsed.document.lock() else { return };
+        let root = doc.root();
+        (
+            crate::csp_enforce::document_csp_policy(&doc, root),
+            crate::resource_base::document_referrer_policy(&doc),
+        )
+    };
+    let self_origin = base.origin();
+    let _s = lumen_core::trace::span("web-fonts", "font");
+    let (loaded, _blocked) = crate::frames::fetch_web_fonts_blocking(
+        pending, base, sink, None, csp_gate.as_ref(), self_origin.as_ref(), referrer_policy,
+    );
+    if loaded.is_empty() {
+        return;
+    }
+    for (wf, variation_settings) in loaded {
+        parsed.font_registry.register_from_bytes(
+            &wf.family, wf.weight, wf.style, &wf.unicode_range, wf.bytes.clone(),
+            wf.ascent_override, wf.descent_override, wf.size_adjust, wf.line_gap_override,
+            variation_settings,
+        );
+        parsed.measurer.register_family_with_overrides(
+            &wf.family, wf.bytes, wf.unicode_range, wf.ascent_override, wf.descent_override,
+            wf.size_adjust, wf.line_gap_override,
+        );
+    }
+    let layout = {
+        let Ok(doc) = parsed.document.lock() else { return };
+        lumen_layout::layout_measured_hyp(
+            &doc, &parsed.stylesheet, vp, &parsed.measurer, &NullHyphenationProvider, false,
+        )
+    };
+    parsed.layout = layout;
+}
+
+/// Максимум кадров `requestAnimationFrame`, которые снимок прокручивает после `load`.
+/// Двойной rAF (`rAF(() => rAF(() => …))`) — обычный приём «дождаться отрисовки» в
+/// reftest-ах; цепочка длиннее пары кадров снимку не нужна.
+const SCREENSHOT_RAF_TURNS: usize = 4;
+
+/// Довести страницу до состояния «после `load` и первых кадров» перед снимком.
+///
+/// `parse_and_layout` отдаёт документ сразу после inline-скриптов и
+/// `DOMContentLoaded`: обработчики `window.onload`/`<body onload>` и колбэки
+/// `requestAnimationFrame` (живой цикл крутит их сам) в headless-пути не
+/// исполнялись, поэтому страницы, меняющие DOM в `load`/двойном rAF
+/// (`css-gaps/*repaint-on-*`, `gap-decorations-003/004`), снимались «до» правки.
+/// Здесь один раз шлётся `load`, затем до [`SCREENSHOT_RAF_TURNS`] кадров rAF, пока
+/// очередь не опустеет; если скрипты тронули DOM — layout пересчитывается тем же
+/// измерителем (страницы без изменений остаются побайтово прежними).
+#[cfg(feature = "v8")]
+pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, vp: Size) {
+    let Some(js) = parsed.js_ctx.clone() else { return };
+    js.notify_window_loaded();
+    let mut ts = 0.0_f64;
+    for _ in 0..SCREENSHOT_RAF_TURNS {
+        if !js.has_raf_pending() {
+            break;
+        }
+        ts += 16.0;
+        js.run_animation_frame(ts);
+    }
+    if !js.take_dom_dirty() {
+        return;
+    }
+    let layout = {
+        let Ok(doc) = parsed.document.lock() else { return };
+        lumen_layout::layout_measured_hyp(
+            &doc, &parsed.stylesheet, vp, &parsed.measurer, &NullHyphenationProvider, false,
+        )
+    };
+    parsed.layout = layout;
+}
+
+#[cfg(not(feature = "v8"))]
+pub(crate) fn settle_after_load(_parsed: &mut crate::page_pipeline::ParsedPage, _vp: Size) {}
 
 /// Convert a `PersistentJs::flush_canvas_updates` drain into renderer image
 /// entries keyed exactly the way the display list refers to them.
@@ -329,7 +441,7 @@ pub(crate) fn do_print_to_pdf(
         &raw.report_to_endpoints,
         raw.sync_xhr_document_policy,
         raw.sync_xhr_permissions_policy,
-        raw.referrer_policy_header.as_deref(),
+        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
 
@@ -388,7 +500,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
 ) -> Result<usize, Box<dyn Error>> {
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{
-        build_print_display_list, split_at_page_breaks, strip_background_graphics, Renderer,
+        apply_print_color_adjust, build_print_display_list, split_at_page_breaks, Renderer,
     };
     let PrintOptions { margin_tb, margin_lr, scale, print_backgrounds, landscape } = opts;
 
@@ -425,7 +537,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
         &raw.report_to_endpoints,
         raw.sync_xhr_document_policy,
         raw.sync_xhr_permissions_policy,
-        raw.referrer_policy_header.as_deref(),
+        raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
 
@@ -440,10 +552,11 @@ pub(crate) fn do_print_to_pdf_with_opts(
     let mut pages = paginate(&parsed.layout, &ctx);
     let page_count_total = pages.len() as u32;
     attach_page_boxes(&mut pages, page_count_total, &ctx);
+    // CC-8: drop CSS background graphics when the dialog toggle is off —
+    // except for boxes that opt in with `print-color-adjust: exact`.
+    apply_print_color_adjust(&mut pages, print_backgrounds);
     let cmds = build_print_display_list(&pages);
-    let mut split_pages = split_at_page_breaks(cmds);
-    // CC-8: drop CSS background graphics when the dialog toggle is off.
-    strip_background_graphics(&mut split_pages, print_backgrounds);
+    let split_pages = split_at_page_breaks(cmds);
 
     let images = Renderer::render_print_pages(
         INTER_FONT.to_vec(),
@@ -642,14 +755,14 @@ pub(crate) fn run_dump(
         }
         DumpKind::Layout => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
-            let mut dl = paint_ordered(&parsed.layout);
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
             // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на
             // экран, — окно вклеивает содержимое под-документов в список
             // страницы (`Lumen::set_display_list`), и без этой строки дамп

@@ -24,16 +24,17 @@ use std::ops::Range;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
+    box_can_own_stacking_context, contains_fixed_descendants, forward_box_transform, is_positioned_layer_auto,
+    owns_paint_layer, perspective_matrix,
     transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     SvgGradientDef, SvgGradientUnits, SvgPaint,
     GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
+    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, PrintColorAdjust, Resize,
     ScrollbarWidth, SelectionHighlight,
     StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
@@ -42,7 +43,11 @@ use lumen_layout::{
     font_palette::{palette_selection, FontPaletteSelection},
 };
 
-use crate::gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
+use crate::gap_decorations::{
+    emit_gap_rules, grid_gap_segments, subgrid_axis_gap, GapDecorationContext, GapSegment, GridGapGeometry,
+    GridGapParams,
+};
+use crate::flex_gap_decorations::flex_gap_segments;
 
 mod paint_types;
 pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClipShape};
@@ -77,9 +82,15 @@ pub use fingerprint::{
 mod serialize;
 pub use serialize::serialize_display_list;
 
+mod emit_cache;
+pub use emit_cache::{EmitCacheStats, SubtreeEmitCache};
+// Used only by `display_list/box_layer.rs` (via `super::*`).
+use emit_cache::{CaptureMark, Lookup};
+
 mod builder;
 pub use builder::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
+    build_display_list_ordered_dpr_cached,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_ordered_with_anim_split, build_display_list_with_anim,
     build_display_list_with_selection,
@@ -88,7 +99,7 @@ pub use builder::{
 use builder::SplitTracker;
 
 mod print;
-pub use print::{build_print_display_list, split_at_page_breaks, strip_background_graphics};
+pub use print::{apply_print_color_adjust, build_print_display_list, split_at_page_breaks};
 // Used by `display_list/{box_layer,walk}.rs` and `display_list/tests/anim_and_chrome.rs`
 // (via `super::*` / explicit `use super::clip_path_to_rect`).
 use print::clip_path_to_rect;
@@ -237,7 +248,7 @@ mod text_run;
 use text_run::emit_inline_run;
 
 mod box_layer;
-use box_layer::fill_buckets;
+use box_layer::{fill_buckets, fill_buckets_cached};
 
 mod inline_frag;
 use inline_frag::{
@@ -252,7 +263,8 @@ use inline_frag::background_origin_rect;
 use inline_frag::content_box_rect;
 
 mod background_mask;
-use background_mask::{emit_background_image, emit_push_mask, rendered_mask_layers};
+use background_mask::{emit_background_image, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
+pub use background_mask::with_fixed_background_viewport;
 // Used only by `display_list/tests/background_and_layers.rs` (via `super::*`).
 #[cfg(test)]
 use background_mask::gradient_tile_rects;
@@ -264,12 +276,14 @@ mod box_shadow;
 use box_shadow::{emit_box_shadows, emit_inset_box_shadows};
 
 mod scrollbars;
-use scrollbars::emit_scrollbars;
-pub use scrollbars::patch_scroll_layer;
+use scrollbars::{emit_scrollbars, scrolled_hidden};
+pub use scrollbars::{ScrollLayerOverride, apply_scroll_overrides, patch_scroll_layer};
 // Used only by `display_list/tests/anim_and_chrome.rs` (via `super::*`).
 #[cfg(test)]
 use scrollbars::{SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR, SCROLLBAR_WIDTH_THIN};
 
+mod fieldset;
+use fieldset::{emit_box_border, fieldset_decoration_box};
 mod outline_misc;
 use outline_misc::{emit_column_rules, emit_outline, emit_resize_grip};
 pub use outline_misc::point_on_resize_grip;
@@ -289,6 +303,10 @@ use svg_text_decoration::{emit_svg_shape, emit_svg_shape_masked, emit_svg_text, 
 #[path = "display_list/tests/text_and_images.rs"]
 mod text_and_images;
 
+#[cfg(test)]
+#[path = "display_list/tests/images_media.rs"]
+mod images_media;
+
 mod text_highlight;
 pub use text_highlight::emit_text_with_highlights;
 
@@ -297,8 +315,8 @@ use table::{collect_table_cells, emit_table_box, emit_table_cell_border};
 
 mod walk;
 use walk::{
-    depth_sorted_child_order, emit_box_self, establishes_3d_rendering_context, is_backface_hidden,
-    walk,
+    depth_sorted_child_order, emit_box_self, emit_push_perspective, establishes_3d_rendering_context,
+    gap_decoration_commands, is_backface_hidden, walk,
 };
 // Used only by `display_list/tests/shadows_and_transforms.rs` (via `use super::*`).
 #[cfg(test)]
@@ -317,6 +335,22 @@ mod svg_table_and_hash;
 mod anim_and_chrome;
 
 #[cfg(test)]
+#[path = "display_list/tests/chrome_overlays_print.rs"]
+mod chrome_overlays_print;
+
+#[cfg(test)]
+#[path = "display_list/tests/flex_gap_rules.rs"]
+mod flex_gap_rules;
+
+#[cfg(test)]
+#[path = "display_list/tests/flex_grid_order_paint.rs"]
+mod flex_grid_order_paint;
+
+#[cfg(test)]
+#[path = "display_list/tests/fieldset_legend.rs"]
+mod fieldset_legend;
+
+#[cfg(test)]
 #[path = "display_list/tests/shadows_and_transforms.rs"]
 mod shadows_and_transforms;
 
@@ -329,6 +363,10 @@ mod background_and_layers;
 mod ordered_build_scroll;
 
 #[cfg(test)]
+#[path = "display_list/tests/fixed_cb_scroll.rs"]
+mod fixed_cb_scroll;
+
+#[cfg(test)]
 #[path = "display_list/tests/form_controls_caret.rs"]
 mod form_controls_caret;
 
@@ -339,3 +377,11 @@ mod walk_trampoline;
 #[cfg(test)]
 #[path = "display_list/tests/fill_buckets_trampoline.rs"]
 mod fill_buckets_trampoline;
+
+#[cfg(test)]
+#[path = "display_list/tests/subtree_paint_eq.rs"]
+mod subtree_paint_eq;
+
+#[cfg(test)]
+#[path = "display_list/tests/subtree_emit_cache.rs"]
+mod subtree_emit_cache;

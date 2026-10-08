@@ -102,6 +102,9 @@ const LOAF_SHIM: &str = r#"(function() {
     };
   };
 
+  // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+  Object.defineProperty(PerformanceScriptTiming.prototype, Symbol.toStringTag,
+    { value: 'PerformanceScriptTiming', configurable: true });
   globalThis.PerformanceScriptTiming = PerformanceScriptTiming;
 
   // ── PerformanceLongAnimationFrameTiming ────────────────────────────────────
@@ -148,6 +151,9 @@ const LOAF_SHIM: &str = r#"(function() {
     };
   };
 
+  // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+  Object.defineProperty(PerformanceLongAnimationFrameTiming.prototype, Symbol.toStringTag,
+    { value: 'PerformanceLongAnimationFrameTiming', configurable: true });
   globalThis.PerformanceLongAnimationFrameTiming = PerformanceLongAnimationFrameTiming;
 
   // ── Delivery binding ──────────────────────────────────────────────────────
@@ -162,7 +168,7 @@ const LOAF_SHIM: &str = r#"(function() {
   //   first_ui_event_ts     — first UI event timestamp, or 0
   //   blocking_duration_ms  — pre-computed blocking portion, or -1 to auto-compute
   //   scripts_json          — JSON array of PerformanceScriptTiming initialisers, or null
-  globalThis._lumen_deliver_long_animation_frame = function(
+  __lumen_C._lumen_deliver_long_animation_frame = function(
     start_ms, duration_ms, render_start, style_layout_start,
     first_ui_event_ts, blocking_duration_ms, scripts_json
   ) {

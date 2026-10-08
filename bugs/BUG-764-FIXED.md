@@ -118,7 +118,7 @@ WAI-ARIA landmark-роли — своих `ROLE_SYSTEM_*` под `IA2_ROLE_LANDM
 
 * [BUG-398](BUG-398-FIXED.md) — тот же дефект для трёх ролей Graphics ARIA,
   закрыт 2026-08-11; его правка — рабочий шаблон для этой.
-* [BUG-686](BUG-686-OPEN.md) — соседний, но другой путь: implicit-роли SVG
+* [BUG-686](BUG-686-FIXED.md) — соседний, но другой путь: implicit-роли SVG
   (`implicit_role`, namespace не проверяется), а не explicit `role=`.
 * `docs/wpt-vendor-notes/dpub-aam.md` / `dpub-aria.md` — вендоринг категорий,
   инфраструктурная часть (хелпер `/wai-aria/scripts/aria-utils.js` не довендорен,

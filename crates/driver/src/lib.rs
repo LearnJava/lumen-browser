@@ -232,6 +232,15 @@ pub trait BrowserSession {
     /// `screenshot` reflect any DOM mutation the script made.
     fn eval(&mut self, js: &str) -> Result<String>;
 
+    /// [`Self::eval`] with an explicit wait budget in milliseconds (BUG-1145).
+    ///
+    /// Only the live window has something to wait for — its engine thread can
+    /// be busy with earlier work — so the default ignores `timeout_ms`.
+    fn eval_with_timeout(&mut self, js: &str, timeout_ms: u64) -> Result<String> {
+        let _ = timeout_ms;
+        self.eval(js)
+    }
+
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если
     /// ни один узел не совпал.
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>>;
@@ -339,6 +348,22 @@ pub trait BrowserSession {
     /// real effect.
     fn set_timezone(&mut self, _timezone_id: Option<&str>) -> Result<()> {
         Ok(())
+    }
+
+    /// Set a permission state (WebDriver BiDi `permissions.setPermission`,
+    /// BUG-1014). `Ok(false)` = the engine does not know `name`.
+    ///
+    /// Default impl reports `Ok(true)` without effect (headless sessions have
+    /// no page to observe it); [`LiveWindowSession`] overrides it.
+    fn set_permission(&mut self, _name: &str, _state: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Role and accessible name of the element the selector chain resolves to
+    /// (BUG-1014). `Ok(None)` = no such element; headless sessions have no
+    /// live page and always answer `None`.
+    fn computed_a11y(&mut self, _selectors: &[String]) -> Result<Option<(String, String)>> {
+        Ok(None)
     }
 
     /// Register a network intercept rule (WebDriver BiDi `network.addIntercept`,

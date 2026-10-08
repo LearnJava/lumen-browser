@@ -12,7 +12,7 @@ impl Lumen {
     pub(crate) fn execute_gesture_action(
         &mut self,
         action: input::gesture::GestureAction,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
     ) {
         use input::gesture::GestureAction;
         match action {

@@ -14,6 +14,12 @@ pub(crate) fn establishes_bfc(b: &LayoutBox) -> bool {
         || b.style.overflow_y != Overflow::Visible
         || b.style.float_side != FloatSide::None
         || matches!(b.style.position, Position::Absolute | Position::Fixed)
+        // Flexbox §3 / Grid §3: a flex/grid container is an independent
+        // formatting context, so its items' margins never reach its ancestors.
+        || matches!(
+            b.style.display,
+            Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+        )
 }
 
 /// True if the box has any in-flow child that produces content (i.e. a child
@@ -41,6 +47,11 @@ pub(crate) fn has_in_flow_content(b: &LayoutBox) -> bool {
 /// an inline run or a replaced element) the collapsing chain is broken and
 /// `None` is returned. A child with clearance also breaks the chain.
 fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
+    // A vertical box stacks its children along x: its top margin has no
+    // block-axis neighbour inside it to collapse with.
+    if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb) {
+        return None;
+    }
     for child in &b.children {
         if matches!(child.kind, BoxKind::Marker { .. } | BoxKind::Skip) {
             continue;
@@ -170,6 +181,9 @@ pub(crate) fn collapsed_top_margin(
 /// replaced element) the collapsing chain is broken and `None` is returned. A
 /// child with clearance also breaks the chain.
 pub(crate) fn last_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
+    if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb) {
+        return None;
+    }
     for child in b.children.iter().rev() {
         if matches!(child.kind, BoxKind::Marker { .. } | BoxKind::Skip) {
             continue;

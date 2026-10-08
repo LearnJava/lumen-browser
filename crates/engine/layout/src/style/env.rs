@@ -69,6 +69,12 @@ thread_local! {
     // SPLIT-ST9: та же причина, что у `CONTAINER_CQ` — `ch`/`ex` резолвит
     // `Length::resolve` из `style::values::length`.
     pub(in crate::style) static FONT_CH_EX: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+    /// Used `line-height` (px) of the box being laid out, for the `lh` unit
+    /// (CSS Values L4 §5.1.1). `None` outside layout → `1.2em` fallback.
+    pub(in crate::style) static FONT_LH: Cell<Option<f32>> = const { Cell::new(None) };
+    /// `(lh, ch, ex)` in px of the root element's font, for `rlh`/`rch`/`rex`.
+    /// Set once by the outermost `lay_out_inner` (the root box); `None` outside layout.
+    pub(in crate::style) static ROOT_FONT_METRICS: Cell<Option<(f32, f32, f32)>> = const { Cell::new(None) };
 }
 
 /// Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
@@ -76,6 +82,31 @@ thread_local! {
 /// `None` clears the context, making `Length::{Ch,Ex}` use the `0.5em` fallback.
 pub fn push_ch_ex_context(ch_ex: Option<(f32, f32)>) -> Option<(f32, f32)> {
     FONT_CH_EX.with(|c| c.replace(ch_ex))
+}
+
+/// Installs the `lh` context (used line-height in px); returns the previous value.
+pub fn push_lh_context(lh: Option<f32>) -> Option<f32> {
+    FONT_LH.with(|c| c.replace(lh))
+}
+
+/// Returns the current root-font metrics context.
+pub fn root_font_metrics() -> Option<(f32, f32, f32)> {
+    ROOT_FONT_METRICS.with(|c| c.get())
+}
+
+/// Installs the root-font metrics context (`lh`, `ch`, `ex` px); returns the previous value.
+pub fn push_root_font_metrics(m: Option<(f32, f32, f32)>) -> Option<(f32, f32, f32)> {
+    ROOT_FONT_METRICS.with(|c| c.replace(m))
+}
+
+/// Restores the value returned by [`push_root_font_metrics`].
+pub fn pop_root_font_metrics(prev: Option<(f32, f32, f32)>) {
+    ROOT_FONT_METRICS.with(|c| c.set(prev));
+}
+
+/// Restores the `lh` context to a value returned by [`push_lh_context`].
+pub fn pop_lh_context(prev: Option<f32>) {
+    FONT_LH.with(|c| c.set(prev));
 }
 
 /// Restores the `ch`/`ex` metric context to a value previously returned by

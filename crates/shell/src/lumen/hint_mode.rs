@@ -57,13 +57,7 @@ impl Lumen {
                 node_id.index()
             );
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
-            if let Some(Some(nav)) = route_query_js(
-                self.engine_thread.as_ref(),
-                self.js_ctx.as_ref(),
-                |j| j.take_navigate_request(),
-            ) {
-                self.pending_js_navigate = Some(nav);
-            }
+            self.queue_js_navigate_read();
         }
         // Form action classification.
         let form_action = if let Some(src) = self.layout_source.as_ref() {

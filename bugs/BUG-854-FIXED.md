@@ -36,7 +36,7 @@ dev-release, Linux, коммит `c583a90b4`, `--seconds 5`, страница ж
 
 Соседние варианты того же замера отделяют этот дефект от уже заведённых:
 `<object data>`/`<embed src>` ведут себя так же и принадлежат
-[BUG-798](BUG-798-OPEN.md); `<iframe src>` тоже не запрашивает документ, но у
+[BUG-798](BUG-798-FIXED.md); `<iframe src>` тоже не запрашивает документ, но у
 него есть `contentWindow`/`contentDocument` и свой баг —
 [BUG-480](BUG-480-OPEN.md); `window.frameElement` отсутствует по
 [BUG-588](BUG-588-OPEN.md). Разметочный `<frame>` внутри `<frameset>` не
@@ -182,7 +182,7 @@ dev-release, Linux, коммит `c583a90b4`, `--seconds 5`, страница ж
 Также остаётся не про этот баг: `<frame>` не рисуется (раскладка содержимого
 фрейма — срез BUG-480), `window.frameElement` отсутствует
 ([BUG-588](BUG-588-OPEN.md)), а `<object data>`/`<embed src>` по-прежнему не
-грузятся вовсе ([BUG-798](BUG-798-OPEN.md)) — маркер
+грузятся вовсе ([BUG-798](BUG-798-FIXED.md)) — маркер
 `nbc-element-never-loads` остаётся за ними.
 
 Найдено рядом и заведено отдельно: `iframe.src` отдаёт атрибут дословно вместо

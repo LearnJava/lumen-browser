@@ -6,6 +6,7 @@
 use super::*;
 
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
+    let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
     walk(root, &mut list, 1.0, None);
     list
@@ -25,6 +26,7 @@ pub fn build_display_list_with_selection(
     root: &LayoutBox,
     sel: Option<&SelectionHighlight>,
 ) -> DisplayList {
+    let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
     walk(root, &mut list, 1.0, sel);
     list
@@ -43,6 +45,7 @@ pub fn build_display_list_with_anim(
     root: &LayoutBox,
     anim: Option<&CompositorAnimFrame>,
 ) -> DisplayList {
+    let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
     walk_with_anim(root, anim, &mut list, 1.0);
     list
@@ -98,12 +101,49 @@ pub fn build_display_list_ordered_dpr(
     order: &PaintOrder,
     dpr: f32,
 ) -> (DisplayList, ProvenanceIndex) {
+    ordered_dpr_impl(root, tree, order, dpr, None)
+}
+
+/// [`build_display_list_ordered_dpr`] with a [`SubtreeEmitCache`] carried across
+/// frames (PERF-16): subtrees whose paint inputs equal the cached snapshot are
+/// replayed instead of re-emitted. The result — commands and provenance — is
+/// identical to the uncached build (`tests/subtree_emit_cache.rs`).
+///
+/// The cache is a mutable argument rather than hidden state, so the builder
+/// stays a function of its parameters (ADR-008 Invariant 3).
+pub fn build_display_list_ordered_dpr_cached(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    dpr: f32,
+    cache: &mut SubtreeEmitCache,
+) -> (DisplayList, ProvenanceIndex) {
+    ordered_dpr_impl(root, tree, order, dpr, Some(cache))
+}
+
+fn ordered_dpr_impl(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    dpr: f32,
+    mut cache: Option<&mut SubtreeEmitCache>,
+) -> (DisplayList, ProvenanceIndex) {
+    let _vp = FixedBgViewportGuard::install(root);
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
     let mut split = SplitTracker::disabled();
     let mut raw_spans: Vec<RawSpan> = Vec::new();
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[], &mut split, &mut raw_spans);
+    if let Some(c) = cache.as_deref_mut() {
+        c.begin_build(dpr);
+    }
+    fill_buckets_cached(
+        root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[],
+        &mut split, &mut raw_spans, cache.as_deref_mut(),
+    );
+    if let Some(c) = cache {
+        c.end_build();
+    }
 
     let mut spans_by_field: HashMap<(u32, BucketField), Vec<RawSpan>> = HashMap::new();
     for rs in raw_spans {
@@ -280,6 +320,7 @@ fn ordered_with_anim_internal(
     dpr: f32,
     track_split: bool,
 ) -> (DisplayList, Vec<std::ops::Range<usize>>) {
+    let _vp = FixedBgViewportGuard::install(root);
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;

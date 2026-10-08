@@ -107,7 +107,7 @@ fn apply_container_inner(
             let content_x = b.rect.x + pad_l + b.style.border_left_width;
             let content_y = b.rect.y + pad_t + b.style.border_top_width;
             let avail_h: Option<f32> = content_h;
-            let child_pcb = if !matches!(b.style.position, Position::Static) {
+            let child_pcb = if super::multicol_abspos::establishes_abs_cb(&b.style) {
                 Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
             } else {
                 pcb
@@ -179,9 +179,12 @@ fn apply_anchor_positions_rec(
     pcb: Rect,
     ancestors: &mut Vec<lumen_dom::NodeId>,
 ) {
-    let mut stack: Vec<(&mut LayoutBox, Rect, usize)> = vec![(lb, pcb, ancestors.len())];
-    while let Some((lb, pcb, depth)) = stack.pop() {
+    // `fixed_cb` — padding box of the nearest ancestor that captures `position: fixed`
+    // (transform/filter/contain, css-transforms-1 §2); `None` — the viewport.
+    let mut stack: Vec<(&mut LayoutBox, Rect, Option<Rect>, usize)> = vec![(lb, pcb, None, ancestors.len())];
+    while let Some((lb, pcb, fixed_cb, depth)) = stack.pop() {
     ancestors.truncate(depth);
+    let viewport_rect = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     // CSS Anchor Positioning L1 §4 — correct `anchor-size()` width/height against the
     // final, global anchor registry. The local registry `lay_out_abs_children` used is
     // collected once before any deferred (abs/fixed) sibling in the same containing
@@ -192,13 +195,19 @@ fn apply_anchor_positions_rec(
     // CSS: anchor-size(), position-anchor
     if matches!(lb.style.position, Position::Absolute | Position::Fixed) {
         let default_anchor = lb.style.position_anchor.as_deref();
+        let em = lb.style.font_size;
+        let cb = if matches!(lb.style.position, Position::Fixed) {
+            fixed_cb.unwrap_or(viewport_rect)
+        } else {
+            pcb
+        };
         if let Some(w) = lb.style.anchor_size_w.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(registry, f, default_anchor)
+            crate::anchor::resolve_anchor_size_or_fallback(registry, f, default_anchor, em, cb.width, viewport)
         }) {
             lb.rect.width = w;
         }
         if let Some(h) = lb.style.anchor_size_h.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(registry, f, default_anchor)
+            crate::anchor::resolve_anchor_size_or_fallback(registry, f, default_anchor, em, cb.height, viewport)
         }) {
             lb.rect.height = h;
         }
@@ -215,7 +224,7 @@ fn apply_anchor_positions_rec(
         if row != InsetAreaKeyword::None || col != InsetAreaKeyword::None {
             positioned_by_inset_area = true;
             let cb = if matches!(lb.style.position, Position::Fixed) {
-                Rect::new(0.0, 0.0, viewport.width, viewport.height)
+                fixed_cb.unwrap_or(viewport_rect)
             } else {
                 pcb
             };
@@ -265,7 +274,7 @@ fn apply_anchor_positions_rec(
             || lb.style.anchor_bottom.is_some();
         if has_anchor_func {
             let cb = if matches!(lb.style.position, Position::Fixed) {
-                Rect::new(0.0, 0.0, viewport.width, viewport.height)
+                fixed_cb.unwrap_or(viewport_rect)
             } else {
                 pcb
             };
@@ -314,23 +323,24 @@ fn apply_anchor_positions_rec(
         }
     }
 
-    // Compute the containing block for absolute-positioned children of this element.
-    let is_positioned = !matches!(lb.style.position, Position::Static);
-    let my_pcb = if is_positioned {
-        Rect::new(
-            lb.rect.x + lb.style.border_left_width,
-            lb.rect.y + lb.style.border_top_width,
-            (lb.rect.width - lb.style.border_left_width - lb.style.border_right_width).max(0.0),
-            (lb.rect.height - lb.style.border_top_width - lb.style.border_bottom_width).max(0.0),
-        )
+    // Compute the containing blocks for absolute- and fixed-positioned children of this element.
+    let padding_box = Rect::new(
+        lb.rect.x + lb.style.border_left_width,
+        lb.rect.y + lb.style.border_top_width,
+        (lb.rect.width - lb.style.border_left_width - lb.style.border_right_width).max(0.0),
+        (lb.rect.height - lb.style.border_top_width - lb.style.border_bottom_width).max(0.0),
+    );
+    let my_pcb = if super::multicol_abspos::establishes_abs_cb(&lb.style) { padding_box } else { pcb };
+    let my_fixed_cb = if crate::resolved_geometry::contains_fixed_descendants(&lb.style) {
+        Some(padding_box)
     } else {
-        pcb
+        fixed_cb
     };
 
     ancestors.push(lb.node);
     let child_depth = ancestors.len();
     for child in &mut lb.children {
-        stack.push((child, my_pcb, child_depth));
+        stack.push((child, my_pcb, my_fixed_cb, child_depth));
     }
     }
 }

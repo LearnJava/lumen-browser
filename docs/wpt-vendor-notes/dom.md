@@ -78,8 +78,8 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 
 | Подкаталог | id | OK | TIMEOUT | ERROR | сабтесты | Головная причина |
 |---|---:|---:|---:|---:|---|---|
-| `events/` | 192 | 141 | 16 | 35 | 198/578 | россыпь известных гэпов (см. ниже), крупнейший локальный — [BUG-865](../../bugs/BUG-865-OPEN.md) |
-| `ranges/` | 57 | 33 | 0 | 24 | 10/251 | [BUG-863](../../bugs/BUG-863-FIXED.md) — **все 24 ERROR** из одной причины ; после починки (2026-09-25) — 46/57 OK, 12262/44063 сабтестов, причины остатка — [BUG-1159](../../bugs/BUG-1159-OPEN.md), [BUG-1160](../../bugs/BUG-1160-OPEN.md), [BUG-1161](../../bugs/BUG-1161-OPEN.md) |
+| `events/` | 192 | 141 | 16 | 35 | 198/578 | россыпь известных гэпов (см. ниже), крупнейший локальный — [BUG-865](../../bugs/BUG-865-FIXED.md) |
+| `ranges/` | 57 | 33 | 0 | 24 | 10/251 | [BUG-863](../../bugs/BUG-863-FIXED.md) — **все 24 ERROR** из одной причины ; после починки (2026-09-25) — 46/57 OK, 12262/44063 сабтестов, после BUG-1159 (2026-10-01) — 31325/44063; причины остатка — [BUG-1232](../../bugs/BUG-1232-OPEN.md), [BUG-1159](../../bugs/BUG-1159-FIXED.md), [BUG-1160](../../bugs/BUG-1160-FIXED.md), [BUG-1161](../../bugs/BUG-1161-FIXED.md) |
 | `observable/` | 29 | 25 | 4 | 0 | 0/251 | `Observable` не реализован (WICG-предложение, каталог `tentative/`) |
 | `traversal/` | 18 | 14 | 1 | 3 | 26/56 | 3 ERROR — та же [BUG-863](../../bugs/BUG-863-FIXED.md) ; после починки — 17/18 OK, 1031/1583, остаток — [BUG-1164](../../bugs/BUG-1164-OPEN.md) |
 | `collections/` | 10 | 10 | 0 | 0 | 11/53 | `HTMLCollection.namedItem` отсутствует |
@@ -97,7 +97,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
   Отсюда `ranges/` 10/251: категория не «провалена», а не запущена.
 * [BUG-864](../../bugs/BUG-864-OPEN.md) — `Node.lookupNamespaceURI`/`lookupPrefix`/
   `isDefaultNamespace` отсутствуют целиком (70 сабтестов одного файла, ни одного PASS).
-* [BUG-865](../../bugs/BUG-865-OPEN.md) — опция `passive` у `addEventListener` не
+* [BUG-865](../../bugs/BUG-865-FIXED.md) — опция `passive` у `addEventListener` не
   разбирается: 57 FAIL в `passive-by-default.html`, весь
   `AddEventListenerOptions-passive.any.*` и 6 файлов `non-cancelable-when-passive/`.
   Тихий дефект: страница просит пассивный слушатель, получает обычный.
@@ -112,7 +112,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 | [BUG-482](../../bugs/BUG-482-OPEN.md) `document.scrollingElement` | почти весь `events/scrolling/` — 13 ERROR вида `Cannot read properties of undefined (reading 'scrollTo'/'scrollLeft'/'style')` |
 | [BUG-746](../../bugs/BUG-746-FIXED.md) `document.styleSheets` | 4 ERROR `webkit-{animation-*,transition-end}-event` (`styleSheets[0].insertRule`) |
 | [BUG-533](../../bugs/BUG-533-FIXED.md) `StaticRange` | 14 FAIL `StaticRange is not defined` |
-| [BUG-689](../../bugs/BUG-689-OPEN.md) `Attr`-подсистема | 32 FAIL `document.createAttribute is not a function` |
+| [BUG-689](../../bugs/BUG-689-FIXED.md) `Attr`-подсистема | 32 FAIL `document.createAttribute is not a function` |
 | [BUG-480](../../bugs/BUG-480-OPEN.md) вложенные browsing context | `handler-count.html` (3 id, `Browsing context for element was detached`), `scrollend-event-fires-to-iframe-window` |
 
 ### Вне скоупа движка, багов не заводилось

@@ -498,8 +498,35 @@ pub enum AutomationCommand {
     Type(Target, String),
     /// Scroll by delta in document coordinates.
     Scroll(ScrollDelta),
+    /// Move the pointer to viewport CSS-pixel coordinates without pressing a
+    /// button (BUG-1194): goes the same way as a real `CursorMoved` — hit
+    /// test, `:hover`, `pointerout/mouseout/…/mouseover/pointerenter`.
+    PointerMove {
+        /// Viewport X, CSS px.
+        x: f32,
+        /// Viewport Y, CSS px.
+        y: f32,
+    },
+    /// Press or release one non-text key (BUG-1194): dispatches `keydown` or
+    /// `keyup` with the given `KeyboardEvent.key`/`code` at the focused
+    /// element, without clicking anywhere.
+    Key {
+        /// `KeyboardEvent.key`, e.g. `Escape`.
+        key: String,
+        /// `KeyboardEvent.code`, e.g. `Escape`, `ShiftLeft`.
+        code: String,
+        /// `true` — `keydown`, `false` — `keyup`.
+        down: bool,
+    },
+    /// Type characters into the currently focused element without clicking
+    /// first (BUG-1194; `Type` always clicks its target).
+    TypeFocused(String),
     /// Evaluate JavaScript in the active tab.
-    Eval(String),
+    ///
+    /// The second field is how long (ms) the live window waits for its engine
+    /// thread to run the script before replying that the thread is busy
+    /// (BUG-1145); `None` — the shell's default.
+    Eval(String, Option<u64>),
     /// Take a screenshot.
     Screenshot,
     /// Wait for condition.
@@ -528,6 +555,23 @@ pub enum AutomationCommand {
     /// clears the override (host timezone); `Some(id)` is an IANA timezone
     /// identifier (e.g. `"America/New_York"`).
     SetTimezone(Option<String>),
+    /// Set a permission state on the live window (BUG-1014, WebDriver BiDi
+    /// `permissions.setPermission`): `name` is a Permissions API name,
+    /// `state` one of `granted` / `denied` / `prompt`.
+    SetPermission {
+        /// Permission name (`PermissionDescriptor.name`).
+        name: String,
+        /// `granted`, `denied` or `prompt`.
+        state: String,
+    },
+    /// Role and accessible name of the element addressed by a selector chain
+    /// (BUG-1014, WebDriver `Get Computed Role`/`Label`): the chain runs from
+    /// the outermost document down, each next selector inside the previous
+    /// match's shadow root. Reply: `Eval` with JSON `{"role":…,"name":…}`.
+    ComputedA11y {
+        /// Selector chain, one entry per shadow-root level.
+        selectors: Vec<String>,
+    },
     /// Register a network intercept rule on the live window (BUG-295
     /// remainder, WebDriver BiDi `network.addIntercept`).
     AddIntercept {

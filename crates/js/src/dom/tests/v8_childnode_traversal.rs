@@ -20,8 +20,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// `install_dom` argument list, same `_LUMEN_EXTENSION_ACTIVE` pre-eval.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -653,4 +653,27 @@ fn get_viewport_size_returns_updated_values() {
         }
         other => panic!("expected Array, got {other:?}"),
     }
+}
+
+/// BUG-1171: `nextNode()` goes from `currentNode` along tree links, even when
+/// `currentNode` (a template's content) lies outside the `root` subtree.
+#[test]
+fn tree_walker_next_node_from_current_outside_root() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _t = document.createElement('template');
+                _t.innerHTML = '<div class="a"><span id="s">hi</span><!--c--></div>';
+                var _w = document.createTreeWalker(document, 129);
+                _w.currentNode = _t.content;
+                var _seen = [], _n;
+                while ((_n = _w.nextNode()) !== null) _seen.push(_n.nodeType + '|' + _n.nodeName);
+                _seen = _seen.join(',');
+                var _w2 = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+                _w2.currentNode = document.body;
+                var _prev = _w2.previousNode();
+            "#).unwrap();
+    let seen = rt.eval("_seen").unwrap();
+    assert_eq!(seen, lumen_core::JsValue::String("1|DIV,1|SPAN,8|#comment".into()));
+    let prev = rt.eval("_prev === null").unwrap();
+    assert_eq!(prev, lumen_core::JsValue::Bool(true));
 }

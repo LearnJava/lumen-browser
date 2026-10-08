@@ -1,24 +1,23 @@
 use super::*;
 
 /// GAP-RUBYBOX — builds the `BoxKind::Ruby` box for a `<ruby>` element:
-/// partitions its DOM children into base/annotation groups and wraps each
-/// group in its own anonymous `Block` box via [`build_ruby_group_box`], so
-/// `layout_dispatch`'s `Ruby` arm can lay each one out with ordinary
-/// block-flow recursion before handing the resulting (sized) `LayoutBox`es
-/// to [`crate::ruby::RubyBox::from_style`] / [`crate::ruby::lay_out_ruby`].
+/// partitions its DOM children into ruby segments and wraps every base /
+/// annotation group in its own anonymous `Block` box via
+/// [`build_ruby_group_box`], so `layout_dispatch`'s `Ruby` arm can lay each
+/// one out with ordinary block-flow recursion before handing the resulting
+/// (sized) `LayoutBox`es to [`crate::ruby::lay_out_ruby_segments`].
 ///
-/// Grouping (CSS Ruby L1 §3 base/annotation pairing, `ruby-merge: separate`
-/// shape): walks children in DOM order, accumulating a "current base" run
-/// until it meets an `<rt>` (direct, or nested one level inside `<rtc>` —
-/// Phase 0 does not give `<rtc>` its own multi-annotation grouping, see the
-/// doc comment above `is_ruby_text_container_element`); that pairs the
-/// accumulated base with the `<rt>`'s own box. `<rp>` fallback-parenthesis
-/// content is dropped entirely (CSS Ruby L1 §4.3 — only meant for UAs
-/// without ruby support). Trailing base content with no following `<rt>`
-/// is folded into the last paired base group (documented remainder: full
-/// `ruby-merge` semantics would give it its own unannotated column) unless
-/// there was no `<rt>` at all, in which case the whole `<ruby>` degrades to
-/// `lay_out_ruby`'s "no ruby text" branch (`base_count == children.len()`).
+/// Segmentation (CSS Ruby L1 §2.2, GAP-RUBYBOX-2): children are walked in
+/// DOM order. Base content accumulates into the current segment's bases —
+/// each `<rb>` is one base, each run of other (loose) content another. An
+/// annotation run follows: consecutive bare `<rt>`s form one annotation level
+/// (anonymous container, `ruby-position` of the `<ruby>`), each `<rtc>` its
+/// own level (`ruby-position` of the `<rtc>`; its `<rt>` children are the
+/// annotations, a run of loose content inside it one more). Base content
+/// after an annotation run starts a new segment, so trailing unannotated base
+/// text gets its own column. `<rp>` fallback-parenthesis content is dropped
+/// (CSS Ruby L1 §4.3 — only meant for UAs without ruby support), as are
+/// whitespace-only text nodes between the pieces.
 #[allow(clippy::too_many_arguments)]
 fn build_ruby_box(
     doc: &Document,
@@ -32,64 +31,138 @@ fn build_ruby_box(
     dark_mode: bool,
     prev_index: Option<&crate::incremental::ReuseIndex>,
 ) -> LayoutBox {
-    let dom_children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
-    let mut base_boxes: Vec<LayoutBox> = Vec::new();
-    let mut ruby_text_boxes: Vec<LayoutBox> = Vec::new();
-    let mut cur_base: Vec<NodeId> = Vec::new();
-
-    let pair_with_rt = |cur_base: &mut Vec<NodeId>,
-                            base_boxes: &mut Vec<LayoutBox>,
-                            ruby_text_boxes: &mut Vec<LayoutBox>,
-                            rt_id: NodeId| {
-        let base_box = build_ruby_group_box(
-            doc, sheet, id, cur_base, style, viewport, flat, counters, registry, dark_mode,
+    let group = |owner: NodeId, nodes: &[NodeId], parent: &Arc<ComputedStyle>| {
+        build_ruby_group_box(
+            doc, sheet, owner, nodes, parent, viewport, flat, counters, registry, dark_mode,
             prev_index,
-        );
-        cur_base.clear();
-        base_boxes.push(base_box);
-        ruby_text_boxes.push(build_box_or_reuse(
-            doc, sheet, rt_id, style, viewport, flat, counters, registry, dark_mode, prev_index,
-        ));
+        )
+    };
+    // An `<rt>` gets the same shrink-to-fit wrapper as a base group: built
+    // as its own element box it was a block stretched to the whole line
+    // (1008px for `ān`), so neighbouring rubies' annotations overlapped (WPT
+    // `css-ruby/ruby-overhang-no-overlap.html`).
+    let annotation = |node: NodeId, parent: &Arc<ComputedStyle>| group(node, &[node], parent);
+    // CSS Ruby L1 §2.1: a floated or absolutely positioned `<rt>` is
+    // blockified and stops being ruby text — it stays in the base level
+    // (WPT `css-ruby/rt-display-blockified.html`).
+    let is_annotation = |node: NodeId, parent: &ComputedStyle| {
+        is_ruby_text_element(doc, node) && {
+            let s = counters.style_arc(node).unwrap_or_else(|| {
+                Arc::new(compute_style(doc, node, sheet, parent, viewport, dark_mode))
+            });
+            s.float_side == FloatSide::None
+                && !matches!(s.position, Position::Absolute | Position::Fixed)
+        }
+    };
+    let skipped = |node: NodeId| match &doc.get(node).data {
+        NodeData::Comment(_) | NodeData::Doctype { .. } => true,
+        NodeData::Text(t) => t.chars().all(is_wrap_whitespace),
+        _ => is_ruby_parenthesis_element(doc, node),
     };
 
-    for &cid in &dom_children {
-        if is_ruby_parenthesis_element(doc, cid) {
+    let mut shape = crate::ruby::RubyShape::default();
+    let mut children: Vec<LayoutBox> = Vec::new();
+    let mut bases: Vec<LayoutBox> = Vec::new();
+    let mut loose: Vec<NodeId> = Vec::new();
+    let mut implicit: Vec<LayoutBox> = Vec::new();
+    let mut levels: Vec<(crate::ruby::RubyPosition, Vec<LayoutBox>)> = Vec::new();
+
+    let flush_loose = |loose: &mut Vec<NodeId>, bases: &mut Vec<LayoutBox>| {
+        if !loose.is_empty() {
+            bases.push(group(id, loose, style));
+            loose.clear();
+        }
+    };
+    let flush_implicit =
+        |implicit: &mut Vec<LayoutBox>, levels: &mut Vec<(crate::ruby::RubyPosition, Vec<LayoutBox>)>| {
+            if !implicit.is_empty() {
+                levels.push((style.ruby_position, std::mem::take(implicit)));
+            }
+        };
+    let finish_segment = |bases: &mut Vec<LayoutBox>,
+                          levels: &mut Vec<(crate::ruby::RubyPosition, Vec<LayoutBox>)>,
+                          shape: &mut crate::ruby::RubyShape,
+                          children: &mut Vec<LayoutBox>| {
+        if bases.is_empty() && levels.is_empty() {
+            return;
+        }
+        shape.segments.push(crate::ruby::RubySegmentShape {
+            bases: bases.len(),
+            levels: levels
+                .iter()
+                .map(|(position, anns)| crate::ruby::RubyLevelShape {
+                    annotations: anns.len(),
+                    position: *position,
+                })
+                .collect(),
+        });
+        children.append(bases);
+        for (_, anns) in levels.drain(..) {
+            children.extend(anns);
+        }
+    };
+
+    for &cid in flat.children_of(doc, id) {
+        if skipped(cid) {
             continue;
         }
-        if is_ruby_text_element(doc, cid) {
-            pair_with_rt(&mut cur_base, &mut base_boxes, &mut ruby_text_boxes, cid);
+        if is_annotation(cid, style) {
+            flush_loose(&mut loose, &mut bases);
+            implicit.push(annotation(cid, style));
         } else if is_ruby_text_container_element(doc, cid) {
-            for &rt_id in flat.children_of(doc, cid) {
-                if is_ruby_text_element(doc, rt_id) {
-                    pair_with_rt(&mut cur_base, &mut base_boxes, &mut ruby_text_boxes, rt_id);
+            flush_loose(&mut loose, &mut bases);
+            flush_implicit(&mut implicit, &mut levels);
+            let rtc_style = counters.style_arc(cid).unwrap_or_else(|| {
+                Arc::new(compute_style(doc, cid, sheet, style, viewport, dark_mode))
+            });
+            let mut anns: Vec<LayoutBox> = Vec::new();
+            let mut rtc_loose: Vec<NodeId> = Vec::new();
+            for &rid in flat.children_of(doc, cid) {
+                if skipped(rid) {
+                    continue;
+                }
+                if is_annotation(rid, &rtc_style) {
+                    if !rtc_loose.is_empty() {
+                        anns.push(group(cid, &rtc_loose, &rtc_style));
+                        rtc_loose.clear();
+                    }
+                    anns.push(annotation(rid, &rtc_style));
+                } else {
+                    rtc_loose.push(rid);
                 }
             }
-        } else if !matches!(doc.get(cid).data, NodeData::Comment(_) | NodeData::Doctype { .. }) {
-            cur_base.push(cid);
+            if !rtc_loose.is_empty() {
+                anns.push(group(cid, &rtc_loose, &rtc_style));
+            }
+            if !anns.is_empty() {
+                levels.push((rtc_style.ruby_position, anns));
+            }
+        } else {
+            if !implicit.is_empty() || !levels.is_empty() {
+                flush_implicit(&mut implicit, &mut levels);
+                finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
+            }
+            if is_ruby_base_element(doc, cid) {
+                flush_loose(&mut loose, &mut bases);
+                bases.push(group(id, &[cid], style));
+            } else {
+                loose.push(cid);
+            }
         }
     }
-
-    if !cur_base.is_empty() {
-        let mut extra = build_ruby_group_box(
-            doc, sheet, id, &cur_base, style, viewport, flat, counters, registry, dark_mode,
-            prev_index,
-        );
-        match base_boxes.last_mut() {
-            Some(last) => last.children.append(&mut extra.children),
-            None => base_boxes.push(extra),
-        }
-    }
-
-    let base_count = base_boxes.len();
-    let mut children = base_boxes;
-    children.extend(ruby_text_boxes);
+    flush_loose(&mut loose, &mut bases);
+    flush_implicit(&mut implicit, &mut levels);
+    finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
 
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::clone(style),
-        kind: BoxKind::Ruby { base_count },
+        kind: BoxKind::Ruby { shape: Box::new(shape) },
         children,
         col_span: 1,
         row_span: 1,
@@ -118,7 +191,7 @@ fn build_ruby_group_box(
     sheet: &Stylesheet,
     owner_id: NodeId,
     group: &[NodeId],
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     viewport: Size,
     flat: &FlatTree,
     counters: &CounterMap,
@@ -135,7 +208,7 @@ fn build_ruby_group_box(
             continue;
         }
         if let NodeData::Text(s) = &doc.get(cid).data
-            && s.chars().all(char::is_whitespace)
+            && is_discardable_text(s, parent_style.white_space)
         {
             continue;
         }
@@ -171,6 +244,9 @@ fn build_ruby_group_box(
         node: owner_id,
         rect: Rect::ZERO,
         used_line_height: bstyle.font_size * bstyle.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::new(bstyle),
         kind: BoxKind::Block,
         children,
@@ -224,7 +300,7 @@ fn build_base_select_box(
     if !label.is_empty() {
         let seg = InlineSegment {
             text: label,
-            style: anon_style(style),
+            style: Arc::new(anon_style(style)),
             pre_space: 0.0,
             post_space: 0.0,
             is_element_box: false,
@@ -246,6 +322,9 @@ fn build_base_select_box(
         node: id,
         rect: Rect::ZERO,
         used_line_height: trigger_style.font_size * trigger_style.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::new(trigger_style),
         kind: BoxKind::Block,
         children: trigger_children,
@@ -264,6 +343,9 @@ fn build_base_select_box(
         node: id,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: Arc::new(style.clone()),
         // FlowRoot: establishes a BFC and lays out the trigger as a block child,
         // regardless of the select's own (inline-block) UA display.
@@ -386,8 +468,27 @@ pub fn incremental_build_box(
     dark_mode: bool,
     prev: &mut LayoutBox,
 ) -> LayoutBox {
+    incremental_build_box_unplaced(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev).0
+}
+
+/// [`incremental_build_box`], also handing back the subtrees it took out of `prev` and did not
+/// place in the new tree (BUG-935 срез 78: their ids are ones the caches must forget).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn incremental_build_box_unplaced(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev: &mut LayoutBox,
+) -> (LayoutBox, Vec<LayoutBox>) {
     if !incremental_box_build_enabled() {
-        return build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+        let built = build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+        return (built, Vec::new());
     }
     let t = std::time::Instant::now();
     let (prev_index, visited) = crate::incremental::extract_clean_subtrees(prev, counters.clean_subtrees());
@@ -399,7 +500,10 @@ pub fn incremental_build_box(
     if box_build_diagnostics_on() {
         note_prev_index(t.elapsed().as_nanos() as u64, visited);
     }
-    build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
+    let built =
+        build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index));
+    let unplaced = prev_index.into_values().filter_map(|slot| slot.into_inner().ok().flatten()).collect();
+    (built, unplaced)
 }
 
 /// BUG-341 S20 — timing shim around [`build_box_inner`].
@@ -470,6 +574,22 @@ fn build_box_inner(
             Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
         })
     });
+
+    // HTML Rendering §15.3.13: a legend of a fieldset is blockified (`inline`, `inline-block`, the
+    // table-internal values), and its children are built as the content of a block. The box
+    // itself gets the author's `display` back below — `getComputedStyle` reads the box's style and
+    // reports the computed value, not the used one (the layout of the legend blockifies it again
+    // for the duration of `place_rendered_legend`).
+    let legend_author_display = if is_fieldset_legend(doc, id)
+        && let Some(block) = blockified_legend_display(style.display)
+        && block == Display::Block
+    {
+        let author = style.display;
+        Arc::make_mut(&mut style).display = block;
+        Some(author)
+    } else {
+        None
+    };
 
     // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
     // as an author-styleable widget tree instead of the opaque native control.
@@ -657,9 +777,8 @@ fn build_box_inner(
                             let selected_text = collect_select_label(doc, id);
                             FormControlKind::Select { selected_text }
                         }
-                        // <selectlist> (Customizable Select, Phase 0) renders as a
-                        // native-select widget. P4 wires ::picker(select) appearance.
-                        // CSS: appearance: base-select
+                        // <selectlist> without `appearance: base-select` renders as a
+                        // native-select widget (the base-select path returns earlier).
                         "selectlist" => {
                             let selected_text = collect_selectlist_label(doc, id);
                             FormControlKind::Select { selected_text }
@@ -790,6 +909,10 @@ fn build_box_inner(
                     doc, sheet, id, &style, viewport, flat, counters, registry, dark_mode,
                     prev_index,
                 );
+            } else if style.display == Display::Block && is_fieldset_element(doc, id) {
+                // HTML Rendering §15.3.13: fieldset образует BFC (рамка с legend не
+                // схлопывает поля с содержимым).
+                BoxKind::FlowRoot
             } else {
                 BoxKind::Block
             }
@@ -800,10 +923,16 @@ fn build_box_inner(
     // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
     // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
     if style.content_visibility == crate::style::ContentVisibility::Hidden {
+        if let Some(author) = legend_author_display {
+            Arc::make_mut(&mut style).display = author;
+        }
         return LayoutBox {
             node: id,
             rect: Rect::ZERO,
             used_line_height: style.font_size * style.line_height,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style,
             kind,
             children: Vec::new(),
@@ -841,15 +970,23 @@ fn build_box_inner(
             BoxRole::AnonymousInlineRun,
         ));
     }
-    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
+    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup) {
+        // BUG-935 срез 71: `BoxKind::SvgRoot` is deliberately not in this list — its
+        // children are replaced below by `build_svg_children` (the SVG shape tree, not
+        // HTML boxes), so building them here only to drop them cost a full pass over
+        // every inline `<svg>` (a 340-box icon sprite = 4 ms of every same-tick flush
+        // on lenta.ru).
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
         // HTML5 §4.11.1 — <details>: when `open` attribute absent, only <summary> is rendered.
-        // P3 wires: clicking <summary> should toggle `open` attribute + relayout.
+        // A `<details>` with its UA shadow tree needs no filter: the content
+        // slot is `content-visibility: hidden` while closed (GAP-UASHADOWSLOT,
+        // `apply_ua_slot`). The filter stays for one without it.
         let dom_children: Vec<NodeId> = if textarea_runtime_value.is_some() {
             // The default value's text nodes are replaced by the run above.
             Vec::new()
         } else if is_details_element(doc, id)
             && doc.get(id).get_attr("open").is_none()
+            && doc.shadow_root_of(id).is_none()
         {
             flat.children_of(doc, id)
                 .iter()
@@ -1108,10 +1245,8 @@ fn build_box_inner(
                         // BUG-120: control-only text is skipped like whitespace-only,
                         // but contributes an inter-segment space only if it actually
                         // contains whitespace (a bare U+0001 is zero-advance in Edge).
-                        NodeData::Text(s)
-                            if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) =>
-                        {
-                            had_ws |= s.chars().any(char::is_whitespace);
+                        NodeData::Text(s) if is_discardable_text(s, style.white_space) => {
+                            had_ws |= s.chars().any(is_collapsible_whitespace);
                             i += 1;
                             continue;
                         }
@@ -1131,7 +1266,7 @@ fn build_box_inner(
                             && let Some(last) = pending.last_mut()
                             && !last.forced_break
                             && !last.style.white_space.preserves_whitespace()
-                            && !last.text.ends_with(|c: char| c.is_whitespace())
+                            && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
                         {
                             last.text.push(' ');
                         }
@@ -1160,6 +1295,9 @@ fn build_box_inner(
                                 node: id,
                                 rect: Rect::ZERO,
                                 used_line_height: gap_style.font_size * gap_style.line_height,
+                                grid_baselines: None,
+                                fieldset_legend: None,
+                                subgrid_tracks: None,
                                 style: Arc::new(gap_style),
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
@@ -1323,10 +1461,26 @@ fn build_box_inner(
         (1, 1)
     };
 
+    if let Some(author) = legend_author_display {
+        Arc::make_mut(&mut style).display = author;
+    }
+    let fieldset_legend = if is_fieldset_element(doc, id) {
+        rendered_legend_index(doc, &children).map(|idx| FieldsetLegend {
+            idx,
+            node: children[idx].node,
+            placed: false,
+            border_inset: 0.0,
+        })
+    } else {
+        None
+    };
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
+        grid_baselines: None,
+        fieldset_legend,
+        subgrid_tracks: None,
         style,
         kind,
         children,

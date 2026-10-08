@@ -7,8 +7,8 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -37,11 +37,14 @@ fn members_are_own_properties_of_interface_prototypes() {
     let node = [
         "appendChild", "insertBefore", "removeChild", "replaceChild", "cloneNode", "getRootNode",
         "parentNode", "childNodes", "lastChild", "textContent", "nodeType", "nodeName",
-        "isConnected", "ownerDocument", "addEventListener", "firstChild", "nextSibling",
+        "isConnected", "ownerDocument", "firstChild", "nextSibling",
     ];
     for m in node {
         assert_eq!(own(&rt, "Node", m), "true", "Node.prototype.{m}");
     }
+    // `Node : EventTarget` (BUG-1123): the listener methods are inherited.
+    assert_eq!(own(&rt, "Node", "addEventListener"), "false");
+    assert_eq!(own(&rt, "EventTarget", "addEventListener"), "true");
     let element = [
         "hasAttribute", "getAttribute", "setAttribute", "querySelector", "querySelectorAll",
         "attachShadow", "closest", "matches", "append", "children", "innerHTML",

@@ -190,7 +190,7 @@ fn named_access_wrapper<'s>(
     nid: u32,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let ctx = scope.get_current_context();
-    let global = ctx.global(scope);
+    let global = crate::internal_globals::holder_for(scope, ctx, "_lumen_make_element");
     let key = v8::String::new(scope, "_lumen_make_element")?;
     let factory = v8::Local::<v8::Function>::try_from(global.get(scope, key.into())?).ok()?;
     let arg = v8::Integer::new_from_unsigned(scope, nid).into();
@@ -292,7 +292,7 @@ pub(super) fn window_named_properties_template<'s>(
 /// spec's "no indexed setter → always false" answer.
 fn indexed_define_trusted(scope: &mut v8::PinScope) -> bool {
     let ctx = scope.get_current_context();
-    let global = ctx.global(scope);
+    let global = crate::internal_globals::holder_for(scope, ctx, "_lumen_indexed_define_trusted");
     let Some(key) = v8::String::new(scope, "_lumen_indexed_define_trusted") else {
         return false;
     };

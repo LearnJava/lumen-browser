@@ -1,6 +1,6 @@
 //! Развёртка CSS-шортхендов, у которых нет отдельного longhand-парсера:
 //! `text-decoration`, `text-emphasis`, `contain-intrinsic-size`, `text-wrap`,
-//! `flex-flow`/`flex`, `grid-column`/`grid-row`/`grid-area`.
+//! `flex-flow`/`flex`, `grid-column`/`grid-row`/`grid-area`, `grid-template`/`grid`.
 //!
 //! Перенесено батчем SPLIT-ST7 из `crates/engine/layout/src/style.rs`
 //! (анкер `struct ParsedTextDecorationShorthand`) без правок тел: изменены
@@ -10,7 +10,9 @@ use lumen_core::geom::Size;
 
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::{
-    parse_length, ComputedStyle, CssColor, FlexBasis, FlexDirection, FlexWrap, GridLine, Length,
+    parse_auto_repeat, parse_grid_template_areas, parse_length, parse_subgrid_name_fill, parse_track_line_names,
+    ComputedStyle, CssColor,
+    FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Length, NameFill,
     TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextWrapMode, TextWrapStyle, WhiteSpace,
 };
@@ -571,6 +573,11 @@ pub(in crate::style) fn apply_flex_shorthand(style: &mut ComputedStyle, val: &st
             style.flex_shrink = numbers[1];
             style.flex_basis = b;
         }
+        (3, None) if numbers[2] == 0.0 => {
+            // flex: <grow> <shrink> 0 — unitless zero is the basis (§7.1.1)
+            style.flex_grow = numbers[0];
+            style.flex_shrink = numbers[1];
+        }
         (0, Some(b)) => {
             // flex: <basis> only (e.g. flex: 100px)
             style.flex_basis = b;
@@ -593,65 +600,351 @@ pub(in crate::style) fn find_slash(s: &str) -> Option<usize> {
     None
 }
 
-/// Parse `grid-column` / `grid-row` shorthand: `<start> / <end>`.
+/// Значение пропущенной стороны шортхенда (CSS Grid L1 §8.4): `<custom-ident>`
+/// копируется, всё остальное — `auto`.
+fn omitted_grid_line(counterpart: &GridLine) -> GridLine {
+    match counterpart {
+        GridLine::Named(_) => counterpart.clone(),
+        _ => GridLine::Auto,
+    }
+}
+
+/// Parse `grid-column` / `grid-row` shorthand: `<grid-line> [ / <grid-line> ]?`.
+///
+/// CSS Grid L1 §8.4: невалидная часть делает невалидным всё значение
+/// (декларация игнорируется); пропущенный `end` — копия `start`, если тот —
+/// `<custom-ident>`, иначе `auto`.
 pub(in crate::style) fn apply_grid_line_shorthand(val: &str, start: &mut GridLine, end: &mut GridLine) {
-    let trimmed = val.trim();
-    if let Some(pos) = trimmed.find('/') {
-        let s = trimmed[..pos].trim();
-        let e = trimmed[pos + 1..].trim();
-        if let Some(v) = GridLine::parse(s) {
-            *start = v;
+    let parts: Vec<&str> = val.split('/').map(str::trim).collect();
+    match parts.as_slice() {
+        [s] => {
+            if let Some(sv) = GridLine::parse(s) {
+                *end = omitted_grid_line(&sv);
+                *start = sv;
+            }
         }
-        if let Some(v) = GridLine::parse(e) {
-            *end = v;
+        [s, e] => {
+            if let (Some(sv), Some(ev)) = (GridLine::parse(s), GridLine::parse(e)) {
+                *start = sv;
+                *end = ev;
+            }
         }
-    } else if let Some(v) = GridLine::parse(trimmed) {
-        *start = v.clone();
-        // end stays Auto per spec when only start provided
-        let _ = end; // keep lint quiet
+        _ => {}
     }
 }
 
 /// Parse `grid-area` shorthand: `row-start / col-start / row-end / col-end`.
 ///
-/// CSS Grid L1 §8.3: when only a single `<custom-ident>` is provided
-/// (not `auto`, not an integer, not `span`), it is a named area reference —
-/// all four grid-line properties are set to `Named(ident)` and resolved at
-/// layout time against the parent's `grid-template-areas`.
+/// CSS Grid L1 §8.4: пропущенные значения — копия противоположной стороны,
+/// если та `<custom-ident>`, иначе `auto` (`grid-area: main` ставит `main` во
+/// все четыре стороны). Невалидная часть — декларация игнорируется.
 pub(in crate::style) fn apply_grid_area_shorthand(val: &str, style: &mut ComputedStyle) {
     let parts: Vec<&str> = val.split('/').map(str::trim).collect();
-    match parts.as_slice() {
-        [single] => {
-            if let Some(v) = GridLine::parse(single) {
-                // Single named area: propagate to all four placement properties.
-                match &v {
-                    GridLine::Named(_) => {
-                        style.grid_row_start = v.clone();
-                        style.grid_row_end = v.clone();
-                        style.grid_column_start = v.clone();
-                        style.grid_column_end = v;
-                    }
-                    _ => {
-                        style.grid_row_start = v;
-                    }
+    if parts.is_empty() || parts.len() > 4 {
+        return;
+    }
+    let mut lines = Vec::with_capacity(4);
+    for p in &parts {
+        match GridLine::parse(p) {
+            Some(v) => lines.push(v),
+            None => return,
+        }
+    }
+    let row_start = lines[0].clone();
+    let col_start = lines.get(1).cloned().unwrap_or_else(|| omitted_grid_line(&row_start));
+    let row_end = lines.get(2).cloned().unwrap_or_else(|| omitted_grid_line(&row_start));
+    let col_end = lines.get(3).cloned().unwrap_or_else(|| omitted_grid_line(&col_start));
+    style.grid_row_start = row_start;
+    style.grid_column_start = col_start;
+    style.grid_row_end = row_end;
+    style.grid_column_end = col_end;
+}
+
+/// Делит строку по пробелам на глубине скобок 0, не разрывая кавычки.
+fn split_top_level_ws(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                quote = Some(c);
+                start.get_or_insert(i);
+            }
+            '(' | '[' => {
+                depth += 1;
+                start.get_or_insert(i);
+            }
+            ')' | ']' => {
+                depth -= 1;
+                start.get_or_insert(i);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(st) = start.take() {
+                    out.push(&s[st..i]);
                 }
             }
+            _ => {
+                start.get_or_insert(i);
+            }
         }
-        [rs, cs] => {
-            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
-            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
-        }
-        [rs, cs, re] => {
-            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
-            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
-            if let Some(v) = GridLine::parse(re) { style.grid_row_end = v; }
-        }
-        [rs, cs, re, ce] => {
-            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
-            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
-            if let Some(v) = GridLine::parse(re) { style.grid_row_end = v; }
-            if let Some(v) = GridLine::parse(ce) { style.grid_column_end = v; }
-        }
-        _ => {}
     }
+    if let Some(st) = start {
+        out.push(&s[st..]);
+    }
+    out
+}
+
+/// Токен `[line-name ...]` — имена линий в `ComputedStyle` не хранятся.
+fn is_line_names(tok: &str) -> bool {
+    tok.starts_with('[') && tok.ends_with(']')
+}
+
+/// Значения осевого списка шортхенда: треки, метаданные auto-repeat и имена линий.
+type AxisTracks = (Vec<GridTrackSize>, Option<GridRepeat>, Vec<Vec<String>>, Option<NameFill>);
+
+/// Разбор `<track-list>` оси: `None` — невалидный список (декларация целиком
+/// невалидна). `none` даёт пустой список.
+fn parse_axis_tracks(s: &str, is_quirks: bool) -> Option<AxisTracks> {
+    let cleaned = split_top_level_ws(s)
+        .into_iter()
+        .filter(|t| !is_line_names(t))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cleaned.eq_ignore_ascii_case("none") {
+        return Some((Vec::new(), None, Vec::new(), None));
+    }
+    let tracks = GridTrackSize::parse_track_list(&cleaned, is_quirks);
+    if tracks.is_empty() {
+        return None;
+    }
+    let names = parse_track_line_names(s, is_quirks);
+    Some((tracks, parse_auto_repeat(s), names, parse_subgrid_name_fill(s)))
+}
+
+/// Разобранные longhand-ы `grid-template-*` (initial = пустые).
+#[derive(Default)]
+struct GridTemplateParts {
+    rows: Vec<GridTrackSize>,
+    columns: Vec<GridTrackSize>,
+    row_repeat: Option<GridRepeat>,
+    col_repeat: Option<GridRepeat>,
+    areas: Vec<Vec<String>>,
+    row_names: Vec<Vec<String>>,
+    col_names: Vec<Vec<String>>,
+    row_fill: Option<NameFill>,
+    col_fill: Option<NameFill>,
+}
+
+impl GridTemplateParts {
+    fn apply(self, style: &mut ComputedStyle) {
+        style.grid_template_rows = self.rows;
+        style.grid_template_columns = self.columns;
+        style.grid_template_row_auto_repeat = self.row_repeat;
+        style.grid_template_col_auto_repeat = self.col_repeat;
+        style.grid_template_areas = self.areas;
+        style.grid_template_row_line_names = self.row_names;
+        style.grid_template_col_line_names = self.col_names;
+        style.grid_template_row_subgrid_fill = self.row_fill;
+        style.grid_template_col_subgrid_fill = self.col_fill;
+    }
+}
+
+/// Форма `grid-template` со строками-`<string>`:
+/// `[<line-names>? <string> <track-size>? <line-names>?]+ [/ <explicit-track-list>]?`.
+fn parse_grid_template_with_areas(
+    left: &str,
+    right: Option<&str>,
+    is_quirks: bool,
+) -> Option<GridTemplateParts> {
+    let mut parts = GridTemplateParts::default();
+    let mut area_src = String::new();
+    let mut pending_size: Option<GridTrackSize> = None;
+    let mut row_count = 0usize;
+    for tok in split_top_level_ws(left) {
+        if tok.starts_with('"') || tok.starts_with('\'') {
+            if row_count > 0 {
+                parts.rows.push(pending_size.take().unwrap_or(GridTrackSize::Auto));
+            }
+            row_count += 1;
+            area_src.push_str(tok);
+            area_src.push(' ');
+        } else if is_line_names(tok) {
+            // имена линий не хранятся
+        } else if row_count > 0 && pending_size.is_none() {
+            pending_size = Some(GridTrackSize::parse_single(tok, is_quirks)?);
+        } else {
+            return None;
+        }
+    }
+    if row_count == 0 {
+        return None;
+    }
+    parts.rows.push(pending_size.take().unwrap_or(GridTrackSize::Auto));
+    parts.areas = parse_grid_template_areas(&area_src);
+    if parts.areas.len() != row_count {
+        return None; // непрямоугольная сетка или пустая строка
+    }
+    if let Some(cols) = right {
+        let (columns, col_repeat, col_names, col_fill) = parse_axis_tracks(cols, is_quirks)?;
+        parts.columns = columns;
+        parts.col_repeat = col_repeat;
+        parts.col_names = col_names;
+        parts.col_fill = col_fill;
+    }
+    Some(parts)
+}
+
+/// Разбор значения `grid-template`; `None` — невалидно.
+fn parse_grid_template(val: &str, is_quirks: bool) -> Option<GridTemplateParts> {
+    let trimmed = val.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        return Some(GridTemplateParts::default());
+    }
+    let (left, right) = match find_slash(trimmed) {
+        Some(pos) => (trimmed[..pos].trim(), Some(trimmed[pos + 1..].trim())),
+        None => (trimmed, None),
+    };
+    if left.contains('"') || left.contains('\'') {
+        return parse_grid_template_with_areas(left, right, is_quirks);
+    }
+    // `<'grid-template-rows'> / <'grid-template-columns'>` — `/` обязателен.
+    let (rows, row_repeat, row_names, row_fill) = parse_axis_tracks(left, is_quirks)?;
+    let (columns, col_repeat, col_names, col_fill) = parse_axis_tracks(right?, is_quirks)?;
+    Some(GridTemplateParts {
+        rows,
+        columns,
+        row_repeat,
+        col_repeat,
+        areas: Vec::new(),
+        row_names,
+        col_names,
+        row_fill,
+        col_fill,
+    })
+}
+
+/// CSS Grid L1 §7.4 — `grid-template`: сбрасывает `grid-template-rows/-columns/-areas`.
+/// Невалидное значение — декларация игнорируется (`false`, `style` не тронут).
+pub(in crate::style) fn apply_grid_template_shorthand(
+    val: &str,
+    style: &mut ComputedStyle,
+    is_quirks: bool,
+) -> bool {
+    match parse_grid_template(val, is_quirks) {
+        Some(parts) => {
+            parts.apply(style);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Сторона `grid` в форме `auto-flow && dense? <track-size>?`.
+/// `Ok(None)` — слова `auto-flow` нет (сторона — обычный track-list);
+/// `Err(())` — невалидно; `Ok(Some((dense, size)))` — разобрано.
+#[allow(clippy::type_complexity, clippy::result_unit_err)]
+fn parse_auto_flow_side(
+    s: &str,
+    is_quirks: bool,
+) -> Result<Option<(bool, GridTrackSize)>, ()> {
+    let toks = split_top_level_ws(s);
+    if !toks.iter().any(|t| t.eq_ignore_ascii_case("auto-flow")) {
+        return Ok(None);
+    }
+    let mut dense = false;
+    let mut seen_flow = false;
+    let mut size: Option<GridTrackSize> = None;
+    for t in toks {
+        if t.eq_ignore_ascii_case("auto-flow") && !seen_flow {
+            seen_flow = true;
+        } else if t.eq_ignore_ascii_case("dense") && !dense {
+            dense = true;
+        } else if size.is_none() {
+            size = Some(GridTrackSize::parse_single(t, is_quirks).ok_or(())?);
+        } else {
+            return Err(());
+        }
+    }
+    Ok(Some((dense, size.unwrap_or(GridTrackSize::Auto))))
+}
+
+/// CSS Grid L1 §8.2 — `grid`:
+/// `<'grid-template'> |
+///  <'grid-template-rows'> / [auto-flow && dense?] <'grid-auto-columns'>? |
+///  [auto-flow && dense?] <'grid-auto-rows'>? / <'grid-template-columns'>`.
+///
+/// Сбрасывает все явные и неявные longhand-ы сетки (`grid-template-*`,
+/// `grid-auto-*`). Невалидное значение — декларация игнорируется (`false`).
+pub(in crate::style) fn apply_grid_shorthand(
+    val: &str,
+    style: &mut ComputedStyle,
+    is_quirks: bool,
+) -> bool {
+    let trimmed = val.trim();
+    let sides = find_slash(trimmed).map(|p| (trimmed[..p].trim(), trimmed[p + 1..].trim()));
+    let flows = match sides {
+        Some((l, r)) => {
+            match (parse_auto_flow_side(l, is_quirks), parse_auto_flow_side(r, is_quirks)) {
+                (Ok(lf), Ok(rf)) => Some((lf, rf)),
+                _ => return false,
+            }
+        }
+        None => None,
+    };
+    let (Some((left, right)), Some((lf, rf))) = (sides, flows) else {
+        // Нет `/` — только форма `<'grid-template'>` (`none` / areas-строки).
+        return apply_grid_template_then_reset_auto(trimmed, style, is_quirks);
+    };
+    match (lf, rf) {
+        // `auto-flow [dense]? <auto-rows>? / <template-columns>`
+        (Some((dense, auto_rows)), None) => {
+            let Some((columns, col_repeat, col_names, col_fill)) = parse_axis_tracks(right, is_quirks) else {
+                return false;
+            };
+            GridTemplateParts { columns, col_repeat, col_names, col_fill, ..Default::default() }.apply(style);
+            style.grid_auto_rows = auto_rows;
+            style.grid_auto_columns = GridTrackSize::Auto;
+            style.grid_auto_flow = if dense { GridAutoFlow::RowDense } else { GridAutoFlow::Row };
+            true
+        }
+        // `<template-rows> / auto-flow [dense]? <auto-columns>?`
+        (None, Some((dense, auto_columns))) => {
+            let Some((rows, row_repeat, row_names, row_fill)) = parse_axis_tracks(left, is_quirks) else {
+                return false;
+            };
+            GridTemplateParts { rows, row_repeat, row_names, row_fill, ..Default::default() }.apply(style);
+            style.grid_auto_columns = auto_columns;
+            style.grid_auto_rows = GridTrackSize::Auto;
+            style.grid_auto_flow =
+                if dense { GridAutoFlow::ColumnDense } else { GridAutoFlow::Column };
+            true
+        }
+        // Обе стороны без `auto-flow` — это форма `<'grid-template'>` с `/`.
+        (None, None) => apply_grid_template_then_reset_auto(trimmed, style, is_quirks),
+        // `auto-flow` с обеих сторон — невалидно.
+        (Some(_), Some(_)) => false,
+    }
+}
+
+/// Форма `grid: <'grid-template'>`: template по грамматике, `grid-auto-*` — к initial.
+fn apply_grid_template_then_reset_auto(
+    val: &str,
+    style: &mut ComputedStyle,
+    is_quirks: bool,
+) -> bool {
+    if !apply_grid_template_shorthand(val, style, is_quirks) {
+        return false;
+    }
+    style.grid_auto_flow = GridAutoFlow::Row;
+    style.grid_auto_rows = GridTrackSize::Auto;
+    style.grid_auto_columns = GridTrackSize::Auto;
+    true
 }

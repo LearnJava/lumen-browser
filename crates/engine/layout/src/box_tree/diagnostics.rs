@@ -305,8 +305,9 @@ thread_local! {
 // Set when such a resolution returned `None` *because* the basis was
 // indefinite: with a definite one the same site could have produced a value,
 // so the probe's result may not be replayed. Also set unconditionally by the
-// two dispatch paths that consume `available_height` inside another module
-// (vertical writing modes, SVG roots) and are therefore not auditable here.
+// dispatch paths that consume `available_height` inside another module
+// (vertical writing modes) and are therefore not auditable here. SVG roots
+// used to be among them; their single read now goes through the funnel.
 //
 // Callers save (`replace(false)`), run the probe, then restore
 // `outer || touched_here`, so a nested probe neither poisons a sibling's reuse
@@ -398,8 +399,24 @@ pub(crate) fn resolve_block_size(
     available_height: Option<f32>,
     viewport: Size,
 ) -> Option<f32> {
+    // CSS Sizing L4 §4.1 — `stretch` fills the containing block's definite
+    // content height; against an indefinite one it behaves as `auto` and the
+    // probe/final pass can differ, so record the consultation like a `%` does.
+    if matches!(l, Length::Stretch) {
+        if available_height.is_none() {
+            INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        }
+        return available_height;
+    }
     let resolved = l.resolve(em, available_height, viewport);
-    if resolved.is_none() && available_height.is_none() {
+    // BUG-341 S42: only a failure the basis *caused* counts. Intrinsic keywords
+    // (`min-content`/`fit-content`) and `cq*` units fail identically against a
+    // definite basis, so a definite re-run could not differ; the probe (`None`)
+    // and the final pass (`Some`) are then the same layout and may be replayed.
+    if resolved.is_none()
+        && available_height.is_none()
+        && l.resolve(em, Some(0.0), viewport).is_some()
+    {
         INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
     }
     resolved

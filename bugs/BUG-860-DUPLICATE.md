@@ -49,7 +49,7 @@ wa-eventtarget addEventListener=undefined cancel=function finish=function
 
 Механизм `animation-not-eventtarget` в `tests/wpt/timeout_audit.py` — часть
 кластера `web-animations`/`scroll-animations` в остатке снимка WPT-RUN-5
-(7 id вместе с [BUG-861](BUG-861-OPEN.md) и [BUG-704](BUG-704-OPEN.md)):
+(7 id вместе с [BUG-861](BUG-861-FIXED.md) и [BUG-704](BUG-704-OPEN.md)):
 `web-animations/interfaces/Animation/onfinish.html`, `onremove.html`,
 `persist.html`, `web-animations/animation-model/keyframe-effects/effect-value-replaced-animations.html`,
 `web-animations/interfaces/Animatable/getAnimations-iframe.html`,

@@ -711,7 +711,7 @@ elements never get `HTMLAnchorElement.prototype` — `anchor.ping` throws
 synchronously on a plain getter read). `rg ping crates --type rust` and a
 grep of every shim file turn up zero hyperlink-auditing call sites — the
 mechanism does not exist, not a bug in an existing one. Filed as
-[BUG-963](BUG-963-OPEN.md).
+[BUG-963](BUG-963-FIXED.md).
 
 This does **not** explain the corpus TIMEOUT, though: same pattern as
 `console-log-large-array`/`canvas-with-padding` (срез 48, item 4) — the test

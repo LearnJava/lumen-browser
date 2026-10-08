@@ -99,40 +99,59 @@ pub fn split_at_page_breaks(cmds: Vec<DisplayCommand>) -> Vec<Vec<DisplayCommand
     pages
 }
 
-/// Removes background-graphics paint commands from each print page when the
-/// user disabled "Background graphics" in the print dialog (CC-8).
+/// Drops CSS background graphics from the paginated layout when the user
+/// disabled "Background graphics" in the print dialog (CC-8), honouring
+/// `print-color-adjust` (CSS Color Adjustment L1 §4.1).
 ///
-/// Mirrors Chrome's "Background graphics" print toggle: when `print_backgrounds`
-/// is `false`, the CSS-background paint family is stripped — solid background
-/// fills (`FillRect`, `FillRoundedRect`), `background-image`s, and the three
-/// gradient kinds (linear/radial/conic). Foreground content — text, borders,
-/// outlines, `<img>` raster images, and SVG paths — is preserved.
+/// With `print_backgrounds == false` the UA is in "economy" mode: every box
+/// whose computed `print-color-adjust` is `economy` loses its
+/// `background-color` and `background-image` layers (gradients included).
+/// A box with `print-color-adjust: exact` keeps them — the user toggle is a
+/// default, the author's explicit `exact` hint wins for that subtree (the
+/// property is inherited, so inline fragments carry their own value).
+/// Foreground content — text, borders, outlines, `<img>` raster images and
+/// SVG paths — is never touched.
 ///
-/// No-op when `print_backgrounds` is `true`. Operates in place, page by page;
-/// `Push*`/`Pop*` nesting stays balanced because only leaf paint commands are
-/// removed.
-pub fn strip_background_graphics(pages: &mut [Vec<DisplayCommand>], print_backgrounds: bool) {
+/// No-op when `print_backgrounds` is `true`. Works on the layout tree rather
+/// than the flat display list because the per-element `exact`/`economy`
+/// decision is no longer recoverable from the emitted fills.
+pub fn apply_print_color_adjust(pages: &mut [Page], print_backgrounds: bool) {
     if print_backgrounds {
         return;
     }
     for page in pages.iter_mut() {
-        page.retain(|cmd| !is_background_graphic(cmd));
+        for frag in page.fragments.iter_mut() {
+            economize_box(&mut frag.layout_box);
+        }
     }
 }
 
-/// Classifies a [`DisplayCommand`] as a CSS background-graphics paint op —
-/// the set removed when "Background graphics" is off (see
-/// [`strip_background_graphics`]).
-fn is_background_graphic(cmd: &DisplayCommand) -> bool {
-    matches!(
-        cmd,
-        DisplayCommand::FillRect { .. }
-            | DisplayCommand::FillRoundedRect { .. }
-            | DisplayCommand::DrawBackgroundImage { .. }
-            | DisplayCommand::DrawLinearGradient { .. }
-            | DisplayCommand::DrawRadialGradient { .. }
-            | DisplayCommand::DrawConicGradient { .. }
-    )
+fn economize_box(b: &mut LayoutBox) {
+    if b.style.print_color_adjust == PrintColorAdjust::Economy
+        && (b.style.background_color.is_some() || !b.style.background_layers.is_empty())
+    {
+        let st = std::sync::Arc::make_mut(&mut b.style);
+        st.background_color = None;
+        st.background_layers.clear();
+    }
+    if let BoxKind::InlineRun { segments, lines, .. } = &mut b.kind {
+        for seg in segments.iter_mut() {
+            economize_style(std::sync::Arc::make_mut(&mut seg.style));
+        }
+        for frag in lines.iter_mut().flatten() {
+            economize_style(std::sync::Arc::make_mut(&mut frag.style));
+        }
+    }
+    for child in b.children.iter_mut() {
+        economize_box(child);
+    }
+}
+
+fn economize_style(style: &mut ComputedStyle) {
+    if style.print_color_adjust == PrintColorAdjust::Economy {
+        style.background_color = None;
+        style.background_layers.clear();
+    }
 }
 
 #[derive(Default, Clone)]

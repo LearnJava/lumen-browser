@@ -6,8 +6,10 @@
 //!
 //! Phase 0 exposes:
 //! - `PerformanceSoftNavigationEntry` class (entryType = `'soft-navigation'`).
-//! - `_lumen_deliver_soft_nav(url, startTime, durationMs)` — shell hook to record
-//!   a soft navigation and notify `PerformanceObserver` subscribers.
+//! - `_lumen_deliver_soft_nav(url, startTime, durationMs)` — hook to record a soft
+//!   navigation and notify `PerformanceObserver` subscribers. Its caller is the
+//!   `_sn_*` block at the end of `shim/web_api_shim_tail.js` (GAP-SOFTNAV-S1):
+//!   trusted click/keydown + `pushState` + node insertion, delivered on the next rAF.
 //!
 //! The entry is inserted into `performance._perf_entries` (same slot used by other
 //! performance entries) so that `performance.getEntriesByType('soft-navigation')`
@@ -49,6 +51,9 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
         navigationId: this.navigationId
       };
     };
+    // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+    Object.defineProperty(PerformanceSoftNavigationEntry.prototype, Symbol.toStringTag,
+      { value: 'PerformanceSoftNavigationEntry', configurable: true });
     globalThis.PerformanceSoftNavigationEntry = PerformanceSoftNavigationEntry;
   }
 
@@ -60,7 +65,7 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
   //   startTime  — navigation start timestamp (ms, same epoch as performance.now())
   //   durationMs — time until largest contentful paint or DOMContentLoaded (Phase 0: 0)
 
-  globalThis._lumen_deliver_soft_nav = function(url, startTime, durationMs) {
+  __lumen_C._lumen_deliver_soft_nav = function(url, startTime, durationMs) {
     var entry = new PerformanceSoftNavigationEntry({
       name:         url || '',
       startTime:    startTime  || 0,
@@ -68,21 +73,13 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
       navigationId: String(Date.now())
     });
 
-    // Insert into performance entries (same bucket as PerformanceObserver reads).
-    if (typeof performance !== 'undefined' && Array.isArray(performance._perf_entries)) {
-      performance._perf_entries.push(entry);
-    }
-
-    // Notify PerformanceObserver subscribers for 'soft-navigation'.
-    if (typeof performance !== 'undefined' && Array.isArray(performance._observers)) {
-      var observers = performance._observers;
-      for (var i = 0; i < observers.length; i++) {
-        var obs = observers[i];
-        if (!obs._types || obs._types.indexOf('soft-navigation') >= 0) {
-          try { obs._callback([entry]); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
-        }
-      }
-    }
+    // The page shim's performance entry buffer and §5.1 «queue a
+    // PerformanceEntry» (`web_api_shim_tail.js`), the same pair every other
+    // entry type goes through (BUG-678). `performance._perf_entries` /
+    // `performance._observers`, which this hook used to write, exist nowhere,
+    // so even a wired caller would have produced an entry nobody could read.
+    if (typeof _perf_entries !== 'undefined') _perf_entries.push(entry);
+    if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
   };
 
 })();
@@ -132,47 +129,15 @@ mod tests {
         });
     }
 
+    // Delivery into the real performance timeline is covered with the page
+    // shim loaded — `dom/tests/v8_perf_observers.rs`
+    // (`soft_nav_hook_feeds_the_performance_timeline`); without it the hook
+    // must stay a harmless no-op.
     #[test]
-    fn deliver_soft_nav_inserts_entry() {
+    fn deliver_soft_nav_without_page_shim_is_noop() {
         with_soft_navigation(|rt| {
             let ok = rt
-                .eval(
-                    r#"
-                    var _perf = { _perf_entries: [], _observers: [] };
-                    var savedPerf = globalThis.performance;
-                    globalThis.performance = _perf;
-                    _lumen_deliver_soft_nav('/home', 0, 0);
-                    var _ok = _perf._perf_entries.length === 1
-                      && _perf._perf_entries[0].entryType === 'soft-navigation'
-                      && _perf._perf_entries[0].name === '/home';
-                    globalThis.performance = savedPerf;
-                    _ok
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
-    }
-
-    #[test]
-    fn deliver_soft_nav_notifies_observer() {
-        with_soft_navigation(|rt| {
-            let ok = rt
-                .eval(
-                    r#"
-                    var _perf2 = { _perf_entries: [], _observers: [] };
-                    var _notified = false;
-                    _perf2._observers.push({
-                      _types: ['soft-navigation'],
-                      _callback: function(entries) { _notified = entries.length === 1; }
-                    });
-                    var savedPerf2 = globalThis.performance;
-                    globalThis.performance = _perf2;
-                    _lumen_deliver_soft_nav('/page', 10, 200);
-                    globalThis.performance = savedPerf2;
-                    _notified
-                    "#,
-                )
+                .eval("_lumen_deliver_soft_nav('/home', 0, 0); true")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });

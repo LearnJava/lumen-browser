@@ -10,7 +10,7 @@
 и прогнана целиком (`run_report.py --all --root web-animations --recursive`,
 ~4 мин, 139 отобранных id): 121/139 harness OK, 930/4147 сабтестов. Крупнейший
 одиночный драйвер провалов — уже отдельно задокументированный
-[BUG-670](BUG-670-OPEN.md) (`getComputedTiming` отсутствует, ~556 вхождений
+[BUG-670](BUG-670-FIXED.md) (`getComputedTiming` отсутствует, ~556 вхождений
 текста ошибки по трём вариантам вызывающего кода: `effect.`/`anim.effect.`/
 `animation.effect.getComputedTiming is not a function`).
 
@@ -90,7 +90,7 @@ wp-commit-throws  TypeError: b.commitStyles is not a function
 остатка снимка WPT-RUN-5: `Animation/persist.html`, `Animation/onremove.html`,
 `keyframe-effects/effect-value-replaced-animations.html`. Соседние дыры того
 же объекта — [BUG-860](BUG-860-DUPLICATE.md) (не `EventTarget`) и
-[BUG-861](BUG-861-OPEN.md) (перемотка завершённой анимации).
+[BUG-861](BUG-861-FIXED.md) (перемотка завершённой анимации).
 
 ## Исправлено 2026-09-17 (P3)
 

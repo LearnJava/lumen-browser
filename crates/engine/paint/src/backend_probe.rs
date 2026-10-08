@@ -94,7 +94,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use winit::window::Window;
 
 use crate::renderer::{renderer_instance_descriptor, window_device_limits};
 
@@ -467,7 +466,7 @@ fn candidates_before<T: Copy>(
 ///
 /// `None` — проба выключена/неприменима (env-override, не Windows) или все
 /// кандидаты провалились; вызывающий код использует статическую цепочку.
-pub async fn pick_backend(window: &Arc<Window>) -> Option<ProbeOutcome> {
+pub async fn pick_backend(window: &Arc<crate::SurfaceWindow>) -> Option<ProbeOutcome> {
     // BUG-275 — специфика Windows (DWM/WSI); на других ОС проба не нужна,
     // а пробный цветной кадр в окне — неоправданный побочный эффект.
     if !cfg!(target_os = "windows") || probe_disabled() {
@@ -593,7 +592,7 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<ProbeOutcome> {
 /// отклонён: сигнал readback и (адаптер, драйвер), если кандидат открылся
 /// (для [`fallback_choice`]).
 async fn probe_one(
-    window: &Arc<Window>,
+    window: &Arc<crate::SurfaceWindow>,
     backends: wgpu::Backends,
     name: &str,
 ) -> Result<CandidateReport, (Signal, Option<(String, String)>)> {
@@ -622,7 +621,7 @@ async fn probe_one(
 /// Пробует один бэкенд: instance → surface → adapter → device → 2 кадра
 /// clear-ом пробного цвета → readback + захват презентации.
 async fn probe_candidate(
-    window: &Arc<Window>,
+    window: &Arc<crate::SurfaceWindow>,
     backends: wgpu::Backends,
 ) -> Result<CandidateReport, String> {
     let mut phases = PhaseTimes::default();
@@ -916,7 +915,7 @@ fn read_staging(
 /// `None` — захват недоступен (не Windows / GDI-сбой) — сигнал
 /// [`Signal::Unavailable`] у вызывающего.
 #[cfg(target_os = "windows")]
-fn capture_present(window: &Window, srgb: bool) -> Option<Signal> {
+fn capture_present(window: &crate::SurfaceWindow, srgb: bool) -> Option<Signal> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let hwnd = match window.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => h.hwnd.get() as *mut std::ffi::c_void,
@@ -928,14 +927,14 @@ fn capture_present(window: &Window, srgb: bool) -> Option<Signal> {
 
 /// Заглушка захвата для не-Windows: сигнал недоступен.
 #[cfg(not(target_os = "windows"))]
-fn capture_present(_window: &Window, _srgb: bool) -> Option<Signal> {
+fn capture_present(_window: &crate::SurfaceWindow, _srgb: bool) -> Option<Signal> {
     None
 }
 
 /// Перекрыто ли окно чужим окном и строка его состояния для лога —
 /// для решения по несошедшемуся захвату (BUG-1073).
 #[cfg(target_os = "windows")]
-fn window_cover(window: &Window) -> Option<(bool, String)> {
+fn window_cover(window: &crate::SurfaceWindow) -> Option<(bool, String)> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match window.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => {
@@ -948,7 +947,7 @@ fn window_cover(window: &Window) -> Option<(bool, String)> {
 
 /// Заглушка для не-Windows: захвата нет, перекрытие не проверяется.
 #[cfg(not(target_os = "windows"))]
-fn window_cover(_window: &Window) -> Option<(bool, String)> {
+fn window_cover(_window: &crate::SurfaceWindow) -> Option<(bool, String)> {
     None
 }
 

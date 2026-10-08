@@ -100,15 +100,18 @@ impl std::ops::BitOrAssign for DirtyBits {
 /// Used to reposition a clean subtree when a dirty sibling above it changed
 /// height, keeping the block-flow y-cursor consistent across siblings.
 /// Zero deltas are a no-op (early exit at the root level).
+///
+/// Moves what *other* layout output is stored in document space together with
+/// the rect — `svg_paint_matrix` and the `<mask>` content of SVG shapes (the
+/// walk is [`crate::box_tree::shift_tree`]). A rect-only translate left the
+/// matrix at its old origin, so each incremental pass that relocated a clean
+/// icon grew the gap between `rect` and the CTM that `<path>` icons paint with
+/// (chrome: +41 px per keystroke).
 pub fn translate_subtree(b: &mut LayoutBox, dx: f32, dy: f32) {
     if dx.abs() < f32::EPSILON && dy.abs() < f32::EPSILON {
         return;
     }
-    b.rect.x += dx;
-    b.rect.y += dy;
-    for child in &mut b.children {
-        translate_subtree(child, dx, dy);
-    }
+    crate::box_tree::shift_tree(b, dx, dy);
 }
 
 /// Mark `node_id` as needing full re-layout.
@@ -191,7 +194,7 @@ pub(crate) type ReuseIndex = std::collections::HashMap<NodeId, std::sync::Mutex<
 /// see that flag for why the graft must be able to recognise one.
 pub(crate) fn extract_clean_subtrees(
     prev: &mut LayoutBox,
-    clean: &std::collections::HashSet<NodeId>,
+    clean: &lumen_core::id_hash::IdSet<NodeId>,
 ) -> (ReuseIndex, u64) {
     let mut out = ReuseIndex::default();
     let mut visited = 0u64;
@@ -207,7 +210,7 @@ pub(crate) fn extract_clean_subtrees(
 
 fn extract_clean_subtrees_inner(
     b: &mut LayoutBox,
-    clean: &std::collections::HashSet<NodeId>,
+    clean: &lumen_core::id_hash::IdSet<NodeId>,
     out: &mut ReuseIndex,
     visited: &mut u64,
 ) {
@@ -242,6 +245,9 @@ fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
         node: b.node,
         rect: b.rect,
         used_line_height: b.used_line_height,
+        grid_baselines: None,
+        fieldset_legend: None,
+        subgrid_tracks: None,
         style: std::sync::Arc::clone(&b.style),
         origin: b.origin,
         kind: crate::box_tree::BoxKind::Skip,
@@ -253,6 +259,78 @@ fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
         scroll_y: 0.0,
         dirty: DirtyBits::MOVED_OUT,
     }
+}
+
+/// BUG-935 срез 78 — the node ids a restyle took out of the *previous* tree's dirty area.
+///
+/// The JS-visible caches (`layout_rects`, `client_rects`, `computed_styles`, `scroll_states`) are
+/// evicted for every node the flush's dirty roots owned before the flush, so that a node the
+/// mutation removed does not linger with stale geometry. That set used to be the whole subtree of
+/// every root in the old tree — `body` on a real page, i.e. the document — and the plan then
+/// subtracted the whole document again for the subtrees it left alone.
+///
+/// A subtree the box builder carried over is, by construction, still in the new tree under the same
+/// ids, so only the other old boxes can have gone: the ones the build left in the husked `prev`
+/// ([`extract_clean_subtrees`]) and the carried-over subtrees it did not end up placing. Those are
+/// proportional to what changed, not to the document.
+///
+/// `index` is keyed by [`NodeId::index`] (`layout_rects`, `client_rects`, `computed_styles`), `raw`
+/// by [`NodeId::raw`] (`scroll_states`) — the asymmetry the caches already have.
+#[derive(Default, Debug, Clone)]
+pub struct ReleasedIds {
+    pub index: lumen_core::id_hash::IdSet<u32>,
+    pub raw: lumen_core::id_hash::IdSet<u32>,
+}
+
+impl ReleasedIds {
+    fn add_subtree(&mut self, top: &LayoutBox) {
+        let mut stack = vec![top];
+        while let Some(b) = stack.pop() {
+            self.index.insert(b.node.index() as u32);
+            self.raw.insert(b.node.raw());
+            stack.extend(b.children.iter());
+        }
+    }
+}
+
+/// BUG-935 срез 78 — [`ReleasedIds`] of a tree `prev` the box build has taken subtrees out of.
+///
+/// The area is what [`crate::find_dirty_root_boxes`] gives for `scope`: the subtree of the first box
+/// of each scope root in pre-order. `unplaced` are the subtrees the build moved out of `prev` and
+/// then did not use (their parent no longer builds them, say); one counts when the husk at its old
+/// position lies in the area. With the build off `prev` has no husks and this is the old subtree
+/// walk.
+pub(crate) fn released_ids(
+    prev: &LayoutBox,
+    unplaced: &[LayoutBox],
+    scope: &lumen_core::id_hash::IdSet<NodeId>,
+) -> ReleasedIds {
+    let mut out = ReleasedIds::default();
+    if scope.is_empty() {
+        return out;
+    }
+    let mut husks_in_area = lumen_core::id_hash::IdSet::<NodeId>::default();
+    let mut stack: Vec<(&LayoutBox, bool)> = vec![(prev, false)];
+    while let Some((b, in_area)) = stack.pop() {
+        let in_area = in_area || scope.contains(&b.node);
+        if b.dirty.contains(DirtyBits::MOVED_OUT) {
+            if in_area {
+                husks_in_area.insert(b.node);
+            }
+            continue;
+        }
+        if in_area {
+            out.index.insert(b.node.index() as u32);
+            out.raw.insert(b.node.raw());
+        }
+        stack.extend(b.children.iter().map(|c| (c, in_area)));
+    }
+    for top in unplaced {
+        if husks_in_area.contains(&top.node) {
+            out.add_subtree(top);
+        }
+    }
+    out
 }
 
 // ─── Graft accounting (BUG-341 S13) ─────────────────────────────────────────
@@ -528,7 +606,16 @@ pub fn graft_geometry_with_cascade(
     }
 
     let common = new.children.len().min(prev.children.len());
-    let mut all_clean = self_reusable && new.children.len() == prev.children.len();
+    // BUG-935 срез 64 / BUG-1245: an inline element owns no box — its style rides on the
+    // segments of the run it sits in, so a restyle of `<u>`/`<span>` leaves the run's own box
+    // (and its cascade entry) as it was. `segments_eq` leaves the segment styles out on purpose,
+    // so a clean graft would copy the previous run — laid-out lines *and* the old segment
+    // styles — over the freshly built one. A change confined to paint-only fields is adopted
+    // into the previous lines in place (below); any other change makes the run dirty.
+    let run_change = inline_run_style_change(&new.kind, &prev.kind);
+    let mut all_clean = self_reusable
+        && new.children.len() == prev.children.len()
+        && run_change != RunStyleChange::Layout;
     // BUG-355: this box's own geometry-affecting fields changed, so every
     // in-flow child is about to be measured against a different containing
     // block even though its own style is untouched — grafting it clean would
@@ -560,7 +647,10 @@ pub fn graft_geometry_with_cascade(
         // post-layout payload e.g. InlineRun's laid-out `lines`, absent on the
         // freshly-built `new` side).
         new.rect = prev.rect;
-        new.kind = prev.kind.clone();
+        let fresh_kind = std::mem::replace(&mut new.kind, prev.kind.clone());
+        if run_change == RunStyleChange::PaintOnly {
+            adopt_fresh_segment_styles(&mut new.kind, fresh_kind);
+        }
         // `style` is deliberately NOT taken from `prev`, unlike `kind` above.
         // `kind` holds layout output paint reads back (`InlineRun`'s laid-out
         // `lines`); the used values in `prev`'s *style* are read by nothing
@@ -620,6 +710,14 @@ fn containing_block_style_changed(new: &crate::style::ComputedStyle, prev: &crat
     new.width != prev.width
         || new.min_width != prev.min_width
         || new.max_width != prev.max_width
+        // BUG-1242: an auto-width box hands its children `available − margins`, and an
+        // absolutely positioned one derives its width from its insets.
+        || new.margin_left != prev.margin_left
+        || new.margin_right != prev.margin_right
+        || new.position != prev.position
+        || new.float_side != prev.float_side
+        || new.left != prev.left
+        || new.right != prev.right
         || new.padding_top != prev.padding_top
         || new.padding_right != prev.padding_right
         || new.padding_bottom != prev.padding_bottom
@@ -767,6 +865,83 @@ pub(crate) fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::
     }
 }
 
+/// How the per-segment styles of two `InlineRun`s relate.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunStyleChange {
+    /// Same styles (or not an `InlineRun`).
+    None,
+    /// Styles differ only in fields that move no glyph or line box (colour, decoration, ...).
+    PaintOnly,
+    /// A style differs in a field that can change the run's geometry.
+    Layout,
+}
+
+/// Fields of a segment style that only paint reads. Copying them from `fresh` into a clone of
+/// `old` and comparing tells a paint-only change from a geometry-affecting one.
+fn paint_only_fields_eq(old: &crate::style::ComputedStyle, fresh: &crate::style::ComputedStyle) -> bool {
+    let mut probe = old.clone();
+    probe.color = fresh.color;
+    probe.background_color = fresh.background_color;
+    probe.text_decoration_color = fresh.text_decoration_color;
+    probe.text_decoration_line = fresh.text_decoration_line;
+    probe.text_decoration_style = fresh.text_decoration_style;
+    probe.text_decoration_skip_ink = fresh.text_decoration_skip_ink;
+    probe.text_shadow = fresh.text_shadow.clone();
+    probe.cursor = fresh.cursor;
+    probe.opacity = fresh.opacity;
+    probe == *fresh
+}
+
+fn inline_run_style_change(fresh: &crate::box_tree::BoxKind, prev: &crate::box_tree::BoxKind) -> RunStyleChange {
+    use crate::box_tree::BoxKind::InlineRun;
+    let (InlineRun { segments: sf, first_line_style: ff, .. }, InlineRun { segments: sp, lines: lp, .. }) = (fresh, prev) else {
+        return RunStyleChange::None;
+    };
+    let mut change = RunStyleChange::None;
+    for (f, p) in sf.iter().zip(sp) {
+        if f.style == p.style {
+            continue;
+        }
+        if ff.is_some() || !paint_only_fields_eq(&p.style, &f.style) {
+            return RunStyleChange::Layout;
+        }
+        change = RunStyleChange::PaintOnly;
+    }
+    // The in-place adoption needs every fragment traceable to exactly one segment.
+    if change == RunStyleChange::PaintOnly
+        && lp.iter().flatten().any(|frag| {
+            !frag.merged_sources.is_empty()
+                || !sp.iter().any(|s| s.source_node == frag.source_node && s.style == frag.style)
+        })
+    {
+        return RunStyleChange::Layout;
+    }
+    change
+}
+
+/// Puts the segment styles of `fresh` into `kind` (a clone of the previous run) — the segments
+/// themselves and every laid-out fragment that was cut from a changed one. Fragments keep their
+/// geometry: the caller established the change is paint-only.
+fn adopt_fresh_segment_styles(kind: &mut crate::box_tree::BoxKind, fresh: crate::box_tree::BoxKind) {
+    use crate::box_tree::BoxKind::InlineRun;
+    let InlineRun { segments: fresh_segments, .. } = fresh else { return };
+    let InlineRun { segments, lines, .. } = kind else { return };
+    for line in lines.iter_mut() {
+        for frag in line.iter_mut() {
+            let Some(i) = segments
+                .iter()
+                .position(|s| s.source_node == frag.source_node && s.style == frag.style)
+            else {
+                continue;
+            };
+            frag.style = fresh_segments[i].style.clone();
+        }
+    }
+    for (seg, f) in segments.iter_mut().zip(fresh_segments) {
+        seg.style = f.style;
+    }
+}
+
 /// Compare two `InlineRun` segment lists for layout equality.
 ///
 /// Compares the size-affecting scalar fields of each [`crate::box_tree::InlineSegment`]
@@ -806,6 +981,9 @@ mod tests {
             node: NodeId::from_index(id as usize),
             rect,
             used_line_height: 16.0 * 1.2,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
@@ -824,6 +1002,9 @@ mod tests {
             node: NodeId::from_index(id as usize),
             rect,
             used_line_height: 16.0 * 1.2,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
@@ -946,6 +1127,44 @@ mod tests {
         assert!((root.rect.y - 10.0).abs() < f32::EPSILON);
         assert!((root.children[0].rect.x - 15.0).abs() < f32::EPSILON);
         assert!((root.children[0].rect.y - 30.0).abs() < f32::EPSILON);
+    }
+
+    /// `svg_paint_matrix` (document-space CTM) and `<mask>` content live outside `rect` but in
+    /// the same space: a translate that moves only `rect` leaves a `<path>` icon painted at
+    /// its old origin (`emit_svg_shape` takes the matrix's translation as is).
+    #[test]
+    fn translate_subtree_moves_svg_paint_matrix_and_mask_content_with_the_rect() {
+        use crate::box_tree::{SvgMaskContent, SvgShapeKind, SvgTransform};
+
+        let mut mask_shape = leaf(4, Rect::new(1.0, 2.0, 3.0, 4.0));
+        mask_shape.kind = BoxKind::SvgShape {
+            shape: SvgShapeKind::Path { d: "M0 0".to_owned() },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, 1.0, 2.0] },
+            svg_mask: None,
+        };
+        let mut shape = leaf(3, Rect::new(10.0, 20.0, 5.0, 5.0));
+        shape.kind = BoxKind::SvgShape {
+            shape: SvgShapeKind::Path { d: "M0 0 L1 1".to_owned() },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform { matrix: [0.5, 0.0, 0.0, 0.5, 10.0, 20.0] },
+            svg_mask: Some(Box::new(SvgMaskContent { content: vec![mask_shape], mode: crate::style::MaskMode::default() })),
+        };
+        let mut root = block_with_children(1, Rect::new(0.0, 0.0, 100.0, 100.0), vec![shape]);
+
+        translate_subtree(&mut root, 5.0, 40.0);
+
+        let BoxKind::SvgShape { svg_paint_matrix, svg_mask, .. } = &root.children[0].kind else {
+            panic!("shape box expected");
+        };
+        assert_eq!(root.children[0].rect.y, 60.0);
+        assert_eq!(svg_paint_matrix.matrix, [0.5, 0.0, 0.0, 0.5, 15.0, 60.0], "CTM follows the rect");
+        let mask_box = &svg_mask.as_ref().expect("mask kept").content[0];
+        assert_eq!((mask_box.rect.x, mask_box.rect.y), (6.0, 42.0), "mask content follows the shape");
+        let BoxKind::SvgShape { svg_paint_matrix: mask_matrix, .. } = &mask_box.kind else {
+            panic!("mask shape expected");
+        };
+        assert_eq!(mask_matrix.matrix, [1.0, 0.0, 0.0, 1.0, 6.0, 42.0]);
     }
 
     #[test]
@@ -1619,7 +1838,7 @@ mod tests {
             !dirty_roots.is_empty(),
             "the `.card`/`.item` ancestors carry hover rules — narrowing them away would be wrong",
         );
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -1687,7 +1906,7 @@ mod tests {
         set_interactive_state(Some(card), None, None);
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(card), &state_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -1769,6 +1988,7 @@ mod tests {
             prev_styles: prev_counters.into_styles(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let (incr, counters) = layout_mutation_incremental_restyle(
@@ -1905,7 +2125,7 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta =
-            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
@@ -1927,6 +2147,133 @@ mod tests {
              ({} built vs {full_built} full) — {stats:?}",
             stats.built,
         );
+    }
+
+    /// BUG-935 срез 64: an inline element owns no box, so restyling `<u>` leaves the box of
+    /// the run it sits in with the same style. The graft must still see that the run's
+    /// segments were cut in another one — a clean graft copies the previous run, segments
+    /// included, over the fresh one.
+    #[test]
+    fn restyling_an_inline_element_refreshes_the_segment_styles_of_its_run() {
+        restyled_inline_run_matches_full_layout("p u { color: rgb(255, 0, 0); }");
+    }
+
+    /// BUG-1245: a geometry-affecting change takes the dirty path, not the paint-only adoption.
+    #[test]
+    fn restyling_an_inline_element_with_a_layout_change_matches_full_layout() {
+        restyled_inline_run_matches_full_layout("p u { color: rgb(255, 0, 0); font-size: 30px; }");
+    }
+
+    fn restyled_inline_run_matches_full_layout(extra_rule: &str) {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{
+            layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, set_incremental_box_build,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        fn run_colors(b: &LayoutBox, out: &mut Vec<(String, (u8, u8, u8))>) {
+            if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
+                out.extend(segments.iter().map(|s| (s.text.clone(), (s.style.color.r, s.style.color.g, s.style.color.b))));
+                out.extend(lines.iter().flatten().map(|f| (format!("frag {}", f.text), (f.style.color.r, f.style.color.g, f.style.color.b))));
+            }
+            for c in &b.children {
+                run_colors(c, out);
+            }
+        }
+
+        let doc = parse_html("<html><body><p>plain <u id=\"u\">under</u> tail</p></body></html>");
+        let old = parse_css("body { margin: 0; } u { text-decoration: underline; }");
+        let new = parse_css(&format!("body {{ margin: 0; }} u {{ text-decoration: underline; }} {extra_rule}"));
+        let vp = Size::new(800.0, 600.0);
+        let u = doc.find_by_id("u").expect("#u must exist");
+
+        let (prev, prev_counters) =
+            layout_measured_hyp_with_counters(&doc, &old, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots: std::iter::once(u).collect(),
+            content_dirty: crate::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(), point_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        let (incr, _) =
+            layout_mutation_incremental_restyle(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta);
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        let (full, _) =
+            layout_measured_hyp_with_counters(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let (mut got, mut want) = (Vec::new(), Vec::new());
+        run_colors(&incr, &mut got);
+        run_colors(&full, &mut want);
+        assert!(want.iter().any(|(t, c)| t.contains("under") && *c == (255, 0, 0)), "fixture: {want:?}");
+        assert_eq!(got, want, "the incremental run kept the segment styles from before the restyle");
+    }
+
+    /// BUG-935 срез 65: a box that `lay_out` cannot just translate (`margin: 0 auto`, `position:
+    /// relative`) is laid out for real even when the graft proved it unchanged — and its
+    /// descendants, still marked dirty from the fresh tree, must not drag the whole subtree through
+    /// layout with it. A restyled inline element elsewhere dirties `body`; the centred wrapper full
+    /// of paragraphs next to it is the same as before and has to be moved, not recomputed.
+    #[test]
+    fn a_clean_untranslatable_box_does_not_relayout_its_clean_subtree() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{
+            layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, set_incremental_box_build,
+            set_layout_key_census, take_layout_key_census,
+        };
+        use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        fn rects(b: &LayoutBox, out: &mut Vec<(usize, [i32; 4])>) {
+            let r = b.rect;
+            out.push((b.node.index(), [(r.x * 100.0) as i32, (r.y * 100.0) as i32, (r.width * 100.0) as i32, (r.height * 100.0) as i32]));
+            for c in &b.children {
+                rects(c, out);
+            }
+        }
+
+        let mut html = String::from("<html><body><div class=\"w\">");
+        for i in 0..60 {
+            html.push_str(&format!("<p>paragraph {i} with <b>bold</b> and <i>italic</i> words in it</p>"));
+        }
+        html.push_str("</div><p id=\"t\">tail <span id=\"s\">span</span> end</p></body></html>");
+        let doc = parse_html(&html);
+        let base = "body { margin: 0; } .w { width: 600px; margin: 0 auto; } p { margin: 4px 0; }";
+        let old = parse_css(base);
+        let new = parse_css(&format!("{base} #s {{ font-size: 30px; }}"));
+        let vp = Size::new(800.0, 600.0);
+        let span = doc.find_by_id("s").expect("#s");
+
+        let (prev, prev_counters) =
+            layout_measured_hyp_with_counters(&doc, &old, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots: std::iter::once(span).collect(),
+            content_dirty: ContentDirty::Nothing,
+            shallow_roots: Default::default(), point_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        set_layout_key_census(true);
+        let (incr, _) =
+            layout_mutation_incremental_restyle(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta);
+        let laid_out = take_layout_key_census().calls;
+        set_layout_key_census(false);
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        let (full, _) =
+            layout_measured_hyp_with_counters(&doc, &new, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let (mut got, mut want) = (Vec::new(), Vec::new());
+        rects(&incr, &mut got);
+        rects(&full, &mut want);
+        assert_eq!(got, want, "incremental geometry differs from a full layout");
+        assert!(laid_out < 30, "{laid_out} boxes laid out for real; the centred wrapper's 60 paragraphs were recomputed");
     }
 
     /// Boxes in `b`'s subtree, inclusive — gate bookkeeping only.
@@ -1979,6 +2326,7 @@ mod tests {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         let flat = build_flat_tree(&doc);
         set_incremental_restyle(true);
@@ -2052,6 +2400,9 @@ mod tests {
             node,
             rect: Rect::new(1.0, 2.0, 3.0, 4.0),
             used_line_height: 16.0 * 1.2,
+            grid_baselines: None,
+            fieldset_legend: None,
+            subgrid_tracks: None,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Skip,
             children: Vec::new(),
@@ -2104,7 +2455,7 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta =
-            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
@@ -2160,6 +2511,7 @@ mod tests {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: std::collections::HashSet::new(),
             content_dirty: crate::counters::ContentDirty::Untracked,
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
@@ -2223,7 +2575,7 @@ mod tests {
         set_interactive_state(Some(b), None, None);
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -2274,7 +2626,7 @@ mod tests {
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, None, &state_index);
         assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let _ = crate::counters::take_cascade_stats();
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
@@ -2365,7 +2717,7 @@ mod tests {
         let node_index = restyle_node_index(&doc, &sheet);
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -2456,6 +2808,7 @@ mod tests {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Untracked,
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
@@ -2555,6 +2908,7 @@ mod tests {
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: ContentDirty::Nodes(&content),
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         set_incremental_restyle(true);
         let _ = take_cascade_stats();
@@ -2644,7 +2998,7 @@ mod tests {
         let node_index = restyle_node_index(&doc, &sheet);
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(menu, NodeChange::Unattributed)], &node_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -2824,6 +3178,7 @@ mod tests {
             prev_styles: prev.styles().clone(),
             dirty_roots: Default::default(),
             content_dirty: crate::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         let result = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
@@ -2885,6 +3240,7 @@ mod tests {
             prev_styles: prev.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
+            shallow_roots: Default::default(), point_roots: Default::default(),
         };
         let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
@@ -3169,7 +3525,7 @@ mod tests {
         // Incremental: same transition, conservative root-set derived from it.
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         take_cascade_stats();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
@@ -3239,7 +3595,7 @@ mod tests {
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         // BUG-341 S4: a DOM class mutation is NOT `dom_content_stable` — box-build
         // reuse must not trust style-equality alone here (see `RestyleDelta` doc).
-        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         take_cascade_stats();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
@@ -3256,5 +3612,59 @@ mod tests {
              class change on #a should not force-recompute the unrelated \
              #unrelated subtree",
         );
+    }
+
+    /// BUG-935 срез 78: the ids a restyle releases from the previous tree's dirty area are the boxes
+    /// the build left in `prev` plus the subtrees it took out and did not place — and nothing it
+    /// carried over, nor anything outside the area.
+    #[test]
+    fn bug935_s78_released_ids_are_what_left_the_dirty_area() {
+        use crate::box_tree::layout_measured_hyp_with_counters;
+        use lumen_core::ext::NullHyphenationProvider;
+        use lumen_core::id_hash::IdSet;
+
+        let doc = lumen_html_parser::parse(
+            "<body><div id=\"p\"><div id=\"c\"><span id=\"s\">x</span></div><div id=\"d\"></div></div><div id=\"o\"></div></body>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let id = |name: &str| doc.find_by_id(name).unwrap();
+        let idx = |name: &str| id(name).index() as u32;
+        let hollowed = || {
+            let (mut prev, _) =
+                layout_measured_hyp_with_counters(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+            let clean: IdSet<NodeId> = [id("c"), id("o")].into_iter().collect();
+            let (index, _) = extract_clean_subtrees(&mut prev, &clean);
+            let taken: Vec<LayoutBox> = index.into_values().filter_map(|slot| slot.into_inner().unwrap()).collect();
+            (prev, taken)
+        };
+        let scope = |names: &[&str]| -> IdSet<NodeId> { names.iter().map(|n| id(n)).collect() };
+
+        // `c` and `o` were carried over (and placed): only what is left in `prev` inside `p` goes.
+        let (prev, _) = hollowed();
+        let released = released_ids(&prev, &[], &scope(&["p"]));
+        assert!(released.index.contains(&idx("p")) && released.index.contains(&idx("d")));
+        for carried in ["c", "o"] {
+            assert!(!released.index.contains(&idx(carried)), "{carried} was carried over");
+        }
+        assert!(released.raw.contains(&id("d").raw()));
+
+        // `c` taken out and not placed: its whole subtree goes, but not `o`, which is outside the area.
+        let (prev, taken) = hollowed();
+        assert_eq!(taken.len(), 2);
+        let released = released_ids(&prev, &taken, &scope(&["p"]));
+        for gone in ["p", "d", "c"] {
+            assert!(released.index.contains(&idx(gone)), "{gone} left the tree");
+            assert!(released.raw.contains(&id(gone).raw()));
+        }
+        assert!(!released.index.contains(&idx("o")), "o is outside the dirty area");
+
+        // A dirty area that does not hold `c`'s husk does not release it either.
+        let released = released_ids(&prev, &taken, &scope(&["d"]));
+        assert_eq!(released.index.len(), 1, "{released:?}");
+        assert!(released.index.contains(&idx("d")));
+
+        // No scope, nothing released.
+        assert!(released_ids(&prev, &taken, &IdSet::default()).index.is_empty());
     }
 }

@@ -83,7 +83,7 @@ Directly asserted by WPT: `inert-node-is-unfocusable.html`'s "Can get
 inert via property" and "Elements inside of inert subtrees return false
 when getting 'inert'" subtests exercise exactly this getter, but never
 actually ran in this session's category pass — the file errors out earlier
-on the unrelated [BUG-462](BUG-462-OPEN.md)/[BUG-574](BUG-574-OPEN.md)
+on the unrelated [BUG-462](BUG-462-FIXED.md)/[BUG-574](BUG-574-FIXED.md)
 (`Node.prototype.contains` missing, used by vendored `testdriver.js`'s
 click helper) before reaching them, so this defect was masked rather than
 reported as its own FAIL. Any page/test that reads `.inert` right after

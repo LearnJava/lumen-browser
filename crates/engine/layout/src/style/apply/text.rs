@@ -25,6 +25,9 @@ use crate::style::{
     FontStyle,
     FontVariantCaps,
     FontVariantEmoji,
+    FontVariantLigatures,
+    FontVariantNumeric,
+    FontVariantPosition,
     FontWeight,
     Hyphens,
     Length,
@@ -40,7 +43,7 @@ use crate::style::{
     TextOrientation,
     TextOverflow,
     TextSizeAdjust,
-    TextTransform,
+    TextTransformExtra,
     TextUnderlinePosition,
     TextWrapMode,
     TextWrapStyle,
@@ -62,6 +65,7 @@ use crate::style::{
     parse_text_shadow_one,
     split_top_level_commas,
 };
+use crate::style::values::length::split_top_level_ws;
 use crate::style::parse::box_sides::{resolve_box_length, resolve_svg_length};
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::parse::content::parse_content_items;
@@ -103,6 +107,16 @@ pub(in crate::style) fn apply_decl_text(
                 "left" => TextAlign::Left,
                 "center" => TextAlign::Center,
                 "right" => TextAlign::Right,
+                "justify" => TextAlign::Justify,
+                // CSS Text L3 §7.1: `justify-all` — shorthand над `text-align` и
+                // `text-align-last: justify`.
+                "justify-all" => {
+                    style.text_align_last = TextAlignLast::Justify;
+                    TextAlign::Justify
+                }
+                // Резолвится в конце `compute_style` (`resolve_match_parent`): здесь неизвестно,
+                // есть ли у элемента родитель.
+                "match-parent" => TextAlign::MatchParent,
                 _ => style.text_align,
             };
         }
@@ -115,6 +129,7 @@ pub(in crate::style) fn apply_decl_text(
                 "right" => TextAlignLast::Right,
                 "center" => TextAlignLast::Center,
                 "justify" => TextAlignLast::Justify,
+                "match-parent" => TextAlignLast::MatchParent,
                 _ => style.text_align_last,
             };
         }
@@ -214,6 +229,9 @@ pub(in crate::style) fn apply_decl_text(
                 // `font` сбрасывает ВСЕ longhand-ы `font-variant`, включая те,
                 // что сам выразить не может (§6.10) — emoji-компоненту тоже.
                 style.font_variant_emoji = FontVariantEmoji::Normal;
+                style.font_variant_ligatures = FontVariantLigatures::default();
+                style.font_variant_numeric = FontVariantNumeric::default();
+                style.font_variant_position = FontVariantPosition::Normal;
                 style.font_weight = parts
                     .weight
                     .as_deref()
@@ -269,14 +287,50 @@ pub(in crate::style) fn apply_decl_text(
                 style.font_variant_emoji = v;
             }
         }
+        "font-variant-ligatures" => {
+            // CSS Fonts L4 §6.5 — `normal | none | [ <common-lig> || ... ]`.
+            if let Some(v) = FontVariantLigatures::parse(val) {
+                style.font_variant_ligatures = v;
+            }
+        }
+        "font-variant-numeric" => {
+            // CSS Fonts L4 §6.7 — `normal | [ <figure> || <spacing> || ... ]`.
+            if let Some(v) = FontVariantNumeric::parse(val) {
+                style.font_variant_numeric = v;
+            }
+        }
+        "font-variant-position" => {
+            // CSS Fonts L4 §6.8 — `normal | sub | super`.
+            if let Some(v) = FontVariantPosition::from_keyword(val.trim()) {
+                style.font_variant_position = v;
+            }
+        }
         "font-variant" => {
             // CSS Fonts L4 §6.10 — shorthand над font-variant-{caps,ligatures,
-            // numeric,east-asian,position,alternates,emoji}. Реализованы только
-            // caps- и emoji-компоненты, но сбросить их обязан любой валидный
-            // shorthand (CSS Cascade L4 §3.1): `font-variant: common-ligatures`
-            // должен вернуть caps в initial, а не оставить унаследованное
-            // small-caps. `none` (отключение лигатур) и любые нереализованные
-            // keyword-ы этих компонент не содержат — значит они в initial.
+            // numeric,east-asian,position,alternates,emoji}. Реализованы все,
+            // кроме `-east-asian`/`-alternates`, но сбросить их обязан любой
+            // валидный shorthand (CSS Cascade L4 §3.1): `font-variant:
+            // common-ligatures` должен вернуть caps в initial, а не оставить
+            // унаследованное small-caps. Нереализованные keyword-ы компонент
+            // не содержат — значит они в initial. `none` принадлежит
+            // ligatures-компоненте (§6.10: «none» = `font-variant-ligatures:
+            // none`, остальные longhand-ы — initial).
+            let mut ligatures = FontVariantLigatures::default();
+            let mut numeric = FontVariantNumeric::default();
+            let mut position = FontVariantPosition::Normal;
+            for kw in val.split_whitespace() {
+                let kw = kw.to_ascii_lowercase();
+                if kw == "none" {
+                    ligatures = FontVariantLigatures::NONE;
+                } else if kw == "sub" || kw == "super" {
+                    position = FontVariantPosition::from_keyword(&kw).unwrap_or_default();
+                } else if !ligatures.set_keyword(&kw) {
+                    numeric.set_keyword(&kw);
+                }
+            }
+            style.font_variant_ligatures = ligatures;
+            style.font_variant_numeric = numeric;
+            style.font_variant_position = position;
             style.font_variant_caps = val
                 .split_whitespace()
                 .find_map(FontVariantCaps::from_keyword)
@@ -301,8 +355,32 @@ pub(in crate::style) fn apply_decl_text(
         "text-indent" => {
             // CSS Text L3 §7.1: <length> | <percentage>. `%` теперь хранится
             // typed — резолвится при layout с known cb_width.
-            if let Some(len) = parse_length_q(val, is_quirks) {
+            // CSS Text L3 §7.1: `<length-percentage> && hanging? && each-line?` —
+            // модификаторы в любом порядке, каждый не более раза.
+            let mut hanging = false;
+            let mut each_line = false;
+            let mut dup = false;
+            let mut rest: Vec<&str> = Vec::new();
+            for tok in split_top_level_ws(val) {
+                match tok.to_ascii_lowercase().as_str() {
+                    "hanging" => {
+                        dup |= hanging;
+                        hanging = true;
+                    }
+                    "each-line" => {
+                        dup |= each_line;
+                        each_line = true;
+                    }
+                    _ => rest.push(tok),
+                }
+            }
+            if !dup
+                && let [one] = rest.as_slice()
+                && let Some(len) = parse_length_q(one, is_quirks)
+            {
                 style.text_indent = len;
+                style.text_extra.indent_hanging = hanging;
+                style.text_extra.indent_each_line = each_line;
             }
         }
         "letter-spacing" => {
@@ -331,13 +409,11 @@ pub(in crate::style) fn apply_decl_text(
         "text-transform" => {
             // CSS Text L3: none | uppercase | lowercase | capitalize.
             // `full-width` / `full-size-kana` отложены (CJK-специфика).
-            style.text_transform = match val.split_whitespace().next() {
-                Some("none") => TextTransform::None,
-                Some("uppercase") => TextTransform::Uppercase,
-                Some("lowercase") => TextTransform::Lowercase,
-                Some("capitalize") => TextTransform::Capitalize,
-                _ => style.text_transform,
-            };
+            // `full-width` / `full-size-kana` / `math-auto` хранятся (CSSOM), но текст не меняют.
+            if let Some((case, extra)) = TextTransformExtra::parse(val) {
+                style.text_transform = case;
+                style.text_extra.transform = extra;
+            }
         }
         "white-space" => {
             // CSS Text L4 §2.1: shorthand над white-space-collapse и
@@ -356,6 +432,12 @@ pub(in crate::style) fn apply_decl_text(
                 style.white_space = ws;
                 style.white_space_collapse = ws.collapse_component();
                 style.text_wrap_mode = ws.wrap_component();
+            } else if let Some((collapse, wrap)) = parse_white_space_longhand_pair(val) {
+                // `<'white-space-collapse'> || <'text-wrap-mode'>`: опущенная часть —
+                // initial (`collapse` / `wrap`).
+                style.white_space_collapse = collapse;
+                style.text_wrap_mode = wrap;
+                style.white_space = WhiteSpace::combine(collapse, wrap);
             }
         }
         "white-space-collapse" => {
@@ -384,14 +466,39 @@ pub(in crate::style) fn apply_decl_text(
         "-webkit-line-clamp" | "line-clamp" => {
             // CSS Overflow L4 §13.4 / compat -webkit-line-clamp.
             // Значения: `none` → None; <integer> > 0 → Some(n).
+            // `-webkit-line-clamp` — только `none | <integer>` и только на `display: -webkit-box`
+            // с вертикальной осью (`line_clamp_legacy`); `line-clamp` — любой блок-контейнер.
             let v = val.trim();
-            style.line_clamp = if v == "none" {
-                None
+            let legacy = prop == "-webkit-line-clamp";
+            if v == "none" {
+                style.line_clamp = None;
+                style.line_clamp_auto = false;
+                style.line_clamp_legacy = legacy;
+            } else if v == "auto" && !legacy {
+                style.line_clamp = None;
+                style.line_clamp_auto = true;
+                style.line_clamp_legacy = false;
+            } else if !legacy
+                && let Some(n) = {
+                    // `<integer [1,∞]> || auto`: `4 auto` and `auto 4` mean "4 lines, or what the
+                    // height holds if that is fewer".
+                    let mut toks = v.split_whitespace();
+                    match (toks.next(), toks.next(), toks.next()) {
+                        (Some(a), Some("auto"), None) | (Some("auto"), Some(a), None) => {
+                            a.parse::<u32>().ok().filter(|&n| n > 0)
+                        }
+                        _ => None,
+                    }
+                }
+            {
+                style.line_clamp = Some(n);
+                style.line_clamp_auto = true;
+                style.line_clamp_legacy = false;
             } else if let Ok(n) = v.parse::<u32>() {
-                if n > 0 { Some(n) } else { None }
-            } else {
-                style.line_clamp
-            };
+                style.line_clamp = if n > 0 { Some(n) } else { None };
+                style.line_clamp_auto = false;
+                style.line_clamp_legacy = legacy;
+            }
         }
         "-webkit-box-orient" => {
             // WHATWG Compat §2.1 — Phase 0: только для `display: -webkit-box`
@@ -496,12 +603,9 @@ pub(in crate::style) fn apply_decl_text(
             };
         }
         "ruby-position" => {
-            style.ruby_position = match val.trim() {
-                // `alternate` (одиночный) по спеке ведёт себя как over.
-                "over" | "alternate" => RubyPosition::Over,
-                "under" => RubyPosition::Under,
-                _ => style.ruby_position,
-            };
+            if let Some(pos) = RubyPosition::parse(val) {
+                style.ruby_position = pos;
+            }
         }
         "ruby-align" => {
             style.ruby_align = match val.trim() {
@@ -543,7 +647,8 @@ pub(in crate::style) fn apply_decl_text(
                 style.math_depth = n;
             }
         }
-        "user-select" => {
+        // `-webkit-user-select` — the prefixed alias every real-world sheet still ships.
+        "user-select" | "-webkit-user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
             }
@@ -553,10 +658,14 @@ pub(in crate::style) fn apply_decl_text(
             // в spaces; принимаем как 8px-per-space heuristic. Length —
             // resolved-px.
             let trimmed = val.trim();
-            if let Ok(n) = trimmed.parse::<i32>() {
-                style.tab_size = (n.max(0) as f32) * 8.0;
+            if let Ok(n) = trimmed.parse::<f32>() {
+                if n >= 0.0 && n.is_finite() {
+                    style.tab_size = n * 8.0;
+                    style.text_extra.tab_size_number = Some(n);
+                }
             } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks) {
                 style.tab_size = px.max(0.0);
+                style.text_extra.tab_size_number = None;
             }
         }
         "overflow-wrap" | "word-wrap" => {
@@ -706,7 +815,8 @@ pub(in crate::style) fn apply_decl_text(
                     Length::Percent(_)
                     | Length::MinContent
                     | Length::MaxContent
-                    | Length::FitContent(_) => None,
+                    | Length::FitContent(_)
+                    | Length::Stretch => None,
                     _ => len.resolve(em_basis, None, viewport),
                 };
                 if let Some(px) = px
@@ -816,4 +926,27 @@ pub(in crate::style) fn apply_decl_text(
         _ => return false,
     }
     true
+}
+
+/// CSS Text L4 §2.1: `white-space: <'white-space-collapse'> || <'text-wrap-mode'>` — одна или две
+/// лексемы в любом порядке, по одной на компоненту. Возвращает `(collapse, wrap)`; пропущенная
+/// компонента — initial. `None` — значение невалидно (лишняя или повторная лексема).
+fn parse_white_space_longhand_pair(val: &str) -> Option<(WhiteSpaceCollapse, TextWrapMode)> {
+    let mut collapse: Option<WhiteSpaceCollapse> = None;
+    let mut wrap: Option<TextWrapMode> = None;
+    let mut n = 0;
+    for tok in val.split_whitespace() {
+        n += 1;
+        if let Some(c) = WhiteSpaceCollapse::parse(tok).filter(|c| *c != WhiteSpaceCollapse::PreserveSpaces) {
+            if collapse.replace(c).is_some() {
+                return None;
+            }
+        } else {
+            let w = TextWrapMode::parse(tok)?;
+            if wrap.replace(w).is_some() {
+                return None;
+            }
+        }
+    }
+    (n > 0).then(|| (collapse.unwrap_or_default(), wrap.unwrap_or_default()))
 }

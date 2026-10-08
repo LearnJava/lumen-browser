@@ -80,6 +80,23 @@ fn nodata_hint(_e: &std::io::Error) -> &'static str {
     ""
 }
 
+/// `localhost` и `*.localhost` (регистронезависимо, допустима хвостовая точка)
+/// → loopback без обращения к резолверу (RFC 6761 §6.3, BUG-1070). Windows
+/// `getaddrinfo` разрешает только сам `localhost` из hosts-файла, поддомены
+/// (`www.localhost`, `dev.app.localhost`) отдаёт как WSAHOST_NOT_FOUND.
+/// Порядок: IPv4 первым — dev-серверы чаще слушают только `127.0.0.1`.
+pub(crate) fn localhost_addrs(hostname: &str, port: u16) -> Option<Vec<SocketAddr>> {
+    let host = hostname.strip_suffix('.').unwrap_or(hostname).to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        Some(vec![
+            SocketAddr::new(IpAddr::from([127, 0, 0, 1]), port),
+            SocketAddr::new(IpAddr::from(std::net::Ipv6Addr::LOCALHOST), port),
+        ])
+    } else {
+        None
+    }
+}
+
 /// DNS-резолвер на основе системного getaddrinfo (через std::net).
 ///
 /// Default-резолвер для `HttpClient` — поведение совпадает с прежним
@@ -94,6 +111,9 @@ pub struct SystemDnsResolver;
 
 impl DnsResolver for SystemDnsResolver {
     fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
+        if let Some(addrs) = localhost_addrs(hostname, port) {
+            return Ok(addrs);
+        }
         let target = (hostname, port);
         let resolved: Vec<SocketAddr> = target
             .to_socket_addrs()
@@ -126,6 +146,17 @@ mod tests {
         assert!(!addrs.is_empty());
         assert!(addrs.iter().all(|a| a.port() == 8080));
         assert!(addrs.iter().any(|a| a.ip().is_loopback()));
+    }
+
+    #[test]
+    fn localhost_subdomains_resolve_to_loopback() {
+        for h in ["www.localhost", "WWW1.Localhost", "dev.app.localhost.", "localhost."] {
+            let addrs = SystemDnsResolver.resolve(h, 18300).unwrap();
+            assert!(addrs.iter().all(|a| a.ip().is_loopback() && a.port() == 18300), "{h}");
+            assert!(addrs[0].is_ipv4(), "{h}");
+        }
+        assert!(localhost_addrs("notlocalhost", 1).is_none());
+        assert!(localhost_addrs("localhost.example", 1).is_none());
     }
 
     #[test]

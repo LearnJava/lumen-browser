@@ -78,7 +78,9 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
         };
         let thumb = Rect::new(
             track.x + inset,
-            thumb_y.clamp(i.clip_y, i.clip_y + i.clip_h - thumb_h),
+            // Верхняя граница не ниже нижней: при `thumb_h == clip_h` округление f32 ставит её на ulp ниже,
+            // а `f32::clamp` на `min > max` паникует.
+            thumb_y.clamp(i.clip_y, (i.clip_y + i.clip_h - thumb_h).max(i.clip_y)),
             g - inset * 2.0,
             thumb_h,
         );
@@ -102,7 +104,7 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
             i.clip_x
         };
         let thumb = Rect::new(
-            thumb_x.clamp(i.clip_x, i.clip_x + i.clip_w - thumb_w),
+            thumb_x.clamp(i.clip_x, (i.clip_x + i.clip_w - thumb_w).max(i.clip_x)),
             track.y + inset,
             thumb_w,
             g - inset * 2.0,
@@ -113,6 +115,15 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
     };
 
     (v, h)
+}
+
+/// An `overflow: hidden` box (either axis) whose content a script scrolled
+/// (`scrollTo()`/`scrollBy()`/`scrollTop = …` leave a non-zero offset on the
+/// layout box): paint wraps its content in a `PushScrollLayer` inside the clip,
+/// without scrollbars. `scroll`/`auto` boxes take the scroll-layer path anyway.
+pub(crate) fn scrolled_hidden(b: &LayoutBox) -> bool {
+    (b.scroll_x != 0.0 || b.scroll_y != 0.0)
+        && (matches!(b.style.overflow_x, Overflow::Hidden) || matches!(b.style.overflow_y, Overflow::Hidden))
 }
 
 /// Emit `DrawScrollbar` track+thumb commands for a scroll container's padding box.
@@ -200,8 +211,6 @@ pub(crate) fn emit_scrollbars(
 /// на ordered-пути. Дрейф с `box_layer_ops` ловят equivalence-тесты
 /// `patch_scroll_layer_*` (патч против полной пересборки).
 struct ScrollLayerGeometry {
-    /// Значение `PushScrollLayer.clip_rect` (может содержать BIG-сентинели).
-    clip_rect: Rect,
     /// Padding-box `(px, py, pw, ph)` — вход `emit_scrollbars`.
     padding_box: (f32, f32, f32, f32),
     /// `overflow-x` ∈ {scroll, auto}.
@@ -223,22 +232,15 @@ fn scroll_layer_geometry(b: &LayoutBox) -> Option<ScrollLayerGeometry> {
     if !(clip_x || clip_y) {
         return None;
     }
-    const BIG: f32 = 1_000_000.0;
     let px = b.rect.x + s.border_left_width;
     let py = b.rect.y + s.border_top_width;
     let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
     let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
-    let cr = Rect::new(
-        if clip_x { px } else { -BIG },
-        if clip_y { py } else { -BIG },
-        if clip_x { pw } else { 2.0 * BIG },
-        if clip_y { ph } else { 2.0 * BIG },
-    );
+
     let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
     let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
     if (is_scroll_x || is_scroll_y) && !paint_contain {
         Some(ScrollLayerGeometry {
-            clip_rect: cr,
             padding_box: (px, py, pw, ph),
             is_scroll_x,
             is_scroll_y,
@@ -267,21 +269,17 @@ pub fn patch_scroll_layer(dl: &mut DisplayList, b: &LayoutBox) -> bool {
     let Some(g) = scroll_layer_geometry(b) else {
         return false;
     };
-    let cr = g.clip_rect;
-    let same_rect = |r: &Rect| {
-        r.x.to_bits() == cr.x.to_bits()
-            && r.y.to_bits() == cr.y.to_bits()
-            && r.width.to_bits() == cr.width.to_bits()
-            && r.height.to_bits() == cr.height.to_bits()
-    };
-    // Все PushScrollLayer контейнера: оригинал + переустановленные (BUG-159).
+    // Все PushScrollLayer контейнера: оригинал + переустановленные (BUG-159) —
+    // у всех один `id` (индекс узла). Раньше их искали по побитовому `clip_rect`,
+    // и два контейнера с одинаковым прямоугольником путались (ADR-032, срез 4).
     // Они — клоны одной команды, поэтому старые значения скролла обязаны
-    // совпадать; расхождение значит, что clip_rect делят разные контейнеры.
+    // совпадать; расхождение значит, что id делят разные слои.
+    let id = b.node.index() as u32;
     let mut push_idxs: Vec<usize> = Vec::new();
     let mut old_scroll: Option<(u32, u32)> = None;
     for (i, cmd) in dl.iter().enumerate() {
-        if let DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } = cmd
-            && same_rect(clip_rect)
+        if let DisplayCommand::PushScrollLayer { id: lid, scroll_x, scroll_y, .. } = cmd
+            && *lid == id
         {
             let sxy = (scroll_x.to_bits(), scroll_y.to_bits());
             match old_scroll {
@@ -338,4 +336,115 @@ pub fn patch_scroll_layer(dl: &mut DisplayList, b: &LayoutBox) -> bool {
         }
     }
     true
+}
+
+/// Смещение одного overflow-контейнера, которое ведёт рендер-поток (ADR-032,
+/// срез 4): подменяет скролл в копии display list без `LayoutBox`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollLayerOverride {
+    /// `PushScrollLayer::id` контейнера.
+    pub id: u32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    /// Пределы смещения (`scroll_size - clip_size`, не меньше нуля): от них
+    /// зависит положение бегунка скроллбара.
+    pub max_x: f32,
+    pub max_y: f32,
+}
+
+/// Подставляет смещения контейнеров прямо в display list: `scroll_*` у всех
+/// `PushScrollLayer` с совпавшим `id` и бегунки `DrawScrollbar`, лежащие подряд
+/// после первого `PopScrollLayer` этого контейнера. Бегунок пересчитывается той
+/// же формулой, что `scrollbar_rects`, поэтому результат совпадает с пересборкой
+/// списка (тест `override_matches_patch_scroll_layer`). Возвращает число
+/// затронутых контейнеров.
+pub fn apply_scroll_overrides(dl: &mut DisplayList, overrides: &[ScrollLayerOverride]) -> usize {
+    if overrides.is_empty() {
+        return 0;
+    }
+    let mut open: Vec<Option<usize>> = Vec::new();
+    let mut bars_done = vec![false; overrides.len()];
+    let mut touched = vec![false; overrides.len()];
+    let mut i = 0;
+    while i < dl.len() {
+        match &mut dl[i] {
+            DisplayCommand::PushScrollLayer { id, scroll_x, scroll_y, .. } => {
+                let k = overrides.iter().position(|o| o.id == *id);
+                if let Some(k) = k {
+                    *scroll_x = overrides[k].scroll_x;
+                    *scroll_y = overrides[k].scroll_y;
+                    touched[k] = true;
+                }
+                open.push(k);
+            }
+            DisplayCommand::PopScrollLayer => {
+                if let Some(Some(k)) = open.pop()
+                    && !bars_done[k]
+                {
+                    bars_done[k] = true;
+                    let o = overrides[k];
+                    let mut j = i + 1;
+                    while let Some(DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical, .. }) =
+                        dl.get_mut(j)
+                    {
+                        if *vertical {
+                            let free = track_rect.height - thumb_rect.height;
+                            let y = if o.max_y > 0.0 {
+                                track_rect.y + (o.scroll_y / o.max_y) * free
+                            } else {
+                                track_rect.y
+                            };
+                            thumb_rect.y = y.clamp(track_rect.y, (track_rect.y + free).max(track_rect.y));
+                        } else {
+                            let free = track_rect.width - thumb_rect.width;
+                            let x = if o.max_x > 0.0 {
+                                track_rect.x + (o.scroll_x / o.max_x) * free
+                            } else {
+                                track_rect.x
+                            };
+                            thumb_rect.x = x.clamp(track_rect.x, (track_rect.x + free).max(track_rect.x));
+                        }
+                        j += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    touched.iter().filter(|t| **t).count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Контент выше клипа на ничтожную долю → `thumb_h == clip_h`, и верхняя граница `clamp`,
+    /// `clip_y + clip_h - thumb_h`, из-за округления f32 оказывалась на ulp НИЖЕ нижней —
+    /// `f32::clamp` паниковал («min > max») и валил сборку display list. Находка теста
+    /// PERF-16 `subtree_paint_eq` (`overflow: scroll` на странице из `graphic_tests`).
+    #[test]
+    fn a_thumb_as_long_as_the_clip_does_not_invert_the_clamp_range() {
+        for y_tenths in 0..20_000 {
+            let clip_y = y_tenths as f32 * 0.1;
+            for clip_h in [17.3_f32, 100.1, 333.7, 599.9] {
+                let (v, h) = scrollbar_rects(&ScrollbarInput {
+                    clip_x: clip_y,
+                    clip_y,
+                    clip_w: clip_h,
+                    clip_h,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    content_w: clip_h * 1.000_000_1 + 0.000_1,
+                    content_h: clip_h * 1.000_000_1 + 0.000_1,
+                    need_v: true,
+                    need_h: true,
+                    gutter_px: 12.0,
+                });
+                for (_, thumb) in [v, h].into_iter().flatten() {
+                    assert!(thumb.x.is_finite() && thumb.y.is_finite());
+                }
+            }
+        }
+    }
 }

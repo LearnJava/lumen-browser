@@ -164,6 +164,135 @@ pub(super) fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     t.nodes.insert(nid);
     t.epoch = t.epoch.wrapping_add(1);
+    // BUG-1211: record at the POST-increment epoch, so a same-tick flush
+    // basis taken right after this touch (which reads `epoch` after this
+    // function returns) treats this node as "already covered by the next
+    // basis" — see `DomTouched::touch_gen`'s doc comment.
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    t.structural_gen.insert(nid, touch_gen);
+}
+
+/// BUG-935 срез 60: like [`record_dom_touch`], for a change of `nid`'s child list and
+/// nothing else — the flush restyles `nid` and its direct children, not the parent's
+/// whole subtree.
+pub(super) fn record_dom_touch_child_list(tracker: &Mutex<DomTouched>, nid: NodeId) {
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    t.child_list_gen.insert(nid, touch_gen);
+    t.child_any_gen.insert(nid, touch_gen);
+}
+
+/// BUG-935 срез 89: what an insertion or a removal of one child did to its parent's element list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ChildEdit {
+    /// A text/comment node: no element changed place, no `:first-child` can flip.
+    NonElement,
+    /// An element; `front`/`back` — no element stands before/after it.
+    Element { front: bool, back: bool },
+}
+
+/// BUG-935 срез 89: [`record_dom_touch_child_list`] for an edit whose reach on the first/last
+/// element is known — `edit` is [`child_edit_kind`]'s answer, `None` when it cannot say.
+pub(super) fn record_dom_touch_child_edit(tracker: &Mutex<DomTouched>, nid: NodeId, edit: Option<ChildEdit>) {
+    let Some(edit) = edit else {
+        return record_dom_touch_child_list(tracker, nid);
+    };
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    t.child_list_gen.insert(nid, touch_gen);
+    // A text node cannot change a `:first-child`/`:last-child` answer: only the container's own
+    // `:empty` moved, which its shallow root covers. The touch stays, there is nothing to log.
+    let ChildEdit::Element { front, back } = edit else {
+        return;
+    };
+    let log = t.child_edits.entry(nid).or_default();
+    if log.len() >= super::runtime::CHILD_EDIT_CAP {
+        log.clear();
+        t.child_any_gen.insert(nid, touch_gen);
+        return;
+    }
+    log.push((touch_gen, front, back));
+}
+
+/// BUG-935 срез 89: what an insertion or a removal of `node` (attached to its parent at the time
+/// of the call) did to the parent's element list; `None` for a fragment, a detached node or
+/// anything else the log cannot describe.
+pub(super) fn child_edit_kind(doc: &lumen_dom::Document, node: NodeId) -> Option<ChildEdit> {
+    use lumen_dom::NodeData;
+    let parent = doc.try_get(node)?.parent?;
+    match &doc.get(node).data {
+        NodeData::Text(_) | NodeData::Comment(_) | NodeData::ProcessingInstruction { .. } => {
+            return Some(ChildEdit::NonElement);
+        }
+        NodeData::Element { .. } => {}
+        _ => return None,
+    }
+    let is_element = |c: &NodeId| matches!(doc.get(*c).data, NodeData::Element { .. });
+    let children = &doc.get(parent).children;
+    let front = children.iter().find(|c| is_element(c)) == Some(&node);
+    let back = children.iter().rev().find(|c| is_element(c)) == Some(&node);
+    Some(ChildEdit::Element { front, back })
+}
+
+/// BUG-935 срез 89: what [`record_child_edit`] needs from before the edit — where `child` stood.
+pub(super) struct ChildEditProbe {
+    old_parent: Option<NodeId>,
+    edit: Option<ChildEdit>,
+}
+
+/// BUG-935 срез 89: look at `child` before it is moved or removed.
+pub(super) fn probe_child_edit(doc: &lumen_dom::Document, child: NodeId) -> ChildEditProbe {
+    ChildEditProbe { old_parent: doc.get(child).parent, edit: child_edit_kind(doc, child) }
+}
+
+/// BUG-935 срез 89: record an edit of `child` made after `probe` — taken out of its old parent
+/// and, if `new_parent` is given, put into it. A move inside one parent is two edits there.
+pub(super) fn record_child_edit(
+    tracker: &Mutex<DomTouched>,
+    doc: &lumen_dom::Document,
+    probe: &ChildEditProbe,
+    child: NodeId,
+    new_parent: Option<NodeId>,
+) {
+    if let Some(old) = probe.old_parent {
+        record_dom_touch_child_edit(tracker, old, probe.edit);
+    }
+    if let Some(np) = new_parent {
+        // The attach may have been refused (the child is still where it was): then the edit is unknown.
+        let edit = if doc.get(child).parent == Some(np) { child_edit_kind(doc, child) } else { None };
+        record_dom_touch_child_edit(tracker, np, edit);
+    }
+}
+
+/// BUG-1211: like [`record_dom_touch`], for a plain write to (or removal of)
+/// the attribute `attr` on `nid`. Remembers the name, so the same-tick flush
+/// can narrow the restyle root with `NodeChange::Attr` instead of widening to
+/// the parent.
+pub(super) fn record_dom_touch_attr(tracker: &Mutex<DomTouched>, nid: NodeId, attr: &str, before: Option<&str>) {
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
+    let touch_gen = t.epoch;
+    t.touch_gen.insert(nid, touch_gen);
+    // BUG-935 срез 68: a `class`/`id` write keeps the value it replaced, so the flush can
+    // tell which tokens moved since its basis.
+    if let Some(kind) = super::runtime::LoggedAttr::of(attr) {
+        t.value_log.entry((nid, kind)).or_default().push(touch_gen, before.unwrap_or(""));
+    }
+    let names = t.attr_gen.entry(nid).or_default();
+    match names.get_mut(attr) {
+        Some(g) => *g = touch_gen,
+        None => {
+            names.insert(attr.into(), touch_gen);
+        }
+    }
 }
 
 /// BUG-341 S7: mark this cycle's DOM mutations as unattributable — a mutation
@@ -175,6 +304,7 @@ pub(super) fn record_dom_touch_unattributed(tracker: &Mutex<DomTouched>) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     t.unattributed = true;
     t.epoch = t.epoch.wrapping_add(1);
+    t.unattributed_gen = t.epoch;
 }
 
 /// Mirrors `dom::set_text_content`.
@@ -237,21 +367,18 @@ pub(super) fn remove_attribute(doc: &mut lumen_dom::Document, id: lumen_dom::Nod
 }
 
 /// DOM §4.5 "validate and extract" namespace resolution, attribute-namespacing
-/// slice (GAP-XMLDOC срез 10, BUG-685): the reverse of [`namespace_uri`],
-/// restricted to the namespaces Lumen's closed `Namespace` enum can actually
-/// represent. `None` means "not one of the namespaces Lumen tracks for
-/// attributes" — distinct from `Namespace::Html`'s "definitely no namespace",
-/// since a caller-supplied URI Lumen has no representation for is neither
-/// (same BUG-830 "no general namespace registry yet" limitation as
-/// `_lumen_create_element_ns`, applied to attributes rather than elements).
+/// slice (GAP-XMLDOC срез 10, BUG-685): the reverse of [`namespace_uri`].
+/// `None` means "search by plain name" — the "no namespace" ask (`None`/empty)
+/// and the XHTML URI, which every plain attribute is stored under
+/// ([`resolve_attribute_namespace`]). Any other URI resolves to its own
+/// `Namespace`, `Namespace::Other` included: since GAP-XMLDOC срез 37
+/// `setAttributeNS` stores an unrecognized URI verbatim, so the lookup must
+/// match it too — before BUG-689 it fell back to the plain-name search, and
+/// `getAttributeNS('urn:x', 'foo')` missed the `p:foo` it had just set.
 fn known_attribute_namespace(ns: Option<&str>) -> Option<lumen_dom::Namespace> {
     match ns? {
-        "http://www.w3.org/1999/xlink" => Some(lumen_dom::Namespace::XLink),
-        "http://www.w3.org/XML/1998/namespace" => Some(lumen_dom::Namespace::Xml),
-        "http://www.w3.org/2000/xmlns/" => Some(lumen_dom::Namespace::XmlNs),
-        "http://www.w3.org/2000/svg" => Some(lumen_dom::Namespace::Svg),
-        "http://www.w3.org/1998/Math/MathML" => Some(lumen_dom::Namespace::MathMl),
-        _ => None,
+        "" | "http://www.w3.org/1999/xhtml" => None,
+        uri => Some(lumen_dom::Namespace::from_uri(Some(uri))),
     }
 }
 
@@ -276,11 +403,9 @@ pub(super) fn resolve_attribute_namespace(ns: Option<&str>) -> lumen_dom::Namesp
 /// BUG-685, BUG-309): finds the stored qualified name of the attribute whose
 /// namespace URI is `ns` and whose local name (the qualified name's suffix
 /// after the last `:`, or the whole name if there is none) is `local_name`.
-/// `ns` of `None`/empty/unrecognized falls back to a plain by-name lookup —
-/// the DOM standard's "no namespace" case for the first two, and (BUG-309,
-/// BUG-830) the best Lumen can do for a namespace URI it has no
-/// representation for, matching pre-срез-10 behavior for that case rather
-/// than newly reporting "not found" for every attribute set through it.
+/// `ns` of `None`/empty/XHTML falls back to a plain by-name lookup — the DOM
+/// standard's "no namespace" case, which is how Lumen stores every plain
+/// attribute (see [`known_attribute_namespace`]).
 pub(super) fn find_attr_by_namespace(
     doc: &lumen_dom::Document,
     id: lumen_dom::NodeId,
@@ -359,6 +484,25 @@ pub(super) fn escape_html_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('"', "&quot;")
 }
 
+/// HTML LS §13.3 "serializing HTML fragments": a text node whose parent is one of
+/// these HTML elements is emitted literally, not escaped. `noscript` is included
+/// because scripting is always enabled in Lumen. BUG-1132: pages that stash inline
+/// script bodies in `<script type=text/…>` and re-run them via `innerHTML` got
+/// `&amp;&amp;`/`&lt;` back and hit a SyntaxError.
+const RAW_TEXT_PARENTS: &[&str] = &[
+    "style", "script", "xmp", "iframe", "noembed", "noframes", "plaintext", "noscript",
+];
+
+fn parent_is_raw_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool {
+    doc.get(id).parent.is_some_and(|p| match &doc.get(p).data {
+        lumen_dom::NodeData::Element { name, .. } => {
+            name.namespace == lumen_dom::Namespace::Html
+                && RAW_TEXT_PARENTS.iter().any(|t| name.local.eq_ignore_ascii_case(t))
+        }
+        _ => false,
+    })
+}
+
 /// Serializes `id` itself — element open tag + attributes + children + close tag,
 /// or the escaped data for a text/comment node. Mirrors HTML LS §13.3 "serializing
 /// HTML fragments" run on a single node (used for `outerHTML`, BUG-351).
@@ -370,14 +514,91 @@ pub(super) fn escape_html_attr(s: &str) -> String {
 /// once every descendant has already been emitted (LIFO, children pushed in
 /// reverse to preserve document order).
 pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
-    enum Frame {
-        Open(lumen_dom::NodeId),
-        Close(String),
+    serialize_node_shadow(doc, id, out, None);
+}
+
+/// BUG-1064: which shadow roots `getHTML()` emits as `<template shadowrootmode>`.
+pub(super) struct ShadowOpts {
+    /// `serializableShadowRoots: true` — emit every root whose flag is set.
+    pub serializable_all: bool,
+    /// `shadowRoots: [...]` — emitted regardless of the flag.
+    pub explicit: std::collections::HashSet<u32>,
+    /// `nid:bits,…` for every shadow root (bits: 1 delegatesFocus, 2 clonable,
+    /// 4 serializable). Kept as text and scanned per host met during the walk —
+    /// a page can create thousands of roots, but a subtree holds few hosts.
+    pub flags: String,
+}
+
+impl ShadowOpts {
+    fn bits(&self, root: u32) -> u8 {
+        let key = root.to_string();
+        self.flags
+            .split(',')
+            .find_map(|t| t.split_once(':').filter(|(n, _)| *n == key))
+            .and_then(|(_, b)| b.parse().ok())
+            .unwrap_or(0)
     }
-    let mut stack = vec![Frame::Open(id)];
+}
+
+/// [`serialize_node`] with HTML LS §13.3 shadow-root serialization: a host's
+/// qualifying root goes first inside the host, as a `<template>`.
+pub(super) fn serialize_node_shadow(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    out: &mut String,
+    shadow: Option<&ShadowOpts>,
+) {
+    serialize_frames(doc, vec![Frame::Open(id)], out, shadow);
+}
+
+enum Frame {
+    Open(lumen_dom::NodeId),
+    Close(String),
+    Raw(String),
+}
+
+/// Pushes (in pop order: open tag, shadow children, close tag) the frames for
+/// `host`'s qualifying shadow root.
+fn push_shadow_frames(
+    doc: &lumen_dom::Document,
+    host: lumen_dom::NodeId,
+    opts: &ShadowOpts,
+    stack: &mut Vec<Frame>,
+) {
+    let Some(sr) = doc.shadow_root_of(host) else { return };
+    let lumen_dom::NodeData::ShadowRoot { mode } = &doc.get(sr).data else { return };
+    let bits = opts.bits(sr.raw());
+    if !(opts.explicit.contains(&sr.raw()) || (opts.serializable_all && bits & 4 != 0)) {
+        return;
+    }
+    let mut open = format!("<template shadowrootmode=\"{mode}\"");
+    if bits & 1 != 0 {
+        open.push_str(" shadowrootdelegatesfocus=\"\"");
+    }
+    if bits & 4 != 0 {
+        open.push_str(" shadowrootserializable=\"\"");
+    }
+    if bits & 2 != 0 {
+        open.push_str(" shadowrootclonable=\"\"");
+    }
+    open.push('>');
+    stack.push(Frame::Close("template".to_string()));
+    for &child in doc.get(sr).children.iter().rev() {
+        stack.push(Frame::Open(child));
+    }
+    stack.push(Frame::Raw(open));
+}
+
+fn serialize_frames(
+    doc: &lumen_dom::Document,
+    mut stack: Vec<Frame>,
+    out: &mut String,
+    shadow: Option<&ShadowOpts>,
+) {
     while let Some(frame) = stack.pop() {
         match frame {
             Frame::Open(id) => match &doc.get(id).data {
+                lumen_dom::NodeData::Text(s) if parent_is_raw_text(doc, id) => out.push_str(s),
                 lumen_dom::NodeData::Text(s) => out.push_str(&escape_html_text(s)),
                 lumen_dom::NodeData::Comment(s) => {
                     out.push_str("<!--");
@@ -413,6 +634,9 @@ pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, o
                     for &child in doc.get(id).children.iter().rev() {
                         stack.push(Frame::Open(child));
                     }
+                    if let Some(opts) = shadow {
+                        push_shadow_frames(doc, id, opts, &mut stack);
+                    }
                 }
                 // Document/Doctype/ShadowRoot/DocumentFragment never appear as a
                 // regular DOM child reachable from `innerHTML`/`outerHTML` —
@@ -424,15 +648,32 @@ pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, o
                 out.push_str(&tag);
                 out.push('>');
             }
+            Frame::Raw(text) => out.push_str(&text),
         }
     }
 }
 
 /// Serializes `id`'s children in tree order (used for `innerHTML`, BUG-368).
 pub(super) fn serialize_children(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
-    for &child in &doc.get(id).children.clone() {
-        serialize_node(doc, child, out);
+    serialize_children_shadow(doc, id, out, None);
+}
+
+pub(super) fn serialize_children_shadow(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    out: &mut String,
+    shadow: Option<&ShadowOpts>,
+) {
+    let mut stack = Vec::new();
+    for &child in doc.get(id).children.iter().rev() {
+        stack.push(Frame::Open(child));
     }
+    // The host's own root precedes its children (the host's open tag is not
+    // part of `getHTML()`, so it is not emitted by `serialize_frames`).
+    if let Some(opts) = shadow {
+        push_shadow_frames(doc, id, opts, &mut stack);
+    }
+    serialize_frames(doc, stack, out, shadow);
 }
 
 /// Re-creates `src_id` (and its descendants) from the throwaway `src`
@@ -639,6 +880,36 @@ mod tests {
 
         assert_eq!(out.matches("<div>").count(), DEEP_CHAIN_DEPTH);
         assert_eq!(out.matches("</div>").count(), DEEP_CHAIN_DEPTH);
+    }
+
+    // BUG-1132: текст внутри `<script>`/`<style>` сериализуется как есть,
+    // в обычном элементе и в SVG-`<style>` — экранируется.
+    #[test]
+    fn serialize_raw_text_parents_emit_text_verbatim() {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let body = "if (a < 3 && b > 1) x = '&amp;';";
+        let mut ser = |parent: lumen_dom::QualName| {
+            let el = doc.create_element(parent);
+            doc.append_child(root, el);
+            let t = doc.create_text(body.to_string());
+            doc.append_child(el, t);
+            let mut out = String::new();
+            serialize_children(&doc, el, &mut out);
+            out
+        };
+        assert_eq!(ser(lumen_dom::QualName::html("script")), body);
+        assert_eq!(ser(lumen_dom::QualName::html("STYLE")), body);
+        assert_eq!(ser(lumen_dom::QualName::html("noscript")), body);
+        assert_eq!(
+            ser(lumen_dom::QualName::html("div")),
+            "if (a &lt; 3 &amp;&amp; b &gt; 1) x = '&amp;amp;';"
+        );
+        let svg_style = lumen_dom::QualName {
+            namespace: lumen_dom::Namespace::Svg,
+            local: "style".into(),
+        };
+        assert_ne!(ser(svg_style), body);
     }
 
     /// Верхний уровень результата `parse_html_fragment` в компактной записи —

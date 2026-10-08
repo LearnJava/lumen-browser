@@ -6,6 +6,7 @@
 //! Перенесено батчем SPLIT-ST14 из `crates/engine/layout/src/style.rs`
 //! (анкер `static COMPUTE_STYLE_CALLS`) без правок тел.
 
+use crate::style::calc::{looks_like_function_call, parse_math_function_value};
 use std::collections::HashMap;
 
 use lumen_core::geom::Size;
@@ -16,37 +17,30 @@ use lumen_css_parser::{
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::font_palette::resolve_font_palette_overrides;
-use crate::scroll_timeline::ScrollAxis;
 use crate::style::presentational::is_svg_presentational_element;
 use crate::style::share_safety::selector_is_share_safe;
 use crate::style::{
     apply_align_presentational_hint, apply_background_image_presentational_hint,
     apply_bgcolor_presentational_hint, apply_bordercolor_presentational_hint,
-    apply_cellspacing_presentational_hint, apply_declaration,
+    apply_cellspacing_presentational_hint, apply_declaration, apply_dir_presentational_hint,
     apply_font_element_presentational_hints, apply_font_size, apply_forced_colors_mode,
     apply_image_presentational_hints, apply_property_initial_values, apply_quirks_html_height,
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
-    apply_ua_dialog_display, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
-    apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_table_cell_padding,
+    apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
+    apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
     matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
     resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
-    strip_ua_appearance_box_styling, ua_font_family,
+    is_appearance_disabling_property, is_disableable_widget, strip_ua_appearance_box_styling,
+    ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
-    ua_white_space, validate_against_syntax, with_front_cascade_index, AlignValue, Appearance,
-    BackfaceVisibility, BlockStepAlign, BlockStepInsert, BlockStepRound,
-    BorderStyle, BoxSizing, BreakValue, ClearSide,
-    ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor, CssContinue,
-    Display, FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
-    FontPalette, FontSizeBasis, FontWeight, GridAutoFlow, GridLine, GridTrackSize, Isolation,
-    Length, LengthOrAuto, MasonryAutoFlow, MixBlendMode, ObjectFit, ObjectPosition, OffsetRotate,
-    OutlineColor, OutlineStyle, Overflow, OverflowAnchor, OverscrollBehavior, PointerEvents, Position,
-    PositionComponent, PrintColorAdjust, Resize, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType,
-    ScrollTargetGroup, ScrollbarGutter, ShapeOutside, TextAlignLast, TextOverflow, TouchAction, TransformStyle,
-    UnicodeBidi, VerticalAlign, WebkitBoxOrient, WhiteSpace, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
+    parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
+    ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, WebkitBoxOrient,
+    FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
+    SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
 
 /// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
@@ -82,15 +76,20 @@ fn note_compute_style() {
 /// Returns `None` when the value does not parse, in which case the caller must
 /// leave the previous value alone — an invalid declaration is ignored, per
 /// CSS Syntax, not treated as `1.0`.
-pub(in crate::style) fn parse_zoom(value: &str) -> Option<f32> {
+pub(in crate::style) fn parse_zoom(value: &str, em_basis: f32) -> Option<f32> {
     let v = value.trim();
     if v.eq_ignore_ascii_case("normal") || v.eq_ignore_ascii_case("reset") {
         return Some(1.0);
     }
     let factor = if let Some(pct) = v.strip_suffix('%') {
-        pct.trim().parse::<f32>().ok()? / 100.0
+        match pct.trim().parse::<f32>() {
+            Ok(n) => n / 100.0,
+            Err(_) => parse_zoom_math(v, em_basis)?,
+        }
+    } else if let Ok(n) = v.parse::<f32>() {
+        n
     } else {
-        v.parse::<f32>().ok()?
+        parse_zoom_math(v, em_basis)?
     };
     // A negative or non-finite zoom is invalid; a zero one would collapse the
     // subtree to nothing, which no page means and which would divide by zero
@@ -101,10 +100,23 @@ pub(in crate::style) fn parse_zoom(value: &str) -> Option<f32> {
     Some(factor)
 }
 
-/// Scale one already-computed absolute length by `z`. Only `Px` is touched:
-/// every other unit resolves later against a basis (`font_size`, the containing
-/// block, the viewport) that is itself already zoomed, so scaling here too
-/// would apply the factor twice.
+/// `zoom: calc(...)` / `sign(...)` etc. (CSS Values L4 §10): the math function
+/// is evaluated with `%` taken against 1 (so `2%` → 0.02) and `em` against the
+/// inherited font size, since `zoom` is resolved before this element's font-size.
+fn parse_zoom_math(v: &str, em_basis: f32) -> Option<f32> {
+    if !looks_like_function_call(v) {
+        return None;
+    }
+    let Length::Calc(node) = parse_math_function_value(v)? else {
+        return None;
+    };
+    node.resolve(em_basis, Some(1.0), Size { width: 0.0, height: 0.0 })
+}
+
+/// Scale one already-computed absolute length by `z`. Only `Px` and the viewport
+/// units are touched: every other unit resolves later against a basis
+/// (`font_size`, the containing block) that is itself already zoomed, so scaling
+/// here too would apply the factor twice.
 /// CSS Scoping L1 §3.5 (BUG-519): the tree-scoped `@function` lookup chain
 /// for a declaration that came from `sheet`, the stylesheet of the shadow
 /// tree hosted by `owner_host`. Innermost first: `sheet`'s own functions,
@@ -122,16 +134,30 @@ fn shadow_function_chain(doc: &Document, sheet: &Stylesheet, owner_host: NodeId)
     chain.iter().any(|f| !f.is_empty()).then_some(chain)
 }
 
-fn zoom_length(len: &mut Length, z: f32) {
-    if let Length::Px(v) = len {
+fn zoom_length(len: &mut Length, z: f32, rem_k: f32, root_k: f32) {
+    // Viewport units resolve against the unzoomed viewport, so the factor is
+    // folded into the coefficient (CSS Viewport L1 §5: `1vh` under `zoom: 2`
+    // is twice as tall as outside it). The font-relative units are not listed:
+    // their basis (`font_size`, the font metrics) already carries the zoom.
+    if let Length::Px(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v) = len {
         *v *= z;
+    }
+    // `rem` resolves against the fixed 16px UA constant, so the root's
+    // (zoomed) font-size is folded into the coefficient the same way.
+    if let Length::Rem(v) = len {
+        *v *= rem_k;
+    }
+    // `rlh`/`rex`/`rch` carry the root font's (already root-zoomed) metrics, so
+    // only the zoom this element adds on top of the root's remains.
+    if let Length::Rlh(v) | Length::Rex(v) | Length::Rch(v) = len {
+        *v *= root_k;
     }
 }
 
 /// Same for a `<length> | auto` field — `auto` carries no length to scale.
-fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32) {
+fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32, rem_k: f32, root_k: f32) {
     if let LengthOrAuto::Length(l) = len {
-        zoom_length(l, z);
+        zoom_length(l, z, rem_k, root_k);
     }
 }
 
@@ -149,8 +175,8 @@ fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32) {
 /// `font_size` is handled by the caller rather than here, because it is the one
 /// value whose correct factor depends on whether the element specified it (see
 /// the call site).
-fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
-    if (z - 1.0).abs() < f32::EPSILON {
+fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: f32) {
+    if (z - 1.0).abs() < f32::EPSILON && (rem_k - 1.0).abs() < f32::EPSILON && (root_k - 1.0).abs() < f32::EPSILON {
         return;
     }
     for len in [
@@ -162,7 +188,7 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
         &mut style.max_height,
     ] {
         if let Some(l) = len.as_mut() {
-            zoom_length(l, z);
+            zoom_length(l, z, rem_k, root_k);
         }
     }
     for len in [
@@ -175,7 +201,7 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
         &mut style.bottom,
         &mut style.left,
     ] {
-        zoom_length_or_auto(len, z);
+        zoom_length_or_auto(len, z, rem_k, root_k);
     }
     for len in [
         &mut style.padding_top,
@@ -185,7 +211,7 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
         &mut style.row_gap,
         &mut style.column_gap,
     ] {
-        zoom_length(len, z);
+        zoom_length(len, z, rem_k, root_k);
     }
     // Border widths are already resolved to px by the cascade.
     style.border_top_width *= z;
@@ -249,387 +275,25 @@ pub(crate) fn compute_style_shareable(
     // of one line per node. Costs a cached bool check per phase when disabled.
     let _prof = lumen_core::profile::scope_detail("compute_style");
     note_compute_style();
+    // CSS Color L5 §5.3 — `color(--name …)` is parsed deep inside
+    // `apply_declaration`, which never sees the sheet: bind its
+    // `@color-profile` rules to this thread first.
+    crate::style::parse::color::sync_color_profiles(sheet);
     let mut shareable = sheet.scope_rules.is_empty();
     let prof_init = lumen_core::profile::scope_detail("cs_init");
-    let mut style = ComputedStyle {
-        display: default_display(doc, node),
-        // Наследуемые свойства (CSS inherited properties).
-        color: inherited.color,
-        color_space: inherited.color_space,
-        text_align: inherited.text_align,
-        direction: inherited.direction,
-        // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
-        unicode_bidi: UnicodeBidi::Normal,
-        font_size: inherited.font_size,
-        // Seeded from the parent so the value compounds; the element's own
-        // `zoom` declaration is folded in by the pre-pass below.
-        effective_zoom: inherited.effective_zoom,
-        line_height: inherited.line_height,
-        line_height_is_relative: inherited.line_height_is_relative,
-        line_height_is_normal: inherited.line_height_is_normal,
-        line_height_step: inherited.line_height_step,
-        font_style: inherited.font_style,
-        font_weight: inherited.font_weight,
-        font_variant_caps: inherited.font_variant_caps,
-        font_variant_emoji: inherited.font_variant_emoji,
-        font_stretch: inherited.font_stretch,
-        font_family: inherited.font_family.clone(),
-        font_variation_settings: inherited.font_variation_settings.clone(),
-        font_feature_settings: inherited.font_feature_settings.clone(),
-        font_palette: inherited.font_palette.clone(),
-        font_palette_resolved: inherited.font_palette_resolved.clone(),
-        font_optical_sizing: inherited.font_optical_sizing,
-        text_transform: inherited.text_transform,
-        white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
-        white_space_collapse: ua_white_space(doc, node)
-            .map(WhiteSpace::collapse_component)
-            .unwrap_or(inherited.white_space_collapse),
-        text_indent: inherited.text_indent.clone(),
-        letter_spacing: inherited.letter_spacing,
-        word_spacing: inherited.word_spacing,
-        text_decoration_line: inherited.text_decoration_line,
-        text_decoration_color: inherited.text_decoration_color,
-        text_decoration_style: inherited.text_decoration_style,
-        text_decoration_thickness: inherited.text_decoration_thickness,
-        text_emphasis_style: inherited.text_emphasis_style.clone(),
-        text_emphasis_color: inherited.text_emphasis_color,
-        text_emphasis_position: inherited.text_emphasis_position,
-        text_underline_position: inherited.text_underline_position,
-        text_underline_offset: inherited.text_underline_offset,
-        text_decoration_skip_ink: inherited.text_decoration_skip_ink,
-        accent_color: inherited.accent_color,
-        color_scheme: inherited.color_scheme,
-        // CSS Color HDR L1 §2: dynamic-range-limit is inherited. BUG-508.
-        dynamic_range_limit: inherited.dynamic_range_limit,
-        // CSS Text Size Adjustment L1 §2: text-size-adjust is inherited. BUG-513.
-        text_size_adjust: inherited.text_size_adjust,
-        // CSS Color Adjustment L1 §4: forced-color-adjust IS inherited.
-        forced_color_adjust: inherited.forced_color_adjust,
-        // CSS Variables L1: все custom properties inherited.
-        custom_props: inherited.custom_props.clone(),
-        // Ненаследуемые — сброс.
-        background_color: None,
-        width: None,
-        height: None,
-        min_width: None,
-        max_width: None,
-        min_height: None,
-        max_height: None,
-        margin_top: LengthOrAuto::ZERO,
-        margin_right: LengthOrAuto::ZERO,
-        margin_bottom: LengthOrAuto::ZERO,
-        margin_left: LengthOrAuto::ZERO,
-        padding_top: Length::Px(0.0),
-        padding_right: Length::Px(0.0),
-        padding_bottom: Length::Px(0.0),
-        padding_left: Length::Px(0.0),
-        border_top_width: 0.0,
-        border_right_width: 0.0,
-        border_bottom_width: 0.0,
-        border_left_width: 0.0,
-        border_top_style: BorderStyle::None,
-        border_right_style: BorderStyle::None,
-        border_bottom_style: BorderStyle::None,
-        border_left_style: BorderStyle::None,
-        border_top_color: CssColor::CurrentColor,
-        border_right_color: CssColor::CurrentColor,
-        border_bottom_color: CssColor::CurrentColor,
-        border_left_color: CssColor::CurrentColor,
-        box_sizing: BoxSizing::ContentBox,
-        // CSS Rhythmic Sizing L1 §3 (BUG-517) — не наследуются.
-        block_step_size: None,
-        block_step_insert: BlockStepInsert::MarginBox,
-        block_step_align: BlockStepAlign::Auto,
-        block_step_round: BlockStepRound::Up,
-        // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
-        position: Position::Static,
-        top: LengthOrAuto::Auto,
-        right: LengthOrAuto::Auto,
-        bottom: LengthOrAuto::Auto,
-        left: LengthOrAuto::Auto,
-        z_index: None,
-        float_side: FloatSide::None,
-        clear: ClearSide::None,
-        initial_letter_size: 1.0,
-        initial_letter_sink: 0,
-        isolation: Isolation::Auto,
-        mix_blend_mode: MixBlendMode::Normal,
-        // border-radius не наследуется.
-        border_top_left_radius: Length::Px(0.0),
-        border_top_right_radius: Length::Px(0.0),
-        border_bottom_right_radius: Length::Px(0.0),
-        border_bottom_left_radius: Length::Px(0.0),
-        border_top_left_radius_y: Length::Px(0.0),
-        border_top_right_radius_y: Length::Px(0.0),
-        border_bottom_right_radius_y: Length::Px(0.0),
-        border_bottom_left_radius_y: Length::Px(0.0),
-        // Inherited (CSS Display L3 §4).
-        visibility: inherited.visibility,
-        // Inherited (CSS UI L4 §8.1).
-        cursor: inherited.cursor,
-        // text-shadow inherited (CSS Text Decoration L3 §4).
-        text_shadow: inherited.text_shadow.clone(),
-        // Не наследуется.
-        box_shadow: Vec::new(),
-        overflow_x: Overflow::Visible,
-        overflow_y: Overflow::Visible,
-        overflow_block: Overflow::Visible,
-        overflow_inline: Overflow::Visible,
-        overflow_clip_margin: None,
-        scroll_marker_group: None,
-        scroll_target_group: ScrollTargetGroup::None,
-        text_overflow: TextOverflow::Clip,
-        opacity: 1.0,
-        outline_width: 3.0,
-        outline_style: OutlineStyle::None,
-        outline_color: OutlineColor::Auto,
-        outline_offset: Length::Px(0.0),
-        // CSS Lists L3 §3 — не наследуются.
-        counter_reset: Vec::new(),
-        counter_increment: Vec::new(),
-        counter_set: Vec::new(),
-        // CSS Masking / Transforms / Filter — не наследуются.
-        clip_path: None,
-        transform: Vec::new(),
-        translate: None,
-        rotate: None,
-        scale: None,
-        filter: Vec::new(),
-        // Box Alignment gap / Sizing aspect-ratio — не наследуются.
-        row_gap: Length::Px(0.0),
-        column_gap: Length::Px(0.0),
-        // CSS Multi-column — не наследуются.
-        column_count: None,
-        column_width: None,
-        column_rule_width: 0.0,
-        column_rule_style: BorderStyle::None,
-        column_rule_color: CssColor::CurrentColor,
-        gap_rule_width: 0.0,
-        gap_rule_style: BorderStyle::None,
-        gap_rule_color: CssColor::CurrentColor,
-        column_span_all: false,
-        column_fill_balance: true,
-        break_before: BreakValue::Auto,
-        break_after: BreakValue::Auto,
-        break_inside: BreakValue::Auto,
-        aspect_ratio: None,
-        width_is_intrinsic_hint: false,
-        height_is_intrinsic_hint: false,
-        // Box Alignment — все не наследуются, default = Auto.
-        align_items: AlignValue::Auto,
-        align_self: AlignValue::Auto,
-        align_content: AlignValue::Auto,
-        justify_items: AlignValue::Auto,
-        justify_self: AlignValue::Auto,
-        justify_content: AlignValue::Auto,
-        // Backgrounds — не наследуются, defaults.
-        background_layers: Vec::new(),
-        // Will Change / Pointer Events — не наследуются.
-        will_change: Vec::new(),
-        pointer_events: PointerEvents::Auto,
-        touch_action: TouchAction::Auto,
-        appearance: Appearance::Auto,
-        field_sizing: FieldSizing::Fixed,
-        text_align_last: TextAlignLast::Auto,
-        // User Select / Scroll Behavior — наследуются.
-        user_select: inherited.user_select,
-        resize: Resize::None,
-        scroll_behavior: inherited.scroll_behavior,
-        // Scroll Snap / Overscroll — не наследуются, defaults.
-        scroll_snap_type: ScrollSnapType::default(),
-        scroll_snap_align: ScrollSnapAlign::default(),
-        scroll_snap_stop: ScrollSnapStop::default(),
-        scroll_margin_top: 0.0,
-        scroll_margin_right: 0.0,
-        scroll_margin_bottom: 0.0,
-        scroll_margin_left: 0.0,
-        scroll_padding_top: 0.0,
-        scroll_padding_right: 0.0,
-        scroll_padding_bottom: 0.0,
-        scroll_padding_left: 0.0,
-        overscroll_behavior_x: OverscrollBehavior::Auto,
-        overscroll_behavior_y: OverscrollBehavior::Auto,
-        overscroll_behavior_block: OverscrollBehavior::Auto,
-        overscroll_behavior_inline: OverscrollBehavior::Auto,
-        // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
-        border_collapse: inherited.border_collapse,
-        empty_cells: inherited.empty_cells,
-        border_spacing_h: inherited.border_spacing_h,
-        border_spacing_v: inherited.border_spacing_v,
-        // CSS Text typography — все inherited.
-        tab_size: inherited.tab_size,
-        caret_color: inherited.caret_color,
-        overflow_wrap: inherited.overflow_wrap,
-        word_break: inherited.word_break,
-        line_break: inherited.line_break,
-        hyphens: inherited.hyphens,
-        // CSS Transforms — не наследуются.
-        transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
-        perspective: None,
-        perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
-        transform_style: TransformStyle::Flat,
-        backface_visibility: BackfaceVisibility::Visible,
-        // CSS Lists — list-style-* наследуются.
-        list_style_type: inherited.list_style_type.clone(),
-        list_style_position: inherited.list_style_position,
-        list_style_image: inherited.list_style_image.clone(),
-        // CSS Transitions / Animations — не наследуются. Initial = empty list.
-        transition_properties: Vec::new(),
-        transition_durations: Vec::new(),
-        transition_delays: Vec::new(),
-        transition_timing_functions: Vec::new(),
-        transition_fill_modes: Vec::new(),
-        animation_names: Vec::new(),
-        animation_durations: Vec::new(),
-        animation_timing_functions: Vec::new(),
-        animation_delays: Vec::new(),
-        animation_iteration_counts: Vec::new(),
-        animation_directions: Vec::new(),
-        animation_fill_modes: Vec::new(),
-        animation_play_states: Vec::new(),
-        animation_timelines: Vec::new(),
-        scroll_timeline_name: None,
-        scroll_timeline_axis: ScrollAxis::Block,
-        view_timeline_name: None,
-        view_timeline_axis: ScrollAxis::Block,
-        // CSS Masking — не наследуется.
-        mask_layers: Vec::new(),
-        // CSS Scrollbars — scrollbar-width/-color inherited;
-        // scrollbar-gutter не наследуется.
-        scrollbar_width: inherited.scrollbar_width,
-        scrollbar_color: inherited.scrollbar_color,
-        scrollbar_gutter: ScrollbarGutter::Auto,
-        // CSS Scroll Anchoring 1 — `overflow-anchor` не наследуется.
-        overflow_anchor: OverflowAnchor::Auto,
-        content: Content::Normal,
-        // CSS Images L3 §5.5 — object-fit / object-position не наследуются.
-        object_fit: ObjectFit::Fill,
-        object_position: ObjectPosition::default(),
-        // CSS 2.1 §10.8.1 — vertical-align не наследуется. Initial = baseline.
-        vertical_align: VerticalAlign::Baseline,
-        // CSS Images L3 §6.1 — image-rendering inherited.
-        image_rendering: inherited.image_rendering,
-        // CSS Flexbox L1 §5 — flex-direction / flex-wrap не наследуются.
-        flex_direction: FlexDirection::Row,
-        flex_wrap: FlexWrap::Nowrap,
-        // CSS Flexbox L1 §7 — flex-grow / flex-shrink / flex-basis не наследуются.
-        flex_grow: 0.0,
-        flex_shrink: 1.0,
-        flex_basis: FlexBasis::Auto,
-        order: 0,
-        // CSS Grid Layout L1 — grid properties не наследуются.
-        grid_template_columns: Vec::new(),
-        grid_template_rows: Vec::new(),
-        grid_template_col_auto_repeat: None,
-        grid_template_row_auto_repeat: None,
-        grid_template_areas: Vec::new(),
-        grid_auto_flow: GridAutoFlow::Row,
-        masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
-        grid_auto_columns: GridTrackSize::Auto,
-        grid_auto_rows: GridTrackSize::Auto,
-        grid_column_start: GridLine::Auto,
-        grid_column_end: GridLine::Auto,
-        grid_row_start: GridLine::Auto,
-        grid_row_end: GridLine::Auto,
-        // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
-        text_wrap_mode: inherited.text_wrap_mode,
-        text_wrap_style: inherited.text_wrap_style,
-        // CSS Overflow L4 — line-clamp не наследуется. Initial = none.
-        line_clamp: None,
-        // WHATWG Compat / CSS Overflow L4 §continue — оба не наследуются.
-        box_orient: WebkitBoxOrient::Horizontal,
-        continue_value: CssContinue::Normal,
-        // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
-        orphans: inherited.orphans,
-        widows: inherited.widows,
-        // CSS Containment L3 — не наследуются. Initial values.
-        contain: ContainFlags::NONE,
-        content_visibility: ContentVisibility::Visible,
-        // CSS Box Sizing L4 §5 — contain-intrinsic-* are NOT inherited.
-        contain_intrinsic_width: None,
-        contain_intrinsic_width_auto: false,
-        contain_intrinsic_height: None,
-        contain_intrinsic_height_auto: false,
-        // CSS Sizing L4 §4.5 — interpolate-size is inherited.
-        interpolate_size: inherited.interpolate_size,
-        container_type: ContainerType::Normal,
-        container_name: Vec::new(),
-        // CSS Filter Effects L2 — backdrop-filter не наследуется.
-        backdrop_filter: Vec::new(),
-        // CSS Color Adjustment L1 §5 — print-color-adjust не наследуется.
-        print_color_adjust: PrintColorAdjust::Economy,
-        // CSS Fonts L5 §4 — font-size-adjust inherited.
-        font_size_adjust: inherited.font_size_adjust,
-        // CSS Writing Modes L3 — оба inherited.
-        writing_mode: inherited.writing_mode,
-        text_orientation: inherited.text_orientation,
-        // CSS Ruby L1 §4 — все три inherited.
-        ruby_position: inherited.ruby_position,
-        ruby_align: inherited.ruby_align,
-        ruby_merge: inherited.ruby_merge,
-        // MathML Core §2.1 — оба inherited (math-depth уже как computed integer).
-        math_style: inherited.math_style,
-        math_depth: inherited.math_depth,
-        // CSS Shapes L1 / Motion Path — не наследуются. Initial values.
-        shape_outside: ShapeOutside::None,
-        shape_margin: Length::Px(0.0),
-        shape_image_threshold: 0.0,
-        offset_path: None,
-        offset_distance: Length::Px(0.0),
-        offset_rotate: OffsetRotate::Auto,
-        offset_anchor: None,
-        // SVG presentation attributes — all inherited per SVG spec §11.
-        svg_fill: inherited.svg_fill.clone(),
-        svg_fill_opacity: inherited.svg_fill_opacity,
-        svg_stroke: inherited.svg_stroke.clone(),
-        svg_stroke_opacity: inherited.svg_stroke_opacity,
-        svg_stroke_width: inherited.svg_stroke_width,
-        svg_fill_rule: inherited.svg_fill_rule,
-        svg_clip_rule: inherited.svg_clip_rule,
-        svg_stroke_linecap: inherited.svg_stroke_linecap,
-        svg_stroke_linejoin: inherited.svg_stroke_linejoin,
-        svg_stroke_miterlimit: inherited.svg_stroke_miterlimit,
-        svg_stroke_dasharray: inherited.svg_stroke_dasharray.clone(),
-        svg_stroke_dashoffset: inherited.svg_stroke_dashoffset,
-        paint_order: inherited.paint_order,
-        text_anchor: inherited.text_anchor,
-        dominant_baseline: inherited.dominant_baseline,
-        // SVG baseline-shift is NOT inherited — reset to initial each element.
-        baseline_shift: crate::box_tree::SvgBaselineShift::Baseline,
-        // CSS Logical Properties L1 — not inherited. Initial values.
-        inline_size: None,
-        block_size: None,
-        inset_inline_start: LengthOrAuto::Auto,
-        inset_inline_end: LengthOrAuto::Auto,
-        inset_block_start: LengthOrAuto::Auto,
-        inset_block_end: LengthOrAuto::Auto,
-        margin_inline_start: LengthOrAuto::ZERO,
-        margin_inline_end: LengthOrAuto::ZERO,
-        margin_block_start: LengthOrAuto::ZERO,
-        margin_block_end: LengthOrAuto::ZERO,
-        padding_inline_start: Length::Px(0.0),
-        padding_inline_end: Length::Px(0.0),
-        padding_block_start: Length::Px(0.0),
-        padding_block_end: Length::Px(0.0),
-        border_inline_start_width: 0.0,
-        border_inline_end_width: 0.0,
-        border_block_start_width: 0.0,
-        border_block_end_width: 0.0,
-        anchor_name: None,
-        position_anchor: None,
-        inset_area_row: crate::anchor::InsetAreaKeyword::None,
-        inset_area_col: crate::anchor::InsetAreaKeyword::None,
-        anchor_scope: crate::anchor::AnchorScope::None,
-        anchor_size_w: None,
-        anchor_size_h: None,
-        anchor_top: None,
-        anchor_right: None,
-        anchor_bottom: None,
-        anchor_left: None,
-        view_transition_name: None,
-        // CSS Generated Content L3 §3.2 — quotes inherited.
-        quotes: inherited.quotes.clone(),
-    };
+    let mut style = ComputedStyle::inheriting(inherited);
+    style.display = default_display(doc, node);
+    // `inherited` is the parent's computed style: a flex/grid parent makes this
+    // box an item, and a `z-index` on a static item must create a stacking
+    // context (CSS Flexbox L1 §4.3, Grid L1 §6.4).
+    style.is_flex_grid_item = matches!(
+        inherited.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    );
+    if let Some(ws) = ua_white_space(doc, node) {
+        style.white_space = ws;
+        style.white_space_collapse = ws.collapse_component();
+    }
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
     // custom-properties. Карта строится локально для каждого узла:
@@ -713,14 +377,16 @@ pub(crate) fn compute_style_shareable(
     if let Some(factor) = ua_font_size_factor(doc, node) {
         style.font_size = inherited.font_size * factor;
     }
-    // UA stylesheet: <sub>/<sup> → vertical-align. HTML5 §15.3.3.
-    if let Some(va) = ua_vertical_align(doc, node) {
+    // UA stylesheet: <sub>/<sup> и табличные элементы → vertical-align. HTML5 §15.3.3, §15.3.8.
+    if let Some(va) = ua_vertical_align(doc, node, inherited.vertical_align) {
         style.vertical_align = va;
     }
     // UA stylesheet: <h1>–<h6> → font-size + vertical margins. HTML Rendering §15.3.3.
     // Set font-size here (before the author font-size pre-pass) so author CSS overrides it.
     apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
+    // UA stylesheet: <fieldset> / <legend>. HTML Rendering §15.3.13. Author CSS перекроет.
+    apply_ua_fieldset_style(doc, node, &mut style);
     // UA stylesheet: <body> → margin: 8px. HTML Rendering §14.3.3. Author CSS перекроет.
     apply_ua_body_margin(doc, node, &mut style);
     // UA stylesheet: form controls — display, intrinsic dimensions, border,
@@ -751,6 +417,9 @@ pub(crate) fn compute_style_shareable(
     // display:none; `hidden="until-found"` → content-visibility:hidden.
     // Author `display`/`content-visibility` declarations win (UA origin).
     apply_ua_hidden(doc, node, &mut style);
+    // UA stylesheet (HTML LS §15.5.4): `<details>`' content slot is a block,
+    // `content-visibility: hidden` while closed (GAP-UASHADOWSLOT).
+    apply_ua_slot(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -800,6 +469,9 @@ pub(crate) fn compute_style_shareable(
 
     // HTML5 §15.3.3: `align` на блочных элементах → text-align.
     apply_align_presentational_hint(doc, node, &mut style);
+
+    // HTML LS §15.3.6: `dir` → `direction` + `unicode-bidi` (BUG-1321).
+    apply_dir_presentational_hint(doc, node, &mut style);
 
     // CSS Quirks Mode §4.1 + HTML5 §14.3.9: `width`/`height` attr на
     // `<td>`/`<th>`/`<table>`. В quirks-mode width ячейки → min-width.
@@ -915,6 +587,9 @@ pub(crate) fn compute_style_shareable(
             .into_iter()
             .filter_map(|flat| {
                 let (block, rule_idx) = *idx.layer_rules.get(flat)?;
+                if !*idx.layer_active.get(block)? {
+                    return None;
+                }
                 Some((flat, block, rule_idx, *idx.layer_order_pos.get(block)?))
             })
             .collect::<Vec<_>>()
@@ -1200,6 +875,13 @@ pub(crate) fn compute_style_shareable(
             None,
         ));
     }
+    // GAP-UASHADOWSLOT: CSS Scoping L1 §3.1 — a document rule never reaches
+    // into a shadow tree, and a UA shadow tree has no sheet of its own, so a
+    // UA slot keeps exactly the UA styles set above. (Author shadow trees
+    // still see document rules here — a wider, pre-existing gap.)
+    if doc.ua_slot_role(node).is_some() {
+        matched.clear();
+    }
     matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _, _)| {
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
@@ -1356,9 +1038,17 @@ pub(crate) fn compute_style_shareable(
     let mut own_zoom = 1.0f32;
     for (_, _, _, _, _, _, decl, _) in &matched {
         if decl.property.eq_ignore_ascii_case("zoom")
-            && let Some(z) = parse_zoom(&decl.value)
+            && let Some(z) = parse_zoom(&decl.value, inherited.font_size)
         {
             own_zoom = z;
+        }
+        // `all: initial|unset|revert` сбрасывает и `zoom` (не наследуется,
+        // initial и UA-значение — 1). `all: inherit` взял бы собственный
+        // множитель родителя, которого стиль не хранит — оставляем как есть.
+        if decl.property == "all"
+            && parse_css_wide_keyword(decl.value.trim()).is_some_and(|kw| kw != CssWideKeyword::Inherit)
+        {
+            own_zoom = 1.0;
         }
     }
     style.effective_zoom = inherited.effective_zoom * own_zoom;
@@ -1387,6 +1077,11 @@ pub(crate) fn compute_style_shareable(
         FontSizeBasis::Absolute => style.effective_zoom,
         FontSizeBasis::ParentRelative => own_zoom,
     };
+    // The document element's computed font-size is what `rem` refers to.
+    if doc.get(node).parent == Some(doc.root()) {
+        style.root_font_size = style.font_size;
+        style.root_zoom = style.effective_zoom;
+    }
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
@@ -1425,7 +1120,20 @@ pub(crate) fn compute_style_shareable(
             _ => {}
         }
     }
-    if appearance_none {
+    // CSS UI L4 §appearance-disabling-properties / HTML LS §15.5: an author
+    // `background-*`/`border-*`/`padding-*` on a widget with `appearance: auto`
+    // switches it to used `none`. UA defaults are programmatic (not in
+    // `matched`), so any such declaration here is the author's.
+    let mut appearance_auto = true;
+    for (_, _, _, _, _, _, decl, _) in &matched {
+        if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance" | "-moz-appearance") {
+            appearance_auto = decl.value.trim().eq_ignore_ascii_case("auto");
+        }
+    }
+    let disabled_by_author = appearance_auto
+        && matched.iter().any(|(_, _, _, _, _, _, decl, _)| is_appearance_disabling_property(&decl.property))
+        && is_disableable_widget(doc, node);
+    if appearance_none || disabled_by_author {
         strip_ua_appearance_box_styling(doc, node, &mut style);
     }
 
@@ -1610,6 +1318,15 @@ pub(crate) fn compute_style_shareable(
         }
     }
 
+    // CSS Text L3 §7.1 — `text-align: match-parent`.
+    if style.text_align == crate::style::TextAlign::MatchParent {
+        style.text_align = if doc.document_element() == Some(node) {
+            crate::style::TextAlign::Start
+        } else {
+            crate::style::resolve_match_parent(inherited.text_align, inherited.direction)
+        };
+    }
+
     // CSS Display L3 §2.7 — blockification: the root element's own box can
     // never be eliminated (there is nothing above it to splice its children
     // into), so a `display: contents` document element computes to `block`
@@ -1618,12 +1335,50 @@ pub(crate) fn compute_style_shareable(
         style.display = Display::Block;
     }
 
+    // WHATWG Compat §2.1 — legacy `display: -webkit-box`/`-webkit-inline-box` is laid out as a
+    // flex container whose axis is `-webkit-box-orient` (Gap Decorations L1 applies to it, WPT
+    // `css-gaps/flex/webkit-box.tentative`). The original keyword is kept in `legacy_box_display`
+    // for `getComputedStyle`. A box that clamps its lines (`-webkit-line-clamp`/`continue: discard`)
+    // stays a block — that is the ellipsis idiom and its children are inline text, not items.
+    // A `<fieldset>` also keeps the block path: its content lives in an anonymous box the flex
+    // arm does not build (`compat/webkit-box-fieldset`: the child must span the width).
+    if matches!(style.display, Display::WebkitBox | Display::WebkitInlineBox)
+        && style.line_clamp.is_none()
+        && !style.line_clamp_auto
+        && style.continue_value != CssContinue::Discard
+        && !matches!(&doc.get(node).data, NodeData::Element { name, .. } if name.local.as_str() == "fieldset")
+    {
+        style.legacy_box_display = Some(style.display);
+        style.display = if style.display == Display::WebkitBox { Display::Flex } else { Display::InlineFlex };
+        style.flex_direction = if style.box_orient == WebkitBoxOrient::Vertical {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+    }
+
+    // CSS Align L3 §vertical-align / Flexbox §4, Grid §6 — an in-flow child of a
+    // flex or grid container is blockified, and `vertical-align` only applies
+    // to inline-level boxes and table cells: the computed value has no effect
+    // on a flex/grid item, so its text must not be shifted by it (WPT
+    // `flex-item-vertical-align.html`).
+    if matches!(
+        inherited.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    ) && style.display != Display::TableCell
+    {
+        style.vertical_align = crate::style::VerticalAlign::Baseline;
+    }
+
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
     // CssColor-typed fields (border-color, background-color, etc.) now that
     // style.color_scheme is final. The `color` field (Color, not CssColor) was
     // already resolved inline in the `"color"` branch of apply_declaration.
     drop(prof_apply);
     let _prof_post = lumen_core::profile::scope_detail("cs_post");
+    if disabled_by_author {
+        style.appearance = crate::Appearance::None;
+    }
     resolve_system_colors_in_style(&mut style, dark_mode);
 
     // CSS Color Adjustment L1 §3 — Forced Colors Mode: when the user preference
@@ -1667,6 +1422,13 @@ pub(crate) fn compute_style_shareable(
     // CSS Logical Properties L1 — resolve logical properties to physical.
     resolve_logical_properties(&mut style);
 
+    // CSS Backgrounds L3 §4.2 — the computed `border-*-width` is `0` when the side's
+    // `border-style` is `none` or `hidden`: `border-width: 10px` without a style draws
+    // nothing and takes no room (WPT `grid-baseline-004`: `.style3 { border-width: … }`
+    // on an element that never gets `border-style`). Runs after logical → physical so
+    // `border-block-*` sides are covered too.
+    zero_unstyled_border_widths(&mut style);
+
     // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
     // apply_ua_form_controls ran before the cascade and may have set explicit UA
     // dimensions. Now that field_sizing is final, clear width/height for text-entry
@@ -1694,7 +1456,34 @@ pub(crate) fn compute_style_shareable(
     // each is scaled exactly once. `font_size` was handled next to the cascade's
     // font-size pre-pass and is deliberately not re-scaled here.
     let z = style.effective_zoom;
-    apply_zoom_to_lengths(&mut style, z);
+    // On the document element itself `rem` still means the initial 16px (CSS
+    // Values L4 §5.1.2), zoomed like any other absolute length.
+    let rem_k = if doc.get(node).parent == Some(doc.root()) {
+        z
+    } else {
+        style.root_font_size / crate::style::ROOT_FONT_SIZE * (z / style.root_zoom)
+    };
+    let root_k = z / style.root_zoom;
+    apply_zoom_to_lengths(&mut style, z, rem_k, root_k);
 
     (style, shareable)
+}
+
+/// CSS Backgrounds L3 §4.2: a side whose `border-style` is `none`/`hidden` has a computed
+/// width of `0` whatever `border-width` says.
+fn zero_unstyled_border_widths(style: &mut ComputedStyle) {
+    use crate::BorderStyle;
+    let unstyled = |s: BorderStyle| matches!(s, BorderStyle::None | BorderStyle::Hidden);
+    if unstyled(style.border_top_style) {
+        style.border_top_width = 0.0;
+    }
+    if unstyled(style.border_right_style) {
+        style.border_right_width = 0.0;
+    }
+    if unstyled(style.border_bottom_style) {
+        style.border_bottom_width = 0.0;
+    }
+    if unstyled(style.border_left_style) {
+        style.border_left_width = 0.0;
+    }
 }

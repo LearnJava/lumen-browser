@@ -757,14 +757,17 @@ pub(crate) fn push_text_glyphs(
 /// Ph3 writing-mode vertical, Срез 2 — rotates a glyph run's vertices 90° CW
 /// around the local origin and translates the result onto `dest`. Mirrors the
 /// CPU rasterizer's `rasterize_text_rotated` transform
-/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x, dest.y)`): a point
-/// laid out horizontally at `(x, y)` maps to `(-y + dest.x, x + dest.y)`.
+/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x + dest.width, dest.y)`): a point
+/// laid out horizontally at `(x, y)` maps to `(-y + dest.x + dest.width, x + dest.y)`.
+/// The glyph top (`y = 0`) lands on the column's right edge and the body grows
+/// leftwards into the column — anchoring at `dest.x` instead put the whole run
+/// one line-height to the left of its box (BUG-553, срез 62).
 /// Callers must have generated `verts` with `push_text_glyphs` at the local
 /// origin `(0, 0)` — not at `dest`.
 pub(crate) fn rotate_text_vertices_cw(verts: &mut [TextVertex], dest: Rect) {
     for v in verts {
         let (x, y) = (v.pos[0], v.pos[1]);
-        v.pos = [-y + dest.x, x + dest.y];
+        v.pos = [-y + dest.x + dest.width, x + dest.y];
     }
 }
 

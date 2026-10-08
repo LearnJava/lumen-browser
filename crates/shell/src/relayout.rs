@@ -7,6 +7,10 @@
 
 use crate::*;
 
+/// BUG-1003: longest a due rAF batch waits for an in-flight relayout commit
+/// (see `pump_raf_engine_thread`).
+const RAF_RELAYOUT_HOLD_MS: f64 = 100.0;
+
 /// BUG-935 S31: measurement-only override for `defer_js_push` at the two call
 /// sites S27 converted (`relayout`/`poll_engine_commit`, `:188`/`:1267`
 /// below). S28/S29/S30 each tried an interleaved A/B of `true` vs `false` by
@@ -26,17 +30,104 @@ fn defer_js_push_override() -> Option<bool> {
     })
 }
 
-/// BUG-935 S46: measurement-only override for the M4-routing order in
+/// BUG-935 S46: override for the M4-routing order in
 /// [`Lumen::relayout_raf_dirty`] — S12/S14/S18/S27 each tried the same swap
 /// (incremental-first) via a literal edit + full rebuild between runs, and
 /// each lost the comparison to noise introduced by the rebuild+link gap
 /// itself (see [`defer_js_push_override`]'s doc for the same lesson). This
 /// mirrors that fix: an env var read once per process, no rebuild needed to
-/// flip it. `None` (unset, the default) leaves the shipped order (full
-/// off-thread first) unchanged for anyone who has not set the var.
+/// flip it. S85: unset is now the budgeted order ([`M4Swap::Guarded`]);
+/// `LUMEN_BUG935_M4_SWAP=0` restores the pre-S85 order.
 fn m4_swap_override() -> bool {
-    static OVERRIDE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OVERRIDE.get_or_init(|| std::env::var("LUMEN_BUG935_M4_SWAP").ok().as_deref() == Some("1"))
+    m4_swap_mode() != M4Swap::Off
+}
+
+/// BUG-935 S85: бюджет on-thread тика (режим `Guarded`, по умолчанию). Тик
+/// дороже — инкрементальный путь на этой странице не дешевле полного каскада
+/// (ria.ru: 0,5–2,1 с на UI-потоке, срез 84), и UI-поток платит их зря. На
+/// lenta.ru своп-тик укладывается в 38–106 мс (срезы 81–84).
+const M4_TICK_BUDGET_MS: f32 = 100.0;
+
+/// Сколько следующих тиков после первого превышения бюджета идёт off-thread.
+/// Кэш каскада в это время держат живым коммиты движкового потока.
+const M4_BACKOFF_TICKS: u8 = 8;
+
+/// Потолок экспоненциального отката: страница, где on-thread тик дорог
+/// всегда (ria.ru), пробует его раз в 128 тиков, а не раз в 8.
+const M4_BACKOFF_MAX_TICKS: u8 = 128;
+
+/// BUG-935 S85: решение после on-thread тика — `(тиков off-thread, штраф
+/// следующего превышения)`. В бюджете — штраф сбрасывается; сверх бюджета —
+/// откат растёт вдвое при каждом повторном превышении подряд.
+fn m4_tick_verdict(elapsed_ms: f32, penalty: u8) -> (u8, u8) {
+    if elapsed_ms <= M4_TICK_BUDGET_MS {
+        return (0, 0);
+    }
+    let ticks = penalty.clamp(M4_BACKOFF_TICKS, M4_BACKOFF_MAX_TICKS);
+    (ticks, ticks.saturating_mul(2).min(M4_BACKOFF_MAX_TICKS))
+}
+
+/// BUG-935 S86: уходит ли предсказанный полный тик (нет базиса стилей или
+/// неатрибутированная правка) off-thread. Стоимость полного прохода на этой
+/// странице неизвестна или не укладывается в бюджет — UI-поток её не платит.
+fn m4_full_tick_off_thread(last_full_cost_ms: Option<f32>) -> bool {
+    last_full_cost_ms.is_none_or(|ms| ms > M4_TICK_BUDGET_MS)
+}
+
+/// BUG-935 S86: уходит ли off-thread рестайл, чьи глубокие корни покрывают
+/// `deep_elements` из `styled` элементов. Цена on-thread тика растёт с долей
+/// пересчитываемых узлов; ширина — по последнему полному проходу этой
+/// страницы (ria.ru: корень на 2151 узел при 1860 стилизованных — тик 666 мс
+/// на UI-потоке, срез 85). Цены полного прохода нет — не угадываем.
+fn m4_wide_restyle_off_thread(last_full_cost_ms: Option<f32>, deep_elements: usize, styled: usize) -> bool {
+    last_full_cost_ms.is_some_and(|full_ms| {
+        let share = (deep_elements as f32 / styled.max(1) as f32).min(1.0);
+        full_ms * share > M4_TICK_BUDGET_MS
+    })
+}
+
+/// BUG-935 S86: занятость движкового потока короче этого порога — не повод
+/// уводить тик off-thread. `redraw_requested` на каждом кадре ставит ему
+/// fire-and-forget задание доставки scroll-progress (~0,2–0,5 мс), и тик
+/// `about_to_wait` почти всегда заставал его на ходу: на lenta.ru 11–24
+/// off-thread тиков по ~210 мс вместо on-thread по ~60 мс (срез 86, замер на
+/// коде среза 85). Задание, которое держит `document.lock()` секунды (JS-ход
+/// rAF), к моменту следующего тика давно старше порога.
+const M4_BUSY_MIN: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// BUG-935 срез 87: сколько UI-поток ждёт хэндл JS у свободного на вид
+/// движкового потока (задание могло стартовать после проверки `busy`).
+const M4_JS_HANDLE_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// BUG-935 S86: держит ли движковый поток, занятый уже `since`, on-thread тик.
+fn m4_busy_blocks_tick(since: std::time::Duration) -> bool {
+    since >= M4_BUSY_MIN
+}
+
+/// BUG-935 S80/S85: режимы `LUMEN_BUG935_M4_SWAP` — порядок маршрутизации
+/// rAF-рестайла в [`Lumen::relayout_raf_dirty`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum M4Swap {
+    /// `=0`: полный off-thread первым (порядок до среза 85) — рычаг отката.
+    Off,
+    /// `=1`: инкрементальный путь на UI-потоке первым безусловно (срезы 46–52,
+    /// измерительный режим).
+    Plain,
+    /// Не задан или `=2` (дефолт со среза 85): on-thread, пока тик укладывается
+    /// в [`M4_TICK_BUDGET_MS`]; тик, рядом с которым движковый поток занят, и
+    /// тики после превышения бюджета уходят off-thread — UI-поток не должен
+    /// ждать `document.lock()`, который держит JS страницы (срез 79: тики по
+    /// ~2 с на ria.ru), и не должен считать секундный каскад сам (срез 84).
+    Guarded,
+}
+
+fn m4_swap_mode() -> M4Swap {
+    static MODE: std::sync::OnceLock<M4Swap> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("LUMEN_BUG935_M4_SWAP").ok().as_deref() {
+        Some("0") => M4Swap::Off,
+        Some("1") => M4Swap::Plain,
+        _ => M4Swap::Guarded,
+    })
 }
 
 impl Lumen {
@@ -142,6 +233,9 @@ impl Lumen {
             css.push_str(&inline);
             css.push_str(&base.linked);
             let mut sheet = lumen_css_parser::parse(&css);
+            // CSS Color L5 §5.3: no network on relayout — keep the ICC bytes
+            // the first sheet already fetched.
+            sheet.carry_color_profile_data(stylesheet);
             if let Some(adopted) = feed.as_ref().and_then(|f| f.document_adopted_stylesheet()) {
                 sheet.merge_from(adopted);
             }
@@ -178,7 +272,30 @@ impl Lumen {
         // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
         // прохода — против нового листа они недействительны.
         self.page_prev_cascade_styles = None;
+        // BUG-1154: `@font-face url()` из поздно вставленного `<style>` (или
+        // CSSOM-правки) — загрузку порождала только первичная сборка страницы.
+        if text_changed || cssom_epoch != 0 {
+            self.spawn_dynamic_web_fonts();
+        }
         true
+    }
+
+    /// BUG-1154: запускает загрузку `@font-face url()`-источников текущего листа,
+    /// которых первичная сборка не видела; уже запрошенные отсекает
+    /// `spawn_web_font_fetches`.
+    fn spawn_dynamic_web_fonts(&mut self) {
+        let Some(src) = self.layout_source.as_ref() else { return };
+        if src.stylesheet.font_faces.is_empty() {
+            return;
+        }
+        let Some(base) = self.document_resource_base() else { return };
+        let (_, pending) = load_font_faces(
+            &src.stylesheet.font_faces,
+            &base,
+            &self.event_sink,
+            Some(self.active_cookie_jar()),
+        );
+        self.spawn_web_font_fetches(pending);
     }
 
     /// GAP-CSSANIM срез 9: this frame's `height` transition/`@keyframes`
@@ -338,7 +455,7 @@ impl Lumen {
     /// `Lumen::relayout_chrome_host`'s BUG-341 S6 wiring. `dirty_roots` unions
     /// the interactive-state delta (hover/focus/active, vs.
     /// `self.page_prev_interactive`) with the DOM-mutation delta
-    /// (`touched.nodes`); `content_dirty` is `Nothing` only when `touched.nodes`
+    /// (`touched.changes`); `content_dirty` is `Nothing` only when `touched.changes`
     /// is empty (a pure interactive-state cycle) and `Untracked` otherwise, the
     /// same precondition `RestyleDelta::content_dirty` documents. An `unattributed` summary
     /// (untracked mutation primitive — Shadow DOM attach, `execCommand`, …) or a
@@ -366,10 +483,53 @@ impl Lumen {
             self.layout_box = Some(prev_lb);
             return false;
         };
+        // BUG-935 S80: под движковым потоком `js_ctx` на UI-стороне пуст, и прежний
+        // `unwrap_or_default()` давал «ничего не тронуто, всё атрибутировано» —
+        // рестайл брал стили прошлого прохода целиком и показывал устаревшую
+        // страницу (живая проба: rAF переключает класс, итоговая геометрия
+        // 300×50 вместо 100×120). Набор сбрасываем через `dom_touched_drain` —
+        // общий мьютекс, без запроса в очередь движкового потока (тот может
+        // секундами исполнять JS страницы); нет сброса — «неатрибутировано»,
+        // то есть полный каскад. Срез 81: «сброс» — читатель с отметкой эпохи
+        // (`V8JsRuntime::dom_changes_reader`), трекер для флаша остаётся целым.
+        // Читается до блокировки документа — базис раскладки позже отметки, поэтому
+        // запись `class`/`id` приходит со всеми значениями после отметки.
+        // Срез 86: читается до побочных эффектов функции — отказ ниже должен их
+        // не оставлять.
+        let touched = if self.engine_thread.is_some() {
+            self.dom_touched_drain.as_ref().map(|drain| drain()).unwrap_or_else(|| {
+                crate::persistent_js::DomTouchedSummary { changes: Vec::new(), unattributed: true }
+            })
+        } else {
+            self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default()
+        };
+        // BUG-935 S86: тик без базиса стилей или с неатрибутированной правкой — это
+        // полный каскад, и on-thread он не дешевле off-thread (ria.ru: первый тик
+        // 970 мс на UI-потоке), зато off-thread не блокирует окно и возвращает
+        // стили, с которыми следующие тики идут по дешёвой ветке. Потерянный
+        // `touched` не нужен: полный проход видит документ целиком.
+        let predicted_full = touched.unattributed || self.page_prev_cascade_styles.is_none();
+        if predicted_full
+            && self.engine_thread.is_some()
+            && m4_swap_mode() == M4Swap::Guarded
+            && m4_full_tick_off_thread(self.m4_full_cost_ms)
+        {
+            if lumen_paint::frame_log_enabled() {
+                eprintln!(
+                    "[engine] relayout_raf_dirty full tick -> off-thread (unattributed={}, basis={}, last_full_ms={:?})",
+                    touched.unattributed,
+                    self.page_prev_cascade_styles.is_some(),
+                    self.m4_full_cost_ms,
+                );
+            }
+            self.layout_box = Some(prev_lb);
+            return false;
+        }
         // BUG-935 S12: time this UI-thread path the same way `relayout()` times
         // the full sync path (`engine_t0` above) — before this section it ran
         // silently, and a census comparing it against `submit_relayout_job`'s
         // off-thread cost (S11) had nothing on this side to read.
+        let full_t0 = std::time::Instant::now();
         let incr_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         self.engine_applied_generation = self.engine_job_generation;
@@ -378,7 +538,6 @@ impl Lumen {
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
-        let touched = self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default();
         // BUG-341 S19: the two paths are one `if`/`else` rather than an
         // `Option` plus a `match` because the restyle path now *consumes*
         // `prev_lb` (it moves the reusable subtrees straight into the fresh
@@ -402,6 +561,13 @@ impl Lumen {
         // specifically instead of guessing from the aggregate.
         let mut lock_wait_ms: Option<f32> = None;
         let mut dirty_roots_ms: Option<f32> = None;
+        // BUG-935 срез 81: why a tick took the full cascade, and what widened a narrowed one —
+        // a live census otherwise sees only `restyle=0` or a large `cascade_recomputed`.
+        let mut roots_log = match (touched.unattributed, self.page_prev_cascade_styles.is_some()) {
+            (true, _) => "full=unattributed".to_string(),
+            (false, false) => "full=no-basis".to_string(),
+            (false, true) => String::new(),
+        };
         let (new_dl, new_lb, fresh_cascade_styles, used_restyle) = if !touched.unattributed
             && let Some(prev_styles) = self.page_prev_cascade_styles.take()
         {
@@ -422,15 +588,87 @@ impl Lumen {
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                 &doc, prev_active, new_interactive.2, &state_index,
             ));
-            // BUG-341 S17: `DomTouched` records node ids without attribute
-            // names, so every page-side mutation stays `Unattributed` — the
-            // pre-S17 widen-to-parent behaviour, unchanged.
-            let node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+            // BUG-935 срез 81: the tracker names what changed (attribute with its old
+            // value, child list) — the same classification the engine thread's flush
+            // uses (`DomTouched::changes_since`). Every node used to go in as
+            // `Unattributed`, so a `class` write on `<html>` restyled the whole document
+            // here while the flush restyled a handful of nodes.
+            let mut node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
+            node_index.set_attr_narrowing(crate::persistent_js::attr_narrowing_enabled());
+            let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
                 &doc,
-                touched.nodes.iter().map(|&n| (n, lumen_layout::style::NodeChange::Unattributed)),
+                touched.changes.iter().map(|(n, c)| (*n, c.as_node_change())),
                 &node_index,
-            ));
+                &|n| !crate::persistent_js::fresh_node_roots_enabled() || prev_styles.contains_key(&n),
+            );
+            if self.engine_thread.is_some() && m4_swap_mode() == M4Swap::Guarded {
+                // Элементы под глубокими корнями — остановка, как только их больше,
+                // чем стилизованных: дальше доля всё равно 1.
+                let styled = prev_styles.len();
+                let (mut deep_elements, mut stack) = (0usize, roots.deep.iter().copied().collect::<Vec<_>>());
+                while let Some(id) = stack.pop() {
+                    if deep_elements > styled {
+                        break;
+                    }
+                    let node = doc.get(id);
+                    deep_elements += usize::from(node.element_name().is_some());
+                    stack.extend(node.children.iter().copied());
+                }
+                if m4_wide_restyle_off_thread(self.m4_full_cost_ms, deep_elements, styled) {
+                    if incr_t0.is_some() {
+                        eprintln!(
+                            "[engine] relayout_raf_dirty wide restyle -> off-thread (deep_elements={deep_elements}, styled={styled}, last_full_ms={:?})",
+                            self.m4_full_cost_ms,
+                        );
+                    }
+                    drop(doc);
+                    lumen_layout::clear_interactive_state();
+                    lumen_layout::set_cv_scroll(0.0, 0.0);
+                    lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+                    self.layout_box = Some(prev_lb);
+                    return false;
+                }
+            }
+            if incr_t0.is_some() {
+                let changes: Vec<String> = touched
+                    .changes
+                    .iter()
+                    .take(6)
+                    .map(|(n, c)| {
+                        let tag = doc.try_get(*n).and_then(|d| d.element_name()).map_or("#node", |q| &*q.local);
+                        format!("{tag}:{c:?}")
+                    })
+                    .collect();
+                // The biggest deep roots by subtree size: what a wide tick is made of.
+                let subtree_size = |root: lumen_dom::NodeId| {
+                    let (mut n, mut stack) = (0usize, vec![root]);
+                    while let Some(id) = stack.pop() {
+                        n += 1;
+                        stack.extend(doc.get(id).children.iter().copied());
+                    }
+                    n
+                };
+                let mut deep: Vec<(usize, String)> = roots
+                    .deep
+                    .iter()
+                    .map(|&r| {
+                        let name = doc.get(r).element_name().map_or("#node", |q| &*q.local);
+                        let size = subtree_size(r);
+                        (size, format!("{name}({size})"))
+                    })
+                    .collect();
+                deep.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
+                let widest: Vec<&str> = deep.iter().take(4).map(|(_, d)| d.as_str()).collect();
+                roots_log = format!(
+                    "roots deep={} shallow={} point={} changes={} widest={widest:?} {changes:?}",
+                    roots.deep.len(),
+                    roots.shallow.len(),
+                    roots.point.len(),
+                    touched.changes.len(),
+                );
+            }
+            dirty_roots.extend(roots.deep);
+            let (shallow_roots, point_roots) = (roots.shallow, roots.point);
             drop(doc);
             dirty_roots_ms = dirty_roots_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
             // BUG-341 S16: the page-side tracker reports *selector-relevant*
@@ -441,12 +679,12 @@ impl Lumen {
             // must therefore stay `Untracked` — this is exactly S4's
             // `dom_content_stable` semantics, unchanged. Giving the page path a
             // real content set means completing `DomTouched` for content first.
-            let content_dirty = if touched.nodes.is_empty() {
+            let content_dirty = if touched.changes.is_empty() {
                 lumen_layout::counters::ContentDirty::Nothing
             } else {
                 lumen_layout::counters::ContentDirty::Untracked
             };
-            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty };
+            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty, shallow_roots, point_roots };
             lumen_layout::counters::set_incremental_restyle(true);
             // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
             // box-build reuse rides on the same content precondition computed
@@ -497,13 +735,16 @@ impl Lumen {
         // longer conditional on which branch ran.
         self.page_prev_cascade_styles = Some(fresh_cascade_styles);
         self.page_prev_interactive = new_interactive;
+        if !used_restyle {
+            self.m4_full_cost_ms = Some(full_t0.elapsed().as_secs_f32() * 1000.0);
+        }
         if let Some(t0) = incr_t0 {
             let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
             let fmt_ms = |ms: Option<f32>| ms.map(|v| format!("{v:.2}")).unwrap_or_else(|| "n/a".to_string());
             let (cascade_reused, cascade_recomputed) =
                 cascade_stats.map(|s| (s.reused, s.recomputed)).unwrap_or_default();
             eprintln!(
-                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed}",
+                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed} {roots_log}",
                 self.display_list.len(),
                 self.prev_styles.len(),
                 used_restyle as u8,
@@ -579,13 +820,43 @@ impl Lumen {
     /// fact.
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if m4_swap_override() {
-            let outer_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+            if m4_swap_mode() == M4Swap::Guarded {
+                let busy = self
+                    .engine_thread
+                    .as_ref()
+                    .and_then(|e| e.busy())
+                    .filter(|(_, since)| m4_busy_blocks_tick(*since));
+                let backoff = self.m4_swap_backoff > 0;
+                if (busy.is_some() || backoff) && self.submit_relayout_job() {
+                    self.m4_swap_backoff = self.m4_swap_backoff.saturating_sub(1);
+                    if lumen_paint::frame_log_enabled() {
+                        match busy {
+                            Some((work, since)) => eprintln!(
+                                "[engine] relayout_raf_dirty deferred off-thread: engine busy with {work} for {:.1}ms",
+                                since.as_secs_f32() * 1000.0,
+                            ),
+                            None => eprintln!(
+                                "[engine] relayout_raf_dirty deferred off-thread: backoff, {} ticks left",
+                                self.m4_swap_backoff,
+                            ),
+                        }
+                    }
+                    return;
+                }
+            }
+            let guarded = m4_swap_mode() == M4Swap::Guarded;
+            let outer_t0 = (guarded || lumen_paint::frame_log_enabled()).then(std::time::Instant::now);
             let handled = self.try_relayout_raf_incremental();
             if let Some(t0) = outer_t0 {
-                eprintln!(
-                    "[engine] relayout_raf_dirty outer_ms={:.2} (try_relayout_raf_incremental call, handled={handled})",
-                    t0.elapsed().as_secs_f32() * 1000.0,
-                );
+                let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                if guarded && handled {
+                    (self.m4_swap_backoff, self.m4_swap_penalty) = m4_tick_verdict(ms, self.m4_swap_penalty);
+                }
+                if lumen_paint::frame_log_enabled() {
+                    eprintln!(
+                        "[engine] relayout_raf_dirty outer_ms={ms:.2} (try_relayout_raf_incremental call, handled={handled})",
+                    );
+                }
             }
             if !handled && !self.submit_relayout_job() {
                 self.relayout();
@@ -650,6 +921,29 @@ impl Lumen {
         raf_turn_inflight || job_generation != applied_generation
     }
 
+    /// THREAD-9: неблокирующее чтение `take_navigate_request` после диспатча
+    /// события. Читает сама движковая задача (она встаёт в FIFO после уже
+    /// отправленных `eval_js`, порядок read-after-eval сохранён) и кладёт
+    /// результат в [`Self::js_nav_inbox`]; UI-поток не ждёт движок. Без
+    /// движкового потока задача выполняется синхронно, поэтому ящик
+    /// переносится в `pending_js_navigate` сразу — байт-идентично прежнему.
+    pub(crate) fn queue_js_navigate_read(&mut self) {
+        let inbox = Arc::clone(&self.js_nav_inbox);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            crate::engine_bridge::deposit_js_navigate(&inbox, j.take_navigate_request());
+        });
+        if self.engine_thread.is_none() {
+            self.collect_js_nav_inbox();
+        }
+    }
+
+    /// THREAD-9: переносит запрос из [`Self::js_nav_inbox`] в `pending_js_navigate`.
+    pub(crate) fn collect_js_nav_inbox(&mut self) {
+        if let Some(nav) = self.js_nav_inbox.lock().ok().and_then(|mut g| g.take()) {
+            self.pending_js_navigate = Some(nav);
+        }
+    }
+
     /// ADR-016 M2.3 + THREAD-2: value-returning JS drain that is **deferred**
     /// (returns `None`) while a rAF turn or a submitted relayout job is in
     /// flight on the engine thread (see [`Self::should_defer_query`]). The
@@ -686,6 +980,14 @@ impl Lumen {
         self.raf_pending_flag
             .as_ref()
             .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// THREAD-9 срез 5: может ли страница слушать `navigate`. Без движкового
+    /// потока или без флага — да (прежний синхронный путь); иначе по флагу.
+    pub(crate) fn navigate_listeners_present(&self) -> bool {
+        self.navigate_listeners_flag
+            .as_ref()
+            .is_none_or(|f| f.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// ADR-016 M2.3: consume (clear + return) the DOM-dirty flag lock-free via the
@@ -740,6 +1042,7 @@ impl Lumen {
         // Consume a completed turn's DOM mutations first (before any re-fire) so a
         // continuous rAF-DOM loop still relayouts each cycle.
         let mut submitted = false;
+        let mut scanned = false;
         if self.take_dom_dirty_lockfree() {
             // FRAME-8: под движковым потоком (default, ADR-023) это —
             // единственное место, где страничный `dom_dirty` потребляется:
@@ -748,6 +1051,7 @@ impl Lumen {
             // `LUMEN_NO_ENGINE_THREAD=1`. Довесок к уже добытому флагу, не
             // отдельный опрос — см. doc-comment `frame_dynamic.rs`.
             self.poll_dynamic_frames();
+            scanned = true;
             self.relayout_raf_dirty();
             submitted = true;
         } else if self.engine_job_generation == self.engine_applied_generation
@@ -780,6 +1084,12 @@ impl Lumen {
             self.relayout_raf_dirty();
             submitted = true;
         }
+        // BUG-935 срез 87: скан фреймов, отложенный из-за занятого документа
+        // (`poll_dynamic_frames` не ждёт движковый поток на UI-потоке). Мутации
+        // DOM без нового `dom_dirty` его не повторят — повторяем здесь.
+        if self.frame_scan_retry && !scanned {
+            self.poll_dynamic_frames();
+        }
         // Drain gate: the first non-inflight pass after a turn completes is
         // reserved for the deferred `drain_query_js` queues (which run this pass,
         // engine now free) — hold off firing the next turn until the following
@@ -788,7 +1098,17 @@ impl Lumen {
             self.raf_drain_gate = false;
             return submitted;
         }
-        if raf_due && self.take_raf_pending_lockfree() {
+        // BUG-1003: the relayout a finished turn just submitted delivers
+        // ResizeObserver/IntersectionObserver entries through the deferred JS
+        // push queued when its commit lands. Firing the next rAF batch before
+        // that (the batch is queued on the same engine FIFO, so it would run
+        // ahead of the push) lets a callback observe a frame in which the
+        // notification for the previous frame's DOM change is still missing —
+        // the update-the-rendering order is rAF → layout → observers → next
+        // frame. Bounded so a job that never commits cannot stall rAF.
+        let relayout_in_flight = self.engine_job_generation != self.engine_applied_generation
+            && timestamp_ms - self.last_raf_batch_ms < RAF_RELAYOUT_HOLD_MS;
+        if raf_due && !relayout_in_flight && self.take_raf_pending_lockfree() {
             self.last_raf_batch_ms = timestamp_ms;
             let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
             self.fire_raf_turn_async(raf_ts);
@@ -951,10 +1271,11 @@ impl Lumen {
         // стороны сравнения были одинаково склеенными.
         apply_step!("dl_splice_diff_cache", {
             crate::frames::splice_frame_content(&mut new_dl, &self.frames);
-            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-            // Cache display list directly (avoid &mut self while layout_source is borrowed).
-            let _dl_hash = lumen_paint::hash_commands(&new_dl);
-            self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
+            // THREAD-7: the per-command `tile_grid` diff and the full-DL clone into
+            // `display_list_cache` used to run here (~18 ms per tick on ria.ru).
+            // Neither has a reader — nothing calls `TileGrid::is_dirty`/`dirty_tiles`
+            // or `DisplayListCache::get` — so both were pure UI-thread cost.
+            // Only the (much rarer) scroll/form patch paths still feed them.
         });
         // Поля пишутся напрямую (не через `set_display_list`): `layout_source`
         // здесь заимствован, `&mut self` целиком взять нельзя.
@@ -962,7 +1283,7 @@ impl Lumen {
         self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
-        let mut new_styles = HashMap::new();
+        let mut new_styles = crate::layout_walk::StyleMap::default();
         apply_step!("transitions_sync", {
             collect_box_styles(&lb, &mut new_styles);
             for (node, new_style) in &new_styles {
@@ -1109,13 +1430,19 @@ impl Lumen {
             // fully synchronous `relayout()` has no engine-thread job to
             // piggy-back on, so it still falls back to the inline path below,
             // byte-identical to before this slice.
-            let js_data = if self.js_present {
+            // BUG-935 S51: on a deferred push with nothing precollected (the
+            // M4 incremental path, the synchronous `relayout()`), only the
+            // cheap layout-shift half runs here; the tree walks move into the
+            // deferred engine task below — see `DeferredJsCollect`. A blocking
+            // push (`defer_js_push=false`) still collects inline: its caller
+            // gets the result back synchronously anyway.
+            let pending = if self.js_present {
                 match precollected {
-                    Some(data) => Some(data),
+                    Some(mut data) => {
+                        self.prev_layout_shift_rects = std::mem::take(&mut data.next_layout_shift_baseline);
+                        Some(PendingJsData::Ready(Box::new(data)))
+                    }
                     None => (|| {
-                        let lb_ref = self.layout_box.as_ref()?;
-                        let doc_guard =
-                            self.layout_source.as_ref()?.document.lock().ok()?;
                         let pseudo_styles_needed = self
                             .pseudo_styles_needed_flag
                             .as_ref()
@@ -1131,7 +1458,33 @@ impl Lumen {
                             .as_ref()
                             .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
                             .unwrap_or(true);
-                        Some(apply_step!(
+                        let lb_ref = self.layout_box.as_ref()?;
+                        let document = Arc::clone(&self.layout_source.as_ref()?.document);
+                        if defer_js_push {
+                            let mut shift = apply_step!(
+                                "js_shift_collect",
+                                collect_js_shift_data(
+                                    lb_ref,
+                                    viewport,
+                                    &self.prev_layout_shift_rects,
+                                    self.last_input_epoch_s,
+                                    now_s,
+                                )
+                            );
+                            let hit_test_tree = apply_step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
+                            self.prev_layout_shift_rects = std::mem::take(&mut shift.next_baseline);
+                            return Some(PendingJsData::Deferred(DeferredJsCollect {
+                                hit_test_tree,
+                                document,
+                                viewport,
+                                shift,
+                                pseudo_styles_needed,
+                                custom_props_needed,
+                                computed_styles_needed,
+                            }));
+                        }
+                        let doc_guard = document.lock().ok()?;
+                        let mut data = apply_step!(
                             "js_geometry_collect",
                             collect_js_data(
                                 lb_ref,
@@ -1144,31 +1497,20 @@ impl Lumen {
                                 custom_props_needed,
                                 computed_styles_needed,
                             )
-                        ))
+                        );
+                        self.prev_layout_shift_rects = std::mem::take(&mut data.next_layout_shift_baseline);
+                        Some(PendingJsData::Ready(Box::new(data)))
                     })(),
                 }
             } else {
                 None
             };
-            if let Some(PrecollectedJsData {
-                rects,
-                layout_shift_score,
-                layout_shift_sources,
-                had_input,
-                client_rects,
-                hit_test_tree,
-                styles,
-                pseudo_styles,
-                customs,
-                scroll_states,
-                next_layout_shift_baseline,
-            }) = js_data
-            {
-                self.prev_layout_shift_rects = next_layout_shift_baseline;
+            if let Some(pending) = pending {
                 let (vw, vh) = (viewport.width, viewport.height);
                 let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
                 let reduced_motion = self.a11y_store.reduced_motion();
+                let forced_colors_pref = self.a11y_store.forced_colors();
                 // CSSOM-7 (BUG-977): push the live cascade alongside the rest
                 // of this snapshot, same `Arc` `apply_relayout_result` already
                 // laid out against (`relayout_page`/`compute_layout` above) —
@@ -1211,6 +1553,24 @@ impl Lumen {
                                 result
                             }};
                         }
+                        // BUG-935 S51: the tree walks run here, on the engine
+                        // thread, when the producer had nothing precollected.
+                        let Some(PrecollectedJsData {
+                            rects,
+                            layout_shift_score,
+                            layout_shift_sources,
+                            had_input,
+                            client_rects,
+                            hit_test_tree,
+                            styles,
+                            pseudo_styles,
+                            customs,
+                            scroll_states,
+                            next_layout_shift_baseline: _,
+                        }) = timed_step!("js_geometry_collect_deferred", pending.resolve())
+                        else {
+                            return;
+                        };
                         timed_step!("update_layout_rects", js.update_layout_rects(rects));
                         timed_step!("update_client_rects", js.update_client_rects(client_rects));
                         timed_step!("update_hit_test_tree", js.update_hit_test_tree(hit_test_tree));
@@ -1243,7 +1603,7 @@ impl Lumen {
                         }
                         timed_step!(
                             "deliver_media_query_changes",
-                            js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion)
+                            js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion, forced_colors_pref)
                         );
                         timed_step!("deliver_lazy_images", js.deliver_lazy_images());
                         let reqs = timed_step!("take_lazy_image_requests", js.take_lazy_image_requests());
@@ -1255,7 +1615,20 @@ impl Lumen {
                         }
                     });
                     });
-                } else {
+                } else if let Some(PrecollectedJsData {
+                    rects,
+                    layout_shift_score,
+                    layout_shift_sources,
+                    had_input,
+                    client_rects,
+                    hit_test_tree,
+                    styles,
+                    pseudo_styles,
+                    customs,
+                    scroll_states,
+                    next_layout_shift_baseline: _,
+                }) = pending.resolve()
+                {
                     lazy_reqs = apply_step!("js_push_blocking", route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
@@ -1282,7 +1655,7 @@ impl Lumen {
                         // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                         // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                         // read from winit at window creation / refreshed on ThemeChanged.
-                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
+                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion, forced_colors_pref);
                         // After fresh rects are in JS: fire lazy-load proximity check.
                         // Images that entered the viewport+margin are queued by JS via
                         // _lumen_request_lazy_image_load; we drain and fetch them below.
@@ -1347,6 +1720,9 @@ impl Lumen {
         let reqs = take_pending_lazy_image_reqs(&self.pending_lazy_image_reqs);
         if !reqs.is_empty() {
             self.fetch_and_register_lazy_images(reqs);
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
         }
     }
 
@@ -1391,6 +1767,9 @@ impl Lumen {
         let forced_colors = self.a11y_store.forced_colors();
         let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
         let cv_relevant = self.cv_relevant.clone();
+        // BUG-935 S80: стили каскада нужны только свопу — без него
+        // `page_prev_cascade_styles` всё равно обнулялся бы после коммита.
+        let want_cascade_styles = m4_swap_override();
         // GAP-CSSANIM срез 9: see `animated_heights_snapshot` doc comment —
         // same thread-local handoff as interactive state/forced-colors above,
         // captured on the UI thread and installed on the engine thread.
@@ -1437,8 +1816,9 @@ impl Lumen {
             lumen_layout::set_cv_scroll(cv_x, cv_y);
             lumen_layout::set_cv_relevant(cv_relevant);
             lumen_layout::set_animated_heights(animated_heights);
-            let (content, layout_box) =
-                compute_layout(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            let (content, layout_box, counters) =
+                compute_layout_with_counters(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            let cascade_styles = want_cascade_styles.then(|| counters.into_styles());
             lumen_layout::clear_interactive_state();
             lumen_layout::clear_animated_heights();
             lumen_layout::set_cv_scroll(0.0, 0.0);
@@ -1479,6 +1859,8 @@ impl Lumen {
                 viewport,
                 generation,
                 compute_ms,
+                cascade_styles,
+                interactive: (hovered, focused, active),
                 #[cfg(feature = "v8")]
                 precollected,
             }
@@ -1573,7 +1955,7 @@ impl Lumen {
         self.engine_applied_generation = commit.generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, .. } = commit;
         // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
         // (the `poll_engine_commit` off-thread commit path) as the dominant
         // contributor to the `QUERY_TIMEOUT` tax on the UI thread (S24's
@@ -1593,11 +1975,21 @@ impl Lumen {
             #[cfg(feature = "v8")]
             precollected,
         );
+        // BUG-935 S80: `apply_relayout_result` обнулил кэш каскада; коммит принёс
+        // стили того же прохода, по которому построено `layout_box` — возвращаем
+        // их, и следующий инкрементальный тик идёт по дешёвой ветке (restyle=1).
+        if let Some(styles) = cascade_styles {
+            self.page_prev_cascade_styles = Some(styles);
+            self.page_prev_interactive = interactive;
+        }
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off
         // the UI thread.
         self.engine_stats.record(compute_ms);
+        // BUG-935 S86: off-thread задание — всегда полный проход; его стоимость
+        // решает, можно ли следующий предсказанный полный тик взять on-thread.
+        self.m4_full_cost_ms = Some(compute_ms);
         if lumen_paint::frame_log_enabled() {
             eprintln!(
                 "[engine] relayout {compute_ms:.2}ms (off-thread) dl={} styled={}",
@@ -1657,11 +2049,16 @@ impl Lumen {
                 // engine `query`. `None` clears them (blank/JS-less tab).
                 self.raf_pending_flag = handle.as_ref().and_then(|h| h.raf_pending_flag());
                 self.dom_dirty_flag = handle.as_ref().and_then(|h| h.dom_dirty_flag());
+                self.navigate_listeners_flag = handle.as_ref().and_then(|h| h.navigate_listeners_flag());
+                self.dom_touched_drain = handle.as_ref().and_then(|h| h.dom_touched_drain());
                 self.js_ctx = None;
                 engine.task(move |state| state.js = handle);
             }
             // Flag off (default): the UI thread owns the handle, exactly as before.
-            None => self.js_ctx = handle,
+            None => {
+                self.navigate_listeners_flag = None;
+                self.js_ctx = handle;
+            }
         }
     }
 
@@ -1719,6 +2116,20 @@ impl Lumen {
             Some(engine) => engine.query(|state| state.js.clone()).flatten(),
             None => self.js_ctx.clone(),
         }
+    }
+
+    /// BUG-935 срез 87: [`Self::clone_js_ctx`] для UI-потока, который не должен
+    /// стоять за заданием движкового потока. Внешний `None` — движковый поток
+    /// занят (или не ответил за [`M4_JS_HANDLE_WAIT`]), хэндл не получен и
+    /// вызывающему стоит повторить позже; `Some(None)` — на странице нет JS.
+    pub(crate) fn try_clone_js_ctx(&self) -> Option<Option<Arc<dyn PersistentJs>>> {
+        let Some(engine) = self.engine_thread.as_ref() else {
+            return Some(self.js_ctx.clone());
+        };
+        if engine.busy().is_some_and(|(_, since)| m4_busy_blocks_tick(since)) {
+            return None;
+        }
+        engine.query_within(M4_JS_HANDLE_WAIT, |state| state.js.clone())
     }
 }
 
@@ -1831,15 +2242,34 @@ pub(crate) fn compute_layout(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
+    let (dl, layout, _) = compute_layout_with_counters(document, stylesheet, viewport, hp, dark_mode, web_fonts);
+    (dl, layout)
+}
+
+/// [`compute_layout`], но с `CounterMap` полного каскада, который проход всё
+/// равно строит (BUG-935 S80): off-thread коммит отдаёт из него стили
+/// каскада, чтобы следующий тик инкрементального рестайла не начинался с
+/// холодного кэша.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn compute_layout_with_counters(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     // PH3-19: измеритель включает накопленные web-шрифты (FOUT relayout);
     // BUG-128: и системные face-ы.
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
-    let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
+    let (layout, counters) =
+        lumen_layout::layout_measured_hyp_with_counters(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
-    let dl = paint_ordered(&layout);
-    (dl, layout)
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
+    (dl, layout, counters)
 }
 
 /// ADR-016 M4: incremental variant of [`relayout_page`] — uses
@@ -1889,7 +2319,7 @@ pub(crate) fn compute_layout_incremental(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
     );
     drop(doc);
-    let dl = paint_ordered(&layout);
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     (dl, layout, counters)
 }
 
@@ -1959,7 +2389,7 @@ pub(crate) fn compute_layout_incremental_restyle(
     );
     drop(doc);
     let paint_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
-    let dl = paint_ordered(&layout);
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     if let Some(t0) = log_t0 {
         let paint_ms = paint_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0).unwrap_or(0.0);
         eprintln!(
@@ -1985,7 +2415,7 @@ pub(crate) struct ContentVisibilityChange {
     pub(crate) skipped: bool,
 }
 
-/// Собрать `(node, top_y)` **всех** `content-visibility: auto` боксов в порядке
+/// Собрать `(node, top_y, bottom_y)` **всех** `content-visibility: auto` боксов в порядке
 /// дерева. top_y — страница-координаты бокса. Скан по дереву (а не thread-local)
 /// — работает и для layout-а, выполненного в фоновом потоке загрузки страницы.
 ///
@@ -2008,22 +2438,31 @@ pub(crate) struct ContentVisibilityChange {
 /// («already observed»). Первый бокс в порядке дерева — сам элемент, анонимный
 /// всегда его потомок. Layout решает ту же задачу тем же способом:
 /// `CV_SKIPPED` дедуплицируется по узлу.
-pub(crate) fn collect_cv_auto(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
+pub(crate) fn collect_cv_auto(
+    b: &lumen_layout::LayoutBox,
+    viewport: Size,
+    out: &mut Vec<(NodeId, f32, f32)>,
+) {
     fn walk(
         b: &lumen_layout::LayoutBox,
+        viewport: Size,
         seen: &mut std::collections::HashSet<NodeId>,
-        out: &mut Vec<(NodeId, f32)>,
+        out: &mut Vec<(NodeId, f32, f32)>,
     ) {
         if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
             && seen.insert(b.node)
         {
-            out.push((b.node, b.rect.y));
+            // `bottom` — та же оценка до layout, что и у самого layout-а
+            // (`cv_bottom_estimate`), иначе состояние в shell и решение о
+            // пропуске разойдутся для боксов с неизвестной высотой.
+            let bottom = lumen_layout::cv_bottom_estimate(&b.style, b.rect.y, viewport);
+            out.push((b.node, b.rect.y, bottom));
         }
         for c in &b.children {
-            walk(c, seen, out);
+            walk(c, viewport, seen, out);
         }
     }
-    walk(b, &mut std::collections::HashSet::new(), out);
+    walk(b, viewport, &mut std::collections::HashSet::new(), out);
 }
 
 /// Дифф skipped-состояния между двумя проходами → события
@@ -2206,7 +2645,7 @@ pub(crate) struct PrecollectedJsData {
     /// empty map on a tick where the flag simply hadn't been set yet would
     /// wipe out a valid snapshot a same-tick CSSOM-4 flush (`style_flush.rs`)
     /// had already populated via a different, non-gated write path.
-    pub(crate) styles: Option<std::collections::HashMap<u32, std::collections::HashMap<String, String>>>,
+    pub(crate) styles: Option<std::collections::HashMap<u32, lumen_layout::StyleMap>>,
     pub(crate) pseudo_styles:
         Option<std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>>,
     pub(crate) customs:
@@ -2221,13 +2660,65 @@ pub(crate) struct PrecollectedJsData {
     pub(crate) next_layout_shift_baseline: std::collections::HashMap<u32, [f32; 4]>,
 }
 
+/// BUG-935 S51: the cheap, layout-shift half of [`collect_js_data`] — kept
+/// on whichever thread applies the commit even when the expensive half
+/// ([`collect_js_tree_data`]) moves into a deferred engine-thread task,
+/// because it reads and advances [`Lumen::prev_layout_shift_rects`]: running
+/// it later, on another thread, would need a second hand-off just to bring
+/// the next baseline back. Measured sub-millisecond on lenta.ru
+/// (`collect_layout_shift_rects` ~0.4ms, `layout_shift_score` ~0.04ms).
+#[cfg(feature = "v8")]
+pub(crate) struct JsShiftData {
+    pub(crate) score: f64,
+    pub(crate) sources: Vec<LayoutShiftSource>,
+    pub(crate) had_input: bool,
+    pub(crate) next_baseline: std::collections::HashMap<u32, [f32; 4]>,
+}
+
+#[cfg(feature = "v8")]
+fn collect_js_shift_data(
+    lb_ref: &lumen_layout::LayoutBox,
+    viewport: Size,
+    prev_layout_shift_rects: &std::collections::HashMap<u32, [f32; 4]>,
+    last_input_epoch_s: f32,
+    now_s: f32,
+) -> JsShiftData {
+    let step_log = lumen_paint::frame_log_enabled();
+    macro_rules! step {
+        ($label:literal, $expr:expr) => {{
+            let t0 = step_log.then(std::time::Instant::now);
+            let result = $expr;
+            if let Some(t0) = t0 {
+                let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                eprintln!("[engine] apply-step {ms:.2}ms ({})", $label);
+            }
+            result
+        }};
+    }
+    let shift_rects = step!(
+        "collect_layout_shift_rects",
+        lumen_layout::collect_layout_shift_rects(lb_ref)
+    );
+    let layout_shift = step!(
+        "layout_shift_score",
+        compute_layout_shift_score(prev_layout_shift_rects, &shift_rects, viewport.width, viewport.height)
+    );
+    JsShiftData {
+        score: layout_shift.score,
+        sources: layout_shift.sources,
+        had_input: now_s - last_input_epoch_s < 0.5,
+        next_baseline: shift_rects,
+    }
+}
+
 /// BUG-935 S41: the pure collection step factored out of
 /// [`Lumen::apply_relayout_result`] so [`Lumen::make_relayout_job`] can run
 /// it on the engine thread instead — S40 found this already the dominant
 /// UI-thread cost of every commit, off-thread or not. Depends only on the
 /// freshly computed layout tree, the (locked) document and a layout-shift
 /// baseline snapshot — no `Lumen` field, so it needs neither `&self` nor the
-/// renderer/frame state.
+/// renderer/frame state. BUG-935 S51: now the composition of
+/// [`collect_js_shift_data`] and [`collect_js_tree_data`].
 #[cfg(feature = "v8")]
 #[allow(clippy::too_many_arguments)]
 fn collect_js_data(
@@ -2246,6 +2737,42 @@ fn collect_js_data(
     custom_props_needed: bool,
     computed_styles_needed: bool,
 ) -> PrecollectedJsData {
+    let shift = collect_js_shift_data(lb_ref, viewport, prev_layout_shift_rects, last_input_epoch_s, now_s);
+    let step_log = lumen_paint::frame_log_enabled();
+    let t0 = step_log.then(std::time::Instant::now);
+    let hit_test_tree = Arc::new(lb_ref.clone());
+    if let Some(t0) = t0 {
+        eprintln!("[engine] apply-step {:.2}ms (clone_hit_test_tree)", t0.elapsed().as_secs_f32() * 1000.0);
+    }
+    collect_js_tree_data(
+        hit_test_tree,
+        doc_guard,
+        viewport,
+        shift,
+        pseudo_styles_needed,
+        custom_props_needed,
+        computed_styles_needed,
+    )
+}
+
+/// BUG-935 S51: the expensive half of [`collect_js_data`] — every tree walk
+/// (`collect_layout_rects`/`collect_client_rects`/`collect_computed_styles`
+/// and the gated pseudo/custom-property/scroll collectors), 160-700ms per
+/// tick on lenta.ru. Takes the layout tree as the `Arc` that is also pushed
+/// to JS as `hit_test_tree`, so a caller that defers this into an
+/// engine-thread task ([`DeferredJsCollect`]) pays for exactly one clone of
+/// the tree on its own thread — the same clone the inline path already made.
+#[cfg(feature = "v8")]
+#[allow(clippy::too_many_arguments)]
+fn collect_js_tree_data(
+    hit_test_tree: Arc<lumen_layout::LayoutBox>,
+    doc_guard: std::sync::MutexGuard<'_, Document>,
+    viewport: Size,
+    shift: JsShiftData,
+    pseudo_styles_needed: bool,
+    custom_props_needed: bool,
+    computed_styles_needed: bool,
+) -> PrecollectedJsData {
     let step_log = lumen_paint::frame_log_enabled();
     macro_rules! step {
         ($label:literal, $expr:expr) => {{
@@ -2258,18 +2785,9 @@ fn collect_js_data(
             result
         }};
     }
+    let lb_ref: &lumen_layout::LayoutBox = &hit_test_tree;
     let rects = step!("collect_layout_rects", collect_layout_rects(lb_ref, &doc_guard));
-    let shift_rects = step!(
-        "collect_layout_shift_rects",
-        lumen_layout::collect_layout_shift_rects(lb_ref)
-    );
-    let layout_shift = step!(
-        "layout_shift_score",
-        compute_layout_shift_score(prev_layout_shift_rects, &shift_rects, viewport.width, viewport.height)
-    );
-    let had_input = now_s - last_input_epoch_s < 0.5;
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
-    let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
     let styles = if computed_styles_needed {
         Some(step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None, viewport)))
     } else {
@@ -2304,16 +2822,87 @@ fn collect_js_data(
     );
     PrecollectedJsData {
         rects,
-        layout_shift_score: layout_shift.score,
-        layout_shift_sources: layout_shift.sources,
-        had_input,
+        layout_shift_score: shift.score,
+        layout_shift_sources: shift.sources,
+        had_input: shift.had_input,
         client_rects,
         hit_test_tree,
         styles,
         pseudo_styles,
         customs,
         scroll_states,
-        next_layout_shift_baseline: shift_rects,
+        next_layout_shift_baseline: shift.next_baseline,
+    }
+}
+
+/// BUG-935 S51: everything [`collect_js_tree_data`] needs, captured on the UI
+/// thread by [`Lumen::apply_relayout_result`] and run later inside the
+/// deferred JS-push engine task — the M4 incremental path
+/// (`try_relayout_raf_incremental`) and the synchronous `relayout()` have no
+/// off-thread layout job to precollect in (S41 only covered
+/// `poll_engine_commit`), so before this slice they paid the whole
+/// collection on the UI thread: S13 of BUG-1112 measured it at 173-700ms per
+/// rAF tick on lenta.ru under `LUMEN_BUG935_M4_SWAP=1`, the actual cause of
+/// the S47 freeze. The document is snapshotted on the engine thread, between
+/// JS turns — the same window `make_relayout_job`'s own collection already
+/// runs in, so a script that mutated the DOM after this layout sees exactly
+/// the snapshot semantics the off-thread path has had since S41.
+#[cfg(feature = "v8")]
+pub(crate) struct DeferredJsCollect {
+    hit_test_tree: Arc<lumen_layout::LayoutBox>,
+    document: Arc<std::sync::Mutex<Document>>,
+    viewport: Size,
+    shift: JsShiftData,
+    pseudo_styles_needed: bool,
+    custom_props_needed: bool,
+    computed_styles_needed: bool,
+}
+
+#[cfg(feature = "v8")]
+impl DeferredJsCollect {
+    /// `None` only when the document lock is poisoned — the inline path
+    /// skipped the whole push on the same condition.
+    fn run(self) -> Option<PrecollectedJsData> {
+        // Hold the document lock only for a snapshot clone, not for the whole
+        // 100-250ms collection: the UI thread re-locks the document right
+        // after spawning this task (`spawn_dynamic_image_loads`, hit tests,
+        // event dispatch), and the first live A/B of S51 showed it simply
+        // blocking on this mutex for the full collection instead of running
+        // it — the freeze moved, it did not go away.
+        let step_log = lumen_paint::frame_log_enabled();
+        let t0 = step_log.then(std::time::Instant::now);
+        let snapshot = std::sync::Mutex::new(self.document.lock().ok()?.clone());
+        if let Some(t0) = t0 {
+            eprintln!("[engine] task-step {:.2}ms (js_collect_doc_snapshot)", t0.elapsed().as_secs_f32() * 1000.0);
+        }
+        let doc_guard = snapshot.lock().ok()?;
+        Some(collect_js_tree_data(
+            self.hit_test_tree,
+            doc_guard,
+            self.viewport,
+            self.shift,
+            self.pseudo_styles_needed,
+            self.custom_props_needed,
+            self.computed_styles_needed,
+        ))
+    }
+}
+
+/// BUG-935 S51: JS geometry for one commit — already collected, or captured
+/// for collection inside the deferred push task (see [`DeferredJsCollect`]).
+#[cfg(feature = "v8")]
+enum PendingJsData {
+    Ready(Box<PrecollectedJsData>),
+    Deferred(DeferredJsCollect),
+}
+
+#[cfg(feature = "v8")]
+impl PendingJsData {
+    fn resolve(self) -> Option<PrecollectedJsData> {
+        match self {
+            Self::Ready(data) => Some(*data),
+            Self::Deferred(d) => d.run(),
+        }
     }
 }
 
@@ -2386,5 +2975,71 @@ mod bug935_s26_pending_lazy_image_drain_tests {
         let slot = Arc::new(Mutex::new(vec![(1u32, "a.png".to_string())]));
         let _first = take_pending_lazy_image_reqs(&slot);
         assert!(take_pending_lazy_image_reqs(&slot).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod bug935_s85_adaptive_m4_routing_tests {
+    use super::{m4_busy_blocks_tick, m4_full_tick_off_thread, m4_tick_verdict, m4_wide_restyle_off_thread, M4_BACKOFF_MAX_TICKS, M4_BACKOFF_TICKS, M4_TICK_BUDGET_MS};
+
+    #[test]
+    fn tick_within_budget_clears_backoff_and_penalty() {
+        assert_eq!(m4_tick_verdict(M4_TICK_BUDGET_MS, 64), (0, 0));
+        assert_eq!(m4_tick_verdict(38.0, 0), (0, 0));
+    }
+
+    #[test]
+    fn first_overrun_backs_off_the_base_ticks_and_arms_a_longer_next_one() {
+        assert_eq!(m4_tick_verdict(M4_TICK_BUDGET_MS + 0.1, 0), (M4_BACKOFF_TICKS, M4_BACKOFF_TICKS * 2));
+    }
+
+    #[test]
+    fn repeated_overruns_double_the_backoff_up_to_the_cap() {
+        let mut penalty = 0;
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            let (ticks, next) = m4_tick_verdict(1500.0, penalty);
+            seen.push(ticks);
+            penalty = next;
+        }
+        assert_eq!(seen, [8, 16, 32, 64, 128, 128, 128, 128]);
+        assert!(seen.iter().all(|&t| t <= M4_BACKOFF_MAX_TICKS));
+    }
+
+    #[test]
+    fn a_cheap_tick_after_overruns_resets_the_ladder() {
+        let (_, penalty) = m4_tick_verdict(900.0, 0);
+        let (_, penalty) = m4_tick_verdict(900.0, penalty);
+        let (ticks, penalty) = m4_tick_verdict(40.0, penalty);
+        assert_eq!((ticks, penalty), (0, 0));
+        assert_eq!(m4_tick_verdict(900.0, penalty).0, M4_BACKOFF_TICKS);
+    }
+
+    #[test]
+    fn predicted_full_tick_goes_off_thread_until_a_cheap_full_pass_is_measured() {
+        assert!(m4_full_tick_off_thread(None), "неизвестная цена — не блокируем UI");
+        assert!(m4_full_tick_off_thread(Some(970.0)), "ria.ru: полный проход дороже бюджета");
+        assert!(m4_full_tick_off_thread(Some(M4_TICK_BUDGET_MS + 0.1)));
+        assert!(!m4_full_tick_off_thread(Some(M4_TICK_BUDGET_MS)), "в бюджете — on-thread");
+        assert!(!m4_full_tick_off_thread(Some(12.0)));
+    }
+
+    #[test]
+    fn a_task_that_just_started_does_not_defer_the_tick() {
+        use std::time::Duration;
+        assert!(!m4_busy_blocks_tick(Duration::from_micros(200)), "scroll-progress из redraw");
+        assert!(m4_busy_blocks_tick(Duration::from_millis(1)));
+        assert!(m4_busy_blocks_tick(Duration::from_millis(3677)), "JS-ход rAF");
+    }
+
+    #[test]
+    fn wide_restyle_goes_off_thread_by_share_of_the_last_full_cost() {
+        assert!(m4_wide_restyle_off_thread(Some(600.0), 2151, 1860), "корень шире страницы — как полный проход");
+        assert!(m4_wide_restyle_off_thread(Some(600.0), 400, 1860), "600 мс × 21% = 129 мс > бюджета");
+        assert!(!m4_wide_restyle_off_thread(Some(600.0), 200, 1860), "600 мс × 11% = 65 мс");
+        assert!(m4_wide_restyle_off_thread(Some(180.0), 1860, 1860), "полный проход 180 мс не влезает");
+        assert!(!m4_wide_restyle_off_thread(Some(60.0), 1860, 1860), "страница целиком дешевле бюджета");
+        assert!(!m4_wide_restyle_off_thread(None, 5000, 10), "цены нет — on-thread, как раньше");
+        assert!(!m4_wide_restyle_off_thread(Some(600.0), 0, 0));
     }
 }

@@ -366,7 +366,7 @@ mod tests {
         style.unicode_bidi = bidi;
         InlineSegment {
             text: text.to_string(),
-            style,
+            style: std::sync::Arc::new(style),
             pre_space: 0.0,
             post_space: 0.0,
             is_element_box: false,
@@ -387,7 +387,7 @@ mod tests {
             width,
             y_offset: 0.0,
             text: text.to_string(),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             padding_left: 0.0,
             padding_right: 0.0,
             is_element_box: false,

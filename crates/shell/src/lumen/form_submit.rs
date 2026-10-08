@@ -80,11 +80,17 @@ impl Lumen {
                     // `preventDefault()` the navigation. That made every
                     // SPA login form (Keycloak, Next.js) unusable, through
                     // the UI and through MCP/BiDi `click` alike.
-                    if fire_submit_event
-                        && let Some(sub) = submitter
-                        && !self.dispatch_submit_event(form, sub)
-                    {
-                        return;
+                    if fire_submit_event && let Some(sub) = submitter {
+                        // THREAD-9 срез 6: с движковым потоком ответ «не
+                        // отменён ли submit» приходит сообщением, а отправка
+                        // повторяется без события (`collect_click_proceed`).
+                        if self.engine_thread.is_some() {
+                            self.queue_submit_dispatch(form, sub);
+                            return;
+                        }
+                        if !self.dispatch_submit_event(form, sub) {
+                            return;
+                        }
                     }
                     // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
                     //
@@ -96,12 +102,9 @@ impl Lumen {
                         // Multipart: deterministic boundary for Phase 0.
                         let boundary = "----LumenFormBoundary0000000000000000";
                         forms::encode_form_fields_multipart(&fields, boundary)
+                    } else if enctype == "text/plain" {
+                        forms::encode_form_fields_plain(&fields)
                     } else {
-                        // Сюда же попадает `enctype="text/plain"`: собственного
-                        // кодировщика plain-text (HTML LS §4.10.21.8) в движке
-                        // нет, поля кодируются urlencoded — BUG-1042. Заголовок
-                        // объявляет то, что реально лежит в теле, а не enctype
-                        // формы: соврать про кодировку хуже, чем её не иметь.
                         (
                             "application/x-www-form-urlencoded".to_owned(),
                             forms::encode_form_fields(&fields).into_bytes(),
@@ -139,12 +142,9 @@ impl Lumen {
                         }
                         "get" => {
                             // HTML LS §form-submission step 23: navigate
-                            // to action + query-string (only urlencoded for GET).
-                            let url_body = if enctype == "multipart/form-data" {
-                                forms::encode_form_fields(&fields)
-                            } else {
-                                body.clone()
-                            };
+                            // to action + query-string (only urlencoded for GET,
+                            // whatever the enctype says).
+                            let url_body = forms::encode_form_fields(&fields);
                             let get_url = forms::make_get_url(&action, &url_body);
                             let resolved = self.source.resolve_href(&get_url);
                             let resolved = crate::csp_enforce::upgrade_navigation_url(csp_gate.as_ref(), &resolved);
@@ -152,7 +152,7 @@ impl Lumen {
                                 return;
                             }
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, "")));
                         }
                         _ => {
                             // HTML LS §form-submission step 23, «submit as
@@ -169,7 +169,7 @@ impl Lumen {
                                 return;
                             }
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            let mut nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir);
+                            let mut nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""));
                             if let PageSource::Url { body: slot, .. } = &mut nav {
                                 *slot = Some(Box::new(lumen_network::NavigationBody::post(
                                     content_type,
@@ -242,6 +242,31 @@ impl Lumen {
         true
     }
 
+    /// THREAD-9 срез 6: ставит `submit`-событие в движок и запоминает форму до
+    /// ответа; UI-поток не ждёт.
+    fn queue_submit_dispatch(&mut self, form: NodeId, submitter: NodeId) {
+        let script = format!(
+            "_lumen_dispatch_submit_event({}, {})",
+            form.index(),
+            submitter.index(),
+        );
+        let id = self.next_click_proceed_id;
+        self.next_click_proceed_id += 1;
+        let inbox = Arc::clone(&self.click_proceed_inbox);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            let proceed = match j.eval_js_value(&script) {
+                Ok(json) => json.trim() != "false",
+                Err(_) => true,
+            };
+            if let Ok(mut q) = inbox.lock() {
+                q.push((id, proceed));
+            }
+        });
+        self.pending_submits.push((id, form, submitter, self.current_display_url().to_owned(), std::time::Instant::now()));
+        self.queue_js_navigate_read();
+        self.request_redraw();
+    }
+
     fn dispatch_submit_event(&mut self, form: NodeId, submitter: NodeId) -> bool {
         let script = format!(
             "_lumen_dispatch_submit_event({}, {})",
@@ -258,13 +283,7 @@ impl Lumen {
             Some(Ok(json)) => json.trim() != "false",
             Some(Err(_)) | None => true,
         };
-        if let Some(Some(nav)) = route_query_js(
-            self.engine_thread.as_ref(),
-            self.js_ctx.as_ref(),
-            |j| j.take_navigate_request(),
-        ) {
-            self.pending_js_navigate = Some(nav);
-        }
+        self.queue_js_navigate_read();
         proceed
     }
 }

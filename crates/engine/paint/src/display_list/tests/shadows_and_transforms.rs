@@ -973,17 +973,147 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
         assert!((bg.x - 25.0).abs() < 0.01, "got x {}", bg.x);
     }
 
+    fn names(dl: &DisplayList) -> Vec<&'static str> {
+        dl.iter().map(DisplayCommand::variant_name).collect()
+    }
+
     #[test]
-    fn background_clip_text_falls_back_to_border_box_phase0() {
-        // Phase 0 без glyph-mask: text-clip эмитим как border-box.
+    fn background_clip_text_masks_gradient_by_glyphs() {
+        // CSS Backgrounds L4 §3.8: the gradient is drawn into the level below
+        // `PushMaskLayer`, the element's glyphs form the alpha mask, no box fill.
+        let dl = build(
+            "<div>Hi</div>",
+            "div { width: 100px; background: linear-gradient(red, blue); \
+             background-clip: text; color: transparent; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").expect("PopMaskLayer");
+        let grad = n.iter().position(|c| *c == "DrawLinearGradient").expect("gradient");
+        assert!(grad < push, "gradient must precede the mask layer: {n:?}");
+        assert!(
+            n[push + 1..pop].iter().all(|c| *c == "DrawText") && pop > push + 1,
+            "mask layer must hold only glyph runs: {n:?}"
+        );
+        // Glyph mask is opaque black regardless of the (transparent) text colour.
+        assert!(dl[push + 1..pop].iter().all(|c| matches!(
+            c,
+            DisplayCommand::DrawText { color, .. } if color.a == 255 && color.r == 0
+        )));
+    }
+
+    #[test]
+    fn background_clip_text_color_is_glyph_masked_not_box_filled() {
+        let dl = build(
+            "<div>Hi</div>",
+            "div { width: 100px; height: 50px; background: red; \
+             background-clip: text; color: transparent; }",
+        );
+        let n = names(&dl);
+        assert!(n.contains(&"PushMaskLayer"), "{n:?}");
+        // The only FillRect is the one inside the isolated, masked group.
+        let fills = n.iter().filter(|c| **c == "FillRect").count();
+        assert_eq!(fills, 1, "{n:?}");
+        let fill = n.iter().position(|c| *c == "FillRect").unwrap();
+        let push = n.iter().position(|c| *c == "PushMaskLayer").unwrap();
+        assert!(fill < push, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_without_text_paints_nothing() {
         let dl = build(
             "<div></div>",
-            "div { width: 100px; height: 50px; background: red; \
-             background-clip: text; }",
+            "div { width: 100px; height: 50px; background: red; background-clip: text; }",
         );
-        let bg = first_bg_rect(&dl);
-        assert!((bg.width - 100.0).abs() < 0.01);
-        assert!((bg.height - 50.0).abs() < 0.01);
+        let n = names(&dl);
+        assert!(!n.contains(&"FillRect") && !n.contains(&"PushMaskLayer"), "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_collects_descendant_text() {
+        let dl = build(
+            "<div><p>a</p><p>b</p></div>",
+            "div { width: 100px; background: linear-gradient(red, blue); \
+             background-clip: text; color: transparent; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n[push + 1..pop].iter().filter(|c| **c == "DrawText").count(), 2, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_excludes_absolute_descendant_text() {
+        // L4 §3.8: only "in-flow and floated descendants" contribute glyphs.
+        let dl = build(
+            "<div>a<span class=\"o\">b</span></div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; }              .o { position: absolute; left: 50px; top: 0; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n[push + 1..pop].iter().filter(|c| **c == "DrawText").count(), 1, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_includes_floated_descendant_text() {
+        let dl = build(
+            "<div>a<p class=\"f\">b</p></div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; }              .f { float: left; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n[push + 1..pop].iter().filter(|c| **c == "DrawText").count(), 2, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_transformed_descendant_carries_its_transform() {
+        // The descendant's glyphs sit inside its own PushTransform inside the
+        // mask layer, so the background shows through them where they are drawn.
+        let dl = build(
+            "<div>a<p>b</p></div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; }              p { transform: translate(30px, 5px); }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        let inner = &n[push + 1..pop];
+        assert_eq!(inner.iter().filter(|c| **c == "DrawText").count(), 2, "{n:?}");
+        let pt = inner.iter().position(|c| *c == "PushTransform").expect("PushTransform in mask");
+        let pp = inner.iter().position(|c| *c == "PopTransform").expect("PopTransform in mask");
+        let text_in = inner.iter().enumerate().filter(|(_, c)| **c == "DrawText").map(|(i, _)| i);
+        assert_eq!(text_in.filter(|i| *i > pt && *i < pp).count(), 1, "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_own_transform_not_repeated_in_mask() {
+        // The root's transform wraps the whole group already — repeating it
+        // inside the mask would apply it twice.
+        let dl = build(
+            "<div>Hi</div>",
+            "div { width: 100px; background: linear-gradient(red, blue);              background-clip: text; color: transparent; transform: rotate(5deg); }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert!(!n[push + 1..pop].contains(&"PushTransform"), "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_text_vertical_writing_mode_in_mask() {
+        // Vertical runs need a text measurer to be laid out at all (`build`
+        // has none), hence `layout_measured` with the fixed-width stub.
+        let doc = lumen_html_parser::parse("<div>Hi</div>");
+        let sheet = lumen_css_parser::parse(
+            "div { height: 100px; writing-mode: vertical-lr;              background: linear-gradient(red, blue);              background-clip: text; color: transparent; }",
+        );
+        let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let dl = build_display_list(&tree);
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert!(n[push + 1..pop].contains(&"DrawText"), "{n:?}");
     }
 
     #[test]
@@ -1668,4 +1798,103 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
                 if *color == green)),
             "после override зелёного фона быть не должно"
         );
+    }
+
+    // ─── CSS Transforms L2 §4: perspective ──────────────────────────────────
+
+    /// Perspective-обёртка: единственный `PushTransform`, у которого m[11] ≠ 0
+    /// (элемент (3,4) матрицы perspective(d) = -1/d).
+    fn perspective_pushes(dl: &DisplayList) -> Vec<lumen_layout::Mat4> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } if matrix.0[11] != 0.0 => Some(*matrix),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const PERSPECTIVE_HTML: &str = r#"<div id="stage"><div id="card">x</div></div>"#;
+    const PERSPECTIVE_CSS: &str = "#stage { perspective: 200px; width: 200px; height: 100px; } \
+        #card { width: 100px; height: 100px; background: red; transform: rotateY(45deg); }";
+
+    #[test]
+    fn perspective_wraps_3d_children_in_both_builders() {
+        for (name, dl) in [
+            ("walk", build(PERSPECTIVE_HTML, PERSPECTIVE_CSS)),
+            ("ordered", build_ordered(PERSPECTIVE_HTML, PERSPECTIVE_CSS)),
+        ] {
+            let p = perspective_pushes(&dl);
+            assert_eq!(p.len(), 1, "{name}: одна perspective-обёртка: {dl:?}");
+            assert!((p[0].0[11] + 1.0 / 200.0).abs() < 1e-6, "{name}: -1/d");
+            let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. }));
+            let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
+            assert_eq!(pushes, pops, "{name}: Push/PopTransform сбалансированы");
+            // Обёртка открыта до фона ребёнка (красный) — проекция действует на детей.
+            let open = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::PushTransform { matrix } if matrix.0[11] != 0.0))
+                .unwrap();
+            let red = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255 && color.g == 0))
+                .expect("red fill");
+            assert!(open < red, "{name}: perspective до фона ребёнка");
+        }
+    }
+
+    #[test]
+    fn perspective_origin_defaults_to_box_centre() {
+        // perspective-origin: 50% 50% → центр #stage = (100, 50) в viewport.
+        // P = T(100,50)·perspective(200)·T(-100,-50); точка центра неподвижна
+        // при любом z, т.е. P·(100,50,z,1) даёт x/w = 100, y/w = 50.
+        let dl = build(PERSPECTIVE_HTML, PERSPECTIVE_CSS);
+        let m = perspective_pushes(&dl)[0];
+        let (x, y, _) = m.project_point_z(100.0, 50.0, -40.0);
+        assert!((x - 100.0).abs() < 1e-3 && (y - 50.0).abs() < 1e-3, "centre fixed: ({x}, {y})");
+        // Точка вне центра при z < 0 (дальше от зрителя) стягивается к центру.
+        let (x2, _, _) = m.project_point_z(180.0, 50.0, -40.0);
+        assert!(x2 < 180.0 && x2 > 100.0, "far point shrinks toward origin: {x2}");
+    }
+
+    #[test]
+    fn perspective_origin_explicit_is_resolved_against_own_box() {
+        let css = "#stage { perspective: 200px; perspective-origin: 0 0; width: 200px; height: 100px; } \
+            #card { width: 100px; height: 100px; transform: rotateY(45deg); }";
+        let dl = build(PERSPECTIVE_HTML, css);
+        let m = perspective_pushes(&dl)[0];
+        let (x, y, _) = m.project_point_z(0.0, 0.0, -40.0);
+        assert!(x.abs() < 1e-3 && y.abs() < 1e-3, "origin (0,0) fixed: ({x}, {y})");
+    }
+
+    #[test]
+    fn perspective_skipped_for_flat_children() {
+        // На плоскости z = 0 проекция — тождество: обёртка не эмитится, чтобы
+        // не переводить 2D-клипы потомков на 3D-fallback.
+        let css = "#stage { perspective: 200px; } #card { transform: rotate(10deg); }";
+        assert!(perspective_pushes(&build(PERSPECTIVE_HTML, css)).is_empty());
+        assert!(perspective_pushes(&build_ordered(PERSPECTIVE_HTML, css)).is_empty());
+    }
+
+    #[test]
+    fn perspective_none_emits_no_wrapper() {
+        let css = "#card { transform: rotateY(45deg); }";
+        assert!(perspective_pushes(&build(PERSPECTIVE_HTML, css)).is_empty());
+    }
+
+    #[test]
+    fn perspective_does_not_project_the_box_itself() {
+        // Собственный фон #stage рисуется до обёртки (проекция — только для детей).
+        let css = "#stage { perspective: 200px; background: blue; width: 200px; height: 100px; } \
+            #card { width: 100px; height: 100px; transform: rotateY(45deg); }";
+        for dl in [build(PERSPECTIVE_HTML, css), build_ordered(PERSPECTIVE_HTML, css)] {
+            let blue = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.b == 255 && color.r == 0))
+                .expect("blue fill");
+            let open = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::PushTransform { matrix } if matrix.0[11] != 0.0))
+                .expect("perspective push");
+            assert!(blue < open, "own background outside the projection");
+        }
     }

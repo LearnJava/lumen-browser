@@ -11,7 +11,7 @@ use lumen_core::geom::Size;
 use serde::{Deserialize, Serialize};
 
 use crate::style::parse::counters::is_css_ident;
-use crate::style::values::length::{parse_length, parse_length_q, Length};
+use crate::style::values::length::{parse_length, parse_length_q, split_top_level_ws, Length};
 
 /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
 ///
@@ -166,6 +166,77 @@ pub struct GridRepeat {
     pub count: RepeatCount,
     /// The track sizing functions inside the parentheses, e.g. `minmax(100px, 1fr)`.
     pub tracks: Vec<GridTrackSize>,
+    /// Tracks written before the auto `repeat()` in the same track list
+    /// (`100px repeat(auto-fit, 50px) 1fr` → `[100px]`). CSS Grid L2 §7.2.3.2: only one
+    /// auto repeat may appear, fixed tracks around it keep their place.
+    pub before: Vec<GridTrackSize>,
+    /// Tracks written after the auto `repeat()` (`[1fr]` in the example above).
+    pub after: Vec<GridTrackSize>,
+    /// Line names written around and inside the `repeat()`; expanded together with the tracks.
+    pub names: RepeatLineNames,
+}
+
+/// Line names of a track list with one auto `repeat()` (CSS Grid L1 §7.2.2): the names written
+/// before, inside and after it. Each part lists the names of its lines, `tracks + 1` groups: the
+/// first group of `rep` / `after` is the line it shares with the end of the previous part.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RepeatLineNames {
+    pub before: Vec<Vec<String>>,
+    pub rep: Vec<Vec<String>>,
+    pub after: Vec<Vec<String>>,
+}
+
+impl RepeatLineNames {
+    /// Names of every line of the track list with the repeat expanded `count` times (`tracks + 1`
+    /// groups). The names on the seam between two repetitions, or between the repeat and its
+    /// neighbours, merge into one line.
+    pub fn expand(&self, count: usize) -> Vec<Vec<String>> {
+        let mut out = self.before.clone();
+        if out.is_empty() {
+            out.push(Vec::new());
+        }
+        if let Some((seam, inner)) = self.rep.split_first() {
+            for _ in 0..count {
+                if let Some(last) = out.last_mut() {
+                    last.extend(seam.iter().cloned());
+                }
+                out.extend(inner.iter().cloned());
+            }
+        }
+        if let Some((seam, rest)) = self.after.split_first() {
+            if let Some(last) = out.last_mut() {
+                last.extend(seam.iter().cloned());
+            }
+            out.extend(rest.iter().cloned());
+        }
+        out
+    }
+}
+
+/// Where `repeat(auto-fill, <line-names>+)` sits in the line-name list of `subgrid <line-name-list>`
+/// (CSS Grid L2 §9): `names[at..at + len]` is one repetition (written once in the stored list).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameFill {
+    pub at: usize,
+    pub len: usize,
+}
+
+impl NameFill {
+    /// The names of the `lines` lines of a subgrid: the repeat is repeated as many times as fit
+    /// next to the names written around it (possibly none), the list is cut at `lines`.
+    pub fn expand(self, names: &[Vec<String>], lines: usize) -> Vec<Vec<String>> {
+        let at = self.at.min(names.len());
+        let end = (self.at + self.len).min(names.len());
+        let outside = names.len() - (end - at);
+        let times = lines.saturating_sub(outside).checked_div(self.len).unwrap_or(0);
+        let mut out = names[..at].to_vec();
+        for _ in 0..times {
+            out.extend_from_slice(&names[at..end]);
+        }
+        out.extend_from_slice(&names[end..]);
+        out.truncate(lines);
+        out
+    }
 }
 
 /// Count type for grid-template-columns/rows `repeat()`.
@@ -209,8 +280,8 @@ pub enum GridTrackSize {
     /// `masonry` — CSS Grid L3 §14 waterfall layout axis sentinel.
     /// Stored as `vec![GridTrackSize::Masonry]` in `grid_template_columns` or
     /// `grid_template_rows` to signal that the axis uses masonry placement.
-    /// The perpendicular axis defines track sizes; `masonry.rs` handles placement.
-    /// P4 handoff: `masonry-auto-flow`, `align-tracks`, `justify-tracks` in ComputedStyle.
+    /// Layout strips it and falls back to a regular grid (Edge parity, see
+    /// `box_tree/grid.rs` and `masonry.rs`); `masonry.rs` placement is unwired.
     Masonry,
 }
 
@@ -233,6 +304,15 @@ impl GridTrackSize {
     /// Extract fr value.
     pub fn fr(&self) -> Option<f32> {
         if let Self::Fr(v) = self { Some(*v) } else { None }
+    }
+
+    /// Flex factor of a flexible track: `Nfr` or `minmax(<min>, Nfr)` (CSS Grid L1 §7.2.3).
+    pub fn flex_factor(&self) -> Option<f32> {
+        match self {
+            Self::Fr(v) => Some(*v),
+            Self::Minmax(_, max) => max.fr(),
+            _ => None,
+        }
     }
 
     /// True when this track inherits its size from the parent grid (subgrid axis).
@@ -290,7 +370,9 @@ impl GridTrackSize {
     pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
         let trimmed = s.trim();
         // CSS Grid L2 §9: `subgrid` replaces the entire track list for that axis.
-        if trimmed.eq_ignore_ascii_case("subgrid") {
+        if let Some(rest) = strip_subgrid_keyword(trimmed)
+            && parse_subgrid_names(rest).is_some()
+        {
             return vec![Self::Subgrid];
         }
         // CSS Grid L3 §14: `masonry` replaces the entire track list — waterfall placement axis.
@@ -320,12 +402,12 @@ impl GridTrackSize {
                     if count == RepeatCount::Fixed(0) {
                         // zero repeat, add nothing
                     } else if matches!(count, RepeatCount::Fixed(_)) {
-                        // Expand fixed repeat immediately
+                        // Expand fixed repeat immediately, within the track-count limit
                         let n = match count {
                             RepeatCount::Fixed(n) => n,
                             _ => unreachable!(),
                         };
-                        for _ in 0..n {
+                        for _ in 0..clamp_repeat(n, tracks.len(), result.len()) {
                             result.extend(tracks.iter().cloned());
                         }
                     } else {
@@ -348,30 +430,73 @@ impl GridTrackSize {
     }
 }
 
-/// Extracts auto-fill/auto-fit repeat metadata from a track-list string.
-/// Returns `Some(GridRepeat)` when the string is exactly `repeat(auto-fill|auto-fit, ...)`.
-/// Used in Phase 2 of CSS Grid auto-repeat expansion (CSS Grid L1 §7.2.3.4).
-pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
-    let trimmed = s.trim();
-    // Must start with "repeat(" (case-insensitive) and end with ")"
-    let lc = trimmed.to_ascii_lowercase();
-    let inner = lc.strip_prefix("repeat(")?.strip_suffix(')')?;
-    let (count_s, rest) = split_paren_aware_comma(inner)?;
-    let count = match count_s.trim() {
-        "auto-fill" => RepeatCount::AutoFill,
-        "auto-fit" => RepeatCount::AutoFit,
-        _ => return None,
-    };
-    // Re-parse from original string to preserve case in track sizes
-    let orig_inner = trimmed
-        .get("repeat(".len()..trimmed.len() - 1)?;
-    let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
-    let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
-    if tracks.is_empty() {
-        return None;
+/// Upper bound on the explicit tracks of one axis a `repeat(<integer>, …)` may expand to (UA limit,
+/// CSS Grid L1 §7.2.3.2 lets the UA clamp; Chrome and Firefox keep the same order of magnitude).
+/// Without it `repeat(1000, 1px)` written 100 000 times builds 100 million tracks (BUG-1320).
+const MAX_EXPLICIT_TRACKS: usize = 10_000;
+
+/// How many whole iterations of a `repeat(count, …)` with `per_iter` tracks each fit under
+/// [`MAX_EXPLICIT_TRACKS`] when `used` tracks are already in the list. Both the track list and its
+/// line names use it, so their lengths stay in step. A track-less body (invalid) is capped at one
+/// iteration so a huge count cannot spin.
+fn clamp_repeat(count: usize, per_iter: usize, used: usize) -> usize {
+    if per_iter == 0 {
+        return count.min(1);
     }
-    let _ = rest; // suppress unused warning from lc version
-    Some(GridRepeat { count, tracks })
+    count.min(MAX_EXPLICIT_TRACKS.saturating_sub(used) / per_iter)
+}
+
+/// Extracts auto-fill/auto-fit repeat metadata from a track-list string: the single auto
+/// `repeat(auto-fill|auto-fit, ...)` plus the fixed tracks written before and after it
+/// (CSS Grid L1 §7.2.3.4, CSS Grid L2 §7.2.3.2). `None` when the list has no auto repeat,
+/// or has more than one (invalid).
+pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
+    let mut found: Option<(RepeatCount, Vec<GridTrackSize>, Vec<Vec<String>>)> = None;
+    let (mut before, mut after): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    for tok in split_track_list_tokens(s.trim()) {
+        let lc = tok.to_ascii_lowercase();
+        if let Some(inner) = lc.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')'))
+            && let Some((count_s, _)) = split_paren_aware_comma(inner)
+        {
+            let count = match count_s.trim() {
+                "auto-fill" => Some(RepeatCount::AutoFill),
+                "auto-fit" => Some(RepeatCount::AutoFit),
+                _ => None,
+            };
+            if let Some(count) = count {
+                if found.is_some() {
+                    return None;
+                }
+                // Re-parse from the original token to preserve case in track sizes.
+                let orig_inner = tok.get("repeat(".len()..tok.len() - 1)?;
+                let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
+                let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
+                if tracks.is_empty() {
+                    return None;
+                }
+                found = Some((count, tracks, collect_line_names(orig_rest.trim(), false).1));
+                continue;
+            }
+        }
+        if found.is_some() {
+            after.push(tok);
+        } else {
+            before.push(tok);
+        }
+    }
+    let (count, tracks, rep_names) = found?;
+    let (before, after) = (before.join(" "), after.join(" "));
+    Some(GridRepeat {
+        count,
+        tracks,
+        names: RepeatLineNames {
+            before: collect_line_names(&before, false).1,
+            rep: rep_names,
+            after: collect_line_names(&after, false).1,
+        },
+        before: GridTrackSize::parse_track_list(&before, false),
+        after: GridTrackSize::parse_track_list(&after, false),
+    })
 }
 
 /// Split a comma inside a track-list token that may contain nested parens.
@@ -388,6 +513,145 @@ fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Имена линий `<track-list>` оси (CSS Grid L1 §7.2.2): `[a b] 100px [c]`.
+///
+/// Индекс `i` результата — имена линии номер `i + 1`; длина всегда
+/// `треков + 1`. Фиксированный `repeat(N, ...)` разворачивается (имена на
+/// стыке итераций объединяются); `auto-fill`/`auto-fit` учитываются как одна
+/// итерация — то же правило, что в [`GridTrackSize::parse_track_list`], чтобы
+/// индексы совпадали с развёрнутым списком треков. `subgrid`/`masonry` и
+/// `none` дают пустой список.
+pub(crate) fn parse_track_line_names(s: &str, is_quirks: bool) -> Vec<Vec<String>> {
+    let trimmed = s.trim();
+    if let Some(rest) = strip_subgrid_keyword(trimmed) {
+        return match parse_subgrid_names(rest) {
+            Some((names, fill)) if fill.is_some() || names.iter().any(|g| !g.is_empty()) => names,
+            _ => Vec::new(),
+        };
+    }
+    if trimmed.eq_ignore_ascii_case("masonry") || trimmed.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    let (_, names) = collect_line_names(trimmed, is_quirks);
+    // Без единого имени хранить нечего — экономим аллокации на типичных сетках.
+    if names.iter().all(Vec::is_empty) {
+        return Vec::new();
+    }
+    names
+}
+
+/// Position of the `repeat(auto-fill, …)` among the line names of `subgrid <line-name-list>`;
+/// `None` — the value is not a subgrid or has no auto-fill repeat.
+pub(crate) fn parse_subgrid_name_fill(s: &str) -> Option<NameFill> {
+    parse_subgrid_names(strip_subgrid_keyword(s.trim())?)?.1
+}
+
+/// The text after a leading `subgrid` keyword (`subgrid [a] [b]` → ` [a] [b]`); `None` when the
+/// value does not start with the keyword.
+fn strip_subgrid_keyword(s: &str) -> Option<&str> {
+    let head = s.get(.."subgrid".len())?;
+    let rest = &s["subgrid".len()..];
+    (head.eq_ignore_ascii_case("subgrid") && rest.chars().next().is_none_or(|c| c.is_whitespace() || c == '['))
+        .then_some(rest)
+}
+
+/// `[a b][c]` → the name groups, one per bracket pair; `None` on anything but brackets.
+fn bracket_groups(tok: &str) -> Option<Vec<Vec<String>>> {
+    let mut groups = Vec::new();
+    let mut rest = tok.trim();
+    while !rest.is_empty() {
+        let inner = rest.strip_prefix('[')?;
+        let close = inner.find(']')?;
+        let names: Vec<String> = inner[..close].split_whitespace().map(str::to_string).collect();
+        if !names.iter().all(|n| is_css_ident(n)) {
+            return None;
+        }
+        groups.push(names);
+        rest = inner[close + 1..].trim_start();
+    }
+    Some(groups)
+}
+
+/// `<line-name-list>` of `subgrid` (CSS Grid L2 §9): `[a] [b b2] repeat(2, [c] [d]) repeat(auto-fill, [e])`.
+/// Every bracket pair is one line; a fixed `repeat()` is expanded, the single `auto-fill` one is kept
+/// once and reported as a [`NameFill`]. `None` — not a valid list.
+fn parse_subgrid_names(s: &str) -> Option<(Vec<Vec<String>>, Option<NameFill>)> {
+    let mut names: Vec<Vec<String>> = Vec::new();
+    let mut fill = None;
+    for tok in split_track_list_tokens(s.trim()) {
+        let lc = tok.to_ascii_lowercase();
+        let Some(inner) = lc.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')')) else {
+            names.extend(bracket_groups(tok)?);
+            continue;
+        };
+        let (count, _) = split_paren_aware_comma(inner)?;
+        let (_, body) = split_paren_aware_comma(tok.get("repeat(".len()..tok.len() - 1)?)?;
+        let groups = split_track_list_tokens(body.trim())
+            .into_iter()
+            .map(bracket_groups)
+            .collect::<Option<Vec<_>>>()?
+            .concat();
+        if groups.is_empty() {
+            return None;
+        }
+        if count.trim() == "auto-fill" {
+            if fill.is_some() {
+                return None;
+            }
+            fill = Some(NameFill { at: names.len(), len: groups.len() });
+            names.extend(groups);
+        } else {
+            let times = count.trim().parse::<usize>().ok().filter(|&n| n >= 1)?;
+            for _ in 0..clamp_repeat(times, groups.len(), names.len()) {
+                names.extend(groups.iter().cloned());
+            }
+        }
+    }
+    Some((names, fill))
+}
+
+fn collect_line_names(s: &str, is_quirks: bool) -> (usize, Vec<Vec<String>>) {
+    let mut n_tracks = 0usize;
+    let mut names: Vec<Vec<String>> = vec![Vec::new()];
+    for token in split_track_list_tokens(s) {
+        let t = token.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            for name in t[1..t.len() - 1].split_whitespace() {
+                names[n_tracks].push(name.to_string());
+            }
+            continue;
+        }
+        let lc = t.to_ascii_lowercase();
+        if lc.starts_with("repeat(") && lc.ends_with(')') {
+            let inner = &t[7..t.len() - 1];
+            let Some((count_s, rest)) = split_paren_aware_comma(inner) else { continue };
+            let count_lc = count_s.trim().to_ascii_lowercase();
+            let times = if count_lc == "auto-fill" || count_lc == "auto-fit" {
+                1
+            } else if let Ok(n) = count_lc.parse::<usize>() {
+                n
+            } else {
+                continue;
+            };
+            let (inner_tracks, inner_names) = collect_line_names(rest.trim(), is_quirks);
+            for _ in 0..clamp_repeat(times, inner_tracks, n_tracks) {
+                for (k, group) in inner_names.iter().enumerate() {
+                    if k > 0 {
+                        n_tracks += 1;
+                        names.push(Vec::new());
+                    }
+                    names[n_tracks].extend(group.iter().cloned());
+                }
+                debug_assert_eq!(inner_names.len(), inner_tracks + 1);
+            }
+        } else if GridTrackSize::parse_single(t, is_quirks).is_some() {
+            n_tracks += 1;
+            names.push(Vec::new());
+        }
+    }
+    (n_tracks, names)
+}
+
 /// Tokenize a track-list string into individual track tokens,
 /// respecting parentheses (so `minmax(...)` stays as one token).
 fn split_track_list_tokens(s: &str) -> Vec<&str> {
@@ -397,8 +661,8 @@ fn split_track_list_tokens(s: &str) -> Vec<&str> {
     let bytes = s.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         match b {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
             b' ' | b'\t' | b'\n' if depth == 0 => {
                 let tok = s[start..i].trim();
                 if !tok.is_empty() {
@@ -479,46 +743,88 @@ pub enum GridLine {
     Line(i32),
     /// `span <integer>` — span N tracks.
     Span(u32),
-    /// Named grid area reference (CSS Grid L1 §8.3). Resolved at layout time
-    /// by looking up the name in the containing grid's `grid-template-areas`.
+    /// `<custom-ident>` — named grid area (`<name>-start` / `<name>-end`
+    /// implicit lines) or, failing that, the first line with that name
+    /// (CSS Grid L1 §8.3). Resolved at layout time against the container.
     Named(String),
+    /// `<integer> <custom-ident>` — N-th line with that name (negative N
+    /// counts from the end of the grid).
+    NamedLine(String, i32),
+    /// `span <custom-ident>` / `span <integer> <custom-ident>` — span until
+    /// the N-th line with that name, counted from the opposite edge.
+    SpanNamed(String, u32),
 }
 
 impl GridLine {
+    /// Parse a `<grid-line>` value (CSS Grid L1 §8.3):
+    /// `auto | <custom-ident> | [<integer [-∞,-1]|[1,∞]> && <custom-ident>?] |
+    /// [span && [<integer [1,∞]> || <custom-ident>]]`.
     pub fn parse(s: &str) -> Option<Self> {
-        let trimmed = s.trim();
-        if trimmed.eq_ignore_ascii_case("auto") {
-            return Some(Self::Auto);
-        }
-        // `span N` or `span`
-        if let Some(rest) = trimmed.to_ascii_lowercase().strip_prefix("span") {
-            let rest = rest.trim();
-            if rest.is_empty() {
-                return Some(Self::Span(1));
+        let toks: Vec<&str> = s.split_whitespace().collect();
+        let is_ident = |t: &str| {
+            is_css_ident(t)
+                && !t.eq_ignore_ascii_case("span")
+                && !t.eq_ignore_ascii_case("auto")
+        };
+        let as_int = |t: &str| t.parse::<i32>().ok();
+        match toks.as_slice() {
+            [] => None,
+            [t] => {
+                if t.eq_ignore_ascii_case("auto") {
+                    Some(Self::Auto)
+                } else if t.eq_ignore_ascii_case("span") {
+                    // Голое `span` без счётчика/имени невалидно по грамматике,
+                    // но исторически принималось как `span 1`.
+                    Some(Self::Span(1))
+                } else if let Some(n) = as_int(t) {
+                    (n != 0).then_some(Self::Line(n))
+                } else if is_ident(t) {
+                    Some(Self::Named((*t).to_string()))
+                } else {
+                    None
+                }
             }
-            if let Ok(n) = rest.parse::<u32>() {
-                return Some(Self::Span(n.max(1)));
+            [first, rest @ ..] if first.eq_ignore_ascii_case("span") => {
+                // `span` && [<integer> || <custom-ident>]
+                let (mut count, mut name) = (None, None);
+                for t in rest {
+                    if let Some(n) = as_int(t) {
+                        if n < 1 || count.is_some() {
+                            return None;
+                        }
+                        count = Some(n as u32);
+                    } else if is_ident(t) && name.is_none() {
+                        name = Some((*t).to_string());
+                    } else {
+                        return None;
+                    }
+                }
+                match (count, name) {
+                    (None, None) => None,
+                    (c, None) => Some(Self::Span(c.unwrap_or(1))),
+                    (c, Some(n)) => Some(Self::SpanNamed(n, c.unwrap_or(1))),
+                }
             }
+            [a, b] => {
+                // <integer> && <custom-ident> в любом порядке.
+                let (n, name) = match (as_int(a), as_int(b)) {
+                    (Some(n), None) if is_ident(b) => (n, *b),
+                    (None, Some(n)) if is_ident(a) => (n, *a),
+                    _ => return None,
+                };
+                (n != 0).then(|| Self::NamedLine(name.to_string(), n))
+            }
+            _ => None,
         }
-        // integer line number
-        if let Ok(n) = trimmed.parse::<i32>() && n != 0 {
-            return Some(Self::Line(n));
-        }
-        // CSS custom-ident: named grid area or named line.
-        // Only accept valid CSS idents (letters, digits, hyphens, underscores;
-        // cannot start with a digit or two hyphens without a letter).
-        if is_css_ident(trimmed) {
-            return Some(Self::Named(trimmed.to_string()));
-        }
-        None
     }
 }
 
-/// Одна компонента `object-position`. Length-варианты резолвятся в px
-/// относительно края коробки (positive = от left/top); percentage —
-/// относительно **свободного места** `box_size - content_size` (может быть
-/// отрицательным, тогда излишек уходит за противоположный край). См.
-/// CSS Images L3 §5.5 «object-position».
+/// Одна компонента `<position>` (`object-position`, `background-position`,
+/// `transform-origin`, `perspective-origin`, `mask-position`, `offset-anchor`).
+/// Length-варианты резолвятся в px относительно края коробки (positive = от
+/// left/top); percentage — относительно **свободного места**
+/// `box_size - content_size` (может быть отрицательным, тогда излишек уходит
+/// за противоположный край). См. CSS Images L3 §5.5 «object-position».
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionComponent {
     /// Length в px (после resolve em/rem/vw/...).
@@ -526,6 +832,13 @@ pub enum PositionComponent {
     /// Percentage в долях 1.0 (`50%` → 0.5). Резолвится на paint-стадии
     /// против свободного места: `offset = free_space * percent`.
     Percent(f32),
+    /// Смещение от дальнего края (CSS Values L4 §9.4 tri-/quad-форма,
+    /// `right 10px` / `bottom 3px`): процент свободного места **плюс** px.
+    /// `right 10px` → `PercentPlusPx { percent: 1.0, px: -10.0 }`
+    /// (`calc(100% - 10px)`). Чисто процентные смещения (`right 20%` → `80%`)
+    /// сворачиваются в `Percent` при построении
+    /// ([`PositionComponent::from_edge`]).
+    PercentPlusPx { percent: f32, px: f32 },
 }
 
 impl PositionComponent {
@@ -537,6 +850,26 @@ impl PositionComponent {
         match self {
             Self::Px(px) => px,
             Self::Percent(p) => free_space * p,
+            Self::PercentPlusPx { percent, px } => free_space * percent + px,
+        }
+    }
+
+    /// Компонента «смещение `offset` от края»: `far = false` — от
+    /// левого/верхнего (`left 10px` ≡ `10px`), `far = true` — от
+    /// правого/нижнего (`right 10px` ≡ `calc(100% - 10px)`). `offset = None`
+    /// — голый keyword-край (`left` = `0%`, `right` = `100%`).
+    fn from_edge(far: bool, offset: Option<PositionComponent>) -> Self {
+        match (far, offset) {
+            (false, None) => Self::Percent(0.0),
+            (true, None) => Self::Percent(1.0),
+            (false, Some(o)) => o,
+            (true, Some(Self::Px(v))) => Self::PercentPlusPx { percent: 1.0, px: -v },
+            (true, Some(Self::Percent(p))) => Self::Percent(1.0 - p),
+            // Смещение уже смешанное — парсер такого не порождает
+            // (`parse_length_percentage_component` отдаёт только Px/Percent).
+            (true, Some(Self::PercentPlusPx { percent, px })) => {
+                Self::PercentPlusPx { percent: 1.0 - percent, px: -px }
+            }
         }
     }
 }
@@ -579,16 +912,20 @@ impl ObjectPosition {
     ///   - один token (`50%`, `10px`, keyword) — второй = `center`,
     ///   - два token-а — первый x, второй y.
     ///
-    /// Tri- и quad-форма (`<keyword> <length> <keyword> <length>` для
-    /// сторон-якорей) — отложены: на современных страницах редкость.
+    /// Tri- и quad-форма (`right 10px bottom 3px`, `left 5% top`) — смещение
+    /// от указанного края, см. [`parse_edge_offset_position`].
     pub fn parse(s: &str, em_basis: f32, viewport: Size) -> Option<Self> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return None;
         }
-        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-        if tokens.is_empty() || tokens.len() > 2 {
+        let tokens = split_top_level_ws(trimmed);
+        if tokens.is_empty() || tokens.len() > 4 {
             return None;
+        }
+        // Tri-/quad-форма: `[ left | right | center ] <lp>? && [ top | bottom | center ] <lp>?`.
+        if tokens.len() >= 3 {
+            return parse_edge_offset_position(&tokens, em_basis, viewport);
         }
         // Single-token: применяется к horizontal оси; вертикальная = center.
         // Если token — vertical keyword (`top`/`bottom`), то horizontal = center.
@@ -632,6 +969,117 @@ fn is_vertical_keyword(t: &str) -> bool {
 
 fn is_horizontal_keyword(t: &str) -> bool {
     t.eq_ignore_ascii_case("left") || t.eq_ignore_ascii_case("right")
+}
+
+fn is_edge_keyword(t: &str) -> bool {
+    is_horizontal_keyword(t) || is_vertical_keyword(t)
+}
+
+/// Tri-/quad-форма `<position>` (CSS Values L4 §9.4): две группы
+/// `<keyword> <length-percentage>?`, где keyword — `left|right|top|bottom`
+/// (`center` — без смещения). Группы могут идти в любом порядке, но обязаны
+/// занимать разные оси; `center` занимает ту ось, что осталась.
+fn parse_edge_offset_position(tokens: &[&str], em_basis: f32, viewport: Size) -> Option<ObjectPosition> {
+    let mut groups: Vec<(&str, Option<PositionComponent>)> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let kw = tokens[i];
+        let is_center = kw.eq_ignore_ascii_case("center");
+        if !(is_center || is_edge_keyword(kw)) {
+            return None;
+        }
+        i += 1;
+        let mut offset = None;
+        if i < tokens.len() && !(tokens[i].eq_ignore_ascii_case("center") || is_edge_keyword(tokens[i])) {
+            // `center` смещения не принимает.
+            if is_center {
+                return None;
+            }
+            offset = Some(parse_length_percentage_component(tokens[i], em_basis, viewport)?);
+            i += 1;
+        }
+        groups.push((kw, offset));
+    }
+    if groups.len() != 2 {
+        return None;
+    }
+    let mut x: Option<PositionComponent> = None;
+    let mut y: Option<PositionComponent> = None;
+    let mut centers = 0;
+    for (kw, off) in &groups {
+        if kw.eq_ignore_ascii_case("center") {
+            centers += 1;
+            continue;
+        }
+        let far = kw.eq_ignore_ascii_case("right") || kw.eq_ignore_ascii_case("bottom");
+        let slot = if is_horizontal_keyword(kw) { &mut x } else { &mut y };
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(PositionComponent::from_edge(far, *off));
+    }
+    // `center` занимает ось, оставшуюся свободной.
+    for _ in 0..centers {
+        let slot = if x.is_none() { &mut x } else { &mut y };
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(PositionComponent::Percent(0.5));
+    }
+    Some(ObjectPosition { x: x?, y: y? })
+}
+
+/// Одна ось `background-position-x`/`-y` (CSS Backgrounds L4 §2.6):
+/// `center | [ [ left | right | x-start | x-end ]? <length-percentage>? ]!`
+/// (для y — `top | bottom | y-start | y-end`). `x-start`/`x-end` трактуются
+/// как физические `left`/`right` (`y-start`/`y-end` — `top`/`bottom`): спека
+/// (§2.6, «still being worked out») пока не определяет их соотнесение с
+/// `writing-mode`/`direction`.
+pub(in crate::style) fn parse_position_axis(
+    s: &str,
+    em_basis: f32,
+    viewport: Size,
+    vertical: bool,
+) -> Option<PositionComponent> {
+    let tokens = split_top_level_ws(s.trim());
+    let (near, far, start, end) = if vertical {
+        ("top", "bottom", "y-start", "y-end")
+    } else {
+        ("left", "right", "x-start", "x-end")
+    };
+    // `Some(false)` — ближний край, `Some(true)` — дальний, `None` — не keyword края.
+    let edge = |t: &str| -> Option<bool> {
+        if t.eq_ignore_ascii_case(near) || t.eq_ignore_ascii_case(start) {
+            Some(false)
+        } else if t.eq_ignore_ascii_case(far) || t.eq_ignore_ascii_case(end) {
+            Some(true)
+        } else {
+            None
+        }
+    };
+    match tokens.as_slice() {
+        [t] => match edge(t) {
+            Some(is_far) => Some(PositionComponent::from_edge(is_far, None)),
+            None => parse_position_component(t, em_basis, viewport, vertical),
+        },
+        [kw, off] => {
+            let is_far = edge(kw)?;
+            let off = parse_length_percentage_component(off, em_basis, viewport)?;
+            Some(PositionComponent::from_edge(is_far, Some(off)))
+        }
+        _ => None,
+    }
+}
+
+/// `<length-percentage>` → `Px`/`Percent` (без keyword-ов).
+fn parse_length_percentage_component(t: &str, em_basis: f32, viewport: Size) -> Option<PositionComponent> {
+    if let Some(pct) = t.strip_suffix('%')
+        && let Ok(n) = pct.trim().parse::<f32>()
+    {
+        return Some(PositionComponent::Percent(n / 100.0));
+    }
+    let len = parse_length(t)?;
+    Some(PositionComponent::Px(len.resolve(em_basis, None, viewport)?))
 }
 
 pub(in crate::style) fn parse_position_component(
@@ -701,6 +1149,9 @@ pub enum AlignValue {
     Center,
     /// `baseline` — выровнять text-baseline (для align-items).
     Baseline,
+    /// `last baseline` — выровнять по последней базовой линии (CSS Box Alignment L3 §9.3);
+    /// во flex прижимает группу к cross-end, а не к cross-start, как `baseline`.
+    LastBaseline,
     /// `space-between` — равные промежутки между items, по краям нет.
     SpaceBetween,
     /// `space-around` — промежутки между + половинные по краям.
@@ -709,9 +1160,108 @@ pub enum AlignValue {
     SpaceEvenly,
 }
 
+/// The parts of `justify-content`/`align-content` that [`AlignValue`] alone does
+/// not carry, because only a flex container reads them (`flex.rs`):
+/// the `safe` overflow position (CSS Box Alignment L3 §4.4) and the physical
+/// `left`/`right` keywords of `justify-content`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentAlignExtra {
+    /// `justify-content: safe …` — on overflow the items align to the
+    /// writing-mode `start` edge instead of the alignment mode's own side.
+    pub justify_safe: bool,
+    /// `align-content: safe …`.
+    pub align_safe: bool,
+    /// `justify-content: left | right` (stored as `Start`/`End` in
+    /// `justify_content`).
+    pub justify_side: Option<ContentSide>,
+    /// `justify-content: start | end` — relative to the container's writing
+    /// mode, not to `flex-direction` like `flex-start`/`flex-end` (both are
+    /// stored as `Start`/`End`).
+    pub justify_wm: bool,
+    /// `align-content: start | end` — likewise for the cross axis.
+    pub align_wm: bool,
+    /// `align-self: safe …` / `align-items: safe …`.
+    pub self_safe: bool,
+    pub items_safe: bool,
+    /// `align-self: start | end | self-start | self-end` (writing-mode relative,
+    /// stored as `Start`/`End`), and the same for `align-items`.
+    pub self_wm: bool,
+    pub items_wm: bool,
+    /// `self-start` / `self-end`: relative to the item's *own* writing mode and
+    /// direction, not the container's (CSS Box Alignment L3 §4.2).
+    pub self_own: bool,
+    pub items_own: bool,
+    /// `justify-self: safe …` / `justify-items: safe …` (read by grid).
+    pub justify_self_safe: bool,
+    pub justify_items_safe: bool,
+    /// `justify-self: self-start | self-end` / `justify-items: …` — relative to the item's own
+    /// writing mode and direction (read by grid).
+    pub justify_self_own: bool,
+    pub justify_items_own: bool,
+    /// `justify-self: left | right` / `justify-items: left | right` (stored as `Start`/`End`;
+    /// grid resolves the physical side against its inline axis).
+    pub justify_self_side: Option<ContentSide>,
+    pub justify_items_side: Option<ContentSide>,
+}
+
+/// A physical side keyword of `justify-content` (CSS Box Alignment L3 §6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentSide {
+    Left,
+    Right,
+}
+
+impl AlignValue {
+    /// `[safe | unsafe]? <keyword>` of `justify-content`/`align-content`: the
+    /// keyword, whether it was `safe`, and whether it was a writing-mode
+    /// relative `start`/`end` (as opposed to `flex-start`/`flex-end`).
+    pub fn parse_with_overflow(s: &str) -> Option<(Self, bool, bool)> {
+        let lc = s.trim().to_ascii_lowercase();
+        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
+            (rest, true)
+        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
+            (rest, false)
+        } else {
+            (lc.as_str(), false)
+        };
+        let wm_relative = matches!(rest.trim(), "start" | "end" | "self-start" | "self-end");
+        Self::parse(rest).map(|v| (v, safe, wm_relative))
+    }
+
+    /// Was the keyword `self-start` / `self-end` (items' own axes)?
+    pub fn is_self_relative(s: &str) -> bool {
+        let lc = s.trim().to_ascii_lowercase();
+        let rest = lc.strip_prefix("safe ").or_else(|| lc.strip_prefix("unsafe ")).unwrap_or(&lc);
+        matches!(rest.trim(), "self-start" | "self-end")
+    }
+
+    /// `[safe | unsafe]? left | right` as a `justify-self` / `justify-items` value: the side
+    /// and whether it was `safe`.
+    pub fn parse_self_side(s: &str) -> Option<(ContentSide, bool)> {
+        let lc = s.trim().to_ascii_lowercase();
+        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
+            (rest, true)
+        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
+            (rest, false)
+        } else {
+            (lc.as_str(), false)
+        };
+        Self::parse_content_side(rest).map(|side| (side, safe))
+    }
+
+    /// `left` / `right` as a `justify-content` value.
+    pub fn parse_content_side(s: &str) -> Option<ContentSide> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "left" => Some(ContentSide::Left),
+            "right" => Some(ContentSide::Right),
+            _ => None,
+        }
+    }
+}
+
 impl AlignValue {
     pub fn parse(s: &str) -> Option<Self> {
-        let lc = s.trim().to_ascii_lowercase();
+        let lc = s.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
         match lc.as_str() {
             "auto" => Some(Self::Auto),
             "normal" => Some(Self::Normal),
@@ -719,7 +1269,8 @@ impl AlignValue {
             "start" | "flex-start" | "self-start" => Some(Self::Start),
             "end" | "flex-end" | "self-end" => Some(Self::End),
             "center" => Some(Self::Center),
-            "baseline" | "first baseline" | "last baseline" => Some(Self::Baseline),
+            "baseline" | "first baseline" => Some(Self::Baseline),
+            "last baseline" => Some(Self::LastBaseline),
             "space-between" => Some(Self::SpaceBetween),
             "space-around" => Some(Self::SpaceAround),
             "space-evenly" => Some(Self::SpaceEvenly),

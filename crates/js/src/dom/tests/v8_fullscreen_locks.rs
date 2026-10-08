@@ -1,7 +1,7 @@
 //! V8 port of Fullscreen API (WHATWG Fullscreen §4), Web Locks API, Screen Wake
 //! Lock stub, Network Information stub, `navigator.userActivation`, Web Share API
 //! stub and `window.reportError()` — seven adjacent scoping-table sub-families
-//! ported together, **31 tests**, QuickJS copies deleted. All of these are plain
+//! ported together, **33 tests**, QuickJS copies deleted. All of these are plain
 //! JS in the shared `WEB_API_SHIM`, not native bindings, so nothing changed on the
 //! `V8JsRuntime` side.
 //!
@@ -22,8 +22,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -33,8 +33,8 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 /// and `v8_runtime_with_dom`'s empty URL is insecure).
 fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -469,6 +469,32 @@ fn wake_lock_unsupported_type_rejects() {
 fn wake_lock_absent_on_insecure_origin() {
     let rt = v8_runtime_with_url("http://example.com/");
     assert!(bool_eval(&rt, "typeof navigator.wakeLock === 'undefined'"));
+    // BUG-669: the `WakeLock` interface object is `[SecureContext]` as well.
+    assert!(bool_eval(&rt, "!('WakeLock' in self)"));
+}
+
+#[test]
+fn wake_lock_interface_exposed_on_secure_origin() {
+    // BUG-669: `WakeLock` used to be missing from the global object entirely,
+    // so `'WakeLock' in self` was `false` even in a secure context.
+    let rt = v8_runtime_with_url("https://example.com/");
+    assert!(bool_eval(&rt,
+        "'WakeLock' in self && typeof WakeLock === 'function' &&          navigator.wakeLock instanceof WakeLock &&          navigator.wakeLock === navigator.wakeLock &&          typeof WakeLock.prototype.request === 'function' &&          Object.keys(navigator.wakeLock).length === 0 &&          Object.prototype.toString.call(navigator.wakeLock) === '[object WakeLock]'"
+    ));
+    assert!(bool_eval(&rt,
+        "(function() { try { new WakeLock(); return false; }                        catch (e) { return e instanceof TypeError; } })()"
+    ));
+}
+
+#[test]
+fn wake_lock_request_type_defaults_to_screen() {
+    // `request(optional WakeLockType type = "screen")`.
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(r#"
+                var defType = null;
+                navigator.wakeLock.request().then(function(s) { defType = s.type; });
+            "#).unwrap();
+    assert!(bool_eval(&rt, "defType === 'screen'"));
 }
 
 // ── Network Information stub ────────────────────────────────────────────────
@@ -494,6 +520,43 @@ fn navigator_connection_downlink_max_is_unknown_infinity() {
     // WPT `netinfo-basics.html`'s `downlinkMax >= 0` check.
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(&rt, "navigator.connection.downlinkMax === Infinity"));
+}
+
+#[test]
+fn navigator_connection_is_event_target_interface() {
+    // BUG-664: `interface NetworkInformation : EventTarget` — the object used
+    // to be a plain constructor instance with no-op listener stubs.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "navigator.connection instanceof NetworkInformation && \
+         navigator.connection instanceof EventTarget && \
+         Object.getPrototypeOf(NetworkInformation.prototype) === EventTarget.prototype && \
+         Object.prototype.toString.call(navigator.connection) === '[object NetworkInformation]' && \
+         Object.keys(navigator.connection).length === 0"
+    ));
+    assert!(bool_eval(&rt,
+        "(function() { try { new NetworkInformation(); return false; } \
+                       catch (e) { return e instanceof TypeError; } })()"
+    ));
+    // Readonly attributes: assignment must not overwrite the engine's value.
+    assert!(bool_eval(&rt,
+        "navigator.connection.effectiveType = 'slow-2g'; \
+         navigator.connection.effectiveType === '4g'"
+    ));
+}
+
+#[test]
+fn navigator_connection_change_reaches_listener_and_onchange() {
+    // BUG-664: both subscription paths used to be dropped silently.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var hits = []; var c = navigator.connection; \
+         c.addEventListener('change', function(e) { hits.push('l:' + e.type); }, { once: true }); \
+         c.onchange = function(e) { hits.push('h:' + (e.target === c)); }; \
+         c.dispatchEvent(new Event('change')); \
+         c.dispatchEvent(new Event('change')); \
+         hits.join() === 'l:change,h:true,h:true'"
+    ));
 }
 
 // ── navigator.userActivation (GAP-USERACT, BUG-751/BUG-758) ──────────────────

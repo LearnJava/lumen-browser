@@ -44,7 +44,7 @@ Treat anti-detection capabilities as a **layered privacy stack**, delivered by d
 
 ### Layer 1 — Surface API: no automation markers (default, always on)
 
-- `navigator.webdriver` is **not present** (not `false`, not present at all — same as a clean Chrome without `--enable-automation`).
+- `navigator.webdriver` is `false` (a configurable, enumerable accessor — same as Chrome/Firefox outside automation; an *absent* property is itself a distinguishing signal, BUG-754).
 - No `chrome.runtime`, no `__playwright`, no `__puppeteer`, no `__nightmare`, no `cdc_*` (ChromeDriver), no `_phantom`, no `callPhantom`, no `Buffer` global, no `emit` on `window`.
 - The JS runtime (`rquickjs` Phase 0, V8 Phase 3+) is **not instrumented for automation**. Automation goes through `BrowserSession` trait (ADR-006), which never touches the JS environment unless the page itself accesses it (e.g., `eval_js()` runs as an ordinary script, leaving no trace).
 - DOM `event.isTrusted = true` for native-injected input (ADR-006, task 8C.2), because the events enter through the same path as OS events.

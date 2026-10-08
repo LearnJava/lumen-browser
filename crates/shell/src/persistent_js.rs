@@ -146,7 +146,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// back to a full cascade — preserves those engines' existing behaviour
     /// exactly.
     fn take_dom_touched(&self) -> DomTouchedSummary {
-        DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
+        DomTouchedSummary { changes: Vec::new(), unattributed: true }
     }
     /// BUG-272/BUG-306 diagnostics: JS engine heap `(total_heap_size,
     /// used_heap_size)` in bytes; `(-1, -1)` when the runtime does not expose
@@ -184,6 +184,25 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// THREAD-9 срез 5: флаг «страница слушает `navigate`». `None` — не
+    /// поддерживается (по умолчанию): shell считает, что слушатель есть.
+    fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
+    /// BUG-935 S80: сброс набора затронутых узлов ([`Self::take_dom_touched`]),
+    /// который UI-поток может звать сам, не ставя запрос в очередь движкового
+    /// потока. `None` — не поддерживается (по умолчанию).
+    ///
+    /// BUG-935 срез 81: трекер не сбрасывается — читатель держит свою отметку эпохи
+    /// (`V8JsRuntime::dom_changes_reader`), и флаш движкового потока видит всё.
+    fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
+        None
+    }
+    /// BUG-935 срез 94: оболочка дописала в DOM презентационные атрибуты
+    /// `width`/`height` узлам `nids` (`apply_intrinsic_size`) мимо JS — трекер
+    /// мутаций сам этого не видит, и флаш движкового потока оставил бы узлам
+    /// прежний стиль. Default no-op: движок без трекера и так идёт полным каскадом.
+    fn note_shell_attr_writes(&self, _nids: &[u32]) {}
     /// BUG-935 S43: shared, lock-free handle to a flag set `true` once the
     /// page has read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path — lets the embedder skip
@@ -322,8 +341,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `contentDocument` из скриптов родителя видят фасады под-документа
     /// (`crates/js/src/frame_bridge.rs`).
     ///
-    /// Вызывается из [`load_frame_sub_documents`] после исполнения скриптов
-    /// ребёнка и **до** диспатча trusted `load` на хосте. `name` — значение
+    /// Вызывается из [`load_frame_sub_documents`] дважды: до скриптов
+    /// ребёнка без `peer` (BUG-1198, `frame_ancestry.rs`) и после них — с
+    /// `peer`, **до** диспатча trusted `load` на хосте. `name` — значение
     /// атрибута `name` хоста (ключ именованного доступа `window[name]`,
     /// срез 3). `accessible=false`
     /// (cross-origin / opaque sandbox) регистрирует биндинг без доступа к
@@ -332,7 +352,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// чтения/вызова его реальных глобалов из фасада `winFacade` (не только
     /// фиксированный IDL-набор); `None`, если у ребёнка нет своего рантайма
     /// (загрузка провалилась) — фасад в этом случае остаётся на прежнем
-    /// поведении (только IDL-набор). Default no-op покрывает сборки без v8.
+    /// поведении (только IDL-набор). `opaque` — BUG-1198: у ребёнка
+    /// непрозрачное происхождение (`sandbox` без `allow-same-origin`), его
+    /// сообщения приходят с `origin === "null"`. Связи ребёнка с предками
+    /// ставит не этот трейт, а `frame_ancestry.rs` — прямо на рантайме
+    /// ребёнка, до его первого скрипта. Default no-op покрывает сборки без v8.
+    #[allow(clippy::too_many_arguments)]
     fn register_iframe_document(
         &self,
         _host_nid: u32,
@@ -340,43 +365,7 @@ pub(crate) trait PersistentJs: Send + Sync {
         _url: &str,
         _name: Option<&str>,
         _accessible: bool,
-        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-    }
-    /// BUG-480 срез 3: зарегистрировать документ родителя в JS-контексте
-    /// фрейма — внутри фрейма `window.parent`/`window.frameElement`/`window.name`
-    /// видят фасад родительской стороны (`crates/js/src/frame_bridge.rs`).
-    ///
-    /// Вызывается из [`load_frame_sub_documents`] сразу после создания
-    /// контекста ребёнка и до его DOMContentLoaded/load: обработчики ребёнка
-    /// читают предков из любого события. `host_nid` — nid хоста в дереве
-    /// родителя. `name` — значение атрибута `name` хоста НА МОМЕНТ вызова
-    /// (BUG-921): `window.name` ребёнка запоминает его один раз, а не
-    /// перечитывает атрибут при каждом обращении. `peer` — BUG-979: хэндл
-    /// РОДИТЕЛЯ, симметричный `register_iframe_document`'s `peer` (ребёнок
-    /// синхронно читает/вызывает глобалы родителя через `window.parent`/
-    /// `.top` так же, как родитель — глобалы ребёнка через `contentWindow`).
-    /// Default no-op покрывает сборки без v8.
-    fn register_parent_document(
-        &self,
-        _host_nid: u32,
-        _doc: Arc<Mutex<Document>>,
-        _url: &str,
-        _name: Option<&str>,
-        _accessible: bool,
-        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-    }
-    /// BUG-480 срез 3: зарегистрировать документ верхнего окна в JS-контексте
-    /// фрейма глубины ≥ 2 (`window.top` ведёт в корень, а не в непосредственного
-    /// родителя). Для фрейма первого уровня не вызывается — там top разрешается
-    /// через [`PersistentJs::register_parent_document`]. `peer` — BUG-979, тот
-    /// же смысл, что у `register_parent_document`. Default no-op без v8.
-    fn register_top_document(
-        &self,
-        _doc: Arc<Mutex<Document>>,
-        _url: &str,
-        _accessible: bool,
+        _opaque: bool,
         _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
     }
@@ -433,7 +422,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after every `relayout_page`. The JS side uses this for
     /// `window.getComputedStyle()` and CSS property reads.
     #[allow(dead_code)]
-    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
+    fn update_computed_styles(&self, styles: HashMap<u32, lumen_layout::StyleMap>);
     /// Merge per-frame animated `opacity`/`transform` overrides into the
     /// computed-style snapshot in place (GAP-CSSANIM срез 3), so
     /// `getComputedStyle()` reflects the live interpolated value during an
@@ -510,9 +499,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Must be called after `update_viewport_size` so JS reads consistent
     /// dimensions. Shell calls it after every `relayout_page` and any
-    /// `prefers-color-scheme` or `prefers-reduced-motion` toggle.
+    /// `prefers-color-scheme`, `prefers-reduced-motion` or `forced-colors` toggle.
     #[allow(dead_code)]
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool);
+    fn deliver_media_query_changes(
+        &self,
+        width: f32,
+        height: f32,
+        prefers_dark: bool,
+        reduced_motion: bool,
+        forced_colors: bool,
+    );
     /// Poll all live `WebSocket` instances and deliver queued events to JS.
     ///
     /// Must be called on every event-loop step so that `onopen`/`onmessage`/
@@ -938,8 +934,9 @@ pub(crate) struct V8PersistentJs {
     /// BUG-979: `Arc`-wrapped (not owned by value) so a peer frame's registry
     /// can hold its own clone for [`lumen_js::frame_peer_bridge::FramePeerBridge`]
     /// alongside the `Arc<Mutex<Document>>` it already keeps for the same
-    /// lifetime — see `register_iframe_document`/`register_parent_document`/
-    /// `register_top_document` below.
+    /// lifetime — see `register_iframe_document` below and
+    /// `frame_ancestry.rs`, which registers the parent/top slots straight on
+    /// the child's runtime.
     pub(crate) rt: Arc<lumen_js::v8_runtime::V8JsRuntime>,
 }
 
@@ -1085,7 +1082,13 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_dom_touched(&self) -> DomTouchedSummary {
         let t = self.rt.take_dom_touched();
-        DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
+        // BUG-935 срез 81: `log_floor` у сброшенного трекера — эпоха прошлого сброса, то есть
+        // базис «всего, что накопилось с тех пор». Не точный: раскладка берёт документ после
+        // сброса, и запись между ними видна ей, но не этому набору.
+        DomTouchedSummary {
+            changes: t.changes_since(t.log_floor(), lumen_js::child_list_narrowing_enabled(), false),
+            unattributed: t.unattributed,
+        }
     }
     fn debug_js_heap(&self) -> (i64, i64) {
         self.rt.debug_heap_stats()
@@ -1104,6 +1107,20 @@ impl PersistentJs for V8PersistentJs {
     }
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.dom_dirty_flag())
+    }
+    fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.navigate_listeners_flag())
+    }
+    fn note_shell_attr_writes(&self, nids: &[u32]) {
+        let nodes: Vec<lumen_dom::NodeId> = nids.iter().map(|&n| lumen_dom::NodeId::from_raw(n)).collect();
+        self.rt.note_shell_attr_writes(&nodes, &["width", "height"]);
+    }
+    fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
+        let read = self.rt.dom_changes_reader();
+        Some(Arc::new(move || {
+            let t = read();
+            DomTouchedSummary { changes: t.changes, unattributed: t.unattributed }
+        }))
     }
     fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.pseudo_styles_needed_flag())
@@ -1136,7 +1153,7 @@ impl PersistentJs for V8PersistentJs {
         self.rt.update_stylesheet(sheet);
     }
     fn deliver_layout_observers(&self) {
-        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
+        self.eval_js("_lumen_deliver_resize_observers_layout();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
     }
     fn register_lazy_images(&self, pairs: &[(u32, &str)]) {
         if pairs.is_empty() {
@@ -1171,6 +1188,7 @@ impl PersistentJs for V8PersistentJs {
         url: &str,
         name: Option<&str>,
         accessible: bool,
+        opaque: bool,
         peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
         self.rt.register_frame_document(
@@ -1179,35 +1197,9 @@ impl PersistentJs for V8PersistentJs {
             url.to_owned(),
             name.map(str::to_owned),
             accessible,
+            opaque,
             peer,
         );
-    }
-    fn register_parent_document(
-        &self,
-        host_nid: u32,
-        doc: Arc<Mutex<Document>>,
-        url: &str,
-        name: Option<&str>,
-        accessible: bool,
-        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-        self.rt.register_parent_document(
-            host_nid,
-            doc,
-            url.to_owned(),
-            name.map(str::to_owned),
-            accessible,
-            peer,
-        );
-    }
-    fn register_top_document(
-        &self,
-        doc: Arc<Mutex<Document>>,
-        url: &str,
-        accessible: bool,
-        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-        self.rt.register_top_document(doc, url.to_owned(), accessible, peer);
     }
     fn frame_peer_bridge(&self) -> Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>> {
         Some(Arc::clone(&self.rt) as Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>)
@@ -1273,8 +1265,8 @@ impl PersistentJs for V8PersistentJs {
             "_lumen_deliver_layout_shift({value}, [{sources_js}], {had_input_js})"
         ));
     }
-    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
-        self.rt.update_computed_styles(styles);
+    fn update_computed_styles(&self, styles: HashMap<u32, lumen_layout::StyleMap>) {
+        self.rt.update_style_maps(styles);
     }
     fn patch_animated_computed_styles(&self, patches: &HashMap<u32, HashMap<String, String>>) {
         self.rt.patch_animated_computed_styles(patches);
@@ -1303,11 +1295,19 @@ impl PersistentJs for V8PersistentJs {
     fn notify_window_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('complete')");
     }
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool) {
+    fn deliver_media_query_changes(
+        &self,
+        width: f32,
+        height: f32,
+        prefers_dark: bool,
+        reduced_motion: bool,
+        forced_colors: bool,
+    ) {
         let dark = if prefers_dark { "true" } else { "false" };
         let rm = if reduced_motion { "true" } else { "false" };
+        let fc = if forced_colors { "true" } else { "false" };
         self.eval_js(&format!(
-            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm});"
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm},{fc});"
         ));
     }
     fn pump_websockets(&self) {
@@ -1551,6 +1551,32 @@ impl PersistentJs for V8PersistentJs {
     }
 }
 
+/// BUG-935 срез 81: рычаги сужения корней рестайла (`LUMEN_NO_SHALLOW_ROOTS`,
+/// `LUMEN_NO_ATTR_LOCAL_ROOTS`) — те же, что у флаша движкового потока. Без JS-движка
+/// трекера нет, и спрашивать нечего: сужение по умолчанию включено.
+pub(crate) fn attr_narrowing_enabled() -> bool {
+    #[cfg(feature = "v8")]
+    {
+        lumen_js::attr_narrowing_enabled()
+    }
+    #[cfg(not(feature = "v8"))]
+    {
+        true
+    }
+}
+
+/// BUG-935 срез 82: рычаг `LUMEN_NO_FRESH_NODE_ROOTS` — тот же, что у флаша движкового потока.
+pub(crate) fn fresh_node_roots_enabled() -> bool {
+    #[cfg(feature = "v8")]
+    {
+        lumen_js::fresh_node_roots_enabled()
+    }
+    #[cfg(not(feature = "v8"))]
+    {
+        true
+    }
+}
+
 /// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
 /// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
 /// default (used by no-engine builds, which have no tracker) compiles
@@ -1559,11 +1585,17 @@ impl PersistentJs for V8PersistentJs {
 /// Consumed by [`Lumen::try_relayout_raf_incremental`] (BUG-341 S7 part 2) to
 /// derive the DOM-mutation half of `RestyleDelta::dirty_roots` for the
 /// incremental-cascade path (`layout_mutation_incremental_restyle`).
+/// BUG-935 S80: UI-сторонний сброс набора затронутых узлов — см.
+/// [`PersistentJs::dom_touched_drain`].
+pub(crate) type DomTouchedDrain = Arc<dyn Fn() -> DomTouchedSummary + Send + Sync>;
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct DomTouchedSummary {
     /// Nodes whose selector-relevant state actually changed via a tracked
-    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
-    pub(crate) nodes: std::collections::HashSet<lumen_dom::NodeId>,
+    /// mutation primitive, each with what the restyle root-set may assume
+    /// about the change (BUG-935 срез 81 — was a bare node set, every entry
+    /// read as `NodeChange::Unattributed`). See `lumen_js::DomTouched::changes_since`.
+    pub(crate) changes: Vec<(lumen_dom::NodeId, lumen_layout::style::OwnedNodeChange)>,
     /// `true` when `nodes` alone is not a safe restyle root-set this cycle —
     /// the caller must fall back to a full cascade. See
     /// `lumen_js::DomTouched::unattributed`.

@@ -109,6 +109,27 @@ struct SharedWorkerThread {
 #[cfg(feature = "v8-backend")]
 static PORT_COUNTER: AtomicU32 = AtomicU32::new(1);
 
+/// Per-page record of `SharedWorker` client ports it has connected (port id →
+/// identity key) — a `V8JsRuntime` field, read only by its own `Drop` (BUG-1000).
+/// The hub (`HUB_V8`) is process-global and has no notion of "this page went
+/// away"; this map is what lets a page's teardown reach it anyway.
+#[cfg(feature = "v8-backend")]
+pub type SharedWorkerClientPorts = Arc<Mutex<HashMap<u32, String>>>;
+
+/// Close every port a page ever opened (BUG-1000, called from
+/// `V8JsRuntime::drop`) — same effect as that page's script calling
+/// `port.close()` on each, so a worker left with no other client notices via
+/// the same emptied-`ports`-map check as an explicit close and terminates
+/// itself rather than outliving the page indefinitely.
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn close_all_client_ports_v8(ports: &SharedWorkerClientPorts) {
+    let drained: Vec<(u32, String)> = std::mem::take(&mut *ports.lock().unwrap()).into_iter().collect();
+    for (port_id, key) in drained {
+        close_shared_worker_port_v8(&key, port_id);
+    }
+}
+
 /// Drain all messages a runtime's shared-worker ports have received.
 ///
 /// Returns the drained `(port_id, json)` list and clears the queue atomically.
@@ -140,6 +161,12 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // are shared (`crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`).
   if (typeof _lumen_make_worker_location === 'function') {
     globalThis.location = _lumen_make_worker_location(
+      typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
+  }
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // above.
+  if (typeof _lumen_make_worker_origin === 'function') {
+    globalThis.origin = _lumen_make_worker_origin(
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }
 
@@ -189,7 +216,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     // function at all, so the global stays `undefined`) — see
     // `eval_and_report_via_runtime_only`. The value itself no longer gates
     // anything: cancelled or not, a runtime error stops at this scope.
-    globalThis._lumen_worker_error_cancelled = false;
+    __lumen_C._lumen_worker_error_cancelled = false;
     if (_reportingError) { _lumen_sw_console_log('[ERR]  ' + message); return; }
     _reportingError = true;
     var cancelled = false;
@@ -214,7 +241,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
         if (ev.defaultPrevented) cancelled = true;
       }
     } finally { _reportingError = false; }
-    globalThis._lumen_worker_error_cancelled = cancelled;
+    __lumen_C._lumen_worker_error_cancelled = cancelled;
     if (!cancelled) _lumen_sw_console_log('[ERR]  ' + message);
   }
 
@@ -281,7 +308,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   }
 
   // Called by the Rust loop when a new client connects.
-  globalThis._lumen_sw_dispatch_connect = function(pid) {
+  __lumen_C._lumen_sw_dispatch_connect = function(pid) {
     var port = _makePort(pid);
     _ports[pid] = port;
     var ev = { type: 'connect', target: globalThis, source: port,
@@ -293,13 +320,13 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   };
 
   // Called by the Rust loop for each client port.postMessage.
-  globalThis._lumen_sw_dispatch_port_message = function(pid, data) {
+  __lumen_C._lumen_sw_dispatch_port_message = function(pid, data) {
     var port = _ports[pid];
     if (port) port._deliver(data);
   };
 
   // Called by the Rust loop when a client closes its port.
-  globalThis._lumen_sw_dispatch_port_close = function(pid) {
+  __lumen_C._lumen_sw_dispatch_port_close = function(pid) {
     delete _ports[pid];
   };
 
@@ -316,7 +343,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // matches the dedicated worker's own resolution — `data:` inline, and
   // anything else resolved against the worker's own script URL
   // (`_lumen_worker_base_url`, empty for a blob:/data: worker) and fetched
-  // over the network. `blob:lumen/` still fails — see
+  // over the network. `blob:` still fails — see
   // `install_shared_worker_globals_v8`'s doc comment on why.
   globalThis.importScripts = function() {
     // HTML LS §10.2.3: unavailable in a module worker, unconditionally and
@@ -349,7 +376,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // evaluated as a separate IIFE after this one) routes a throwing
   // fetch/XHR listener through the same reporting path (BUG-591 shape,
   // BUG-778 scope).
-  globalThis._lumen_worker_exception_reporter = _lumen_sw_report_exception;
+  __lumen_C._lumen_worker_exception_reporter = _lumen_sw_report_exception;
 
   // close() — HTML LS §10.2.4 "close a worker" for a shared worker
   // (BUG-778): discard further queued tasks, including a not-yet-delivered
@@ -359,7 +386,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // `WORKER_TIMERS_SHIM`'s task loop so a `close()` from inside a timer stops
   // the remaining due timers of that very flush (BUG-815).
   globalThis.close = function() {
-    globalThis._lumen_worker_closed = true;
+    __lumen_C._lumen_worker_closed = true;
     _lumen_worker_self_close();
   };
 })();
@@ -368,7 +395,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 /// Main-thread `SharedWorker` class shim (evaluated in the page JS context).
 ///
 /// Depends on the `_lumen_sw_connect` / `_lumen_sw_post` / `_lumen_sw_close`
-/// native bindings, plus `_object_url_store` / `TextDecoder` / `atob` from the
+/// native bindings, plus `_lumen_blob_url_entry` / `TextDecoder` / `atob` from the
 /// core DOM shim for blob-/data-URL script resolution.
 #[cfg(feature = "v8-backend")]
 const SHARED_WORKER_SHIM: &str = r#"(function() {
@@ -384,8 +411,8 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   // `fetch()`/`XMLHttpRequest` resolve a relative target against (BUG-778).
   function _resolveScript(url) {
     var u = String(url || '');
-    if (u.startsWith('blob:lumen/')) {
-      var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[u] : null;
+    if (u.startsWith('blob:')) {
+      var blob = (typeof _lumen_blob_url_entry === 'function') ? _lumen_blob_url_entry(u) : null;
       if (blob && blob._bytes) {
         try { return { script: new TextDecoder().decode(blob._bytes), url: u }; }
         catch(e) { return { script: '', url: u }; }
@@ -560,7 +587,7 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   if (typeof window !== 'undefined') window.SharedWorker = SharedWorker;
 
   // Called by the page runtime's pump_shared_workers() with [{ id, json }, …].
-  globalThis._lumen_deliver_shared_worker_messages = function(msgs) {
+  __lumen_C._lumen_deliver_shared_worker_messages = function(msgs) {
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i];
       var p = _clientPorts[m.id];
@@ -572,7 +599,7 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   // of uncaught-exception reports (BUG-591 SharedWorker parent-side
   // reporting) — `json` is the `{message, filename, lineno, colno}` object
   // literal `_lumen_sw_report_error` built on the worker side.
-  globalThis._lumen_deliver_shared_worker_errors = function(errs) {
+  __lumen_C._lumen_deliver_shared_worker_errors = function(errs) {
     for (var i = 0; i < errs.length; i++) {
       var m = errs[i];
       var w = _sharedWorkerInstances[m.id];
@@ -668,10 +695,14 @@ fn post_to_shared_worker_v8(key: &str, port_id: u32, json: String) {
 /// Notify the shared worker that a client closed its port.
 ///
 /// The worker-side port mapping is dropped; the worker thread itself stays
-/// alive for other clients (shared workers outlive individual connections).
+/// alive as long as another client still holds a port open (shared workers
+/// outlive an individual connection) — but once the last one closes,
+/// `run_shared_worker_thread_v8`'s message loop notices its `ports` map went
+/// empty and terminates itself (BUG-1000), instead of idling in `HUB_V8`
+/// until the process exits.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-fn close_shared_worker_port_v8(key: &str, port_id: u32) {
+pub(crate) fn close_shared_worker_port_v8(key: &str, port_id: u32) {
     if let Some(t) = hub_v8().lock().unwrap().get(key) {
         let _ = t.tx.send(SwInMsg::Close { port_id });
     }
@@ -681,7 +712,7 @@ fn close_shared_worker_port_v8(key: &str, port_id: u32) {
 /// native bindings and the `SharedWorker` JS class into a V8 context.
 ///
 /// Must be called after the core DOM shim so that `TextDecoder`,
-/// `_object_url_store`, and `atob` are available for blob-/data-URL
+/// `_lumen_blob_url_entry`, and `atob` are available for blob-/data-URL
 /// resolution in the constructor.  `outbox` is this runtime's outbound queue;
 /// `errors` is this runtime's shared-worker uncaught-exception queue
 /// (BUG-591), drained by [`crate::v8_runtime::V8JsRuntime::pump_shared_workers`].
@@ -691,6 +722,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
     rt: &V8JsRuntime,
     outbox: &SharedWorkerOutbox,
     errors: &crate::worker::WorkerErrorQueue,
+    client_ports: &SharedWorkerClientPorts,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
@@ -719,12 +751,15 @@ pub(crate) fn install_shared_worker_bindings_v8(
         let errs = Arc::clone(errors);
         let fp = fetch_provider.clone();
         let det = determinism.clone();
+        // BUG-1000: recorded so this page's `Drop` can close every port it
+        // ever opened — see `SharedWorkerClientPorts`'s doc comment.
+        let cports = Arc::clone(client_ports);
         rt.register_native(
             "_lumen_sw_connect",
             into_v8_fn4(
                 move |key: String, script: String, script_url: String, is_module: bool| -> u32 {
-                    connect_shared_worker_v8(
-                        key,
+                    let port_id = connect_shared_worker_v8(
+                        key.clone(),
                         script,
                         script_url,
                         is_module,
@@ -733,7 +768,9 @@ pub(crate) fn install_shared_worker_bindings_v8(
                         fp.clone(),
                         ws_provider.clone(),
                         det.clone(),
-                    )
+                    );
+                    cports.lock().unwrap().insert(port_id, key);
+                    port_id
                 },
             ),
         )?;
@@ -915,7 +952,7 @@ fn run_shared_worker_thread_v8(
         // never ran" (the global stays `undefined`, not a `bool`) is exactly a
         // parse/load failure, the only case that still reaches a client.
         let reporter_ran = matches!(
-            rt.eval("typeof globalThis._lumen_worker_error_cancelled === 'boolean'"),
+            rt.eval("typeof __lumen_C._lumen_worker_error_cancelled === 'boolean'"),
             Ok(lumen_core::JsValue::Bool(true))
         );
         if !reporter_ran {
@@ -987,12 +1024,24 @@ fn run_shared_worker_thread_v8(
                 }
             }
             SwInMsg::Close { port_id } => {
-                ports.lock().unwrap().remove(&port_id);
+                let now_empty = {
+                    let mut live = ports.lock().unwrap();
+                    live.remove(&port_id);
+                    live.is_empty()
+                };
                 error_ports.lock().unwrap().remove(&port_id);
                 let _ = rt.eval(&format!(
                     "if(typeof _lumen_sw_dispatch_port_close==='function')\
                      _lumen_sw_dispatch_port_close({port_id});"
                 ));
+                // BUG-1000: no client has a port left — nothing can reach
+                // this worker anymore (a fresh `new SharedWorker(key)` spawns
+                // its own thread once this one is gone, `connect_shared_worker_v8`
+                // above already handles a dead `tx`), so keeping the thread
+                // alive only leaks it until process exit.
+                if now_empty {
+                    close_flag.store(true, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -1039,7 +1088,7 @@ fn broadcast_shared_worker_error(
 /// client-visible error report is [`run_shared_worker_thread_v8`]'s top-level
 /// parse/load-failure branch, which writes into `error_ports` directly.
 ///
-/// `importScripts('blob:lumen/…')` is not supported here (`None` is passed as
+/// `importScripts('blob:…')` is not supported here (`None` is passed as
 /// the blob store — always empty): unlike a dedicated [`crate::worker`], a
 /// shared worker has no per-instance blob mirroring from the connecting
 /// page's `_object_url_store`. `data:`/`http(s):` targets — the shape that
@@ -1087,7 +1136,7 @@ fn install_shared_worker_globals_v8(
     let net_provider = fetch_provider.clone();
 
     // _lumen_import_scripts_resolve(url) → String | undefined — BUG-778, see
-    // this function's own doc comment on the `blob:lumen/` limitation.
+    // this function's own doc comment on the `blob:` limitation.
     //
     // GAP-CSPENF срез 28: same `worker-src`/`default-src` gate that
     // `worker.rs`'s twin registration now applies — a `SharedWorker` shares
@@ -1286,7 +1335,7 @@ mod tests_v8 {
             JsValue::String("h:boom@http://example.test/sw.js;l:true;".to_string())
         );
         assert_eq!(
-            rt.eval("globalThis._lumen_worker_error_cancelled").unwrap(),
+            rt.eval("__lumen_C._lumen_worker_error_cancelled").unwrap(),
             JsValue::Bool(false)
         );
 
@@ -1298,7 +1347,7 @@ mod tests_v8 {
         )
         .unwrap();
         assert_eq!(
-            rt.eval("globalThis._lumen_worker_error_cancelled").unwrap(),
+            rt.eval("__lumen_C._lumen_worker_error_cancelled").unwrap(),
             JsValue::Bool(true)
         );
     }
@@ -1356,7 +1405,8 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None, None, None).unwrap();
+        let client_ports = rt.shared_worker_client_ports_for_test();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, &client_ports, None, None, None).unwrap();
         (rt, outbox, errors)
     }
 
@@ -1518,6 +1568,60 @@ mod tests_v8 {
         assert_eq!(as_num(&rt.eval("globalThis.__b").unwrap()), 2.0);
     }
 
+    /// BUG-1000: a page that never called `port.close()` must still take its
+    /// `SharedWorker` connection down with it once its `V8JsRuntime` drops
+    /// (navigation, tab close) — the worker's own `n` counter resets, proving
+    /// a fresh worker thread was spawned rather than the original one
+    /// (which, left alone, used to run until the whole process exited).
+    #[test]
+    fn v8_dropping_the_page_runtime_closes_its_shared_worker_ports() {
+        let (rt1, outbox1) = runtime_with_shared_worker();
+        let script = "var n=0;onconnect=function(e){var p=e.ports[0];\
+            p.onmessage=function(){n+=1;p.postMessage(n);};};";
+        let data_url = format!("data:text/javascript,{}", urlencode(script));
+        let key = "v8-bug1000-drop";
+        rt1.eval(&format!(
+            "globalThis.__got=0;\
+             var w=new SharedWorker('{data_url}','{key}');\
+             w.port.onmessage=function(ev){{globalThis.__got=ev.data;}};\
+             w.port.postMessage('x');"
+        ))
+        .unwrap();
+        pump_until(&rt1, &outbox1, "globalThis.__got", 1.0);
+        assert_eq!(as_num(&rt1.eval("globalThis.__got").unwrap()), 1.0);
+
+        drop(rt1);
+
+        // The old thread only notices its last port closed, and exits,
+        // asynchronously — each retry opens a brand-new `SharedWorker`
+        // (a fresh `_lumen_sw_connect` call, so a still-live-but-dying old
+        // thread losing this particular attempt just means the next retry
+        // tries again) until one lands on either a respawned worker or the
+        // moment the old thread has fully exited.
+        let mut got = 0.0;
+        for _ in 0..50 {
+            let (rt2, outbox2) = runtime_with_shared_worker();
+            rt2.eval(&format!(
+                "globalThis.__got=0;\
+                 var w2=new SharedWorker('{data_url}','{key}');\
+                 w2.port.onmessage=function(ev){{globalThis.__got=ev.data;}};\
+                 w2.port.postMessage('x');"
+            ))
+            .unwrap();
+            pump_until(&rt2, &outbox2, "globalThis.__got", 1.0);
+            got = as_num(&rt2.eval("globalThis.__got").unwrap());
+            if got == 1.0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            got, 1.0,
+            "a fresh SharedWorker (n starting over at 1) must be reachable once \
+             the only page that held it open has dropped — BUG-1000"
+        );
+    }
+
     #[test]
     fn v8_distinct_names_are_isolated() {
         let (rt, outbox) = runtime_with_shared_worker();
@@ -1589,7 +1693,8 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, Some(fp), None, None).unwrap();
+        let client_ports = rt.shared_worker_client_ports_for_test();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, &client_ports, Some(fp), None, None).unwrap();
         (rt, outbox)
     }
 
@@ -1762,7 +1867,7 @@ mod tests_v8 {
         // turn the (already absolute) URL into itself.
         rt.eval(
             "globalThis._url_resolve=function(u){return String(u);};\
-             globalThis._lumen_document_base_url=function(){return '';};",
+             __lumen_C._lumen_document_base_url=function(){return '';};",
         )
         .unwrap();
         rt.eval(

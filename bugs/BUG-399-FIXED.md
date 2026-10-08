@@ -126,7 +126,7 @@ is_secure_context`, 5/5. Юнит-тесты бьют по `install_dom` нап�
 локальный HTTP-сервер, слушающий и loopback, и LAN-адрес): `http://127.0.0.1`
 → `true`, `http://localhost` → `true`, `http://<LAN-IPv4>` → `false`,
 `file://…` → `true` — 4/4. Формы `file:///D:/…` и `about:blank` в headless-MCP
-недостижимы по уже заведённому [BUG-760](BUG-760-OPEN.md) (`navigate` там не
+недостижимы по уже заведённому [BUG-760](BUG-760-FIXED.md) (`navigate` там не
 знает ни трёхслэшевой формы, ни схемы `about:`), поэтому проверены только
 юнит-тестами.
 
@@ -140,7 +140,7 @@ is_secure_context`, 5/5. Юнит-тесты бьют по `install_dom` нап�
   `Gyroscope_insecure_context.html`, с которого началась заявка: чтобы тест
   позеленел на не-loopback origin, нужен не только флаг, но и гейт.
 * В `WorkerGlobalScope` свойства нет вовсе (`worker_global_shim` его не
-  заводит) — [BUG-766](BUG-766-OPEN.md), тот же класс, что
+  заводит) — [BUG-766](BUG-766-FIXED.md), тот же класс, что
   [BUG-401](BUG-401-FIXED.md).
 
 ## Связанные

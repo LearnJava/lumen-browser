@@ -7,6 +7,7 @@
 //! Перенесено батчем SPLIT-ST17 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum Content` до конца `impl Resize`) без правок тел.
 
+use crate::style::values::length::{parse_length_q, split_top_level_ws, Length};
 use crate::style::values::scroll::WritingMode;
 
 /// CSS Content L3 — value свойства `content`.
@@ -441,6 +442,9 @@ pub enum WordBreak {
     BreakAll,
     /// `break-word` — legacy для `overflow-wrap: break-word`.
     BreakWord,
+    /// `auto-phrase` (CSS Text L4 §5.1) — фразовые разрывы CJK. Хранится ради
+    /// computed-значения; layout ведёт себя как `normal`.
+    AutoPhrase,
 }
 
 impl WordBreak {
@@ -450,6 +454,7 @@ impl WordBreak {
             "keep-all" => Some(Self::KeepAll),
             "break-all" => Some(Self::BreakAll),
             "break-word" => Some(Self::BreakWord),
+            "auto-phrase" => Some(Self::AutoPhrase),
             _ => None,
         }
     }
@@ -714,3 +719,295 @@ impl BlockStepRound {
     }
 }
 
+/// CSS Gap Decorations L1 §3.2 — `column-rule-break` / `row-rule-break`.
+/// NOT inherited. Initial: `normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuleBreak {
+    /// `none` — one continuous decoration from one end of the gap to the other.
+    None,
+    /// `normal` — container-dependent: grid breaks at "T" intersections only,
+    /// flex behaves as `none`, multicol as `intersection` (columns) / `none` (rows).
+    #[default]
+    Normal,
+    /// `intersection` — decorations start and end at every "T" and "cross".
+    Intersection,
+}
+
+impl RuleBreak {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "normal" => Some(Self::Normal),
+            "intersection" => Some(Self::Intersection),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Normal => "normal",
+            Self::Intersection => "intersection",
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §3.4 — `column-rule-visibility-items` /
+/// `row-rule-visibility-items`. NOT inherited. Initial: `normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuleVisibilityItems {
+    /// `all` — paint in every gap segment, whether or not items are adjacent.
+    All,
+    /// `around` — paint when at least one of the two adjacent areas holds an item.
+    Around,
+    /// `between` — paint only when both adjacent areas hold items.
+    Between,
+    /// `normal` — container-dependent: grid `all`; multicol `between` (columns)
+    /// / `all` (rows).
+    #[default]
+    Normal,
+}
+
+impl RuleVisibilityItems {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "all" => Some(Self::All),
+            "around" => Some(Self::Around),
+            "between" => Some(Self::Between),
+            "normal" => Some(Self::Normal),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Around => "around",
+            Self::Between => "between",
+            Self::Normal => "normal",
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §3.5 — `rule-overlap`: paint order of overlapping
+/// row and column decorations. NOT inherited. Initial: `row-over-column`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuleOverlap {
+    /// `row-over-column` — row decorations are painted above column ones.
+    #[default]
+    RowOverColumn,
+    /// `column-over-row` — column decorations are painted above row ones.
+    ColumnOverRow,
+}
+
+impl RuleOverlap {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "row-over-column" => Some(Self::RowOverColumn),
+            "column-over-row" => Some(Self::ColumnOverRow),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::RowOverColumn => "row-over-column",
+            Self::ColumnOverRow => "column-over-row",
+        }
+    }
+}
+
+/// CSS Gap Decorations L1 §3.3 — `<inset-value>` = `<length-percentage> | overlap-join`:
+/// смещение конца линии щели относительно её «естественного» края.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleInset {
+    /// `<length-percentage>`; процент считается от ширины пересекающей щели
+    /// (на краю контейнера она 0, так что процент там даёт 0).
+    Length(Length),
+    /// `overlap-join` — заходит в стык на полширины пересекающей щели плюс
+    /// полширины её линии; на «колпачковом» конце (cap) равно 0.
+    OverlapJoin,
+}
+
+impl Default for RuleInset {
+    /// Initial value: `0`.
+    fn default() -> Self {
+        Self::Length(Length::Px(0.0))
+    }
+}
+
+impl RuleInset {
+    /// Разбирает один токен; `None` — для всего, что не `<length-percentage>`
+    /// и не `overlap-join`.
+    pub(in crate::style) fn parse(s: &str, is_quirks: bool) -> Option<Self> {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("overlap-join") {
+            return Some(Self::OverlapJoin);
+        }
+        parse_length_q(t, is_quirks).map(Self::Length)
+    }
+
+    /// Сериализация computed-значения (as specified).
+    pub fn to_css(&self) -> String {
+        match self {
+            Self::Length(l) => crate::selector_query::length_to_css(l),
+            Self::OverlapJoin => "overlap-join".into(),
+        }
+    }
+}
+
+/// Восемь смещений концов линий одной оси: `{cap,junction}-{start,end}`
+/// (`column-rule-inset-*` / `row-rule-inset-*`). Не наследуются.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RuleInsets {
+    /// `*-rule-inset-cap-start`.
+    pub cap_start: RuleInset,
+    /// `*-rule-inset-cap-end`.
+    pub cap_end: RuleInset,
+    /// `*-rule-inset-junction-start`.
+    pub junction_start: RuleInset,
+    /// `*-rule-inset-junction-end`.
+    pub junction_end: RuleInset,
+}
+
+impl RuleInsets {
+    /// Слот по порядку `[cap-start, cap-end, junction-start, junction-end]`.
+    pub fn slot_mut(&mut self, i: usize) -> &mut RuleInset {
+        match i {
+            0 => &mut self.cap_start,
+            1 => &mut self.cap_end,
+            2 => &mut self.junction_start,
+            _ => &mut self.junction_end,
+        }
+    }
+
+    /// Слот по порядку `[cap-start, cap-end, junction-start, junction-end]`.
+    pub fn slot(&self, i: usize) -> &RuleInset {
+        match i {
+            0 => &self.cap_start,
+            1 => &self.cap_end,
+            2 => &self.junction_start,
+            _ => &self.junction_end,
+        }
+    }
+}
+
+/// Грамматика свойства из семейства `*-rule-inset*` (CSS Gap Decorations L1 §3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleInsetShape {
+    /// Одно `<inset-value>`, записывается во все перечисленные слоты
+    /// (`*-cap-start`: `[0]`; `*-start`: `[0, 2]`).
+    Single(&'static [usize]),
+    /// `<inset-value> <inset-value>?` в пару слотов `(start, end)`
+    /// (`*-cap`, `*-junction`).
+    Pair(usize, usize),
+    /// `cap-start cap-end? [/ junction-start junction-end?]?` (`*-rule-inset`).
+    Full,
+}
+
+/// Разобранное имя свойства `*-rule-inset*`: на какие оси оно действует и какая у него грамматика.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::style) struct RuleInsetProp {
+    /// Действует на `column_rule_inset`.
+    pub cols: bool,
+    /// Действует на `row_rule_inset`.
+    pub rows: bool,
+    shape: RuleInsetShape,
+}
+
+impl RuleInsetProp {
+    /// `None`, если `prop` не из семейства `column-/row-/rule-inset*`.
+    pub(in crate::style) fn of(prop: &str) -> Option<Self> {
+        let (cols, rows, rest) = if let Some(r) = prop.strip_prefix("column-rule-inset") {
+            (true, false, r)
+        } else if let Some(r) = prop.strip_prefix("row-rule-inset") {
+            (false, true, r)
+        } else {
+            (true, true, prop.strip_prefix("rule-inset")?)
+        };
+        // Слоты: 0 cap-start, 1 cap-end, 2 junction-start, 3 junction-end.
+        let shape = match rest {
+            "" => RuleInsetShape::Full,
+            "-cap-start" => RuleInsetShape::Single(&[0]),
+            "-cap-end" => RuleInsetShape::Single(&[1]),
+            "-junction-start" => RuleInsetShape::Single(&[2]),
+            "-junction-end" => RuleInsetShape::Single(&[3]),
+            "-start" => RuleInsetShape::Single(&[0, 2]),
+            "-end" => RuleInsetShape::Single(&[1, 3]),
+            "-cap" => RuleInsetShape::Pair(0, 1),
+            "-junction" => RuleInsetShape::Pair(2, 3),
+            _ => return None,
+        };
+        Some(Self { cols, rows, shape })
+    }
+
+    /// Слоты `[cap-start, cap-end, junction-start, junction-end]`, которые свойство задаёт.
+    pub(in crate::style) fn slots(&self) -> &'static [usize] {
+        match self.shape {
+            RuleInsetShape::Single(s) => s,
+            RuleInsetShape::Pair(0, _) => &[0, 1],
+            RuleInsetShape::Pair(..) => &[2, 3],
+            RuleInsetShape::Full => &[0, 1, 2, 3],
+        }
+    }
+
+    /// Разбирает значение в пары `(слот, значение)`; `None` — декларация невалидна.
+    pub(in crate::style) fn parse(&self, val: &str, is_quirks: bool) -> Option<Vec<(usize, RuleInset)>> {
+        let list = |s: &str| -> Option<Vec<RuleInset>> {
+            let toks = split_top_level_ws(s.trim());
+            if toks.is_empty() || toks.len() > 2 {
+                return None;
+            }
+            toks.iter().map(|t| RuleInset::parse(t, is_quirks)).collect()
+        };
+        match self.shape {
+            RuleInsetShape::Single(slots) => {
+                let v = list(val).filter(|v| v.len() == 1)?.remove(0);
+                Some(slots.iter().map(|&i| (i, v.clone())).collect())
+            }
+            RuleInsetShape::Pair(a, b) => {
+                let v = list(val)?;
+                let start = v[0].clone();
+                let end = v.get(1).cloned().unwrap_or_else(|| start.clone());
+                Some(vec![(a, start), (b, end)])
+            }
+            RuleInsetShape::Full => {
+                let (cap, junction) = match split_top_level_slash(val) {
+                    (c, Some(j)) => (list(c)?, Some(list(j)?)),
+                    (c, None) => (list(c)?, None),
+                };
+                let cap_start = cap[0].clone();
+                let cap_end = cap.get(1).cloned().unwrap_or_else(|| cap_start.clone());
+                let (js, je) = match junction {
+                    Some(j) => {
+                        let s = j[0].clone();
+                        let e = j.get(1).cloned().unwrap_or_else(|| s.clone());
+                        (s, e)
+                    }
+                    None => (cap_start.clone(), cap_end.clone()),
+                };
+                Some(vec![(0, cap_start), (1, cap_end), (2, js), (3, je)])
+            }
+        }
+    }
+}
+
+/// Делит `s` по первому `/` вне скобок (`calc(1px / 2)` не режется).
+fn split_top_level_slash(s: &str) -> (&str, Option<&str>) {
+    let mut depth = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            '/' if depth == 0 => return (&s[..i], Some(&s[i + 1..])),
+            _ => {}
+        }
+    }
+    (s, None)
+}

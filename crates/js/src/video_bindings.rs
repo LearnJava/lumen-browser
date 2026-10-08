@@ -833,7 +833,7 @@ tt.length === 1
                 None,
                 None,
                 None,
-                false,
+                false, None,
             )
             .unwrap();
             rt
@@ -1219,7 +1219,7 @@ tt.length === 1
                 None,
                 None,
                 None,
-                false,
+                false, None,
             )
             .unwrap();
             rt
@@ -1357,7 +1357,7 @@ tt.length === 1
 
         fn rt_with_dom() -> V8JsRuntime {
             let rt = V8JsRuntime::new().unwrap();
-            rt.install_dom(empty_doc(), "", None, None, None, None, None, None, None, None, None, false)
+            rt.install_dom(empty_doc(), "", None, None, None, None, None, None, None, None, None, false, None)
                 .unwrap();
             rt
         }
@@ -1655,7 +1655,7 @@ tt.length === 1
                 None,
                 None,
                 None,
-                false,
+                false, None,
             )
             .unwrap();
             rt

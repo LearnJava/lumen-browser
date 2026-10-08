@@ -16,7 +16,7 @@ use lumen_dom::DocumentMode;
 
 fn runtime_with(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(
         doc,
         "https://example.com/page.html",
@@ -29,7 +29,7 @@ fn runtime_with(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
         None,
         None,
         None,
-        false,
+        false, None,
     )
     .unwrap();
     rt

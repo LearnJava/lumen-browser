@@ -15,7 +15,7 @@ use crate::*;
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
+    pub(crate) fn handle_key(&mut self, event_loop: &MainHandle<'_>, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
             return;
         }
@@ -572,6 +572,16 @@ impl Lumen {
             if moved {
                 self.request_redraw();
             }
+            return;
+        }
+
+        // Ctrl+C over a page-text selection copies it (minus `user-select:
+        // none` text). A focused typeable field keeps its own handling.
+        if code == KeyCode::KeyC
+            && self.modifiers == ModifiersState::CONTROL
+            && self.focused_node.is_none_or(|n| self.typeable_field(n).is_none())
+            && self.copy_page_selection()
+        {
             return;
         }
 

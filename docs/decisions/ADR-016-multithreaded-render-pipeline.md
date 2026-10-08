@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — thread table amended by [ADR-032](ADR-032-thin-main-thread-scroll-off-ui.md) (chrome UI state moves from Main to a browser thread)
 
 ## Date
 
@@ -41,7 +41,7 @@ User decision 2026-07-09: the transition to a multithreaded pipeline is
 ## Decision
 
 Adopt a staged multithreaded render pipeline built on message passing with
-immutable snapshots. Full working plan: `docs/tasks/ph3-render-multithreading.md`.
+immutable snapshots. Full working plan: `git show 21a414fe5^:docs/tasks/ph3-render-multithreading.md` (brief removed with the closed task).
 
 **Target thread model:**
 

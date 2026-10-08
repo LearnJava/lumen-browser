@@ -24,6 +24,8 @@ pub(super) fn v8_thread_main(
     // S12b-23: dynamic `import()` is resolved by an isolate-wide host hook
     // (static imports go through the callback passed to `instantiate_module`).
     crate::v8_esm::install_dynamic_import_hook(&mut isolate);
+    // BUG-753 срез 3: `import.meta` (url/resolve/env) is filled by a host hook.
+    crate::v8_esm::install_import_meta_hook(&mut isolate);
     // BUG-716: unhandledrejection/rejectionhandled dispatch, also isolate-wide.
     install_promise_reject_hook(&mut isolate);
     // Create the context inside a short-lived HandleScope so the scope's borrow
@@ -42,6 +44,8 @@ pub(super) fn v8_thread_main(
         // for anything else — this is the baseline `suspend()` diffs against.
         let baseline = {
             let ctx_scope = &mut v8::ContextScope::new(scope, ctx);
+            // BUG-753 срез 2: every context owns an internal container from birth.
+            let _ = crate::internal_globals::install_container(ctx_scope, ctx);
             let global = ctx.global(ctx_scope);
             let mut names = std::collections::HashSet::new();
             if let Some(own_props) = global.get_own_property_names(ctx_scope, Default::default())
@@ -73,12 +77,20 @@ pub(super) fn v8_thread_main(
     // callback itself (`_lumen_tt_get_compliant_script_for_codegen`), same
     // division as every other sink this task closed.
     codegen_hook::install(&mut inner.isolate, &inner.context);
+    // BUG-935 срез 53: `LUMEN_JS_STALL_SAMPLE_MS` — стек долгой JS-задачи в stderr.
+    let stall_sampler = super::stall_sampler::StallSampler::start(&mut inner.isolate, &inner.context);
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             V8Command::Run(job) => {
+                if let Some(s) = &stall_sampler {
+                    s.job_started();
+                }
                 job(&mut inner);
+                if let Some(s) = &stall_sampler {
+                    s.job_finished();
+                }
                 // BUG-918: end of the job = end of the microtask checkpoint,
                 // which is where HTML LS §8.1.7.3 step 4 notifies about
                 // rejected promises. Every JS entry point on this runtime

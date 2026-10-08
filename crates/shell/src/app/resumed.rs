@@ -8,7 +8,7 @@
 use crate::*;
 
 impl Lumen {
-    pub(crate) fn on_resumed(&mut self, event_loop: &ActiveEventLoop) {
+    pub(crate) fn on_resumed(&mut self, event_loop: &MainHandle<'_>) {
         let (win_w, win_h) = if let Some((w, h)) = self.viewport_override {
             // `--viewport` (DEVX-1) wins over both defaults below — lets
             // `--deterministic` be combined with graphic_tests' fixed 1024×720
@@ -25,7 +25,12 @@ impl Lumen {
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))
             .with_position(LogicalPosition::new(0, 0))
-            .with_maximized(self.maximized);
+            .with_maximized(self.maximized)
+            // PERF-10: `--no-paint` — окно видимое (скрытое не получает
+            // `RedrawRequested`, а `load` у картинок и часть rAF-работы живёт
+            // только в нём: `relevant-mutations.html` висел в TIMEOUT), но не
+            // активируется, чтобы не уводить фокус.
+            .with_active(!no_paint_backend::no_paint_enabled());
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -99,7 +104,8 @@ impl Lumen {
         // "срез" write-ups in BUG-274-OPEN.md.
         let early_stream = std::env::var_os("LUMEN_NO_EARLY_STREAM").is_none();
         if early_stream {
-            self.start_streaming_load(self.load_generation);
+            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.start_streaming_load(tab_id, self.load_generation);
             if lumen_paint::frame_log_enabled()
                 && let Some(ms) = bench_frames::since_process_start_ms()
             {
@@ -107,11 +113,27 @@ impl Lumen {
             }
         }
 
-        let mut renderer = match backend_factory::create_backend(
-            window.clone(),
-            INTER_FONT.to_vec(),
-            self.target_color_space(),
-        ) {
+        // PERF-10: без растеризации GPU-бэкенд не создаётся вовсе — layout берёт
+        // размер вьюпорта и DPR у `NoPaintBackend`.
+        let backend_result: Result<Box<dyn lumen_paint::RenderBackend>, Box<dyn std::error::Error>> =
+            if no_paint_backend::no_paint_enabled() {
+                let size = window.inner_size();
+                Ok(Box::new(no_paint_backend::NoPaintBackend::new(
+                    size.width,
+                    size.height,
+                    window.scale_factor(),
+                )))
+            } else {
+                // ADR-032, срез 3: ручка рендер-потока, оставшаяся от прежнего
+                // окна, не должна достаться этому.
+                let _ = render_thread::take_last_link();
+                backend_factory::create_backend(
+                    window.clone(),
+                    INTER_FONT.to_vec(),
+                    self.target_color_space(),
+                )
+            };
+        let mut renderer = match backend_result {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");
@@ -137,6 +159,7 @@ impl Lumen {
         }
 
         self.renderer = Some(renderer);
+        self.attach_scroll_route();
         // CC-4: first chrome layout pass, now that the renderer knows the
         // window's initial size.
         self.relayout_chrome_host();
@@ -149,7 +172,8 @@ impl Lumen {
         }
 
         if !early_stream {
-            self.start_streaming_load(self.load_generation);
+            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.start_streaming_load(tab_id, self.load_generation);
             if lumen_paint::frame_log_enabled()
                 && let Some(ms) = bench_frames::since_process_start_ms()
             {

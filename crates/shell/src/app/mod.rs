@@ -20,7 +20,7 @@ pub(crate) mod window_event;
 
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.on_resumed(event_loop);
+        self.on_resumed(&MainHandle::Direct(event_loop));
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
@@ -28,6 +28,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.on_exiting();
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.on_about_to_wait(&MainHandle::Direct(event_loop));
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        self.on_device_event(event);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.on_window_event(&MainHandle::Direct(event_loop), window_id, event);
+    }
+}
+
+impl Lumen {
+    pub(crate) fn on_exiting(&mut self) {
         // PERF-15: a visit shorter than the recording window is saved too.
         crate::site_memory::finish_visit();
         // M0.1 (ADR-016): финальная сессионная сводка времён кадров. Печатается
@@ -39,10 +67,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(summary) = self.engine_stats.summary() {
             eprintln!("{} (session exit)", summary.display_with("ENGINE_SUMMARY"));
         }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.on_about_to_wait(event_loop);
+    
     }
 
     /// Handle raw device events — used for Pointer Lock raw mouse delta.
@@ -50,12 +75,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     /// W3C Pointer Lock L2 §6.3: when locked, `DeviceEvent::MouseMotion` delivers
     /// relative mouse movement without OS acceleration or clipping.  Shell dispatches
     /// `mousemove`/`pointermove` with `movementX`/`movementY` to the locked element.
-    fn device_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _device_id: DeviceId,
-        event: DeviceEvent,
-    ) {
+    pub(crate) fn on_device_event(&mut self, event: DeviceEvent) {
         #[cfg(feature = "v8")]
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             && lumen_js::pointer_lock::is_pointer_locked()
@@ -86,11 +106,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // прежнему `ctx.eval_js(&script)` (script построен до маршрутизации).
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
+    
     }
 
-    fn window_event(
+    pub(crate) fn on_window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &MainHandle<'_>,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -366,5 +387,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             WindowEvent::RedrawRequested => self.on_redraw_requested(),
             _ => {}
         }
+    
     }
 }

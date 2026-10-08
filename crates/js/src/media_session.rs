@@ -323,7 +323,7 @@ const MEDIA_SESSION_SHIM: &str = r#"(function() {
   // if nothing changed since the last call (same _updateSeq).
   // Shell (P3) polls this in about_to_wait to forward metadata to OS.
   var _lastSeqSeen = -1;
-  globalThis._lumen_take_media_session_update = function() {
+  __lumen_C._lumen_take_media_session_update = function() {
     if (_updateSeq === _lastSeqSeen) return null;
     _lastSeqSeen = _updateSeq;
     return {
@@ -345,7 +345,7 @@ const MEDIA_SESSION_SHIM: &str = r#"(function() {
 
   // Deliver a media session action from the OS (e.g. OS media keys).
   // Shell calls _lumen_fire_media_action('play') etc. to trigger handlers.
-  globalThis._lumen_fire_media_action = function(action, details) {
+  __lumen_C._lumen_fire_media_action = function(action, details) {
     var handler = _actionHandlers[action];
     if (typeof handler === 'function') {
       try { handler(details || {}); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
@@ -509,7 +509,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-            rt.eval("globalThis._lumen_fire_media_action('play');")
+            rt.eval("__lumen_C._lumen_fire_media_action('play');")
                 .unwrap();
             let played = rt.eval("globalThis._played").unwrap();
             assert_eq!(played, JsValue::Bool(true));
@@ -526,7 +526,7 @@ mod tests {
                   globalThis._pausedCount++;
                 });
                 navigator.mediaSession.setActionHandler('pause', null);
-                globalThis._lumen_fire_media_action('pause');
+                __lumen_C._lumen_fire_media_action('pause');
                 "#,
             )
             .unwrap();
@@ -561,7 +561,7 @@ mod tests {
             )
             .unwrap();
             let has_update = rt
-                .eval("globalThis._lumen_take_media_session_update() !== null")
+                .eval("__lumen_C._lumen_take_media_session_update() !== null")
                 .unwrap();
             assert_eq!(has_update, JsValue::Bool(true));
         });
@@ -571,11 +571,11 @@ mod tests {
     fn take_media_session_update_null_when_no_change() {
         with_media_session(|rt| {
             // Prime: consume first update.
-            rt.eval("globalThis._lumen_take_media_session_update();")
+            rt.eval("__lumen_C._lumen_take_media_session_update();")
                 .unwrap();
             // Second call with no change should return null.
             let null_update = rt
-                .eval("globalThis._lumen_take_media_session_update() === null")
+                .eval("__lumen_C._lumen_take_media_session_update() === null")
                 .unwrap();
             assert_eq!(null_update, JsValue::Bool(true));
         });
@@ -693,7 +693,7 @@ mod tests {
             None,
             None,
             None,
-            false,
+            false, None,
         )
         .unwrap();
         assert_all_true(
@@ -719,7 +719,7 @@ mod tests {
             rt.eval("navigator.mediaSession.setCameraActive(true);")
                 .unwrap();
             let has_update = rt
-                .eval("globalThis._lumen_take_media_session_update() !== null")
+                .eval("__lumen_C._lumen_take_media_session_update() !== null")
                 .unwrap();
             assert_eq!(has_update, JsValue::Bool(true));
         });

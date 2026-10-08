@@ -9,6 +9,7 @@ use lumen_layout::{
     ObjectPosition,
 };
 use lumen_layout::style::TextOrientation;
+use crate::border_bevel::paint_bevel_sides;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
@@ -273,6 +274,8 @@ pub(crate) fn rasterize_cpu_with_fonts(
     // документа — поэтому внутри слоя они пересчитываются обратной матрицей,
     // а на `PopTransform` восстанавливаются отсюда.
     let mut clip_saves: Vec<Vec<Rect>> = Vec::new();
+    // One flag per open `PushScrollLayer`: did it open a translated layer (non-zero scroll).
+    let mut scroll_layer_shifted: Vec<bool> = Vec::new();
 
     for cmd in commands {
         match cmd {
@@ -417,17 +420,48 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 }
             }
             // CSS Overflow L3 §3.2 — `overflow: scroll/auto` (and the `auto`
-            // axis a mismatched `overflow` pair coerces to). Treated as a clip
-            // to `clip_rect`; the scroll translation is not modelled, matching
-            // the CPU path's handling of `PushTransform`. Offscreen snapshots
-            // render a freshly-loaded page, so `scroll_x`/`scroll_y` are always
-            // 0 and the clip is exact.
-            DisplayCommand::PushScrollLayer { clip_rect: cr, .. } => {
+            // axis a mismatched `overflow` pair coerces to): a clip to `clip_rect`
+            // plus a `(-scroll_x, -scroll_y)` translation of the content. A freshly
+            // loaded page has both offsets at 0 and this is a plain clip; a page
+            // script that scrolled a container (`el.scrollBy()` before the
+            // snapshot) makes the content an off-screen group translated at
+            // composite time, exactly like `PushTransform` — the clip is mapped
+            // through the inverse so it still gates the pre-translation draws.
+            DisplayCommand::PushScrollLayer { clip_rect: cr, scroll_x, scroll_y, .. } => {
                 clip_stack.push(*cr);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
+                let shifted = *scroll_x != 0.0 || *scroll_y != 0.0;
+                scroll_layer_shifted.push(shifted);
+                if shifted {
+                    let matrix = lumen_layout::Mat4::translation_2d(-*scroll_x, -*scroll_y);
+                    let [a, b, c, d, e, f] = mat4_to_2d_affine(&matrix);
+                    let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
+                    let layer = tiny_skia::Pixmap::new(width, height)
+                        .ok_or("Failed to create scroll layer")?;
+                    layers.push(CpuLayer::new(layer));
+                    layer_ops.push(LayerComposite::Transform(t));
+                    clip_saves.push(clip_stack.clone());
+                    if let Some(active) = clip_rect
+                        && let Some(inv) = matrix.invert_2d_affine()
+                    {
+                        clip_stack = vec![transform_rect_bbox(active, &inv)];
+                        clip_rect = clip_intersection(&clip_stack);
+                        clip_mask = build_clip_mask(width, height, clip_rect);
+                    }
+                }
             }
             DisplayCommand::PopScrollLayer => {
+                if scroll_layer_shifted.pop() == Some(true)
+                    && let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
+                {
+                    if let Some(saved) = clip_saves.pop() {
+                        clip_stack = saved;
+                    }
+                    if let Some(dst) = layers.last_mut() {
+                        close_layer(dst, &top, &op);
+                    }
+                }
                 clip_stack.pop();
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
@@ -1831,8 +1865,19 @@ fn rasterize_fill_rect(
         blend_mode: tiny_skia::BlendMode::SourceOver,
     };
 
-    let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
-        .ok_or("Invalid rect dimensions")?;
+    // BUG-1249: pixel snapping рёбер бокса (CSS Painting) — иначе дробная
+    // граница двух соседей даёт AA-шов, через который виден фон родителя.
+    // Рёбра округляются, а не ширина, поэтому соседи делят одно ребро.
+    let (x0, y0) = (rect.x.round(), rect.y.round());
+    let (x1, y1) = ((rect.x + rect.width).round(), (rect.y + rect.height).round());
+    if x1 <= x0 || y1 <= y0 {
+        // Бокс тоньше пикселя: рисуем исходный прямоугольник как есть.
+        let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+            .ok_or("Invalid rect dimensions")?;
+        pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), clip);
+        return Ok(());
+    }
+    let skia_rect = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1).ok_or("Invalid rect dimensions")?;
 
     pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), clip);
     Ok(())
@@ -1882,6 +1927,14 @@ fn rasterize_fill_rounded_rect(
     Ok(())
 }
 
+/// Краи бокса рамки по целым пикселям, ничья — вверх (Chromium `PixelSnappedIntRect`):
+/// отличается от «пиксель, чей центр внутри» только на ровно дробной `.5` границе.
+fn snap_border_box(rect: Rect) -> Rect {
+    let snap = |v: f32| (v + 0.5).floor();
+    let (x0, y0) = (snap(rect.x), snap(rect.y));
+    Rect::new(x0, y0, snap(rect.x + rect.width) - x0, snap(rect.y + rect.height) - y0)
+}
+
 fn rasterize_draw_border(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
@@ -1909,7 +1962,20 @@ fn rasterize_draw_border(
     // tiny-skia's hairline_aa::fill_dot8 debug_assert for sub-pixel rects (BUG-052).
     let [top_w, right_w, bottom_w, left_w] = widths;
     let [top_c, right_c, bottom_c, left_c] = colors;
-    let [top_s, right_s, bottom_s, left_s] = styles;
+    // Рамка рисуется без сглаживания: tiny-skia берёт пиксель, чей центр лежит в
+    // `[край, край)`, и на ровно дробной `.5` границе (`top: 212.5px`) округляет вниз, а
+    // Chromium (`PixelSnappedIntRect`) — вверх; полосы `groove`/`ridge` из `border_bevel`
+    // уже округляют вверх, и одна и та же рамка расходилась со своим `solid`-соседом.
+    let snapped = snap_border_box(*rect);
+    let rect = &snapped;
+    // groove/ridge/inset/outset — общая геометрия `border_bevel` (две полосы / один оттенок
+    // на сторону, стыки по диагонали); остальные стороны идут обычным путём ниже.
+    let styles = paint_bevel_sides(*rect, *widths, *colors, *styles, |piece, color| {
+        if let Some(r) = tiny_skia::Rect::from_xywh(piece.x, piece.y, piece.width, piece.height) {
+            pixmap.fill_rect(r, &border_paint(color), tiny_skia::Transform::identity(), clip);
+        }
+    });
+    let [top_s, right_s, bottom_s, left_s] = &styles;
 
     draw_border_side_h(pixmap, rect.x, rect.y, rect.width, *top_w, *top_c, *top_s, clip)?;
     draw_border_side_v(pixmap, rect.x + rect.width - right_w, rect.y, *right_w, rect.height, *right_c, *right_s, clip)?;
@@ -2923,7 +2989,7 @@ fn rasterize_text_rotated(
         return Ok(None);
     };
 
-    let transform = tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y);
+    let transform = tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x + rect.width, rect.y);
     let clip_mask = build_clip_mask(width, height, clip.copied());
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
@@ -2932,7 +2998,7 @@ fn rasterize_text_rotated(
     };
     pixmap.draw_pixmap(0, 0, local.as_ref(), &paint, transform, clip_mask.as_ref());
 
-    let rotate = |x: f32, y: f32| (-y + rect.x, x + rect.y);
+    let rotate = |x: f32, y: f32| (-y + rect.x + rect.width, x + rect.y);
     let corners = [rotate(l, t), rotate(r, t), rotate(r, b), rotate(l, b)];
     let (mut dl, mut dt, mut dr, mut db) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
     for (x, y) in corners {
@@ -3075,9 +3141,9 @@ fn rasterize_text_mixed(
                 font_style, font_features, font_family, font_provider, None,
             )? {
                 let transform =
-                    tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y + y_cursor);
+                    tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x + rect.width, rect.y + y_cursor);
                 pixmap.draw_pixmap(0, 0, local.as_ref(), &paint, transform, clip_mask.as_ref());
-                let rotate = |x: f32, y: f32| (-y + rect.x, x + rect.y + y_cursor);
+                let rotate = |x: f32, y: f32| (-y + rect.x + rect.width, x + rect.y + y_cursor);
                 let corners = [rotate(l, t), rotate(r, t), rotate(r, b), rotate(l, b)];
                 let (mut dl, mut dt, mut dr, mut db) =
                     (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -3430,6 +3496,41 @@ mod tests {
     fn px(img: &Image, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * img.width + x) * 4) as usize;
         (img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3])
+    }
+
+    /// `PushScrollLayer` with a non-zero offset shifts the content up by
+    /// `scroll_y` inside the clip: a 100px-tall grey block above a green one
+    /// ends at y=90 after a 10px scroll, and nothing leaks outside the clip.
+    #[test]
+    fn scroll_layer_translates_content_inside_clip() {
+        let grey = Color { r: 128, g: 128, b: 128, a: 255 };
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 40.0, 60.0), scroll_x: 0.0, scroll_y: 10.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
+            DisplayCommand::FillRect { rect: rect(0.0, 40.0, 40.0, 100.0), color: green },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(64, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 5), (128, 128, 128, 255), "grey still covers y<30");
+        assert_eq!(px(&img, 10, 25), (128, 128, 128, 255), "grey ends at 40-10=30");
+        assert_eq!(px(&img, 10, 35), (0, 128, 0, 255), "green starts at 30");
+        assert_eq!(px(&img, 10, 65), (255, 255, 255, 255), "clip stops at y=60");
+        assert_eq!(px(&img, 50, 35), (255, 255, 255, 255), "clip stops at x=40");
+    }
+
+    /// With a zero offset the scroll layer is a plain clip (no extra layer).
+    #[test]
+    fn scroll_layer_at_origin_is_plain_clip() {
+        let grey = Color { r: 128, g: 128, b: 128, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 20.0, 20.0), scroll_x: 0.0, scroll_y: 0.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 10), (128, 128, 128, 255));
+        assert_eq!(px(&img, 30, 30), (255, 255, 255, 255));
     }
 
     /// `DrawSvgPath` fills the tessellated triangle interior with the solid
@@ -3854,6 +3955,36 @@ mod tests {
         assert!(s_h > s_w, "sideways run should be taller than wide (w={s_w} h={s_h})");
     }
 
+    /// BUG-553, срез 62: a rotated run lives inside its column box. The rotation
+    /// maps the glyph top onto the column's RIGHT edge (`rect.x + rect.width`) and
+    /// the body grows leftwards; anchored at `rect.x` the whole run fell one
+    /// line-height to the left of the box (`vertical-lr` text outside its block).
+    #[test]
+    fn draw_text_sideways_ink_stays_inside_the_column_box() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: rect(60.0, 10.0, 40.0, 100.0),
+            text: "Hi".to_string(),
+            font_size: 32.0,
+            color: blue,
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: Some(TextOrientation::Sideways),
+        }];
+        let img = rasterize_cpu(160, 160, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let (l, t, r, b) = ink_bbox_blue(&img);
+        assert!(r > l && b > t, "sideways run produced no ink");
+        assert!(l >= 60 && r <= 100, "ink x-range {l}..{r} must lie inside the column 60..100");
+        assert!(t >= 10, "run must start at the column top, got y={t}");
+    }
+
     fn ink_bbox_blue(img: &Image) -> (u32, u32, u32, u32) {
         let (mut l, mut t, mut r, mut b) = (img.width, img.height, 0u32, 0u32);
         for y in 0..img.height {
@@ -4265,6 +4396,23 @@ mod tests {
         ];
         let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 32, 32), (255, 255, 255, 255), "fully transparent group");
+    }
+
+    /// BUG-1249: соседние боксы с общей дробной границей не оставляют шва —
+    /// фон родителя не просвечивает.
+    #[test]
+    fn adjacent_fractional_fills_leave_no_seam() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 80.0), color: red },
+            DisplayCommand::FillRect { rect: rect(0.0, 25.72, 20.0, 25.0), color: green },
+            DisplayCommand::FillRect { rect: rect(0.0, 50.72, 20.0, 25.0), color: green },
+        ];
+        let img = rasterize_cpu(32, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        for y in 27..75 {
+            assert_eq!(px(&img, 10, y), (0, 128, 0, 255), "row {y}");
+        }
     }
 
     /// Group opacity fades the *whole* subtree by one alpha: two sibling fills in
@@ -5079,6 +5227,24 @@ mod tests {
     }
 
     /// Dashed border: `BorderStyle::None` sides render nothing (zero colored pixels).
+    /// `groove` — две полосы разных оттенков (Edge: `border: 6px groove #808080` =
+    /// `#2c2c2c` ×3, затем `#d4d4d4` ×3), а не сплошная линия.
+    #[test]
+    fn draw_border_groove_paints_two_shades() {
+        let grey = Color { r: 0x80, g: 0x80, b: 0x80, a: 255 };
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(2.0, 2.0, 40.0, 40.0),
+            widths: [6.0; 4],
+            colors: [grey; 4],
+            styles: [lumen_layout::BorderStyle::Groove; 4],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(44, 44, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let r = |y: u32| px(&img, 22, y).0;
+        assert_eq!([r(2), r(4), r(5), r(7)], [0x2c, 0x2c, 0xd4, 0xd4]);
+        assert_eq!(px(&img, 22, 20), (255, 255, 255, 255), "внутренность не закрашена");
+    }
+
     #[test]
     fn draw_border_none_style_renders_nothing() {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };

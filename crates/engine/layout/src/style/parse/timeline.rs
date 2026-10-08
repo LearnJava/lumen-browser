@@ -10,7 +10,7 @@
 use crate::scroll_timeline::ScrollAxis;
 use crate::style::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, ComputedStyle,
-    IterationCount, TimingFunction, split_top_level_commas,
+    IterationCount, TimingFunction, TransitionBehavior, split_top_level_commas,
 };
 
 /// Parse `scroll-timeline-axis` / `view-timeline-axis` keyword.
@@ -328,6 +328,7 @@ pub(in crate::style) fn apply_transition_shorthand(style: &mut ComputedStyle, va
     let mut durations: Vec<f32> = Vec::new();
     let mut timings: Vec<TimingFunction> = Vec::new();
     let mut delays: Vec<f32> = Vec::new();
+    let mut behaviors: Vec<TransitionBehavior> = Vec::new();
 
     for layer in split_top_level_commas(val) {
         let layer = layer.trim();
@@ -339,12 +340,14 @@ pub(in crate::style) fn apply_transition_shorthand(style: &mut ComputedStyle, va
         durations.push(parsed.duration);
         timings.push(parsed.timing);
         delays.push(parsed.delay);
+        behaviors.push(parsed.behavior);
     }
 
     style.transition_properties = props;
     style.transition_durations = durations;
     style.transition_timing_functions = timings;
     style.transition_delays = delays;
+    style.transition_behaviors = behaviors;
 }
 
 /// Результат парсинга одного `<single-transition>` слоя. Все 4 поля
@@ -354,6 +357,7 @@ struct SingleTransition {
     duration: f32,
     timing: TimingFunction,
     delay: f32,
+    behavior: TransitionBehavior,
 }
 
 impl Default for SingleTransition {
@@ -363,6 +367,7 @@ impl Default for SingleTransition {
             duration: 0.0,
             timing: TimingFunction::default(),
             delay: 0.0,
+            behavior: TransitionBehavior::Normal,
         }
     }
 }
@@ -376,8 +381,18 @@ fn parse_single_transition(s: &str) -> SingleTransition {
     let mut delay_set = false;
     let mut timing_set = false;
     let mut property_set = false;
+    let mut behavior_set = false;
 
     for tok in tokenize_with_parens(s) {
+        // CSS Transitions L2 §3.2: `<transition-behavior-value>` — ключевые слова
+        // `normal` / `allow-discrete` как пятый компонент слоя.
+        if !behavior_set
+            && let Some(b) = TransitionBehavior::parse(&tok)
+        {
+            out.behavior = b;
+            behavior_set = true;
+            continue;
+        }
         if let Some(t) = parse_time_seconds(&tok) {
             if !duration_set {
                 out.duration = t;
@@ -445,6 +460,17 @@ pub(in crate::style) fn parse_time_list(s: &str) -> Vec<f32> {
         .filter(|p| !p.is_empty())
         .filter_map(parse_time_seconds)
         .collect()
+}
+
+/// Interest Invokers — одно значение `interest-delay-start`/`-end`:
+/// `normal | <time [0s,∞]>`. Внешний `None` — невалидное значение (объявление
+/// отбрасывается), `Some(None)` — `normal`, `Some(Some(s))` — секунды.
+pub(in crate::style) fn parse_interest_delay(s: &str) -> Option<Option<f32>> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("normal") {
+        return Some(None);
+    }
+    parse_time_seconds(s).filter(|v| v.is_finite() && *v >= 0.0).map(Some)
 }
 
 fn parse_time_seconds(s: &str) -> Option<f32> {

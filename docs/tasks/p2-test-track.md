@@ -594,7 +594,7 @@ unexpected pass и потребует новой перегенерации.
 `global-object-implicit-this-value-cross-realm.html` всегда TIMEOUT, но число доехавших
 подтестов плавает (три изолированных прогона: 0/6, 0/6, 1/6), поэтому один гейт
 одновременно рапортует регрессию (`expected NOTRUN, got TIMEOUT`) и неожиданный PASS на
-двух соседних подтестах одного файла. Заведено [BUG-999](../../bugs/BUG-999-OPEN.md);
+двух соседних подтестах одного файла. Заведено [BUG-999](../../bugs/BUG-999-FIXED.md);
 методический вывод шире одной категории — **подтестовый baseline теста, который всегда
 TIMEOUT, невоспроизводим в принципе**, и такую категорию надо ловить до коммита, а не
 после.
@@ -628,13 +628,13 @@ WPT-VENDOR − 199), из них 11 покрыть нечем, ещё 21 (дол
 
 **Три категории оказались невоспроизводимы, а не мертвы**, и вместо перегенерации откачены
 `git checkout --` в состояние до среза 6 — заведены отдельные баги (тот же класс, что
-[BUG-999](../../bugs/BUG-999-OPEN.md)):
-- `resize-observer` — [BUG-1003](../../bugs/BUG-1003-OPEN.md): подтест `Removing 2nd
+[BUG-999](../../bugs/BUG-999-FIXED.md)):
+- `resize-observer` — [BUG-1003](../../bugs/BUG-1003-FIXED.md): подтест `Removing 2nd
   fragment` (`fragments.html`) дал FAIL в 3 из 4 наблюдений, PASS — только в том прогоне,
   что попал бы в baseline; `notify.html` один раз дал `ERROR` вместо `OK`.
-- `close-watcher` — [BUG-1004](../../bugs/BUG-1004-OPEN.md): два `--check`-прогона подряд
+- `close-watcher` — [BUG-1004](../../bugs/BUG-1004-CANNOT-REPRODUCE.md): два `--check`-прогона подряд
   без изменений между ними дали РАЗНЫЕ наборы регрессий внутри `user-activation/*`.
-- `input-events` — [BUG-1005](../../bugs/BUG-1005-OPEN.md): перегенерация прошла штатно, но
+- `input-events` — [BUG-1005](../../bugs/BUG-1005-FIXED.md): перегенерация прошла штатно, но
   немедленный повторный `--check` дал 159 регрессий, почти все в одном файле
   (`input-events-get-target-ranges-deleting-in-list-items.tentative.html`, десятки
   `<ol>`/`<li>`-вложенных query-вариантов) — масштаб больше единичной гонки, похоже на
@@ -1105,7 +1105,7 @@ event before requestAnimationFrame») — гипотеза «баг только
 разные комбинации PASS/FAIL для этой пары, но всегда «один PASS, один FAIL»
 — настоящая, воспроизводимая гонка в движке между одним из двух
 animation-событий и постановкой rAF-колбэка в очередь, заведена как
-[BUG-1041](../../bugs/BUG-1041-OPEN.md) (номер BUG-1039 занят параллельно
+[BUG-1041](../../bugs/BUG-1041-FIXED.md) (номер BUG-1039 занят параллельно
 найденным багом graphic_tests-тулинга — P1, LAYOUT-2 паинт срез 10).
 
 **Контракт гейта для intermittent-ожиданий:** wptrunner переносит первый
@@ -1135,7 +1135,7 @@ MISSING и сохранение пропуска невыразимых имён
 слова аппроксимированы грубыми квадратичными формулами вместо контрольных точек
 спеки, и `getComputedStyle().transform` сериализует накопленный до тождественного
 результат как `none` вместо матричной формы — заведены как
-[BUG-1040](../../bugs/BUG-1040-OPEN.md), `expected: FAIL` сужен. Контрольный
+[BUG-1040](../../bugs/BUG-1040-FIXED.md), `expected: FAIL` сужен. Контрольный
 `--check` после фиксации baseline — 0 регрессий, 1 known-intermittent-pass (тот же
 BUG-1041, ожидаемо). Baseline 239 → 240 (мерж среза 32 не добавил категорий,
 только уточнил ожидания внутри уже посчитанной `web-animations`).
@@ -1272,12 +1272,12 @@ known-intermittent из срезов 33/35 не понадобилось — в 
 Главный результат прогона — не baseline, а то, во что категория упирается
 (из 9689 сабтестов 8380 не пройдены — две причины дают почти всё):
 
-- **[BUG-1064](../../bugs/BUG-1064-OPEN.md)** — `shadow-dom/declarative/gethtml.html`: 6528 из
+- **[BUG-1064](../../bugs/BUG-1064-FIXED.md)** — `shadow-dom/declarative/gethtml.html`: 6528 из
   8380 непройденных (~78 %) в одном файле. `getHTML({serializableShadowRoots|shadowRoots})` возвращает
   `''` вместо `<template shadowrootmode=…>` (заглушка «Phase 0» в шиме), а
   `ShadowRoot.serializable`/`clonable`/`delegatesFocus`/`slotAssignment` равны `undefined`.
   Файл без `test_driver` — чистая проба движка.
-- **[BUG-1063](../../bugs/BUG-1063-OPEN.md)** — 51 из 63 файлов `TEST_END: ERROR` падают на
+- **[BUG-1063](../../bugs/BUG-1063-FIXED.md)** — 51 из 63 файлов `TEST_END: ERROR` падают на
   `:root > *|body:nth-child(2) is not a valid selector`. Селектор строит вендоренный
   `testdriver-extra.js::get_selector` для любого элемента без `id` (`*|<localName>:nth-child(n)`),
   а движок отвергает namespace-префикс `*|` целиком (`*|body`, `*|*`, `|body`). Идиома
@@ -1398,7 +1398,7 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 - **TIMEOUT/NOTRUN почти везде — [BUG-948](../../bugs/BUG-948-FIXED.md):** `long-animation-frame` намеренно
   нет в `supportedEntryTypes`, и ни одна `PerformanceLongAnimationFrameTiming` не производится, поэтому
   `PerformanceObserver`-тесты ждут запись, которая не придёт. Отдельного бага не заводилось.
-- **`ERROR` на `*|body:nth-child(2)` — [BUG-1063](../../bugs/BUG-1063-OPEN.md):** в логе прогона это
+- **`ERROR` на `*|body:nth-child(2)` — [BUG-1063](../../bugs/BUG-1063-FIXED.md):** в логе прогона это
   `*|body`, `*|iframe`, `*|button` от `test_driver.click`/`send_keys` (тот же `get_selector`,
   что в срезе 36) — файлы, зовущие `test_driver`, гаснут до первого утверждения. Сколько именно из 7
   `ERROR` — этот класс, по файлам не сверялось.
@@ -1422,7 +1422,7 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 **Выбор кандидата.** Из оставшихся малых первым проверен `appmanifest` (102 файла, 0 предикторных хитов):
 `--update-expected` за 5 с — `no tests selected`, единственные 4 файла с `testharness.js` — `*-manual.html`.
 Baseline получить нечем (в список «покрыть нечем» к `annotation-*`, `avif`, `print` и т.д.). Вторым взят
-`connection-allowlist` — категория [BUG-1038](../../bugs/BUG-1038-OPEN.md), откаченная в срезе 30; счёт по
+`connection-allowlist` — категория [BUG-1038](../../bugs/BUG-1038-FIXED.md), откаченная в срезе 30; счёт по
 id заранее: `running 73 all vendored` (срез 30 брал те же 73).
 
 **Baseline.** `--update-expected --recursive --processes 4` — 6:33 (23/73 harness OK, 82/164 подтестов,
@@ -1452,7 +1452,7 @@ baseline (по ~7 мин): **0 регрессий, 0 unexpected pass, 0 друг
   `expected: ERROR`) затронуто 1992 из 2024 `.ini` во всём `tests/wpt/metadata/` — **не проверено по
   каждому файлу**; сверено только в этой категории.
 - **`TIMEOUT`/`NOTRUN` на подтестах `www*.localhost`:** поддомены не резолвятся на Windows
-  (`os error 11001`, `ping www.localhost` тоже не находит) — [BUG-1070](../../bugs/BUG-1070-OPEN.md);
+  (`os error 11001`, `ping www.localhost` тоже не находит) — [BUG-1070](../../bugs/BUG-1070-FIXED.md);
   `SystemDnsResolver` целиком `getaddrinfo`. Здесь же вероятная причина плавания среза 30 (фоновый
   DNS-шум), но она **не доказана**: в срезе 39 плавали другие подтесты.
 - Заголовок `Connection-Allowlist` в движке не реализован (скоуп категории 🚫) — отдельный баг не заводился.
@@ -1490,7 +1490,7 @@ OPEN (корневая причина плавания среза 30 не лок
   сходится (18 загрузок `.sxg` + 4 из `service-workers/` + 6 `.https.`-страниц по две строки = 46 строк
   TLS), но соответствие «файл → строка лога» проверено не по каждому файлу.
 - **29 `TIMEOUT` + 1 плавающий — все файлы `reporting/`:** в логе 29 строк
-  `resolve not-web-platform.test:18443 … (os error 11001)`. Это НЕ [BUG-1070](../../bugs/BUG-1070-OPEN.md)
+  `resolve not-web-platform.test:18443 … (os error 11001)`. Это НЕ [BUG-1070](../../bugs/BUG-1070-FIXED.md)
   (`*.localhost`), а альтернативный домен WPT, который резолвится только записью в hosts-файле
   (`tests/wpt/host_audit.py`, комментарий `browsers/lumen.py::env_options`, WPT-RUN-10 — семейство
   alt-домена оставлено открытым). Отдельный баг не заводился: окружение, не движок, и менять hosts
@@ -1645,7 +1645,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | Причина | id | Доказательство |
 |---|---|---|
 | hex-экранированный `id` в селекторе, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 152 | `eval: JS runtime error: #2 = < < f e  is not a valid selector` — `testdriver-extra.js::get_selector` |
-| `*\|` в селекторе безымянного элемента, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 12 | `:root > *\|body:nth-child(2) is not a valid selector` |
+| `*\|` в селекторе безымянного элемента, [BUG-1063](../../bugs/BUG-1063-FIXED.md) | 12 | `:root > *\|body:nth-child(2) is not a valid selector` |
 | сертификат `localhost`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 24 | 72 = 24×3 строки `ExecutorException`, все `TLS handshake … not valid for name "localhost"` |
 | harness `TIMEOUT` с подтестами | 31 | `Test TIMEOUT, expected OK` — не разбирались |
 | harness `OK` | 23 | — |
@@ -1663,7 +1663,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 у двух из четырёх одновременно стартовавших `lumen.exe`, затем `panicked … wgpu error: Validation Error — In Surface::configure — Invalid surface`
 (`wgpu_core.rs:3526`), `ConnectionRefusedError [WinError 1225]`, `IO Completion Port failed to signal process shutdown`, три релонча подряд
 `did not print [bidi] token`, `TestRunnerManager` падает. Пятый прогон — чистый (`23/258`, `301/489`, 0 регрессий, `present=WHITE` в логе нет).
-Заведён [BUG-1073](../../bugs/BUG-1073-OPEN.md). Причина не установлена: одиночный и тройной ручной запуск `lumen.exe --bidi-port` сбой не воспроизвёл;
+Заведён [BUG-1073](../../bugs/BUG-1073-FIXED.md). Причина не установлена: одиночный и тройной ручной запуск `lumen.exe --bidi-port` сбой не воспроизвёл;
 версия «нагрузка от чужой сборки» проверена и не объясняет (четвёртый обрыв — при 0 `rustc` в системе). Гипотеза о состоянии рабочего стола не проверена.
 Итог: три чистых `--check` (№1, №2, пятый прогон); четыре оборванных в счёт не идут — они не дошли до результата, а не дали иной.
 
@@ -1689,7 +1689,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 | Причина | id | Доказательство |
 |---|---|---|
-| `navigation.navigate()` с относительным URL, [BUG-1075](../../bugs/BUG-1075-OPEN.md) | 67 | `browsingContext.navigate(…) failed: navigation failed: invalid url: "#frag": relative URL without a base`; в логе 146 строк `Reload: #…`/`Reload: ?…` |
+| `navigation.navigate()` с относительным URL, [BUG-1075](../../bugs/BUG-1075-FIXED.md) | 67 | `browsingContext.navigate(…) failed: navigation failed: invalid url: "#frag": relative URL without a base`; в логе 146 строк `Reload: #…`/`Reload: ?…` |
 | `navigate()` с непарсящимся абсолютным URL (`https://example.com\0mozilla.org`) — тот же корень | 2 | тот же `browsingContext.navigate … invalid url` |
 | `navigate('file:///')` | 1 | `network error: file: not a local path: file:///` — не разбиралась |
 | исполнитель: `AssertionError: Got results from …?phase=…, expected …` | 10 | многофазные тесты (`?phase=start`/`initial`, `navigate-history-back-after-pushState`) — результат приходит от другого URL, чем ждёт `executorlumen.py`; **на стороне исполнителя, не диагностировано** |
@@ -1735,7 +1735,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | harness `ERROR` без https в имени: `modules/{dedicated,shared}-worker-import-{csp,referrer}.html`, `semantics/structured-clone/{dedicated,shared}.html` | 6 | не разбирались |
 | harness `TIMEOUT` | 58 | 18 из них — `SharedWorker`/`.any.sharedworker.html`, 11 — модульные воркеры/`import`; причина по файлам не устанавливалась. Строки лога не привязаны к id при `--processes 4` |
 
-Известные открытые дефекты того же слоя: [BUG-866](../../bugs/BUG-866-OPEN.md), [BUG-867](../../bugs/BUG-867-OPEN.md), [BUG-1000](../../bugs/BUG-1000-OPEN.md) (SharedWorker),
+Известные открытые дефекты того же слоя: [BUG-866](../../bugs/BUG-866-OPEN.md), [BUG-867](../../bugs/BUG-867-OPEN.md), [BUG-1000](../../bugs/BUG-1000-FIXED.md) (SharedWorker),
 [BUG-1071](../../bugs/BUG-1071-FIXED.md) (`WebSocket` в воркере). В логе есть ещё `[shared-worker] v8 script error: Runtime("Unexpected token '<'")` и
 `network error: unsupported scheme: blob` — не диагностировались; в одиночном прогоне `baseurl/alpha` (`importScripts-in-sharedworker`, `xhr-in-sharedworker`, оба 1/1) `<` не воспроизвёлся,
 то есть при `--processes 4` строку нельзя приписать конкретному файлу.
@@ -1765,7 +1765,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 | Причина | id | Доказательство |
 |---|---|---|
-| селектор с namespace-префиксом `*|`: `:root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 263 | `testdriver-extra.js::get_selector` для элемента без `id`; `editing/other/*`, `editing/run/*`, `editing/plaintext-only/*` |
+| селектор с namespace-префиксом `*|`: `:root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`, [BUG-1063](../../bugs/BUG-1063-FIXED.md) | 263 | `testdriver-extra.js::get_selector` для элемента без `id`; `editing/other/*`, `editing/run/*`, `editing/plaintext-only/*` |
 | hex-эскейп `id`: `#\66 \69 \72 \73 \74  is not a valid selector`, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 13 | `editing/other/empty-elements-insertion.html`, `editing/run/caret-navigation-after-removing-line-break.html` и др. |
 | https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 10 | `edit-context/*.https.html`, `plaintext-only/paste.https.html?…` |
 | `EditContext is not defined` | 2 | `edit-context/edit-context-bidi-caret-association.tentative.html` — интерфейс не реализован, баг не заводился |
@@ -1775,7 +1775,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | harness `TIMEOUT` | 25 | `other/delete-in-child-of-{head,html}.tentative.html` (по 4), `other/insertparagraph-in-child-of-{head,html}.tentative.html` (по 8), `run/undo-redo.html` (1) — причина не устанавливалась |
 
 **Главное.** Это самая массовая единичная причина harness-`ERROR` из всех снятых категорий: 263 из 700 id (38 %), в `pointerevents` было 12, в `shadow-dom` — единицы. Починка
-[BUG-1063](../../bugs/BUG-1063-OPEN.md) + [BUG-1065](../../bugs/BUG-1065-OPEN.md) переведёт ~276 файлов из `ERROR` в реальные подтесты (остаётся ~17 `ERROR`). Из 103 698 подтестов
+[BUG-1063](../../bugs/BUG-1063-FIXED.md) + [BUG-1065](../../bugs/BUG-1065-OPEN.md) переведёт ~276 файлов из `ERROR` в реальные подтесты (остаётся ~17 `ERROR`). Из 103 698 подтестов
 66 939 проходят, но это в основном `editing/run/*` с тысячами подтестов на файл, где `execCommand` уже реализован частично — баланс по id (382 из 700) честнее.
 
 **Ограничение записанного.** 263 + 13 + 10 id записаны как `ERROR` — нижняя планка; после починки BUG-1063/1065/1069 baseline регенерируется (`--update-expected` + три `--check`),
@@ -1816,7 +1816,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | Причина | Масштаб | Доказательство |
 |---|---|---|
 | в воркерной области нет `WebAssembly.compileStreaming`/`instantiateStreaming`, [BUG-1078](../../bugs/BUG-1078-FIXED.md) (FIXED, WORKER-1 срез 6) | 212 + 152 сообщений `is not a function` в логе | `instantiateStreaming-bad-imports.any.worker.html` 0/106, `invalid-args.any.worker.html` 0/44; в окне те же методы есть (проба `--dump-layout`) |
-| оконный стриминг не по спецификации, [BUG-1079](../../bugs/BUG-1079-OPEN.md) | `instantiateStreaming-bad-imports.any.html` 9/106, `invalid-args.any.html` 4/44, `instantiateStreaming.any.html` 0/25 | промис резолвится вместо отклонения на неверный `imports`; `CompileError` вместо `TypeError`; расширяемый `exports` |
+| оконный стриминг не по спецификации, [BUG-1079](../../bugs/BUG-1079-FIXED.md) | `instantiateStreaming-bad-imports.any.html` 9/106, `invalid-args.any.html` 4/44, `instantiateStreaming.any.html` 0/25 | промис резолвится вместо отклонения на неверный `imports`; `CompileError` вместо `TypeError`; расширяемый `exports` |
 | `WebAssembly.Global.prototype.type` отсутствует | 24 сообщения | `jsapi/global/type.tentative.any.js` — предложение type reflection, `tentative`; отдельно не заводилось (упомянуто в BUG-1079) |
 | harness `TIMEOUT` (50) / `ERROR` (39) | 89 id | причины не разбирались, кроме перечисленного |
 
@@ -1878,10 +1878,10 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 |---|---|---|
 | В воркерной области нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream`/`TextEncoderStream`, [BUG-1080](../../bugs/BUG-1080-FIXED.md) | 51 воркерный id, ≈15 000 сообщений (главная масса подтестов, не прошедших в категории) | `api-basics.any.worker.html` 0/6 при `.any.html` 6/6 |
 | Воркерный `XMLHttpRequest` без `overrideMimeType`, [BUG-1081](../../bugs/BUG-1081-FIXED.md) | 26 сообщений | `replacement-encodings`/`unsupported-encodings` `.any.worker.html` |
-| Одиночный суррогат кодируется в WTF-8, [BUG-1082](../../bugs/BUG-1082-OPEN.md) | `api-surrogates-utf8` 1/6, `textencoder-utf16-surrogates` 2/7, `streams/encode-utf8` 3/19 | проба `--dump-layout` |
-| Потоковый `TextDecoder` не срезает BOM, разнесённый по чанкам, [BUG-1083](../../bugs/BUG-1083-OPEN.md) | `streams/decode-ignore-bom` 5/12, `textdecoder-copy` 0/2 | проба `--dump-layout` |
-| `TextDecoderStream` принимает не-`BufferSource`, [BUG-1084](../../bugs/BUG-1084-OPEN.md) | `streams/decode-bad-chunks` 0/5 | проба `--dump-layout` |
-| `WebAssembly.Memory({shared:true})` отдаёт `ArrayBuffer`, [BUG-1085](../../bugs/BUG-1085-OPEN.md) | 55 подтестов (`encodeInto.any.html` 54, `textdecoder-copy.any.html` 1); хелпер `common/sab.js` подключают 12 файлов из 5 категорий | `Error("WebAssembly.Memory does not support shared:true")` |
+| Одиночный суррогат кодируется в WTF-8, [BUG-1082](../../bugs/BUG-1082-FIXED.md) | `api-surrogates-utf8` 1/6, `textencoder-utf16-surrogates` 2/7, `streams/encode-utf8` 3/19 | проба `--dump-layout` |
+| Потоковый `TextDecoder` не срезает BOM, разнесённый по чанкам, [BUG-1083](../../bugs/BUG-1083-FIXED.md) | `streams/decode-ignore-bom` 5/12, `textdecoder-copy` 0/2 | проба `--dump-layout` |
+| `TextDecoderStream` принимает не-`BufferSource`, [BUG-1084](../../bugs/BUG-1084-FIXED.md) | `streams/decode-bad-chunks` 0/5 | проба `--dump-layout` |
+| `WebAssembly.Memory({shared:true})` отдаёт `ArrayBuffer`, [BUG-1085](../../bugs/BUG-1085-FIXED.md) | 55 подтестов (`encodeInto.any.html` 54, `textdecoder-copy.any.html` 1); хелпер `common/sab.js` подключают 12 файлов из 5 категорий | `Error("WebAssembly.Memory does not support shared:true")` |
 | harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 16 из 18 `ERROR`: `sharedarraybuffer.https.html` и 15 `*.any.serviceworker.html` (`certificate not valid for name "localhost"`, 48 строк в логе) | service-worker-варианты до кода движка не доходят |
 
 Остальные top-level отклонения **не разбирались**: `ERROR` `single-byte-decoder-iframe.window.html`, `streams/decode-utf8.any.html` (5/5 подтестов, но harness `ERROR`); `TIMEOUT`
@@ -1914,11 +1914,11 @@ baseline получить не могут; правка `executorlumen.py` по�
 
 | Причина | Масштаб | Доказательство |
 |---|---|---|
-| `document.createAttributeNS`/`createAttribute` отсутствуют, [BUG-689](../../bugs/BUG-689-OPEN.md) | 372 сообщения (360 + 12), главная масса `FAIL` | `set-attributes-*`, `Element-setAttribute-setAttributeNS-sinks`, `trusted-types-event-handlers` |
-| Ни один sink не спрашивает политику, [BUG-946](../../bugs/BUG-946-OPEN.md) | `setAttribute(name, "2+2")` не бросает (95), `elem[attr] = value` не бросает (32), `expected "safe_output" but got "unsafe_input"` (60) — sink не звал политику; `Node-multiple-arguments*` (40 сообщений `expected "'createScript';" but got ""`) — вероятно тот же корень, не проверялось | `trusted-types-event-handlers.html`, `set-attributes-mutations-in-callback.tentative.html` |
+| `document.createAttributeNS`/`createAttribute` отсутствуют, [BUG-689](../../bugs/BUG-689-FIXED.md) | 372 сообщения (360 + 12), главная масса `FAIL` | `set-attributes-*`, `Element-setAttribute-setAttributeNS-sinks`, `trusted-types-event-handlers` |
+| Ни один sink не спрашивает политику, [BUG-946](../../bugs/BUG-946-FIXED.md) | `setAttribute(name, "2+2")` не бросает (95), `elem[attr] = value` не бросает (32), `expected "safe_output" but got "unsafe_input"` (60) — sink не звал политику; `Node-multiple-arguments*` (40 сообщений `expected "'createScript';" but got ""`) — вероятно тот же корень, не проверялось | `trusted-types-event-handlers.html`, `set-attributes-mutations-in-callback.tentative.html` |
 | CSP-репорты и enforcement, [BUG-811](../../bugs/BUG-811-FIXED.md) | `a single violation reported expected 1 but got 0` — 92 сообщения (`trusted-types-reporting-*`, `-report-only`) — по природе CSP, каждый файл отдельно не проверялся | — |
-| В воркерах нет `trustedTypes`, **новый** [BUG-1086](../../bugs/BUG-1086-OPEN.md) | 23 из 28 не-service-worker воркерных id — `TIMEOUT`, ни одного проходящего подтеста | сырой лог `--log-raw`: `[worker-0] v8 script error: Runtime("trustedTypes is not defined")`, `[shared-worker] [ERR] trustedTypes is not defined` |
-| Интерфейсы Trusted Types не WebIDL-формы, **новый** [BUG-1087](../../bugs/BUG-1087-OPEN.md) | `idlharness.window.html` 39/100 (61 `FAIL`) | проба `--dump-layout`: `typeof self.TrustedTypePolicyFactory` → `undefined`, `trustedTypes.constructor.name` → `Object` |
+| В воркерах нет `trustedTypes`, **новый** [BUG-1086](../../bugs/BUG-1086-FIXED.md) | 23 из 28 не-service-worker воркерных id — `TIMEOUT`, ни одного проходящего подтеста | сырой лог `--log-raw`: `[worker-0] v8 script error: Runtime("trustedTypes is not defined")`, `[shared-worker] [ERR] trustedTypes is not defined` |
+| Интерфейсы Trusted Types не WebIDL-формы, **новый** [BUG-1087](../../bugs/BUG-1087-FIXED.md) | `idlharness.window.html` 39/100 (61 `FAIL`) | проба `--dump-layout`: `typeof self.TrustedTypePolicyFactory` → `undefined`, `trustedTypes.constructor.name` → `Object` |
 | harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 20 `.https.` id, из них 15 `*ServiceWorker*` (120 строк `certificate not valid for name "localhost"` в логе) | service-worker-варианты до кода движка не доходят |
 
 Остальные top-level отклонения **не разбирались** и багов на них не заводилось: `ERROR` `HTMLElement-generic.html` (40/72), `block-text-node-insertion-into-*script-element.html`, `inheriting-csp-for-local-schemes.html`,
@@ -1949,10 +1949,10 @@ baseline получить не могут; правка `executorlumen.py` по�
 
 | Причина | Масштаб | Доказательство |
 |---|---|---|
-| Конструкторы узлов не валидируют, **новый** [BUG-1090](../../bugs/BUG-1090-OPEN.md) | `ctor-*.html` — 197 подтестов в 20 файлах, `did not throw` (`ctor-panner` 21/44, `ctor-analyser` 13/20, `ctor-audiobuffer` 11/15) | проба `--dump-layout`: `new AnalyserNode()`, `new AnalyserNode(1)`, `new PannerNode(ctx,{refDistance:-1})` не бросают |
-| Нет `renderSizeHint`/`renderQuantumSize`, **новый** [BUG-1088](../../bugs/BUG-1088-OPEN.md) | 20 сообщений, `audiocontext-rendersizehint.html` + `offlineaudiocontext-rendersizehint.html` 35 подтестов; 7 `*-rendersizehint*.https.html` — `ERROR` | проба: `renderQuantumSize` → `undefined`, `renderSizeHint: 'bogus'` не бросает |
-| Нет `sinkId`/`setSinkId`/`playbackStats`/`playoutStats`, **новый** [BUG-1089](../../bugs/BUG-1089-OPEN.md) | `audiocontext-playoutstats.html` 8 `promise_test`; `audiocontext-sinkid-*.https.html` — `ERROR` | проба: все члены и `AudioSinkInfo`/`AudioPlaybackStats` → `undefined` |
-| `PannerNode`/`ConvolverNode`/`DynamicsCompressorNode` пропускают вход, **новый** [BUG-1091](../../bugs/BUG-1091-OPEN.md) | `distance-{linear,inverse,exponential}.html` — 309 подтестов, `Got 1.` | шапка `web_audio.rs` («Not rendered»), «осознанный остаток» [BUG-828](../../bugs/BUG-828-FIXED.md) без задачи |
+| Конструкторы узлов не валидируют, **новый** [BUG-1090](../../bugs/BUG-1090-FIXED.md) | `ctor-*.html` — 197 подтестов в 20 файлах, `did not throw` (`ctor-panner` 21/44, `ctor-analyser` 13/20, `ctor-audiobuffer` 11/15) | проба `--dump-layout`: `new AnalyserNode()`, `new AnalyserNode(1)`, `new PannerNode(ctx,{refDistance:-1})` не бросают |
+| Нет `renderSizeHint`/`renderQuantumSize`, **новый** [BUG-1088](../../bugs/BUG-1088-FIXED.md) | 20 сообщений, `audiocontext-rendersizehint.html` + `offlineaudiocontext-rendersizehint.html` 35 подтестов; 7 `*-rendersizehint*.https.html` — `ERROR` | проба: `renderQuantumSize` → `undefined`, `renderSizeHint: 'bogus'` не бросает |
+| Нет `sinkId`/`setSinkId`/`playbackStats`/`playoutStats`, **новый** [BUG-1089](../../bugs/BUG-1089-FIXED.md) | `audiocontext-playoutstats.html` 8 `promise_test`; `audiocontext-sinkid-*.https.html` — `ERROR` | проба: все члены и `AudioSinkInfo`/`AudioPlaybackStats` → `undefined` |
+| `PannerNode`/`ConvolverNode`/`DynamicsCompressorNode` пропускают вход, **новый** [BUG-1091](../../bugs/BUG-1091-FIXED.md) | `distance-{linear,inverse,exponential}.html` — 309 подтестов, `Got 1.` | шапка `web_audio.rs` («Not rendered»), «осознанный остаток» [BUG-828](../../bugs/BUG-828-FIXED.md) без задачи |
 | Нет `IIRFilterNode`/`createIIRFilter`, [BUG-707](../../bugs/BUG-707-OPEN.md) | 14 `Unhandled rejection … createIIRFilter is not a function`, 43 строки в логе | проба: `typeof IIRFilterNode` → `undefined`. **`ConstantSourceNode` в BUG-707 уже устарел** — `typeof ConstantSourceNode` → `function`, `createConstantSource` есть; `createMediaStreamDestination()` по-прежнему отдаёт `AudioNode` |
 | Нет валидации сеттеров, [BUG-708](../../bugs/BUG-708-OPEN.md) | `convolver-channels` (31), `realtimeanalyser-fft-sizing` (28), `audioparam-exceptional-values` (39), `audioparam-nominal-range` (23) — сопоставлено по заголовку BUG-708, файлы отдельно не проверялись | — |
 | `AudioWorklet` не грузит модули, [BUG-779](../../bugs/BUG-779-OPEN.md) | 38 `ERROR` в `the-audioworklet-interface`, все `.https.` | BUG-1069 маскирует, что там дальше |
@@ -1983,10 +1983,10 @@ baseline получить не могут; правка `executorlumen.py` по�
 
 | Причина | Масштаб | Доказательство |
 |---|---|---|
-| 13 SVG/SMIL WebIDL-глобалов не заведены вовсе (`SVGAElement`, `SVGAngle`, `SVGNumber`, `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGUseElementShadowRoot`, `ShadowAnimation`, `TimeEvent`, `SVGMPathElement`), **новый** [BUG-1092](../../bugs/BUG-1092-OPEN.md) | `svg/idlharness.window.html` 145/1005 `FAIL` этого файла; побочный эффект — 11/18 `fe*`-фильтровых элементов вне `SVG_TAG_MAP`, `SVGAnimatedNumber-initial-values.html` 102 подтеста | `grep -c` по всем 13 именам на `window.SVG*=` в `svg.rs` — 0 совпадений при 88 других присвоениях; `createSVGNumber()`/`createSVGAngle()` (`svg.rs:522-523`) возвращают объект-литерал |
-| Заведённые SVG-интерфейсы не той WebIDL-формы (члены на инстансе вместо прототипа, геттеры не бросают на прототипе, операции не enumerable, readonly `writable`), **новый** [BUG-1093](../../bugs/BUG-1093-OPEN.md) | остаток `svg/idlharness.window.html` — 860/1005 `FAIL`, ~20 интерфейсов (`SVGTextContentElement` 51, `SVGGraphicsElement` 48, `SVGPreserveAspectRatio` 47, `SVGLength` 46, `SVGSVGElement` 43, `SVGAElement` 42, `SVGTransform`/`SVGMarkerElement` по 39…) | тот же класс, что BUG-677/BUG-1087/дубликат BUG-544, впервые на всей SVG-иерархии разом |
-| SVG2 геометрические/красящие CSS-свойства не в `SUPPORTED_PROPERTIES` (`cx`/`cy`/`r`/`rx`/`ry`/`x`/`y`/`color-interpolation`/`path-length`), **новый** [BUG-1094](../../bugs/BUG-1094-OPEN.md) | 9 файлов, **100% каждого** — `CSS.supports()` гейтит `test_interpolation` перед стартом сравнения: `svg/geometry/animations/{cx,cy,r,rx,ry,x,y}-composition.html` (30×7=210), `svg/painting/color-interpolation-animation.html` (42), `svg/path/animations/path-length-interpolation.tentative.html` (32) = 284 подтеста | `grep` по всем 9 именам на `SUPPORTED_PROPERTIES` — 0 совпадений; все 9 файлов 0 pass / N fail |
-| Осознанно суженный остаток GAP-SMIL (`begin` syncbase/event-формы) даёт `TIMEOUT`, а не `FAIL`, **новый** [BUG-1095](../../bugs/BUG-1095-OPEN.md) | 38 из 41 «плохих» top-level результатов — `TIMEOUT`, вся `svg/animations/` | `_lumen_smil_parse_begin_offset` (`svg.rs:1013-1020`) возвращает `null` на syncbase/event-формы → анимация никогда не стартует → ожидаемое событие никогда не диспатчится → harness ждёт до тайм-аута раннера вместо конкретного `FAIL` |
+| 13 SVG/SMIL WebIDL-глобалов не заведены вовсе (`SVGAElement`, `SVGAngle`, `SVGNumber`, `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGUseElementShadowRoot`, `ShadowAnimation`, `TimeEvent`, `SVGMPathElement`), **новый** [BUG-1092](../../bugs/BUG-1092-FIXED.md) | `svg/idlharness.window.html` 145/1005 `FAIL` этого файла; побочный эффект — 11/18 `fe*`-фильтровых элементов вне `SVG_TAG_MAP`, `SVGAnimatedNumber-initial-values.html` 102 подтеста | `grep -c` по всем 13 именам на `window.SVG*=` в `svg.rs` — 0 совпадений при 88 других присвоениях; `createSVGNumber()`/`createSVGAngle()` (`svg.rs:522-523`) возвращают объект-литерал |
+| Заведённые SVG-интерфейсы не той WebIDL-формы (члены на инстансе вместо прототипа, геттеры не бросают на прототипе, операции не enumerable, readonly `writable`), **новый** [BUG-1093](../../bugs/BUG-1093-FIXED.md) | остаток `svg/idlharness.window.html` — 860/1005 `FAIL`, ~20 интерфейсов (`SVGTextContentElement` 51, `SVGGraphicsElement` 48, `SVGPreserveAspectRatio` 47, `SVGLength` 46, `SVGSVGElement` 43, `SVGAElement` 42, `SVGTransform`/`SVGMarkerElement` по 39…) | тот же класс, что BUG-677/BUG-1087/дубликат BUG-544, впервые на всей SVG-иерархии разом |
+| SVG2 геометрические/красящие CSS-свойства не в `SUPPORTED_PROPERTIES` (`cx`/`cy`/`r`/`rx`/`ry`/`x`/`y`/`color-interpolation`/`path-length`), **новый** [BUG-1094](../../bugs/BUG-1094-FIXED.md) | 9 файлов, **100% каждого** — `CSS.supports()` гейтит `test_interpolation` перед стартом сравнения: `svg/geometry/animations/{cx,cy,r,rx,ry,x,y}-composition.html` (30×7=210), `svg/painting/color-interpolation-animation.html` (42), `svg/path/animations/path-length-interpolation.tentative.html` (32) = 284 подтеста | `grep` по всем 9 именам на `SUPPORTED_PROPERTIES` — 0 совпадений; все 9 файлов 0 pass / N fail |
+| Осознанно суженный остаток GAP-SMIL (`begin` syncbase/event-формы) даёт `TIMEOUT`, а не `FAIL`, **новый** [BUG-1095](../../bugs/BUG-1095-FIXED.md) | 38 из 41 «плохих» top-level результатов — `TIMEOUT`, вся `svg/animations/` | `_lumen_smil_parse_begin_offset` (`svg.rs:1013-1020`) возвращает `null` на syncbase/event-формы → анимация никогда не стартует → ожидаемое событие никогда не диспатчится → harness ждёт до тайм-аута раннера вместо конкретного `FAIL` |
 
 Остальные отклонения **не разбирались**: `Cannot read properties of undefined (reading 'baseVal'/'animVal')` — 231 подтест/70 файлов всего, из них 102 (`SVGAnimatedNumber-initial-values.html`) и 35 (внутри `idlharness.window.html`) уже учтены в BUG-1092/1093 выше, остаток ~94 подтеста/68 файлов не разобран; 186 подтестов `assert_equals: expected object "[object Object]" but got object "[object Object]"` (22 файла, крупнейшие — `SameObject-identity.html` 54, `rect-hittest-002.html` 45, `ellipse-hittest.html` 24, из них 34 внутри `idlharness.window.html` уже учтены — вероятно смежные грани BUG-1093, не подтверждено).
 
@@ -2011,9 +2011,9 @@ baseline получить не могут; правка `executorlumen.py` по�
 | Причина | Масштаб | Доказательство |
 |---|---|---|
 | Referrer Policy §8.3 «long referrer»: `Referer` длиннее 4096 байт должен обрезаться до origin — шаг отсутствует в `compute_referrer`, **новый** [BUG-1096](../../bugs/BUG-1096-FIXED.md) | 207 подтестов семьи `4K*` (`same-http`/`same-https` варианты `xhr`/`fetch`) — `assert_in_array: document.referrer value "<непокоцанный URL>" not in array [origin, undefined]` | `crates/network/src/referrer_policy.rs:98-148` — ни одна ветка `match policy` не проверяет `full().len() > 4096` |
-| `lumen-image` не умеет BMP (только PNG/JPEG/GIF/WebP/AVIF/SVG/JXL/HEIC) — общий WPT-хелпер `common/security-features/subresource/image.py` отдаёт `image/bmp`, **новый** [BUG-1097](../../bugs/BUG-1097-OPEN.md) | 156 подтестов `img-tag` только в `4K*`; инфраструктура шире одной категории (`mixed-content`/CSP/`upgrade-insecure-requests`/… — везде, где тест берёт `img-tag`/`picture-tag`), масштаб за пределами этого среза не измерен | `crates/engine/image/src/lib.rs::decode_raw` (120-152) — 8 форматов по сигнатуре, ветки для `BM`-сигнатуры нет, падает в `UnknownFormat` |
+| `lumen-image` не умеет BMP (только PNG/JPEG/GIF/WebP/AVIF/SVG/JXL/HEIC) — общий WPT-хелпер `common/security-features/subresource/image.py` отдаёт `image/bmp`, **новый** [BUG-1097](../../bugs/BUG-1097-FIXED.md) | 156 подтестов `img-tag` только в `4K*`; инфраструктура шире одной категории (`mixed-content`/CSP/`upgrade-insecure-requests`/… — везде, где тест берёт `img-tag`/`picture-tag`), масштаб за пределами этого среза не измерен | `crates/engine/image/src/lib.rs::decode_raw` (120-152) — 8 форматов по сигнатуре, ветки для `BM`-сигнатуры нет, падает в `UnknownFormat` |
 
-**Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `www1.localhost` (own-subdomain cross-origin семья) не резолвится на этой машине — [BUG-1070](../../bugs/BUG-1070-OPEN.md) (`SystemDnsResolver` не реализует RFC 6761 §6.3 для `*.localhost`); живьём в stderr движка `resolve www1.localhost: имя или служба не известны (os error 11001)` на подавляющем большинстве `cross-http`/`cross-https` вариантов по всей категории, не только `4K*`. TLS-сертификат не покрывает SAN `localhost` (только `127.0.0.1`/`web-platform.test`) — [BUG-1069](../../bugs/BUG-1069-FIXED.md); живьём `TLS handshake: invalid peer certificate: certificate not valid for name "localhost"` на `.https.`-подресурсах. Оба — известный, уже локализованный класс, не движковая находка этого среза, но вместе объясняют основную долю FAIL/TIMEOUT/ERROR по категории за пределами BUG-1096/1097.
+**Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `www1.localhost` (own-subdomain cross-origin семья) не резолвится на этой машине — [BUG-1070](../../bugs/BUG-1070-FIXED.md) (`SystemDnsResolver` не реализует RFC 6761 §6.3 для `*.localhost`); живьём в stderr движка `resolve www1.localhost: имя или служба не известны (os error 11001)` на подавляющем большинстве `cross-http`/`cross-https` вариантов по всей категории, не только `4K*`. TLS-сертификат не покрывает SAN `localhost` (только `127.0.0.1`/`web-platform.test`) — [BUG-1069](../../bugs/BUG-1069-FIXED.md); живьём `TLS handshake: invalid peer certificate: certificate not valid for name "localhost"` на `.https.`-подресурсах. Оба — известный, уже локализованный класс, не движковая находка этого среза, но вместе объясняют основную долю FAIL/TIMEOUT/ERROR по категории за пределами BUG-1096/1097.
 
 **Не разобрано.** Кластер `promise_test: Unhandled rejection with value: object "[object Object]"` за пределами `img-tag` — `script-tag` (141 подтест в `4K*`), `sharedworker-classic` (12), `a-tag` (3). `script-tag` использует `common/security-features/subresource/script.py` (не изображение), значит НЕ объясняется BUG-1097; воспроизводится и для same-origin без редиректа, значит не BUG-1070/1069. Механизм не установлен — кандидат `requestViaScript`'s гонка `bindEvents2(window, "message", script, "error", window, "error")` (`common.sub.js:626-635`) против нашей доставки событий `postMessage`/`error`, не проверено.
 
@@ -2036,7 +2036,7 @@ baseline получить не могут; правка `executorlumen.py` по�
 **Три `--check`, один невалиден.** Прогон 1: **13 регрессий**, 26 unexpected pass, 54 other
 deviations — чисто. Прогон 2 оборвался инфраструктурным сбоем раннера
 (`lumen --bidi-port did not print [bidi] token`, 111/906 файлов остались `MISSING`) — тот же
-класс, что [BUG-1072](../../bugs/BUG-1072-OPEN.md) (заметка добавлена туда, не новый баг);
+класс, что [BUG-1072](../../bugs/BUG-1072-FIXED.md) (заметка добавлена туда, не новый баг);
 прогон отброшен, не участвует в сравнении. Прогон 3 (повтор, чистый): **34 регрессии**, 54
 unexpected pass, 53 other deviations. Оба чистых прогона (1 и 3) пересекаются лишь частично
 на кластере `fetch/orb/tentative/*`/`fetch/metadata/generated/*` (TIMEOUT/NOTRUN, состав и
@@ -2057,11 +2057,11 @@ redirects 1`, редирект на `mailto:`] — промис `fetch()` рез
 корректно baseline-нуты с этим же `FAIL` на `redirects 1`. `.ini` для `.any.html`-варианта
 вручную приведён к тому же виду (`expected: ERROR` → `[Fetch: handling different schemes in
 redirects 1]` / `expected: FAIL`), подтверждено scoped `--check --root fetch/api/redirect
---recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-OPEN.md).
+--recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-FIXED.md).
 
 **Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `.https.`-подресурсы
 (166 файлов) ловят TLS-цепочку [BUG-1069](../../bugs/BUG-1069-FIXED.md)/
-[BUG-1070](../../bugs/BUG-1070-OPEN.md) наравне с прошлыми категориями — основная доля
+[BUG-1070](../../bugs/BUG-1070-FIXED.md) наравне с прошлыми категориями — основная доля
 `ERROR`/`TIMEOUT` за пределами BUG-1098 и флапа BUG-1022 по-прежнему объясняется этой парой,
 отдельно не переизмерялась.
 
@@ -2143,7 +2143,7 @@ DNS:*.localhost`; `crates/` не тронуты, пересборка не тр�
 activation-after-registration.https.html` — было `ERROR` на TLS, стало unexpected PASS
 (harness `OK`, сам тест зелёный) — полное рукопожатие вплоть до зелёного результата тела
 теста. `*.localhost`-поддомены отдельно не проверялись: их резолвинг на этой машине упирается
-в DNS, не в сертификат ([BUG-1070](../../bugs/BUG-1070-OPEN.md), не в скоупе этого фикса).
+в DNS, не в сертификат ([BUG-1070](../../bugs/BUG-1070-FIXED.md), не в скоупе этого фикса).
 
 **Baseline-регенерация не входит в этот заход, как и предупреждал сам баг.** ~2000 `.ini` во
 всех уже закрытых срезах WPT-RUN-7 с `.https.`-файлами сейчас фиксируют `ERROR` как
@@ -2225,7 +2225,7 @@ https.html`) + 1 status-change. Три непересекающихся набо
 подряд: 0 регрессий, 0 unexpected pass, 0 других отклонений.** Baseline 245 → 245
 (перегенерация, не новая категория).
 
-**Найден [BUG-1099](../../bugs/BUG-1099-OPEN.md).** Два файла (`service-worker-dedicated-
+**Найден [BUG-1099](../../bugs/BUG-1099-FIXED.md).** Два файла (`service-worker-dedicated-
 worker`, `service-worker-shared-worker`, оба `.https.`) падают в `cleanup` с
 `worker.terminate is not a function`/`Cannot read properties of undefined (reading
 'close')`. Корень найден по исходнику, не предположение: оба теста создают воркер через
@@ -2433,7 +2433,7 @@ serviceworker), `fetch/metadata/*` верхнего уровня (9 файлов
 задокументирован. Baseline оставлен таким, каким его записал исходный `--update-expected`, не
 откачен, не сужен — новый экземпляр добавлен в [BUG-1022](../../bugs/BUG-1022-FIXED.md).
 
-**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-OPEN.md) (срез 55)
+**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-FIXED.md) (срез 55)
 держится** — файл не всплыл ни в одном из трёх `--check`, ручная правка среза 55 пережила
 регенерацию baseline.
 
@@ -2493,6 +2493,77 @@ timeout`: исполнитель под нагрузкой не успел за�
 
 Категорий с baseline: 262. Дальше — `mixed-content` (533 файла, не пробовалась) либо
 `referrer-policy`/`4K*` полный `--check` (требует сессии с бюджетом на многочасовой прогон).
+
+### TEST-3: срез 65 (2026-09-29/30) — `mixed-content` (262 → 263): найден и частично устранён механизм ложных регрессий, диффузный флап того же класса, что в срезе 63
+
+Следующая по списку из «Дальше» среза 63/64: `--all --root mixed-content --recursive` выбирает
+**388** тестовых id (из 533 вендоренных файлов — разница обычная, как и в прошлых срезах, часть
+файлов это support/resources, не тесты). `dev-release` собран из текущего `main`, бинарь не менялся
+на протяжении всего среза.
+
+**Первый baseline (`--processes` не указан → 1 процесс, ~5 ч 10 мин).** `tests: 222/388 harness OK;
+subtests: 1321/2241 passed`, `298 unexpected results, 0 unexpected passes` → 298 `.ini` записано.
+
+**Три первых `--check` не сошлись: 71/70/57 регрессий** на `--processes=14`, `--processes=10`
+(целиком) и `--processes=10` (шестью чанками по `--offset/--limit`, см. ниже) соответственно —
+похоже на диффузный флап, но с подозрительно устойчивым пересечением между прогонами (19
+идентичных отклонений из 71/70/57).
+
+**Механизм найден.** Пример из «сырого» лога baseline-прогона
+(`iframe-inherit.http-rp/opt-in/object-tag.https.html`): harness поймал внешний таймаут файла,
+и `WARNING Command left in command_queue during cleanup` — событие `test_ended` с полной,
+корректной раскладкой по подтестам (`TIMEOUT` на одном конкретном подтесте, `NOTRUN` на
+последующих) осталось необработанным, поэтому `--update-expected` записал только файловый
+`TIMEOUT` без единого подтеста. Тот же класс, что уже фиксировался как `WARNING Command left in
+command_queue` (только 4 файла с этим точным симптомом), но у большинства затронутых файлов
+подтесты в `.ini` **были** — просто зафиксированная точка обрыва не совпадала с той, что
+воспроизводилась на `--check`: baseline снят на `--processes=1` (лёгкая нагрузка → каждый
+отдельный тест исполняется быстрее → внешний таймаут файла наступает **позже** в
+последовательности подтестов), а `--check` шёл на `--processes=10–14` (та же машина, но N
+экземпляров `lumen.exe` конкурируют за CPU/сеть → каждый тест исполняется медленнее → внешний
+таймаут наступает на 1 подтест **раньше**). Не движковый баг — системное рассогласование
+окружений baseline/check, тот же корень, что описан в памяти по `--processes`
+(`reference-wpt-processes-tuning`).
+
+**Проверено `expectations.py::write_expected`** (не читалось раньше для этой методологии):
+`os.remove`/запись идут только по файлам из текущей выборки (`results`), не сканируют остальное
+дерево `.ini` — чанкирование `--update-expected`/`--check` через `--offset/--limit` безопасно
+для параллельных/последовательных сессий на разных срезах корпуса.
+
+**Baseline перегенерирован на `--processes=10`** (совпадает с окружением `--check`), шестью
+чанками по 70 файлов (`--offset 0/70/140/210/280/350 --limit 70/…/38`) — каждый укладывается в
+одиночный вызов и переживает прерывание сессии (первая попытка прогнать проверочный `--check`
+одним запросом в фоне пропала вместе с прерванной сессией **до** переноса на чанки — прямое
+подтверждение, что для прогонов этой длины чанки обязательны, а не просто удобны). Итог:
+51 `.ini` перезаписано, 7 удалено (стали чистыми), остальные 388 без изменений.
+
+**Три `--check` против нового baseline снова не сошлись: 52/65/70 регрессий** — диффузный флап
+сохраняется даже при совпадающем `--processes`, тот же класс, что для `fetch` в срезе 63.
+Пересечение **по значению** (`ключ + expected + got`, не только по ключу) во всех трёх дало
+**17 идентичных отклонений** на 9 файлах (2 из них не имели `.ini` вовсе — заведены новые) — тот
+же механизм «точка обрыва сдвинулась на один подтест», подтверждённый построчно по «сырым» логам
+всех трёх прогонов. Поправлены вручную (`iframe-data-inherit.http-rp/opt-in/fetch`,
+`iframe-inherit.meta/opt-in/worker-import-data` [новый], `sharedworker-module-data.meta/unset/fetch`,
+`srcdoc-inherit.http-rp/opt-in/audio-tag`, `srcdoc-inherit.meta/opt-in/sharedworker-import-data`
+[новый], `top.http-rp/opt-in/sharedworker-import-data`, `worker-classic-data.http-rp/opt-in/fetch`,
+`worker-classic-data.meta/unset/fetch`, `worker-classic-data.meta/unset/xhr`) — новый `.ini`-текст
+проверен `expectations.wptmanifest_parse` перед записью (тот же парсер, что использует
+`build_expected_ini`, отказ от записи непарсящегося `.ini` — единственная защита от порчи baseline).
+
+**Контрольный `--check`: 56 регрессий, все 17 подтверждённых ушли.** Оставшийся диффузный флап —
+другой, каждый раз новый набор файлов (та же природа: разные подтесты становятся точкой обрыва от
+прогона к прогону даже на одном `--processes`, WPT-раннер под конкурентной нагрузкой сам по себе
+не даёт стабильного результата на TIMEOUT-тяжёлой категории) — без общего знаменателя, отдельный
+`BUG-NNN` не заводится (инфраструктурный шум раннера, не движковый дефект, см.
+`reference-wpt-processes-tuning`). Первый коммит baseline для категории (294 `.ini`, ранее
+`tests/wpt/metadata/mixed-content/` не существовал в git).
+
+**Окружение этой сессии.** `dev-release`, HEAD = `main` `edde70f72`, Windows 10 19045,
+`tests/wpt/.venv/Scripts/python.exe`, `MSYS2_ARG_CONV_EXCL='/dom'`.
+
+Категорий с baseline: 263. Дальше — либо повторить `mixed-content` ещё одной сессией (диффузный
+флап может сузиться дальше повторными итерациями пересечения, как не пробовалось для `fetch`),
+либо `referrer-policy`/`4K*` полный `--check` (требует сессии с бюджетом на многочасовой прогон).
 
 ## TEST-4: WPT reftest-executor (L)
 

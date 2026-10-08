@@ -41,7 +41,7 @@ doc-open   ticks=15  docopen-threw TypeError: document.open is not a function
                      docopen-alive found=false
 ```
 
-`wrote-script-ran` не напечатан — это половина [BUG-568](BUG-568-OPEN.md),
+`wrote-script-ran` не напечатан — это половина [BUG-568](BUG-568-FIXED.md),
 которая после BUG-701 стала следствием сознательного no-op, а не отдельным
 дефектом исполнения.
 

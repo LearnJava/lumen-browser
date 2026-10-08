@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!-- BUG-1211: минимальная репродукция зависания движкового потока.
+     Каждый getComputedStyle() после мутации стиля форсит полный
+     lumen_layout::layout_measured_with_counters по ВСЕМУ документу
+     (FlushHandles::maybe_flush, CSSOM-4/BUG-493) — O(reads * nodes)
+     вместо инкрементального пересчёта. N=3000/reads=500 не завершается
+     за 60с; N=300/reads=50 — 1.7с. Именно этот паттерн (read-after-mutate
+     в цикле) исполняет Optimizely landingprod.js на cnn.com/udemy.com. -->
+<html><head><style>
+div { counter-reset: c; }
+div::before { counter-increment: c; content: counter(c); }
+</style></head>
+<body>
+<div id="root"></div>
+<script>
+var root = document.getElementById('root');
+var N = 3000, READS = 500; // уменьшить для быстрого прогона (300/50 ~ 1.7с)
+for (var i = 0; i < N; i++) {
+  var d = document.createElement('div');
+  d.textContent = 'x';
+  root.appendChild(d);
+}
+var t0 = Date.now();
+for (var i = 0; i < READS; i++) {
+  var el = root.children[i % root.children.length];
+  el.style.color = (i % 2) ? 'red' : 'blue';
+  var cs = window.getComputedStyle(el);
+  var v = cs.color;
+}
+console.log('loop took ms: ' + (Date.now() - t0));
+</script>
+</body></html>

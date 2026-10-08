@@ -178,6 +178,50 @@ impl EmptyCells {
     }
 }
 
+/// CSS Tables L2 §17.4.1 — `caption-side`. Inherited. Initial: `Top`.
+/// Which side of the table grid box a `display: table-caption` box is placed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionSide {
+    /// Caption above the table grid box.
+    #[default]
+    Top,
+    /// Caption below the table grid box.
+    Bottom,
+}
+
+impl CaptionSide {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "top" => Some(Self::Top),
+            "bottom" => Some(Self::Bottom),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Tables L2 §17.5.2 — `table-layout`. Not inherited. Initial: `Auto`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableLayout {
+    /// Automatic algorithm: column widths depend on cell content.
+    #[default]
+    Auto,
+    /// Fixed algorithm: column widths come from the table `width`, `<col>`s and the
+    /// first row only; content never widens a column (applies only when `width` is not `auto`).
+    Fixed,
+}
+
+impl TableLayout {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "auto" => Some(Self::Auto),
+            "fixed" => Some(Self::Fixed),
+            _ => None,
+        }
+    }
+}
+
 /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
 /// Controls how the interior of a shape is determined for overlapping contours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -301,11 +345,27 @@ pub enum BorderStyle {
     Dashed,
     Dotted,
     Double,
+    /// `hidden` — как `none`, но выигрывает конфликт (CSS Backgrounds L3 §4.3).
+    /// Из `border-style` недостижим (его разбор знает пять ключевых слов); приходит
+    /// только из `*-rule-style` (CSS Gap Decorations L1 §4.2).
+    Hidden,
+    /// `groove` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Groove,
+    /// `ridge` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Ridge,
+    /// `inset` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Inset,
+    /// `outset` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
+    /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.
+    Outset,
 }
 
 impl BorderStyle {
     pub fn is_visible(self) -> bool {
-        !matches!(self, BorderStyle::None)
+        !matches!(self, BorderStyle::None | BorderStyle::Hidden)
     }
 }
 

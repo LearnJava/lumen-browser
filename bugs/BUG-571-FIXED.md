@@ -71,7 +71,7 @@ the category (not separately quantified here — those tests mix this defect
 with legitimate ordering-semantics gaps).
 
 Distinguish from [BUG-446](BUG-446-FIXED.md) (network-loaded *module* import
-graph) and [BUG-568](BUG-568-OPEN.md) (`document.write()`) — both are about
+graph) and [BUG-568](BUG-568-FIXED.md) (`document.write()`) — both are about
 different script-loading paths; this one is specifically "script created via
 DOM API, whether classic or module, whether inline or `src`, is never
 executed at all, in a page that has already finished its initial parse".

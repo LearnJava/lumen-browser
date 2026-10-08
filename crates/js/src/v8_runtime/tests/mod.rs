@@ -10,7 +10,7 @@
 
 use super::*;
 // Кэш байт-кода — свой модуль (SPLIT-JS5), из `super::*` его имена не видны.
-use super::code_cache::{CODE_CACHE, CODE_CACHE_MIN_LEN, code_cache_hash};
+use super::code_cache::{CODE_CACHE, CODE_CACHE_MAX_ENTRIES, CODE_CACHE_MIN_LEN, code_cache_hash};
 use lumen_core::JsRuntime;
 
 fn rt() -> V8JsRuntime {
@@ -55,7 +55,7 @@ fn perf9_census_install_dom_cost() {
         let rt = V8JsRuntime::new().unwrap();
         let t_new = t0.elapsed();
         let t1 = std::time::Instant::now();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false, None)
             .unwrap();
         let t_install = t1.elapsed();
         eprintln!(
@@ -109,6 +109,33 @@ fn perf9_code_cache_hit_preserves_semantics() {
         bytes_after_hits, bytes_after_miss,
         "a cache hit must not rewrite or drop this test's own entry"
     );
+}
+
+/// BUG-1243: with `CODE_CACHE` at its cap, a miss must still store its own
+/// entry (evicting another) — before the fix the insert was silently
+/// dropped, which made `perf9_code_cache_hit_preserves_semantics` flake
+/// once the full suite had filled the process-wide cache.
+#[test]
+fn perf9_code_cache_full_still_stores_new_entry() {
+    let script = format!(
+        "(function() {{ return 7; }})();
+{}",
+        "// bug1243 padding to clear CODE_CACHE_MIN_LEN
+".repeat(30)
+    );
+    let hash = code_cache_hash(&script);
+    {
+        let mut map = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(&hash);
+        let mut fake = 0u64;
+        while map.len() < CODE_CACHE_MAX_ENTRIES {
+            map.insert(fake ^ 0xB06_1243_0000_0000, vec![0]);
+            fake += 1;
+        }
+    }
+    assert_eq!(rt().eval(&script).unwrap(), JsValue::Number(7.0));
+    let stored = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&hash);
+    assert!(stored, "a miss on a full cache must still populate its own entry");
 }
 
 /// PERF-9: scripts below `CODE_CACHE_MIN_LEN` (the vast majority of
@@ -287,6 +314,28 @@ fn eval_circular_object_does_not_crash() {
         }
         other => panic!("expected object, got {other:?}"),
     }
+}
+
+#[test]
+fn eval_completion_object_with_throwing_getter_is_not_an_error() {
+    // BUG-662: WPT `resizeTestHelper.js` ends with
+    // `Helper.prototype = { get _currentStep() { return this._steps[...]; } }`;
+    // reading that getter off the bare prototype throws, which used to fail
+    // the whole `eval()` with a misleading `get '_currentStep' failed`.
+    let rt = rt();
+    let val = rt
+        .eval("var P = { get cur() { return this._steps[0]; }, n: 1 }; P")
+        .unwrap();
+    match val {
+        JsValue::Object(entries) => {
+            let get = |k: &str| entries.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+            assert_eq!(get("cur"), Some(JsValue::String("[Getter threw]".into())));
+            assert_eq!(get("n"), Some(JsValue::Number(1.0)));
+        }
+        other => panic!("expected object, got {other:?}"),
+    }
+    // The getter's exception stays inside the conversion — the next eval is clean.
+    assert_eq!(rt.eval("1 + 1").unwrap(), JsValue::Number(2.0));
 }
 
 #[test]
@@ -613,7 +662,7 @@ fn make_doc() -> Arc<Mutex<lumen_dom::Document>> {
 /// and `WEB_API_SHIM` installed against `doc`, page URL `page_url`.
 fn runtime_with_dom(doc: Arc<Mutex<lumen_dom::Document>>, page_url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(doc, page_url, None, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, page_url, None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -630,14 +679,14 @@ fn frame_post_message_self_delivery_through_install_dom() {
     // постановки в ящик та же, что у пары родитель↔ребёнок, но внутри
     // одного изолята. Слот родителя с about:-URL даёт источнику события
     // унаследованный origin (self_origin страницы).
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), None, true, None);
-    rt.eval("window.__got = null; window.onmessage = function(e) { window.__got = e; };")
+    rt.eval("globalThis.__got = null; window.onmessage = function(e) { globalThis.__got = e; };")
         .unwrap();
     rt.eval("_lumen_frame_content_window(1).postMessage({n: 5}, '*')").unwrap();
     // До пумпы доставки нет — postMessage асинхронен.
     assert_eq!(
-        rt.eval("window.__got === null").unwrap(),
+        rt.eval("globalThis.__got === null").unwrap(),
         JsValue::Bool(true)
     );
     rt.eval("_lumen_frame_pump_messages()").unwrap();
@@ -646,9 +695,9 @@ fn frame_post_message_self_delivery_through_install_dom() {
     // слота родителя.
     assert!(matches!(
         rt.eval(
-            "window.__got !== null && window.__got.data.n === 5 \
-                 && window.__got.origin === 'https://parent.example' \
-                 && window.__got.source !== null"
+            "globalThis.__got !== null && globalThis.__got.data.n === 5 \
+                 && globalThis.__got.origin === 'https://parent.example' \
+                 && globalThis.__got.source !== null"
         )
         .unwrap(),
         JsValue::Bool(true)
@@ -663,7 +712,7 @@ fn frame_post_message_self_delivery_through_install_dom() {
 fn frame_facade_focus_and_blur_update_active_element_without_shell_request() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     // tabindex делает div#main фокусируемым (HTML LS §6.6.1).
     rt.eval("document.getElementById('main').setAttribute('tabindex', '0');")
         .unwrap();
@@ -705,11 +754,11 @@ fn frame_facade_focus_and_blur_update_active_element_without_shell_request() {
 fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
-        "window.__got = null; \
+        "globalThis.__got = null; \
              document.getElementById('main').addEventListener('hello', function(e) { \
-                 window.__got = { type: e.type, bubbles: e.bubbles, detail: e.detail }; \
+                 globalThis.__got = { type: e.type, bubbles: e.bubbles, detail: e.detail }; \
              });",
     )
     .unwrap();
@@ -720,16 +769,16 @@ fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
     )
     .unwrap();
     assert_eq!(
-        rt.eval("window.__got === null").unwrap(),
+        rt.eval("globalThis.__got === null").unwrap(),
         JsValue::Bool(true),
         "до пумпы доставки нет"
     );
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(matches!(
         rt.eval(
-            "window.__got !== null && window.__got.type === 'hello' \
-                 && window.__got.bubbles === true \
-                 && window.__got.detail.n === 42"
+            "globalThis.__got !== null && globalThis.__got.type === 'hello' \
+                 && globalThis.__got.bubbles === true \
+                 && globalThis.__got.detail.n === 42"
         )
         .unwrap(),
         JsValue::Bool(true)
@@ -743,25 +792,25 @@ fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
 fn frame_facade_inserted_script_executes_on_pump_with_current_script() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
              s.setAttribute('id', 'probe'); \
-             s.textContent = 'window.__ran = true; \
-                              window.__cs = document.currentScript \
+             s.textContent = 'globalThis.__ran = true; \
+                              globalThis.__cs = document.currentScript \
                                 && document.currentScript.id;'; \
              d.body.appendChild(s);",
     )
     .unwrap();
     // До пумпы скрипт не исполнялся — доставка через границу асинхронная.
     assert_eq!(
-        rt.eval("window.__ran === undefined").unwrap(),
+        rt.eval("globalThis.__ran === undefined").unwrap(),
         JsValue::Bool(true)
     );
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(matches!(
-        rt.eval("window.__ran === true && window.__cs === 'probe'")
+        rt.eval("globalThis.__ran === true && globalThis.__cs === 'probe'")
             .unwrap(),
         JsValue::Bool(true)
     ));
@@ -774,22 +823,22 @@ fn frame_facade_inserted_script_executes_on_pump_with_current_script() {
 fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
-        "window.__count = 0; \
+        "globalThis.__count = 0; \
              var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
-             s.textContent = 'window.__count++;'; \
+             s.textContent = 'globalThis.__count++;'; \
              d.body.appendChild(s); \
              var j = d.createElement('script'); \
              j.setAttribute('type', 'application/json'); \
-             j.textContent = 'window.__count += 10;'; \
+             j.textContent = 'globalThis.__count += 10;'; \
              d.body.appendChild(j);",
     )
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        rt.eval("window.__count").unwrap(),
+        rt.eval("globalThis.__count").unwrap(),
         JsValue::Number(1.0),
         "классика исполнена один раз, JSON-блок — нет"
     );
@@ -803,7 +852,7 @@ fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        rt.eval("window.__count").unwrap(),
+        rt.eval("globalThis.__count").unwrap(),
         JsValue::Number(1.0),
         "повторная вставка не перезапускает исполненный скрипт"
     );
@@ -816,18 +865,18 @@ fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
 fn detached_before_delivery_script_runs_on_reinsertion() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
-             s.textContent = 'window.__ran = true;'; \
+             s.textContent = 'globalThis.__ran = true;'; \
              d.body.appendChild(s); \
              d.body.removeChild(s);",
     )
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        rt.eval("window.__ran === undefined").unwrap(),
+        rt.eval("globalThis.__ran === undefined").unwrap(),
         JsValue::Bool(true),
         "отсоединённый до доставки конверт не исполняется"
     );
@@ -838,7 +887,7 @@ fn detached_before_delivery_script_runs_on_reinsertion() {
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(matches!(
-        rt.eval("window.__ran === true").unwrap(),
+        rt.eval("globalThis.__ran === true").unwrap(),
         JsValue::Bool(true)
     ));
 }
@@ -852,15 +901,15 @@ fn detached_before_delivery_script_runs_on_reinsertion() {
 fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
-        "window.__err = false; \
+        "globalThis.__err = false; \
              var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
              d.body.appendChild(s); \
-             window.__snid = s.__nid__; \
+             globalThis.__snid = s.__nid__; \
              _lumen_make_element(s.__nid__).addEventListener('error', function () { \
-                 window.__err = true; \
+                 globalThis.__err = true; \
              });",
     )
     .unwrap();
@@ -868,7 +917,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     assert!(
         matches!(
             rt.eval(
-                "_lumen_frame_scripts_started[__snid] === undefined && window.__err === false"
+                "_lumen_frame_scripts_started[__snid] === undefined && globalThis.__err === false"
             )
             .unwrap(),
             JsValue::Bool(true)
@@ -881,7 +930,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     rt.eval("_lumen_frame_pump_messages()").unwrap();
     assert!(
         matches!(
-            rt.eval("_lumen_frame_scripts_started[__snid] === 1 && window.__err === false")
+            rt.eval("_lumen_frame_scripts_started[__snid] === 1 && globalThis.__err === false")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -891,7 +940,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     // асинхронно (task hop таймера внутри _lumen_script_load_external).
     rt.eval("_lumen_tick_timers();").unwrap();
     assert_eq!(
-        rt.eval("window.__err").unwrap(),
+        rt.eval("globalThis.__err").unwrap(),
         JsValue::Bool(true),
         "неудавшаяся загрузка отстрелила error на элементе"
     );
@@ -899,7 +948,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     rt.eval("s.src = 'other.js';").unwrap();
     rt.eval("_lumen_frame_pump_messages(); _lumen_tick_timers();").unwrap();
     assert_eq!(
-        rt.eval("window.__err").unwrap(),
+        rt.eval("globalThis.__err").unwrap(),
         JsValue::Bool(true),
         "повторный src после already started — no-op"
     );
@@ -911,14 +960,14 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
 fn frame_data_block_stays_unmarked_after_delivery() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var j = d.createElement('script'); \
              j.setAttribute('type', 'application/json'); \
              j.textContent = '{\"x\":1}'; \
              d.body.appendChild(j); \
-             window.__jnid = j.__nid__;",
+             globalThis.__jnid = j.__nid__;",
     )
     .unwrap();
     rt.eval("_lumen_frame_pump_messages()").unwrap();
@@ -951,6 +1000,7 @@ fn parent_child_pair(
         "about:srcdoc".to_owned(),
         None,
         true,
+        false,
         None,
     );
     child.register_parent_document(
@@ -975,13 +1025,13 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     let (parent, child, parent_doc, _child_doc) = parent_child_pair();
     parent
         .eval(
-            "window.__order = []; \
+            "globalThis.__order = []; \
                  var d = _lumen_frame_content_document(1); \
                  var s = d.getElementById('main'); \
-                 window.__s = s; \
-                 s.addEventListener('load', function () { window.__order.push('l1'); }); \
+                 globalThis.__s = s; \
+                 s.addEventListener('load', function () { globalThis.__order.push('l1'); }); \
                  s.addEventListener('load', function () { \
-                     window.__order.push('l2'); \
+                     globalThis.__order.push('l2'); \
                  });",
         )
         .unwrap();
@@ -995,7 +1045,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
         Arc::as_ptr(&parent_doc) as usize
     )));
     assert_eq!(
-        parent.eval("window.__order.length").unwrap(),
+        parent.eval("globalThis.__order.length").unwrap(),
         JsValue::Number(0.0),
         "до пумпы родителя доставок нет"
     );
@@ -1003,7 +1053,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     assert!(
         matches!(
             parent
-                .eval("window.__order.join(',') === 'l1,l2'")
+                .eval("globalThis.__order.join(',') === 'l1,l2'")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1012,8 +1062,8 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     // Теперь назначается свойство on<type>: тот же фасад, второй конверт.
     parent
         .eval(
-            "window.__s.onerror = function (ev) { \
-                     window.__order.push('prop:' + ev.type + ':' + (ev.target === __s) + ':' + \
+            "globalThis.__s.onerror = function (ev) { \
+                     globalThis.__order.push('prop:' + ev.type + ':' + (ev.target === __s) + ':' + \
                          (ev.currentTarget === ev.target) + ':' + ev.bubbles + ':' + ev.isTrusted); \
                  };",
         )
@@ -1027,7 +1077,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     assert!(
         matches!(
             parent
-                .eval("window.__order.join(',').split(',')[2] !== undefined && window.__order[2].indexOf('prop:error:') === 0")
+                .eval("globalThis.__order.join(',').split(',')[2] !== undefined && globalThis.__order[2].indexOf('prop:error:') === 0")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1036,7 +1086,7 @@ fn frame_resource_event_reaches_facade_handlers_in_parent() {
     assert!(
         matches!(
             parent
-                .eval("window.__order[2] === 'prop:error:true:true:false:true'")
+                .eval("globalThis.__order[2] === 'prop:error:true:true:false:true'")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1051,23 +1101,23 @@ fn facade_remove_listener_stops_delivery() {
     let (parent, child, _parent_doc, _child_doc) = parent_child_pair();
     parent
         .eval(
-            "window.__n = 0; \
+            "globalThis.__n = 0; \
                  var d = _lumen_frame_content_document(1); \
                  var s = d.getElementById('main'); \
-                 var fn = function () { window.__n++; }; \
+                 var fn = function () { globalThis.__n++; }; \
                  s.addEventListener('load', fn); \
-                 window.__fn = fn;",
+                 globalThis.__fn = fn;",
         )
         .unwrap();
     child
         .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
-    assert_eq!(parent.eval("window.__n").unwrap(), JsValue::Number(1.0));
+    assert_eq!(parent.eval("globalThis.__n").unwrap(), JsValue::Number(1.0));
     parent
         .eval(
             "var s2 = _lumen_frame_content_document(1).getElementById('main'); \
-                 s2.removeEventListener('load', window.__fn);",
+                 s2.removeEventListener('load', globalThis.__fn);",
         )
         .unwrap();
     child
@@ -1075,7 +1125,7 @@ fn facade_remove_listener_stops_delivery() {
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        parent.eval("window.__n").unwrap(),
+        parent.eval("globalThis.__n").unwrap(),
         JsValue::Number(1.0),
         "после removeEventListener доставок нет"
     );
@@ -1106,7 +1156,7 @@ fn mirror_gates_top_level_non_element_and_missing_native() {
         None,
     );
     // Текстовый узел — не элемент.
-    rt.eval("window.__tnid = document.createTextNode('x').__nid__;").unwrap();
+    rt.eval("globalThis.__tnid = document.createTextNode('x').__nid__;").unwrap();
     assert_eq!(
         rt.eval("_lumen_frame_mirror_resource(__tnid, 'load')").unwrap(),
         JsValue::Bool(false),
@@ -1154,14 +1204,14 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         None,
     );
     parent
-        .eval("window.__got = false;")
+        .eval("globalThis.__got = false;")
         .unwrap();
     child
         .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        parent.eval("window.__got").unwrap(),
+        parent.eval("globalThis.__got").unwrap(),
         JsValue::Bool(false),
         "неизвестный отправитель — тихая потеря конверта"
     );
@@ -1177,6 +1227,7 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         "about:srcdoc".to_owned(),
         None,
         false,
+        false,
         None,
     );
     child
@@ -1184,7 +1235,7 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         .unwrap();
     parent.eval("_lumen_frame_pump_messages()").unwrap();
     assert_eq!(
-        parent.eval("window.__got").unwrap(),
+        parent.eval("globalThis.__got").unwrap(),
         JsValue::Bool(false),
         "cross-origin отправитель не доставляется"
     );
@@ -1203,9 +1254,9 @@ fn external_script_failure_mirrors_error_to_facade_handler() {
             "var d = _lumen_frame_content_document(1); \
                  var s = d.createElement('script'); \
                  s.setAttribute('id', 'probe'); \
-                 window.__s = s; \
-                 window.__err = null; \
-                 s.onerror = function (ev) { window.__err = ev.type; }; \
+                 globalThis.__s = s; \
+                 globalThis.__err = null; \
+                 s.onerror = function (ev) { globalThis.__err = ev.type; }; \
                  s.src = 'missing.js'; \
                  d.body.appendChild(s);",
         )
@@ -1218,7 +1269,7 @@ fn external_script_failure_mirrors_error_to_facade_handler() {
     assert!(
         matches!(
             parent
-                .eval("window.__err === 'error' && window.__s.onerror !== null")
+                .eval("globalThis.__err === 'error' && globalThis.__s.onerror !== null")
                 .unwrap(),
             JsValue::Bool(true)
         ),
@@ -1233,7 +1284,7 @@ fn external_script_failure_mirrors_error_to_facade_handler() {
 fn frame_transport_pending_flips_around_pump() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, false, None);
     assert!(!rt.frame_transport_pending(), "ящик пуст до постановки");
     rt.eval("_lumen_frame_content_window(1).postMessage('wake', '*')")
         .unwrap();
@@ -1360,6 +1411,40 @@ fn take_dom_touched_reports_set_attribute() {
     assert!(!t.unattributed);
 }
 
+/// BUG-935 S80 / срез 81: читатель, которого UI-поток держит у себя (`js_ctx` под
+/// движковым потоком пуст), видит изменения после своей прошлой отметки, называет запись
+/// `class` со старым значением и **не** сбрасывает трекер — флашу движкового потока тот
+/// нужен целым.
+#[test]
+fn dom_changes_reader_reports_changes_since_its_own_mark() {
+    use lumen_layout::style::OwnedNodeChange;
+    let doc = make_doc();
+    let main = doc.lock().unwrap().find_by_id("main").unwrap();
+    let rt = runtime_with_dom(doc, "");
+    let read = rt.dom_changes_reader();
+    assert!(read().unattributed, "первое чтение не знает базиса — полный каскад");
+    rt.eval("document.getElementById('main').className = 'a'").unwrap();
+    let t = read();
+    assert!(!t.unattributed);
+    assert_eq!(t.changes, vec![(main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "".into() })]);
+    assert!(read().changes.is_empty(), "второе чтение без мутаций пусто");
+    rt.eval("document.getElementById('main').className = 'b'").unwrap();
+    let t = read();
+    assert_eq!(t.changes, vec![(main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "a".into() })]);
+    // Запись туда и обратно: базис читателя может лежать между записями (раскладка берёт
+    // документ позже отметки), поэтому названы оба значения, а не только первое.
+    rt.eval("var m = document.getElementById('main'); m.className = 'c'; m.className = 'b'").unwrap();
+    let t = read();
+    assert_eq!(
+        t.changes,
+        vec![
+            (main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "b".into() }),
+            (main, OwnedNodeChange::AttrFrom { name: "class".into(), old: "c".into() }),
+        ]
+    );
+    assert!(rt.take_dom_touched().nodes.contains(&main), "читатель не сбросил общий трекер");
+}
+
 #[test]
 fn take_dom_touched_ignores_a_no_op_set_attribute() {
     let doc = make_doc();
@@ -1484,6 +1569,33 @@ fn take_dom_touched_clears_between_calls() {
     assert!(!second.unattributed);
 }
 
+/// BUG-1211: плоская запись атрибута (`setAttribute`, `removeAttribute`,
+/// инлайновый `style`) запоминает имя в `attr_gen`, а не в `structural_gen`;
+/// смена списка детей — в `child_list_gen`; всё остальное — структурное. Это то, по чему
+/// `try_incremental_flush` выбирает `NodeChange::Attr` против `Unattributed`.
+#[test]
+fn dom_touched_names_plain_attribute_writes() {
+    let doc = make_doc();
+    let rt = runtime_with_dom(doc, "");
+    rt.eval(
+        "var m = document.getElementById('main');         m.style.width = '10px'; m.setAttribute('data-x', '1'); m.removeAttribute('data-x');",
+    )
+    .unwrap();
+    let t = rt.take_dom_touched();
+    let (&node, names) = t.attr_gen.iter().next().expect("attribute writes must be named");
+    let mut got: Vec<&str> = names.keys().map(|k| &**k).collect();
+    got.sort_unstable();
+    assert_eq!(got, ["data-x", "style"]);
+    assert!(!t.structural_gen.contains_key(&node), "plain attribute writes are not structural");
+
+    // BUG-935 срез 60: a change of the child list is its own kind of touch — the flush
+    // restyles the container and its direct children, not the parent's subtree.
+    rt.eval("document.getElementById('main').appendChild(document.createElement('i'))").unwrap();
+    let t = rt.take_dom_touched();
+    assert!(!t.child_list_gen.is_empty(), "appendChild is a child-list touch");
+    assert!(t.structural_gen.is_empty(), "appendChild is not an unattributed structural touch");
+}
+
 /// BUG-341 S7 part 2: end-to-end differential test for the page-pipeline
 /// wiring (`Lumen::try_relayout_raf_incremental`) — `take_dom_touched()`'s
 /// node set, fed through `restyle_root_set_for_node_change` into a
@@ -1552,7 +1664,7 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
             &node_index,
         )
     };
-    let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
+    let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
 
     // BUG-341 S19: the incremental pass consumes `prev` (it moves the
     // reusable subtrees into the tree it returns), and the geometry
@@ -1602,6 +1714,10 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
     );
 }
 
+mod bug1159_range_spec;
+mod bug935_child_edits;
+mod bug1198_opaque_frame;
+mod bug1231_frame_referrer;
 mod dom_suspend_focus;
 
 // ── LONGTASK-1 срез 4-5: culprit source-location attribution ──────────────
@@ -1645,7 +1761,9 @@ fn capture_call_site_reports_source_char_position() {
     .unwrap();
     assert_eq!(
         rt.eval("__site.sourceCharPosition").unwrap(),
-        JsValue::Number(30.0)
+        // Internal evals compile `with (container) { … }` around the source, so
+        // every offset is shifted by the wrapper's prefix.
+        JsValue::Number(30.0 + crate::internal_globals::WITH_PREFIX.len() as f64)
     );
 }
 

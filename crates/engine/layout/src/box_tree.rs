@@ -51,23 +51,29 @@ pub use container_anchor::apply_container_styles;
 use container_anchor::apply_anchor_positions;
 
 mod inline_wrap;
+mod inline_wrap_preserved;
 pub use inline_wrap::{measure_text_w, measure_text_w_families, measure_text_w_varied};
 pub(crate) use inline_wrap::strip_soft_hyphens;
 use inline_wrap::{
-    align_lines, apply_inline_vertical_align, apply_line_clamp, apply_text_overflow_ellipsis, balance_wrap,
-    one_line_fallback, pretty_wrap, step_line_height, wrap_inline_run,
+    align_lines, align_one_line, apply_inline_vertical_align, ellipsize_last_line,
+    apply_text_overflow_ellipsis, balance_wrap, one_line_fallback, pretty_wrap, step_line_height, wrap_inline_run,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's own non-test code.
 #[cfg(test)]
 use inline_wrap::{caps_synthesis, char_break_offset, try_hyp_break, SMALL_CAPS_SCALE};
 
 mod grid;
+mod grid_auto_cols;
 pub use grid::resolve_auto_fill_fit_count;
 
+mod baseline;
+use baseline::BaselineSide;
 mod flex;
 use flex::UsedSizeOverride;
 
 mod multicol_abspos;
+mod multicol_fragmentation;
+mod multicol_span;
 use multicol_abspos::lay_out_abs_children;
 
 mod table;
@@ -105,9 +111,9 @@ mod predicates;
 pub(crate) use predicates::{
     embedded_document_url, embedded_image, embedded_resource_url, is_audio_element, is_canvas_element,
     is_iframe_element, is_image_element,
-    is_inline_replaced_media_element, is_picture_element, is_ruby_element,
-    is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
-    is_video_element, scrollbar_gutter_block,
+    blockified_legend_display, is_fieldset_element, is_fieldset_legend, is_inline_replaced_media_element, is_picture_element, is_ruby_element,
+    is_ruby_base_element, is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
+    is_video_element, rendered_legend_index, scrollbar_gutter_block,
     scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 
@@ -146,12 +152,12 @@ use svg::{
 mod image_requests;
 pub use image_requests::{
     apply_intrinsic_size, collect_background_image_requests, collect_cascade_background_image_requests,
-    collect_image_requests, CrossOriginMode, ImageRequest,
+    collect_image_requests, pick_image_request_url, CrossOriginMode, ImageRequest,
 };
 use image_requests::resolve_image_source;
 
 mod types;
-pub use types::{BoxKind, BoxOrigin, BoxRole, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, SvgMaskContent};
+pub use types::{BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, SvgMaskContent};
 
 mod pseudo_text;
 use pseudo_text::{
@@ -163,7 +169,7 @@ use pseudo_text::{
 use pseudo_text::is_first_letter_box;
 
 mod entry;
-use entry::{is_collapsible_whitespace, is_invisible_control, strip_invisible_controls};
+use entry::{is_collapsible_whitespace, is_discardable_text, is_invisible_control, is_wrap_whitespace, split_css_whitespace, strip_invisible_controls};
 #[cfg(test)]
 use entry::{apply_font_size_adjust, font_size_adjust_used};
 pub use entry::{
@@ -187,17 +193,31 @@ use build::{build_box, build_box_or_reuse};
 pub use build::incremental_build_box;
 
 mod intrinsic;
+pub(crate) use intrinsic::{
+    max_content_outer_height, max_content_outer_width, min_content_outer_width_of_contents,
+};
 use intrinsic::{
-    flex_auto_base_main_width, flex_item_max_main_outer, flex_item_min_main_width,
-    form_control_fit_content_width, max_content_outer_width, min_content_outer_width,
+    flex_auto_base_main_width, flex_auto_base_main_width_from, flex_item_max_main_outer, flex_item_min_main_width,
+    form_control_fit_content_width, min_content_outer_width,
     preferred_inline_block_width,
 };
 
 mod shapes_floats;
+mod inline_shape_wrap;
+// `shift_tree` is also `incremental::translate_subtree`: one relocation, one implementation
+// (rect + `svg_paint_matrix` + `<mask>` content move together).
+pub(crate) use shapes_floats::shift_tree;
+// `FloatContext` is also the float state of a vertical block (`vertical::VerticalInit`).
+pub(crate) use shapes_floats::FloatContext;
+use shapes_floats::{
+    register_shape_outside, shift_y_box, FloatShapeGeom,
+};
+// Used only by `mod tests` (super::super::X) — never called from this file's
+// own non-test code.
+#[cfg(test)]
 use shapes_floats::{
     parse_circle_px, parse_shape_ellipse_px, parse_shape_inset_px, parse_shape_path_px,
-    parse_shape_polygon_px, shift_tree, shift_y_box, FloatContext, ShapeEllipse, ShapeInset,
-    ShapePolygon,
+    parse_shape_polygon_px, polygon_edge_x_at_y_margin, ShapeEllipse, ShapeInset, ShapePolygon,
 };
 // Used only by `mod tests` (super::super::X) — never called from this file's
 // own non-test code.
@@ -205,18 +225,30 @@ use shapes_floats::{
 use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_edge_at_y};
 
 mod bfc;
+mod line_clamp_flow;
+mod layout_cache;
 mod layout_dispatch;
 mod block_flow_trampoline;
+mod fieldset;
 mod flex_trampoline;
 mod grid_trampoline;
+mod grid_vertical;
+mod table_height;
 mod table_trampoline;
+mod table_valign;
 mod multicol_trampoline;
 mod vertical_trampoline;
+mod vertical_row;
+mod vertical_float;
+mod vertical_margins;
+pub(crate) use vertical_margins::{escapes_end, escapes_start};
 
 use bfc::{
-    collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc,
+    collapsed_bottom_margin, collapsed_top_margin, contained_content_height,
     has_in_flow_content, last_collapsible_child, MarginCollapseCache,
 };
+// Also read by `vertical::build_vertical_init` (which boxes enclose their floats).
+pub(crate) use bfc::establishes_bfc;
 use layout_dispatch::{lay_out, lay_out_with_used_size};
 
 #[cfg(test)]

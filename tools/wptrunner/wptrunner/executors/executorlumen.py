@@ -51,31 +51,28 @@ page-visible `_lumen_deliver_report` JS global, no new BiDi surface needed)
 are actually executed; every other action fails cleanly (rejects the test's
 promise, logged on the runner side too since BUG-810) rather than hanging
 forever — the DoD is "not silently SKIPped", not "every `test_driver.*`
-method works". Left unimplemented past this slice for want of a matching
-engine/BiDi surface rather than tooling effort: `set_permission` (no
-`permissions.setPermission` BiDi command exists server-side —
-`crates/bidi-server/src/protocol.rs` has no `permissions.*` handler at all,
-so this is new engine-adjacent surface, not payload translation) and
-`get_computed_role`/`get_computed_label` (an accessibility tree does exist —
-`crates/engine/a11y`, `AutomationCommand::A11yTree` — but nothing correlates
-one of its `AXNode`s back to the DOM element `params["selectors"]` resolves
-to; that correlation, not the tree itself, is the missing piece, and it's
-sized like its own task rather than a payload translation).
+method works". `set_permission` (`permissions.setPermission`, BUG-1014) is
+executed too, as are `get_computed_role`/`get_computed_label` (Lumen's own
+`lumen.getComputedA11y` BiDi extension: the selector chain is resolved against
+the live DOM and role/name read off the accessibility tree, BUG-1014).
 """
 
 import asyncio
 import base64
 import json
+import os
 import socket
 import struct
 import traceback
+from urllib.parse import unquote
 
 from webdriver.bidi.client import BidiSession
 from webdriver.bidi.error import BidiException, UnknownErrorException
 from webdriver.bidi.modules.input import Actions
 from webdriver.bidi.modules.script import ContextTarget
 
-from .base import ExecutorException, RefTestExecutor, RefTestImplementation, TestharnessExecutor
+from .base import (CrashtestExecutor, ExecutorException, RefTestExecutor,
+                   RefTestImplementation, TestharnessExecutor)
 from .protocol import Protocol
 
 #: Global `tests/wpt/resources/testharnessreport.js` stashes the JSON-encoded
@@ -99,6 +96,113 @@ POLL_INTERVAL_S = 0.05
 #: normally visible on the first poll; this only absorbs the same
 #: document-swap lag the "JS context not available" retry below covers.
 NAV_SETTLE_S = 2.0
+
+#: Global `tests/wpt/resources/testharnessreport.js` sets at parse time on
+#: every test document. A top-level document without it is not the test: the
+#: test navigated its own browsing context away (a `<form target>` Lumen
+#: resolves to the top level instead of the named `<iframe>`, `location =`,
+#: an un-returned bfcache round trip) and the harness that would report is
+#: gone with it.
+TEST_CONTEXT_GLOBAL = "__wptrunner_is_test_context"
+
+#: Env var: seconds a *foreign* top-level document (see `TEST_CONTEXT_GLOBAL`)
+#: may stay live before the test is ended as TIMEOUT early, instead of polling
+#: a page that can never report until the full `timeout` (60 s for
+#: `timeout: long`) runs out. Unset — the default below; `off` — never end
+#: early (only log, for an A/B against the old behaviour).
+FOREIGN_GRACE_ENV = "LUMEN_WPT_FOREIGN_GRACE_S"
+
+#: Default for `FOREIGN_GRACE_ENV`. Long enough for a test that leaves and
+#: comes back on its own (bfcache `executor-window.py` round trips, measured
+#: ≤ 8.2 s away on `websockets/back-forward-cache-*`, all still OK).
+FOREIGN_GRACE_DEFAULT_S = 15.0
+
+
+def foreign_grace_s():
+    """`FOREIGN_GRACE_ENV` parsed: a float, or `None` for `off`."""
+    raw = os.environ.get(FOREIGN_GRACE_ENV, "").strip().lower()
+    if not raw:
+        return FOREIGN_GRACE_DEFAULT_S
+    if raw in ("off", "none", "0"):
+        return None
+    return float(raw)
+
+
+#: Env var: `off` disables the per-test hard cap (`hard_cap_s`), for an A/B
+#: against the old behaviour. Anything else (or unset) leaves it on.
+HARD_CAP_ENV = "LUMEN_WPT_HARD_CAP"
+
+#: Seconds `LumenBidiProtocol.teardown` waits for the WebSocket close
+#: handshake. A healthy browser answers in milliseconds; a wedged one never
+#: does, and `websockets`' own `close_timeout` (10 s) would then eat exactly
+#: the time the cap below saved.
+TEARDOWN_CLOSE_S = 2.0
+
+
+def hard_cap_s(timeout, extra_timeout):
+    """Wall-clock ceiling for one whole test inside the executor, or `None`.
+
+    Lumen's executors do not run under `TimedRunner` (`executors/base.py`),
+    so nothing bounded a single BiDi call: a `script.evaluate` against a page
+    whose JS never yields only returns when Lumen's own automation timeout
+    fires (30-65 s). Until then the poll loop cannot even look at its
+    deadline, and the test ends on `testrunner.py`'s external timer
+    (`timeout + 3 * extra_timeout`) — after which the manager waits
+    `join(10)` for a runner process still stuck in that call and terminates
+    it. 168 such tests in 25 102 of the 2026-10 control runs, ~15-20 s lost on
+    each (`docs/tasks/p2-wpt-runner-throughput.md` §URL результата).
+
+    The cap is upstream's own leeway, `timeout + 2 * extra_timeout`
+    (`TimedRunner.run`): past the poll loop's deadline (`timeout +
+    extra_timeout`) and before the external timer, so a test whose calls
+    return is never affected — only a call that is itself stuck.
+    """
+    if timeout is None:
+        return None
+    if os.environ.get(HARD_CAP_ENV, "").strip().lower() in ("off", "none", "0"):
+        return None
+    return timeout + 2 * extra_timeout
+
+
+def run_capped(protocol, coro, cap, url):
+    """Run `coro` on `protocol`'s loop, at most `cap` seconds (`hard_cap_s`).
+
+    Over the cap the browser is treated as wedged: `EXTERNAL-TIMEOUT` (shown as
+    TIMEOUT, the verdict the external timer would have given) makes
+    `testrunner.py` restart it, and `protocol.wedged` makes the teardown skip
+    waiting for a close handshake that will not come.
+    """
+    if cap is None:
+        return protocol.run(coro)
+    try:
+        return protocol.run(asyncio.wait_for(coro, cap))
+    except asyncio.TimeoutError as e:
+        protocol.wedged = True
+        raise ExecutorException(
+            "EXTERNAL-TIMEOUT",
+            f"browser did not answer a BiDi call within {cap:g}s while running {url} "
+            f"({HARD_CAP_ENV})") from e
+
+
+def canonical_result_url(test, raw_result):
+    """`raw_result` with its URL replaced by `test.url` when the two differ
+    only in percent-encoding, otherwise unchanged.
+
+    `testharnessreport.js` reports `location.pathname + location.search`,
+    which the browser percent-encodes; `test.url` is the manifest's literal
+    id. For an id with a space or other raw character in its query (`/xhr/
+    xmlhttprequest-timeout-*.html?aborted immediately after send()` — 54
+    manifest ids) the two never match, and `TestharnessResultConverter`'s
+    `result_url == test.url` assertion threw away a real result as
+    INTERNAL-ERROR, restarting the browser each time. Comparing the decoded
+    forms keeps the assertion's real job — catching a result that belongs to a
+    *different* test (BUG-1268) — intact.
+    """
+    result_url = raw_result[0]
+    if result_url != test.url and unquote(result_url) == unquote(test.url):
+        return [test.url] + list(raw_result[1:])
+    return raw_result
+
 
 #: Text Lumen's BiDi server returns when its UI-thread automation channel did
 #: not reply in time (`crates/driver/src/automation.rs`, `RecvTimeoutError::
@@ -134,12 +238,20 @@ RESET_EXPRESSION = f"""(() => {{
 #: callback fires *after* the runner moved on would otherwise re-populate
 #: `RESULTS_GLOBAL` on the un-replaced document and hand the next test the
 #: previous one's result all over again.
+#:
+#: `{"k": "f", "v": <location.href>}` — the live document is neither the old
+#: one nor a test document (`TEST_CONTEXT_GLOBAL` missing): the test navigated
+#: its own top level away. Checked before arming the testdriver callback so
+#: nothing is planted on a page that is not ours.
 POLL_EXPRESSION = f"""(() => {{
   if (window.{STALE_GLOBAL} === true) {{
     return JSON.stringify({{k: "s", v: String(location.href)}});
   }}
   if (window.{RESULTS_GLOBAL} !== undefined) {{
     return JSON.stringify({{k: "r", v: window.{RESULTS_GLOBAL}}});
+  }}
+  if (window.{TEST_CONTEXT_GLOBAL} !== true) {{
+    return JSON.stringify({{k: "f", v: String(location.href)}});
   }}
   if (!window.__wptrunner_testdriver_callback) {{
     window.__wptrunner_testdriver_callback = (r) => {{ window.__lumen_td_slot = r; }};
@@ -174,6 +286,10 @@ class LumenBidiProtocol(Protocol):
         self.capabilities = capabilities
         self.loop = asyncio.new_event_loop()
         self.session = None
+        #: Set by `run_capped` when a test overran its hard cap: the browser
+        #: stopped answering, so `teardown` does not wait for its close
+        #: handshake.
+        self.wedged = False
         #: Top-level browsing context tests navigate in; fetched once in
         #: `after_connect` and reused for every test (single-window executor).
         self.context_id = None
@@ -203,7 +319,11 @@ class LumenBidiProtocol(Protocol):
     def teardown(self):
         if self.session is not None:
             try:
-                self.loop.run_until_complete(self.session.end())
+                # Bounded (`TEARDOWN_CLOSE_S`): a wedged browser never answers
+                # the close frame, and `testrunner.py` only gives the whole
+                # runner process `join(10)` before terminating it.
+                self.loop.run_until_complete(asyncio.wait_for(
+                    self.session.end(), 0.1 if self.wedged else TEARDOWN_CLOSE_S))
             except Exception:
                 self.logger.debug(traceback.format_exc())
             self.session = None
@@ -219,6 +339,50 @@ class LumenBidiProtocol(Protocol):
             return False
         reader = self.session.transport.read_message_task
         return reader is None or not reader.done()
+
+
+def _lost_browser(protocol, url, error):
+    """`ExecutorException` for an executor call that failed because the browser
+    is gone or wedged, or `None` when the failure is the test's own (BUG-1022).
+
+    A test that kills the browser (a stack overflow on `lumen-pipeline` aborts
+    the whole process) used to come back as a plain ERROR. ERROR does not make
+    `testrunner.py` restart the browser, so the *next* test in the same worker
+    inherited the dead WebSocket and got an ERROR of its own — which neighbour
+    that was depended on sharding, and every `--check` flipped a different
+    innocent file OK→ERROR. CRASH is the status that triggers
+    `restart_before_next`, and is also the honest one.
+
+    Second shape of the same leak: the socket is still up but Lumen's
+    automation loop stopped answering (`crates/driver/src/automation.rs` —
+    `span-limits.html` wedges it before the process finally dies during the
+    *next* test's navigate). A wedged browser is exactly what EXTERNAL-TIMEOUT
+    means, and it too triggers the restart; ERROR would hand the wedge to a
+    neighbour.
+    """
+    if not protocol.is_alive():
+        return ExecutorException(
+            "CRASH", f"browser connection lost while running {url}: {error}")
+    if AUTOMATION_TIMEOUT_MARKER in str(error):
+        return ExecutorException(
+            "EXTERNAL-TIMEOUT",
+            f"browser stopped answering automation while running {url}: {error}")
+    return None
+
+
+async def _reset_and_mark(session, context):
+    """Clear the outgoing document's result/testdriver slots and mark it
+    (`RESET_EXPRESSION`). Best-effort: a context with no JS runtime yet
+    (the initial `about:blank`, before the first test) reports "JS context
+    not available" and has nothing to carry over anyway."""
+    try:
+        await session.script.evaluate(
+            expression=RESET_EXPRESSION,
+            target=ContextTarget(context),
+            await_promise=False)
+    except UnknownErrorException as e:
+        if "JS context not available" not in e.message:
+            raise
 
 
 class LumenTestharnessExecutor(TestharnessExecutor):
@@ -244,31 +408,14 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         timeout = (test.timeout * self.timeout_multiplier
                    if self.debug_info is None else None)
         try:
-            raw_result = self.protocol.run(self._run_testharness(url, timeout))
+            raw_result = run_capped(self.protocol, self._run_testharness(url, timeout),
+                                    hard_cap_s(timeout, self.extra_timeout), url)
         except Exception as e:
-            # BUG-1022: a test that kills the browser (a stack overflow on
-            # `lumen-pipeline` aborts the whole process) used to come back as
-            # a plain ERROR. ERROR does not make `testrunner.py` restart the
-            # browser, so the *next* test in the same worker inherited the
-            # dead WebSocket and got an ERROR of its own — which neighbour
-            # that was depended on sharding, and every `--check` flipped a
-            # different innocent file OK→ERROR. CRASH is the status that
-            # triggers `restart_before_next`, and is also the honest one.
-            if not self.protocol.is_alive():
-                raise ExecutorException(
-                    "CRASH", f"browser connection lost while running {url}: {e}") from e
-            # Second shape of the same leak: the socket is still up but
-            # Lumen's automation loop stopped answering (`crates/driver/src/
-            # automation.rs` — `span-limits.html` wedges it before the process
-            # finally dies during the *next* test's navigate). A wedged
-            # browser is exactly what EXTERNAL-TIMEOUT means, and it too
-            # triggers the restart; ERROR would hand the wedge to a neighbour.
-            if AUTOMATION_TIMEOUT_MARKER in str(e):
-                raise ExecutorException(
-                    "EXTERNAL-TIMEOUT",
-                    f"browser stopped answering automation while running {url}: {e}") from e
+            lost = _lost_browser(self.protocol, url, e)  # BUG-1022
+            if lost is not None:
+                raise lost from e
             raise
-        return self.convert_result(test, raw_result)
+        return self.convert_result(test, canonical_result_url(test, raw_result))
 
     async def _run_testharness(self, url, timeout):
         session = self.protocol.session
@@ -289,6 +436,8 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout + self.extra_timeout
         settle_deadline = loop.time() + NAV_SETTLE_S
+        grace = foreign_grace_s()
+        foreign_since = None
         while True:
             try:
                 # `await_promise=False` is deliberate: async tests
@@ -315,26 +464,47 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 if "JS context not available" not in e.message:
                     raise
             else:
-                if value.get("type") == "string":
-                    outer = json.loads(value["value"])
-                    if outer["k"] == "s":
-                        # The document that was live before `navigate` is still
-                        # answering: the new page never replaced it.
-                        if loop.time() > settle_deadline:
-                            raise ExecutorException(
-                                "ERROR",
-                                f"browsingContext.navigate({url}) reported success but the "
-                                f"document was never replaced (still at {outer['v']}); "
-                                f"the page did not load")
-                    elif outer["k"] == "r":
-                        return json.loads(outer["v"])
-                    else:
-                        # outer["k"] == "a": [url, "action", {type, action, params, id}].
-                        # Dispatch and post the completion back, then keep polling
-                        # in the same loop — an action never ends the test itself.
-                        _, msg_type, payload = outer["v"]
-                        if msg_type == "action":
-                            await self._handle_action(session, context, payload)
+                outer = (json.loads(value["value"])
+                         if value.get("type") == "string" else {"k": None})
+                if outer["k"] == "f":
+                    # The test's own document is gone (see
+                    # `TEST_CONTEXT_GLOBAL`). Its harness cannot report any
+                    # more, so the old behaviour — poll until `deadline` —
+                    # spent the whole timeout to arrive at the very TIMEOUT
+                    # raised here. A test that leaves and comes back on its own
+                    # resets the clock on the first poll that sees it again.
+                    now = loop.time()
+                    if foreign_since is None:
+                        foreign_since = now
+                    elif grace is not None and now - foreign_since > grace:
+                        away = str(outer["v"])
+                        if len(away) > 160:
+                            away = away[:160] + "…"
+                        raise ExecutorException(
+                            "TIMEOUT",
+                            f"test document navigated away to {away} and did not "
+                            f"come back within {grace:g}s ({FOREIGN_GRACE_ENV}); its "
+                            f"harness can no longer report: {url}")
+                else:
+                    foreign_since = None
+                if outer["k"] == "s":
+                    # The document that was live before `navigate` is still
+                    # answering: the new page never replaced it.
+                    if loop.time() > settle_deadline:
+                        raise ExecutorException(
+                            "ERROR",
+                            f"browsingContext.navigate({url}) reported success but the "
+                            f"document was never replaced (still at {outer['v']}); "
+                            f"the page did not load")
+                elif outer["k"] == "r":
+                    return json.loads(outer["v"])
+                elif outer["k"] == "a":
+                    # [url, "action", {type, action, params, id}].
+                    # Dispatch and post the completion back, then keep polling
+                    # in the same loop — an action never ends the test itself.
+                    _, msg_type, payload = outer["v"]
+                    if msg_type == "action":
+                        await self._handle_action(session, context, payload)
             if deadline is not None and loop.time() > deadline:
                 raise ExecutorException(
                     "TIMEOUT",
@@ -342,18 +512,7 @@ class LumenTestharnessExecutor(TestharnessExecutor):
             await asyncio.sleep(POLL_INTERVAL_S)
 
     async def _reset_and_mark(self, session, context):
-        """Clear the outgoing document's result/testdriver slots and mark it
-        (`RESET_EXPRESSION`). Best-effort: a context with no JS runtime yet
-        (the initial `about:blank`, before the first test) reports "JS context
-        not available" and has nothing to carry over anyway."""
-        try:
-            await session.script.evaluate(
-                expression=RESET_EXPRESSION,
-                target=ContextTarget(context),
-                await_promise=False)
-        except UnknownErrorException as e:
-            if "JS context not available" not in e.message:
-                raise
+        await _reset_and_mark(session, context)
 
     async def _handle_action(self, session, context, payload):
         """Execute one `test_driver_internal.*` action and post its
@@ -374,6 +533,10 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 result = await self._action_send_keys(session, context, params)
             elif action == "delete_all_cookies":
                 result = await self._action_delete_all_cookies(session, context, params)
+            elif action in ("set_permission", "bidi.permissions.set_permission"):
+                result = await self._action_set_permission(session, context, params)
+            elif action in ("get_computed_role", "get_computed_label"):
+                result = await self._action_get_computed_a11y(session, action, params)
             else:
                 # BUG-810/WPT-RUN-12: the rejection itself already reaches the
                 # page fine (BUG-716 fixed unhandled-rejection visibility) —
@@ -506,6 +669,42 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         await session.storage.delete_cookies()
         return None
 
+    async def _action_set_permission(self, session, context, params):
+        """`test_driver.set_permission` / `bidi.permissions.set_permission` —
+        BiDi `permissions.setPermission` (BUG-1014,
+        `crates/bidi-server/src/protocol.rs::permissions_set_permission`),
+        which lands in what `navigator.permissions.query()` reads. The legacy
+        action nests `{descriptor, state}` under `permission_params` and has no
+        origin, so the page's own is used (the bidi variant already carries
+        one)."""
+        p = params.get("permission_params") or params
+        origin = params.get("origin")
+        if origin is None:
+            value = await session.script.evaluate(
+                expression="location.origin", target=ContextTarget(context),
+                await_promise=False)
+            origin = value.get("value")
+        try:
+            await session.permissions.set_permission(
+                descriptor=p["descriptor"], state=p["state"], origin=origin)
+        except BidiException as e:
+            raise ActionError(f"permissions.setPermission failed: {e}") from e
+        return None
+
+    async def _action_get_computed_a11y(self, session, action, params):
+        """`test_driver.get_computed_role` / `get_computed_label` — Lumen's
+        `lumen.getComputedA11y` BiDi extension (BUG-1014) resolves the selector
+        chain against the live DOM and reads role/name off the accessibility
+        tree, so no DOM-element ↔ `AXNode` correlation is needed on this side."""
+        try:
+            # `send_command` is `async def -> Awaitable`: the outer await only
+            # sends the command, the returned future carries the result.
+            value = await (await session.send_command(
+                "lumen.getComputedA11y", {"selectors": params["selectors"]}))
+        except BidiException as e:
+            raise ActionError(f"lumen.getComputedA11y failed: {e}") from e
+        return value["role" if action == "get_computed_role" else "name"]
+
     async def _resolve_element_center(self, session, context, selectors):
         expression = f"""(() => {{
   const selectors = {json.dumps(selectors)};
@@ -563,6 +762,12 @@ _RESP_TAB_ERROR = 10
 class IpcError(Exception):
     """Failure talking to `lumen --ipc-server` (protocol, connection, or a
     `TabError` reply)."""
+
+
+class IpcTabError(IpcError):
+    """`TabError` reply: the server answered this very request, so the
+    request/response stream is still in step and the connection stays usable
+    — the page itself failed, which is the test's verdict."""
 
 
 def _u32(v):
@@ -641,6 +846,21 @@ class LumenIpcProtocol(Protocol):
     def is_alive(self):
         return self.sock is not None
 
+    def drop(self):
+        """Close the connection after a request whose reply was not read in
+        full (`socket.timeout`, an unexpected variant, a truncated body).
+
+        The protocol is strict request/response with no request id, so a
+        reply that arrives after its reader gave up is read by the *next*
+        request as its own: `NavigateTab` gets the late `Screenshot` (variant
+        9) and fails, its own `Navigated` is then read by the following
+        `Screenshot`, and so on — every later test on this browser was a FAIL
+        that never looked at a pixel (37 of them after six render timeouts on
+        a 1 970-id set, 2026-10-05). Dropping the socket makes `is_alive`
+        false, so the browser is restarted instead of being reused out of
+        step."""
+        self.teardown()
+
     def _send(self, payload):
         self.sock.sendall(_u32(len(payload)) + payload)
 
@@ -665,7 +885,7 @@ class LumenIpcProtocol(Protocol):
             return
         if tag == _RESP_TAB_ERROR:
             c.u32()
-            raise IpcError(f"NavigateTab: {c.string()}")
+            raise IpcTabError(f"NavigateTab: {c.string()}")
         raise IpcError(f"expected Navigated, got variant {tag}")
 
     def screenshot_png(self):
@@ -677,7 +897,7 @@ class LumenIpcProtocol(Protocol):
             return c.vec()
         if tag == _RESP_TAB_ERROR:
             c.u32()
-            raise IpcError(f"Screenshot: {c.string()}")
+            raise IpcTabError(f"Screenshot: {c.string()}")
         raise IpcError(f"expected Screenshot, got variant {tag}")
 
 
@@ -724,12 +944,135 @@ class LumenRefTestExecutor(RefTestExecutor):
         assert dpi is None
         url = self.test_url(test)
         timeout = test.timeout * self.timeout_multiplier + self.extra_timeout
+        if self.protocol.sock is None:
+            return False, ("CRASH", f"lumen --ipc-server connection already dropped before {url}")
         self.protocol.sock.settimeout(timeout)
         try:
             self.protocol.navigate(url)
             png = self.protocol.screenshot_png()
         except socket.timeout:
-            return False, ("TIMEOUT", f"Timed out rendering {url}")
-        except IpcError as e:
+            # The reply is still coming; reading the next request's answer
+            # from this socket would be reading this one (`LumenIpcProtocol.
+            # drop`). EXTERNAL-TIMEOUT is reported as TIMEOUT — the verdict
+            # this always gave — and makes `testrunner.py` restart the browser.
+            self.protocol.drop()
+            return False, ("EXTERNAL-TIMEOUT", f"Timed out rendering {url}")
+        except IpcTabError as e:
             return False, ("FAIL", str(e))
+        except (IpcError, OSError) as e:
+            # Out of step or gone: a CRASH, so the browser is restarted.
+            self.protocol.drop()
+            return False, ("CRASH", f"lumen --ipc-server connection lost rendering {url}: {e}")
         return True, [base64.b64encode(png).decode("ascii")]
+
+
+#: Polled by `LumenCrashtestExecutor`: `"s"` while the pre-navigation document
+#: still answers (`STALE_GLOBAL`, BUG-380), `"w"` while `<html>` carries the
+#: `test-wait` class, `"d"` once it is gone.
+CRASHTEST_POLL_EXPRESSION = f"""(() => {{
+  if (window.{STALE_GLOBAL} === true) return "s";
+  const root = document.documentElement;
+  return root && root.classList.contains("test-wait") ? "w" : "d";
+}})()"""
+
+#: Consecutive `"d"` polls required before a crashtest is called finished. A
+#: page may add `test-wait` from its own `load` handler, which runs *after*
+#: `navigate(wait="complete")` already returned; one poll can land before it.
+CRASHTEST_DONE_POLLS = 2
+
+
+class LumenCrashtestExecutor(CrashtestExecutor):
+    """crashtest executor for Lumen over BiDi (WPT-RUN-8-S1).
+
+    The criterion is the upstream one (`executorwebdriver.
+    WebDriverCrashtestExecutor`): the page loads, the `test-wait` class on
+    `<html>` (if it ever had one) is removed, and the browser is still alive —
+    then `PASS`. The page's own `<script>` errors are irrelevant. A dead
+    process is `CRASH` and a wedged one `EXTERNAL-TIMEOUT` (`_lost_browser`),
+    both of which make `testrunner.py` restart the browser; `test-wait` never
+    removed is `TIMEOUT`.
+
+    Transport is BiDi, like testharness: the IPC path (`LumenIpcProtocol`)
+    does not pump timers, so a `test-wait` removed from `setTimeout` would
+    never be seen there.
+    """
+
+    protocol_cls = LumenBidiProtocol
+
+    def __init__(self, logger, browser, server_config, timeout_multiplier=1,
+                 screenshot_cache=None, debug_info=None, capabilities=None, **kwargs):
+        CrashtestExecutor.__init__(self, logger, browser, server_config,
+                                   screenshot_cache=screenshot_cache,
+                                   timeout_multiplier=timeout_multiplier,
+                                   debug_info=debug_info)
+        self.protocol = self.protocol_cls(self, browser, capabilities)
+
+    def do_test(self, test):
+        url = self.test_url(test)
+        timeout = (test.timeout * self.timeout_multiplier
+                   if self.debug_info is None else None)
+        try:
+            run_capped(self.protocol, self._run_crashtest(url, timeout),
+                       hard_cap_s(timeout, self.extra_timeout), url)
+        except ExecutorException as e:
+            return test.make_result(e.status, e.message), []
+        except Exception as e:
+            lost = _lost_browser(self.protocol, url, e)
+            if lost is not None:
+                raise lost from e
+            raise
+        return self.convert_result(test, {"status": "PASS", "message": None})
+
+    async def _run_crashtest(self, url, timeout):
+        session = self.protocol.session
+        context = self.protocol.context_id
+
+        await _reset_and_mark(session, context)
+        try:
+            await session.browsing_context.navigate(context=context, url=url, wait="complete")
+        except BidiException as e:
+            raise ExecutorException(
+                "ERROR", f"browsingContext.navigate({url}) failed: {e}") from e
+
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout + self.extra_timeout
+        settle_deadline = loop.time() + NAV_SETTLE_S
+        done_polls = 0
+        no_context_since = None
+        while True:
+            try:
+                value = await session.script.evaluate(
+                    expression=CRASHTEST_POLL_EXPRESSION,
+                    target=ContextTarget(context),
+                    await_promise=False)
+            except UnknownErrorException as e:
+                # Same document-swap lag as in `_run_testharness` — but a
+                # document with no `<script>` never gets a JS runtime at all,
+                # and most crashtests are exactly that (pure markup+CSS).
+                # Only script can clear `test-wait`, so a context that is
+                # still missing after `NAV_SETTLE_S` means "nothing to wait
+                # for"; the liveness check below is then the whole verdict.
+                if "JS context not available" not in e.message:
+                    raise
+                done_polls = 0
+                no_context_since = no_context_since or loop.time()
+                if loop.time() - no_context_since > NAV_SETTLE_S:
+                    if not self.protocol.is_alive():
+                        raise ExecutorException(
+                            "CRASH", f"browser connection lost while running {url}")
+                    return
+            else:
+                no_context_since = None
+                state = value.get("value") if value.get("type") == "string" else None
+                if state == "s" and loop.time() > settle_deadline:
+                    raise ExecutorException(
+                        "ERROR",
+                        f"browsingContext.navigate({url}) reported success but the "
+                        f"document was never replaced; the page did not load")
+                done_polls = done_polls + 1 if state == "d" else 0
+                if done_polls >= CRASHTEST_DONE_POLLS:
+                    return
+            if deadline is not None and loop.time() > deadline:
+                raise ExecutorException(
+                    "TIMEOUT", f"Timed out waiting for test-wait to clear: {url}")
+            await asyncio.sleep(POLL_INTERVAL_S)

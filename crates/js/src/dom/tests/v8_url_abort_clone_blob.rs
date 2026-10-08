@@ -20,8 +20,8 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false, None)
         .unwrap();
     rt
 }
@@ -623,6 +623,30 @@ fn atob_invalid_input_throws_dom_exception() {
         .eval("(function() { try { atob('!!!'); return 'no throw'; } catch (e) { return (e instanceof DOMException) + ':' + e.name; } })()")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::String("true:InvalidCharacterError".into()));
+}
+
+/// BUG-1133: `atob` is Infra "forgiving-base64 decode" — padding optional
+/// (airbnb `tags.js` decodes unpadded strings), `=` only as trailing padding,
+/// length ≡ 1 (mod 4) rejected. Expected values are Chrome's.
+#[test]
+fn atob_is_forgiving_base64() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "function t(f){try{return f();}catch(e){return 'THROW '+e.name;}} \
+             [t(function(){return atob('YQ');}), t(function(){return atob('YWI');}), \
+              t(function(){return atob('YQ==');}), t(function(){return atob(' Y W\\tI=\\n');}), \
+              t(function(){return atob('YWJjZ');}), t(function(){return atob('YQ==YQ==');}), \
+              t(function(){return atob('YQ=');}), t(function(){return atob('Y2VpbA');}), \
+              atob(btoa('\\xff\\x00')) === '\\xff\\x00'].join('|')",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            "a|ab|a|ab|THROW InvalidCharacterError|THROW InvalidCharacterError|THROW InvalidCharacterError|ceil|true".into()
+        )
+    );
 }
 
 /// BUG-1016: same as [`atob_invalid_input_throws_dom_exception`], for `btoa`

@@ -484,8 +484,8 @@
   </div>
 
   <!-- gap-rule-* (CSS Gap Decorations L1) -->
-  <div style="margin-top:8px; font-size:10px; color:#888;">gap-rule-width/style/color (flex + grid):</div>
-  <div style="display:flex;flex-direction:row;gap:14px;gap-rule-width:2px;gap-rule-style:solid;gap-rule-color:#e94560;
+  <div style="margin-top:8px; font-size:10px; color:#888;">rule-width/style/color (flex + grid):</div>
+  <div style="display:flex;flex-direction:row;gap:14px;rule-width:2px;rule-style:solid;rule-color:#e94560;
               background:#2d3748;padding:6px;width:600px;margin-bottom:6px;">
     <div style="flex:1;height:36px;background:#4a5568;"></div>
     <div style="flex:1;height:36px;background:#4a5568;"></div>
@@ -493,7 +493,7 @@
     <div style="flex:1;height:36px;background:#4a5568;"></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,30px);
-              gap:12px;gap-rule-width:3px;gap-rule-style:dashed;gap-rule-color:#53d8fb;
+              gap:12px;rule-width:3px;rule-style:dashed;rule-color:#53d8fb;
               background:#2d3748;padding:6px;width:400px;">
     <div style="background:#4a5568;"></div>
     <div style="background:#4a5568;"></div>
@@ -1222,6 +1222,26 @@
   <div class="ub-row ub-flip">ALPHA BETA</div>
   <div class="ub-row">ALPHA <span class="ub-flip">BETA</span></div>
 </div><!-- /unicode-bidi card -->
+
+<!-- background-attachment demo card -->
+<!-- CSS Backgrounds L3 §3.6: fixed layers are one picture spread over the
+     viewport; each box is a window onto it — scroll the page and the stripes
+     stay put while the boxes move over them. -->
+<style>
+  .ba-card { background:#1b263b; padding:8px; border-radius:4px; }
+  .ba-wrap { display:flex; gap:8px; margin-top:6px; }
+  .ba-box { width:90px; height:54px; border:3px solid #e8eef7;
+    background:repeating-linear-gradient(45deg, #2255cc 0, #2255cc 20px, #cc2222 20px, #cc2222 40px) fixed; }
+  .ba-scroll { background-attachment:scroll; }
+</style>
+<div class="card ba-card">
+  <h4>background-attachment</h4>
+  <div class="ba-wrap">
+    <div class="ba-box"></div>
+    <div class="ba-box"></div>
+    <div class="ba-box ba-scroll"></div>
+  </div>
+</div><!-- /background-attachment card -->
 
 <!-- zoom demo card -->
 <style>

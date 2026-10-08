@@ -247,7 +247,7 @@ fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSeg
     style.font_variant_caps = caps;
     super::InlineSegment {
         text: text.to_string(),
-        style,
+        style: std::sync::Arc::new(style),
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
@@ -353,7 +353,7 @@ fn caps_synthesis_baseline_compensation_lowers_capitals() {
 fn caps_synthesis_respects_author_vertical_align() {
     use crate::style::{FontVariantCaps, VerticalAlign};
     let mut seg = caps_seg("ab", FontVariantCaps::SmallCaps);
-    seg.style.vertical_align = VerticalAlign::Super;
+    std::sync::Arc::make_mut(&mut seg.style).vertical_align = VerticalAlign::Super;
     let (segs, _) = super::caps_synthesis(&[seg], None).expect("must be synthesized");
     // Автор задал выравнивание явно — компенсацию не навязываем.
     assert_eq!(segs[0].style.vertical_align, VerticalAlign::Super);
@@ -453,15 +453,63 @@ mod pseudo_first_line;
 mod generated_float;
 mod shapes_and_contain;
 mod flex_align_content;
+mod flex_baseline;
+mod flex_column_wrap;
+mod multicol_rows;
+mod multicol_break_inside;
+mod multicol_grid_fragments;
+mod multicol_forced_break;
+mod multicol_orphans;
+mod flex_axes;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
+mod bug935_attr_local_roots;
+mod bug935_fresh_node_roots;
+mod bug935_child_list_ends;
+mod bug935_shallow_roots;
+mod bug935_cascade_bench;
+mod bug935_svg_root_children;
+mod perf16_shadow_sheets;
 mod bfc_margin_collapse;
 mod layout_box_drop;
 mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
+mod grid_empty_tracks;
+mod grid_subgrid_contribution;
+mod grid_subgrid_line_names;
+mod grid_track_limit;
+mod container_min_max_height;
+mod grid_overflow_align;
+mod grid_item_percent_height;
+mod flex_column_percent_height;
+mod flex_auto_min_size;
+mod flex_factor_below_one;
 mod table_trampoline;
+mod table_caption_layout;
+mod table_height;
+mod table_valign;
+mod baseline_containers;
+mod grid_baseline2;
+mod line_clamp_flow;
 mod multicol_trampoline;
+mod multicol_span;
 mod vertical_trampoline;
+mod vertical_row;
+mod vertical_float;
+mod vertical_margins;
+mod flex_vwm3;
+mod flex_vwm4;
+mod flex_vwm5;
+mod fixed_cb;
+mod abs_auto_margins;
+mod relative_offset_flow;
+mod vertical_positioned;
+mod grid_vwm;
+mod fieldset_legend;
 mod ruby_pipeline;
+mod pre_wrap;
+mod tab_size;
+mod ws_only_text;
+mod nbsp_no_wrap;

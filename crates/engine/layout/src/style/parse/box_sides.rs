@@ -11,6 +11,7 @@
 use lumen_core::geom::Size;
 
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
+use crate::style::values::length::split_top_level_ws;
 use crate::style::{
     BorderStyle, BreakValue, ComputedStyle, CssColor, Length, LengthOrAuto, OutlineColor,
     OutlineStyle, OverscrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis,
@@ -177,7 +178,10 @@ pub(in crate::style) fn parse_padding_shorthand(val: &str, is_quirks: bool) -> O
 }
 
 fn is_border_style_kw(s: &str) -> bool {
-    matches!(s.trim(), "none" | "solid" | "dashed" | "dotted" | "double")
+    matches!(
+        s.trim(),
+        "none" | "solid" | "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset"
+    )
 }
 
 pub(in crate::style) fn parse_border_style_kw(s: &str) -> BorderStyle {
@@ -186,6 +190,10 @@ pub(in crate::style) fn parse_border_style_kw(s: &str) -> BorderStyle {
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
         "double" => BorderStyle::Double,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
         _ => BorderStyle::None,
     }
 }
@@ -197,7 +205,20 @@ pub(in crate::style) fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
         "dashed" => Some(BorderStyle::Dashed),
         "dotted" => Some(BorderStyle::Dotted),
         "double" => Some(BorderStyle::Double),
+        "groove" => Some(BorderStyle::Groove),
+        "ridge" => Some(BorderStyle::Ridge),
+        "inset" => Some(BorderStyle::Inset),
+        "outset" => Some(BorderStyle::Outset),
         _ => None,
+    }
+}
+
+/// CSS Gap Decorations L1 §4.2 — `<line-style>` целиком (десять ключевых слов):
+/// в отличие от `border-style` у `*-rule-style` разбирается и `hidden`.
+pub(in crate::style) fn parse_rule_style_opt(s: &str) -> Option<BorderStyle> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "hidden" => Some(BorderStyle::Hidden),
+        other => parse_border_style_opt(other),
     }
 }
 
@@ -222,8 +243,13 @@ pub(in crate::style) fn parse_outline_style_opt(s: &str) -> Option<OutlineStyle>
         return Some(OutlineStyle::Auto);
     }
     match parse_border_style_opt(s)? {
-        BorderStyle::None => Some(OutlineStyle::None),
-        BorderStyle::Solid | BorderStyle::Double => Some(OutlineStyle::Solid),
+        BorderStyle::None | BorderStyle::Hidden => Some(OutlineStyle::None),
+        BorderStyle::Solid
+        | BorderStyle::Double
+        | BorderStyle::Groove
+        | BorderStyle::Ridge
+        | BorderStyle::Inset
+        | BorderStyle::Outset => Some(OutlineStyle::Solid),
         BorderStyle::Dashed => Some(OutlineStyle::Dashed),
         BorderStyle::Dotted => Some(OutlineStyle::Dotted),
     }
@@ -343,62 +369,89 @@ pub(in crate::style) fn parse_inset_area_keyword(s: &str) -> Option<crate::ancho
 
 /// CSS Anchor Positioning L1 §4 — parse `anchor-size(<anchor-el>? <anchor-size>)`.
 ///
+/// The `<anchor-name>` and `<anchor-size>` components combine with `&&`, in any
+/// order; the comma only separates the trailing `<length-percentage>` fallback.
 /// Accepts forms:
 /// - `anchor-size(width)` / `anchor-size(height)` / `anchor-size(block)` / etc.
-/// - `anchor-size(--name, width)` / `anchor-size(--name, height)` / etc.
+/// - `anchor-size(--name width)` / `anchor-size(height --name)`.
+/// - `anchor-size(--name width, 10px)` — with a fallback.
 ///
-/// Returns `None` when `val` is not an `anchor-size()` expression.
-pub(in crate::style) fn parse_anchor_size_func(val: &str) -> Option<crate::anchor::AnchorSizeFunc> {
+/// Returns `None` when `val` is not an `anchor-size()` expression, repeats a
+/// component, or uses the pre-spec `anchor-size(--name, width)` form.
+pub(in crate::style) fn parse_anchor_size_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorSizeFunc> {
     use crate::anchor::{AnchorSizeDimension, AnchorSizeFunc};
     let v = val.trim();
-    let inner = v.strip_prefix("anchor-size(")?.strip_suffix(')')?;
-    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
-    let (anchor_name, dim_str) = if parts.len() == 2 {
-        let name = parts[0];
-        let anchor_name = if name.starts_with("--") { Some(name.into()) } else { return None };
-        (anchor_name, parts[1])
-    } else {
-        (None, parts[0])
-    };
-    let dimension = match dim_str.to_ascii_lowercase().as_str() {
-        "width"       => AnchorSizeDimension::Width,
-        "height"      => AnchorSizeDimension::Height,
-        "block"       => AnchorSizeDimension::Block,
-        "inline"      => AnchorSizeDimension::Inline,
-        "self-block"  => AnchorSizeDimension::SelfBlock,
-        "self-inline" => AnchorSizeDimension::SelfInline,
-        _ => return None,
-    };
-    Some(AnchorSizeFunc { anchor_name, dimension })
+    let inner = strip_function_call(v, "anchor-size")?;
+    let (head, fallback) = split_anchor_fallback(inner, is_quirks)?;
+    let mut anchor_name = None;
+    let mut dimension = None;
+    for tok in head.split_whitespace() {
+        if tok.starts_with("--") {
+            anchor_name.replace(tok.into()).is_none().then_some(())?;
+            continue;
+        }
+        let dim = match tok.to_ascii_lowercase().as_str() {
+            "width"       => AnchorSizeDimension::Width,
+            "height"      => AnchorSizeDimension::Height,
+            "block"       => AnchorSizeDimension::Block,
+            "inline"      => AnchorSizeDimension::Inline,
+            "self-block"  => AnchorSizeDimension::SelfBlock,
+            "self-inline" => AnchorSizeDimension::SelfInline,
+            _ => return None,
+        };
+        dimension.replace(dim).is_none().then_some(())?;
+    }
+    Some(AnchorSizeFunc { anchor_name, dimension: dimension?, fallback })
+}
+
+/// Returns the text between the parentheses of `name( … )` — the function name
+/// matches ASCII-case-insensitively (CSS Syntax §function), `v` must end at the
+/// closing parenthesis.
+fn strip_function_call<'a>(v: &'a str, name: &str) -> Option<&'a str> {
+    let head = v.get(..name.len())?;
+    if !head.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    v[name.len()..].strip_prefix('(')?.strip_suffix(')')
+}
+
+/// Splits the inside of `anchor()` / `anchor-size()` at the first comma into the
+/// space-separated head and the optional `<length-percentage>` fallback.
+fn split_anchor_fallback(inner: &str, is_quirks: bool) -> Option<(&str, Option<crate::style::Length>)> {
+    match inner.split_once(',') {
+        Some((head, fb)) => Some((head.trim(), Some(parse_length_q(fb.trim(), is_quirks)?))),
+        None => Some((inner.trim(), None)),
+    }
 }
 
 /// CSS Anchor Positioning L1 §3.1 — parse `anchor(<anchor-el>? <anchor-side>, <fallback>?)`.
 ///
-/// Accepts forms:
+/// The `<anchor-name>` and `<anchor-side>` components combine with `&&`, in any
+/// order; the side is required. Accepts forms:
 /// - `anchor(top)` / `anchor(50%)` / `anchor(start)` — anchor-side only, uses the
 ///   element's `position-anchor` default anchor.
-/// - `anchor(--name top)` / `anchor(--name 25%)` — explicit anchor-element argument.
+/// - `anchor(--name top)` / `anchor(top --name)` / `anchor(--name 25%)` — explicit
+///   anchor-element argument.
 /// - `anchor(top, 10px)` / `anchor(--name left, 1em)` — trailing `<length-percentage>`
 ///   fallback, used when the anchor can't be resolved.
 ///
-/// Returns `None` when `val` is not an `anchor()` expression.
-fn parse_anchor_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorFunc> {
+/// Returns `None` when `val` is not an `anchor()` expression or repeats a component
+/// (`anchor(--a --b top)`, `anchor(top left)`).
+pub(in crate::style) fn parse_anchor_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorFunc> {
     use crate::anchor::AnchorFunc;
     let v = val.trim();
-    let inner = v.strip_prefix("anchor(")?.strip_suffix(')')?;
-    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
-    let fallback = match parts.get(1) {
-        Some(fb) => Some(parse_length_q(fb, is_quirks)?),
-        None => None,
-    };
-    let head_parts: Vec<&str> = parts[0].split_whitespace().collect();
-    let (anchor_name, side_str) = match head_parts.as_slice() {
-        [side] => (None, *side),
-        [name, side] if name.starts_with("--") => (Some((*name).into()), *side),
-        _ => return None,
-    };
-    let side = parse_anchor_side(side_str)?;
-    Some(AnchorFunc { anchor_name, side, fallback })
+    let inner = strip_function_call(v, "anchor")?;
+    let (head, fallback) = split_anchor_fallback(inner, is_quirks)?;
+    let mut anchor_name = None;
+    let mut side = None;
+    for tok in head.split_whitespace() {
+        if tok.starts_with("--") {
+            anchor_name.replace(tok.into()).is_none().then_some(())?;
+        } else {
+            side.replace(parse_anchor_side(tok)?).is_none().then_some(())?;
+        }
+    }
+    Some(AnchorFunc { anchor_name, side: side?, fallback })
 }
 
 /// CSS Anchor Positioning L1 §3.1 — parse a single `<anchor-side>` keyword or
@@ -413,8 +466,69 @@ fn parse_anchor_side(s: &str) -> Option<crate::anchor::AnchorSide> {
         "center" => Some(AnchorSide::Center),
         "start" => Some(AnchorSide::Start),
         "end" => Some(AnchorSide::End),
-        other => other.strip_suffix('%')?.trim().parse::<f32>().ok().map(AnchorSide::Percentage),
+        "inside" => Some(AnchorSide::Inside),
+        "outside" => Some(AnchorSide::Outside),
+        "self-start" => Some(AnchorSide::SelfStart),
+        "self-end" => Some(AnchorSide::SelfEnd),
+        other => other
+            .strip_suffix('%')?
+            .parse::<f32>()
+            .ok()
+            .filter(|p| p.is_finite())
+            .map(AnchorSide::Percentage),
     }
+}
+
+/// CSSOM-2 (BUG-563, GAP-ANCHORCSSOM-S2): validates and canonicalizes a
+/// top-level `anchor()` / `anchor-size()` specified value for the JS
+/// `element.style` object (`_lumen_canonicalize_longhand`), through the same
+/// parsers the cascade uses ([`parse_anchor_func`], [`parse_anchor_size_func`]).
+/// Same role as [`crate::style::canonical_specified_length`].
+///
+/// Serialization (CSS Anchor Positioning L1 §3.1/§4): the `<anchor-name>`
+/// comes first and the `<anchor-side>`/`<anchor-size>` second regardless of the
+/// authored order, a fallback follows after `, ` and is a canonical
+/// `<length-percentage>` (`0` → `0px`). `allow_anchor` is `false` for the
+/// properties that accept `anchor-size()` but not `anchor()` (sizing, margin).
+/// `None` = invalid or not a top-level anchor function.
+///
+/// `anchor()`/`anchor-size()` nested in `calc()`/`min()`/`max()` or in a
+/// fallback are not parsed by the cascade either — they stay `None` (S3/S4).
+pub fn canonical_specified_anchor(s: &str, allow_anchor: bool) -> Option<String> {
+    use crate::anchor::{AnchorSide, AnchorSizeDimension};
+    use crate::selector_query::length_to_css;
+    let fallback_css = |fb: &Option<Length>| fb.as_ref().map(|l| format!(", {}", length_to_css(l))).unwrap_or_default();
+    let name_css = |n: &Option<Box<str>>| n.as_ref().map(|n| format!("{n} ")).unwrap_or_default();
+    if let Some(f) = parse_anchor_size_func(s, false) {
+        let dim = match f.dimension {
+            AnchorSizeDimension::Width => "width",
+            AnchorSizeDimension::Height => "height",
+            AnchorSizeDimension::Block => "block",
+            AnchorSizeDimension::Inline => "inline",
+            AnchorSizeDimension::SelfBlock => "self-block",
+            AnchorSizeDimension::SelfInline => "self-inline",
+        };
+        return Some(format!("anchor-size({}{dim}{})", name_css(&f.anchor_name), fallback_css(&f.fallback)));
+    }
+    if !allow_anchor {
+        return None;
+    }
+    let f = parse_anchor_func(s, false)?;
+    let side = match f.side {
+        AnchorSide::Top => "top".to_string(),
+        AnchorSide::Right => "right".to_string(),
+        AnchorSide::Bottom => "bottom".to_string(),
+        AnchorSide::Left => "left".to_string(),
+        AnchorSide::Center => "center".to_string(),
+        AnchorSide::Start => "start".to_string(),
+        AnchorSide::End => "end".to_string(),
+        AnchorSide::Inside => "inside".to_string(),
+        AnchorSide::Outside => "outside".to_string(),
+        AnchorSide::SelfStart => "self-start".to_string(),
+        AnchorSide::SelfEnd => "self-end".to_string(),
+        AnchorSide::Percentage(p) => length_to_css(&Length::Percent(p)),
+    };
+    Some(format!("anchor({}{side}{})", name_css(&f.anchor_name), fallback_css(&f.fallback)))
 }
 
 pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {
@@ -432,7 +546,9 @@ pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {
 /// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
 /// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
 pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
-    let tokens: Vec<&str> = val.split_whitespace().collect();
+    // Top-level split: a colour like `rgba(0, 0, 255, 0.5)` is one token.
+    let tokens = split_top_level_ws(val);
+    let mut invisible = false;
     for tok in &tokens {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             style.border_top_width = v;
@@ -441,6 +557,7 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
             style.border_left_width = v;
         } else if is_border_style_kw(tok) {
             let bs = parse_border_style_kw(tok);
+            invisible = !bs.is_visible();
             style.border_top_style = bs;
             style.border_right_style = bs;
             style.border_bottom_style = bs;
@@ -451,6 +568,15 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
             style.border_bottom_color = c;
             style.border_left_color = c;
         }
+    }
+    // CSS Backgrounds L3 §4.1: `border-*-width` computes to 0 when the style is `none`/`hidden`.
+    // `border: none` must therefore also drop a width set earlier (a UA `fieldset` border, an
+    // author `border: 1px solid` the rule overrides) instead of leaving it to layout.
+    if invisible {
+        style.border_top_width = 0.0;
+        style.border_right_width = 0.0;
+        style.border_bottom_width = 0.0;
+        style.border_left_width = 0.0;
     }
 }
 
@@ -464,14 +590,20 @@ pub(in crate::style) fn apply_border_side_shorthand(
     viewport: Size,
     is_quirks: bool,
 ) {
-    for tok in val.split_whitespace() {
+    let mut invisible = false;
+    for tok in split_top_level_ws(val) {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
+            invisible = !bstyle.is_visible();
         } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
             *color = c;
         }
+    }
+    // Same as `apply_border_shorthand`: a `none`/`hidden` side has a computed width of 0.
+    if invisible {
+        *width = 0.0;
     }
 }
 

@@ -46,8 +46,19 @@ static GLOBAL: OnceLock<FingerprintProfile> = OnceLock::new();
 
 /// Install the process-global fingerprint profile. Idempotent: the first call
 /// wins, subsequent calls are ignored (returns whether this call set it).
+///
+/// BUG-1210: a second call used to be a silent no-op — e.g. `--proxy`/`--tor`
+/// cloning the already-installed profile, mutating the clone, and calling this
+/// again, which never took effect. Callers must fold every CLI override into
+/// the profile *before* the single call that installs it; a repeat call here
+/// is now a bug, flagged loudly in debug builds instead of failing silently.
 pub fn init_global(profile: FingerprintProfile) -> bool {
-    GLOBAL.set(profile).is_ok()
+    let set = GLOBAL.set(profile).is_ok();
+    debug_assert!(
+        set,
+        "config::init_global вызван повторно — OnceLock уже занят, профиль отброшен молча (BUG-1210)"
+    );
+    set
 }
 
 /// Return the process-global fingerprint profile, or the default if unset.

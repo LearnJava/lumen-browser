@@ -151,7 +151,7 @@ filed — folds under this bug's umbrella per the pattern above.
    симптом сместился с «бросает исключение» на «молча ждёт вечно».
 
 Родственные элементы измерены тем же прогоном и разведены по своим багам:
-`<object data>`/`<embed src>` — [BUG-798](BUG-798-OPEN.md), `<frame>` —
+`<object data>`/`<embed src>` — [BUG-798](BUG-798-FIXED.md), `<frame>` —
 [BUG-854](BUG-854-FIXED.md).
 
 ## Срез 1 (P3, 2026-08-23) — шелловый конвейер под-документов
@@ -1784,5 +1784,5 @@ shell 1610+2 ok (без изменений — новый путь не имее
   Репро `.tmp/compat/g2/iframejs.html`.
 - **w3schools** — FastCMP в `load` iframe без `src` пишет
   `iframe.contentDocument.documentElement.style.cssText`; синхронно после `appendChild`
-  `contentDocument === null` (Chrome — документ `about:blank`), а у фасада `frameElem` нет `.style`
-  (см. BUG-970). Диалог согласия не строится. Репро `.tmp/compat/g6/site/iframedoc.html`.
+  `contentDocument === null` (Chrome — документ `about:blank`); пробел `.style` у фасада `frameElem`
+  закрыт в [BUG-1147](BUG-1147-FIXED.md) 2026-09-28. Диалог согласия не строится. Репро `.tmp/compat/g6/site/iframedoc.html`.

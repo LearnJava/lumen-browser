@@ -758,6 +758,16 @@ fn define_hidden_global(
     key: v8::Local<'_, v8::String>,
     value: v8::Local<'_, v8::Value>,
 ) {
+    // BUG-753 срез 2: an internal name goes to the context's container when it
+    // has one — the page never sees it. `set` (not define) so a live accessor a
+    // shim already exported for a not-yet-registered native receives the value.
+    let name = key.to_rust_string_lossy(scope);
+    if crate::internal_globals::is_internal_name(&name)
+        && let Some(c) = crate::internal_globals::container(scope, ctx)
+    {
+        c.set(scope, key.into(), value);
+        return;
+    }
     ctx.global(scope)
         .define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
 }

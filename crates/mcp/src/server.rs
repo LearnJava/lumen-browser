@@ -8,6 +8,9 @@ use lumen_core::error::Result;
 use crate::protocol::{McpMessage, McpRequest, McpResource, McpResponse, McpTool};
 use crate::transport::Transport;
 
+/// Версии протокола MCP, которые понимает сервер; первая — новейшая.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
 /// MCP сервер для Lumen браузера.
 ///
 /// Обворачивает [`BrowserSession`] и предоставляет ресурсы и инструменты
@@ -26,6 +29,9 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
     /// отклоняется.
     authenticated: bool,
 }
+
+/// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -48,6 +54,11 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
 
             match msg {
                 McpMessage::Request(req) => {
+                    // Уведомление (нет `id`) — ответа не бывает: ни успешного,
+                    // ни ошибки (JSON-RPC 2.0 §4.1, MCP §Lifecycle).
+                    if req.id.is_none() {
+                        continue;
+                    }
                     let response = self.handle_request(&req);
                     self.transport.write_message(&McpMessage::Response(response))?;
                 }
@@ -77,6 +88,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         match req.method.as_str() {
             // ── Инициализация ──
             "initialize" => self.on_initialize(&id, &req.params),
+            "ping" => McpResponse::ok(id, json!({})),
             "resources/list" => self.on_resources_list(&id),
             "tools/list" => self.on_tools_list(&id),
 
@@ -102,15 +114,26 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         }
         self.authenticated = true;
 
+        // Версия протокола: эхо версии клиента, если мы её знаем, иначе
+        // наша новейшая (MCP §Lifecycle, version negotiation).
+        let requested = params.get("protocolVersion").and_then(|v| v.as_str());
+        let protocol_version = match requested {
+            Some(v) if SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
+            _ => SUPPORTED_PROTOCOL_VERSIONS[0],
+        };
+
         let response = json!({
-            "serverVersion": "0.1.0",
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": protocol_version,
+            "instructions": SERVER_INSTRUCTIONS,
+            "serverInfo": {
+                "name": "lumen",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
             "capabilities": {
                 "resources": {
                     "subscribe": false,
                 },
                 "tools": {},
-                "sampling": {}
             }
         });
 
@@ -179,7 +202,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         let tools = vec![
             McpTool {
                 name: "navigate".to_string(),
-                description: "Navigate to a URL (supports file://, http://, https://)".to_string(),
+                description: "Navigate the active tab to a URL (file://, http://, https://) and return once the navigation has been started. Returns {success, url}. The page may still be loading: follow with `wait` (document_ready or network_idle) before reading the DOM. Fails with an error for an unparsable URL or a failed load.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["url"],
@@ -194,7 +217,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "new_tab".to_string(),
-                description: "Open a new tab (it becomes active) and navigate it to a URL".to_string(),
+                description: "Open a new tab, make it the active one and navigate it to a URL. Returns {success, url}. Subsequent tools act on this tab; call `wait` before reading the page.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["url"],
@@ -209,7 +232,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "click".to_string(),
-                description: "Click on an element".to_string(),
+                description: "Click an element or a point. `target` is a CSS selector string, {selector}, {node_id} (from `query`) or {point: {x, y}} in document coordinates. Returns {success: true}. Errors if the selector matches nothing or the target is not in the layout (e.g. display:none) — `wait` for `visible` first.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["target"],
@@ -224,7 +247,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "type".to_string(),
-                description: "Type text into an input field".to_string(),
+                description: "Type text into an input or textarea: focuses the target and sends the characters. `target` has the same forms as for `click`. Returns {success, text}. Errors if the target does not exist; does not clear the existing value.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["target", "text"],
@@ -243,7 +266,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "scroll".to_string(),
-                description: "Scroll the page".to_string(),
+                description: "Scroll the page or an element by a delta in logical pixels (positive y scrolls down). `target` has the same forms as for `click`. Returns {success, delta}. Content added by scrolling (lazy loading) appears asynchronously: `wait` afterwards.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["target", "delta"],
@@ -271,7 +294,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "wait".to_string(),
-                description: "Wait for a condition (document ready, element visible, etc)".to_string(),
+                description: "Block until a condition holds: document_ready (document parsed and load finished), network_idle (no requests in flight), js_idle (no pending JS tasks), visible / stable (need `selector`: element has a box / its box stopped moving). Returns {success, condition}; errors on timeout (`timeout_ms`, default 30000). Typical order: navigate, then wait document_ready or network_idle, then query / eval.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["condition"],
@@ -295,7 +318,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "eval".to_string(),
-                description: "Execute JavaScript code".to_string(),
+                description: "Run JavaScript in the page and return {success, result}, where `result` is a string. Evaluate an expression and serialize structured data yourself, e.g. `JSON.stringify(...)`, then parse it. Errors carry the JS exception text. In the live window a busy engine thread makes the call fail after `timeout_ms` (default 5000).".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["code"],
@@ -303,6 +326,10 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "code": {
                             "type": "string",
                             "description": "JavaScript code to execute"
+                        },
+                        "timeout_ms": {
+                            "type": "integer",
+                            "description": "Live window only: how long to wait for a busy engine thread before reporting it busy (default 5000)"
                         }
                     }
                 }),
@@ -310,7 +337,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "query".to_string(),
-                description: "Find DOM elements by CSS selector".to_string(),
+                description: "Find all DOM elements matching a CSS selector. Returns {nodes: [{node_id, tag_name, text_content, bounding_rect}]} (empty array when nothing matches; rect in document coordinates). Use node_id as `target` of click/type. Run after `wait`, otherwise the DOM may be incomplete.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["selector"],
@@ -484,8 +511,30 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         McpResponse::ok(id.clone(), response)
     }
 
-    /// Чтение ресурса.
+    /// Чтение ресурса: приводит элементы `contents` к форме спецификации —
+    /// `uri` + `text` либо `uri` + `blob` (base64) + `mimeType`.
     fn on_resources_read(&self, id: &Value, params: &Value) -> McpResponse {
+        let mut response = self.read_resource(id, params);
+        let uri = params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(Value::Array(items)) = response
+            .result
+            .as_mut()
+            .and_then(|r| r.get_mut("contents"))
+        {
+            for item in items {
+                let Some(obj) = item.as_object_mut() else { continue };
+                obj.remove("type");
+                if let Some(data) = obj.remove("data") {
+                    obj.insert("blob".to_string(), data);
+                }
+                obj.insert("uri".to_string(), json!(uri));
+            }
+        }
+        response
+    }
+
+    /// Чтение ресурса (внутренняя форма, до приведения к спецификации).
+    fn read_resource(&self, id: &Value, params: &Value) -> McpResponse {
         let uri = match params.get("uri").and_then(|v| v.as_str()) {
             Some(u) => u,
             None => return McpResponse::err(id.clone(), -32602, "Missing uri parameter"),
@@ -547,8 +596,44 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         }
     }
 
-    /// Вызов инструмента.
+    /// Вызов инструмента. Результат — по спецификации MCP: `content` + `isError`.
+    ///
+    /// Ошибка выполнения инструмента (код -32603) уходит как `isError: true`
+    /// результат, а не JSON-RPC-ошибка; JSON-RPC-ошибкой остаются только
+    /// неизвестный инструмент и неверные параметры. Прежние поля результата
+    /// (`success`, `url`, `nodes`, …) сохранены рядом с `content` — на них
+    /// завязаны скрипты репозитория.
     fn on_tools_call(&mut self, id: &Value, params: &Value) -> McpResponse {
+        let raw = self.dispatch_tool(id, params);
+        if let Some(err) = &raw.error {
+            if err.code != -32603 {
+                return raw;
+            }
+            return McpResponse::ok(
+                id.clone(),
+                json!({
+                    "content": [{ "type": "text", "text": err.message }],
+                    "isError": true,
+                }),
+            );
+        }
+        let mut result = raw.result.unwrap_or_else(|| json!({}));
+        let text = serde_json::to_string(&result).unwrap_or_default();
+        let mut content = vec![json!({ "type": "text", "text": text })];
+        if let Some(b64) = result.get("png_base64").and_then(|v| v.as_str()) {
+            content = vec![json!({ "type": "image", "data": b64, "mimeType": "image/png" })];
+        }
+        let Some(obj) = result.as_object_mut() else {
+            // Результат-не-объект (не бывает у нынешних инструментов) — оборачиваем.
+            return McpResponse::ok(id.clone(), json!({ "content": content, "isError": false }));
+        };
+        obj.insert("content".to_string(), Value::Array(content));
+        obj.insert("isError".to_string(), json!(false));
+        McpResponse::ok(id.clone(), result)
+    }
+
+    /// Диспетчер инструментов (внутренняя форма результата).
+    fn dispatch_tool(&mut self, id: &Value, params: &Value) -> McpResponse {
         let name = match params.get("name").and_then(|v| v.as_str()) {
             Some(n) => n,
             None => return McpResponse::err(id.clone(), -32602, "Missing tool name"),
@@ -659,7 +744,13 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(c) => c,
                     None => return McpResponse::err(id.clone(), -32602, "Missing code argument"),
                 };
-                match self.session.eval(code) {
+                // BUG-1145: без `timeout_ms` — прежний путь с таймаутом живого
+                // окна по умолчанию.
+                let result = match args.get("timeout_ms").and_then(|v| v.as_u64()) {
+                    Some(ms) => self.session.eval_with_timeout(code, ms),
+                    None => self.session.eval(code),
+                };
+                match result {
                     Ok(result) => json!({ "success": true, "result": result }),
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Eval error: {e}")),
                 }
@@ -931,7 +1022,10 @@ mod tests {
             "about:blank".to_string()
         }
 
-        fn navigate(&mut self, _url: &str) -> lumen_core::error::Result<()> {
+        fn navigate(&mut self, url: &str) -> lumen_core::error::Result<()> {
+            if url.starts_with("fail://") {
+                return Err(lumen_core::error::Error::Network("boom".to_string()));
+            }
             Ok(())
         }
 
@@ -953,6 +1047,10 @@ mod tests {
 
         fn eval(&mut self, _js: &str) -> lumen_core::error::Result<String> {
             Ok("null".to_string())
+        }
+
+        fn eval_with_timeout(&mut self, _js: &str, timeout_ms: u64) -> lumen_core::error::Result<String> {
+            Ok(format!("\"waited {timeout_ms}\""))
         }
 
         fn query(&self, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::NodeRef>> {
@@ -1036,13 +1134,27 @@ mod tests {
     }
 
     #[test]
+    fn initialize_returns_instructions_and_tools_are_described() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let resp = run_one(&mut server, &make_request("initialize", serde_json::json!({})));
+        let result = resp.result.unwrap();
+        assert!(!result["instructions"].as_str().unwrap_or("").is_empty());
+        let resp = run_one(&mut server, &make_request("tools/list", serde_json::json!({})));
+        let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
+        for t in tools {
+            let d = t["description"].as_str().unwrap_or("");
+            assert!(d.ends_with('.') || d.contains(". "), "tool {} lacks a full sentence: {d}", t["name"]);
+        }
+    }
+
+    #[test]
     fn initialize_returns_capabilities() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("initialize", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
-        assert_eq!(result["protocolVersion"], "2024-11-05");
+        assert_eq!(result["protocolVersion"], "2025-06-18");
         assert!(result["capabilities"].is_object());
     }
 
@@ -1272,9 +1384,10 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let contents = &resp.result.unwrap()["contents"];
-        assert_eq!(contents[0]["type"], "image");
+        assert_eq!(contents[0]["uri"], "resource://screenshot");
+        assert_eq!(contents[0]["mimeType"], "image/png");
         // "UE5H" is base64("PNG")
-        assert_eq!(contents[0]["data"], "UE5H");
+        assert_eq!(contents[0]["blob"], "UE5H");
     }
 
     #[test]
@@ -1385,6 +1498,82 @@ mod tests {
         assert_eq!(resp.result.unwrap()["success"], true);
     }
 
+    /// BUG-1246: полное рукопожатие стандартного MCP-клиента.
+    #[test]
+    fn spec_handshake_initialize_ping_list_call() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let init = make_request(
+            "initialize",
+            serde_json::json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } }),
+        );
+        let result = run_one(&mut server, &init).result.unwrap();
+        assert_eq!(result["protocolVersion"], "2024-11-05");
+        assert_eq!(result["serverInfo"]["name"], "lumen");
+        assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(result["capabilities"].get("sampling").is_none());
+        assert!(result.get("serverVersion").is_none());
+
+        // Уведомление и ping, затем tools/list — за один проход run().
+        server.transport.push_incoming(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        server.transport.push_incoming(&make_request("ping", serde_json::json!({})));
+        server.transport.push_incoming(&make_request("tools/list", serde_json::json!({})));
+        let _ = server.run(); // завершится ошибкой пустого транспорта
+        let out = server.transport.take_outgoing();
+        assert_eq!(out.len(), 2, "на уведомление ответа быть не должно: {out:?}");
+        let ping: serde_json::Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(ping["result"], serde_json::json!({}));
+        let list: serde_json::Value = serde_json::from_str(&out[1]).unwrap();
+        for tool in list["result"]["tools"].as_array().unwrap() {
+            assert!(tool["inputSchema"].is_object(), "{tool}");
+            assert!(tool.get("input_schema").is_none());
+        }
+
+        let res = run_one(
+            &mut server,
+            &make_request("resources/list", serde_json::json!({})),
+        )
+        .result
+        .unwrap();
+        assert!(res["resources"][0]["mimeType"].is_string());
+    }
+
+    #[test]
+    fn initialize_unknown_protocol_version_falls_back_to_latest() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("initialize", serde_json::json!({ "protocolVersion": "1999-01-01" }));
+        let result = run_one(&mut server, &req).result.unwrap();
+        assert_eq!(result["protocolVersion"], "2025-06-18");
+    }
+
+    #[test]
+    fn tools_call_result_has_content_and_is_error_false() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "eval", "arguments": { "code": "1" } }),
+        );
+        let result = run_one(&mut server, &req).result.unwrap();
+        assert_eq!(result["content"][0]["type"], "text");
+        assert_eq!(result["isError"], false);
+        // прежние поля остаются для скриптов репозитория
+        assert_eq!(result["success"], true);
+    }
+
+    #[test]
+    fn tools_call_execution_failure_is_is_error_result_not_rpc_error() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "navigate", "arguments": { "url": "fail://x" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["content"][0]["type"], "text");
+        assert!(result["content"][0]["text"].as_str().unwrap().contains("boom"));
+    }
+
     #[test]
     fn tool_navigate_missing_url_errors() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
@@ -1406,6 +1595,19 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["success"], true);
+    }
+
+    #[test]
+    fn tool_eval_timeout_ms_reaches_session() {
+        // BUG-1145: `timeout_ms` уходит в `eval_with_timeout`, а не теряется.
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "eval", "arguments": { "code": "1+1", "timeout_ms": 30000 } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["result"], "\"waited 30000\"");
     }
 
     #[test]

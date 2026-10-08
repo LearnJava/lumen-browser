@@ -58,14 +58,15 @@ import run_suite  # noqa: E402
 REPO_ROOT = run_smoke.REPO_ROOT
 DEFAULT_OUT = os.path.join(REPO_ROOT, ".tmp", "wpt-report.html")
 
-# Manifest item types this project's executors can actually produce a
-# testharness-shaped result for (LumenTestharnessExecutor over BiDi; the
+# Manifest item types this project's executors can actually produce a result
+# for: testharness (LumenTestharnessExecutor over BiDi), crashtest
+# (LumenCrashtestExecutor over BiDi, WPT-RUN-8-S1: PASS/CRASH/TIMEOUT). The
 # TEST-4 reftest executor is not wired into run_report.py yet — see
-# docs/tasks/p2-test-track.md). Everything else (`crashtest`, `reftest`,
-# `print-reftest`, `manual`, `visual`, `support`, ...) never emits
-# `test_start`, so wptrunner reports it as MISSING — permanently, on every
-# run — which `expectations.classify()` then flags as a REGRESSION forever.
-RUNNABLE_ITEM_TYPES = {"testharness", "test262"}
+# docs/tasks/p2-test-track.md. Everything else (`reftest`, `print-reftest`,
+# `manual`, `visual`, `support`, ...) never emits `test_start`, so wptrunner
+# reports it as MISSING — permanently, on every run — which
+# `expectations.classify()` then flags as a REGRESSION forever.
+RUNNABLE_ITEM_TYPES = {"testharness", "test262", "crashtest"}
 
 _manifest_index_cache = None
 

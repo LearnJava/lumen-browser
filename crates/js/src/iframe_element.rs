@@ -95,8 +95,12 @@ const IFRAME_ELEMENT_SHIM: &str = r#"(function() {
       configurable: true,
     });
 
-    // getSVGDocument() → null (no sub-document).
-    el.getSVGDocument = function() { return null; };
+    // getSVGDocument() — вложенный документ, только если он SVG (OBJECT-1
+    // срез 5, то же правило, что у <object>/<embed>).
+    el.getSVGDocument = function() {
+      var d = this.contentDocument;
+      return (d && d.contentType === 'image/svg+xml') ? d : null;
+    };
   }
 
   // Patch any <iframe> elements already in the document.
@@ -272,7 +276,7 @@ el.getSVGDocument() === null
 "#,
                 )
                 .unwrap();
-            assert_eq!(result, JsValue::Bool(true), "getSVGDocument() should return null in Phase 0");
+            assert_eq!(result, JsValue::Bool(true), "getSVGDocument() без под-документа — null");
         });
     }
 

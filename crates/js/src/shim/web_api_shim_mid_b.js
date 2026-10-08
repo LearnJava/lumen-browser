@@ -11,12 +11,10 @@ var _lumen_loc_hash  = _lumen_loc_parts.hash;
 // this re-initializes for free rather than needing an explicit reset.
 var _lumen_document_domain = _lumen_loc_parts.hostname;
 // BUG-1121: `document.referrer`'s backing store (HTML LS §3.1.2 "the
-// document's referrer"). The spec value is the referrer of the request that
-// fetched the document; a top-level navigation in Lumen sends no `Referer`
-// (`HttpClient::fetch_page` has no document context — BUG-1156), so the
-// document's referrer is "no referrer" and the getter reports ''. Kept as a
-// variable, not a literal, so the navigation slice seeds it in one place.
-var _lumen_document_referrer = '';
+// document's referrer"): the referrer of the request that fetched the
+// document. BUG-1156: seeded by Rust (`_LUMEN_DOCUMENT_REFERRER`) from the
+// `Referer` the top-level navigation sent; '' = no referrer.
+var _lumen_document_referrer = typeof _LUMEN_DOCUMENT_REFERRER !== 'undefined' ? String(_LUMEN_DOCUMENT_REFERRER) : '';
 
 // BUG-765: single source of truth for every `[SecureContext]`-gated surface
 // installed below and by the per-module shims that run after `WEB_API_SHIM`
@@ -184,7 +182,18 @@ var _lumen_location = (function() {
     accessor('hash',
         function()  { return _lumen_loc_hash; },
         function(v) { _lumen_set_location_hash(v); });
-    accessor('origin', function() { return _lumen_loc_parts.origin; }); // readonly per spec
+    // BUG-1208: an opaque-origin address (`about:blank`/`about:srcdoc`, and
+    // any other URL with no authority — `data:`, `mailto:`, …) has NO tuple
+    // origin, so its serialization is the literal string `"null"` (HTML LS
+    // §7.1.1 «ascii serialization of an origin»), not the empty string
+    // `_lumen_parse_url`'s `origin` field falls back to for that case (its
+    // shape is shared with `URL.prototype.origin`, out of this bug's scope —
+    // see the bug file). `location.origin` never inherits a parent's origin
+    // the way `window.origin` does (`_LUMEN_ORIGIN` below): it is always the
+    // literal address's own origin, opaque or not.
+    accessor('origin', function() {
+        return _lumen_loc_parts.origin === '' ? 'null' : _lumen_loc_parts.origin;
+    }); // readonly per spec
     function method(name, fn) {
         Object.defineProperty(loc, name,
             { value: fn, writable: false, enumerable: true, configurable: false });
@@ -335,7 +344,7 @@ function _lumen_build_response(body, infoJson) {
     return new Response(body, opts);
 }
 
-function _lumen_build_cache_object(origin, cacheName) {
+function _lumen_build_cache_object(cacheName) {
     return {
         put: function(request, response) {
             var url = _lumen_req_url(request);
@@ -348,37 +357,37 @@ function _lumen_build_cache_object(origin, cacheName) {
             }
             var metaJson = JSON.stringify({ method: method, status: status, statusText: statusText, headers: hdrs });
             return response.arrayBuffer().then(function(buf) {
-                _lumen_cache_put(origin, cacheName, url, metaJson, new Uint8Array(buf));
+                _lumen_cache_put(cacheName, url, metaJson, new Uint8Array(buf));
                 return undefined;
             });
         },
         match: function(request, options) {
             var url = _lumen_req_url(request);
-            var body = _lumen_cache_match(origin, cacheName, url);
+            var body = _lumen_cache_match(cacheName, url);
             if (body === undefined || body === null) return Promise.resolve(undefined);
-            return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_info(origin, cacheName, url)));
+            return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_info(cacheName, url)));
         },
         matchAll: function(request, options) {
             if (request === undefined) {
-                var urls = _lumen_cache_keys(origin, cacheName);
+                var urls = _lumen_cache_keys(cacheName);
                 return Promise.resolve(urls.map(function(u) {
                     return _lumen_build_response(
-                        _lumen_cache_match(origin, cacheName, u),
-                        _lumen_cache_match_info(origin, cacheName, u)
+                        _lumen_cache_match(cacheName, u),
+                        _lumen_cache_match_info(cacheName, u)
                     );
                 }));
             }
             var url = _lumen_req_url(request);
-            var body = _lumen_cache_match(origin, cacheName, url);
+            var body = _lumen_cache_match(cacheName, url);
             if (body === undefined || body === null) return Promise.resolve([]);
-            return Promise.resolve([_lumen_build_response(body, _lumen_cache_match_info(origin, cacheName, url))]);
+            return Promise.resolve([_lumen_build_response(body, _lumen_cache_match_info(cacheName, url))]);
         },
         delete: function(request, options) {
             var url = _lumen_req_url(request);
-            return Promise.resolve(_lumen_cache_delete(origin, cacheName, url));
+            return Promise.resolve(_lumen_cache_delete(cacheName, url));
         },
         keys: function(request, options) {
-            var entries = JSON.parse(_lumen_cache_keys_full(origin, cacheName));
+            var entries = JSON.parse(_lumen_cache_keys_full(cacheName));
             if (request !== undefined) {
                 var filterUrl = _lumen_req_url(request);
                 entries = entries.filter(function(e) { return e.url === filterUrl; });
@@ -399,26 +408,29 @@ function _lumen_build_cache_object(origin, cacheName) {
     };
 }
 
+// Only the default `getRegistration()` URL reads this. The storage natives take
+// no origin at all — they are bound to the document's origin in Rust (BUG-674),
+// so reassigning this global cannot reach another origin's registrations/caches.
 var _sw_origin = (typeof location !== 'undefined') ? (location.protocol + '//' + location.host) : '';
 
 var caches = {
     open: function(name) {
-        return Promise.resolve(_lumen_build_cache_object(_sw_origin, String(name)));
+        return Promise.resolve(_lumen_build_cache_object(String(name)));
     },
     match: function(request, options) {
         var url = _lumen_req_url(request);
-        var body = _lumen_cache_match_any(_sw_origin, url);
+        var body = _lumen_cache_match_any(url);
         if (body === undefined || body === null) return Promise.resolve(undefined);
-        return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_any_info(_sw_origin, url)));
+        return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_any_info(url)));
     },
     has: function(name) {
-        return Promise.resolve(_lumen_cache_has(_sw_origin, String(name)));
+        return Promise.resolve(_lumen_cache_has(String(name)));
     },
     delete: function(name) {
-        return Promise.resolve(_lumen_cache_delete_cache(_sw_origin, String(name)));
+        return Promise.resolve(_lumen_cache_delete_cache(String(name)));
     },
     keys: function() {
-        return Promise.resolve(_lumen_cache_names(_sw_origin));
+        return Promise.resolve(_lumen_cache_names());
     },
 };
 
@@ -503,7 +515,7 @@ function _sw_make_registration(scope, scriptUrl) {
         onupdatefound: null,
         update: function() { return Promise.resolve(); },
         unregister: function() {
-            _lumen_sw_unregister(_sw_origin, scope);
+            _lumen_sw_unregister(scope);
             delete _sw_registrations[scope];
             _sw_persist();
             return Promise.resolve(true);
@@ -523,7 +535,7 @@ function _sw_persist() {
                 state: r.active ? 'activated' : (r.waiting ? 'installed' : 'installing'),
             });
         }
-        _lumen_sw_persist(_sw_origin, JSON.stringify(snap));
+        _lumen_sw_persist(JSON.stringify(snap));
     } catch(e) {}
 }
 
@@ -541,7 +553,7 @@ function _sw_run_lifecycle(reg) {
             sw._setState('installed');
             reg.waiting = sw;
             reg.installing = null;
-            _lumen_sw_register(_sw_origin, reg.scope, reg.scriptURL);
+            _lumen_sw_register(reg.scope, reg.scriptURL);
             setTimeout(function() {
                 reg.waiting = null;
                 sw._setState('activating');
@@ -557,7 +569,7 @@ function _sw_run_lifecycle(reg) {
                         fetch(scriptURL)
                             .then(function(res) { return res.text(); })
                             .then(function(text) {
-                                _lumen_sw_activate_script(_sw_origin, scope, text);
+                                _lumen_sw_activate_script(scope, text);
                             })
                             .catch(function() {}); // ignore fetch errors — lifecycle still simulated
                     })(reg.scope, reg.scriptURL);
@@ -578,7 +590,7 @@ function _sw_run_lifecycle(reg) {
 // Restore registrations saved from a previous page load.
 (function() {
     try {
-        var snap = _lumen_sw_load(_sw_origin);
+        var snap = _lumen_sw_load();
         if (snap) {
             var arr = JSON.parse(snap);
             for (var i = 0; i < arr.length; i++) {
@@ -588,7 +600,7 @@ function _sw_run_lifecycle(reg) {
                     var sw = _sw_make_worker(item.scriptURL, item.state);
                     reg.active = sw;
                     _sw_registrations[item.scope] = reg;
-                    _lumen_sw_register(_sw_origin, item.scope, item.scriptURL);
+                    _lumen_sw_register(item.scope, item.scriptURL);
                 }
             }
         }
@@ -608,6 +620,58 @@ var _sw_ready_promise = new Promise(function(resolve) {
     }
 });
 
+// BUG-675: URL checks of `register()` (SW §3.4.3 steps 2–4, §9.2 Start
+// Register steps 3–6, §9.6 Register step 2–3). Returns `{script}` with the
+// absolute script URL, or `{error}` holding the rejection reason.
+function _sw_check_register_urls(scriptUrl, scopeOpt) {
+    var base = (typeof document !== 'undefined' && document && document.baseURI)
+        || (typeof location !== 'undefined' ? location.href : undefined);
+    var docOrigin = (typeof location !== 'undefined') ? location.origin : undefined;
+    function parse(value, what) {
+        try {
+            return { url: new URL(String(value), base) };
+        } catch (e) {
+            return { error: new TypeError('Failed to register a ServiceWorker: the '
+                + what + ' URL \'' + String(value) + '\' is invalid.') };
+        }
+    }
+    // Start Register: scheme and encoded separators — TypeError.
+    function checkShape(u, what) {
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+            return new TypeError('Failed to register a ServiceWorker: the '
+                + what + ' URL protocol \'' + u.protocol + '\' is not supported.');
+        }
+        if (/%2f|%5c/i.test(u.pathname)) {
+            return new TypeError('Failed to register a ServiceWorker: the '
+                + what + ' URL path must not contain an escaped \'/\' or \'\\\'.');
+        }
+        return null;
+    }
+    // Register job: origin mismatch with the registering document — SecurityError.
+    function checkOrigin(u, what) {
+        if (docOrigin !== undefined && u.origin !== docOrigin) {
+            return new DOMException('Failed to register a ServiceWorker: the origin of the '
+                + what + ' URL (\'' + u.origin + '\') does not match the current origin (\''
+                + docOrigin + '\').', 'SecurityError');
+        }
+        return null;
+    }
+    var s = parse(scriptUrl, 'script');
+    if (s.error) return s;
+    var err = checkShape(s.url, 'script');
+    if (err) return { error: err };
+    var sc = null;
+    if (scopeOpt !== undefined && scopeOpt !== null) {
+        sc = parse(scopeOpt, 'scope');
+        if (sc.error) return sc;
+        err = checkShape(sc.url, 'scope');
+        if (err) return { error: err };
+    }
+    err = checkOrigin(s.url, 'script') || (sc && checkOrigin(sc.url, 'scope'));
+    if (err) return { error: err };
+    return { script: s.url.href };
+}
+
 var _sw_container_et = _sw_make_event_target();
 var _sw_container = Object.assign({
     get controller() {
@@ -622,6 +686,14 @@ var _sw_container = Object.assign({
     onmessageerror: null,
     register: function(scriptUrl, options) {
         var scope = (options && options.scope) ? String(options.scope) : '/';
+        // BUG-675: SW §3.4.3 register() + §9.2 Start Register — the script URL
+        // (and an explicit scope) is parsed against the document's base URL and
+        // must be http(s), same-origin with the document, and free of encoded
+        // path separators; otherwise the promise rejects before any
+        // registration state exists. The registry key stays the raw scope.
+        var checked = _sw_check_register_urls(scriptUrl, options && options.scope);
+        if (checked.error) return Promise.reject(checked.error);
+        scriptUrl = checked.script;
         var existing = _sw_registrations[scope];
         if (existing && existing.active && existing.scriptURL === String(scriptUrl)) {
             return Promise.resolve(existing);
@@ -648,7 +720,7 @@ var _sw_container = Object.assign({
         reg.installing = sw;
         _sw_registrations[scope] = reg;
         // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
-        _lumen_sw_register(_sw_origin, scope, String(scriptUrl));
+        _lumen_sw_register(scope, String(scriptUrl));
         _sw_run_lifecycle(reg);
         return Promise.resolve(reg);
     },
@@ -702,6 +774,9 @@ var navigator = Object.assign(Object.create(Navigator.prototype), {
             return ok;
         } catch(e) { return false; }
     },
+    // HTML LS §8.9.1.6 `NavigatorPlugins`: always false (BUG-1142 — Adobe
+    // Analytics calls it unguarded and aborted its `track()` on Lumen).
+    javaEnabled: function javaEnabled() { return false; },
 });
 
 // BUG-765: `navigator.serviceWorker` is `[SecureContext]` (Service Workers
@@ -955,9 +1030,21 @@ function cancelAnimationFrame(id) {
 // timestamp_ms < 0 → use performance.now() (live DOMHighResTimeStamp, EE-5);
 // timestamp_ms >= 0 → use as-is (0 = deterministic mode, frozen clock).
 // All callbacks in a batch receive the SAME timestamp (captured once at start).
+// BUG-1003: counts rAF batches; ResizeObserver delivery reads it to tell
+// «the next frame's update-the-rendering» from «right after this delivery».
+var _ro_raf_epoch = 0;
 function _lumen_run_raf_callbacks(timestamp_ms) {
+    _ro_raf_epoch++;
     var ts = timestamp_ms < 0 ? performance.now() : +timestamp_ms;
     _wa_current_time = ts;
+    // BUG-1041: playback events queued before this frame go out ahead of the
+    // rAF callbacks (Web Animations §4.4.3 "update animations and send events").
+    if (typeof _wa_pending_events !== 'undefined' && _wa_pending_events.length !== 0) {
+        var _wa_evs = _wa_pending_events.splice(0);
+        for (var _e = 0; _e < _wa_evs.length; _e++) {
+            try { _wa_evs[_e].run(); } catch(e) { _lumen_report_exception(e); }
+        }
+    }
     var callbacks = _lumen_raf_callbacks.splice(0);
     var ran = false;
     if (callbacks.length !== 0) {
@@ -975,6 +1062,10 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     // delivery loop is itself queued through this same callback array, after
     // resize observations too) — so a callback that reads
     // `document.activeElement` still sees the pre-fixup value.
+    // BUG-1003: Resize Observer §3.4 — observations are gathered after the
+    // rAF callbacks of the frame; a delivery held back for this batch runs now.
+    if (typeof _ro_frame_pass === 'function') _ro_frame_pass();
+    if (typeof _ro_deliver_after_raf === 'function') _ro_deliver_after_raf();
     _lumen_focus_fixup();
     return ran;
 }
@@ -1068,13 +1159,27 @@ function _lumen_history_can_rewrite_url(target) {
     return t.pathname === d.pathname && t.search === d.search;
 }
 
-var history = {
+// HTML LS §7.4.2 `interface History` (BUG-1137). Not constructible from
+// script; `history` is its only instance and every member lives on
+// `History.prototype` — the attributes as getter-only accessors, the
+// operations as methods — so `history instanceof History` holds and
+// `toString.call(history)` is `[object History]`. Meta's hyperion wraps
+// `History` by name (`new ShadowPrototype(History, …)`) and disables itself
+// when the global is missing.
+function History() { throw new TypeError('Illegal constructor'); }
+var _lumen_history_instance = null;
+function _lumen_history_check(self) {
+    if (self !== _lumen_history_instance) throw new TypeError('Illegal invocation');
+}
+var _lumen_history_members = {
     get length()  {
+        _lumen_history_check(this);
         var m = _lumen_history_length();
         try { var st = JSON.parse(_lumen_navigation_entries_json()); if (st && st.entries && st.entries.length > m) return st.entries.length; } catch (e) {}
         return m;
     },
     get state()   {
+        _lumen_history_check(this);
         try { return JSON.parse(_lumen_history_state_json()); } catch(e) { return null; }
     },
     // `url` is a nullable DOMString defaulting to null, so only an omitted (or
@@ -1083,11 +1188,14 @@ var history = {
     // resolution runs BEFORE anything is stored, because its `SecurityError`
     // must leave the session history untouched (HTML LS §7.4.6 step 3).
     pushState:    function(state, title, url) {
+        _lumen_history_check(this);
         var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
         _lumen_history_push(new_state_json, target === null ? '' : target);
         if (target !== null) {
+            var _sn_moved = target !== _lumen_loc_parts.href;
             _lumen_location_update(target);
+            if (_sn_moved) _sn_note_url(target);
         }
         // A same-document entry is added regardless of whether `url` was
         // given (HTML LS §7.4.6 step 8) — the shell must learn about it
@@ -1098,17 +1206,21 @@ var history = {
         _lumen_history_push_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
     replaceState: function(state, title, url) {
+        _lumen_history_check(this);
         var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
         _lumen_history_replace(new_state_json, target === null ? '' : target);
         if (target !== null) {
+            var _sn_moved = target !== _lumen_loc_parts.href;
             _lumen_location_update(target);
+            if (_sn_moved) _sn_note_url(target);
         }
         _lumen_history_replace_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
-    back:    function() { history.go(-1); },
-    forward: function() { history.go(1); },
+    back:    function() { _lumen_history_check(this); _lumen_history_instance.go(-1); },
+    forward: function() { _lumen_history_check(this); _lumen_history_instance.go(1); },
     go: function(delta) {
+        _lumen_history_check(this);
         // HTML LS (history traversal): history.go(0) reloads the current document.
         if ((delta | 0) === 0) {
             _lumen_reload();
@@ -1136,6 +1248,23 @@ var history = {
         }
     },
 };
+(function() {
+    var proto = History.prototype;
+    Object.getOwnPropertyNames(_lumen_history_members).forEach(function(name) {
+        var d = Object.getOwnPropertyDescriptor(_lumen_history_members, name);
+        if (d.get) {
+            Object.defineProperty(proto, name, { get: d.get, enumerable: true, configurable: true });
+        } else {
+            Object.defineProperty(proto, name, { value: d.value, writable: true, enumerable: true, configurable: true });
+        }
+    });
+    Object.defineProperty(proto, Symbol.toStringTag, {
+        value: 'History', writable: false, enumerable: false, configurable: true });
+    Object.defineProperty(History, 'prototype', { writable: false });
+})();
+_lumen_history_members = undefined;
+var history = _lumen_history_instance = Object.create(History.prototype);
+Object.defineProperty(globalThis, 'History', { enumerable: false });
 
 // ── Server-Sent Events API (HTML Living Standard §9.2) ─────────────────────
 // Phase 0 model: synchronous connect; background recv thread queues events;
@@ -1351,7 +1480,16 @@ var _lumen_bfcache_persisted = false;
 var _pageshow_listeners = [];
 var _pagehide_listeners = [];
 
+// BUG-1129: the shell sends `pageshow` right after `load`; while inserted
+// scripts hold `load` back (`_lumen_load_deferred`), `pageshow` waits for it
+// here and `_lumen_load_delay_done` fires it after `load`.
+var _lumen_pageshow_deferred = null;
+
 function _lumen_fire_page_lifecycle(type, persisted) {
+    if (type === 'pageshow' && typeof _lumen_load_deferred === 'boolean' && _lumen_load_deferred) {
+        _lumen_pageshow_deferred = !!persisted;
+        return;
+    }
     var evt = new PageTransitionEvent(type, { isTrusted: true, persisted: !!persisted });
     if (type === 'pageshow') {
         // HTML LS §7.4.6 «reactivate a document»: the page becomes showing and

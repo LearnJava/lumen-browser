@@ -175,6 +175,34 @@ pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Opti
     parse_color_legacy(s, is_quirks).map(CssColor::Rgba)
 }
 
+/// `<color>` для значений, чей computed value обязан сохранять `color(srgb …)`-форму
+/// (CSS Color L4 §4.2): как [`parse_css_color_legacy`], но `color-mix(in srgb, …)` и
+/// относительный `rgb(from …)`/`rgba(from …)` остаются `CssColor::Wide` с float-каналами
+/// вместо схлопывания в `rgb()` (Gap Decorations: `*-rule-color`, BUG-553). Прочие
+/// формы идут прежним путём.
+pub(in crate::style) fn parse_css_color_keep_srgb_form(s: &str, is_quirks: bool) -> Option<CssColor> {
+    let t = s.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("color-mix(") {
+        if let Some(wide) = parse_color_function(t) {
+            return Some(CssColor::Wide(wide));
+        }
+    } else if let Some(body) =
+        lower.strip_prefix("rgb(").or_else(|| lower.strip_prefix("rgba("))
+        && body.trim_start().starts_with("from ")
+        && let Some(c) = parse_function_color(t)
+    {
+        return Some(CssColor::Wide(ColorFloat {
+            r: f32::from(c.r) / 255.0,
+            g: f32::from(c.g) / 255.0,
+            b: f32::from(c.b) / 255.0,
+            a: f32::from(c.a) / 255.0,
+            space: ColorSpace::Srgb,
+        }));
+    }
+    parse_css_color_legacy(t, is_quirks)
+}
+
 /// CSS Color L4 §10.1 — парсит `color(<space> c1 c2 c3 [/ alpha])`.
 ///
 /// Displayable spaces — `srgb`, `display-p3`, `rec2020` — хранятся как
@@ -185,14 +213,22 @@ pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Opti
 /// и хранятся как `ColorFloat { space: Srgb }` с gamma-encoded каналами.
 ///
 /// CSS Color L5 §4 — `--<dashed-ident>` первым токеном ссылается на
-/// `@color-profile`-профиль. Реальная ICC-трансформация и проверка, что имя
-/// действительно объявлено, отложены (см. `ColorProfileRule` в css-parser);
-/// каналы трактуются как уже sRGB, аналогично ветке `srgb`.
+/// `@color-profile`-профиль. Когда каскад установил контекст профилей
+/// ([`sync_color_profiles`]), каналы идут через скомпилированную ICC-трансформацию
+/// профиля (RGB matrix-shaper — 3 канала, CMYK `A2B0` — 4 канала), а имя без
+/// загруженного профиля даёт невалидный цвет (§5.3). Без контекста (парсинг вне
+/// каскада — Canvas 2D, лист без `@color-profile`) каналы трактуются как
+/// уже sRGB, аналогично ветке `srgb`.
 ///
 /// Каналы: unitless float или % (100% = 1.0). Слэш — разделитель alpha.
 fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
     let lower = s.to_ascii_lowercase();
     let body = lower.strip_prefix("color(")?.strip_suffix(')')?;
+    if body.trim_start().starts_with("--")
+        && let Some(result) = parse_custom_profile_color(body)
+    {
+        return result;
+    }
     // Разбиваем по пробелам и слэшу, пропуская пустые токены.
     let tokens: Vec<&str> = body.split(|c: char| c.is_whitespace() || c == '/').filter(|t| !t.is_empty()).collect();
     if tokens.len() < 4 {
@@ -210,11 +246,10 @@ fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
         "srgb" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Srgb }),
         "display-p3" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::DisplayP3 }),
         "rec2020" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Rec2020 }),
-        // CSS Color L5 §4 — `color(--name c1 c2 c3)` referencing an
-        // `@color-profile`-declared custom profile. Real ICC-based transform
-        // (and existence validation against the declared profile name) is
-        // deferred — channels are treated as already-encoded sRGB, same as
-        // the `srgb` branch above.
+        // CSS Color L5 §4 — `color(--name c1 c2 c3)` with no profile context
+        // installed (`parse_custom_profile_color` handles the cascade case
+        // before we get here): channels are treated as already-encoded sRGB,
+        // same as the `srgb` branch above.
         space if space.starts_with("--") => {
             Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Srgb })
         }
@@ -241,6 +276,129 @@ fn parse_color_fn_channel(s: &str) -> Option<f32> {
         return Some(0.0);
     }
     s.parse::<f32>().ok()
+}
+
+/// Скомпилированная ICC-трансформация одного `@color-profile`.
+enum ProfileTransform {
+    /// RGB matrix-shaper: 3 канала → gamma-encoded sRGB.
+    Rgb(std::sync::Arc<lumen_core::icc::RgbTransform>),
+    /// CMYK `A2B0` LUT: 4 канала → gamma-encoded sRGB.
+    Cmyk(std::sync::Arc<lumen_core::icc::CmykTransform>),
+}
+
+impl ProfileTransform {
+    fn from_icc(bytes: &[u8]) -> Option<Self> {
+        if let Some(t) = lumen_core::icc::cached_rgb_transform(bytes) {
+            return Some(Self::Rgb(t));
+        }
+        lumen_core::icc::cached_cmyk_transform(bytes).map(Self::Cmyk)
+    }
+
+    fn channels(&self) -> usize {
+        match self {
+            Self::Rgb(_) => 3,
+            Self::Cmyk(_) => 4,
+        }
+    }
+
+    /// Каналы профиля → gamma-encoded sRGB (каждый в `[0, 1]`).
+    fn to_srgb(&self, c: &[f32]) -> (f32, f32, f32) {
+        let ch = |i: usize| f64::from(c[i].clamp(0.0, 1.0));
+        let (r, g, b) = match self {
+            Self::Rgb(t) => t.apply(ch(0), ch(1), ch(2)),
+            Self::Cmyk(t) => t.apply(ch(0), ch(1), ch(2), ch(3)),
+        };
+        (r as f32, g as f32, b as f32)
+    }
+}
+
+/// Профили `@color-profile` текущего листа, привязанные к потоку.
+struct ColorProfileCtx {
+    /// Версия листа, для которого собрана `map`.
+    revision: Option<lumen_css_parser::StylesheetRevision>,
+    /// Имя профиля (нижний регистр) → трансформация; `None` — профиль
+    /// объявлен, но не загрузился или не разобрался (цвет на него невалиден,
+    /// CSS Color L5 §5.3). Сама `map == None` — контекста нет.
+    map: Option<std::collections::HashMap<String, Option<ProfileTransform>>>,
+}
+
+thread_local! {
+    /// Thread-local, потому что `color()` разбирается глубоко внутри
+    /// `apply_declaration`, куда лист не передаётся; ставится
+    /// [`sync_color_profiles`] в начале `compute_style` — поэтому rayon-воркеры
+    /// получают его сами, без `StyleEnvSnapshot`.
+    static COLOR_PROFILES: std::cell::RefCell<ColorProfileCtx> =
+        const { std::cell::RefCell::new(ColorProfileCtx { revision: None, map: None }) };
+}
+
+/// Привязывает профили `@color-profile` листа к текущему потоку (вызывается
+/// из `compute_style`). Лист без `@color-profile` снимает контекст — тогда
+/// `color(--name …)` разбирается как раньше, каналами sRGB. Для того же листа
+/// (по `revision`) повторная сборка карты пропускается.
+pub(in crate::style) fn sync_color_profiles(sheet: &lumen_css_parser::Stylesheet) {
+    COLOR_PROFILES.with(|cell| {
+        let mut ctx = cell.borrow_mut();
+        if sheet.color_profiles.is_empty() {
+            ctx.map = None;
+            ctx.revision = None;
+            return;
+        }
+        if ctx.revision == Some(sheet.revision()) && ctx.map.is_some() {
+            return;
+        }
+        let mut map = std::collections::HashMap::new();
+        // Последнее правило с тем же именем побеждает (§5.3).
+        for rule in &sheet.color_profiles {
+            let transform = rule.data.as_deref().and_then(|bytes| ProfileTransform::from_icc(bytes));
+            map.insert(rule.name.to_ascii_lowercase(), transform);
+        }
+        ctx.map = Some(map);
+        ctx.revision = Some(sheet.revision());
+    });
+}
+
+/// `color(--name c1 … cN [/ alpha])` при установленном контексте профилей.
+///
+/// Внешний `None` — контекста нет, вызывающий откатывается на sRGB-проход
+/// каналов. `Some(None)` — контекст есть, но цвет невалиден: профиль не
+/// объявлен, не загрузился, не разобрался либо число каналов не совпало с
+/// профилем. `body` — содержимое скобок `color(…)` в нижнем регистре.
+fn parse_custom_profile_color(body: &str) -> Option<Option<ColorFloat>> {
+    COLOR_PROFILES.with(|cell| {
+        let ctx = cell.borrow();
+        let map = ctx.map.as_ref()?;
+        Some(custom_profile_color(map, body))
+    })
+}
+
+fn custom_profile_color(
+    map: &std::collections::HashMap<String, Option<ProfileTransform>>,
+    body: &str,
+) -> Option<ColorFloat> {
+    let (head, alpha) = match body.split_once('/') {
+        Some((h, a)) => (h, Some(a)),
+        None => (body, None),
+    };
+    let mut tokens = head.split_whitespace();
+    let name = tokens.next()?;
+    let transform = map.get(name)?.as_ref()?;
+    let channels: Vec<f32> = tokens.map(parse_color_fn_channel).collect::<Option<Vec<f32>>>()?;
+    if channels.len() != transform.channels() {
+        return None;
+    }
+    let a = match alpha {
+        Some(a) => {
+            let mut it = a.split_whitespace();
+            let v = parse_color_fn_channel(it.next()?)?;
+            if it.next().is_some() {
+                return None;
+            }
+            v.clamp(0.0, 1.0)
+        }
+        None => 1.0,
+    };
+    let (r, g, b) = transform.to_srgb(&channels);
+    Some(ColorFloat { r, g, b, a, space: ColorSpace::Srgb })
 }
 
 /// CSS Color Module Level 3 §4.3 — X11 / SVG named colors. Принимает имя

@@ -187,6 +187,212 @@ PointerEvent.prototype.constructor = PointerEvent;
 PointerEvent.prototype.getCoalescedEvents = function() { return []; };
 PointerEvent.prototype.getPredictedEvents = function() { return []; };
 
+// ── Touch Events L2: Touch / TouchList / TouchEvent (BUG-688) ────────────────
+// The three interfaces as a desktop engine without a touch screen exposes
+// them: constructible `Touch`/`TouchEvent`, a script-built `TouchList`, and
+// NO `ontouch*` members on `window`/`document`/elements — the spec's "expose
+// legacy touch event APIs" flag is off, so `'ontouchstart' in window` stays
+// `false` and touch-detecting sites keep their mouse UI, as in desktop Edge.
+// Nothing in the shell synthesizes touches; a page only sees what it builds.
+// State sits in WeakMaps behind prototype getters (WebIDL attributes), which
+// also serve as the brand check. Globals are published non-enumerable at the
+// end of the block, as `_perf_mark_iface` in `performance_shim.js` explains.
+var _LUMEN_TOUCH_SLOTS = new WeakMap();
+var _LUMEN_TOUCH_LIST_SLOTS = new WeakMap();
+var _LUMEN_TOUCH_EVENT_SLOTS = new WeakMap();
+
+// Readonly WebIDL attributes as prototype accessors named `get <attr>`.
+function _lumen_touch_define_getters(proto, slots, names) {
+    names.forEach(function(name) {
+        var getter = function() {
+            var s = slots.get(this);
+            if (s === undefined) throw new TypeError('Illegal invocation');
+            return s[name];
+        };
+        Object.defineProperty(getter, 'name', { value: 'get ' + name });
+        Object.defineProperty(proto, name, { get: getter, enumerable: true, configurable: true });
+    });
+}
+
+// WebIDL dictionary argument: undefined/null read as `{}`, any other
+// non-object is a TypeError.
+function _lumen_touch_dict(value, iface, dictName) {
+    if (value === undefined || value === null) return {};
+    if (typeof value !== 'object' && typeof value !== 'function') {
+        throw new TypeError("Failed to construct '" + iface + "': The provided value is not of type '" + dictName + "'.");
+    }
+    return value;
+}
+
+// `TouchInit` members in WebIDL conversion order (lexicographic), with the
+// type each converts to: `double`/`float` are the restricted kinds, so a
+// non-finite value throws.
+var _LUMEN_TOUCH_INIT_MEMBERS = [
+    ['altitudeAngle', 'double'], ['azimuthAngle', 'double'],
+    ['clientX', 'double'], ['clientY', 'double'], ['force', 'float'],
+    ['identifier', 'long'], ['pageX', 'double'], ['pageY', 'double'],
+    ['radiusX', 'float'], ['radiusY', 'float'], ['rotationAngle', 'float'],
+    ['screenX', 'double'], ['screenY', 'double'], ['target', 'EventTarget'],
+    ['touchType', 'TouchType'],
+];
+
+// Touch Events L2 §5.1 `constructor(TouchInit touchInitDict)` — `identifier`
+// and `target` are required members, so even `new Touch({})` throws.
+var _lumen_touch_iface = function Touch(touchInitDict) {
+    if (new.target === undefined) {
+        throw new TypeError("Failed to construct 'Touch': Please use the 'new' operator.");
+    }
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to construct 'Touch': 1 argument required, but only 0 present.");
+    }
+    var init = _lumen_touch_dict(touchInitDict, 'Touch', 'TouchInit');
+    var s = {};
+    _LUMEN_TOUCH_INIT_MEMBERS.forEach(function(m) {
+        var name = m[0], type = m[1], v = init[name];
+        var prefix = "Failed to construct 'Touch': ";
+        if (v === undefined) {
+            if (name === 'identifier' || name === 'target') {
+                throw new TypeError(prefix + "required member " + name + " is undefined.");
+            }
+            s[name] = type === 'TouchType' ? 'direct' : 0;
+            return;
+        }
+        if (type === 'long') {
+            s[name] = Number(v) | 0;
+        } else if (type === 'EventTarget') {
+            if (!(v instanceof EventTarget)) {
+                throw new TypeError(prefix + "Failed to read the 'target' property from 'TouchInit': Failed to convert value to 'EventTarget'.");
+            }
+            s[name] = v;
+        } else if (type === 'TouchType') {
+            v = String(v);
+            if (v !== 'direct' && v !== 'stylus') {
+                throw new TypeError(prefix + "Failed to read the 'touchType' property from 'TouchInit': The provided value '"
+                    + v + "' is not a valid enum value of type TouchType.");
+            }
+            s[name] = v;
+        } else {
+            var n = type === 'float' ? Math.fround(Number(v)) : Number(v);
+            if (!isFinite(n)) {
+                throw new TypeError(prefix + "Failed to read the '" + name + "' property from 'TouchInit': The provided "
+                    + type + " value is non-finite.");
+            }
+            s[name] = n;
+        }
+    });
+    _LUMEN_TOUCH_SLOTS.set(this, s);
+};
+_lumen_touch_define_getters(_lumen_touch_iface.prototype, _LUMEN_TOUCH_SLOTS, [
+    'identifier', 'target', 'screenX', 'screenY', 'clientX', 'clientY', 'pageX',
+    'pageY', 'radiusX', 'radiusY', 'rotationAngle', 'force', 'altitudeAngle',
+    'azimuthAngle', 'touchType',
+]);
+
+// Touch Events L2 §5.2 — no constructor; a list exists only as a
+// `TouchEvent` attribute. Entries are own indexed properties (the
+// `getter Touch? item()` indexed getter) over a frozen snapshot.
+var _lumen_touch_list_iface = function TouchList() { throw new TypeError('Illegal constructor'); };
+function _lumen_make_touch_list(touches) {
+    var list = Object.create(_lumen_touch_list_iface.prototype);
+    _LUMEN_TOUCH_LIST_SLOTS.set(list, { length: touches.length, items: touches });
+    for (var i = 0; i < touches.length; i++) {
+        Object.defineProperty(list, i, { value: touches[i], writable: false, enumerable: true, configurable: true });
+    }
+    return list;
+}
+_lumen_touch_define_getters(_lumen_touch_list_iface.prototype, _LUMEN_TOUCH_LIST_SLOTS, ['length']);
+Object.defineProperty(_lumen_touch_list_iface.prototype, 'item', {
+    value: function item(index) {
+        var s = _LUMEN_TOUCH_LIST_SLOTS.get(this);
+        if (s === undefined) throw new TypeError('Illegal invocation');
+        if (arguments.length < 1) {
+            throw new TypeError("Failed to execute 'item' on 'TouchList': 1 argument required, but only 0 present.");
+        }
+        var i = Number(index) >>> 0;
+        return i < s.length ? s.items[i] : null;
+    },
+    writable: true, enumerable: true, configurable: true,
+});
+// WebIDL §3.7.6: an indexed getter plus an integer `length` makes the
+// interface iterable through `%Array.prototype.values%`.
+Object.defineProperty(_lumen_touch_list_iface.prototype, Symbol.iterator,
+    { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
+
+// `sequence<Touch>` member of `TouchEventInit`: any iterable of `Touch`.
+function _lumen_touch_sequence(value, name) {
+    if (value === undefined) return [];
+    var prefix = "Failed to construct 'TouchEvent': Failed to read the '" + name + "' property from 'TouchEventInit': ";
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function')
+        || typeof value[Symbol.iterator] !== 'function') {
+        throw new TypeError(prefix + "The provided value cannot be converted to a sequence.");
+    }
+    var out = [];
+    for (var t of value) {
+        if (!_LUMEN_TOUCH_SLOTS.has(t)) {
+            throw new TypeError(prefix + "Failed to convert value to 'Touch'.");
+        }
+        out.push(t);
+    }
+    return out;
+}
+
+// Touch Events L2 §5.4 `TouchEvent : UIEvent`,
+// `constructor(DOMString type, optional TouchEventInit eventInitDict = {})`.
+var _lumen_touch_event_iface = function TouchEvent(type) {
+    if (new.target === undefined) {
+        throw new TypeError("Failed to construct 'TouchEvent': Please use the 'new' operator.");
+    }
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to construct 'TouchEvent': 1 argument required, but only 0 present.");
+    }
+    var init = _lumen_touch_dict(arguments[1], 'TouchEvent', 'TouchEventInit');
+    UIEvent.call(this, type, init);
+    _LUMEN_TOUCH_EVENT_SLOTS.set(this, {
+        altKey: !!init.altKey,
+        ctrlKey: !!init.ctrlKey,
+        metaKey: !!init.metaKey,
+        shiftKey: !!init.shiftKey,
+        changedTouches: _lumen_make_touch_list(_lumen_touch_sequence(init.changedTouches, 'changedTouches')),
+        targetTouches: _lumen_make_touch_list(_lumen_touch_sequence(init.targetTouches, 'targetTouches')),
+        touches: _lumen_make_touch_list(_lumen_touch_sequence(init.touches, 'touches')),
+    });
+};
+Object.defineProperty(_lumen_touch_event_iface, 'prototype', { value: Object.create(UIEvent.prototype) });
+Object.setPrototypeOf(_lumen_touch_event_iface, UIEvent);
+_lumen_touch_define_getters(_lumen_touch_event_iface.prototype, _LUMEN_TOUCH_EVENT_SLOTS, [
+    'touches', 'targetTouches', 'changedTouches', 'altKey', 'metaKey', 'ctrlKey', 'shiftKey',
+]);
+// Only the four modifiers the init dictionary carries, as in `MouseEvent`.
+Object.defineProperty(_lumen_touch_event_iface.prototype, 'getModifierState', {
+    value: function getModifierState(keyArg) {
+        var s = _LUMEN_TOUCH_EVENT_SLOTS.get(this);
+        if (s === undefined) throw new TypeError('Illegal invocation');
+        if (arguments.length < 1) {
+            throw new TypeError("Failed to execute 'getModifierState' on 'TouchEvent': 1 argument required, but only 0 present.");
+        }
+        var key = String(keyArg);
+        if (key === 'Alt') return s.altKey;
+        if (key === 'Control') return s.ctrlKey;
+        if (key === 'Meta') return s.metaKey;
+        if (key === 'Shift') return s.shiftKey;
+        return false;
+    },
+    writable: true, enumerable: true, configurable: true,
+});
+
+[[_lumen_touch_iface, 'Touch'], [_lumen_touch_list_iface, 'TouchList'],
+ [_lumen_touch_event_iface, 'TouchEvent']].forEach(function(p) {
+    var iface = p[0], name = p[1];
+    Object.defineProperty(iface.prototype, 'constructor',
+        { value: iface, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(iface.prototype, Symbol.toStringTag,
+        { value: name, writable: false, enumerable: false, configurable: true });
+    // An interface object's `prototype` is non-writable (WebIDL §3.7.1).
+    Object.defineProperty(iface, 'prototype', { writable: false });
+    Object.defineProperty(globalThis, name,
+        { value: iface, writable: true, enumerable: false, configurable: true });
+});
+
 // AnimationEvent — animationstart / animationend / animationiteration / animationcancel
 function AnimationEvent(type, init) {
     Event.call(this, type, init);
@@ -355,6 +561,52 @@ CommandEvent.prototype = Object.create(Event.prototype);
 CommandEvent.prototype.constructor = CommandEvent;
 Object.defineProperty(CommandEvent.prototype, Symbol.toStringTag,
     { value: 'CommandEvent', writable: false, enumerable: false, configurable: true });
+
+// InterestEvent — Interest Invokers (WHATWG HTML PR #11006, `.tentative.`).
+// Same nullable-`Element` `source` member as `CommandEvent`, but the getter
+// retargets it against `currentTarget` (DOM §4.2.2): an invoker inside a
+// shadow tree pointing at a light-DOM target reads as the shadow host from a
+// light-DOM listener (`interestevent-dispatch-shadow.tentative.html`).
+var _LUMEN_INTEREST_EVENT_SOURCE = new WeakMap();
+function InterestEvent(type) {
+    if (!new.target) throw new TypeError("Failed to construct 'InterestEvent': Please use the 'new' operator.");
+    var init = arguments[1];
+    Event.call(this, type, init);
+    var source;
+    if (init == null || init.source === undefined || init.source === null) {
+        source = null;
+    } else if (init.source && typeof init.source === 'object' && init.source.__nid__ !== undefined
+               && init.source.nodeType === 1) {
+        source = init.source;
+    } else {
+        throw new TypeError("Failed to construct 'InterestEvent': member source is not of type Element.");
+    }
+    _LUMEN_INTEREST_EVENT_SOURCE.set(this, source);
+}
+// WebIDL shape (idlharness): non-writable `prototype`, non-enumerable
+// `constructor` and global binding, `source` as a prototype accessor.
+Object.defineProperty(InterestEvent, 'prototype', { value: Object.create(Event.prototype), writable: false });
+Object.defineProperty(InterestEvent.prototype, 'constructor',
+    { value: InterestEvent, writable: true, enumerable: false, configurable: true });
+Object.defineProperty(InterestEvent.prototype, 'source', {
+    get: function() {
+        if (!_LUMEN_INTEREST_EVENT_SOURCE.has(this)) {
+            throw new TypeError('Illegal invocation');
+        }
+        var source = _LUMEN_INTEREST_EVENT_SOURCE.get(this);
+        var ct = this.currentTarget;
+        if (source === null || !ct || ct.__nid__ === undefined) return source;
+        var r = _lumen_retarget_nid(source.__nid__, ct.__nid__);
+        return r === source.__nid__ ? source : _lumen_make_element(r);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(InterestEvent.prototype, Symbol.toStringTag,
+    { value: 'InterestEvent', writable: false, enumerable: false, configurable: true });
+Object.defineProperty(Object.getOwnPropertyDescriptor(InterestEvent.prototype, 'source').get, 'name',
+    { value: 'get source' });
+Object.setPrototypeOf(InterestEvent, Event);
+Object.defineProperty(globalThis, 'InterestEvent', { enumerable: false });
 
 // ContentVisibilityAutoStateChangeEvent — CSS Contain L2 §4.1 (BUG-852).
 // `skipped` is a readonly WebIDL boolean with a `false` default, so a member
@@ -682,6 +934,29 @@ function CompositionEvent(type, init) {
 CompositionEvent.prototype = Object.create(UIEvent.prototype);
 CompositionEvent.prototype.constructor = CompositionEvent;
 
+// UI Events §4.4 legacy TextEvent (BUG-691): not constructible (`new
+// TextEvent()` -> TypeError); only `document.createEvent('TextEvent')` makes
+// one, which sets the internal flag below for the duration of the call.
+var _lumen_text_event_internal = false;
+function TextEvent(type, init) {
+    if (!_lumen_text_event_internal) { throw new TypeError("Failed to construct 'TextEvent': Illegal constructor"); }
+    UIEvent.call(this, type, init);
+    this.data = '';
+}
+TextEvent.prototype = Object.create(UIEvent.prototype);
+TextEvent.prototype.constructor = TextEvent;
+TextEvent.prototype.initTextEvent = function(type, bubbles, cancelable, view, data) {
+    if (arguments.length < 1) { throw new TypeError("Failed to execute 'initTextEvent' on 'TextEvent': 1 argument required, but only 0 present."); }
+    this.initUIEvent(type, bubbles, cancelable, view, 0);
+    this.data = String(data);
+};
+
+// UI Events §idl-uievent legacy `pseudoTarget` (BUG-691): no pseudo-element
+// retargeting is performed by the dispatcher, so it is always null.
+Object.defineProperty(UIEvent.prototype, 'pseudoTarget', {
+    get: function() { return null; }, enumerable: true, configurable: true
+});
+
 // ── Per-element event listener store ─────────────────────────────────────────
 // Key: String(nid) + ':' + type  →  Array of handler functions.
 
@@ -800,8 +1075,11 @@ var _LUMEN_EVENT_HANDLER_ATTRS = [
     'onprogress', 'onratechange', 'onreset', 'onresize', 'onscroll',
     'onscrollend', 'onsecuritypolicyviolation', 'onseeked', 'onseeking',
     'onselect', 'onslotchange', 'onstalled', 'onsubmit', 'onsuspend',
-    'ontimeupdate', 'ontoggle', 'ontouchcancel', 'ontouchend', 'ontouchmove',
-    'ontouchstart', 'ontransitioncancel', 'ontransitionend', 'ontransitionrun',
+    // No `ontouch*`: Touch Events L2 adds them only under "expose legacy touch
+    // event APIs", which a desktop engine leaves off — an element answering
+    // `'ontouchstart' in el` would flip touch-detecting sites to their touch
+    // UI while `window`/`document` said otherwise (BUG-688).
+    'ontimeupdate', 'ontoggle', 'ontransitioncancel', 'ontransitionend', 'ontransitionrun',
     'ontransitionstart', 'onvolumechange', 'onwaiting', 'onwaitingforkey',
     'onwheel'
 ];
@@ -834,23 +1112,59 @@ function _lumen_capture_flag(options) {
 // and remove it by the ORIGINAL function identity, same as a plain listener.
 var _lumen_once_wrappers = new WeakMap();
 
+// DOM §2.7/§2.8 `passive` (BUG-865): while a passive listener runs the event
+// carries `_inPassive`, which makes `preventDefault()` a no-op. The listener is
+// stored as a wrapper (like `once`) because every consumer of the listener
+// stores calls the entry directly; `_lumen_passive_wrap` is that wrapper and
+// `_lumen_once_wrappers` keeps it findable by the ORIGINAL function.
+var _LUMEN_PASSIVE_DEFAULT_TYPES = { touchstart: 1, touchmove: 1, wheel: 1, mousewheel: 1 };
+
+// The effective passive flag of one registration. `passiveByDefault` is true
+// for the targets the spec lists (Window, Document, document.body); an
+// explicit `passive` always wins over the default.
+function _lumen_passive_flag(options, type, passiveByDefault) {
+    if (options !== null && typeof options === 'object') {
+        var p = options.passive;
+        if (p !== undefined && p !== null) return !!p;
+    }
+    return !!passiveByDefault && _LUMEN_PASSIVE_DEFAULT_TYPES[type] === 1;
+}
+
+function _lumen_passive_wrap(fn) {
+    return function(ev) {
+        if (!ev || typeof ev !== 'object') return fn.apply(this, arguments);
+        var prev = ev._inPassive;
+        ev._inPassive = true;
+        try { return fn.apply(this, arguments); } finally { ev._inPassive = prev; }
+    };
+}
+
 function _lumen_add_listener(nid, type, fn, options) {
     if (typeof fn !== 'function') return;
     var capture = _lumen_capture_flag(options);
+    var passive = false;
+    if (options !== null && typeof options === 'object' || _LUMEN_PASSIVE_DEFAULT_TYPES[type] === 1) {
+        var byDefault = _LUMEN_PASSIVE_DEFAULT_TYPES[type] === 1 &&
+            (nid === _LUMEN_DOC_LISTENER_NID || (typeof document !== 'undefined' && document.body && document.body.__nid__ === nid));
+        passive = _lumen_passive_flag(options, type, byDefault);
+    }
     var store = capture ? _lumen_capture_listeners : _lumen_listeners;
     var key = String(nid) + ':' + String(type);
     if (!store[key]) store[key] = [];
-    var target = fn;
-    if (options && options.once) {
-        var wrapperKey = (capture ? '1:' : '0:') + key;
-        var wrapper = function() {
+    var target = passive ? _lumen_passive_wrap(fn) : fn;
+    var once = !!(options && options.once);
+    if (once) {
+        var inner = target;
+        target = function() {
             _lumen_rm_listener(nid, type, fn, options);
-            return fn.apply(this, arguments);
+            return inner.apply(this, arguments);
         };
+    }
+    if (once || passive) {
+        var wrapperKey = (capture ? '1:' : '0:') + key;
         var perFn = _lumen_once_wrappers.get(fn);
         if (!perFn) { perFn = {}; _lumen_once_wrappers.set(fn, perFn); }
-        perFn[wrapperKey] = wrapper;
-        target = wrapper;
+        perFn[wrapperKey] = target;
     }
     store[key].push(target);
 }
@@ -961,7 +1275,12 @@ function _lumen_invoke_at(nid, event, capture) {
     var onFn = null;
     if (!capture) {
         var onAttrName = _LUMEN_ON_ATTR_TYPE_ALIAS[event.type] || ('on' + event.type);
-        if (isDoc) {
+        // `onbegin`/`onrepeat`/`onend` belong to the `*Event` types only: a
+        // plain `end` event must not reach them.
+        if (event.type === 'begin' || event.type === 'repeat' || event.type === 'end') onAttrName = null;
+        if (onAttrName === null) {
+            onFn = null;
+        } else if (isDoc) {
             var docFn = document[onAttrName];
             onFn = (typeof docFn === 'function') ? docFn : null;
         } else {
@@ -996,6 +1315,8 @@ function _lumen_invoke_at(nid, event, capture) {
 // The single dispatch. `target_nid` is an arena node id, or one of the two
 // sentinels when the target is `document`/`window` itself.
 function _lumen_propagate(target_nid, event) {
+    // SMIL event-base `begin`/`end` listeners must exist before the event (svg.rs).
+    if (typeof _lumen_smil_prebind === 'function') _lumen_smil_prebind();
     if (!event || event.type === undefined || event.type === null) return true;
     var path = _lumen_event_path(target_nid);
     if (path.length === 0) return !event.defaultPrevented;
@@ -1140,7 +1461,8 @@ function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
 // sample for _lumen_dispatch_pointer_event's getCoalescedEvents()/
 // getPredictedEvents() arrays (Pointer Events L3 §4.1). Mirrors the main
 // event's fields except position.
-function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles) {
+function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles, ident) {
+    ident = ident || _lumen_pointer_identity(buttons);
     var cev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
         clientX: cx, clientY: cy,
@@ -1149,10 +1471,10 @@ function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod,
         button: button, buttons: buttons,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
-        pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0,
+        pointerId: ident.pointerId, pointerType: ident.pointerType, isPrimary: ident.isPrimary,
+        pressure: ident.pressure,
         altitudeAngle: Math.PI / 2, azimuthAngle: 0,
-        width: 1, height: 1,
+        width: ident.width, height: ident.height,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
     cev.getCoalescedEvents = function() { return [cev]; };
@@ -1173,14 +1495,30 @@ function _lumen_predict_pointer_events(coalesced) {
     var dy = last.clientY - prev.clientY;
     var mod = (last.ctrlKey ? 1 : 0) | (last.shiftKey ? 2 : 0) |
               (last.altKey  ? 4 : 0) | (last.metaKey  ? 8 : 0);
+    var ident = _lumen_pointer_identity(last.buttons, last.pointerId, last.pointerType,
+        last.isPrimary, last.width, last.height, last.pressure);
     var out = [];
     for (var i = 1; i <= 2; i++) {
         out.push(_lumen_make_coalesced_pointer_event(
             last.type, last.clientX + dx * i, last.clientY + dy * i,
-            last.button, last.buttons, mod, last.bubbles
+            last.button, last.buttons, mod, last.bubbles, ident
         ));
     }
     return out;
+}
+
+// The pointer-identity members of a PointerEvent. Every argument is optional:
+// an omitted one (`undefined`) takes the mouse default, so callers that only
+// ever sent mouse events are unchanged.
+function _lumen_pointer_identity(buttons, pointerId, pointerType, isPrimary, width, height, pressure) {
+    return {
+        pointerId: pointerId === undefined ? 1 : pointerId,
+        pointerType: pointerType === undefined ? 'mouse' : pointerType,
+        isPrimary: isPrimary === undefined ? true : !!isPrimary,
+        width: width === undefined ? 1 : width,
+        height: height === undefined ? 1 : height,
+        pressure: pressure === undefined ? (buttons ? 0.5 : 0.0) : pressure
+    };
 }
 
 // Called from shell for pointer events (W3C Pointer Events Level 2/3).
@@ -1190,8 +1528,19 @@ function _lumen_predict_pointer_events(coalesced) {
 // coalesced: optional array of [x,y] CSS-pixel positions buffered since the
 // last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
 // (clientX, clientY). Omitted/empty for non-move event types.
-function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
-    _lumen_note_activation_input(type);
+// pointerId / pointerType / isPrimary / width / height / pressure: optional
+// identity of the pointer, default 1 / 'mouse' / true / 1 / 1 / 0.5 while a
+// button is down (else 0). A touch contact passes pointerType 'touch' and its
+// own id. HTML LS §6.4.3 makes `pointerdown` activation-triggering only for a
+// mouse and `pointerup` only for the other types, hence the type shuffle below.
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced,
+                                       pointerId, pointerType, isPrimary, width, height, pressure) {
+    var ident = _lumen_pointer_identity(buttons, pointerId, pointerType, isPrimary, width, height, pressure);
+    if (ident.pointerType === 'mouse') {
+        _lumen_note_activation_input(type);
+    } else if (type === 'pointerup') {
+        _lumen_mark_user_activation();
+    }
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -1201,11 +1550,11 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         button: button, buttons: buttons,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
-        pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0,
-        // Pointer Events Level 3 §4.1 — mouse always perpendicular to surface
+        pointerId: ident.pointerId, pointerType: ident.pointerType, isPrimary: ident.isPrimary,
+        pressure: ident.pressure,
+        // Pointer Events Level 3 §4.1 — perpendicular to the surface
         altitudeAngle: Math.PI / 2, azimuthAngle: 0,
-        width: 1, height: 1,
+        width: ident.width, height: ident.height,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
     // Level 3 §4.1: intermediate samples buffered since the last dispatch,
@@ -1217,13 +1566,50 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
     if (Array.isArray(coalesced)) {
         for (var i = 0; i < coalesced.length; i++) {
             coalescedEvents.push(_lumen_make_coalesced_pointer_event(
-                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles
+                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles, ident
             ));
         }
     }
     coalescedEvents.push(ev);
     ev.getCoalescedEvents = function() { return coalescedEvents; };
     ev.getPredictedEvents = function() { return _lumen_predict_pointer_events(coalescedEvents); };
+    return _lumen_dispatch_rich(start_nid, ev);
+}
+
+// Touch Events L2 §5 — called from the shell for one touch contact change.
+// `touches` / `changedTouches` / `targetTouches` are arrays of descriptors
+// `{identifier, target_nid, clientX, clientY, radiusX, radiusY, force}` (the
+// shell owns the contact state, S4/S5). `touches` = every contact on the
+// surface, `targetTouches` = those that started on this event's target,
+// `changedTouches` = those this event is about. The event goes to `start_nid`
+// and bubbles; per L2 §5 only `touchcancel` is not cancelable. Returns the
+// `dispatchEvent` result: false when a listener called preventDefault().
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_touch_event(start_nid, type, touches, changedTouches, targetTouches, mod) {
+    if (type === 'touchend') _lumen_mark_user_activation();
+    function build(descs) {
+        var out = [];
+        for (var i = 0; descs && i < descs.length; i++) {
+            var d = descs[i];
+            out.push(new Touch({
+                identifier: d.identifier,
+                target: _lumen_make_element(d.target_nid),
+                clientX: d.clientX, clientY: d.clientY,
+                screenX: d.clientX, screenY: d.clientY,
+                pageX: d.clientX + (window.scrollX || 0), pageY: d.clientY + (window.scrollY || 0),
+                radiusX: d.radiusX || 0, radiusY: d.radiusY || 0,
+                force: d.force || 0
+            }));
+        }
+        return out;
+    }
+    var ev = new TouchEvent(type, {
+        bubbles: true, cancelable: type !== 'touchcancel', isTrusted: true,
+        touches: build(touches), targetTouches: build(targetTouches),
+        changedTouches: build(changedTouches),
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
@@ -1345,13 +1731,41 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
 // `HTMLCollection`/`NodeList`/`ShadowRoot` already do.
 function DOMTokenList() { throw new TypeError('Illegal constructor'); }
 
+// BUG-1147: attribute backing shared by the attribute-backed views
+// (`DOMTokenList`, the element `CSSStyleDeclaration`, `DOMStringMap`). An
+// instance carrying `__fbid__` belongs to a cross-frame facade element
+// (`frame_bridge.rs::frameElem`) — node `__nid__` of ANOTHER document, reached
+// only through the `_lumen_f_*` bridge natives; without it `__nid__` is a node
+// of this document. `in`, not a property read: the style Proxy answers any
+// unknown property read with `getPropertyValue`, which would re-parse the
+// attribute just to learn that there is no backing.
+function _lumen_backing_fbid(o) {
+    return '__fbid__' in o ? o.__fbid__ : undefined;
+}
+function _lumen_backing_get_attr(fbid, nid, name) {
+    return _lumen_u2n(fbid !== undefined ? _lumen_f_attr(fbid, nid, name) : _lumen_get_attr(nid, name));
+}
+function _lumen_backing_set_attr(fbid, nid, name, value) {
+    if (fbid !== undefined) _lumen_f_set_attr(fbid, nid, name, value);
+    else _lumen_set_attr(nid, name, value);
+}
+function _lumen_backing_remove_attr(fbid, nid, name) {
+    if (fbid !== undefined) _lumen_f_remove_attr(fbid, nid, name);
+    else _lumen_remove_attr(nid, name);
+}
+function _lumen_backing_attr_names(fbid, nid) {
+    return fbid !== undefined ? _lumen_f_attr_names(fbid, nid) : _lumen_get_attr_names(nid);
+}
+
 function _lumen_token_list_arr(tl) {
-    var c = _lumen_get_attr(tl.__nid__, tl.__attrName__);
+    var c = _lumen_backing_get_attr(_lumen_backing_fbid(tl), tl.__nid__, tl.__attrName__);
     return (c && c.length > 0)
         ? c.split(/\s+/).filter(function(t) { return t.length > 0; })
         : [];
 }
-function _lumen_token_list_save(tl, arr) { _lumen_set_attr(tl.__nid__, tl.__attrName__, arr.join(' ')); }
+function _lumen_token_list_save(tl, arr) {
+    _lumen_backing_set_attr(_lumen_backing_fbid(tl), tl.__nid__, tl.__attrName__, arr.join(' '));
+}
 
 DOMTokenList.prototype.contains = function(cls) { return _lumen_token_list_arr(this).indexOf(String(cls)) >= 0; };
 DOMTokenList.prototype.add = function() {
@@ -1392,15 +1806,32 @@ DOMTokenList.prototype.replace = function(oldCls, newCls) {
 DOMTokenList.prototype.item = function(i) {
     var arr = _lumen_token_list_arr(this); i = i >>> 0; return i < arr.length ? arr[i] : null;
 };
-DOMTokenList.prototype.forEach = function(fn, thisArg) { _lumen_token_list_arr(this).forEach(fn, thisArg); };
+// BUG-1125: DOM §7.1 declares `iterable<DOMString>`, so WebIDL §3.7.9 gives
+// `entries`/`keys`/`values`/`forEach` plus `@@iterator`, which is the very
+// same function object as `values`. Only `forEach` existed, so
+// `classList.values()` (wordpress) and `classList[Symbol.iterator]()`
+// (Transcend `airgap.js` on mozilla) threw. Same live index iterator as
+// `NodeList` (`_lumen_index_iterator`, declared further down this file and
+// looked up only at call time): `this` is the indexed Proxy, so every step
+// re-reads the attribute. `forEach` walks the same live view and passes the
+// list itself as the third callback argument, as WebIDL does.
+DOMTokenList.prototype.forEach = function(fn, thisArg) {
+    if (typeof fn !== 'function') throw new TypeError('callback is not a function');
+    for (var i = 0; i < this.length; i++) fn.call(thisArg, this[i], i, this);
+};
+DOMTokenList.prototype.entries = function() { return _lumen_index_iterator(this, 'entries'); };
+DOMTokenList.prototype.keys    = function() { return _lumen_index_iterator(this, 'keys'); };
+DOMTokenList.prototype.values  = function() { return _lumen_index_iterator(this, 'values'); };
+Object.defineProperty(DOMTokenList.prototype, Symbol.iterator,
+    { value: DOMTokenList.prototype.values, writable: true, enumerable: false, configurable: true });
 DOMTokenList.prototype.toString = function() { return _lumen_token_list_arr(this).join(' '); };
 Object.defineProperty(DOMTokenList.prototype, 'length', {
     get: function() { return _lumen_token_list_arr(this).length; },
     enumerable: true, configurable: true,
 });
 Object.defineProperty(DOMTokenList.prototype, 'value', {
-    get: function() { return _lumen_get_attr(this.__nid__, this.__attrName__) || ''; },
-    set: function(v) { _lumen_set_attr(this.__nid__, this.__attrName__, String(v)); },
+    get: function() { return _lumen_backing_get_attr(_lumen_backing_fbid(this), this.__nid__, this.__attrName__) || ''; },
+    set: function(v) { _lumen_backing_set_attr(_lumen_backing_fbid(this), this.__nid__, this.__attrName__, String(v)); },
     enumerable: true, configurable: true,
 });
 Object.defineProperty(DOMTokenList.prototype, Symbol.toStringTag,
@@ -1459,17 +1890,37 @@ function _lumen_make_indexed_readonly_proxy(target, getArr) {
     });
 }
 
-function _lumen_make_attr_token_list(nid, attrName) {
+// `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
+function _lumen_make_attr_token_list(nid, attrName, fbid) {
     var tl = Object.create(DOMTokenList.prototype);
     Object.defineProperty(tl, '__nid__',
         { value: nid, enumerable: false, writable: false, configurable: false });
+    if (fbid !== undefined) {
+        Object.defineProperty(tl, '__fbid__',
+            { value: fbid, enumerable: false, writable: false, configurable: false });
+    }
     Object.defineProperty(tl, '__attrName__',
         { value: attrName, enumerable: false, writable: false, configurable: false });
     return _lumen_make_indexed_readonly_proxy(tl, _lumen_token_list_arr);
 }
 
-function _lumen_make_class_list(nid) {
-    return _lumen_make_attr_token_list(nid, 'class');
+function _lumen_make_class_list(nid, fbid) {
+    return _lumen_make_attr_token_list(nid, 'class', fbid);
+}
+
+// GAP-FOCUSGROUP: HTML LS «focusgroup» — `element.focusGroup` is the
+// DOMTokenList over the `focusgroup` attribute, with a `supports()` over the
+// spec's token set (same per-instance `supports` as `relList`, BUG-826).
+var _LUMEN_FOCUSGROUP_TOKENS = [
+    'toolbar', 'tablist', 'radiogroup', 'listbox', 'menu', 'menubar',
+    'wrap', 'nowrap', 'inline', 'block', 'nomemory', 'none'
+];
+function _lumen_make_focus_group_list(nid) {
+    var tl = _lumen_make_attr_token_list(nid, 'focusgroup');
+    tl.supports = function(token) {
+        return _LUMEN_FOCUSGROUP_TOKENS.indexOf(String(token).toLowerCase()) >= 0;
+    };
+    return tl;
 }
 
 // ── CSSStyleDeclaration (inline style) ───────────────────────────────────────
@@ -1507,6 +1958,19 @@ function _lumen_parse_style(s) {
         var prop = decl.slice(0, idx).trim();
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
+        if (prop === 'word-wrap') prop = 'overflow-wrap';
+        if (_lumen_gap_rule_key_re.test(prop)) {
+            // `!important` is not part of the value (the priority is not tracked here).
+            var gapVal = _lumen_close_open_parens(val.replace(/\s*!\s*important\s*$/i, ''));
+            if (_lumen_pending_substitution_value(gapVal) === undefined) {
+                var gapPairs = _lumen_gap_rule_expand(prop, gapVal);
+                if (gapPairs === false) return;
+                if (gapPairs !== null) {
+                    gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+                    return;
+                }
+            }
+        }
         if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(prop)) {
             var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[prop], val);
             if (expanded !== null) {
@@ -1544,6 +2008,12 @@ function _lumen_parse_style(s) {
                 obj[longhands2v[1]] = expanded2v.end;
                 return;
             }
+        }
+        if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(prop)) {
+            var txtLonghands = _lumen_expand_text_shorthand(prop, val);
+            if (txtLonghands === null) return; // invalid declaration: dropped, not stored
+            Object.keys(txtLonghands).forEach(function(k) { obj[k] = txtLonghands[k]; });
+            return;
         }
         var canon = _lumen_canonicalize_longhand(prop, val);
         if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
@@ -1603,12 +2073,12 @@ function _lumen_shorthand_value(obj, shorthand) {
 // `_LUMEN_KEYWORD_PROPERTIES` below) — its canon fn reuses that same
 // `border-top-style` keyword list rather than duplicating it.
 var _LUMEN_TRBL_SHORTHAND_CANON = {
-    'margin':       function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'margin':       function(v) { return _lumen_length_or_anchor_canon(1, v, true, false); },
     'padding':      function(v) { return _lumen_css_canonical_length(v, false, true); },
     'border-width': function(v) { return _lumen_css_canonical_line_width(v); },
     'border-style': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['border-top-style']); },
     'border-color': function(v) { return _lumen_css_canonical_color(v); },
-    'inset':        function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'inset':        function(v) { return _lumen_length_or_anchor_canon(2, v, true, false); },
     'scroll-margin':  function(v) { return _lumen_css_canonical_scroll_offset(v, false, false); },
     'scroll-padding': function(v) { return _lumen_css_canonical_scroll_offset(v, true, true); },
 };
@@ -1632,7 +2102,7 @@ function _lumen_expand_trbl_shorthand(canonFn, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { top: lowerVal, right: lowerVal, bottom: lowerVal, left: lowerVal };
     }
-    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    var tokens = _lumen_split_top_level_ws(strVal);
     if (tokens.length < 1 || tokens.length > 4) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
@@ -1805,6 +2275,8 @@ var _LUMEN_2V_SHORTHANDS = {
     // as the six pairs above, confirmed against `style/apply/motion.rs`'s own
     // `"overscroll-behavior"` arm (`parts.first()` → x, `parts.get(1)` → y).
     'overscroll-behavior': ['overscroll-behavior-x', 'overscroll-behavior-y'],
+    // Interest Invokers: `interest-delay: <start> <end>?`.
+    'interest-delay': ['interest-delay-start', 'interest-delay-end'],
 };
 
 // Срез 15: per-shorthand canon function for `_LUMEN_2V_SHORTHANDS`. The six
@@ -1816,16 +2288,17 @@ var _LUMEN_2V_SHORTHANDS = {
 // list, `align-content`/`align-items`/`align-self` already need to exist
 // there for the plain longhand assignment path (`style.alignContent = …`).
 var _LUMEN_2V_SHORTHAND_CANON = {
-    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_length_or_anchor_canon(1, v, g.allowAuto, g.nonNegative); },
+    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_length_or_anchor_canon(1, v, g.allowAuto, g.nonNegative); },
     'padding-inline': function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-inline-start']; return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
     'padding-block':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-block-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
-    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_length_or_anchor_canon(2, v, g.allowAuto, g.nonNegative); },
+    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_length_or_anchor_canon(2, v, g.allowAuto, g.nonNegative); },
     'place-content':  function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-content']); },
     'place-items':    function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-items']); },
     'place-self':     function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-self']); },
     'overscroll-behavior': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['overscroll-behavior-x']); },
+    'interest-delay': _lumen_css_canonical_interest_delay,
 };
 
 // Same CSS-wide-keyword whole-value fan-out as `_lumen_expand_trbl_shorthand`/
@@ -1846,7 +2319,7 @@ function _lumen_expand_2v_shorthand(canonFn, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { start: lowerVal, end: lowerVal };
     }
-    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    var tokens = _lumen_split_top_level_ws(strVal);
     if (tokens.length < 1 || tokens.length > 2) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
@@ -1893,6 +2366,15 @@ function _lumen_serialize_style(obj) {
         shorthandOf[lh[0]] = sh;
         shorthandOf[lh[1]] = sh;
     });
+    ['white-space', 'text-wrap'].forEach(function(sh) {
+        var lh = _LUMEN_TEXT_SHORTHANDS[sh];
+        if (shorthandOf[lh[0]] || shorthandOf[lh[1]]) return;
+        var v = _lumen_text_shorthand_value(obj, sh);
+        if (v === undefined) return;
+        shorthandVal[sh] = v;
+        shorthandOf[lh[0]] = sh;
+        shorthandOf[lh[1]] = sh;
+    });
     var emittedShorthand = {};
     var parts = [];
     keys.forEach(function(k) {
@@ -1908,7 +2390,106 @@ function _lumen_serialize_style(obj) {
     return parts.length ? parts.join('; ') + ';' : '';
 }
 function _lumen_camel_to_kebab(prop) {
-    return prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+    var key = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+    // CSS Text L3 §5.5: `word-wrap` is a legacy alias of `overflow-wrap` (BUG-1325).
+    return key === 'word-wrap' ? 'overflow-wrap' : key;
+}
+
+// CSS Text L3/L4 longhands with a length or multi-component grammar: the native
+// `_lumen_css_canonical_text` (engine `style::values::text_cssom`) validates the value and
+// returns its canonical serialization (BUG-1325).
+var _LUMEN_TEXT_PROPERTIES = {
+    'tab-size': 1, 'letter-spacing': 1, 'word-spacing': 1, 'text-indent': 1, 'text-transform': 1,
+};
+
+// CSS Text L4 §2.1 / §6.4.3: `white-space` and `text-wrap` are shorthands; the inline-style
+// object keeps only their longhands (`text-wrap-mode` is shared). Order matters for cssText:
+// `white-space` claims the shared `text-wrap-mode` first.
+var _LUMEN_TEXT_SHORTHANDS = {
+    'white-space': ['white-space-collapse', 'text-wrap-mode'],
+    'text-wrap':   ['text-wrap-mode', 'text-wrap-style'],
+};
+var _LUMEN_WHITE_SPACE_LEGACY = {
+    'normal':       ['collapse', 'wrap'],
+    'nowrap':       ['collapse', 'nowrap'],
+    'pre':          ['preserve', 'nowrap'],
+    'pre-wrap':     ['preserve', 'wrap'],
+    'pre-line':     ['preserve-breaks', 'wrap'],
+    'break-spaces': ['break-spaces', 'wrap'],
+};
+// Longhand name → value map of the shorthand `name` set to `strVal`, or `null` when the value
+// is invalid for its grammar.
+function _lumen_expand_text_shorthand(name, strVal) {
+    var lh = _LUMEN_TEXT_SHORTHANDS[name];
+    var lower = strVal.trim().toLowerCase();
+    var out = {};
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lower) !== -1) {
+        out[lh[0]] = lower;
+        out[lh[1]] = lower;
+        return out;
+    }
+    var tokens = lower.split(/\s+/).filter(function(t) { return t !== ''; });
+    if (tokens.length < 1 || tokens.length > 2) return null;
+    if (name === 'white-space') {
+        if (tokens.length === 1 && _LUMEN_WHITE_SPACE_LEGACY.hasOwnProperty(tokens[0])) {
+            out[lh[0]] = _LUMEN_WHITE_SPACE_LEGACY[tokens[0]][0];
+            out[lh[1]] = _LUMEN_WHITE_SPACE_LEGACY[tokens[0]][1];
+            return out;
+        }
+        var collapse = null, mode = null;
+        for (var i = 0; i < tokens.length; i++) {
+            var t = tokens[i];
+            if (_LUMEN_KEYWORD_PROPERTIES['white-space-collapse'].indexOf(t) !== -1) {
+                if (collapse !== null) return null;
+                collapse = t;
+            } else if (_LUMEN_KEYWORD_PROPERTIES['text-wrap-mode'].indexOf(t) !== -1) {
+                if (mode !== null) return null;
+                mode = t;
+            } else {
+                return null;
+            }
+        }
+        out[lh[0]] = collapse === null ? 'collapse' : collapse;
+        out[lh[1]] = mode === null ? 'wrap' : mode;
+        return out;
+    }
+    // text-wrap: <'text-wrap-mode'> || <'text-wrap-style'>
+    var wmode = null, wstyle = null;
+    for (var j = 0; j < tokens.length; j++) {
+        var u = tokens[j];
+        if (_LUMEN_KEYWORD_PROPERTIES['text-wrap-mode'].indexOf(u) !== -1) {
+            if (wmode !== null) return null;
+            wmode = u;
+        } else if (_LUMEN_KEYWORD_PROPERTIES['text-wrap-style'].indexOf(u) !== -1) {
+            if (wstyle !== null) return null;
+            wstyle = u;
+        } else {
+            return null;
+        }
+    }
+    out[lh[0]] = wmode === null ? 'wrap' : wmode;
+    out[lh[1]] = wstyle === null ? 'auto' : wstyle;
+    return out;
+}
+// Shorthand value composed from the longhands in `obj`, or `undefined` when one is missing.
+function _lumen_text_shorthand_value(obj, name) {
+    var lh = _LUMEN_TEXT_SHORTHANDS[name];
+    if (!lh) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(obj, lh[0]) ||
+        !Object.prototype.hasOwnProperty.call(obj, lh[1])) return undefined;
+    var a = obj[lh[0]], b = obj[lh[1]];
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(a) !== -1 || _LUMEN_CSS_WIDE_KEYWORDS.indexOf(b) !== -1) {
+        return a === b ? a : undefined;
+    }
+    if (name === 'white-space') {
+        for (var k in _LUMEN_WHITE_SPACE_LEGACY) {
+            if (_LUMEN_WHITE_SPACE_LEGACY[k][0] === a && _LUMEN_WHITE_SPACE_LEGACY[k][1] === b) return k;
+        }
+        return a + ' ' + b;
+    }
+    // text-wrap: omit components at their initial value, but never the whole value.
+    if (b === 'auto') return a;
+    return a === 'wrap' ? b : a + ' ' + b;
 }
 
 // CSS Color L4 / CSSOM §6.7.3 (BUG-465): these longhands take a bare
@@ -1969,6 +2550,14 @@ var _LUMEN_LENGTH_PROPERTIES = {
     'inset-inline-end':   { allowAuto: true, nonNegative: false },
     'inset-block-start':  { allowAuto: true, nonNegative: false },
     'inset-block-end':    { allowAuto: true, nonNegative: false },
+    // SVG 2 §Geometry (BUG-1094).
+    'cx': { allowAuto: false, nonNegative: false },
+    'cy': { allowAuto: false, nonNegative: false },
+    'x':  { allowAuto: false, nonNegative: false },
+    'y':  { allowAuto: false, nonNegative: false },
+    'r':  { allowAuto: false, nonNegative: true },
+    'rx': { allowAuto: true,  nonNegative: true },
+    'ry': { allowAuto: true,  nonNegative: true },
 };
 
 // CSS Scroll Snap L1 §8 (CSSOM-2/BUG-484, срез 19): kept out of
@@ -2021,6 +2610,19 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
     'width': 1, 'height': 1,
 };
 
+// BUG-1315: grid-family properties (plus `flex-grow`/`flex-shrink` and
+// `flow-tolerance`) have no per-value canonical form here, only a grammar:
+// `_lumen_css_canonical_grid` (engine `style::values::grid_cssom`) returns the
+// trimmed value when it parses and `null` otherwise, so `style.gridRow = "5 / 8 / 3"`
+// is rejected like `width = "10pxx"` instead of being stored verbatim.
+var _LUMEN_GRID_PROPERTIES = {
+    'grid-template-columns': 1, 'grid-template-rows': 1, 'grid-template-areas': 1,
+    'grid-auto-columns': 1, 'grid-auto-rows': 1, 'grid-auto-flow': 1,
+    'grid-row-start': 1, 'grid-row-end': 1, 'grid-column-start': 1, 'grid-column-end': 1,
+    'grid-row': 1, 'grid-column': 1, 'grid-area': 1, 'grid-template': 1, 'grid': 1,
+    'flex-grow': 1, 'flex-shrink': 1, 'flow-tolerance': 1,
+};
+
 // CSSOM-2 (BUG-484, срез 7): plain keyword-enum longhands — the whole
 // grammar is a fixed list of case-insensitive keywords, validated and
 // canonicalized via `_lumen_css_canonical_keyword`. Lists mirror what
@@ -2028,11 +2630,9 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // (`crates/engine/layout/src/style.rs::parse_overflow_kw` and neighbors),
 // NOT the full CSS spec grammar where the engine doesn't implement it yet
 // (e.g. `visibility: collapse` IS in this list — the engine recognizes it —
-// but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are NOT
-// (срез 13), since `BorderStyle` has no variants for them,
-// `style/values/box_model.rs` — the five values it does list
-// (`none`/`solid`/`dashed`/`dotted`/`double`) are the full grammar
-// `parse_border_style_kw` (`style/parse/box_sides.rs`) accepts.
+// but `border-style`'s `hidden` is NOT (срез 13) — `parse_border_style_kw`
+// (`style/parse/box_sides.rs`) accepts `none`/`solid`/`dashed`/`dotted`/`double`
+// and, since the volumetric-border slice, `groove`/`ridge`/`inset`/`outset`.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
 // exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
@@ -2063,6 +2663,7 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
+    'color-interpolation': ['auto', 'srgb', 'linearrgb'],
     // CSS Rhythmic Sizing L1 §3 (BUG-517) — `block-step-size` is a
     // `none | <length [0,∞]>` grammar, not a flat keyword list, so it gets
     // its own canon function (`_lumen_css_canonical_block_step_size`,
@@ -2093,21 +2694,30 @@ var _LUMEN_KEYWORD_PROPERTIES = {
         'auto', 'none', 'visible', 'visiblepainted', 'visiblefill',
         'visiblestroke', 'painted', 'fill', 'stroke', 'all',
     ],
-    'text-align':     ['start', 'end', 'left', 'center', 'right'],
+    // CSS Text L3 §7.1/§7.2 (BUG-1325): `justify`, `match-parent` and the legacy `justify-all`
+    // are values of `text-align`; `text-align-last` takes the same set minus `justify-all`.
+    'text-align':     ['start', 'end', 'left', 'center', 'right', 'justify', 'match-parent', 'justify-all'],
+    'text-align-last': ['auto', 'start', 'end', 'left', 'right', 'center', 'justify', 'match-parent'],
     'direction':      ['ltr', 'rtl'],
-    'text-transform': ['none', 'uppercase', 'lowercase', 'capitalize'],
+    // CSS Text L3/L4 line-breaking and wrapping keywords (BUG-1325). `word-wrap` is an alias of
+    // `overflow-wrap` and is folded into it by `_lumen_camel_to_kebab`. `text-transform`,
+    // `tab-size`, `letter-spacing`, `word-spacing` and `text-indent` take lengths or several
+    // components — they go through `_LUMEN_TEXT_PROPERTIES` below.
+    'word-break':     ['normal', 'break-all', 'keep-all', 'manual', 'auto-phrase', 'break-word'],
+    'overflow-wrap':  ['normal', 'break-word', 'anywhere'],
+    'hyphens':        ['none', 'manual', 'auto'],
+    'line-break':     ['auto', 'loose', 'normal', 'strict', 'anywhere'],
+    'text-wrap-mode': ['wrap', 'nowrap'],
+    'text-wrap-style': ['auto', 'balance', 'stable', 'pretty'],
+    'white-space-collapse': ['collapse', 'preserve', 'preserve-breaks', 'break-spaces'],
     'user-select':    ['auto', 'text', 'none', 'contain', 'all'],
     // Срез 11: `scrollbar-width` (CSS Scrollbars L1 §3, `ScrollbarWidth::parse`
     // in `style/values/misc.rs` — exact `auto|thin|none` match, no extra
     // keywords) and the three `ruby-*` longhands (CSS Ruby L1 §4,
-    // `style/apply/text.rs`'s bare `match` arms). `ruby-position` excludes
-    // spec-valid `inter-character` — `ruby.rs`'s own doc comment says the
-    // engine parses only `over`/`under`/`alternate`, `inter-character` is
-    // unmatched and silently keeps the previous value, same no-op contract
-    // as `text-align`'s excluded `justify`/`match-parent` (срез 7 note
-    // above). `alternate` IS included — the engine's match has an arm for
-    // it (resolves to `Over`), and CSSOM's specified-value model must keep
-    // the literal token, not the resolved one (same reasoning as
+    // `style/apply/text.rs`'s bare `match` arms). `ruby-position` lists the
+    // full grammar `RubyPosition::parse` (`ruby.rs`, GAP-RUBYBOX-2) accepts,
+    // both orders of the two-keyword forms included; CSSOM's specified-value
+    // model keeps the literal token, not the resolved one (same reasoning as
     // `pointer-events`' SVG aliases, срез 10).
     'scrollbar-width': ['auto', 'thin', 'none'],
     // CSS Overflow L5 §scroll-target-group (BUG-505 срез 6): plain `none |
@@ -2118,26 +2728,29 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // `auto | none` — parsing/CSSOM only, the anchor-selection algorithm
     // itself isn't implemented yet (see bugs/BUG-524-OPEN.md).
     'overflow-anchor': ['auto', 'none'],
-    'ruby-position': ['over', 'under', 'alternate'],
+    'ruby-position': [
+        'over', 'under', 'inter-character', 'alternate', 'alternate over',
+        'over alternate', 'alternate under', 'under alternate',
+    ],
     'ruby-align':    ['start', 'center', 'space-between', 'space-around'],
     'ruby-merge':    ['separate', 'merge', 'auto'],
     // Срез 13: `border-*-style` longhands, physical and logical alike (the
     // logical ones resolve through the same `parse_border_style_kw` as their
     // physical counterparts, `crates/engine/layout/src/style/apply/paint.rs`
     // — identical grammar, same pattern as the border-*-width logical
-    // longhands, срез 2/4). List is the five keywords the engine's own
-    // parser accepts — see the срез-7-note edit above for why `hidden`/
-    // `groove`/`ridge`/`inset`/`outset` are excluded. The `border-style`
+    // longhands, срез 2/4). List is the nine keywords the engine's own
+    // parser accepts (`BorderStyle` has `groove`/`ridge`/`inset`/`outset` since
+    // the gap-rule slices; `hidden` stays unreachable from `border-style`). The `border-style`
     // shorthand itself is wired separately, through
     // `_LUMEN_TRBL_SHORTHAND_CANON` (it reuses `border-top-style`'s list).
-    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
-    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
     // CSS Box Alignment L3 (срез 15): all six align-/justify- longhands
     // share ONE list, mirroring `AlignValue::parse`
     // (`crates/engine/layout/src/style/values/flexgrid.rs`) — the engine
@@ -2175,6 +2788,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'overscroll-behavior-x': ['auto', 'contain', 'none'],
     'overscroll-behavior-y': ['auto', 'contain', 'none'],
     'scroll-snap-stop': ['normal', 'always'],
+    // CSS Scroll Snap L2 §4: `scroll-initial-target: none | nearest` — the
+    // strict two-keyword `match` in `style/apply/motion.rs`.
+    'scroll-initial-target': ['none', 'nearest'],
 };
 
 // CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |
@@ -2380,6 +2996,21 @@ function _lumen_split_top_level_ws_quoted(s) {
 // `ComputedStyle` field (`scroll_marker_group`, `style/values/misc.rs`)
 // since — unlike `block-ellipsis`/`continue` below — this property has a
 // `-computed.html` test.
+// Interest Invokers `interest-delay-start`/`-end` (GAP-INTERESTINVOKER):
+// `normal | <time [0s,∞]>`. The specified value keeps its written unit
+// (`123ms` stays `123ms`, the Rust computed side answers `0.123s`); a unitless
+// `0` and negative times are invalid. A `calc()` is kept verbatim — the
+// grammar allows `calc(2s * sibling-index())`, which only resolves per
+// element.
+function _lumen_css_canonical_interest_delay(strVal) {
+    var v = strVal.trim();
+    if (v.toLowerCase() === 'normal') return 'normal';
+    var m = /^\+?((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)(s|ms)$/i.exec(v);
+    if (m) return m[1] + m[2].toLowerCase();
+    if (/^calc\(.*\)$/i.test(v) && /[0-9.]m?s\b/i.test(v)) return v;
+    return null;
+}
+
 function _lumen_css_canonical_scroll_marker_group(strVal) {
     var v = strVal.trim().toLowerCase();
     if (v === 'none') return 'none';
@@ -2552,7 +3183,10 @@ var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert
 // grammar (`env(10px)`, `env(x, {)` are invalid), via the same Rust validator
 // the cascade uses. Returns the trimmed value, `null` when invalid, or
 // `undefined` when `strVal` has no substitution function at all.
-var _LUMEN_SUBSTITUTION_FN_RE = /(^|[^\w-])(var|env)\(/i;
+// `--name(` custom function calls (CSS Functions and Mixins L1) are
+// substitution values too: their grammar is checked at call time, and only the
+// reserved named-argument pattern is a parse-time error (see Rust side).
+var _LUMEN_SUBSTITUTION_FN_RE = /(^|[^\w-])(var|env)\(|(^|[^\w-])--[\w-]+\(/i;
 function _lumen_pending_substitution_value(strVal) {
     if (!_LUMEN_SUBSTITUTION_FN_RE.test(strVal)) return undefined;
     return _lumen_css_env_well_formed(strVal) ? strVal.trim() : null;
@@ -2576,6 +3210,53 @@ function _lumen_css_canonical_zoom(strVal) {
     return v;
 }
 
+// CSS Anchor Positioning L1 (BUG-563, GAP-ANCHORCSSOM-S2): a value that starts
+// with `anchor(` / `anchor-size(` is canonicalized by the real parser
+// (`_lumen_css_canonical_anchor`) instead of the length grammar, which has no
+// notion of either function. `anchor()` is valid only in the inset properties,
+// `anchor-size()` also in margin and sizing ones (padding takes neither); the
+// per-property mode is 2 / 1 / 0 for those three cases. `anchor()` nested in
+// `calc()`/`min()`/`max()` is not a top-level call and keeps going through the
+// regular grammar (S3/S4).
+var _LUMEN_ANCHOR_FN_RE = /^\s*anchor(?:-size)?\(/i;
+var _LUMEN_ANCHOR_INSET_KEY_RE = /^(?:top|right|bottom|left|inset-(?:block|inline)-(?:start|end))$/;
+var _LUMEN_ANCHOR_SIZE_ONLY_KEY_RE = /^(?:margin-.+|(?:min-|max-)?(?:width|height|block-size|inline-size))$/;
+function _lumen_anchor_fn_mode(key) {
+    if (_LUMEN_ANCHOR_INSET_KEY_RE.test(key)) return 2;
+    if (_LUMEN_ANCHOR_SIZE_ONLY_KEY_RE.test(key)) return 1;
+    return 0;
+}
+// Returns `undefined` when `strVal` is not a top-level anchor function (or the
+// property takes none), so the caller continues with its own grammar; else the
+// canonical string or `null` for an invalid value.
+function _lumen_anchor_fn_canon(mode, strVal) {
+    if (mode === 0 || !_LUMEN_ANCHOR_FN_RE.test(strVal)) return undefined;
+    return _lumen_css_canonical_anchor(strVal, mode === 2);
+}
+// `<length-percentage>` grammar of a shorthand with `mode` as above.
+function _lumen_length_or_anchor_canon(mode, strVal, allowAuto, nonNegative) {
+    var a = _lumen_anchor_fn_canon(mode, strVal);
+    return a !== undefined ? a : _lumen_css_canonical_length(strVal, allowAuto, nonNegative);
+}
+// Splits a shorthand value on whitespace outside parentheses, so
+// `anchor(--a top)` / `calc(1px + 2px)` stay one token.
+function _lumen_split_top_level_ws(strVal) {
+    var tokens = [], depth = 0, start = -1;
+    var s = strVal.trim();
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')' && depth > 0) depth--;
+        if (depth === 0 && /\s/.test(c)) {
+            if (start >= 0) { tokens.push(s.substring(start, i)); start = -1; }
+        } else if (start < 0) {
+            start = i;
+        }
+    }
+    if (start >= 0) tokens.push(s.substring(start));
+    return tokens;
+}
+
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
 // longhand value", shared by `setProperty` and `_lumen_parse_style`'s
 // per-declaration loop above — previously each had its own copy of this
@@ -2593,6 +3274,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     var pending = _lumen_pending_substitution_value(strVal);
     if (pending !== undefined) return pending;
+    var anchorFn = _lumen_anchor_fn_canon(_lumen_anchor_fn_mode(key), strVal);
+    if (anchorFn !== undefined) return anchorFn;
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_color(strVal);
     }
@@ -2606,9 +3289,15 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_sizing_length(strVal);
     }
+    if (_LUMEN_GRID_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_grid(key, strVal);
+    }
     if (_LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key)) {
         var scrollGrammar = _LUMEN_SCROLL_OFFSET_PROPERTIES[key];
         return _lumen_css_canonical_scroll_offset(strVal, scrollGrammar.allowAuto, scrollGrammar.nonNegative);
+    }
+    if (_LUMEN_TEXT_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_text(key, strVal);
     }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
@@ -2652,6 +3341,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'scroll-marker-group') {
         return _lumen_css_canonical_scroll_marker_group(strVal);
     }
+    if (key === 'interest-delay-start' || key === 'interest-delay-end') {
+        return _lumen_css_canonical_interest_delay(strVal);
+    }
     if (key === 'zoom') {
         return _lumen_css_canonical_zoom(strVal);
     }
@@ -2671,7 +3363,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
 function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
 
 // `target` is a `CSSStyleDeclaration` instance: either an element's live
-// style (carries `__nid__`, backed by the `style=""` attribute) or a
+// style (carries `__nid__`, backed by the `style=""` attribute — of a
+// cross-frame sub-document when it also carries `__fbid__`, BUG-1147) or a
 // CSSOM-8 rule style (carries `__loc__`, backed by
 // `_lumen_stylesheet_rule_(set_)style`/`_lumen_stylesheet_media_child_
 // (set_)style` — `document.styleSheets`'s OWN, not constructed, sheets
@@ -2692,8 +3385,8 @@ function _lumen_style_get_parsed(target) {
         var t = raw ? JSON.parse(raw).styleCssText : '';
         return _lumen_parse_style(t !== undefined && t !== null ? t : '');
     }
-    var s = _lumen_get_attr(target.__nid__, 'style');
-    return _lumen_parse_style(s !== undefined ? s : '');
+    var s = _lumen_backing_get_attr(_lumen_backing_fbid(target), target.__nid__, 'style');
+    return _lumen_parse_style(s !== null ? s : '');
 }
 function _lumen_style_set_parsed(target, obj) {
     var loc = target.__loc__;
@@ -2708,7 +3401,7 @@ function _lumen_style_set_parsed(target, obj) {
         }
         return;
     }
-    _lumen_set_attr(target.__nid__, 'style', _lumen_serialize_style(obj));
+    _lumen_backing_set_attr(_lumen_backing_fbid(target), target.__nid__, 'style', _lumen_serialize_style(obj));
 }
 
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
@@ -2729,18 +3422,79 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
         var v2v = _lumen_2v_shorthand_value(obj, key);
         if (v2v !== undefined) return v2v;
     }
+    if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+        var txtSh = _lumen_text_shorthand_value(obj, key);
+        if (txtSh !== undefined) return txtSh;
+    }
+    if (_lumen_gap_rule_key_re.test(key)) {
+        var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
+        if (gapSh !== null && gapSh !== undefined) return gapSh;
+    }
     return '';
 };
+// CSS Syntax §5.4.7: the end of the value closes every function still open, so
+// `repeat(auto, red, blue` is the value `repeat(auto, red, blue)`. Without the
+// closing here the unclosed `(` would swallow the `;` the style attribute is
+// serialized with and the whole declaration would be lost on re-parse. Applied to
+// the CSS Gap Decorations properties (`rule*`, `{column,row}-rule*`) whose lists
+// are the only grammar with a function that tests feed an unclosed value.
+var _lumen_gap_rule_key_re = /^(rule|(column|row)-rule)(-|$)/;
+function _lumen_close_open_parens(v) {
+    var depth = 0, quote = '';
+    for (var i = 0; i < v.length; i++) {
+        var c = v[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+        else if (c === '"' || c === "'") quote = c;
+        else if (c === '(') depth++;
+        else if (c === ')') { if (depth === 0) return v; depth--; }
+    }
+    if (quote) return v;
+    for (var d = 0; d < depth; d++) v += ')';
+    return v;
+}
+// CSS Gap Decorations L1 §3–§4 (BUG-553): `rule*`/`{column,row}-rule*` are stored in the
+// inline-style object as canonical LONGHANDS only (`_lumen_css_expand_gap_rule`, Rust
+// `style/values/rule_cssom.rs`); a shorthand is composed back on read
+// (`_lumen_css_gap_rule_shorthand`). Returns `null` when `key` is not one of these
+// properties, `false` when the value is invalid (declaration dropped), else the list of
+// `[longhand, value]` pairs.
+function _lumen_gap_rule_expand(key, strVal) {
+    if (!_lumen_gap_rule_key_re.test(key)) return null;
+    var r = JSON.parse(_lumen_css_expand_gap_rule(key, strVal));
+    if (r.k === 'not') return null;
+    if (r.k === 'invalid') return false;
+    return r.l;
+}
+// Drops `key` — and, for a gap shorthand, every longhand it covers — from `obj`.
+function _lumen_gap_rule_delete(obj, key) {
+    if (_lumen_gap_rule_key_re.test(key)) {
+        JSON.parse(_lumen_css_gap_rule_longhands(key)).forEach(function(n) { delete obj[n]; });
+    }
+    delete obj[key];
+}
 CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
     var strVal = String(val);
+    if (_lumen_gap_rule_key_re.test(key)) strVal = _lumen_close_open_parens(strVal);
     var obj = _lumen_style_get_parsed(nid);
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property.
-        delete obj[key];
+        if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+            _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+        }
+        _lumen_gap_rule_delete(obj, key);
         _lumen_style_set_parsed(nid, obj);
         return;
+    }
+    if (_lumen_pending_substitution_value(strVal) === undefined) {
+        var gapPairs = _lumen_gap_rule_expand(key, strVal);
+        if (gapPairs === false) return; // invalid gap-decoration value: declaration dropped
+        if (gapPairs !== null) {
+            gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+            _lumen_style_set_parsed(nid, obj);
+            return;
+        }
     }
     // BUG-514: `var()`/`env()` values bypass every per-property grammar below
     // (shorthand expansion included) — see `_lumen_pending_substitution_value`.
@@ -2789,6 +3543,13 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _lumen_style_set_parsed(nid, obj);
         return;
     }
+    if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+        var txtExpanded = _lumen_expand_text_shorthand(key, strVal);
+        if (txtExpanded === null) return; // invalid shorthand value: whole declaration dropped
+        Object.keys(txtExpanded).forEach(function(k) { obj[k] = txtExpanded[k]; });
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
     // Срез 10: color/length/line-width/sizing/keyword grammars all
     // go through the shared `_lumen_canonicalize_longhand` dispatch
     // (also used by `_lumen_parse_style` above) instead of one
@@ -2797,7 +3558,9 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_GRID_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_TEXT_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
         key === 'scrollbar-color' ||
         key === 'scroll-snap-type' ||
@@ -2825,7 +3588,9 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         // (`scroll-target-group` needs no separate arm — it's a
         // plain `_LUMEN_KEYWORD_PROPERTIES` entry above, already
         // covered by that check in this same condition).
-        key === 'scroll-marker-group') {
+        key === 'scroll-marker-group' ||
+        key === 'interest-delay-start' ||
+        key === 'interest-delay-end') {
         var canon = _lumen_canonicalize_longhand(key, strVal);
         if (canon === null || canon === undefined) return; // invalid value: no-op
         obj[key] = canon;
@@ -2839,8 +3604,13 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
     var nid = this;
     var obj = _lumen_style_get_parsed(nid);
     var key = _lumen_camel_to_kebab(String(prop));
-    var old = obj[key] || '';
-    delete obj[key]; _lumen_style_set_parsed(nid, obj); return old;
+    var old = Object.prototype.hasOwnProperty.call(obj, key) ? obj[key]
+        : (_lumen_gap_rule_key_re.test(key) ? (this.getPropertyValue(key) || '') : '');
+    if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
+        old = _lumen_text_shorthand_value(obj, key) || '';
+        _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+    }
+    _lumen_gap_rule_delete(obj, key); _lumen_style_set_parsed(nid, obj); return old;
 };
 Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
     // CSSOM §6.7.2: cssText always reflects the current declarations'
@@ -2855,10 +3625,15 @@ Object.defineProperty(CSSStyleDeclaration.prototype, Symbol.toStringTag,
     { value: 'CSSStyleDeclaration', configurable: true });
 globalThis.CSSStyleDeclaration = CSSStyleDeclaration;
 
-function _lumen_make_style(nid) {
+// `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
+function _lumen_make_style(nid, fbid) {
     var target = Object.create(CSSStyleDeclaration.prototype);
     Object.defineProperty(target, '__nid__',
         { value: nid, enumerable: false, writable: false, configurable: false });
+    if (fbid !== undefined) {
+        Object.defineProperty(target, '__fbid__',
+            { value: fbid, enumerable: false, writable: false, configurable: false });
+    }
     return new Proxy(target, {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
@@ -2936,6 +3711,8 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
 // by shadow-root nid — the arena records only `mode`. A declarative
 // (`<template shadowrootmode>`) root has no entry and reads the defaults.
 var _lumen_shadow_root_init = {};
+// BUG-1064: `nid:bits,…` mirror of the map above for the native `getHTML`.
+var _lumen_shadow_flags = '';
 function _lumen_shadow_root_init_from(init) {
     return {
         delegatesFocus: !!(init && init.delegatesFocus),
@@ -2968,6 +3745,8 @@ function _lumen_get_root_node(nid, options) {
         }
         break;
     }
+    // BUG-1161: the top of a detached document's tree is the document itself.
+    if (cur !== _lumen_root_nid && _lumen_doc_edge[cur]) { return _lumen_doc_edge[cur]; }
     return cur === _lumen_root_nid ? document : _lumen_make_element(cur);
 }
 
@@ -2992,7 +3771,7 @@ function _lumen_selection_tree_root_nid(nid) {
 // или `null`, если аргумент не то и не другое.
 function _lumen_node_or_text_nid(arg) {
     if (typeof arg === 'string') return _lumen_create_text_node(arg);
-    if (arg && arg.__nid__ !== undefined) return arg.__nid__;
+    if (arg && _lumen_adopt_detached(arg).__nid__ !== undefined) return arg.__nid__;
     return _lumen_create_text_node(String(arg));
 }
 
@@ -3041,6 +3820,7 @@ function _lumen_make_document_fragment(nid) {
         // cloneNode: returns a new fragment with deep-cloned children (always deep for fragments).
         cloneNode:            function(deep) {
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
+            _lumen_track_cloned_style_blocks(clone_nid);
             return _lumen_make_document_fragment(clone_nid);
         },
         // DOM §4.4 (GAP-XMLDOC срез 38, BUG-685) — own copies, same reason as
@@ -3075,6 +3855,8 @@ function _lumen_make_document_fragment(nid) {
         get nextSibling()     { return null; },
         get previousSibling() { return null; },
         insertBefore:         function(newNode, refNode) {
+            _lumen_adopt_detached(newNode);
+            _lumen_adopt_detached(refNode);
             if (!newNode || newNode.__nid__ === undefined) {
                 throw new TypeError('insertBefore: newNode must be a node');
             }
@@ -3086,6 +3868,7 @@ function _lumen_make_document_fragment(nid) {
             return newNode;
         },
         replaceChild:         function(newChild, oldChild) {
+            _lumen_adopt_detached(newChild);
             if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
                 throw new TypeError('replaceChild: both arguments must be nodes');
             }
@@ -3434,12 +4217,16 @@ function _lumen_locate_namespace(node, prefix) {
     if (!node) return null;
     switch (node.nodeType) {
         case 1: // Element
+            // The two prefixes bound by definition, whatever the attributes say.
+            if (prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
+            if (prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
             if (node.namespaceURI !== null && node.prefix === prefix) return node.namespaceURI;
             var attrs = node.attributes;
             for (var i = 0; i < attrs.length; i++) {
+                // By qualified name: an HTML-parsed `xmlns:x` carries no
+                // namespace, so its `prefix`/`localName` do not split (BUG-689).
                 var a = attrs[i];
-                if (prefix !== null ? (a.prefix === 'xmlns' && a.localName === prefix)
-                                     : (a.prefix === null && a.localName === 'xmlns')) {
+                if (a.name === (prefix !== null ? 'xmlns:' + prefix : 'xmlns')) {
                     return a.value !== '' ? a.value : null;
                 }
             }
@@ -3463,7 +4250,7 @@ function _lumen_locate_prefix(node, ns) {
             var attrs = node.attributes;
             for (var i = 0; i < attrs.length; i++) {
                 var a = attrs[i];
-                if (a.prefix === 'xmlns' && a.value === ns) return a.localName;
+                if (a.name.slice(0, 6) === 'xmlns:' && a.value === ns) return a.name.slice(6);
             }
             return _lumen_locate_prefix(node.parentElement, ns);
         case 9: // Document
@@ -3606,6 +4393,17 @@ Document.prototype.constructor = Document;
 function XMLDocument() { throw new TypeError('Illegal constructor'); }
 XMLDocument.prototype = Object.create(Document.prototype);
 XMLDocument.prototype.constructor = XMLDocument;
+// The page's own `document` is an `HTMLDocument : Document` (BUG-1138), as in
+// every engine: libraries type-sniff it through
+// `toString.call(document)` (yahoo.co.jp `ual`: `/^(HTML)?Document$/`), which
+// needs a per-interface `Symbol.toStringTag`. Not constructible from script.
+function HTMLDocument() { throw new TypeError('Illegal constructor'); }
+HTMLDocument.prototype = Object.create(Document.prototype);
+HTMLDocument.prototype.constructor = HTMLDocument;
+_lumen_idl_tag(Document, 'Document');
+_lumen_idl_tag(XMLDocument, 'XMLDocument');
+_lumen_idl_tag(HTMLDocument, 'HTMLDocument');
+Object.defineProperty(globalThis, 'HTMLDocument', { enumerable: false });
 function DocumentType() { throw new TypeError('Illegal constructor'); }
 DocumentType.prototype = Object.create(Node.prototype);
 DocumentType.prototype.constructor = DocumentType;
@@ -3840,6 +4638,35 @@ function _lumen_make_character_data(nodeType, nodeName, data, proto) {
     return obj;
 }
 
+// BUG-1055: `new Text()`/`new Comment()`/`createProcessingInstruction()` build
+// detached JS-only nodes with no arena id, so every insertion path used to
+// drop them silently. On first insertion the node is promoted in place: an
+// arena node is created with a copy of its data and the object takes over the
+// wrapper a live node of that kind would have (same `===` identity, and the
+// wrapper cache maps the new id back to it). Returns its argument.
+var _LUMEN_DETACHED_OWN_KEYS = ['data', 'nodeValue', 'textContent', 'length',
+    'nodeType', 'nodeName', 'ownerDocument', 'parentNode', 'childNodes',
+    '__isProcessingInstruction__', 'target', 'appendChild', 'insertBefore',
+    'replaceChild', 'removeChild', 'cloneNode', 'getRootNode'];
+function _lumen_adopt_detached(c) {
+    if (!c || typeof c !== 'object' || c.__nid__ !== undefined) return c;
+    var nt = c.nodeType, nid;
+    if (nt === 3) { nid = _lumen_create_text_node(c.data); }
+    else if (nt === 8) { nid = _lumen_create_comment(c.data); }
+    else if (nt === 7 && c.__isProcessingInstruction__) {
+        nid = _lumen_create_processing_instruction(c.target, c.data);
+    } else { return c; }
+    if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+    var fresh = _lumen_build_element(nid);
+    var keys = Reflect.ownKeys(fresh);
+    for (var i = 0; i < _LUMEN_DETACHED_OWN_KEYS.length; i++) { delete c[_LUMEN_DETACHED_OWN_KEYS[i]]; }
+    for (var j = 0; j < keys.length; j++) {
+        Object.defineProperty(c, keys[j], Object.getOwnPropertyDescriptor(fresh, keys[j]));
+    }
+    _lumen_wrapper_cache_set(nid, c);
+    return c;
+}
+
 // DOM §4.5 Comment(data) / Text(data) — a returned object wins over `this`, so
 // `new Comment()`/`new Text()` yield the detached CharacterData node above.
 function Comment(data) { return _lumen_make_character_data(8, '#comment', data, Comment.prototype); }
@@ -4016,6 +4843,7 @@ ShadowRoot.prototype.appendChild = function(c) {
         try {
             _lumen_append_child(this.__nid__, c.__nid__);
             _lumen_ce_maybe_connected(c);
+            _lumen_ce_connect_descendants(c.__nid__);
         } finally { _lumen_ce_pop_current_element_queue(); }
     }
     return c;
@@ -4030,13 +4858,19 @@ ShadowRoot.prototype.removeChild = function(c) {
     }
     return c;
 };
-ShadowRoot.prototype.addEventListener = function(type, fn, options) { _lumen_add_listener(this.__nid__, type, fn, options); };
-ShadowRoot.prototype.removeEventListener = function(type, fn, options) { _lumen_rm_listener(this.__nid__, type, fn, options); };
-ShadowRoot.prototype.dispatchEvent = function(evt) {
-    if (!evt) return true;
-    evt.target = this; evt.currentTarget = this;
-    return _lumen_dispatch(this.__nid__, evt);
+// A shadow root's EventTarget implementation; reached through
+// `EventTarget.prototype` (BUG-1123, `_lumen_et_platform_impl` below), the
+// element one sits in `_lumen_node_et`.
+var _lumen_shadow_et = {
+    addEventListener: function(type, fn, options) { _lumen_add_listener(this.__nid__, type, fn, options); },
+    removeEventListener: function(type, fn, options) { _lumen_rm_listener(this.__nid__, type, fn, options); },
+    dispatchEvent: function(evt) {
+        if (!evt) return true;
+        evt.target = this; evt.currentTarget = this;
+        return _lumen_dispatch(this.__nid__, evt);
+    },
 };
+var _lumen_node_et = {};
 // ── setHTMLUnsafe / getHTML (WHATWG HTML LS §14.5, BUG-592) ──────────────────
 // Same Element/ShadowRoot mixin the spec places these two on — `Element`'s
 // object-literal copy lives further down this file; `ShadowRoot` shares the
@@ -4050,8 +4884,21 @@ ShadowRoot.prototype.setHTMLUnsafe = function(html) {
         : String(html);
     _lumen_set_inner_html(this.__nid__, s);
 };
+// HTML LS §14.5 getHTML({serializableShadowRoots, shadowRoots}) — BUG-1064.
+// Shared by `Element` and `ShadowRoot`; flags come from `_lumen_shadow_root_init`.
+function _lumen_get_html_opts(nid, opts) {
+    var all = !!(opts && opts.serializableShadowRoots);
+    var explicit = [];
+    if (opts && opts.shadowRoots !== undefined && opts.shadowRoots !== null) {
+        for (var r of opts.shadowRoots) {
+            if (r && r.__nid__ !== undefined) explicit.push(r.__nid__);
+        }
+    }
+    if (!all && explicit.length === 0) return _lumen_get_inner_html(nid);
+    return _lumen_get_html(nid, all, explicit.join(','), _lumen_shadow_flags);
+}
 ShadowRoot.prototype.getHTML = function(opts) {
-    return _lumen_get_inner_html(this.__nid__);
+    return _lumen_get_html_opts(this.__nid__, opts);
 };
 // DOM LS §4.9 Node.cloneNode() — a ShadowRoot is explicitly not clonable: the
 // spec calls this out by name, so it must throw rather than be absent
@@ -4171,6 +5018,27 @@ function _lumen_make_node(nid) {
     return _lumen_make_element(nid);
 }
 
+// BUG-1161: the arena knows nothing of a detached document, so the two facts it
+// would carry live here, keyed by node id. `_lumen_doc_edge[nid]` — the detached
+// document that holds the (parentless) arena node `nid` as a direct child, which
+// is what `parentNode`/sibling links answer at the top of such a tree;
+// `_lumen_free_owner[nid]` — the detached document that created or adopted a
+// free-standing node. Both are consulted only when the node's tree has no live
+// root, so a node pulled into the page falls back to `document` untouched.
+var _lumen_doc_edge = Object.create(null);
+var _lumen_free_owner = Object.create(null);
+function _lumen_owner_doc(nid) {
+    var cur = nid, p;
+    while ((p = _lumen_u2n(_lumen_get_parent(cur))) !== null) { cur = p; }
+    if (cur === _lumen_root_nid) { return document; }
+    return _lumen_doc_edge[cur] || _lumen_free_owner[cur] || document;
+}
+// Sibling of a detached document's child, `delta` places away (-1 / +1).
+function _lumen_doc_sibling(node, nid, delta) {
+    var d = _lumen_doc_edge[nid];
+    return d ? d.__lumen_sibling(node, delta) : null;
+}
+
 // BUG-324: a DocumentType minted by `DOMImplementation.createDocumentType` —
 // detached (no arena backing, unlike the page's own `<!doctype>` wrapped by
 // `_lumen_make_doctype` above). DOM §4.5 sets its node document to the
@@ -4186,9 +5054,21 @@ function _lumen_make_detached_doctype(name, publicId, systemId, ownerDoc) {
     Object.defineProperty(obj, 'publicId',      { get: function() { return publicId; }, enumerable: true });
     Object.defineProperty(obj, 'systemId',      { get: function() { return systemId; }, enumerable: true });
     Object.defineProperty(obj, 'nodeValue',     { get: function() { return null; }, enumerable: true });
-    Object.defineProperty(obj, 'parentNode',    { get: function() { return null; }, enumerable: true });
+    var _docParent = null;
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return _docParent; }, enumerable: true });
+    Object.defineProperty(obj, 'parentElement', { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'previousSibling', {
+        get: function() { return _docParent ? _docParent.__lumen_sibling(obj, -1) : null; }, enumerable: true });
+    Object.defineProperty(obj, 'nextSibling', {
+        get: function() { return _docParent ? _docParent.__lumen_sibling(obj, 1) : null; }, enumerable: true });
+    Object.defineProperty(obj, 'firstChild',    { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'lastChild',     { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'textContent',   { get: function() { return null; }, enumerable: true });
     Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },   enumerable: true });
     Object.defineProperty(obj, 'ownerDocument', { get: function() { return _owner; }, enumerable: true });
+    Object.defineProperty(obj, '__lumen_docParent', {
+        value: function(d) { if (arguments.length > 0) { _docParent = d; } return _docParent; },
+        enumerable: false });
     Object.defineProperty(obj, '__lumen_setOwner', { value: function(doc) { _owner = doc; }, enumerable: false });
     // BUG-557: same three-field equality as the live doctype wrapper, so a
     // document and its deep clone compare equal even though their doctype
@@ -4361,24 +5241,44 @@ function _lumen_build_detached_document(proto, contentType) {
         enumerable: true,
     });
     doc.createElement = function(tag) {
-        var nid = _lumen_create_element(String(tag).toLowerCase());
+        // DOM §4.5: lower-casing only in an HTML document; the XHTML namespace
+        // in an HTML or XHTML document, `null` in any other XML document (BUG-1162).
+        var nid;
+        if (contentType === 'text/html') {
+            nid = _lumen_create_element(String(tag).toLowerCase());
+        } else if (contentType === 'application/xhtml+xml') {
+            nid = _lumen_create_element_ns('http://www.w3.org/1999/xhtml', String(tag));
+        } else {
+            nid = _lumen_create_element_ns('', String(tag));
+        }
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     doc.createElementNS = function(ns, qualifiedName) {
         var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
         var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
+    };
+    // BUG-689: the detached-document twins of the live `document`'s factories.
+    doc.createAttribute = function(localName) {
+        return _lumen_create_attribute_checked(contentType === 'text/html', localName, doc);
+    };
+    doc.createAttributeNS = function(ns, qualifiedName) {
+        return _lumen_create_attribute_ns_checked(ns, qualifiedName, doc);
     };
     doc.createTextNode = function(t) {
         var nid = _lumen_create_text_node(String(t));
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     doc.createComment = function(t) {
         var nid = _lumen_create_comment(t === undefined ? '' : String(t));
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        _lumen_free_owner[nid] = doc;
         return _lumen_make_element(nid);
     };
     // GAP-XMLDOC срез 25 (BUG-786): was missing entirely on every detached
@@ -4419,22 +5319,56 @@ function _lumen_build_detached_document(proto, contentType) {
     }
     // DOM 4.2.3 pre-insert: a node is removed from wherever it currently hangs
     // before being inserted, be that an arena parent or this list.
+    // BUG-1161: the document->child edge, mirrored into the shared registry
+    // (arena nodes) or the node's own hook (doctype) so the child can answer
+    // `parentNode`/siblings/`ownerDocument` without the arena knowing the edge.
+    function _detached_link(node) {
+        var nid = _lumen_tree_nid(node);
+        if (nid !== null && node !== document) {
+            _lumen_doc_edge[nid] = doc;
+            _lumen_free_owner[nid] = doc;
+        } else if (typeof node.__lumen_docParent === 'function') { node.__lumen_docParent(doc); }
+    }
+    function _detached_unlink(node) {
+        var nid = _lumen_tree_nid(node);
+        if (nid !== null && node !== document) {
+            if (_lumen_doc_edge[nid] === doc) { delete _lumen_doc_edge[nid]; }
+        } else if (typeof node.__lumen_docParent === 'function' && node.__lumen_docParent() === doc) {
+            node.__lumen_docParent(null);
+        }
+    }
+    Object.defineProperty(doc, '__lumen_sibling', {
+        value: function(node, delta) {
+            var at = _detached_child_index(node);
+            if (at < 0) { return null; }
+            var other = _children[at + delta];
+            return other === undefined ? null : other;
+        },
+        enumerable: false });
     function _detached_adopt(node) {
         if (node === null || node === undefined) {
             throw new TypeError('the argument is not a Node');
         }
         if (typeof node.__lumen_setOwner === 'function') { node.__lumen_setOwner(doc); }
+        // A JS-only Text/Comment/PI gets its arena node here so the registry
+        // has an id to hang the edge on (same object, same identity).
+        _lumen_adopt_detached(node);
         var nid = _lumen_tree_nid(node);
         if (nid !== null) {
             var parent = _lumen_u2n(_lumen_get_parent(nid));
             if (parent !== null) { _lumen_remove_child(parent, nid); }
         }
+        // Held by another detached document: leave it first.
+        var prev = nid !== null ? _lumen_doc_edge[nid]
+            : (typeof node.__lumen_docParent === 'function' ? node.__lumen_docParent() : null);
+        if (prev && prev !== doc) { prev.removeChild(node); }
         var at = _detached_child_index(node);
         if (at >= 0) { _children.splice(at, 1); }
     }
     doc.appendChild = function(node) {
         _detached_adopt(node);
         _children.push(node);
+        _detached_link(node);
         return node;
     };
     doc.insertBefore = function(node, ref) {
@@ -4447,6 +5381,7 @@ function _lumen_build_detached_document(proto, contentType) {
         // The index is re-read after the adopt: removing `node` from this same
         // list may have shifted the reference node down by one.
         _children.splice(_detached_child_index(ref), 0, node);
+        _detached_link(node);
         return node;
     };
     doc.removeChild = function(node) {
@@ -4456,6 +5391,7 @@ function _lumen_build_detached_document(proto, contentType) {
                 'removeChild: the node is not a child of this document', 'NotFoundError');
         }
         _children.splice(at, 1);
+        _detached_unlink(node);
         return node;
     };
     doc.replaceChild = function(newChild, oldChild) {
@@ -4465,9 +5401,17 @@ function _lumen_build_detached_document(proto, contentType) {
         }
         _detached_adopt(newChild);
         _children.splice(_detached_child_index(oldChild), 1, newChild);
+        _detached_unlink(oldChild);
+        _detached_link(newChild);
         return oldChild;
     };
     doc.hasChildNodes = function() { return _children.length > 0; };
+    // DOM §4.4: a document has no parent and no siblings, and its text content
+    // is null — the inherited accessors read `undefined` for a JS-only node.
+    ['parentNode', 'parentElement', 'previousSibling', 'nextSibling', 'textContent'].forEach(function(k) {
+        Object.defineProperty(doc, k, { get: function() { return null; }, set: function() {},
+            enumerable: true, configurable: true });
+    });
     Object.defineProperty(doc, 'firstChild', {
         get: function() { return _children.length > 0 ? _children[0] : null; },
         enumerable: true, configurable: true,
@@ -4879,7 +5823,7 @@ function _compute_validity(el) {
     // §4.10.21.1 #10: customError
     if (customMsg) flags.customError = true;
 
-    return new ValidityState(flags);
+    return new globalThis.ValidityState(flags);
 }
 
 // ── Path2D class (HTML LS §4.12.5.1.5) ─────────────────────────────────────────
@@ -6131,6 +7075,31 @@ function _lumen_wrapper_cache_set(nid, obj) {
     return obj;
 }
 
+// BUG-1160: a creator that hit MAX_DOM_NODES (-1) retries once after a
+// synchronous reclaim of detached, unreferenced nodes. The 30 s shell GC tick
+// can't run inside a script that builds and drops nodes in one job, so without
+// this a page like `Range-mutations-*` (hundreds of throwaway fixtures) dies
+// with QuotaExceededError while holding few live nodes. The native forces the
+// V8 GC + FinalizationRegistry pump itself (see `install_dom_reclaim`); the
+// freed ids go through `_lumen_gc_collect` so a reused slot inherits no
+// listeners/state from its previous node.
+function _lumen_reclaim_and_retry(raw) {
+    return function() {
+        var n = raw.apply(undefined, arguments);
+        if (n >= 0) { return n; }
+        var freed = _lumen_dom_reclaim_now();
+        if (freed.length === 0) { return n; }
+        _lumen_gc_collect(freed);
+        return raw.apply(undefined, arguments);
+    };
+}
+_lumen_create_element = _lumen_reclaim_and_retry(_lumen_create_element);
+_lumen_create_element_ns = _lumen_reclaim_and_retry(_lumen_create_element_ns);
+_lumen_create_text_node = _lumen_reclaim_and_retry(_lumen_create_text_node);
+_lumen_create_comment = _lumen_reclaim_and_retry(_lumen_create_comment);
+_lumen_create_processing_instruction = _lumen_reclaim_and_retry(_lumen_create_processing_instruction);
+_lumen_create_cdata_section = _lumen_reclaim_and_retry(_lumen_create_cdata_section);
+
 // ── ParentNode / ElementTraversal helpers (DOM Standard §4.2.6/§4.2.7) ────────
 // BUG-310: element-only tree navigation. `_lumen_get_children` returns EVERY
 // child node (text/comment included), so `children`/`childElementCount`/
@@ -6141,6 +7110,9 @@ function _lumen_wrapper_cache_set(nid, obj) {
 // shadow-root) carries a `#`-prefixed node name, which a real element never does.
 function _lumen_is_element_nid(id) {
     if (_lumen_is_text_node(id)) return false;
+    // A doctype reports its name (`html`) as `tagName` — the only non-element
+    // child that does, and it only ever sits directly under the document.
+    if (_lumen_is_doctype(id)) return false;
     var t = _lumen_get_tag_name(id);
     return typeof t === 'string' && t.length > 0 && t.charAt(0) !== '#';
 }
@@ -6426,9 +7398,9 @@ function _lumen_dataset_attr_name(prop) {
 function _lumen_dataset_prop_name(attr) {
     return attr.slice(5).replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
 }
-function _lumen_dataset_keys(nid) {
+function _lumen_dataset_keys(nid, fbid) {
     var out = [];
-    var names = _lumen_get_attr_names(nid);
+    var names = _lumen_backing_attr_names(fbid, nid);
     for (var i = 0; i < names.length; i++) {
         if (names[i].indexOf('data-') === 0) { out.push(_lumen_dataset_prop_name(names[i])); }
     }
@@ -6441,13 +7413,14 @@ function _lumen_dataset_keys(nid) {
 function DOMStringMap() { throw new TypeError('Illegal constructor'); }
 globalThis.DOMStringMap = DOMStringMap;
 
-function _lumen_make_dataset(nid) {
+// `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
+function _lumen_make_dataset(nid, fbid) {
     return new Proxy(Object.create(DOMStringMap.prototype), {
         get: function(_t, prop) {
             if (typeof prop !== 'string') { return undefined; }
             var attr = _lumen_dataset_attr_name(prop);
             if (attr === null) { return undefined; }
-            var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+            var v = _lumen_backing_get_attr(fbid, nid, attr);
             return v !== null ? v : undefined;
         },
         set: function(_t, prop, value) {
@@ -6455,25 +7428,25 @@ function _lumen_make_dataset(nid) {
             if (attr === null) {
                 throw new DOMException('Invalid dataset name: ' + prop, 'SyntaxError');
             }
-            _lumen_set_attr(nid, attr, String(value));
+            _lumen_backing_set_attr(fbid, nid, attr, String(value));
             return true;
         },
         has: function(_t, prop) {
             if (typeof prop !== 'string') { return false; }
             var attr = _lumen_dataset_attr_name(prop);
-            return attr !== null && _lumen_u2n(_lumen_get_attr(nid, attr)) !== null;
+            return attr !== null && _lumen_backing_get_attr(fbid, nid, attr) !== null;
         },
         deleteProperty: function(_t, prop) {
             var attr = _lumen_dataset_attr_name(String(prop));
-            if (attr !== null) { _lumen_remove_attr(nid, attr); }
+            if (attr !== null) { _lumen_backing_remove_attr(fbid, nid, attr); }
             return true;
         },
-        ownKeys: function() { return _lumen_dataset_keys(nid); },
+        ownKeys: function() { return _lumen_dataset_keys(nid, fbid); },
         getOwnPropertyDescriptor: function(_t, prop) {
             if (typeof prop !== 'string') { return undefined; }
             var attr = _lumen_dataset_attr_name(prop);
             if (attr === null) { return undefined; }
-            var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+            var v = _lumen_backing_get_attr(fbid, nid, attr);
             if (v === null) { return undefined; }
             return { value: v, writable: true, enumerable: true, configurable: true };
         },
@@ -6498,108 +7471,339 @@ function _lumen_ns_arg(ns) {
     return (ns === undefined || ns === null || ns === '') ? null : String(ns);
 }
 
-// A live `Attr` node over `nid`'s `name` attribute: reads and writes go
-// straight through to the element, so the object never holds a stale value.
-// `prefix`/`localName` still come from a textual split of the qualified name
-// (Lumen's attribute model has no separate prefix field) — but `namespaceURI`
-// now reads the real `Namespace` the parser/`setAttributeNS` tagged the
-// attribute with (GAP-XMLDOC срез 10, BUG-685, BUG-309), instead of being
-// hardcoded `null`. An attribute the parser never namespaces (plain `id`,
-// `class`, ...) still reports `null` — `_lumen_get_attr_namespace_uri`
-// returns `undefined` for those (`Namespace::Html` isn't a "real" namespace
-// for attributes, same asymmetry `Node.namespaceURI` doesn't have but
-// `Attr.namespaceURI` does per spec: only §13.2.6.5's eleven names get one).
-function _lumen_make_attr(nid, name) {
-    var colon = name.indexOf(':');
+// DOM §4.9.2 `Attr` (BUG-732, BUG-689). Lumen stores attributes as plain
+// (qualified name, value, namespace) triples on the element, with no node of
+// their own, so an `Attr` is a JS object whose internal state lives in
+// `_lumen_attr_state`: `nid` is the owning element (`null` while detached),
+// `name` the qualified name, `ns` the namespace a detached attribute was
+// created with, `value` the last value seen. While the element still carries
+// the attribute every read goes straight to it, so the object never holds a
+// stale value; once the attribute is removed the object keeps the value it had
+// — DOM §4.9 "remove an attribute" leaves the removed `Attr` intact, and
+// `setAttributeNode`'s return value is exactly such an object (before BUG-689
+// it stayed live and reported the value that had just replaced it).
+// `prefix`/`localName` come from a textual split of the qualified name
+// (Lumen's attribute model has no separate prefix field) — for a namespaced
+// attribute only: `setAttribute('pre:fix', …)` makes a no-namespace attribute
+// whose local name is the whole `pre:fix` (WPT `attributes.html`); `namespaceURI` of
+// an attached attribute reads the real `Namespace` the parser/`setAttributeNS`
+// tagged it with (GAP-XMLDOC срез 10, BUG-685, BUG-309). An attribute the
+// parser never namespaces (plain `id`, `class`, ...) reports `null` —
+// `_lumen_get_attr_namespace_uri` returns `undefined` for those
+// (`Namespace::Html` isn't a "real" namespace for attributes: only
+// §13.2.6.5's eleven names get one).
+var _lumen_attr_state = new WeakMap();
+
+function _lumen_new_attr(nid, name, ns, value, doc) {
     var attr = Object.create(Attr.prototype);
-    function value() {
-        var v = _lumen_u2n(_lumen_get_attr(nid, name));
-        return v !== null ? v : '';
-    }
-    function setValue(v) { _lumen_set_attr(nid, name, String(v)); }
-    Object.defineProperties(attr, {
-        name:         { get: function() { return name; }, enumerable: true, configurable: true },
-        nodeName:     { get: function() { return name; }, enumerable: true, configurable: true },
-        localName:    { get: function() { return colon >= 0 ? name.slice(colon + 1) : name; }, enumerable: true, configurable: true },
-        prefix:       { get: function() { return colon >= 0 ? name.slice(0, colon) : null; }, enumerable: true, configurable: true },
-        namespaceURI: { get: function() {
-            var uri = _lumen_get_attr_namespace_uri(nid, name);
-            return uri === undefined || uri === 'http://www.w3.org/1999/xhtml' ? null : uri;
-        }, enumerable: true, configurable: true },
-        nodeType:     { get: function() { return 2; }, enumerable: true, configurable: true },
-        // DOM §4.9.2: `specified` is a legacy getter that is always true.
-        specified:    { get: function() { return true; }, enumerable: true, configurable: true },
-        value:        { get: value, set: setValue, enumerable: true, configurable: true },
-        nodeValue:    { get: value, set: setValue, enumerable: true, configurable: true },
-        textContent:  { get: value, set: setValue, enumerable: true, configurable: true },
-        ownerElement: { get: function() { return _lumen_make_element(nid); }, enumerable: true, configurable: true },
-        ownerDocument: { get: function() { return document; }, enumerable: true, configurable: true },
-    });
+    var s = { nid: nid, name: name, ns: ns, value: value, doc: doc };
+    _lumen_attr_state.set(attr, s);
+    // Seed the snapshot, so an attribute removed before anyone read it through
+    // this object still reports the value it had.
+    if (nid !== null) _lumen_attr_value(s);
     return attr;
+}
+
+function _lumen_attr_st(attr) {
+    var s = _lumen_attr_state.get(attr);
+    if (!s) throw new TypeError('Illegal invocation');
+    return s;
+}
+
+// The element `s` is still an attribute of, or `null`: a removed attribute
+// (`removeAttribute`, or its element dropping it any other way) leaves the
+// `Attr` detached even though nobody told it.
+function _lumen_attr_owner_nid(s) {
+    return s.nid !== null && _lumen_get_attr(s.nid, s.name) !== undefined ? s.nid : null;
+}
+
+function _lumen_attr_value(s) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid !== null) s.value = _lumen_u2n(_lumen_get_attr(nid, s.name)) || '';
+    return s.value;
+}
+
+function _lumen_attr_namespace(s) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid === null) return s.ns;
+    var uri = _lumen_get_attr_namespace_uri(nid, s.name);
+    return uri === undefined || uri === 'http://www.w3.org/1999/xhtml' ? null : uri;
+}
+
+// Index of the prefix/local-name colon, or -1 for a no-namespace attribute.
+function _lumen_attr_colon(s) {
+    return _lumen_attr_namespace(s) === null ? -1 : s.name.indexOf(':');
+}
+
+// DOM §4.9 "set an existing attribute value": a detached `Attr` just keeps
+// the string; an attached one changes the element's attribute through the
+// element's own setter, so Trusted Types (TT §4.1 "get Trusted Types-compliant
+// attribute value"), `on*` handler compilation and custom-element reactions
+// apply exactly as for `setAttribute` (WPT `trusted-types` `Attr.value`/
+// `Node.nodeValue`/`Node.textContent` cases).
+function _lumen_attr_set_value(s, v) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid === null) {
+        s.value = String(v);
+        return;
+    }
+    // `value` is a DOMString: a Trusted Type is stringified before the TT
+    // check sees it, so it gets no pass here (unlike `setAttribute`'s own
+    // union-typed argument).
+    var str = String(v);
+    var ns = _lumen_attr_namespace(s);
+    var el = _lumen_make_element(nid);
+    if (ns === null) el.setAttribute(s.name, str);
+    else el.setAttributeNS(ns, s.name, str);
+    _lumen_attr_value(s);
+}
+
+// Snapshots the value and namespace, then cuts the tie to the element.
+function _lumen_attr_detach(s) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid !== null) {
+        _lumen_attr_value(s);
+        s.ns = _lumen_attr_namespace(s);
+    }
+    s.nid = null;
+}
+
+(function() {
+    function accessor(get, set) {
+        return { get: get, set: set, enumerable: true, configurable: true };
+    }
+    function valueGet() { return _lumen_attr_value(_lumen_attr_st(this)); }
+    function valueSet(v) { _lumen_attr_set_value(_lumen_attr_st(this), v); }
+    Object.defineProperties(Attr.prototype, {
+        name:         accessor(function() { return _lumen_attr_st(this).name; }),
+        nodeName:     accessor(function() { return _lumen_attr_st(this).name; }),
+        localName:    accessor(function() {
+            var s = _lumen_attr_st(this), colon = _lumen_attr_colon(s);
+            return colon >= 0 ? s.name.slice(colon + 1) : s.name;
+        }),
+        prefix:       accessor(function() {
+            var s = _lumen_attr_st(this), colon = _lumen_attr_colon(s);
+            return colon >= 0 ? s.name.slice(0, colon) : null;
+        }),
+        namespaceURI: accessor(function() { return _lumen_attr_namespace(_lumen_attr_st(this)); }),
+        nodeType:     accessor(function() { _lumen_attr_st(this); return 2; }),
+        // DOM §4.9.2: `specified` is a legacy getter that is always true.
+        specified:    accessor(function() { _lumen_attr_st(this); return true; }),
+        value:        accessor(valueGet, valueSet),
+        nodeValue:    accessor(valueGet, valueSet),
+        textContent:  accessor(valueGet, valueSet),
+        ownerElement: accessor(function() {
+            var nid = _lumen_attr_owner_nid(_lumen_attr_st(this));
+            return nid === null ? null : _lumen_make_element(nid);
+        }),
+        ownerDocument: accessor(function() { return _lumen_attr_st(this).doc || document; }),
+    });
+})();
+
+// DOM §4.9 "valid attribute local name": non-empty, no ASCII whitespace,
+// NULL, `/`, `=` or `>` — the relaxed production that replaced the XML Name
+// check (whatwg/dom#1079); a namespace prefix is the same minus the `=` ban.
+var _LUMEN_ATTR_LOCAL_NAME_BAD = /[\t\n\f\r \u0000\/=>]/;
+var _LUMEN_NS_PREFIX_BAD = /[\t\n\f\r \u0000\/>]/;
+
+// DOM §4.5 `createAttribute(localName)` for any document flavour: lowercased
+// in an HTML document, like `createElement`.
+function _lumen_create_attribute_checked(isHtml, localName, doc) {
+    var name = String(localName);
+    if (name === '' || _LUMEN_ATTR_LOCAL_NAME_BAD.test(name)) {
+        throw new DOMException(
+            'createAttribute: not a valid attribute name: ' + name, 'InvalidCharacterError');
+    }
+    return _lumen_new_attr(null, isHtml ? name.toLowerCase() : name, null, '', doc);
+}
+
+// DOM §4.5 `createAttributeNS(namespace, qualifiedName)` — "validate and
+// extract" with the attribute rules, then the four namespace constraints.
+function _lumen_create_attribute_ns_checked(namespace, qualifiedName, doc) {
+    var XML_NS = 'http://www.w3.org/XML/1998/namespace';
+    var XMLNS_NS = 'http://www.w3.org/2000/xmlns/';
+    var ns = _lumen_ns_arg(namespace);
+    var qn = String(qualifiedName);
+    var colon = qn.indexOf(':');
+    var prefix = colon >= 0 ? qn.slice(0, colon) : null;
+    var local = colon >= 0 ? qn.slice(colon + 1) : qn;
+    if ((prefix !== null && (prefix === '' || _LUMEN_NS_PREFIX_BAD.test(prefix)))
+        || local === '' || _LUMEN_ATTR_LOCAL_NAME_BAD.test(local)) {
+        throw new DOMException(
+            'createAttributeNS: not a valid qualified name: ' + qn, 'InvalidCharacterError');
+    }
+    if ((prefix !== null && ns === null)
+        || (prefix === 'xml' && ns !== XML_NS)
+        || ((qn === 'xmlns' || prefix === 'xmlns') !== (ns === XMLNS_NS))) {
+        throw new DOMException(
+            'createAttributeNS: ' + qn + ' does not fit namespace ' + ns, 'NamespaceError');
+    }
+    return _lumen_new_attr(null, qn, ns, '', doc);
 }
 
 // Live `NamedNodeMap` over `nid`'s attributes: indices, `length`, `item()`,
 // `getNamedItem()`/`setNamedItem()`/`removeNamedItem()` and named access all
 // re-read `_lumen_get_attr_names` on every access, so the map tracks
 // `setAttribute`/`removeAttribute` without being rebuilt — the same Proxy
-// design `_lumen_make_nid_collection` uses for HTMLCollection.
+// design `_lumen_make_nid_collection` uses for HTMLCollection. `Attr` objects
+// are cached per qualified name for the map's (= the element wrapper's)
+// lifetime, so `el.getAttributeNode('id') === el.attributes[0]` holds and an
+// `Attr` passed to `setAttributeNode` is the one later handed back.
+//
+// The methods live on `NamedNodeMap.prototype` (WebIDL operations), reaching
+// the per-map state through `_lumen_nnm_impl`; a named attribute never
+// shadows them or anything else on the prototype chain — WebIDL's named
+// property visibility, which WPT `attributes-namednodemap.html` checks with
+// attributes called `item` and `toString` (BUG-689).
+var _lumen_nnm_impl = new WeakMap();
+
+function _lumen_nnm(map) {
+    var impl = _lumen_nnm_impl.get(map);
+    if (!impl) throw new TypeError('Illegal invocation');
+    return impl;
+}
+
+NamedNodeMap.prototype.item = function item(index) { return _lumen_nnm(this).item(index); };
+NamedNodeMap.prototype.getNamedItem = function getNamedItem(qualifiedName) {
+    return _lumen_nnm(this).byName(qualifiedName);
+};
+NamedNodeMap.prototype.getNamedItemNS = function getNamedItemNS(namespace, localName) {
+    return _lumen_nnm(this).byNs(namespace, localName);
+};
+NamedNodeMap.prototype.setNamedItem = function setNamedItem(attr) { return _lumen_nnm(this).set(attr); };
+NamedNodeMap.prototype.setNamedItemNS = function setNamedItemNS(attr) { return _lumen_nnm(this).set(attr); };
+NamedNodeMap.prototype.removeNamedItem = function removeNamedItem(qualifiedName) {
+    return _lumen_nnm(this).removeByName(qualifiedName);
+};
+NamedNodeMap.prototype.removeNamedItemNS = function removeNamedItemNS(namespace, localName) {
+    return _lumen_nnm(this).removeByNs(namespace, localName);
+};
+Object.defineProperty(NamedNodeMap.prototype, 'length', {
+    get: function() { return _lumen_nnm(this).names().length; },
+    enumerable: true, configurable: true,
+});
+
+// Called by the element's own `removeAttribute`/`removeAttributeNS`/
+// `toggleAttribute` before the attribute goes: the cached `Attr`, if any,
+// takes its value snapshot while the value is still there to read.
+function _lumen_attr_note_removal(el, name) {
+    var map = el.__attributes__;
+    if (map !== undefined) _lumen_nnm(map).forget(name);
+}
+
 function _lumen_make_named_node_map(nid) {
-    var proto = Object.create(NamedNodeMap.prototype);
+    var target = Object.create(NamedNodeMap.prototype);
+    var cache = Object.create(null);
     function names() { return _lumen_get_attr_names(nid); }
-    function at(list, i) { return i < list.length ? _lumen_make_attr(nid, list[i]) : null; }
-    var methods = {
+    function attrFor(name) {
+        var a = cache[name];
+        if (a === undefined || _lumen_attr_state.get(a).nid !== nid) {
+            a = _lumen_new_attr(nid, name, null, '', null);
+            cache[name] = a;
+        }
+        return a;
+    }
+    function at(list, i) { return i < list.length ? attrFor(list[i]) : null; }
+    function byName(n) {
+        var name = String(n);
+        if (_lumen_get_attr(nid, name) !== undefined) return attrFor(name);
+        delete cache[name];
+        return null;
+    }
+    function byNs(ns, n) {
+        var name = _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)));
+        return name === null ? null : attrFor(name);
+    }
+    function forget(name) {
+        var a = cache[name];
+        if (a !== undefined) {
+            _lumen_attr_detach(_lumen_attr_state.get(a));
+            delete cache[name];
+        }
+    }
+    function remove(attr) {
+        var name = _lumen_attr_state.get(attr).name;
+        forget(name);
+        _lumen_make_element(nid).removeAttribute(name);
+        return attr;
+    }
+    function notFound(what) {
+        return new DOMException('No attribute ' + what, 'NotFoundError');
+    }
+    var impl = {
+        names: names,
         item: function(i) { return at(names(), i >>> 0); },
-        getNamedItem: function(n) {
-            var name = String(n);
-            return _lumen_get_attr(nid, name) !== undefined ? _lumen_make_attr(nid, name) : null;
-        },
-        // Namespaces are not modelled (see `_lumen_make_attr`), so the NS forms
-        // ignore the namespace and look the qualified name up.
-        getNamedItemNS: function(ns, n) { return methods.getNamedItem(n); },
-        setNamedItem: function(attr) {
-            if (!attr || typeof attr.name !== 'string') {
-                throw new TypeError('setNamedItem: argument is not an Attr');
+        byName: byName,
+        byNs: byNs,
+        forget: forget,
+        // DOM §4.9 "set an attribute": replaces the attribute with the same
+        // (namespace, local name) and hands back the replaced `Attr`, now
+        // detached and holding its old value. Goes through the element's own
+        // `setAttribute`/`setAttributeNS`, so Trusted Types, `on*` handler
+        // compilation and custom-element reactions see it like any other write.
+        set: function(attr) {
+            var s = attr instanceof Attr ? _lumen_attr_state.get(attr) : undefined;
+            if (!s) throw new TypeError('setNamedItem: argument is not an Attr');
+            var owner = _lumen_attr_owner_nid(s);
+            if (owner !== null && owner !== nid) {
+                throw new DOMException('The attribute is in use by another element', 'InUseAttributeError');
             }
-            var prev = methods.getNamedItem(attr.name);
-            _lumen_set_attr(nid, attr.name, String(attr.value));
-            return prev;
-        },
-        setNamedItemNS: function(attr) { return methods.setNamedItem(attr); },
-        removeNamedItem: function(n) {
-            var name = String(n);
-            if (_lumen_get_attr(nid, name) === undefined) {
-                throw new DOMException('No attribute named ' + name, 'NotFoundError');
+            var ns = attr.namespaceURI;
+            var value = _lumen_attr_value(s);
+            var old = byNs(ns, attr.localName);
+            if (old === attr) return attr;
+            if (old !== null) {
+                var oldName = _lumen_attr_state.get(old).name;
+                forget(oldName);
+                if (oldName !== s.name) _lumen_remove_attr(nid, oldName);
             }
-            var prev = _lumen_make_attr(nid, name);
-            _lumen_remove_attr(nid, name);
-            return prev;
+            var el = _lumen_make_element(nid);
+            if (ns === null) el.setAttribute(s.name, value);
+            else el.setAttributeNS(ns, s.name, value);
+            s.nid = nid;
+            cache[s.name] = attr;
+            return old;
         },
-        removeNamedItemNS: function(ns, n) { return methods.removeNamedItem(n); },
+        removeByName: function(n) {
+            var attr = byName(n);
+            if (attr === null) throw notFound('named ' + String(n));
+            return remove(attr);
+        },
+        removeByNs: function(ns, n) {
+            var attr = byNs(ns, n);
+            if (attr === null) throw notFound(String(n) + ' in namespace ' + ns);
+            return remove(attr);
+        },
+        // DOM §4.9 `removeAttributeNode(attr)`: `attr` itself, not a lookalike
+        // with the same name, must be one of this element's attributes.
+        removeNode: function(attr) {
+            var s = attr instanceof Attr ? _lumen_attr_state.get(attr) : undefined;
+            if (!s) throw new TypeError('removeAttributeNode: argument is not an Attr');
+            if (_lumen_attr_owner_nid(s) !== nid || attrFor(s.name) !== attr) {
+                throw notFound('node for ' + s.name + ' on this element');
+            }
+            return remove(attr);
+        },
     };
-    return new Proxy(proto, {
-        get: function(target, prop) {
-            if (prop === 'length') return names().length;
-            if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) {
-                return methods[prop];
-            }
-            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+    function isIndex(prop) { return typeof prop === 'string' && /^[0-9]+$/.test(prop); }
+    // A supported property name that the prototype chain does not already
+    // answer (WebIDL "named property visibility").
+    function isVisibleName(prop) {
+        return typeof prop === 'string' && !(prop in target)
+            && _lumen_get_attr(nid, prop) !== undefined;
+    }
+    var map = new Proxy(target, {
+        get: function(t, prop, receiver) {
+            if (isIndex(prop)) {
                 var byIndex = at(names(), parseInt(prop, 10));
                 return byIndex !== null ? byIndex : undefined;
             }
-            if (typeof prop === 'string' && prop !== 'constructor'
-                && _lumen_get_attr(nid, prop) !== undefined) {
-                return _lumen_make_attr(nid, prop);
-            }
-            return target[prop];
+            if (isVisibleName(prop)) return attrFor(prop);
+            return Reflect.get(t, prop, receiver);
         },
-        has: function(target, prop) {
-            if (prop === 'length') return true;
-            if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) return true;
-            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
-                return parseInt(prop, 10) < names().length;
-            }
-            if (typeof prop === 'string' && _lumen_get_attr(nid, prop) !== undefined) return true;
-            return prop in target;
+        has: function(t, prop) {
+            if (isIndex(prop)) return parseInt(prop, 10) < names().length;
+            return prop in t || isVisibleName(prop);
         },
         // Indexed keys enumerable, named keys own-but-not-enumerable — the same
         // split `_lumen_make_nid_collection` applies (BUG-323), so `for-in`
@@ -6609,25 +7813,28 @@ function _lumen_make_named_node_map(nid) {
             var keys = [];
             for (var i = 0; i < list.length; i++) keys.push(String(i));
             for (var k = 0; k < list.length; k++) {
-                if (!/^[0-9]+$/.test(list[k])) keys.push(list[k]);
+                if (!isIndex(list[k]) && !(list[k] in target)) keys.push(list[k]);
             }
             return keys;
         },
-        getOwnPropertyDescriptor: function(target, prop) {
-            if (typeof prop !== 'string') return undefined;
-            var list = names();
-            if (/^[0-9]+$/.test(prop)) {
-                var byIndex = at(list, parseInt(prop, 10));
+        getOwnPropertyDescriptor: function(t, prop) {
+            if (isIndex(prop)) {
+                var byIndex = at(names(), parseInt(prop, 10));
                 return byIndex !== null
                     ? { value: byIndex, writable: false, enumerable: true, configurable: true }
                     : undefined;
             }
-            if (_lumen_get_attr(nid, prop) !== undefined) {
-                return { value: _lumen_make_attr(nid, prop), writable: false, enumerable: false, configurable: true };
+            if (isVisibleName(prop)) {
+                return { value: attrFor(prop), writable: false, enumerable: false, configurable: true };
             }
-            return undefined;
+            return Reflect.getOwnPropertyDescriptor(t, prop);
         },
     });
+    // Both keys: methods see the proxy as `this`, but an accessor reached
+    // through `Reflect.get` on the target (`length`) may see the target.
+    _lumen_nnm_impl.set(map, impl);
+    _lumen_nnm_impl.set(target, impl);
+    return map;
 }
 
 // ── HTML LS §3.2.7 `innerText` / `outerText` setters (BUG-413) ───────────────
@@ -6808,9 +8015,15 @@ function _lumen_merge_with_next_text(pid, nodeNid) {
 // is itself `display: none` or `visibility: hidden`; nothing distinguishes those
 // from an ordinary one at this layer.
 
-// A node is «being rendered» when the engine published a computed style for it.
+// A node is «being rendered» when the engine published a computed style for it
+// and that style is not `display: none`. BUG-1144: a `display: none` element
+// (an author-hidden `<div>`, a `<script>` in `<body>`) still gets a skipped box
+// in the layout tree, and the snapshot publishes that box's style — so the
+// entry alone would call it rendered and step 1 would never reach `textContent`.
 function _lumen_rt_is_rendered(n) {
-    return _lumen_get_computed_style(n, 'visibility') !== '';
+    return _lumen_get_computed_style(n, 'visibility') !== ''
+        && _lumen_get_computed_style(n, 'display') !== 'none'
+        && _lumen_get_computed_style(n, 'computed:-lumen-boxless') === '';
 }
 
 // Step 8 of the collection steps: a box that starts and ends a line. `table-row`
@@ -6902,10 +8115,13 @@ function _lumen_rt_collect(n) {
     // already accounted for by the text nodes below it. Its children's items
     // pass through — which is also step 3's behaviour for `display: contents` —
     // but it contributes no line break of its own, so a `display: none` block
-    // adds nothing at all.
+    // adds nothing at all. The skipped box of a `display: none` element does
+    // carry an entry (BUG-1144), so it is caught here by its `display` instead —
+    // otherwise a hidden `<p>` would still add step 7's line breaks.
     if (vis === '') { return items; }
 
     var display = _lumen_get_computed_style(n, 'display');
+    if (display === 'none') { return items; }
     if (display === 'table-cell') {                                        // step 6
         var pid = _lumen_u2n(_lumen_get_parent(n));
         if (pid !== null) {
@@ -7037,7 +8253,9 @@ function _lumen_offset_parent_nid(nid) {
 // published in computed-style px, so a plain `parseFloat` resolves them.
 function _lumen_offset_origin(nid) {
     var parent = _lumen_offset_parent_nid(nid);
-    if (parent === null) return [0, 0];
+    // BUG-1252: CSSOM View §5 measures from the initial containing block when
+    // the offsetParent is <body>, not from the body's (margin-shifted) box.
+    if (parent === null || _lumen_is_body(parent)) return [0, 0];
     var r = _lumen_get_bounding_rect(parent);
     if (!r) return [0, 0];
     var bl = parseFloat(_lumen_get_computed_style(parent, 'border-left-width')) || 0;
@@ -7123,14 +8341,11 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // DOM §4.9: the Attr-node accessors that pair with `attributes`.
         getAttributeNode:   function(n)      { var nid = this.__nid__; return this.attributes.getNamedItem(n); },
-        getAttributeNodeNS: function(ns, n)  { var nid = this.__nid__; return this.attributes.getNamedItem(n); },
+        getAttributeNodeNS: function(ns, n)  { var nid = this.__nid__; return this.attributes.getNamedItemNS(ns, n); },
         setAttributeNode:   function(attr)   { var nid = this.__nid__; return this.attributes.setNamedItem(attr); },
         setAttributeNodeNS: function(attr)   { var nid = this.__nid__; return this.attributes.setNamedItem(attr); },
         removeAttributeNode: function(attr)  { var nid = this.__nid__;
-            if (!attr || typeof attr.name !== 'string') {
-                throw new TypeError('removeAttributeNode: argument is not an Attr');
-            }
-            return this.attributes.removeNamedItem(attr.name);
+            return _lumen_nnm(this.attributes).removeNode(attr);
         },
         get attributeStyleMap() { var nid = this.__nid__;
             // CSS Typed OM L1 — StylePropertyMap for element.style (mutable)
@@ -7271,7 +8486,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
                 var newVal   = (typeof _lumen_tt_get_compliant_attribute_value === 'function')
                     ? _lumen_tt_get_compliant_attribute_value(
-                          (_lumen_get_tag_name(nid) || '').toLowerCase(), attrName.toLowerCase(), v)
+                          (_lumen_get_tag_name(nid) || '').toLowerCase(), attrName.toLowerCase(), v,
+                          _lumen_u2n(_lumen_get_namespace_uri(nid)), null)
                     : String(v);
                 _lumen_set_attr(nid, attrName, newVal);
                 // BUG-360: (re)compile `on<type>` content attributes into a handler
@@ -7288,6 +8504,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             try {
                 var attrName = String(n);
                 var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                // BUG-689: a cached `Attr` keeps the value it had.
+                _lumen_attr_note_removal(this, attrName);
                 _lumen_remove_attr(nid, attrName);
                 if (_lumen_is_on_attr_name(attrName)) {
                     _lumen_set_on_handler(nid, attrName, null);
@@ -7299,6 +8517,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
         hasAttribute:    function(n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
         hasAttributes:   function()     { var nid = this.__nid__; return _lumen_get_attr_names(nid).length > 0; },
+        // DOM §4.9: getAttributeNames() — qualified names in attribute-list
+        // order, a fresh array per call (BUG-1136: samsung.com calls it).
+        getAttributeNames: function()   { var nid = this.__nid__; return Array.prototype.slice.call(_lumen_get_attr_names(nid)); },
         // DOM §4.9.2 namespaced attribute accessors (GAP-XMLDOC срез 10,
         // BUG-685, BUG-309): `ns` is looked up against the real `Namespace`
         // the parser (or a prior `setAttributeNS`) tagged the attribute with,
@@ -7310,7 +8531,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // `_lumen_ns_arg` normalizes `undefined`/`null`/`''` to `null` (the
         // native side's `Option<String>::None`) before crossing into Rust.
         getAttributeNS:    function(ns, n)    { var nid = this.__nid__;
-            var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+            var attrName = _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)));
             return attrName === null ? null : _lumen_u2n(_lumen_get_attr(nid, attrName));
         },
         setAttributeNS:    function(ns, n, v) { var nid = this.__nid__;
@@ -7322,7 +8543,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     ? qualifiedName.slice(qualifiedName.indexOf(':') + 1) : qualifiedName;
                 var newVal = (typeof _lumen_tt_get_compliant_attribute_value === 'function')
                     ? _lumen_tt_get_compliant_attribute_value(
-                          (_lumen_get_tag_name(nid) || '').toLowerCase(), localName.toLowerCase(), v)
+                          (_lumen_get_tag_name(nid) || '').toLowerCase(), localName.toLowerCase(), v,
+                          _lumen_u2n(_lumen_get_namespace_uri(nid)), _lumen_ns_arg(ns))
                     : String(v);
                 _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, newVal);
                 _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, newVal);
@@ -7332,16 +8554,17 @@ var _LUMEN_WRAPPER_MEMBERS = {
         removeAttributeNS: function(ns, n)    { var nid = this.__nid__;
             _lumen_ce_push_element_queue();
             try {
-                var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+                var attrName = _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)));
                 if (attrName !== null) {
                     var oldVal = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                    _lumen_attr_note_removal(this, attrName);
                     _lumen_remove_attr(nid, attrName);
                     if (oldVal !== null) _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
                 }
             } finally { _lumen_ce_pop_current_element_queue(); }
         },
         hasAttributeNS:    function(ns, n)    { var nid = this.__nid__;
-            return _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)) !== null;
+            return _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n))) !== null;
         },
         // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
         toggleAttribute: function(n, force) { var nid = this.__nid__;
@@ -7352,6 +8575,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var has = oldVal !== null;
                 if (force === undefined) {
                     if (has) {
+                        _lumen_attr_note_removal(this, attrName);
                         _lumen_remove_attr(nid, attrName);
                         _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
                         return false;
@@ -7368,6 +8592,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     return true;
                 }
                 if (has) {
+                    _lumen_attr_note_removal(this, attrName);
                     _lumen_remove_attr(nid, attrName);
                     _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
                 }
@@ -7553,7 +8778,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (_lumen_is_doctype(nid)) {
                 throw new DOMException('A DocumentType node cannot have children', 'HierarchyRequestError');
             }
+            _lumen_adopt_detached(c);
             if (!c || c.__nid__ === undefined) return c;
+            // BUG-954: DOM §4.2.3 — a host-including ancestor of the parent can't be inserted.
+            if (_lumen_node_contains(c, this)) {
+                throw new DOMException('The new child element contains the parent.', 'HierarchyRequestError');
+            }
             _lumen_ce_push_element_queue();
             try {
                 if (c.__isDocumentFragment__) {
@@ -7562,10 +8792,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     for (var _fi = 0; _fi < kids.length; _fi++) {
                         _lumen_append_child(nid, kids[_fi]);
                         _lumen_ce_maybe_connected(_lumen_make_element(kids[_fi]));
+                        _lumen_ce_connect_descendants(kids[_fi]);
                     }
                 } else {
                     _lumen_append_child(nid, c.__nid__);
                     _lumen_ce_maybe_connected(c);
+                    _lumen_ce_connect_descendants(c.__nid__);
                 }
                 _lumen_fire_slotchange(nid);
             } finally { _lumen_ce_pop_current_element_queue(); }
@@ -7617,7 +8849,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 if (typeof _bn === 'string') {
                     var _btn = _lumen_create_text_node(_bn);
                     _lumen_insert_before(pid, _btn, nid);
-                } else if (_bn && _bn.__nid__ !== undefined) {
+                } else if (_bn && _lumen_adopt_detached(_bn).__nid__ !== undefined) {
                     _lumen_insert_before(pid, _bn.__nid__, nid);
                 }
             }
@@ -7636,7 +8868,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     var _atn = _lumen_create_text_node(_an);
                     if (nextSib !== null) { _lumen_insert_before(pid, _atn, nextSib); }
                     else { _lumen_append_child(pid, _atn); }
-                } else if (_an && _an.__nid__ !== undefined) {
+                } else if (_an && _lumen_adopt_detached(_an).__nid__ !== undefined) {
                     if (nextSib !== null) { _lumen_insert_before(pid, _an.__nid__, nextSib); }
                     else { _lumen_append_child(pid, _an.__nid__); }
                 }
@@ -7660,7 +8892,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                         var _rtn = _lumen_create_text_node(_rn);
                         if (nextSib !== null) { _lumen_insert_before(pid, _rtn, nextSib); }
                         else { _lumen_append_child(pid, _rtn); }
-                    } else if (_rn && _rn.__nid__ !== undefined) {
+                    } else if (_rn && _lumen_adopt_detached(_rn).__nid__ !== undefined) {
                         if (nextSib !== null) { _lumen_insert_before(pid, _rn.__nid__, nextSib); }
                         else { _lumen_append_child(pid, _rn.__nid__); }
                     }
@@ -7679,7 +8911,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     var _ptn = _lumen_create_text_node(_pn);
                     if (firstChild !== null) { _lumen_insert_before(nid, _ptn, firstChild); }
                     else { _lumen_append_child(nid, _ptn); }
-                } else if (_pn && _pn.__nid__ !== undefined) {
+                } else if (_pn && _lumen_adopt_detached(_pn).__nid__ !== undefined) {
                     if (firstChild !== null) { _lumen_insert_before(nid, _pn.__nid__, firstChild); }
                     else { _lumen_append_child(nid, _pn.__nid__); }
                 }
@@ -7692,7 +8924,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var _an = arguments[_ai];
                 if (typeof _an === 'string') {
                     _lumen_append_child(nid, _lumen_create_text_node(_an));
-                } else if (_an && _an.__nid__ !== undefined) {
+                } else if (_an && _lumen_adopt_detached(_an).__nid__ !== undefined) {
                     _lumen_append_child(nid, _an.__nid__);
                 }
             }
@@ -7775,7 +9007,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var _rcn = arguments[_rni];
                 if (typeof _rcn === 'string') {
                     _lumen_append_child(nid, _lumen_create_text_node(_rcn));
-                } else if (_rcn && _rcn.__nid__ !== undefined) {
+                } else if (_rcn && _lumen_adopt_detached(_rcn).__nid__ !== undefined) {
                     _lumen_append_child(nid, _rcn.__nid__);
                 }
             }
@@ -7783,6 +9015,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // DOM LS §4.4: cloneNode(deep) — shallow or deep copy of this element.
         cloneNode:       function(deep) { var nid = this.__nid__;
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
+            _lumen_track_cloned_style_blocks(clone_nid);
             return _lumen_make_element(clone_nid);
         },
         // BUG-796: `content` used to live here, as a template-only getter answering
@@ -7871,7 +9104,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var m = (init && init.mode === 'closed') ? 'closed' : 'open';
             var sr_nid = _lumen_attach_shadow(nid, m);
             _lumen_ce_shadow_host_by_nid[sr_nid] = nid;
-            _lumen_shadow_root_init[sr_nid] = _lumen_shadow_root_init_from(init);
+            var _i = _lumen_shadow_root_init[sr_nid] = _lumen_shadow_root_init_from(init);
+            _lumen_shadow_flags += (_lumen_shadow_flags ? ',' : '') + sr_nid + ':' +
+                ((_i.delegatesFocus ? 1 : 0) | (_i.clonable ? 2 : 0) | (_i.serializable ? 4 : 0));
             if (init && init.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[sr_nid] = { registry: init.customElements._registry, pending: init.customElements._pending };
             }
@@ -7946,12 +9181,16 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // CSSOM View §Extensions to the Element interface: scrollWidth/scrollHeight
         // are defined for EVERY element, not just designated scroll containers
         // (`overflow: scroll`/`auto`) — they must return at least the element's
-        // padding-box size. `_lumen_get_scroll_state` only has an entry for actual
-        // scroll containers (BUG-475); everything else falls back to the border-box
-        // size from `_lumen_get_bounding_rect` (border box ⊇ padding box, so this
-        // still satisfies the "at least padding-box" floor, same relationship
-        // `content_width`/`content_height` already use as the scroll-container
-        // minimum in `lumen_layout::collect_scroll_containers`).
+        // padding-box size, and the exact scrollable-overflow-area magnitude when
+        // it exceeds that floor (BUG-960). `_lumen_get_scroll_state` has an entry
+        // for actual scroll containers (BUG-475) AND for `overflow: visible`
+        // elements whose content overflows their own padding box
+        // (`collect_scroll_containers_for_js_state`, BUG-960); everything else
+        // falls back to the border-box size from `_lumen_get_bounding_rect`
+        // (border box ⊇ padding box, so this still satisfies the "at least
+        // padding-box" floor, same relationship `content_width`/`content_height`
+        // already use as the scroll-container minimum in
+        // `lumen_layout::collect_scroll_containers`).
         get scrollWidth()  { var nid = this.__nid__;
             var s = _lumen_get_scroll_state(nid); if (s) return s[2];
             var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0;
@@ -7995,16 +9234,28 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // Scroll the nearest ancestor scroll container to make this element visible.
             var r = _lumen_get_bounding_rect(nid);
             if (!r) return Promise.resolve();
+            // BUG-962: CSS Scroll Snap L1 §4's scroll-margin expands the
+            // target's border box into a "scroll margin box" before any
+            // alignment math runs (start/end/center all measure against the
+            // expanded box, exactly like it already does for scroll-snap's
+            // own snap area in `lumen_layout`) — fold it into the position/
+            // size pair fed to `_lumen_align_scroll` on both axes.
+            var smTop = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-top')) || 0;
+            var smRight = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-right')) || 0;
+            var smBottom = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-bottom')) || 0;
+            var smLeft = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-left')) || 0;
+            var mw = r[2] + smLeft + smRight;
+            var mh = r[3] + smTop + smBottom;
             var parent = _lumen_u2n(_lumen_get_parent(nid));
             while (parent !== null && parent !== undefined) {
                 var ps = _lumen_get_scroll_state(parent);
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) {
-                        var contentX = (r[0] - pr[0]) + ps[0];
-                        var contentY = (r[1] - pr[1]) + ps[1];
-                        var newX = _lumen_align_scroll(contentX, r[2], pr[2], ps[0], opts.inline);
-                        var newY = _lumen_align_scroll(contentY, r[3], pr[3], ps[1], opts.block);
+                        var contentX = (r[0] - smLeft - pr[0]) + ps[0];
+                        var contentY = (r[1] - smTop - pr[1]) + ps[1];
+                        var newX = _lumen_align_scroll(contentX, mw, pr[2], ps[0], opts.inline);
+                        var newY = _lumen_align_scroll(contentY, mh, pr[3], ps[1], opts.block);
                         _lumen_request_scroll(parent, newX, newY);
                         var parentEl = _lumen_make_element(parent);
                         if (parentEl) {
@@ -8024,10 +9275,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // has no tracked horizontal scroll position (`scrollX` is a
             // hardcoded 0 — a separate gap), so only the block axis moves here.
             var pageY = _lumen_align_scroll(
-                r[1] + _lumen_get_page_scroll_y(), r[3],
+                (r[1] - smTop) + _lumen_get_page_scroll_y(), mh,
                 _lumen_get_viewport_size()[1], _lumen_get_page_scroll_y(), opts.block);
             _lumen_request_page_scroll(pageY, opts.behavior === 'smooth' ? 1 : 0);
-            return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
+            return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
         },
         // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
         // `tabIndex` reflects the `tabindex` content attribute; with the
@@ -8072,6 +9323,19 @@ var _LUMEN_WRAPPER_MEMBERS = {
         set autofocus(v) { var nid = this.__nid__;
             if (v) { _lumen_set_attr(nid, 'autofocus', ''); }
             else { _lumen_remove_attr(nid, 'autofocus'); }
+        },
+        // GAP-FOCUSGROUP: HTMLOrSVGOrMathMLElement mixin, so on `Element`
+        // like `autofocus`/`dataset`. `focusGroup` is [SameObject,
+        // PutForwards=value] — a string assignment rewrites the attribute and
+        // keeps the cached list object.
+        get focusGroup() {
+            return _lumen_wrapper_slot(this, '__focusGroup__', _lumen_make_focus_group_list);
+        },
+        set focusGroup(v) { this.focusGroup.value = v; },
+        get focusGroupStart() { var nid = this.__nid__; return _lumen_has_attr(nid, 'focusgroupstart'); },
+        set focusGroupStart(v) { var nid = this.__nid__;
+            if (v) { _lumen_set_attr(nid, 'focusgroupstart', ''); }
+            else { _lumen_remove_attr(nid, 'focusgroupstart'); }
         },
         // ── HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement properties ──
         // `type` and `name` used to be own properties here, reflected for every
@@ -8223,9 +9487,25 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // the reflection table (BUG-383).
         // DOM LS §4.2.4: insertBefore(newNode, refNode) — inserts before refNode (or appends if null).
         insertBefore: function(newNode, refNode) { var nid = this.__nid__;
+            _lumen_adopt_detached(newNode);
+            _lumen_adopt_detached(refNode);
             if (!newNode || newNode.__nid__ === undefined) return newNode;
-            if (!refNode || refNode.__nid__ === undefined) {
+            if (refNode === null || refNode === undefined) {
                 return this.appendChild(newNode);
+            }
+            // DOM LS §4.2.3 pre-insert: a non-node reference is a WebIDL TypeError,
+            // a node that is not a child of this parent is NotFoundError (BUG-894).
+            if (refNode.__nid__ === undefined) {
+                throw new TypeError("Failed to execute 'insertBefore' on 'Node': parameter 2 is not of type 'Node'.");
+            }
+            if (_lumen_get_children(nid).indexOf(refNode.__nid__) < 0) {
+                throw new DOMException(
+                    "Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.",
+                    'NotFoundError');
+            }
+            // BUG-954: see appendChild.
+            if (_lumen_node_contains(newNode, this)) {
+                throw new DOMException('The new child element contains the parent.', 'HierarchyRequestError');
             }
             _lumen_ce_push_element_queue();
             try {
@@ -8234,10 +9514,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     for (var _ib = 0; _ib < kids.length; _ib++) {
                         _lumen_insert_before(nid, kids[_ib], refNode.__nid__);
                         _lumen_ce_maybe_connected(_lumen_make_element(kids[_ib]));
+                        _lumen_ce_connect_descendants(kids[_ib]);
                     }
                 } else {
                     _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
                     _lumen_ce_maybe_connected(newNode);
+                    _lumen_ce_connect_descendants(newNode.__nid__);
                 }
                 _lumen_fire_slotchange(nid);
             } finally { _lumen_ce_pop_current_element_queue(); }
@@ -8311,6 +9593,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             while (cur !== null && cur !== undefined) {
                 var disp = _lumen_get_computed_style(cur, 'display');
                 if (disp === '' || disp === 'none') return false;
+                // BUG-1191: a boxless element has a style entry but no box.
+                if (_lumen_get_computed_style(cur, 'computed:-lumen-boxless') !== '') return false;
                 if (checkOpacity) {
                     var op = _lumen_get_computed_style(cur, 'opacity');
                     if (op !== null && op !== '' && parseFloat(op) === 0) return false;
@@ -8335,9 +9619,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // ── getHTML (WHATWG HTML LS §14.5) ───────────────────────────────────────
         // Serialises element's subtree as an HTML string.
-        // Phase 0: serializableShadowRoots option deferred (Shadow DOM Phase 2).
         getHTML: function(opts) { var nid = this.__nid__;
-            return _lumen_get_inner_html(nid);
+            return _lumen_get_html_opts(nid, opts);
         },
         // ── moveBefore (DOM LS, Chrome 133+) ─────────────────────────────────────
         // Moves `node` to be the previous sibling of `child` within this element,
@@ -8615,7 +9898,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'parentNode', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
+            if (pid === null) return _lumen_doc_edge[nid] || null;
             // BUG-557: the root element's parent is the document, and it has to
             // be the `document` singleton itself, not a fresh wrapper for the
             // same node id. A reconciler that hydrates into a document root
@@ -8749,7 +10032,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'nextSibling', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
+            if (pid === null) return _lumen_doc_sibling(this, nid, 1);
             var sibs = _lumen_get_children(pid);
             var idx = sibs.indexOf(nid);
             return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
@@ -8759,7 +10042,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'previousSibling', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
+            if (pid === null) return _lumen_doc_sibling(this, nid, -1);
             var sibs = _lumen_get_children(pid);
             var idx = sibs.indexOf(nid);
             return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
@@ -8829,7 +10112,7 @@ _lumen_canvas_define_dim('height', 1, 150);
     // blow up code that walks own-enumerable properties (e.g. `eval()`'s return-value
     // serialization in lib.rs's `from_rq`).
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'ownerDocument', {
-        get: function() { var nid = this.__nid__; return document; },
+        get: function() { return _lumen_owner_doc(this.__nid__); },
         enumerable: false,
         configurable: true,
     });
@@ -8889,8 +10172,9 @@ var _LUMEN_WRAPPER_ON_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAP
 // BUG-1101 had already moved `firstChild`/`nextSibling` for the same reason.
 //
 // Which prototype gets which member (DOM §4.4 Node, §4.2.8 ChildNode,
-// §4.2.7 NonDocumentTypeChildNode; `EventTarget` members sit on `Node.prototype`
-// until `Node` inherits from `EventTarget`, BUG-1123). Everything else in
+// §4.2.7 NonDocumentTypeChildNode; the `EventTarget` members go on no
+// prototype at all — `Node` inherits them from `EventTarget`, see below,
+// BUG-1123). Everything else in
 // `_LUMEN_WRAPPER_MEMBERS` goes on `Element.prototype`: the bundle never told
 // Element members from HTMLElement/HTMLDialogElement/form-control ones, and
 // SVG/MathML elements rely on reaching them through `Element.prototype`.
@@ -8899,8 +10183,9 @@ var _LUMEN_NODE_MEMBER_NAMES = [
     'firstChild', 'lastChild', 'previousSibling', 'nextSibling', 'ownerDocument',
     'isConnected', 'textContent', 'appendChild', 'insertBefore', 'removeChild',
     'replaceChild', 'cloneNode', 'isSameNode', 'isEqualNode', 'getRootNode',
-    'normalize', 'addEventListener', 'removeEventListener', 'dispatchEvent',
+    'normalize',
 ];
+var _LUMEN_ET_MEMBER_NAMES = ['addEventListener', 'removeEventListener', 'dispatchEvent'];
 var _LUMEN_CHILD_NODE_MEMBER_NAMES = [
     'before', 'after', 'replaceWith', 'remove',
     'nextElementSibling', 'previousElementSibling',
@@ -8952,9 +10237,12 @@ function _lumen_install_node_members(proto, descs, names) {
 (function() {
     var elementDescs = {};
     Object.keys(_LUMEN_WRAPPER_DESCRIPTORS).forEach(function(k) {
-        if (_LUMEN_NODE_MEMBER_NAMES.indexOf(k) < 0) elementDescs[k] = _LUMEN_WRAPPER_DESCRIPTORS[k];
+        if (_LUMEN_NODE_MEMBER_NAMES.indexOf(k) < 0 && _LUMEN_ET_MEMBER_NAMES.indexOf(k) < 0) {
+            elementDescs[k] = _LUMEN_WRAPPER_DESCRIPTORS[k];
+        }
     });
     _lumen_install_node_members(Node.prototype, _LUMEN_WRAPPER_DESCRIPTORS, _LUMEN_NODE_MEMBER_NAMES);
+    _LUMEN_ET_MEMBER_NAMES.forEach(function(k) { _lumen_node_et[k] = _LUMEN_WRAPPER_DESCRIPTORS[k].value; });
     _lumen_install_node_members(Element.prototype, elementDescs);
     // After the bundle, as on the old hidden prototype: the `on<type>`
     // accessors replace the bundle's plain `ondrag*: null` fields.
@@ -8963,6 +10251,37 @@ function _lumen_install_node_members(proto, descs, names) {
     _lumen_install_node_members(CharacterData.prototype, _LUMEN_WRAPPER_CD_DESCRIPTORS);
     _lumen_install_node_members(ProcessingInstruction.prototype, _LUMEN_WRAPPER_PI_DESCRIPTORS, ['target']);
 })();
+
+// ── BUG-1123: `Node : EventTarget` (DOM §4.4) ────────────────────────────────
+// `Node.prototype` inherited straight from `Object.prototype`, with its own
+// copy of the three EventTarget methods: `div instanceof EventTarget` was
+// `false`, Meta's hyperion (whatsapp) walked `getPrototypeOf` from
+// `Node.prototype` without reaching `EventTarget.prototype` ("Invalid
+// prototype chain"), and ShadyDOM (youtube) copied the descriptors of
+// `EventTarget.prototype` into `__shady_native_*` on that same prototype,
+// which no node then reached (`a.__shady_native_dispatchEvent is not a
+// function`). Now every node, the document and the window inherit the one
+// `EventTarget.prototype` set of methods, and those route to the target's
+// engine implementation through `_lumen_et_platform_impl`
+// (`event_target_shim.js`). The tables hold those implementations: the
+// node one is filled above, the shadow-root one next to `ShadowRoot`; window
+// and document are object literals whose own methods the shim itself calls
+// before their prototype chains exist, so they keep them until the end of
+// `web_api_shim_tail_b.js`, which moves them here. Any object with an
+// `__nid__` is a node, whether or not it inherits `Node.prototype` (the plain
+// `new DocumentFragment()` literal does not). A `null`/`undefined` receiver
+// is the global object (WebIDL §3.7.5.1 operation steps).
+var _lumen_window_et = null, _lumen_document_et = null;
+Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
+Object.setPrototypeOf(Node, EventTarget);
+_lumen_et_platform_impl = function(target, name) {
+    var table;
+    if (target == null || target === window) table = _lumen_window_et;
+    else if (target === document) table = _lumen_document_et;
+    else if (target.__nid__ === undefined) return null;
+    else table = target instanceof ShadowRoot ? _lumen_shadow_et : _lumen_node_et;
+    return table === null ? null : table[name];
+};
 
 // ── BUG-1130: the rest of ShadowRoot's interfaces ────────────────────────────
 // `ShadowRoot : DocumentFragment : Node` (DOM §4.8) with `ParentNode` on
@@ -10127,75 +11446,215 @@ function _lumen_notify_css_font_loaded(family) {
 // Creates a Range object whose endpoints are identified by [nid, offset] pairs.
 // nid 0 with offset 0 is the collapsed-at-document-start default.
 
+// DOM §5.5 helpers. All positions are [nid, offset] pairs of arena ids.
+// Wrapper for a boundary-point container; the document root is the `document` singleton.
+function _lumen_range_node(nid) { return nid === _lumen_root_nid ? document : _lumen_make_element(nid); }
+
+function _lumen_range_root(nid) {
+    var chain = _lumen_ancestor_nids(nid);
+    return chain[chain.length - 1];
+}
+
+function _lumen_range_index(nid) {
+    var p = _lumen_u2n(_lumen_get_parent(nid));
+    return p === null ? 0 : _lumen_get_children(p).indexOf(nid);
+}
+
+// -1/0/1: position of boundary point A relative to B (same root assumed).
+function _lumen_range_cmp(nA, oA, nB, oB) {
+    if (nA === nB) return oA === oB ? 0 : (oA < oB ? -1 : 1);
+    var ca = _lumen_ancestor_nids(nA);
+    var cb = _lumen_ancestor_nids(nB);
+    var ia = cb.indexOf(nA);
+    // A is an ancestor of B: compare A's offset with the index of the child
+    // of A on the path to B.
+    if (ia >= 0) return _lumen_range_index(cb[ia - 1]) < oA ? 1 : -1;
+    // B is an ancestor of A: the mirror case.
+    if (ca.indexOf(nB) >= 0) return -_lumen_range_cmp(nB, oB, nA, oA);
+    var i = ca.length - 1, j = cb.length - 1;
+    while (i >= 0 && j >= 0 && ca[i] === cb[j]) { i--; j--; }
+    var kids = _lumen_get_children(ca[i + 1]);
+    return kids.indexOf(ca[i]) < kids.indexOf(cb[j]) ? -1 : 1;
+}
+
+function _lumen_range_node_arg(node, what) {
+    var nid = _lumen_tree_nid(node);
+    if (nid === null) {
+        throw new TypeError("Failed to execute '" + what + "' on 'Range': parameter 1 is not of type 'Node'.");
+    }
+    return nid;
+}
+
+// Validates a (node, offset) argument pair; returns the node id.
+function _lumen_range_point_arg(node, offset, what, argc) {
+    if (argc < 2) {
+        throw new TypeError("Failed to execute '" + what + "' on 'Range': 2 arguments required, but only " + argc + " present.");
+    }
+    var nid = _lumen_range_node_arg(node, what);
+    if (node.nodeType === 10) throw new DOMException('The node is a DocumentType.', 'InvalidNodeTypeError');
+    if ((offset >>> 0) > _lumen_node_length(nid)) throw new DOMException("The offset is larger than the node's length.", 'IndexSizeError');
+    return nid;
+}
+
+function _lumen_range_common_nid(a, b) {
+    var ca = _lumen_ancestor_nids(a), cb = _lumen_ancestor_nids(b);
+    for (var i = 0; i < ca.length; i++) { if (cb.indexOf(ca[i]) >= 0) return ca[i]; }
+    return a;
+}
+
+function _lumen_range_is_cdata(node) {
+    var t = node.nodeType;
+    return t === 3 || t === 4 || t === 7 || t === 8;
+}
+
+// Child of `ca` on the path down to `nid`, or null when `nid` is `ca` itself.
+function _lumen_range_child_toward(ca, nid) {
+    var chain = _lumen_ancestor_nids(nid);
+    var i = chain.indexOf(ca);
+    return i > 0 ? chain[i - 1] : null;
+}
+
+// DOM §5.5 "clone the contents" / "extract" of `r` into a fresh fragment.
+// `extract` also removes the content and collapses `r` per the spec.
+function _lumen_range_contents(r, extract) {
+    var sn = r.__start_nid__, so = r.__start_off__, en = r.__end_nid__, eo = r.__end_off__;
+    var snode = _lumen_make_node(sn);
+    var doc = snode.nodeType === 9 ? snode : (snode.ownerDocument || document);
+    var frag = doc.createDocumentFragment();
+    if (sn === en && so === eo) return frag;
+    if (sn === en && _lumen_range_is_cdata(snode)) {
+        var c0 = snode.cloneNode(false);
+        c0.data = snode.substringData(so, eo - so);
+        frag.appendChild(c0);
+        if (extract) { snode.replaceData(so, eo - so, ''); r.__end_nid__ = sn; r.__end_off__ = so; }
+        return frag;
+    }
+    var ca = _lumen_range_common_nid(sn, en);
+    var firstP = (ca === sn) ? null : _lumen_range_child_toward(ca, sn);
+    var lastP = (ca === en) ? null : _lumen_range_child_toward(ca, en);
+    var contained = [];
+    var kids = _lumen_get_children(ca);
+    for (var i = 0; i < kids.length; i++) {
+        var k = kids[i];
+        if (k === firstP || k === lastP) continue;
+        if (_lumen_range_cmp(k, 0, sn, so) > 0 && _lumen_range_cmp(k, _lumen_node_length(k), en, eo) < 0) {
+            if (_lumen_make_node(k).nodeType === 10) throw new DOMException('The range contains a doctype.', 'HierarchyRequestError');
+            contained.push(k);
+        }
+    }
+    var newNid, newOff;
+    if (extract) {
+        if (ca === sn) { newNid = sn; newOff = so; }
+        else {
+            var enChain = _lumen_ancestor_nids(en);
+            var ref = sn;
+            while (enChain.indexOf(_lumen_u2n(_lumen_get_parent(ref))) < 0) ref = _lumen_u2n(_lumen_get_parent(ref));
+            newNid = _lumen_u2n(_lumen_get_parent(ref)); newOff = _lumen_range_index(ref) + 1;
+        }
+    }
+    var c, sub;
+    if (firstP !== null) {
+        var fnode = _lumen_make_node(firstP);
+        c = fnode.cloneNode(false);
+        if (_lumen_range_is_cdata(fnode)) {
+            var flen = _lumen_node_length(firstP);
+            c.data = fnode.substringData(so, flen - so);
+            frag.appendChild(c);
+            if (extract) fnode.replaceData(so, flen - so, '');
+        } else {
+            frag.appendChild(c);
+            sub = _lumen_make_range(sn, so, firstP, _lumen_node_length(firstP));
+            c.appendChild(_lumen_range_contents(sub, extract));
+        }
+    }
+    for (var j = 0; j < contained.length; j++) {
+        var cn = _lumen_make_node(contained[j]);
+        frag.appendChild(extract ? cn : cn.cloneNode(true));
+    }
+    if (lastP !== null) {
+        var lnode = _lumen_make_node(lastP);
+        c = lnode.cloneNode(false);
+        if (_lumen_range_is_cdata(lnode)) {
+            c.data = lnode.substringData(0, eo);
+            frag.appendChild(c);
+            if (extract) lnode.replaceData(0, eo, '');
+        } else {
+            frag.appendChild(c);
+            sub = _lumen_make_range(lastP, 0, en, eo);
+            c.appendChild(_lumen_range_contents(sub, extract));
+        }
+    }
+    if (extract) {
+        r.__start_nid__ = newNid; r.__start_off__ = newOff;
+        r.__end_nid__ = newNid; r.__end_off__ = newOff;
+    }
+    return frag;
+}
+
 function _lumen_make_range(sNid, sOff, eNid, eOff) {
     var r = {
         __start_nid__: sNid, __start_off__: sOff,
         __end_nid__:   eNid, __end_off__:   eOff,
-        get startContainer() { return _lumen_make_element(this.__start_nid__); },
+        get startContainer() { return _lumen_range_node(this.__start_nid__); },
         get startOffset()    { return this.__start_off__; },
-        get endContainer()   { return _lumen_make_element(this.__end_nid__); },
+        get endContainer()   { return _lumen_range_node(this.__end_nid__); },
         get endOffset()      { return this.__end_off__; },
         get collapsed()      { return this.__start_nid__ === this.__end_nid__ && this.__start_off__ === this.__end_off__; },
-        get commonAncestorContainer() {
-            if (this.__start_nid__ === this.__end_nid__) return _lumen_make_element(this.__start_nid__);
-            var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
-            return p !== null ? _lumen_make_element(p) : _lumen_make_element(this.__start_nid__);
+        get commonAncestorContainer() { return _lumen_range_node(_lumen_range_common_nid(this.__start_nid__, this.__end_nid__)); },
+        // DOM §5.5 "set the start or end": a point in another tree, or one
+        // that would invert the range, drags the opposite boundary along.
+        __set__: function(isStart, nid, off) {
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) {
+                this.__start_nid__ = nid; this.__start_off__ = off;
+                this.__end_nid__ = nid; this.__end_off__ = off;
+            } else if (isStart) {
+                if (_lumen_range_cmp(nid, off, this.__end_nid__, this.__end_off__) > 0) {
+                    this.__end_nid__ = nid; this.__end_off__ = off;
+                }
+                this.__start_nid__ = nid; this.__start_off__ = off;
+            } else {
+                if (_lumen_range_cmp(nid, off, this.__start_nid__, this.__start_off__) < 0) {
+                    this.__start_nid__ = nid; this.__start_off__ = off;
+                }
+                this.__end_nid__ = nid; this.__end_off__ = off;
+            }
         },
         setStart: function(node, offset) {
-            if (!node || node.__nid__ === undefined) return;
-            this.__start_nid__ = node.__nid__; this.__start_off__ = offset >>> 0;
+            var nid = _lumen_range_point_arg(node, offset, 'setStart', arguments.length);
+            this.__set__(true, nid, offset >>> 0);
         },
         setEnd: function(node, offset) {
-            if (!node || node.__nid__ === undefined) return;
-            this.__end_nid__ = node.__nid__; this.__end_off__ = offset >>> 0;
+            var nid = _lumen_range_point_arg(node, offset, 'setEnd', arguments.length);
+            this.__set__(false, nid, offset >>> 0);
         },
-        setStartBefore: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__start_nid__ = p; this.__start_off__ = Math.max(0, idx);
+        // Parent id and index of `node`; InvalidNodeTypeError when parentless.
+        __side__: function(node, what) {
+            var nid = _lumen_range_node_arg(node, what);
+            var p = _lumen_u2n(_lumen_get_parent(nid));
+            if (p === null) throw new DOMException('The node has no parent.', 'InvalidNodeTypeError');
+            return [p, _lumen_get_children(p).indexOf(nid)];
         },
-        setStartAfter: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__start_nid__ = p; this.__start_off__ = idx + 1;
-        },
-        setEndBefore: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__end_nid__ = p; this.__end_off__ = Math.max(0, idx);
-        },
-        setEndAfter: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var idx = _lumen_get_children(p).indexOf(node.__nid__);
-            this.__end_nid__ = p; this.__end_off__ = idx + 1;
-        },
+        setStartBefore: function(node) { var s = this.__side__(node, 'setStartBefore'); this.__set__(true, s[0], s[1]); },
+        setStartAfter:  function(node) { var s = this.__side__(node, 'setStartAfter');  this.__set__(true, s[0], s[1] + 1); },
+        setEndBefore:   function(node) { var s = this.__side__(node, 'setEndBefore');   this.__set__(false, s[0], s[1]); },
+        setEndAfter:    function(node) { var s = this.__side__(node, 'setEndAfter');    this.__set__(false, s[0], s[1] + 1); },
         collapse: function(toStart) {
-            if (toStart === false) {
-                this.__start_nid__ = this.__end_nid__; this.__start_off__ = this.__end_off__;
-            } else {
+            if (toStart) {
                 this.__end_nid__ = this.__start_nid__; this.__end_off__ = this.__start_off__;
+            } else {
+                this.__start_nid__ = this.__end_nid__; this.__start_off__ = this.__end_off__;
             }
         },
         selectNode: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
-            if (p === null) return;
-            var ch = _lumen_get_children(p), idx = ch.indexOf(node.__nid__);
-            this.__start_nid__ = p; this.__start_off__ = Math.max(0, idx);
-            this.__end_nid__   = p; this.__end_off__   = idx + 1;
+            var s = this.__side__(node, 'selectNode');
+            this.__start_nid__ = s[0]; this.__start_off__ = s[1];
+            this.__end_nid__   = s[0]; this.__end_off__   = s[1] + 1;
         },
         selectNodeContents: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            this.__start_nid__ = node.__nid__; this.__start_off__ = 0;
-            this.__end_nid__   = node.__nid__; this.__end_off__   = _lumen_node_length(node.__nid__);
+            var nid = _lumen_range_node_arg(node, 'selectNodeContents');
+            if (node.nodeType === 10) throw new DOMException('The node is a DocumentType.', 'InvalidNodeTypeError');
+            this.__start_nid__ = nid; this.__start_off__ = 0;
+            this.__end_nid__   = nid; this.__end_off__   = _lumen_node_length(nid);
         },
         cloneRange: function() {
             return _lumen_make_range(this.__start_nid__, this.__start_off__, this.__end_nid__, this.__end_off__);
@@ -10208,8 +11667,8 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
             this.__start_nid__ = pos[0]; this.__start_off__ = pos[1];
             this.__end_nid__   = pos[0]; this.__end_off__   = pos[1];
         },
-        extractContents: function() { this.deleteContents(); return null; },
-        cloneContents:   function() { return null; },
+        extractContents: function() { return _lumen_range_contents(this, true); },
+        cloneContents:   function() { return _lumen_range_contents(this, false); },
         // DOM Parsing §5 createContextualFragment (BUG-573). Spec calls for
         // parsing `fragmentHtml` with the range's start node as context
         // element (affects e.g. how a bare `<td>` parses); `_lumen_parse_html_fragment`
@@ -10228,21 +11687,73 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
             return _lumen_make_document_fragment(fragNid);
         },
         insertNode: function(node) {
-            if (!node || node.__nid__ === undefined) return;
-            var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
-            if (p !== null) _lumen_append_child(p, node.__nid__);
+            if (arguments.length < 1) throw new TypeError("Failed to execute 'insertNode' on 'Range': 1 argument required.");
+            var nid = _lumen_range_node_arg(node, 'insertNode');
+            var sn = this.__start_nid__, so = this.__start_off__;
+            var start = _lumen_make_node(sn);
+            var t = start.nodeType;
+            var startParent = _lumen_u2n(_lumen_get_parent(sn));
+            if (t === 7 || t === 8 || (t === 3 && startParent === null) || sn === nid) {
+                throw new DOMException('The range start is not a valid insertion point.', 'HierarchyRequestError');
+            }
+            var reference = null;
+            if (t === 3) {
+                // Split the start Text node at the offset; the tail is the reference.
+                var data = start.data;
+                var tail = (start.ownerDocument || document).createTextNode(data.substring(so));
+                start.data = data.substring(0, so);
+                _lumen_make_node(startParent).insertBefore(tail, start.nextSibling);
+                reference = tail;
+            } else {
+                var kids = _lumen_get_children(sn);
+                reference = so < kids.length ? _lumen_make_node(kids[so]) : null;
+            }
+            var parent = reference !== null ? _lumen_make_node(_lumen_u2n(_lumen_get_parent(reference.__nid__))) : start;
+            if (reference !== null && reference === node) reference = node.nextSibling;
+            if (node.parentNode) node.parentNode.removeChild(node);
+            var newOffset = reference !== null ? _lumen_range_index(reference.__nid__) : _lumen_node_length(parent.__nid__);
+            newOffset += node.nodeType === 11 ? _lumen_node_length(nid) : 1;
+            parent.insertBefore(node, reference);
+            if (this.collapsed) { this.__end_nid__ = parent.__nid__; this.__end_off__ = newOffset; }
         },
-        surroundContents:     function() {},
+        surroundContents: function(newParent) {
+            if (arguments.length < 1) throw new TypeError("Failed to execute 'surroundContents' on 'Range': 1 argument required.");
+            var npid = _lumen_range_node_arg(newParent, 'surroundContents');
+            var snChain = _lumen_ancestor_nids(this.__start_nid__);
+            var enChain = _lumen_ancestor_nids(this.__end_nid__);
+            var partial = function(chain, other) {
+                for (var i = 0; i < chain.length && other.indexOf(chain[i]) < 0; i++) {
+                    if (_lumen_make_node(chain[i]).nodeType !== 3) return true;
+                }
+                return false;
+            };
+            if (partial(snChain, enChain) || partial(enChain, snChain)) {
+                throw new DOMException('The range partially selects a non-Text node.', 'InvalidStateError');
+            }
+            var nt = newParent.nodeType;
+            if (nt === 9 || nt === 10 || nt === 11) {
+                throw new DOMException('The new parent is a Document, DocumentType or DocumentFragment.', 'InvalidNodeTypeError');
+            }
+            var frag = this.extractContents();
+            var old = _lumen_get_children(npid);
+            for (var i = old.length - 1; i >= 0; i--) newParent.removeChild(_lumen_make_node(old[i]));
+            this.insertNode(newParent);
+            newParent.appendChild(frag);
+            this.selectNode(newParent);
+        },
         compareBoundaryPoints: function(how, other) {
-            how = (how >>> 0) & 3;
-            var pairs = [[this.__start_nid__, this.__start_off__, other.__start_nid__, other.__start_off__],
-                         [this.__start_nid__, this.__start_off__, other.__end_nid__,   other.__end_off__  ],
-                         [this.__end_nid__,   this.__end_off__,   other.__start_nid__, other.__start_off__],
-                         [this.__end_nid__,   this.__end_off__,   other.__end_nid__,   other.__end_off__  ]];
-            var p = pairs[how];
-            if (p[0] !== p[2]) return p[0] < p[2] ? -1 : 1;
-            if (p[1] !== p[3]) return p[1] < p[3] ? -1 : 1;
-            return 0;
+            if (arguments.length < 2) throw new TypeError("Failed to execute 'compareBoundaryPoints' on 'Range': 2 arguments required.");
+            how = how & 0xFFFF;
+            if (how > 3) throw new DOMException('The comparison method provided must be one of START_TO_START, START_TO_END, END_TO_END, END_TO_START.', 'NotSupportedError');
+            if (!other || other.__start_nid__ === undefined) throw new TypeError("Failed to execute 'compareBoundaryPoints' on 'Range': parameter 2 is not of type 'Range'.");
+            if (_lumen_range_root(this.__start_nid__) !== _lumen_range_root(other.__start_nid__)) {
+                throw new DOMException('The two Ranges are not in the same tree.', 'WrongDocumentError');
+            }
+            var p = [[this.__start_nid__, this.__start_off__, other.__start_nid__, other.__start_off__],
+                     [this.__end_nid__,   this.__end_off__,   other.__start_nid__, other.__start_off__],
+                     [this.__end_nid__,   this.__end_off__,   other.__end_nid__,   other.__end_off__  ],
+                     [this.__start_nid__, this.__start_off__, other.__end_nid__,   other.__end_off__  ]][how];
+            return _lumen_range_cmp(p[0], p[1], p[2], p[3]);
         },
         getBoundingClientRect: function() {
             var el = _lumen_make_element(this.__start_nid__);
@@ -10252,11 +11763,37 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         // Element.prototype.getClientRects()'s return type just below.
         getClientRects:   function() { return new DOMRectList([this.getBoundingClientRect()]); },
         detach:           function() {},
-        isPointInRange:   function() { return false; },
-        comparePoint:     function() { return 0; },
-        intersectsNode:   function() { return false; },
+        isPointInRange: function(node, offset) {
+            if (arguments.length >= 2 && _lumen_tree_nid(node) !== null &&
+                _lumen_range_root(_lumen_tree_nid(node)) !== _lumen_range_root(this.__start_nid__)) return false;
+            var nid = _lumen_range_point_arg(node, offset, 'isPointInRange', arguments.length);
+            offset = offset >>> 0;
+            return _lumen_range_cmp(nid, offset, this.__start_nid__, this.__start_off__) >= 0 &&
+                   _lumen_range_cmp(nid, offset, this.__end_nid__, this.__end_off__) <= 0;
+        },
+        comparePoint: function(node, offset) {
+            if (arguments.length < 2) throw new TypeError("Failed to execute 'comparePoint' on 'Range': 2 arguments required.");
+            var nid = _lumen_range_node_arg(node, 'comparePoint');
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) {
+                throw new DOMException('The node provided is in a different tree.', 'WrongDocumentError');
+            }
+            _lumen_range_point_arg(node, offset, 'comparePoint', 2);
+            offset = offset >>> 0;
+            if (_lumen_range_cmp(nid, offset, this.__start_nid__, this.__start_off__) < 0) return -1;
+            if (_lumen_range_cmp(nid, offset, this.__end_nid__, this.__end_off__) > 0) return 1;
+            return 0;
+        },
+        intersectsNode: function(node) {
+            var nid = _lumen_range_node_arg(node, 'intersectsNode');
+            if (_lumen_range_root(nid) !== _lumen_range_root(this.__start_nid__)) return false;
+            var p = _lumen_u2n(_lumen_get_parent(nid));
+            if (p === null) return true;
+            var idx = _lumen_get_children(p).indexOf(nid);
+            return _lumen_range_cmp(p, idx, this.__end_nid__, this.__end_off__) < 0 &&
+                   _lumen_range_cmp(p, idx + 1, this.__start_nid__, this.__start_off__) > 0;
+        },
     };
-    r.START_TO_START = 0; r.START_TO_END = 1; r.END_TO_START = 2; r.END_TO_END = 3;
+    r.START_TO_START = 0; r.START_TO_END = 1; r.END_TO_END = 2; r.END_TO_START = 3;
     // BUG-474: without this, every Range minted here (createRange, Selection
     // ranges, caretRangeFromPoint, `new Range()`) is a plain object and fails
     // `instanceof Range` — WPT asserts that on the very first caretRangeFromPoint
@@ -10269,7 +11806,8 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
 // Range constructor (allows `new Range()`)
 function Range() { return _lumen_make_range(0, 0, 0, 0); }
 Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
-Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
+Range.prototype.END_TO_END  = 2; Range.prototype.END_TO_START  = 3;
+Range.START_TO_START = 0; Range.START_TO_END = 1; Range.END_TO_END = 2; Range.END_TO_START = 3;
 
 // ── StaticRange (WHATWG DOM §5.4) — BUG-533 ─────────────────────────────────
 // An immutable AbstractRange: unlike Range, its [nid, offset] boundary pair
@@ -10903,12 +12441,18 @@ function _lumen_set_adopted_style_sheets_validated(scopeId, value) {
     _lumen_set_adopted_stylesheets(scopeId, ids);
 }
 
-// ── Selection singleton (WHATWG Selection API §3) ─────────────────────────
+// ── Selection interface + document singleton (Selection API §3) ───────────
 // All access to the selection state goes through the Rust bindings.
+// `Selection` has no constructor operation; members live on the prototype as
+// WebIDL attributes/operations (brand-checked, spec `length`), and the one
+// selection of this document is an instance of it (BUG-671 — it used to be a
+// plain object literal, so `window.Selection` did not exist at all).
+function Selection() { throw new TypeError('Illegal constructor'); }
+var _lumen_selection = Object.create(Selection.prototype);
 
-var _lumen_selection = (function() {
+(function() {
     function _raw() { return _lumen_get_selection(); } // null | [aNid,aOff,fNid,fOff]
-    return {
+    var members = {
         get anchorNode()   { var s = _raw(); return s ? _lumen_make_element(s[0]) : null; },
         get anchorOffset() { var s = _raw(); return s ? s[1] : 0; },
         get focusNode()    { var s = _raw(); return s ? _lumen_make_element(s[2]) : null; },
@@ -10979,7 +12523,37 @@ var _lumen_selection = (function() {
         modify:          function() {},
         toString: function() { return _lumen_get_selection_text(); },
     };
+    members.setPosition = members.collapse; // §3: `setPosition` is an alias of `collapse`
+    // Required-argument counts from the Selection IDL (`Function.length`).
+    // No prototype: `lengths.toString` must not find `Object.prototype.toString`.
+    var lengths = Object.assign(Object.create(null), {
+        getRangeAt: 1, addRange: 1, removeRange: 1, collapse: 1, setPosition: 1,
+        extend: 1, setBaseAndExtent: 4, selectAllChildren: 1, containsNode: 1,
+    });
+    function branded(fn, name, length) {
+        // Method shorthand: WebIDL operations/accessors are not constructors.
+        var w = ({ f() {
+            if (this !== _lumen_selection) throw new TypeError('Illegal invocation');
+            return fn.apply(this, arguments);
+        } }).f;
+        Object.defineProperty(w, 'name', { value: name });
+        Object.defineProperty(w, 'length', { value: length });
+        return w;
+    }
+    Object.keys(members).forEach(function(k) {
+        var d = Object.getOwnPropertyDescriptor(members, k);
+        if (d.get) {
+            d.get = branded(d.get, 'get ' + k, 0);
+        } else {
+            d.value = branded(d.value, k, lengths[k] || 0);
+        }
+        d.enumerable = true;
+        Object.defineProperty(Selection.prototype, k, d);
+    });
 }());
+Object.defineProperty(Selection.prototype, Symbol.toStringTag,
+    { value: 'Selection', configurable: true });
+globalThis.Selection = Selection;
 
 // ── contenteditable key dispatch (Input Events Level 2 §4.1) ─────────────────
 // Called by the shell when a key is pressed while a contenteditable element has
@@ -11101,12 +12675,32 @@ function _lumen_document_collection(key, selector) {
 function HTMLImageElement() { throw new TypeError('Illegal constructor'); }
 HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
 HTMLImageElement.prototype.constructor = HTMLImageElement;
-function Image(width, height) {
+
+// WebIDL §3.7.6 [LegacyFactoryFunction] (BUG-923): `Image`/`Option`/`Audio` are
+// constructors only — a call without `new` throws — whose `.name` is the
+// exposed name, whose `.length` is 0 (every argument is optional) and whose
+// `.prototype` is the SAME object as `Interface.prototype`, read-only. The
+// global is {writable, configurable, non-enumerable}, like an interface object.
+// `build` returns the element; a returned object wins over `this`.
+function _lumen_define_legacy_factory(name, ifaceProto, build) {
+    var factory = function() {
+        if (!new.target) {
+            throw new TypeError("Failed to construct '" + name + "': Please use the 'new' operator, " +
+                "this DOM object constructor cannot be called as a function.");
+        }
+        return build.apply(null, arguments);
+    };
+    Object.defineProperty(factory, 'name', { value: name, writable: false, enumerable: false, configurable: true });
+    Object.defineProperty(factory, 'prototype', { value: ifaceProto, writable: false, enumerable: false, configurable: false });
+    Object.defineProperty(globalThis, name, { value: factory, writable: true, enumerable: false, configurable: true });
+    return factory;
+}
+_lumen_define_legacy_factory('Image', HTMLImageElement.prototype, function(width, height) {
     var img = document.createElement('img');
     if (width !== undefined && width !== null)  { img.width  = width; }
     if (height !== undefined && height !== null) { img.height = height; }
     return img;
-}
+});
 
 // ── DOM §4.4 Node over the live document's own child list (BUG-557) ──────────
 // The live document root is a real arena node (`_lumen_root_nid` is
@@ -11612,6 +13206,16 @@ var document = {
         }
         return _lumen_make_element(nid);
     },
+    // DOM §4.5: a detached `Attr`, to be attached with `setAttributeNode`
+    // (BUG-689: both were missing, and WPT `trusted-types` builds most of its
+    // attribute cases this way).
+    createAttribute:   function(localName) {
+        return _lumen_create_attribute_checked(
+            _lumen_get_document_content_type() === 'text/html', localName, null);
+    },
+    createAttributeNS: function(ns, qualifiedName) {
+        return _lumen_create_attribute_ns_checked(ns, qualifiedName, null);
+    },
     createTextNode:         function(t) {
         var nid = _lumen_create_text_node(String(t));
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
@@ -11638,7 +13242,8 @@ var document = {
         var ctor = _lumen_legacy_event_ctor(String(iface || '').toLowerCase());
         if (!ctor) { throw new DOMException(iface + ' is not a supported event interface', 'NotSupportedError'); }
         var evt = Object.create(ctor.prototype);
-        ctor.call(evt, '');
+        _lumen_text_event_internal = (ctor === TextEvent);
+        try { ctor.call(evt, ''); } finally { _lumen_text_event_internal = false; }
         return evt;
     },
     // DOM LS §4.5: createProcessingInstruction(target, data). Throws
@@ -11761,6 +13366,19 @@ var document = {
         var kids = _lumen_get_children(_lumen_root_nid);
         return kids.length > 0 ? _lumen_make_node(kids[kids.length - 1]) : null;
     },
+    // DOM §4.2.6 ParentNode (BUG-1316): element-only accessors, own copies for
+    // the same reason as `firstChild` — the literal never reaches
+    // `Document.prototype`. Mirrors the detached document's block above.
+    get children()          { return _lumen_make_html_collection(_lumen_root_nid); },
+    get childElementCount() { return _lumen_element_child_nids(_lumen_root_nid).length; },
+    get firstElementChild() {
+        var ch = _lumen_element_child_nids(_lumen_root_nid);
+        return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
+    },
+    get lastElementChild() {
+        var ch = _lumen_element_child_nids(_lumen_root_nid);
+        return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+    },
     // A document is the root of its tree and never has a parent or a sibling;
     // spelled out rather than left `undefined`, because `undefined` and `null`
     // read the same in a truthiness test but not in the `=== null` guard a
@@ -11835,15 +13453,12 @@ var document = {
     // HTML LS §8.4.4 document.write()/writeln() — was missing entirely, so any
     // page calling it (legacy ad/analytics snippets are the common case) threw
     // `document.write is not a function` and aborted the rest of that script.
-    // Spec-accurate behaviour needs an active-parser insertion point we do not
-    // track; instead this covers the two cases that matter without the
-    // destructive implicit document.open() the spec calls for on a closed
-    // document (which would wipe an already-hydrating SPA root out from under
-    // it): while still parsing, the text lands at the end of body, same as a
-    // real browser's insertion point would for a synchronous inline-script
-    // call; once the document has finished loading it is a no-op, matching
+    // Where the text lands and which written `<script>`s run is
+    // `_lumen_document_write` (BUG-568, next to «prepare the script element»
+    // below). Once the document has finished loading it is a no-op, matching
     // real browsers' document.write() intervention for scripts that call it
-    // after load instead of erasing the page.
+    // after load instead of erasing the page — the destructive implicit
+    // document.open() would wipe an already-hydrating SPA root.
     // TRUSTEDTYPES-1 срез 2: HTML LS §8.4.4's own "Document write steps" run
     // TT L2's "Get Trusted Type compliant string" PER ARGUMENT (sink
     // `"Document write"`/`"Document writeln"`), concatenating the already-
@@ -11853,35 +13468,10 @@ var document = {
     // under the wrong sink name and, for a page with its own default policy,
     // double-invoke the transform).
     write: function() {
-        if (_doc_ready_state !== 'loading') return;
-        var body = document.body;
-        if (!body) return;
-        var text = '';
-        for (var i = 0; i < arguments.length; i++) {
-            text += (typeof _lumen_tt_get_compliant_html === 'function')
-                ? _lumen_tt_get_compliant_html(arguments[i], 'Document write')
-                : String(arguments[i]);
-        }
-        var newIds = _lumen_parse_html_fragment(text);
-        for (var _wi = 0; _wi < newIds.length; _wi++) {
-            body.append(_lumen_make_element(newIds[_wi]));
-        }
+        _lumen_document_write(arguments, 'Document write', false);
     },
     writeln: function() {
-        if (_doc_ready_state !== 'loading') return;
-        var body = document.body;
-        if (!body) return;
-        var text = '';
-        for (var i = 0; i < arguments.length; i++) {
-            text += (typeof _lumen_tt_get_compliant_html === 'function')
-                ? _lumen_tt_get_compliant_html(arguments[i], 'Document writeln')
-                : String(arguments[i]);
-        }
-        text += '\n';
-        var newIds = _lumen_parse_html_fragment(text);
-        for (var _wli = 0; _wli < newIds.length; _wli++) {
-            body.append(_lumen_make_element(newIds[_wli]));
-        }
+        _lumen_document_write(arguments, 'Document writeln', true);
     },
     // HTML LS §8.4.4 document.open()/close() (BUG-888) — the explicit entry
     // point `write()` above needed: `write()` after load is a deliberate
@@ -12043,6 +13633,7 @@ var document = {
         if (!node) return null;
         if (node.__nid__ !== undefined) {
             var clone_nid = _lumen_clone_subtree(node.__nid__, deep ? 1 : 0);
+            _lumen_track_cloned_style_blocks(clone_nid);
             if (options && options.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
             }
@@ -12093,7 +13684,8 @@ var document = {
     // CSSOM View §3: elementsFromPoint(x, y) — every element hit by the point,
     // topmost first, deduplicated. Empty array if nothing is hit.
     elementsFromPoint: function(x, y) {
-        return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element);
+        return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element)
+            .filter(function(e) { return e && e.nodeType === 1 && e.localName; });  // BUG-1202: drop the document node (no localName)
     },
     // HTML LS §8.1.7.2.2 (DocumentAndElementEventHandlers) is already covered by
     // the curated list looped in below; these two are Document-only, not part of
@@ -12126,8 +13718,9 @@ for (var _dohi = 0; _dohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _dohi++) {
 // `Document.prototype` carries only `constructor`, and the four members it
 // inherits from `Node.prototype` (`hasChildNodes`, `contains`,
 // `compareDocumentPosition`, `baseURI`) all exist as own properties above,
-// which shadow it.
-Object.setPrototypeOf(document, Document.prototype);
+// which shadow it. BUG-1138: the page document is an `HTMLDocument`, one link
+// below `Document.prototype`, so `instanceof Document` still holds.
+Object.setPrototypeOf(document, HTMLDocument.prototype);
 
 // BUG-587: `document` is a `[LegacyUnforgeable] readonly` own property of the
 // global object (HTML LS, `Window.document`) — the ECMAScript
@@ -12191,6 +13784,30 @@ function _lumen_resource_track(nid, local) {
         && tag !== 'style' && tag !== 'embed' && tag !== 'object') return;
     _lumen_resource_pending[nid] = tag;
     _lumen_resource_pending_count++;
+}
+
+// BUG-967: `cloneNode`/`importNode` go through the native `_lumen_clone_subtree`
+// directly — unlike `createElement`, they never call `_lumen_resource_track`,
+// so a cloned `<style>` (the common `<template>.content.cloneNode(true)` idiom)
+// never enters `_lumen_resource_pending` and its later insertion never runs
+// "update a style block" (§4.14): no `load`/`error`, no `@import` fetch. Unlike
+// `<script>`/`<link>`, a `<style>` block has no spec "already started" flag to
+// preserve across a clone, so tracking every clone unconditionally is correct —
+// each copy gets its own independent update-block run, same as one built with
+// `createElement`. Scripts/links/tracks/etc. are deliberately NOT extended
+// here: their "already started" bookkeeping is why they are excluded from
+// `_lumen_resource_track` for parser/clone origins in the first place (see the
+// comment above `_lumen_resource_pending`), and this bug is about `<style>`
+// only. Walks the whole cloned subtree since `_lumen_clone_subtree` returns
+// only the new root, and a deep clone can carry `<style>` descendants.
+function _lumen_track_cloned_style_blocks(nid) {
+    if (nid === null || nid === undefined) return;
+    if (_lumen_is_style_element(nid) && _lumen_resource_pending[nid] === undefined) {
+        _lumen_resource_pending[nid] = 'style';
+        _lumen_resource_pending_count++;
+    }
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) _lumen_track_cloned_style_blocks(kids[i]);
 }
 
 // Same shadow-inclusive test as Node.isConnected, by nid alone — no element
@@ -12269,12 +13886,21 @@ var _lumen_current_script_stack = [];
 function _lumen_push_current_script(nid) {
     var n = _lumen_u2n(nid);
     _lumen_current_script_stack.push(n === null || n < 0 ? null : _lumen_make_element(n));
+    // BUG-568: one `document.write()` frame per running script, created only
+    // when that script actually writes (see `_lumen_dw_frame`).
+    _lumen_dw_frames.push(null);
 }
 function _lumen_pop_current_script() {
     _lumen_current_script_stack.pop();
+    var frame = _lumen_dw_frames.pop();
+    // BUG-568: the script that wrote has returned — the parser «resumes» and
+    // runs what it wrote, in order, before the next script of the document.
+    if (frame) _lumen_dw_flush(frame);
 }
 
-// A classic script body runs in global scope — indirect eval is exactly that.
+// A classic script body runs as a real Script (BUG-1049: not indirect eval,
+// whose top-level let/const would die with the call instead of joining the
+// global lexical environment shared with modules).
 // An uncaught exception must not escape into the DOM call that inserted the
 // element (the spec reports it to the page instead), hence the catch.
 // `nid` is the `<script>` element being executed; it backs
@@ -12288,7 +13914,7 @@ function _lumen_script_execute_classic(text, nid) {
     // path, …), as opposed to the initial page-load loop in
     // `crates/shell/src/main.rs`, which goes through the Rust-side
     // `V8JsRuntime::eval_and_report` for the same reporting step instead.
-    try { (0, eval)(text); }
+    try { _lumen_run_classic_script(text); }
     catch (e) { _lumen_report_exception(e); }
     finally { _lumen_pop_current_script(); }
 }
@@ -12355,7 +13981,7 @@ function _lumen_script_exec_drain() {
 // as the shell's `@import` gate is. Returns
 // `[effectiveDirective, blockedUri, originalPolicy]` for a blocked request,
 // null otherwise.
-function _lumen_element_src_blocked(destination, url, nid) {
+function _lumen_element_src_blocked(destination, url, nid, parserInserted) {
     if (typeof _lumen_check_element_src !== 'function') return null;
     var nonce = null, integrity = null;
     if (nid !== null) {
@@ -12363,13 +13989,42 @@ function _lumen_element_src_blocked(destination, url, nid) {
         if (destination === 'script') integrity = _lumen_u2n(_lumen_get_attr(nid, 'integrity'));
     }
     var r = _lumen_check_element_src(destination, url,
-        nonce === null ? '' : String(nonce), integrity === null ? '' : String(integrity));
+        nonce === null ? '' : String(nonce), integrity === null ? '' : String(integrity),
+        parserInserted === true);
     return (r && r.length === 3) ? r : null;
+}
+
+// BUG-1129: HTML LS §4.12.1.1 «prepare the script element» — an external
+// script inserted before the document completes delays its load event until
+// the script's own `load`/`error`. `_lumen_apply_ready_state('complete')`
+// holds `readyState`/window `load` while this count is non-zero and leaves
+// `_lumen_load_deferred` set; the last finished script releases it in a task
+// of its own, so microtasks the script's `load` handler queued run first —
+// and a script that handler inserts still counts, as in Chrome.
+var _lumen_load_delay_count = 0;
+var _lumen_load_deferred = false;
+
+function _lumen_load_delay_done(job) {
+    if (!job.delaysLoad) return;
+    job.delaysLoad = false;
+    _lumen_load_delay_count--;
+    if (_lumen_load_delay_count !== 0 || !_lumen_load_deferred) return;
+    setTimeout(function() {
+        if (_lumen_load_delay_count !== 0 || !_lumen_load_deferred) return;
+        _lumen_load_deferred = false;
+        _lumen_apply_ready_state('complete');
+        if (_lumen_pageshow_deferred !== null) {
+            var persisted = _lumen_pageshow_deferred;
+            _lumen_pageshow_deferred = null;
+            _lumen_fire_page_lifecycle('pageshow', persisted);
+        }
+    }, 0);
 }
 
 function _lumen_script_load_external(nid, src, isModule) {
     // state: 0 = fetching, 1 = body ready, 2 = failed.
-    var job = { state: 0, run: null };
+    var job = { state: 0, run: null, delaysLoad: _doc_ready_state !== 'complete' };
+    if (job.delaysLoad) _lumen_load_delay_count++;
     _lumen_script_exec_queue.push(job);
     setTimeout(function() {
         var url;
@@ -12381,6 +14036,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.run = function() {
                 _lumen_console_error('script load failed: ' + src + ': ' + e);
                 _lumen_resource_fire(nid, 'error');
+                _lumen_load_delay_done(job);
             };
             _lumen_script_exec_drain();
             return;
@@ -12397,6 +14053,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.run = function() {
                 _lumen_console_error('script load failed: ' + url + ': blocked by ' + csp[0]);
                 _lumen_resource_fire(nid, 'error');
+                _lumen_load_delay_done(job);
             };
             _lumen_script_exec_drain();
             return;
@@ -12407,14 +14064,27 @@ function _lumen_script_load_external(nid, src, isModule) {
         }).then(function(text) {
             job.state = 1;
             job.run = function() {
-                Promise.resolve().then(function() {
-                    if (isModule) return _lumen_script_run_module(url, text);
+                // BUG-1128: HTML LS §4.12.1.1 «execute the script element»
+                // fires `load` right after a classic body runs, in the same
+                // task. Deferring both to microtasks let the drain loop run
+                // every ready body before the first `load`, so SystemJS read
+                // the last script's `System.register` in the first `load`.
+                // Runtime errors are reported inside and still end in `load`.
+                if (!isModule) {
                     _lumen_script_execute_classic(text, nid);
+                    _lumen_resource_fire(nid, 'load');
+                    _lumen_load_delay_done(job);
+                    return;
+                }
+                Promise.resolve().then(function() {
+                    return _lumen_script_run_module(url, text);
                 }).then(function() {
                     _lumen_resource_fire(nid, 'load');
+                    _lumen_load_delay_done(job);
                 }).catch(function(e) {
                     _lumen_console_error('script load failed: ' + url + ': ' + e);
                     _lumen_resource_fire(nid, 'error');
+                    _lumen_load_delay_done(job);
                 });
             };
             _lumen_script_exec_drain();
@@ -12423,6 +14093,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.run = function() {
                 _lumen_console_error('script load failed: ' + url + ': ' + e);
                 _lumen_resource_fire(nid, 'error');
+                _lumen_load_delay_done(job);
             };
             _lumen_script_exec_drain();
         });
@@ -12488,6 +14159,18 @@ function _lumen_script_empty_src_scan() {
     }
 }
 
+// HTML LS §4.12.1 "child text content": the script's source text is the
+// concatenation of its Text-node children only — element descendants don't
+// count (BUG-1229), unlike `textContent`.
+function _lumen_script_child_text(nid) {
+    var kids = _lumen_get_children(nid);
+    var text = '';
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_text_node(kids[i])) { text += _lumen_get_text_content(kids[i]); }
+    }
+    return text;
+}
+
 // HTML LS §4.12.1 "already started" flag (step 1 / step 12 below). Tracked
 // independently of `_lumen_resource_pending`, which is a one-shot "has the
 // insertion hook run once" map that suits link/track/source/style/embed/
@@ -12518,7 +14201,7 @@ function _lumen_script_prepare(nid) {
     var text = null;
     var hasBody = false;
     if (!hasSrcAttr) {
-        text = _lumen_u2n(_lumen_get_text_content(nid));
+        text = _lumen_script_child_text(nid);
         hasBody = text !== null && String(text).trim() !== '';
     }
     if (!hasSrcAttr && !hasBody) return;
@@ -12556,6 +14239,319 @@ function _lumen_script_prepare(nid) {
             _lumen_resource_fire(nid, 'error');
         });
     }, 0);
+}
+
+// By nid alone, same shape as `_lumen_is_style_element` below.
+function _lumen_is_script_element(nid) {
+    if (nid === null || nid === undefined) return false;
+    var local;
+    try { local = _lumen_u2n(_lumen_get_local_name(nid)); } catch (e) { return false; }
+    return local !== null && String(local).toLowerCase() === 'script';
+}
+
+// BUG-968: HTML LS "src attribute change steps" / "type attribute change
+// steps" (whatwg/html#10188) — mutating `src` or `type` on a connected
+// script re-enters "prepare a script" no matter whether the attribute
+// previously held a value, unlike the old text this replaced (which only
+// triggered on "previously had no such attribute"). This is deliberately a
+// *second* (or later) legitimate prepare, not the re-entry `_lumen_script_
+// prepare`'s own step-1 "already started" flag exists to guard against —
+// that flag has to be cleared here first, or a script whose earlier prepare
+// already ran (the common "swap the bundle" case this bug is about) would
+// see step 1 bounce this call back out as a no-op.
+function _lumen_script_attr_changed(nid, attrName) {
+    if (attrName !== 'src' && attrName !== 'type') return;
+    if (!_lumen_is_script_element(nid)) return;
+    if (!_lumen_resource_is_connected(nid)) return;
+    delete _lumen_script_started[nid];
+    _lumen_script_prepare(nid);
+}
+
+// ── HTML LS §8.4.4 document.write(): the insertion point (BUG-568) ───────────
+//
+// The shell parses the whole document before any script runs, so there is no
+// live tokenizer to feed. What `write()` can still honour is where the text
+// would land and what it runs:
+//
+// - The text goes right after the `<script>` element that is running (the
+//   spec's insertion point sits just past the end tag the parser stopped on),
+//   not at the end of `<body>`. A write from a `<head>` script keeps head-only
+//   content (`<script>`, `<link>`, `<meta>`, …) in `<head>` and moves the rest
+//   to the start of `<body>`, the way the «in head» insertion mode would have
+//   closed the head. With no script running (a timer, an event handler, the
+//   stream `document.open()` reopened) it goes at the end of `<body>`, as
+//   before.
+// - A tag split over several calls (`write('<i id=')`, `write("'x'>…")`), or a
+//   `<script>` whose end tag has not been written yet, is held back until the
+//   rest arrives or the writing script returns.
+// - Written `<script>`s run: an inline classic one at once, inside the
+//   `write()` call; an external classic one without `async`/`defer` blocks —
+//   its fetch starts at once, and it runs, followed by everything written after
+//   it, as soon as the writing script returns and before the next script of
+//   the document; `defer` joins the end of parsing (before DOMContentLoaded);
+//   `async` and module scripts take the force-async path of a DOM-inserted
+//   script.
+//
+// Not modelled: a written unclosed element does not swallow the markup the
+// parser had already placed after the script, and the markup of a blocked
+// write is in the tree before the blocking script runs (only its scripts
+// wait). The destructive implicit `document.open()` on a closed document
+// stays out, as does the late-write no-op after load (BUG-701).
+
+// One slot per running classic script (pushed with `document.currentScript`):
+// `null` until that script first writes, then its frame.
+var _lumen_dw_frames = [];
+// External `defer` scripts `write()` produced, run at the end of parsing.
+var _lumen_dw_deferred = [];
+// A parser-blocking written script holds the page on its fetch, so the wait
+// is bounded; past it the element reports `error`.
+var _LUMEN_DW_FETCH_TIMEOUT_MS = 20000;
+// What the «in head» insertion mode keeps in `<head>` (HTML LS §13.2.6.4.4).
+var _LUMEN_DW_HEAD_OK = {
+    'base': 1, 'basefont': 1, 'bgsound': 1, 'link': 1, 'meta': 1, 'noscript': 1,
+    'script': 1, 'style': 1, 'template': 1, 'title': 1
+};
+
+// Where the text written while `scriptNid` runs goes. `null` for no body and
+// no usable script (nothing can be written then).
+function _lumen_dw_new_frame(scriptNid) {
+    var frame = { parent: null, ref: null, inHead: false, pending: '', queue: [], blocked: false };
+    if (scriptNid !== null && !_doc_explicit_open && _lumen_resource_is_connected(scriptNid)) {
+        var pid = _lumen_u2n(_lumen_get_parent(scriptNid));
+        if (pid !== null) {
+            frame.parent = _lumen_make_element(pid);
+            frame.ref = _lumen_make_element(scriptNid).nextSibling;
+            var hid = _lumen_u2n(_lumen_get_head());
+            frame.inHead = hid !== null && pid === hid;
+        }
+    }
+    if (frame.parent === null) {
+        var body = document.body;
+        if (!body) return null;
+        frame.parent = body;
+    }
+    return frame;
+}
+
+// Length of the prefix of `s` the fragment parser can take now: everything
+// before an unterminated tag, or before a raw-text element whose end tag has
+// not been written yet.
+function _lumen_dw_safe_cut(s) {
+    var cut = s.length;
+    var lt = s.lastIndexOf('<');
+    if (lt !== -1 && s.indexOf('>', lt) === -1) cut = lt;
+    var lower = s.toLowerCase();
+    var re = /<(script|style|textarea|title|xmp)(?=[\s\/>])/gi;
+    var m;
+    while ((m = re.exec(s)) !== null && m.index < cut) {
+        if (lower.indexOf('</' + m[1].toLowerCase(), m.index) === -1) { cut = m.index; break; }
+    }
+    return cut;
+}
+
+function _lumen_dw_fits_head(node) {
+    if (node.nodeType === 8) return true;
+    if (node.nodeType === 3) return /^[\t\n\f\r ]*$/.test(String(node.data));
+    return node.nodeType === 1 && _LUMEN_DW_HEAD_OK[String(node.localName)] === 1;
+}
+
+function _lumen_dw_collect_scripts(node, out) {
+    if (node.nodeType !== 1) return;
+    if (node.localName === 'script') {
+        if (_lumen_is_html_element_nid(node.__nid__)) out.push(node.__nid__);
+        return;
+    }
+    if (typeof node.getElementsByTagName !== 'function') return;
+    var list = node.getElementsByTagName('script');
+    var nids = [];
+    for (var i = 0; i < list.length; i++) nids.push(list[i].__nid__);
+    for (var j = 0; j < nids.length; j++) {
+        if (_lumen_is_html_element_nid(nids[j])) out.push(nids[j]);
+    }
+}
+
+// Parse `text` and put it at the frame's insertion point, then prepare the
+// scripts it brought, in document order.
+function _lumen_dw_insert(frame, text) {
+    if (text === '') return;
+    var ids = _lumen_parse_html_fragment(text);
+    var scripts = [];
+    for (var i = 0; i < ids.length; i++) {
+        var node = _lumen_make_node(ids[i]);
+        if (!node) continue;
+        if (frame.inHead && !_lumen_dw_fits_head(node)) {
+            frame.inHead = false;
+            var body = document.body;
+            if (body) { frame.parent = body; frame.ref = body.firstChild; }
+        }
+        try { frame.parent.insertBefore(node, frame.ref); }
+        catch (e) {
+            // The reference node left the parent since the frame was made.
+            frame.ref = null;
+            try { frame.parent.appendChild(node); } catch (e2) { continue; }
+        }
+        _lumen_dw_collect_scripts(node, scripts);
+    }
+    for (var k = 0; k < scripts.length; k++) _lumen_dw_prepare(frame, scripts[k]);
+}
+
+// HTML LS §4.12.1 «prepare the script element» for a parser-inserted script
+// that `write()` produced.
+function _lumen_dw_prepare(frame, nid) {
+    if (_lumen_script_started[nid] === 1) return;
+    var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
+    var isClassic = !isModule && _lumen_is_classic_script_type(type);
+    // Step 13: an engine with modules skips a `nomodule` classic script.
+    if (isClassic && _lumen_u2n(_lumen_get_attr(nid, 'nomodule')) !== null) return;
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    var external = isClassic && src !== null && String(src).trim() !== '';
+    if (external && _lumen_u2n(_lumen_get_attr(nid, 'async')) === null) {
+        _lumen_script_started[nid] = 1;
+        var job = _lumen_dw_start_fetch(nid, String(src).trim());
+        if (_lumen_u2n(_lumen_get_attr(nid, 'defer')) !== null) { _lumen_dw_deferred.push(job); return; }
+        // Step 31, «pending parsing-blocking script».
+        frame.queue.push(job);
+        frame.blocked = true;
+        return;
+    }
+    // Everything the parser reaches after a blocking script waits for it.
+    if (frame.blocked) { frame.queue.push({ kind: 'prepare', nid: nid }); return; }
+    _lumen_dw_prepare_now(nid);
+}
+
+// Inline classic runs here and now, once `script-src` admits its text;
+// async/module/empty-src go down the same road as a script inserted through
+// the DOM.
+function _lumen_dw_prepare_now(nid) {
+    if (_lumen_script_started[nid] === 1) return;
+    if (_lumen_u2n(_lumen_get_attr(nid, 'src')) === null
+        && typeof _lumen_check_inline_script === 'function') {
+        var nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
+        var body = _lumen_script_child_text(nid);
+        var r = _lumen_check_inline_script(nonce === null ? '' : String(nonce),
+            body === null ? '' : String(body));
+        if (r && r.length === 3) {
+            // Step 12 has run: a blocked script never starts again.
+            _lumen_script_started[nid] = 1;
+            if (typeof _lumen_dispatch_csp_violation === 'function') {
+                _lumen_dispatch_csp_violation(r[0], r[1], r[2], 'enforce');
+            }
+            _lumen_console_error('inline script blocked by ' + r[0]);
+            return;
+        }
+    }
+    _lumen_script_prepare(nid);
+}
+
+// Start the fetch of a written external classic script right away, so the
+// requests of several written scripts overlap on the wire.
+function _lumen_dw_start_fetch(nid, src) {
+    var job = { kind: 'external', nid: nid, url: '', handle: 0, csp: null, error: null };
+    try { job.url = _url_resolve(src, _lumen_document_base_url()); }
+    catch (e) { job.error = String(e); return job; }
+    // The element is parser-inserted, so `'strict-dynamic'` does not admit it.
+    job.csp = _lumen_element_src_blocked('script', job.url, nid, true);
+    if (job.csp) return job;
+    // BUG-1126: a `blob:` script is read from the blob URL store — the network
+    // bridge rejects the scheme.
+    if (job.url.slice(0, 5) === 'blob:') {
+        var blob = _lumen_blob_url_entry(job.url);
+        if (blob) job.blobText = new TextDecoder().decode(blob._bytes);
+        else job.error = 'network error';
+        return job;
+    }
+    if (typeof _lumen_fetch_async_start === 'function') {
+        job.handle = _lumen_fetch_async_start(job.url, 'GET', '', [], false, [], 'no-cors|script');
+    }
+    if (!job.handle) job.error = 'no network provider';
+    return job;
+}
+
+function _lumen_dw_run_external(job) {
+    var nid = job.nid;
+    if (job.csp) {
+        if (typeof _lumen_dispatch_csp_violation === 'function') {
+            _lumen_dispatch_csp_violation(job.csp[0], job.csp[1], job.csp[2], 'enforce');
+        }
+        _lumen_console_error('script load failed: ' + job.url + ': blocked by ' + job.csp[0]);
+        _lumen_resource_fire(nid, 'error');
+        return;
+    }
+    var failure = job.error;
+    var body = null;
+    if (failure === null && job.blobText !== undefined) {
+        body = job.blobText;
+    } else if (failure === null) {
+        var r = _lumen_fetch_async_wait_text(job.handle, _LUMEN_DW_FETCH_TIMEOUT_MS);
+        _lumen_fetch_async_free(job.handle);
+        if (r[0] !== 'ok') failure = r[0];
+        else if (+r[1] < 200 || +r[1] >= 300) failure = 'HTTP ' + r[1];
+        else body = r[3];
+    }
+    if (failure !== null) {
+        _lumen_console_error('script load failed: ' + job.url + ': ' + failure);
+        _lumen_resource_fire(nid, 'error');
+        return;
+    }
+    _lumen_script_execute_classic(body, nid);
+    _lumen_resource_fire(nid, 'load');
+}
+
+// The writing script has returned: parse what is still held back, then run
+// what waited on the blocking script, in order. A script run from here that
+// writes gets a frame of its own, right after itself.
+function _lumen_dw_flush(frame) {
+    if (frame.pending !== '') {
+        var rest = frame.pending;
+        frame.pending = '';
+        _lumen_dw_insert(frame, rest);
+    }
+    while (frame.queue.length > 0) {
+        var item = frame.queue.shift();
+        if (item.kind === 'external') _lumen_dw_run_external(item);
+        else _lumen_dw_prepare_now(item.nid);
+    }
+    frame.blocked = false;
+}
+
+// «The end» step 5 for the `defer` scripts `write()` produced — after the
+// shell's own deferred list, before DOMContentLoaded.
+function _lumen_dw_run_deferred() {
+    while (_lumen_dw_deferred.length > 0) _lumen_dw_run_external(_lumen_dw_deferred.shift());
+}
+
+// The write steps shared by `document.write()`/`writeln()`.
+function _lumen_document_write(args, sink, newline) {
+    if (_doc_ready_state !== 'loading') return;
+    var text = '';
+    for (var i = 0; i < args.length; i++) {
+        text += (typeof _lumen_tt_get_compliant_html === 'function')
+            ? _lumen_tt_get_compliant_html(args[i], sink)
+            : String(args[i]);
+    }
+    if (newline) text += '\n';
+    var frame;
+    var implicit = false;
+    var n = _lumen_dw_frames.length;
+    if (n > 0) {
+        if (_lumen_dw_frames[n - 1] === null) {
+            var cur = _lumen_current_script_stack[_lumen_current_script_stack.length - 1];
+            var snid = (cur && cur.__nid__ !== undefined) ? cur.__nid__ : null;
+            _lumen_dw_frames[n - 1] = _lumen_dw_new_frame(snid) || false;
+        }
+        frame = _lumen_dw_frames[n - 1];
+    } else {
+        frame = _lumen_dw_new_frame(null);
+        implicit = true;
+    }
+    if (!frame) return;
+    var s = frame.pending + text;
+    var cut = _lumen_dw_safe_cut(s);
+    frame.pending = s.slice(cut);
+    _lumen_dw_insert(frame, s.slice(0, cut));
+    // No script to return from: nothing will resume the parser later.
+    if (implicit) _lumen_dw_flush(frame);
 }
 
 // HTML LS §4.6.7 «process the linked resource»: a <link> whose `rel` makes it
@@ -12808,6 +14804,10 @@ function _lumen_link_preload(nid, href) {
     if (_LUMEN_LINK_AS_DESTINATIONS[dest] !== 1) return;
     if (!_lumen_link_hint_media_matches(nid)) return;
     if (!_lumen_link_hint_type_supported(dest, _lumen_u2n(_lumen_get_attr(nid, 'type')))) return;
+    if (dest === 'fetch') {
+        _lumen_fetch_hint_register(_url_resolve(String(href), _lumen_document_base_url()),
+                                   _lumen_u2n(_lumen_get_attr(nid, 'crossorigin')));
+    }
     _lumen_link_hint_fetch(nid, href, null, dest);
 }
 
@@ -13382,21 +15382,65 @@ function _lumen_ce_pop_current_element_queue() {
     _lumen_ce_invoke_element_queue(q);
 }
 
+// BUG-1167: nid -> the custom element object itself, held strongly. A custom
+// element *is* its wrapper — the class prototype and everything its
+// constructor stored on `this` live there, not in the DOM — while the wrapper
+// cache holds only `WeakRef`s (GAP-P3GCJSDOM). Without this pin, a GC
+// between two script accesses let `_lumen_make_element` rebuild a plain
+// `HTMLElement` for the node, and Polymer's callbacks then ran on an object
+// without `_attributeToProperty` (youtube). An entry here is also the
+// "custom element state is not undefined" test: it is written the moment a
+// constructor has run for the node, so a later insertion never constructs it
+// twice. Cost: a custom element node stays alive for the document's
+// lifetime even once detached and unreferenced — no longer weakly reclaimable.
+var _lumen_ce_elements = {};
+// nid -> true once that node's constructor threw — the spec's "failed" state:
+// no reactions are ever enqueued for it and no second construction is tried.
+var _lumen_ce_failed = {};
+
 // Builds the wrapper for a custom element being constructed via `new
 // ctor()`, interning it exactly like `_lumen_make_element` does for every
 // other node — required for node identity (`===`) and for `document
 // .createElement('my-el') === el` once упгрейд (срез 2) starts reusing this.
-// `__ceUpgraded__ = true` marks the node as having gone through the real
-// constructor — set here rather than by each caller so both a bare `new
-// MyEl()` (срез 1) and the upgrade path (срез 2, `_lumen_ce_upgrade_element`)
-// agree on the flag: without it, `_lumen_ce_maybe_connected` on a directly
-// constructed element (never `__ceUpgraded__`) would route it right back
-// through `_lumen_ce_upgrade_element` on its first `appendChild` and run the
-// constructor a second time.
+// Pinned here rather than by each caller, so a bare `new MyEl()` (срез 1)
+// and the upgrade path (срез 2, `_lumen_ce_upgrade_element`) agree that the
+// node went through its real constructor.
 function _lumen_ce_build_wrapper(nid, ctor) {
     var built = _lumen_build_element(nid, ctor.prototype);
-    built.__ceUpgraded__ = true;
+    _lumen_ce_elements[nid] = built;
     return _lumen_wrapper_cache_set(nid, built);
+}
+
+// Runs `ctor` over the existing node `nid` through its construction stack
+// (HTMLElement's constructor consumes the pushed nid instead of minting a
+// node) and records the outcome: the resulting element is pinned in
+// `_lumen_ce_elements` — also a legacy `function Foo() {}` that never calls
+// `super()`, whose plain wrapper then stands in for the instance — and a
+// throw marks the node failed. Returns the element either way.
+function _lumen_ce_run_constructor(nid, ctor, label) {
+    var stack = _lumen_ce_construction_stacks.get(ctor);
+    if (!stack) {
+        stack = [];
+        _lumen_ce_construction_stacks.set(ctor, stack);
+    }
+    stack.push(nid);
+    try {
+        new ctor();
+    } catch (e) {
+        _lumen_ce_failed[nid] = true;
+        _lumen_console_error(label + e);
+    }
+    stack.pop();
+    var el = _lumen_make_element(nid);
+    _lumen_ce_elements[nid] = el;
+    return el;
+}
+
+// The custom element object for `nid` if its constructor ran and succeeded
+// (state "custom" — the only state callback reactions are enqueued for),
+// else `undefined`.
+function _lumen_ce_custom_element(nid) {
+    return _lumen_ce_failed[nid] ? undefined : _lumen_ce_elements[nid];
 }
 
 // GAP-CEREG срез 2 (BUG-890): a node's "associated custom element registry" —
@@ -13446,16 +15490,20 @@ function _lumen_ce_registry_for_nid(nid) {
 // right after upgrade/createElement) — only the *callback* is queued.
 function _lumen_ce_maybe_connected(el) {
     if (!el || el.__nid__ === undefined) return;
-    var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
-    var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
+    var nid   = el.__nid__;
+    var tag   = _lumen_get_tag_name(nid).toLowerCase();
+    var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
-    if (!el.__ceUpgraded__) {
+    if (_lumen_ce_elements[nid] === undefined) {
         _lumen_ce_upgrade_element(el, entry);
         return;
     }
-    if (typeof entry.ctor.prototype.connectedCallback === 'function') {
-        _lumen_ce_enqueue_reaction(el.__nid__, function() {
-            try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
+    // `el` may be a wrapper script obtained before the upgrade replaced it;
+    // the callback's `this` is the constructed element regardless.
+    var inst = _lumen_ce_custom_element(nid);
+    if (inst && _lumen_resource_is_connected(nid) && typeof entry.ctor.prototype.connectedCallback === 'function') {
+        _lumen_ce_enqueue_reaction(nid, function() {
+            try { entry.ctor.prototype.connectedCallback.call(inst); } catch(e) {
                 _lumen_console_error('CE connectedCallback: ' + e);
             }
         });
@@ -13478,16 +15526,41 @@ function _lumen_ce_upgrade_subtree(nid) {
     }
 }
 
+// BUG-1207: HTML LS §4.2.3 "insert" runs the connected/upgrade reaction for
+// every shadow-including inclusive descendant of the inserted node, but the
+// insertion methods call the shallow `_lumen_ce_maybe_connected` on the node
+// alone. A subtree assembled while detached and attached in one go — what
+// ShadyDOM does with a stamped template (youtube's `ytd-app` appends the whole
+// template, with `ytd-page-manager` several levels down) — left its nested
+// custom elements un-upgraded, so their `ready()` never ran. Walks the
+// descendants of `nid` (not `nid` itself) once the subtree is connected, and
+// only past a definition: a page without custom elements pays one comparison.
+var _lumen_ce_define_count = 0;
+function _lumen_ce_connect_descendants(nid) {
+    if (_lumen_ce_define_count === 0 || !_lumen_resource_is_connected(nid)) return;
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) {
+        var kid = kids[i];
+        if (String(_lumen_get_tag_name(kid) || '').indexOf('-') >= 0) {
+            _lumen_ce_maybe_connected(_lumen_make_element(kid));
+        }
+        _lumen_ce_connect_descendants(kid);
+    }
+}
+
 // Enqueues disconnectedCallback on `el` if its tag is in its scope's
 // registry (CE-1 срез 4).
 function _lumen_ce_maybe_disconnected(el) {
     if (!el || el.__nid__ === undefined) return;
-    var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
-    var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
+    var nid  = el.__nid__;
+    var inst = _lumen_ce_custom_element(nid);
+    if (!inst) return;
+    var tag   = _lumen_get_tag_name(nid).toLowerCase();
+    var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
     if (typeof entry.ctor.prototype.disconnectedCallback === 'function') {
-        _lumen_ce_enqueue_reaction(el.__nid__, function() {
-            try { entry.ctor.prototype.disconnectedCallback.call(el); } catch(e) {
+        _lumen_ce_enqueue_reaction(nid, function() {
+            try { entry.ctor.prototype.disconnectedCallback.call(inst); } catch(e) {
                 _lumen_console_error('CE disconnectedCallback: ' + e);
             }
         });
@@ -13495,8 +15568,12 @@ function _lumen_ce_maybe_disconnected(el) {
 }
 
 // Enqueues attributeChangedCallback on the element at `nid` if applicable,
-// using the registry that nid is scoped to (CE-1 срез 4).
+// using the registry that nid is scoped to (CE-1 срез 4). Only a custom
+// element gets one: a defined tag's node that was never upgraded (or whose
+// constructor threw) has no instance to call it on.
 function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
+    var inst = _lumen_ce_custom_element(nid);
+    if (!inst) return;
     var tag   = _lumen_get_tag_name(nid).toLowerCase();
     var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
@@ -13505,7 +15582,7 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
         _lumen_ce_enqueue_reaction(nid, function() {
             try {
                 entry.ctor.prototype.attributeChangedCallback.call(
-                    _lumen_make_element(nid), attrName, oldVal, newVal
+                    inst, attrName, oldVal, newVal
                 );
             } catch(e) {
                 _lumen_console_error('CE attributeChangedCallback: ' + e);
@@ -13517,36 +15594,47 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
 // CE-1 срез 2 (HTML LS §4.13.5 "upgrade an element"): runs the definition's
 // real constructor over the existing native node, reusing the same
 // construction-stack mechanism срез 1 built for a bare `new MyEl()` — this
-// is its other writer. Pushing `nid` first makes `HTMLElement`'s constructor
-// (top of this file) consume it instead of minting a new node, and hand
-// back a wrapper built off `entry.ctor.prototype`; `_lumen_ce_build_wrapper`
-// interns it via `_lumen_wrapper_cache_set`, REPLACING whatever wrapper
-// `nid` had (a plain pre-upgrade one, or none). Any JS reference obtained
-// before the upgrade keeps pointing at the pre-upgrade object — the same
-// wrapper-identity limitation every other `_lumen_wrapper_cache_set` call in
-// this file already has (subsystems/js.md, BUG-732 et al.); not addressed
-// here. A `ctor` that never calls `super()` (most of the pre-срез-1 test
-// suite still registers a bare `function Foo() {}`) leaves the pushed `nid`
-// unconsumed — harmless, since it is popped unconditionally below and the
-// pre-existing wrapper is left as-is, only the callback still fires.
+// is its other writer (`_lumen_ce_run_constructor`). Pushing `nid` first
+// makes `HTMLElement`'s constructor (top of this file) consume it instead of
+// minting a new node, and hand back a wrapper built off `entry.ctor.prototype`;
+// `_lumen_ce_build_wrapper` interns it via `_lumen_wrapper_cache_set`,
+// REPLACING whatever wrapper `nid` had (a plain pre-upgrade one, or none).
+// Any JS reference obtained before the upgrade keeps pointing at the
+// pre-upgrade object — the same wrapper-identity limitation every other
+// `_lumen_wrapper_cache_set` call in this file already has (subsystems/js.md,
+// BUG-732 et al.); the reactions below and in `_lumen_ce_maybe_*` always call
+// back on the constructed element, never on such a stale one. A `ctor` that
+// never calls `super()` (most of the pre-срез-1 test suite still registers a
+// bare `function Foo() {}`) leaves the pushed `nid` unconsumed — harmless,
+// since it is popped unconditionally and the pre-existing wrapper stands in.
+//
+// Steps 4-5 (BUG-1167): an `attributeChangedCallback` for every observed
+// attribute the node already carries, in attribute order with a null old
+// value, then `connectedCallback` if connected. The spec enqueues them
+// before running the constructor but invokes them after it; enqueueing here,
+// after construction, gives the same order without a nested element queue.
+// A throwing constructor leaves the element "failed" — no reactions at all.
 function _lumen_ce_upgrade_element(el, entry) {
-    if (!el || el.__nid__ === undefined || el.__ceUpgraded__) return;
-    var nid  = el.__nid__;
+    if (!el || el.__nid__ === undefined) return;
+    var nid = el.__nid__;
+    if (_lumen_ce_elements[nid] !== undefined) return;
     var ctor = entry.ctor;
-    var stack = _lumen_ce_construction_stacks.get(ctor);
-    if (!stack) {
-        stack = [];
-        _lumen_ce_construction_stacks.set(ctor, stack);
+    var upgraded = _lumen_ce_run_constructor(nid, ctor, 'CE upgrade constructor: ');
+    if (_lumen_ce_failed[nid]) return;
+    if (entry.observedAttributes.length > 0
+        && typeof ctor.prototype.attributeChangedCallback === 'function') {
+        var names = _lumen_get_attr_names(nid);
+        for (var i = 0; i < names.length; i++) {
+            if (entry.observedAttributes.indexOf(names[i]) < 0) continue;
+            (function(name, value) {
+                _lumen_ce_enqueue_reaction(nid, function() {
+                    try { ctor.prototype.attributeChangedCallback.call(upgraded, name, null, value); } catch(e) {
+                        _lumen_console_error('CE attributeChangedCallback (upgrade): ' + e);
+                    }
+                });
+            })(names[i], _lumen_u2n(_lumen_get_attr(nid, names[i])));
+        }
     }
-    stack.push(nid);
-    try {
-        new ctor();
-    } catch (e) {
-        _lumen_console_error('CE upgrade constructor: ' + e);
-    }
-    stack.pop();
-    var upgraded = _lumen_make_element(nid);
-    upgraded.__ceUpgraded__ = true;
     if (_lumen_resource_is_connected(nid)
         && typeof ctor.prototype.connectedCallback === 'function') {
         _lumen_ce_enqueue_reaction(nid, function() {
@@ -13564,27 +15652,11 @@ function _lumen_ce_upgrade_element(el, entry) {
 // gets constructed through the real class immediately, so
 // `el.someMethod()` works right after `createElement`, before the element
 // is ever inserted (the WPT probe this срез targets reads `ctorRan`
-// synchronously). Same construction-stack push/pop `_lumen_ce_upgrade_element`
-// and срез 1's bare `new MyEl()` use; on constructor failure (spec's
-// "failed" custom element state) the plain wrapper is kept, still marked
-// upgraded so a later insertion does not retry the constructor.
+// synchronously). On constructor failure (spec's "failed" custom element
+// state) the wrapper is kept and a later insertion does not retry the
+// constructor.
 function _lumen_ce_construct_sync(nid, entry) {
-    var ctor = entry.ctor;
-    var stack = _lumen_ce_construction_stacks.get(ctor);
-    if (!stack) {
-        stack = [];
-        _lumen_ce_construction_stacks.set(ctor, stack);
-    }
-    stack.push(nid);
-    try {
-        new ctor();
-    } catch (e) {
-        _lumen_console_error('CE create constructor: ' + e);
-    }
-    stack.pop();
-    var built = _lumen_make_element(nid);
-    built.__ceUpgraded__ = true;
-    return built;
+    return _lumen_ce_run_constructor(nid, entry.ctor, 'CE create constructor: ');
 }
 
 // Upgrades all DOM elements matching `tag` that are scoped to `scope`
@@ -13619,6 +15691,7 @@ CustomElementRegistry.prototype.define = function(name, ctor, options) {
         ? ctor.observedAttributes.slice()
         : [];
     this._registry[name] = { ctor: ctor, observedAttributes: observed };
+    _lumen_ce_define_count++;
     _lumen_ce_definition_by_ctor.set(ctor, { name: name, registry: this._registry, pending: this._pending });
     _lumen_ce_upgrade_all(name, { registry: this._registry, pending: this._pending });
     var pending = this._pending[name];
