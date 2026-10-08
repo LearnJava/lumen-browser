@@ -98,6 +98,141 @@ pub fn measure_text_w_varied(
     total - letter_spacing
 }
 
+/// Tab-stop geometry of one run of text (CSS Text L3 §4.2 `tab-size`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TabStops {
+    /// Distance between neighbouring tab stops, in px. `0` — no stops.
+    pub(crate) unit: f32,
+    /// Shortest rendered tab: a stop closer than this is skipped (`0.5ch`).
+    pub(crate) min_w: f32,
+}
+
+impl TabStops {
+    /// `tab-size: <number>` is `n` advances of U+0020 *including* its
+    /// `letter-spacing` and `word-spacing`; `<length>` is taken as is.
+    pub(crate) fn of(style: &ComputedStyle, m: &dyn TextMeasurer) -> Self {
+        let fams = &style.font_family;
+        let unit = match style.text_extra.tab_size_number {
+            Some(n) => {
+                let space = m.char_width_with_families(' ', style.font_size, fams)
+                    + style.letter_spacing
+                    + style.word_spacing;
+                n * space
+            }
+            None => style.tab_size,
+        };
+        Self { unit, min_w: 0.5 * m.char_width_with_families('0', style.font_size, fams) }
+    }
+
+    /// Advance of a tab whose pen sits at `x` (measured from the line's start edge).
+    pub(crate) fn advance(&self, x: f32) -> f32 {
+        if self.unit <= 0.0 {
+            return 0.0;
+        }
+        let adv = self.unit - x.max(0.0).rem_euclid(self.unit);
+        if adv < self.min_w { adv + self.unit } else { adv }
+    }
+}
+
+/// Width of `text` laid out from pen position `start_x`, where every `\t`
+/// runs to the next tab stop. `letter_spacing` follows each character except
+/// a tab (which ends exactly on its stop) and the last one.
+pub(crate) fn measure_text_tabbed(
+    text: &str,
+    start_x: f32,
+    style: &ComputedStyle,
+    tabs: TabStops,
+    m: &dyn TextMeasurer,
+) -> f32 {
+    let ls = style.letter_spacing;
+    let mut pen = start_x;
+    let mut trailing_ls = 0.0_f32;
+    for c in text.chars() {
+        if c == '\t' {
+            pen += tabs.advance(pen);
+            trailing_ls = 0.0;
+        } else {
+            pen += m.char_width_varied(c, style.font_size, &style.font_variation_settings, &style.font_family) + ls;
+            trailing_ls = ls;
+        }
+    }
+    pen - start_x - trailing_ls
+}
+
+/// Pushes `text` of `seg` as fragments of `line` starting at pen `*x`, and
+/// advances `*x`. Each tab becomes a fragment of its own whose
+/// `tab_size` is the tab's real advance, so paint draws it with the width
+/// layout chose; text between tabs stays one fragment. `src_off` is the byte
+/// offset of `text` inside `seg.text`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_tabbed_frags(
+    seg: &InlineSegment,
+    text: &str,
+    src_off: usize,
+    pad_l: f32,
+    pad_r: f32,
+    m: &dyn TextMeasurer,
+    line: &mut Vec<InlineFrag>,
+    x: &mut f32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let style = &seg.style;
+    let tabs = TabStops::of(style, m);
+    let ls = style.letter_spacing;
+    // `[start, end)` byte ranges: a run without tabs, or one tab.
+    let mut pieces: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in text.char_indices() {
+        if c == '\t' {
+            if start < i {
+                pieces.push((start, i));
+            }
+            pieces.push((i, i + 1));
+            start = i + 1;
+        }
+    }
+    if start < text.len() {
+        pieces.push((start, text.len()));
+    }
+    let last = pieces.len() - 1;
+    for (n, &(s, e)) in pieces.iter().enumerate() {
+        let piece = &text[s..e];
+        let is_tab = piece == "\t";
+        let (width, frag_style) = if is_tab {
+            let adv = tabs.advance(*x);
+            let mut st = (**style).clone();
+            // Paint splits on `\t` only for a positive `tab_size`.
+            st.tab_size = adv.max(f32::MIN_POSITIVE);
+            (adv, std::sync::Arc::new(st))
+        } else {
+            let w = measure_text_tabbed(piece, *x, style, tabs, m);
+            // A tab follows: the letter-spacing after the last character is
+            // part of the run, the tab then starts after it.
+            (if n < last { w + ls } else { w }, style.clone())
+        };
+        line.push(InlineFrag {
+            x: *x,
+            y_offset: 0.0,
+            width,
+            text: piece.to_string(),
+            style: frag_style,
+            padding_left: if n == 0 { pad_l } else { 0.0 },
+            padding_right: if n == last { pad_r } else { 0.0 },
+            is_element_box: seg.is_element_box,
+            img_src: None,
+            img_is_lazy: false,
+            is_first_line: false,
+            source_node: seg.source_node,
+            source_char_offset: seg.source_char_offset.saturating_add((src_off + s) as u32),
+            bidi_level: seg.bidi_level,
+            merged_sources: Vec::new(),
+        });
+        *x += width;
+    }
+}
+
 /// CSS Fonts L4 §6.2 — множитель `font-size` для синтезированной капители.
 ///
 /// Настоящая капитель приходит из OpenType-фич (`smcp`/`c2sc`/`pcap`/`c2pc`),
@@ -625,31 +760,11 @@ pub(crate) fn wrap_inline_run(
             }
             let style = &seg.style;
             let em = style.font_size;
-            let ls = style.letter_spacing;
-            let tab_size = style.tab_size;
             let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
             let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_x += seg.pre_space;
-            let frag_x = current_x;
-            let frag_w = measure_text_w_varied(&seg.text, em, ls, tab_size, &seg.style.font_family, &seg.style.font_variation_settings, m);
-            current_line.push(InlineFrag {
-                x: frag_x,
-                y_offset: 0.0,
-                width: frag_w,
-                text: seg.text.clone(),
-                style: style.clone(),
-                padding_left: pad_l,
-                padding_right: pad_r,
-                is_element_box: seg.is_element_box,
-                img_src: None,
-                img_is_lazy: false,
-                is_first_line: false,
-                source_node: seg.source_node,
-                source_char_offset: seg.source_char_offset,
-                bidi_level: seg.bidi_level,
-                merged_sources: Vec::new(),
-            });
-            current_x += frag_w + seg.post_space;
+            push_tabbed_frags(seg, &seg.text, 0, pad_l, pad_r, m, &mut current_line, &mut current_x);
+            current_x += seg.post_space;
             continue;
         }
 

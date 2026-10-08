@@ -14,6 +14,7 @@
 //!   room like any other character.
 
 use super::*;
+use super::inline_wrap::{measure_text_tabbed, push_tabbed_frags, TabStops};
 
 /// Everything [`wrap_preserved_segment`] needs besides the line state.
 pub(crate) struct PreservedWrap<'a> {
@@ -108,16 +109,13 @@ pub(crate) fn wrap_preserved_segment(
     let style = &seg.style;
     let em = style.font_size;
     let ls = style.letter_spacing;
-    let tab_size = style.tab_size;
+    let tabs = TabStops::of(style, p.m);
     let text = seg.text.as_str();
     let break_spaces = p.white_space == crate::style::WhiteSpace::BreakSpaces;
     let pad_l = style.padding_left.resolve_or_zero(em, p.max_width, p.viewport);
     let pad_r = style.padding_right.resolve_or_zero(em, p.max_width, p.viewport);
-    let measure = |s: &str| {
-        measure_text_w_varied(
-            s, em, ls, tab_size, &style.font_family, &style.font_variation_settings, p.m,
-        )
-    };
+    // Width of `s` laid out from pen position `x` (tabs run to the next stop).
+    let measure = |s: &str, x: f32| measure_text_tabbed(s, x, style, tabs, p.m);
 
     // Token boundaries: `bounds[i]..bounds[i + 1]` is token `i`.
     let mut bounds = vec![0usize];
@@ -139,11 +137,13 @@ pub(crate) fn wrap_preserved_segment(
         // Spaces hang off the end of the line under `pre-wrap`; only the part
         // before them has to fit. `break-spaces` counts the spaces too.
         let fit = if break_spaces { token } else { token.trim_end_matches(is_preserved_space) };
-        let mut fit_w = measure(fit);
+        // Pen position where this token starts on the current line.
+        let tok_x = *current_x + pending_w + if pending_w > 0.0 { ls } else { 0.0 };
+        let mut fit_w = measure(fit, tok_x);
         if i == last {
             fit_w += seg.post_space;
         }
-        let full_w = measure(token) + if i == last { seg.post_space } else { 0.0 };
+        let mut full_w = measure(token, tok_x) + if i == last { seg.post_space } else { 0.0 };
 
         let line_empty = current_line.is_empty() && piece_start == s;
         let breakable = if i == 0 { p.break_before } else { true };
@@ -151,25 +151,28 @@ pub(crate) fn wrap_preserved_segment(
             // Emit what fits, then continue the token on a fresh line.
             emit_piece(
                 seg, &text[piece_start..s], piece_start, first_piece, false,
-                pad_l, pad_r, &measure, current_line, current_x,
+                pad_l, pad_r, p.m, current_line, current_x,
             );
             first_piece &= piece_start == s;
             result.push(std::mem::take(current_line));
             *current_x = 0.0;
             piece_start = s;
             pending_w = 0.0;
+            // A tab in the token now starts from the new line's edge.
+            full_w = measure(token, *current_x) + if i == last { seg.post_space } else { 0.0 };
         }
         pending_w += full_w + if pending_w > 0.0 { ls } else { 0.0 };
     }
     emit_piece(
         seg, &text[piece_start..], piece_start, first_piece, true,
-        pad_l, pad_r, &measure, current_line, current_x,
+        pad_l, pad_r, p.m, current_line, current_x,
     );
     *current_x += seg.post_space;
 }
 
-/// Pushes `piece` as a fragment of the current line and advances `current_x`.
-/// An empty piece (the segment broke right at its start) emits nothing.
+/// Pushes `piece` as fragments of the current line (one per tab, see
+/// [`push_tabbed_frags`]) and advances `current_x`. An empty piece (the
+/// segment broke right at its start) emits nothing.
 #[allow(clippy::too_many_arguments)]
 fn emit_piece(
     seg: &InlineSegment,
@@ -179,30 +182,14 @@ fn emit_piece(
     is_last: bool,
     pad_l: f32,
     pad_r: f32,
-    measure: &dyn Fn(&str) -> f32,
+    m: &dyn TextMeasurer,
     current_line: &mut Vec<InlineFrag>,
     current_x: &mut f32,
 ) {
-    if piece.is_empty() {
-        return;
-    }
-    let width = measure(piece);
-    current_line.push(InlineFrag {
-        x: *current_x,
-        y_offset: 0.0,
-        width,
-        text: piece.to_string(),
-        style: seg.style.clone(),
-        padding_left: if is_first { pad_l } else { 0.0 },
-        padding_right: if is_last { pad_r } else { 0.0 },
-        is_element_box: seg.is_element_box,
-        img_src: None,
-        img_is_lazy: false,
-        is_first_line: false,
-        source_node: seg.source_node,
-        source_char_offset: seg.source_char_offset.saturating_add(piece_start as u32),
-        bidi_level: seg.bidi_level,
-        merged_sources: Vec::new(),
-    });
-    *current_x += width;
+    push_tabbed_frags(
+        seg, piece, piece_start,
+        if is_first { pad_l } else { 0.0 },
+        if is_last { pad_r } else { 0.0 },
+        m, current_line, current_x,
+    );
 }

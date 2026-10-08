@@ -21,7 +21,7 @@ WPT: `css/css-text/parsing/letter-spacing-computed.html` (4), `word-spacing-comp
 
 ## Что делать
 
-Хранить `letter-spacing`/`word-spacing` как `Length` (процент резолвится при раскладке от ширины пробела/advance), `tab-size` — enum {число, длина} с `calc()` по числам и функциями `sign()`/`cq*`. Связано с [BUG-1326](BUG-1326-OPEN.md) (раскладка `tab-size` в ширинах пробела).
+Хранить `letter-spacing`/`word-spacing` как `Length` (процент резолвится при раскладке от ширины пробела/advance), `tab-size` — enum {число, длина} с `calc()` по числам и функциями `sign()`/`cq*`. Связано с [BUG-1326](BUG-1326-FIXED.md) (раскладка `tab-size` в ширинах пробела).
 
 ## Как проверить
 

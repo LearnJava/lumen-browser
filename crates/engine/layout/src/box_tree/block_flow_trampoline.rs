@@ -277,8 +277,7 @@ fn step_child(
         } else {
             measurer.map_or(0.0, |m| {
                 let fams = &child.style.font_family;
-                let ts = child.style.tab_size
-                    * m.char_width_with_families(' ', em, fams);
+                let ts = super::inline_wrap::TabStops::of(&child.style, m).unit;
                 measure_text_w_families(
                     &marker_text, em, child.style.letter_spacing, ts, fams, m,
                 )
