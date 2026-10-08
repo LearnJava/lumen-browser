@@ -34,3 +34,7 @@ WPT-RUN-14 срез 20: `css-cascade/layer-cssom-order-reverse.html`, `scope-css
 ## Как проверить
 
 Таблица выше; `css/css-cascade/layer-cssom-order-reverse.html`, `css/css-nesting/cssom.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+Не только `@layer`/`@scope`: `CSSStyleSheet.replaceSync('@container STYLE(--foo: bar){}')` и `insertRule('@container …')`/`@supports`/`@property`/`@function`/`@mixin`/`@view-transition` дают пустой `cssRules` или `SyntaxError`; глобалов `CSSConditionRule`, `CSSSupportsRule`, `CSSContainerRule`, `CSSPropertyRule`, `CSSFunctionRule`, `CSSViewTransitionRule`, `CSSGroupingRule` нет. Здесь же: `[...sheet.cssRules]` не итерируется (BUG-1506). Затронуто в срезе 22: `container-queries/at-container-{style-,scroll-state/}*` (22 ERROR на `assert_implements_style_container_queries`), `css-mixins/*/…cssom|parsing`, `css-properties-values-api/at-property-cssom`, `css-conditional/js/*`, `css-view-transitions/navigation/at-rule-cssom` — не меньше 40 id.

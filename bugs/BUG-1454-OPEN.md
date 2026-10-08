@@ -36,3 +36,7 @@ WPT-RUN-14 срез 20: 19 из 23 `css-namespaces/prefix-00N.xml`/`syntax-0NN.x
 ## Как проверить
 
 Таблица выше; `css/css-namespaces/prefix-001.xml`, `css/selectors/old-tests/css3-modsel-99.xml`.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+`css-conditional/at-supports-namespace-001.html`, `at-supports-namespace-002.html` — 2 reftest `thick`: `@supports (content: attr(x|href))` и `@supports selector(x|y)` с объявленными `@namespace x/y`; `ns|div` после `@namespace` не совпадает ни с чем (проба `.tmp/s22/p39.py`: `@namespace y "…xhtml"; y|div{color:red}` — `black`).

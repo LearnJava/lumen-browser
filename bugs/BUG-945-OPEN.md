@@ -39,3 +39,7 @@ Transitions 2 (`pagereveal`/`pageswap`) в него не заведены.
 (`viewTransition` заполнен, когда навигация участвует в cross-document view
 transition) зависит от того, насколько уже реализованы cross-document view
 transitions — вне этого бага, если совсем не заведены.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+`css-view-transitions/navigation/*` — 55 id, из них 44 TIMEOUT: popup с `@view-transition{navigation:auto}` ждёт `pagereveal`/`pageswap`, `typeof PageRevealEvent` и `typeof PageSwapEvent` — `undefined`, `"onpagereveal" in window` — `false`. Интерфейс событий — BUG-1510 (ДОРАБОТКА → VT-API).
