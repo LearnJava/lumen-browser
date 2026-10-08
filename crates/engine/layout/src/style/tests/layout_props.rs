@@ -523,6 +523,28 @@ use super::*;
         assert_eq!(style.appearance, Appearance::None);
     }
 
+    /// BUG-1277: авторская рамка/фон/padding у виджета с `appearance: auto` → used `none`.
+    #[test]
+    fn appearance_disabled_by_author_box_properties() {
+        let cases = [
+            ("<button></button>", "button { border-top-color: red; }", true),
+            ("<textarea></textarea>", "textarea { padding-left: 3px; }", true),
+            ("<input type=text>", "input { background-color: red; }", true),
+            ("<input type=checkbox>", "input { border-top-color: red; }", false),
+            ("<select></select>", "select { border-top-color: red; }", false),
+            ("<button></button>", "button { color: red; }", false),
+            ("<button></button>", "button { appearance: auto; border-top-color: red; }", true),
+        ];
+        for (html, css, disabled) in cases {
+            let doc = lumen_html_parser::parse(html);
+            let sheet = lumen_css_parser::parse(css);
+            let root = ComputedStyle::root();
+            let el = doc.get(doc.body().unwrap()).children[0];
+            let style = compute_style(&doc, el, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(style.appearance == Appearance::None, disabled, "{html} {css}");
+        }
+    }
+
     #[test]
     fn appearance_base_select() {
         let doc = lumen_html_parser::parse("<select></select>");

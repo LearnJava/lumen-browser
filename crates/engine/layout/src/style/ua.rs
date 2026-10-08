@@ -568,6 +568,35 @@ pub(in crate::style) fn strip_ua_appearance_box_styling(doc: &Document, node: No
         _ => {}
     }
 }
+/// CSS UI L4 §appearance-disabling-properties: author declarations that turn a
+/// native widget (`appearance: auto`) into used `appearance: none`.
+pub(in crate::style) fn is_appearance_disabling_property(prop: &str) -> bool {
+    prop == "background"
+        || prop == "border"
+        || prop == "padding"
+        || prop.starts_with("background-")
+        || prop.starts_with("border-")
+        || prop.starts_with("padding-")
+}
+
+/// Widgets for which the disabling properties apply (HTML LS §15.5): everything
+/// except checkbox/radio/range inputs and dropdown `<select>`.
+pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> bool {
+    let n = doc.get(node);
+    let NodeData::Element { name, .. } = &n.data else { return false; };
+    match name.local.as_str() {
+        "button" | "textarea" | "meter" | "progress" => true,
+        "input" => !n.get_attr("type").is_some_and(|t| {
+            let t = t.trim();
+            ["checkbox", "radio", "range", "hidden"].iter().any(|k| t.eq_ignore_ascii_case(k))
+        }),
+        "select" => {
+            n.get_attr("multiple").is_some()
+                || n.get_attr("size").and_then(|v| v.trim().parse::<u32>().ok()).is_some_and(|v| v > 1)
+        }
+        _ => false,
+    }
+}
 /// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
 /// HTML5 §15.3.9: "dialog:not([open]) { display: none; }"
 pub(in crate::style) fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedStyle) {

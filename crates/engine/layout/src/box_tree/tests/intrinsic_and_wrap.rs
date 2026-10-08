@@ -1570,7 +1570,8 @@ fn bug926_button_width_includes_author_padding() {
         "button { padding: 4px 12px; }",
         0,
     );
-    assert!((w - 50.0).abs() < 0.5, "button width={w}, expected 50 (24 + 24 padding + 2 border)");
+    // Author padding disables the native appearance (CSS UI L4), so the UA border is gone.
+    assert!((w - 48.0).abs() < 0.5, "button width={w}, expected 48 (24 + 24 padding, no UA border)");
 }
 
 /// An explicit CSS width still wins — the fit-content path must not override it.
