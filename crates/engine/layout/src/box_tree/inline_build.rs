@@ -335,6 +335,7 @@ pub(crate) fn build_anon_text_item(
     if segs.is_empty() {
         return None;
     }
+    super::segment_break::collapse_segment_breaks(&mut segs);
     let run = anon_inline_run(id, parent, segs, BoxRole::AnonymousInlineRun);
     let mut item_style = anon_style(parent);
     // The anonymous item is blockified regardless of the container's own display.
@@ -449,6 +450,8 @@ pub(crate) fn split_inline_pieces(
         apply_first_letter_pseudo(&mut chunk, doc, id, sheet, style, viewport, dark_mode);
         out_items.push(anon_inline_run(id, style, chunk, BoxRole::AnonymousInlineRun));
     };
+    let mut segs = segs;
+    super::segment_break::collapse_segment_breaks(&mut segs);
     let mut rest = segs;
     // Escape-ы приходят в порядке обхода, их `at` не убывает; идём с конца,
     // чтобы отрезать хвост `split_off`-ом без сдвигов уже отданных индексов.
@@ -985,7 +988,7 @@ pub(crate) fn collect_inline_segments(
                 bidi_level: 0,
             });
         }
-        NodeData::Text(_) => {
+        NodeData::Text(s) => {
             // CSS Text L3 §4.1.1 — a collapsing whitespace-only text node between
             // inline-level boxes collapses to a single space. We don't emit a
             // segment for it (it would split to zero words); instead we record the
@@ -999,7 +1002,9 @@ pub(crate) fn collect_inline_segments(
                 && !last.style.white_space.preserves_whitespace()
                 && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
             {
-                last.text.push(' ');
+                // `folded_gap` keeps a segment break visible to `collapse_segment_breaks`.
+                let gap = super::segment_break::folded_gap(&last.text, s.contains('\n'));
+                last.text.push(gap);
             }
         }
         NodeData::Element { .. } => {

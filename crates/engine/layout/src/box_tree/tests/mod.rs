@@ -511,5 +511,6 @@ mod fieldset_legend;
 mod ruby_pipeline;
 mod pre_wrap;
 mod tab_size;
+mod segment_break;
 mod ws_only_text;
 mod nbsp_no_wrap;
