@@ -125,7 +125,7 @@ fn post_navigation_becomes_get_after_302() {
     let body = NavigationBody::post("application/x-www-form-urlencoded", b"user=admin".to_vec());
     let mut streamed = Vec::new();
     let page = client
-        .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), Some(&body), false)
+        .fetch_page_streaming(&url, &mut |c, _u, _h| streamed.extend_from_slice(c), Some(&body), false)
         .expect("post navigation");
     assert_eq!(page.body, b"home");
     assert_eq!(streamed, b"home");

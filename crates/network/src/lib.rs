@@ -654,19 +654,9 @@ struct Response {
 /// headers, and body.
 impl From<h3::h3_exchange::H3Response> for Response {
     fn from(resp: h3::h3_exchange::H3Response) -> Self {
-        let headers = resp
-            .headers
-            .into_iter()
-            .map(|(name, value)| {
-                (
-                    String::from_utf8_lossy(&name).into_owned(),
-                    String::from_utf8_lossy(&value).into_owned(),
-                )
-            })
-            .collect();
         Self {
             status: resp.status,
-            headers,
+            headers: h3_headers_as_text(&resp.headers),
             body: resp.body,
             // H3Response.informational keeps only status codes, never the
             // header blocks — see `h3_response_drops_informational_and_trailers`.
@@ -721,6 +711,18 @@ fn record_alt_svc(
     if let Ok(mut guard) = cache.lock() {
         guard.insert(&key, &alternatives, std::time::Instant::now());
     }
+}
+
+/// HTTP/3 header fields as the text pairs the crate `Response` carries — the
+/// same UTF-8 lossy decoding `From<H3Response>` documents, shared with the
+/// streaming [`ChunkSink`] bridge in [`try_h3_dispatch`] (BUG-1185).
+fn h3_headers_as_text(fields: &[(Vec<u8>, Vec<u8>)]) -> Vec<(String, String)> {
+    fields
+        .iter()
+        .map(|(name, value)| {
+            (String::from_utf8_lossy(name).into_owned(), String::from_utf8_lossy(value).into_owned())
+        })
+        .collect()
 }
 
 /// Route one request onto HTTP/3 when — and only when — the origin has a fresh
@@ -779,6 +781,16 @@ fn try_h3_dispatch<'s>(
         let entry = guard.get(&key, now)?;
         entry.connect_target(host)
     };
+    // BUG-1185: the h3 layer hands every DATA payload over with its response
+    // fields as octets, the crate-level sink takes them as text. Decoded per
+    // call rather than cached: a pooled driver that dies mid-response falls
+    // through to a fresh connection below, whose response is a different one.
+    let streams_body = sink.is_some();
+    let mut bridge = |chunk: &[u8], fields: &[(Vec<u8>, Vec<u8>)]| {
+        if let Some(f) = sink.as_mut() {
+            f(chunk, &h3_headers_as_text(fields));
+        }
+    };
 
     // Pool reuse: try a cached driver before opening a fresh connection.
     if let Some(pool_mutex) = h3_pool
@@ -786,7 +798,7 @@ fn try_h3_dispatch<'s>(
         && let Some(mut driver) = pool_guard.take(&key, now)
     {
         drop(pool_guard); // release the lock before I/O
-        let s = sink.as_mut().map(|f| &mut **f as ChunkSink<'_>);
+        let s = streams_body.then_some(&mut bridge as h3::h3_exchange::BodySink<'_>);
         match h3::client_transport::h3_fetch_on_driver_with_sink(
             &mut driver,
             &h3_host,
@@ -818,7 +830,7 @@ fn try_h3_dispatch<'s>(
     let config = h3::client_bootstrap::ClientConnectConfig::default();
     match h3::client_transport::h3_connect(resolver, &h3_host, h3_port, &config, connect_turns) {
         Ok(mut driver) => {
-            let s = sink.as_mut().map(|f| &mut **f as ChunkSink<'_>);
+            let s = streams_body.then_some(&mut bridge as h3::h3_exchange::BodySink<'_>);
             match h3::client_transport::h3_fetch_on_driver_with_sink(
                 &mut driver,
                 &h3_host,
@@ -1034,7 +1046,11 @@ impl AbortWatchdog {
 /// Колбэк, в который streaming-путь отдаёт декодированные порции тела по мере
 /// чтения с сокета (PH1-2a). Алиас держит сигнатуры `fetch_*`/`do_request`
 /// читаемыми (без него clippy::type_complexity ругается на `Option<&mut dyn …>`).
-type ChunkSink<'a> = &'a mut dyn FnMut(&[u8]);
+/// Второй аргумент — заголовки ответа, чьё тело стримится (BUG-1185): они
+/// известны раньше первой порции, и shell обязан прочесть из них
+/// `Content-Security-Policy` до того, как спекулятивно запросит то, что
+/// порция называет.
+type ChunkSink<'a> = &'a mut dyn FnMut(&[u8], &[(String, String)]);
 
 /// A live WebTransport session — the confirmed QUIC driver, the Extended
 /// CONNECT stream id (doubles as the WebTransport session id, RFC 9220 §3),
@@ -1086,7 +1102,8 @@ struct WebTransportSession {
 
 type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
 
-/// Как [`ChunkSink`], но порция сопровождается URL hop-а, чьё тело стримится.
+/// Как [`ChunkSink`], но порция сопровождается URL hop-а, чьё тело стримится,
+/// и заголовками его ответа.
 ///
 /// Публичный вариант для [`HttpClient::fetch_page_streaming`]: shell на каждом
 /// chunk-е запускает preload-сканер и резолвит найденные `href` относительно
@@ -1096,8 +1113,14 @@ type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, 
 /// при этом уже был корректен, потому что его база берётся из `PageResponse`,
 /// то есть после стриминга.
 ///
+/// Третий аргумент — заголовки того же ответа ([BUG-1185]): ранний прогрев
+/// `<script src>`/`<link rel=stylesheet>` проверяет по ним CSP документа, чтобы
+/// не обратиться к источнику, который политика запрещает. Для ответа без
+/// сетевого обмена (перехватчик Service Worker) срез пустой.
+///
 /// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
-pub type PageChunkSink<'a> = &'a mut dyn FnMut(&[u8], &Url);
+/// [BUG-1185]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-1185-FIXED.md
+pub type PageChunkSink<'a> = &'a mut dyn FnMut(&[u8], &Url, &[(String, String)]);
 
 /// Ответ на навигационный запрос — возврат [`HttpClient::fetch_page`] /
 /// [`HttpClient::fetch_page_streaming`].
@@ -2719,9 +2742,9 @@ fn fetch_with_redirect(
         // не знают и знать не должны. `stream_sink` заимствуется только здесь,
         // поэтому остаётся доступным для рекурсии по редиректу ниже.
         let streams_body = stream_sink.is_some();
-        let mut hop_adapter = |chunk: &[u8]| {
+        let mut hop_adapter = |chunk: &[u8], headers: &[(String, String)]| {
             if let Some(s) = stream_sink.as_mut() {
-                s(chunk, url);
+                s(chunk, url, headers);
             }
         };
         let hop_sink: Option<ChunkSink<'_>> =
@@ -4508,7 +4531,7 @@ impl HttpClient {
         {
             let origin = build_origin(url);
             if let Some(intercepted) = interceptor.intercept(url, &origin) {
-                on_chunk(&intercepted, url);
+                on_chunk(&intercepted, url, &[]);
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
@@ -4523,7 +4546,7 @@ impl HttpClient {
             && let Some(snap) = cache.get(&url_str)
         {
             if snap.is_fresh {
-                on_chunk(&snap.body, url);
+                on_chunk(&snap.body, url, &snap.headers);
                 return Ok(PageResponse {
                     body: snap.body,
                     headers: Vec::new(),
@@ -4555,7 +4578,7 @@ impl HttpClient {
                     cache.revalidate(&url_str, &resp.headers);
                     // 304: streamed nothing (revalidate body is empty); deliver
                     // the cached body as the progressive preview.
-                    on_chunk(&snap.body, &final_url);
+                    on_chunk(&snap.body, &final_url, &snap.headers);
                     return Ok(PageResponse {
                         body: snap.body,
                         headers: Vec::new(),
@@ -8128,7 +8151,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
+            .fetch_page_streaming(&url, &mut |c, _u, _h| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world", "streamed chunks must reconstruct the body");
         assert_eq!(body, b"hello world", "returned body must be the full decoded body");
@@ -8146,7 +8169,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
+            .fetch_page_streaming(&url, &mut |c, _u, _h| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world");
         assert_eq!(body, b"hello world");
@@ -8174,7 +8197,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
+            .fetch_page_streaming(&url, &mut |c, _u, _h| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         // sink получает декодированные байты; возвращаемое тело тоже декодировано.
         assert_eq!(streamed, b"Hello, World!");
@@ -8193,7 +8216,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
+            .fetch_page_streaming(&url, &mut |c, _u, _h| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         // Тело 302-редиректа (пустое) НЕ стримится — только финальный 200.
         assert_eq!(streamed, b"done");
@@ -8285,7 +8308,7 @@ mod tests {
         // до-редиректного адреса.
         let mut chunk_urls: Vec<String> = Vec::new();
         let page = client
-            .fetch_page_streaming(&url, &mut |_, u| chunk_urls.push(u.to_string()), None, false)
+            .fetch_page_streaming(&url, &mut |_, u, _| chunk_urls.push(u.to_string()), None, false)
             .expect("streaming fetch");
         let expected = format!("http://127.0.0.1:{port}/b/c/");
         assert_eq!(page.final_url.as_str(), expected);
@@ -8293,6 +8316,47 @@ mod tests {
         assert!(
             chunk_urls.iter().all(|u| *u == expected),
             "chunk-sink получил не финальный URL: {chunk_urls:?}"
+        );
+        server.join().unwrap();
+    }
+
+    /// BUG-1185: каждая порция тела приходит с заголовками именно того ответа,
+    /// чьё тело стримится, — финального, а не 302 перед ним. По ним shell
+    /// читает CSP документа до раннего прогрева подресурсов.
+    #[test]
+    fn fetch_page_streaming_chunks_carry_final_response_headers() {
+        let (port, server) = mock_http_server(2, move |n| match n {
+            1 => b"HTTP/1.1 302 Found\r\nLocation: /b/\r\nContent-Security-Policy: img-src 'none'\r\n\
+                   Content-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Security-Policy: script-src 'none'\r\n\
+                   Content-Length: 4\r\nConnection: close\r\n\r\ndone"
+                .to_vec(),
+            _ => unreachable!(),
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/a/")).unwrap();
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        client
+            .fetch_page_streaming(
+                &url,
+                &mut |_, _, headers| {
+                    seen.push(
+                        headers
+                            .iter()
+                            .filter(|(k, _)| k.eq_ignore_ascii_case("content-security-policy"))
+                            .map(|(_, v)| v.clone())
+                            .collect(),
+                    );
+                },
+                None,
+                false,
+            )
+            .expect("streaming fetch");
+        assert!(!seen.is_empty(), "тело финального ответа не стримилось");
+        assert!(
+            seen.iter().all(|csp| csp == &["script-src 'none'".to_owned()]),
+            "порция пришла не с заголовками финального ответа: {seen:?}"
         );
         server.join().unwrap();
     }

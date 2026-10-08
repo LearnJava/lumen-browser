@@ -1453,7 +1453,10 @@ impl Lumen {
                 // moved into the streaming call, so the per-chunk closure keeps its own.
                 let cj_prefetch = Some(Arc::clone(&cookie_jar));
                 let sink_prefetch = Arc::clone(&sink);
-                let mut on_chunk = |chunk: &[u8], hop_url: &lumen_core::url::Url| {
+                // BUG-1185: CSP заголовка ответа, чьё тело течёт, — разбирается
+                // один раз на hop (у каждого ответа цепочки свои заголовки).
+                let mut header_csp: Option<(String, Vec<lumen_network::csp::CspPolicy>)> = None;
+                let mut on_chunk = |chunk: &[u8], hop_url: &lumen_core::url::Url, headers: &[(String, String)]| {
                     if !matches!(&base, ResourceBase::Url(u) if u == hop_url.as_str()) {
                         base = ResourceBase::Url(hop_url.to_string());
                         // UI-поток резолвит картинки/шрифты частичного DOM от
@@ -1461,10 +1464,18 @@ impl Lumen {
                         let _ = chunk_proxy
                             .send_event(LoadEvent::DocumentBase(base.clone(), generation));
                     }
+                    if !header_csp.as_ref().is_some_and(|(hop, _)| hop == hop_url.as_str()) {
+                        let policies = crate::page_source::content_security_policy_header(headers)
+                            .iter()
+                            .map(|p| lumen_network::csp::parse_csp_header(p))
+                            .collect();
+                        header_csp = Some((hop_url.to_string(), policies));
+                    }
                     feed_preload_and_emit(
                         &mut preload_scanner,
                         chunk,
                         &base,
+                        header_csp.as_ref().map_or(&[][..], |(_, p)| p),
                         &chunk_proxy,
                         generation,
                         &sink_prefetch,
@@ -1513,6 +1524,7 @@ impl Lumen {
                         &mut preload_scanner,
                         chunk,
                         &raw.base,
+                        &[],
                         &proxy,
                         generation,
                         &sink,
@@ -2577,11 +2589,18 @@ impl Lumen {
 /// путей `start_streaming_load`: сетевого streaming-а (URL) и нарезки
 /// уже-загруженного буфера (File/Snapshot/Static). Hint-ы шлются ДО передачи
 /// chunk-а DOM-парсеру, чтобы fetch подресурсов стартовал раньше.
+///
+/// `header_csp` — политики `Content-Security-Policy` ответа, чьё тело течёт
+/// (пусто для несетевого источника); к ним добавляются `<meta>`-политики,
+/// которые сканер уже встретил. Stylesheet/script, запрещённые хоть одной из
+/// них, не прогреваются вовсе: CSP запрещает само обращение к источнику, а не
+/// только применение ответа (BUG-1185, CSP3 §4.1.2).
 #[allow(clippy::too_many_arguments)]
 fn feed_preload_and_emit(
     scanner: &mut lumen_html_parser::PreloadScanner,
     chunk: &[u8],
     base: &ResourceBase,
+    header_csp: &[lumen_network::csp::CspPolicy],
     proxy: &EventLoopProxy<LoadEvent>,
     generation: u64,
     sink: &Arc<dyn EventSink>,
@@ -2602,6 +2621,8 @@ fn feed_preload_and_emit(
     // JS shim once the DOM is ready) and a real consumer elsewhere on the
     // page share one network round trip instead of each doing its own.
     crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned());
+    let meta_csp: Vec<_> = scanner.meta_csp().iter().map(|p| lumen_network::csp::parse_csp_header(p)).collect();
+    let self_origin = base.origin();
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
     // HTML is still streaming. Linked stylesheets AND external classic scripts are
     // warmed into the process-global prefetch cache using the SAME subresource
@@ -2626,6 +2647,13 @@ fn feed_preload_and_emit(
             }
             _ => continue,
         };
+        let resolved_str = base.resolve_str(raw_url);
+        if [header_csp, &meta_csp[..]].into_iter().any(|policies| {
+            crate::csp_enforce::speculative_fetch_blocked(policies, hint, &resolved_str, self_origin.as_ref())
+        }) {
+            eprintln!("  ⤷ preload пропущен (CSP): {resolved_str}");
+            continue;
+        }
         match base.resolve(raw_url) {
             // Local files: read is instant — no cache benefit. Only CSS needs a
             // CssLoaded event for the progressive frame; scripts are read in

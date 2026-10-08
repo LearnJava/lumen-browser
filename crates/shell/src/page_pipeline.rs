@@ -188,7 +188,7 @@ pub(crate) fn dispatch_preload_hints(
         let triple = match hint {
             PreloadHint::Stylesheet { url, fetch_priority, .. } =>
                 (base.resolve_str(url), SubresourceKind::Stylesheet, fetch_priority.clone()),
-            PreloadHint::Script { url, fetch_priority } =>
+            PreloadHint::Script { url, fetch_priority, .. } =>
                 (base.resolve_str(url), SubresourceKind::Script, fetch_priority.clone()),
             PreloadHint::Image { url: Some(url), fetch_priority, .. } =>
                 (base.resolve_str(url), SubresourceKind::Image, fetch_priority.clone()),

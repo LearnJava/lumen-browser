@@ -43,8 +43,13 @@ use super::h3_stream::{RequestState, RequestStream, StreamLayerError};
 
 /// A callback that receives raw `DATA` frame payloads for progressive delivery
 /// (RFC 9114 §7.2.1). Each call carries one complete `DATA` payload in the
-/// order it was decoded off the HTTP/3 response stream.
-pub(crate) type BodySink<'a> = &'a mut dyn FnMut(&[u8]);
+/// order it was decoded off the HTTP/3 response stream, together with the
+/// header fields of the response it belongs to (BUG-1185: the shell's
+/// speculative preload must see the document's `Content-Security-Policy`
+/// before it fetches anything the body names). A `DATA` frame is only legal
+/// after the final response `HEADERS` (RFC 9114 §4.1), so the fields are the
+/// real ones; an empty slice only if that grammar ever changes.
+pub(crate) type BodySink<'a> = &'a mut dyn FnMut(&[u8], &[(Vec<u8>, Vec<u8>)]);
 
 /// A fully assembled HTTP/3 response: the final `:status`, its header fields, the
 /// body, any interim (`1xx`) responses that preceded it, and any trailer section.
@@ -199,7 +204,7 @@ impl ResponseAssembler {
             consumed_total += consumed;
             // Reborrow the sink for each frame: the mutable reference lives only
             // for the duration of `process_frame`, then becomes available again.
-            let sink_ref = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+            let sink_ref = sink.as_mut().map(|f| &mut **f as BodySink<'_>);
             self.process_frame(frame, sink_ref)?;
         }
         if consumed_total > 0 {
@@ -246,7 +251,7 @@ impl ResponseAssembler {
                 // Deliver the raw payload to the sink before accumulating so the
                 // caller sees data as early as possible (progressive rendering).
                 if let Some(s) = sink {
-                    s(&payload);
+                    s(&payload, self.head.as_ref().map_or(&[][..], |h| &h.headers[..]));
                 }
                 self.body.append(&mut payload);
             }
@@ -468,7 +473,7 @@ mod tests {
         stream.extend(data_frame(b"second"));
         stream.extend(data_frame(b"third"));
         let mut chunks: Vec<Vec<u8>> = Vec::new();
-        a.push_bytes_with_sink(&stream, Some(&mut |chunk: &[u8]| chunks.push(chunk.to_vec())))
+        a.push_bytes_with_sink(&stream, Some(&mut |chunk: &[u8], _: &[(Vec<u8>, Vec<u8>)]| chunks.push(chunk.to_vec())))
             .unwrap();
         assert_eq!(chunks, vec![b"first".as_slice(), b"second", b"third"]);
     }
@@ -478,7 +483,7 @@ mod tests {
         let mut a = ResponseAssembler::new();
         let stream = headers_frame(&[HeaderField::new(b":status".to_vec(), b"204".to_vec())]);
         let mut fired = false;
-        a.push_bytes_with_sink(&stream, Some(&mut |_| fired = true))
+        a.push_bytes_with_sink(&stream, Some(&mut |_, _| fired = true))
             .unwrap();
         assert!(!fired, "HEADERS frame must not trigger the sink");
     }
@@ -490,7 +495,7 @@ mod tests {
         let mut stream = headers_frame(&[HeaderField::new(b":status".to_vec(), b"200".to_vec())]);
         stream.extend(data_frame(b"chunk-a"));
         stream.extend(data_frame(b"chunk-b"));
-        a.push_bytes_with_sink(&stream, Some(&mut |_| {})).unwrap();
+        a.push_bytes_with_sink(&stream, Some(&mut |_, _| {})).unwrap();
         let resp = a.finish().unwrap();
         assert_eq!(resp.body, b"chunk-achunk-b");
     }
@@ -516,7 +521,7 @@ mod tests {
         full_stream.extend(data_frame(b"xyz"));
         let mut chunks: Vec<Vec<u8>> = Vec::new();
         for byte in &full_stream {
-            a.push_bytes_with_sink(&[*byte], Some(&mut |c: &[u8]| chunks.push(c.to_vec())))
+            a.push_bytes_with_sink(&[*byte], Some(&mut |c: &[u8], _: &[(Vec<u8>, Vec<u8>)]| chunks.push(c.to_vec())))
                 .unwrap();
         }
         assert_eq!(chunks, vec![b"abc".as_slice(), b"xyz"]);

@@ -469,7 +469,7 @@ impl<T: DatagramTransport> RequestDriver<T> {
             }
             let now = clock();
             self.transmit(now)?;
-            let s = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+            let s = sink.as_mut().map(|f| &mut **f as BodySink<'_>);
             if let RequestPoll::Timers(effects) = self.poll_with_sink(now, s)?
                 && let Some(terminal) = effects.into_iter().find(TurnEffect::is_terminal)
             {
