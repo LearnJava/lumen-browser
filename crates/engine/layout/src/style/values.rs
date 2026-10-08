@@ -16,6 +16,7 @@ pub mod rule_cssom;
 pub mod rule_interp;
 pub mod rule_list;
 pub mod scroll;
+pub mod text_cssom;
 pub mod text_size_adjust;
 pub mod timing;
 pub mod transform;

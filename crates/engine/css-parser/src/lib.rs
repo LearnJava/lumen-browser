@@ -424,6 +424,8 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "text-underline-position",
     "text-wrap",
     "text-wrap-mode",
+    "white-space-collapse",
+    "word-wrap",
     "text-wrap-style",
     "top",
     "touch-action",

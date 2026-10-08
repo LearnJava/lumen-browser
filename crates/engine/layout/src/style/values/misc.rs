@@ -442,6 +442,9 @@ pub enum WordBreak {
     BreakAll,
     /// `break-word` — legacy для `overflow-wrap: break-word`.
     BreakWord,
+    /// `auto-phrase` (CSS Text L4 §5.1) — фразовые разрывы CJK. Хранится ради
+    /// computed-значения; layout ведёт себя как `normal`.
+    AutoPhrase,
 }
 
 impl WordBreak {
@@ -451,6 +454,7 @@ impl WordBreak {
             "keep-all" => Some(Self::KeepAll),
             "break-all" => Some(Self::BreakAll),
             "break-word" => Some(Self::BreakWord),
+            "auto-phrase" => Some(Self::AutoPhrase),
             _ => None,
         }
     }

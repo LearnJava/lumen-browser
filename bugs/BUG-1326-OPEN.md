@@ -23,7 +23,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 9: `css/css-text/tab-size/` — 10 reftest `thick` (`tab-size-block-ancestor`, `-inheritance-001`, `-inline-001/002`, `-integer-004/005`, `-spacing-001/002/003`, `tab-min-rendered-width-1`) + `tab-size.html` (testharness: ожидается 60, получено 0). Пробой подтверждена только таблица выше; `tab-size-computed-value-001.html` (11 сабтестов, `getComputedStyle().tabSize` — `""`) отнесён к [BUG-1325](BUG-1325-OPEN.md).
+WPT-RUN-14 срез 9: `css/css-text/tab-size/` — 10 reftest `thick` (`tab-size-block-ancestor`, `-inheritance-001`, `-inline-001/002`, `-integer-004/005`, `-spacing-001/002/003`, `tab-min-rendered-width-1`) + `tab-size.html` (testharness: ожидается 60, получено 0). Пробой подтверждена только таблица выше; `tab-size-computed-value-001.html` (11 сабтестов, `getComputedStyle().tabSize` — `""`) отнесён к [BUG-1325](BUG-1325-FIXED.md).
 
 ## Что делать
 

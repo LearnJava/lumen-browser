@@ -43,7 +43,7 @@ use crate::style::{
     TextOrientation,
     TextOverflow,
     TextSizeAdjust,
-    TextTransform,
+    TextTransformExtra,
     TextUnderlinePosition,
     TextWrapMode,
     TextWrapStyle,
@@ -65,6 +65,7 @@ use crate::style::{
     parse_text_shadow_one,
     split_top_level_commas,
 };
+use crate::style::values::length::split_top_level_ws;
 use crate::style::parse::box_sides::{resolve_box_length, resolve_svg_length};
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::parse::content::parse_content_items;
@@ -106,6 +107,16 @@ pub(in crate::style) fn apply_decl_text(
                 "left" => TextAlign::Left,
                 "center" => TextAlign::Center,
                 "right" => TextAlign::Right,
+                "justify" => TextAlign::Justify,
+                // CSS Text L3 §7.1: `justify-all` — shorthand над `text-align` и
+                // `text-align-last: justify`.
+                "justify-all" => {
+                    style.text_align_last = TextAlignLast::Justify;
+                    TextAlign::Justify
+                }
+                // Резолвится в конце `compute_style` (`resolve_match_parent`): здесь неизвестно,
+                // есть ли у элемента родитель.
+                "match-parent" => TextAlign::MatchParent,
                 _ => style.text_align,
             };
         }
@@ -118,6 +129,7 @@ pub(in crate::style) fn apply_decl_text(
                 "right" => TextAlignLast::Right,
                 "center" => TextAlignLast::Center,
                 "justify" => TextAlignLast::Justify,
+                "match-parent" => TextAlignLast::MatchParent,
                 _ => style.text_align_last,
             };
         }
@@ -343,8 +355,32 @@ pub(in crate::style) fn apply_decl_text(
         "text-indent" => {
             // CSS Text L3 §7.1: <length> | <percentage>. `%` теперь хранится
             // typed — резолвится при layout с known cb_width.
-            if let Some(len) = parse_length_q(val, is_quirks) {
+            // CSS Text L3 §7.1: `<length-percentage> && hanging? && each-line?` —
+            // модификаторы в любом порядке, каждый не более раза.
+            let mut hanging = false;
+            let mut each_line = false;
+            let mut dup = false;
+            let mut rest: Vec<&str> = Vec::new();
+            for tok in split_top_level_ws(val) {
+                match tok.to_ascii_lowercase().as_str() {
+                    "hanging" => {
+                        dup |= hanging;
+                        hanging = true;
+                    }
+                    "each-line" => {
+                        dup |= each_line;
+                        each_line = true;
+                    }
+                    _ => rest.push(tok),
+                }
+            }
+            if !dup
+                && let [one] = rest.as_slice()
+                && let Some(len) = parse_length_q(one, is_quirks)
+            {
                 style.text_indent = len;
+                style.text_extra.indent_hanging = hanging;
+                style.text_extra.indent_each_line = each_line;
             }
         }
         "letter-spacing" => {
@@ -373,13 +409,11 @@ pub(in crate::style) fn apply_decl_text(
         "text-transform" => {
             // CSS Text L3: none | uppercase | lowercase | capitalize.
             // `full-width` / `full-size-kana` отложены (CJK-специфика).
-            style.text_transform = match val.split_whitespace().next() {
-                Some("none") => TextTransform::None,
-                Some("uppercase") => TextTransform::Uppercase,
-                Some("lowercase") => TextTransform::Lowercase,
-                Some("capitalize") => TextTransform::Capitalize,
-                _ => style.text_transform,
-            };
+            // `full-width` / `full-size-kana` / `math-auto` хранятся (CSSOM), но текст не меняют.
+            if let Some((case, extra)) = TextTransformExtra::parse(val) {
+                style.text_transform = case;
+                style.text_extra.transform = extra;
+            }
         }
         "white-space" => {
             // CSS Text L4 §2.1: shorthand над white-space-collapse и
@@ -398,6 +432,12 @@ pub(in crate::style) fn apply_decl_text(
                 style.white_space = ws;
                 style.white_space_collapse = ws.collapse_component();
                 style.text_wrap_mode = ws.wrap_component();
+            } else if let Some((collapse, wrap)) = parse_white_space_longhand_pair(val) {
+                // `<'white-space-collapse'> || <'text-wrap-mode'>`: опущенная часть —
+                // initial (`collapse` / `wrap`).
+                style.white_space_collapse = collapse;
+                style.text_wrap_mode = wrap;
+                style.white_space = WhiteSpace::combine(collapse, wrap);
             }
         }
         "white-space-collapse" => {
@@ -602,10 +642,14 @@ pub(in crate::style) fn apply_decl_text(
             // в spaces; принимаем как 8px-per-space heuristic. Length —
             // resolved-px.
             let trimmed = val.trim();
-            if let Ok(n) = trimmed.parse::<i32>() {
-                style.tab_size = (n.max(0) as f32) * 8.0;
+            if let Ok(n) = trimmed.parse::<f32>() {
+                if n >= 0.0 && n.is_finite() {
+                    style.tab_size = n * 8.0;
+                    style.text_extra.tab_size_number = Some(n);
+                }
             } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks) {
                 style.tab_size = px.max(0.0);
+                style.text_extra.tab_size_number = None;
             }
         }
         "overflow-wrap" | "word-wrap" => {
@@ -866,4 +910,27 @@ pub(in crate::style) fn apply_decl_text(
         _ => return false,
     }
     true
+}
+
+/// CSS Text L4 §2.1: `white-space: <'white-space-collapse'> || <'text-wrap-mode'>` — одна или две
+/// лексемы в любом порядке, по одной на компоненту. Возвращает `(collapse, wrap)`; пропущенная
+/// компонента — initial. `None` — значение невалидно (лишняя или повторная лексема).
+fn parse_white_space_longhand_pair(val: &str) -> Option<(WhiteSpaceCollapse, TextWrapMode)> {
+    let mut collapse: Option<WhiteSpaceCollapse> = None;
+    let mut wrap: Option<TextWrapMode> = None;
+    let mut n = 0;
+    for tok in val.split_whitespace() {
+        n += 1;
+        if let Some(c) = WhiteSpaceCollapse::parse(tok).filter(|c| *c != WhiteSpaceCollapse::PreserveSpaces) {
+            if collapse.replace(c).is_some() {
+                return None;
+            }
+        } else {
+            let w = TextWrapMode::parse(tok)?;
+            if wrap.replace(w).is_some() {
+                return None;
+            }
+        }
+    }
+    (n > 0).then(|| (collapse.unwrap_or_default(), wrap.unwrap_or_default()))
 }
