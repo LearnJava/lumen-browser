@@ -1,6 +1,6 @@
 # BUG-1328 — `text-transform: full-width`, `full-size-kana`, `math-auto` не разбираются (значение отвергается)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 10, `css/css-text`, вторая половина)
 **Область:** layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `text-transform`; enum `TextTransform` и `TextTransform::apply`, `style/values/typography.rs`)
 
@@ -19,3 +19,13 @@ WPT-RUN-14 срез 10, `css/css-text/text-transform/`: `text-transform-full-siz
 ## Как проверить
 
 `css/css-text/text-transform/text-transform-full-size-kana-009.html`, `text-transform-fullwidth-001.html`.
+
+## Исправление
+
+Разбор значений уже был (`TextTransformExtra::parse`, CSSOM — BUG-1325); не хватало самого преобразования текста.
+
+- Новый модуль `style/values/text_transform_map.rs` — таблицы `full-width` (Unicode `<wide>`/`<narrow>`: ASCII и U+0020 → U+FF01…FF5E/U+3000, полуширинные катакана/хангыль/символы), `full-size-kana` (приложение G CSS Text L3), `math-auto` (italic mappings MathML Core); бинарный поиск.
+- `TextTransformExtra::apply(case, s)`: регистр, затем `full-width` и `full-size-kana`; `math-auto` — только для текста из одного символа (приближение «содержимое `<mi>`»).
+- `inline_build.rs`: все четыре точки преобразования зовут `apply`; ветка `white-space: pre/pre-wrap/break-spaces` **вообще не применяла `text-transform`** (даже `uppercase`) — теперь применяет.
+
+WPT: reftest'ы `fullwidth-002/010`, `full-size-kana-001`, `math/math-auto-001/002` проходят. Остатки: [BUG-1464](BUG-1464-OPEN.md) (`Selection.toString()` — `kana-009`, `math-auto-003`), [BUG-1465](BUG-1465-OPEN.md) (схлопнутый пробел → U+3000: `fullwidth-001/006/008`). `fullwidth-007` (U+3000×3 корректны в дампе раскладки) всё ещё FAIL в reftest — расхождение сегментации в тесте и ссылке, не в значении.

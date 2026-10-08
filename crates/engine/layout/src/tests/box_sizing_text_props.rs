@@ -1342,6 +1342,56 @@ use super::*;
         assert_eq!(p.style.text_transform, TextTransform::Uppercase);
     }
 
+    #[test]
+    fn text_transform_full_width_ascii_and_space() {
+        // CSS Text L3 §2.1: U+0021…007E → U+FF01…FF5E, U+0020 → U+3000 (BUG-1328).
+        let root = lay("<p>Ab 1!</p>", "p { text-transform: full-width; white-space: pre; }");
+        assert_eq!(first_inline_text(&root), "Ａｂ\u{3000}１！");
+    }
+
+    #[test]
+    fn text_transform_uppercase_in_preserved_whitespace() {
+        // Ветка `white-space: pre*` раньше не применяла `text-transform` вовсе.
+        let root = lay("<p>ab  c</p>", "p { text-transform: uppercase; white-space: pre-wrap; }");
+        assert_eq!(first_inline_text(&root), "AB  C");
+    }
+
+    #[test]
+    fn text_transform_full_width_halfwidth_forms() {
+        // `<narrow>` → канонический символ: полуширинная катакана, hangul, символы.
+        let root = lay("<p>ｱﾞ￩¢</p>", "p { text-transform: full-width; }");
+        assert_eq!(first_inline_text(&root), "ア\u{3099}←￠");
+    }
+
+    #[test]
+    fn text_transform_full_width_after_case() {
+        let root = lay("<p>ab</p>", "p { text-transform: full-width uppercase; }");
+        assert_eq!(first_inline_text(&root), "ＡＢ");
+    }
+
+    #[test]
+    fn text_transform_full_size_kana_maps_small_kana() {
+        let root = lay("<p>ぁっゃァッ\u{31F0}ｧ</p>", "p { text-transform: full-size-kana; }");
+        assert_eq!(first_inline_text(&root), "あつやアツク\u{FF71}");
+    }
+
+    #[test]
+    fn text_transform_math_auto_single_char_only() {
+        let root = lay("<p>x</p>", "p { text-transform: math-auto; }");
+        assert_eq!(first_inline_text(&root), "\u{1D465}");
+        // `h` → U+210E (дыра в блоке Mathematical Italic), не U+1D455.
+        let root = lay("<p>h</p>", "p { text-transform: math-auto; }");
+        assert_eq!(first_inline_text(&root), "\u{210E}");
+        let root = lay("<p>xy</p>", "p { text-transform: math-auto; }");
+        assert_eq!(first_inline_text(&root), "xy");
+    }
+
+    #[test]
+    fn text_transform_extra_inherited_into_text() {
+        let root = lay("<div><p>a</p></div>", "div { text-transform: full-width; }");
+        assert_eq!(first_inline_text(first_element_child(&root)), "ａ");
+    }
+
     // ── text-indent ─────────────────────────────────────────────────────────
 
     #[test]
