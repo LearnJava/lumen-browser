@@ -1,6 +1,6 @@
 # BUG-1276 — в вертикальном `writing-mode` не работают смещения позиционированных боксов: инсеты `absolute` и сдвиг `relative` игнорируются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 2 — `css/css-writing-modes`, крупнейший кластер среза)
 **Область:** layout (`crates/engine/layout/src/box_tree/vertical_trampoline.rs` — не зовёт `layout_dispatch::finish_after_match`)
 
@@ -45,3 +45,11 @@ WPT `css/css-writing-modes/abs-pos-non-replaced-*`, `abs-pos-border-offset-*`, `
 `overconstrained-rel-pos-*`, `dynamic-offset-*` — 259 reftest (`docs/wpt-vendor-notes/css.md` §css-writing-modes).
 Эталоны части других тестов (`sizing-orthog-*-ref.xht`) сами ставят блоки `position: absolute` внутри вертикального
 корня — после правки сдвинутся и они.
+
+## Исправление (2026-10-08, P3)
+
+`vertical_trampoline::finish_frame` теперь заканчивается `layout_dispatch::finish_after_match`: abspos/fixed-дети не
+занимают место в потоке (статическая позиция запоминается в `Frame::abs_deferred`, курсор не двигается) и
+размещаются через `lay_out_abs_children` по финальному padding box CB; `position: relative` сдвигает бокс, а
+`finish_child` родителя переносит этот сдвиг при перестановке по block-оси (курсор считается от несмещённой
+позиции). Тесты: `box_tree/tests/vertical_positioned.rs`.
