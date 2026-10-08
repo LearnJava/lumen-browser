@@ -890,7 +890,8 @@ pub struct ComputedStyle {
     /// inline-flow после N-й строки и добавить ellipsis) — отдельная задача.
     pub line_clamp: Option<u32>,
     /// CSS Overflow L4 §line-clamp: `line-clamp: auto` — число строк задаёт высота (`height`/
-    /// `max-height`), а не целое. Не наследуется; `line_clamp` при этом `None`.
+    /// `max-height`), а не целое. Не наследуется; `line_clamp` при этом `None`, кроме формы
+    /// `<n> auto` — там заданы оба, и действует то ограничение, что наступает раньше.
     pub line_clamp_auto: bool,
     /// Значение записано через `-webkit-line-clamp`: усечение действует только на
     /// `display: -webkit-box` с `-webkit-box-orient: vertical` (WPT `webkit-line-clamp-001/002`).

@@ -438,6 +438,22 @@ pub(in crate::style) fn apply_decl_text(
                 style.line_clamp = None;
                 style.line_clamp_auto = true;
                 style.line_clamp_legacy = false;
+            } else if !legacy
+                && let Some(n) = {
+                    // `<integer [1,∞]> || auto`: `4 auto` and `auto 4` mean "4 lines, or what the
+                    // height holds if that is fewer".
+                    let mut toks = v.split_whitespace();
+                    match (toks.next(), toks.next(), toks.next()) {
+                        (Some(a), Some("auto"), None) | (Some("auto"), Some(a), None) => {
+                            a.parse::<u32>().ok().filter(|&n| n > 0)
+                        }
+                        _ => None,
+                    }
+                }
+            {
+                style.line_clamp = Some(n);
+                style.line_clamp_auto = true;
+                style.line_clamp_legacy = false;
             } else if let Ok(n) = v.parse::<u32>() {
                 style.line_clamp = if n > 0 { Some(n) } else { None };
                 style.line_clamp_auto = false;
