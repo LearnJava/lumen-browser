@@ -145,7 +145,7 @@ pub(crate) fn is_inline_content(
     match &doc.get(id).data {
         // Control-only text (after BUG-120 stripping) is no more inline content
         // than whitespace-only text: it must not open an inline run / line box.
-        NodeData::Text(s) => !s.chars().all(|c| is_wrap_whitespace(c) || is_invisible_control(c)),
+        NodeData::Text(s) => !is_discardable_text(s, inherited.white_space),
         NodeData::Element { .. } => {
             if is_image_element(doc, id)
                 || is_inline_replaced_media_element(doc, id)
@@ -923,7 +923,7 @@ pub(crate) fn collect_inline_segments(
                     byte_offset += 1; // the \n character
                 }
                 let stripped = strip_invisible_controls(line);
-                if !stripped.chars().all(is_wrap_whitespace) {
+                if !stripped.chars().all(is_collapsible_whitespace) {
                     let text = inherited.text_transform.apply(&stripped);
                     let kind = if *need_first_letter && !text.trim().is_empty() {
                         *need_first_letter = false;

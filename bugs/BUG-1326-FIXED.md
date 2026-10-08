@@ -35,7 +35,7 @@ WPT-RUN-14 срез 9: `css/css-text/tab-size/` — 10 reftest `thick` (`tab-siz
 
 ## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
 
-`white-space/` — ещё 20 не зелёных id про табуляцию (`break-spaces-tab-*`, `pre-wrap-tab-*`, `tab-stop-threshold-*`, `tab-bidi-001`, `tab-position-with-text-align`, `text-indent-tab-positions-001`), 16 из них с `pre-wrap`/`break-spaces`. Проба: `<i>a</i>	<i>b</i>` в `white-space: pre` — `x` второго элемента 11 (табуляция между элементами пропадает целиком, см. [BUG-1327](BUG-1327-OPEN.md)); `a	<i>b</i>` — 75 (N × 8 px).
+`white-space/` — ещё 20 не зелёных id про табуляцию (`break-spaces-tab-*`, `pre-wrap-tab-*`, `tab-stop-threshold-*`, `tab-bidi-001`, `tab-position-with-text-align`, `text-indent-tab-positions-001`), 16 из них с `pre-wrap`/`break-spaces`. Проба: `<i>a</i>	<i>b</i>` в `white-space: pre` — `x` второго элемента 11 (табуляция между элементами пропадает целиком, см. [BUG-1327](BUG-1327-FIXED.md)); `a	<i>b</i>` — 75 (N × 8 px).
 
 ## Причина и исправление
 

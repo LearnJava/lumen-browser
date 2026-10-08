@@ -208,7 +208,7 @@ fn build_ruby_group_box(
             continue;
         }
         if let NodeData::Text(s) = &doc.get(cid).data
-            && s.chars().all(is_wrap_whitespace)
+            && is_discardable_text(s, parent_style.white_space)
         {
             continue;
         }
@@ -1245,10 +1245,8 @@ fn build_box_inner(
                         // BUG-120: control-only text is skipped like whitespace-only,
                         // but contributes an inter-segment space only if it actually
                         // contains whitespace (a bare U+0001 is zero-advance in Edge).
-                        NodeData::Text(s)
-                            if s.chars().all(|c| is_wrap_whitespace(c) || is_invisible_control(c)) =>
-                        {
-                            had_ws |= s.chars().any(is_wrap_whitespace);
+                        NodeData::Text(s) if is_discardable_text(s, style.white_space) => {
+                            had_ws |= s.chars().any(is_collapsible_whitespace);
                             i += 1;
                             continue;
                         }
