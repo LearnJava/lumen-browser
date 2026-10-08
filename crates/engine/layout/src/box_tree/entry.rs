@@ -52,6 +52,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
+    propagate_body_writing_mode(doc, &mut root, viewport);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -157,6 +158,7 @@ pub fn layout_measured_hyp_with_counters(
         lumen_core::tracy_zone!("build_box");
         build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
     };
+    propagate_body_writing_mode(doc, &mut root, viewport);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     // GAP-CSSANIM срез 9: patch in this frame's animated `height` overrides
     // (CSS transition/`@keyframes`) before layout resolves box sizes, so a
@@ -814,6 +816,41 @@ pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> 
     };
     let color = source.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
+}
+
+/// CSS Writing Modes L3 §8 (Principal Writing Mode): when `<html>` has a `<body>` child, the
+/// `writing-mode`/`direction`/`text-orientation` of that body — not of the root — set the mode of
+/// the root element and the initial containing block, whatever `<html>` itself declares
+/// (WPT `wm-propagation-body-032…055`). `<body>` keeps its own value. Like the gutter pass this
+/// runs only on the non-incremental entry points, and only touches `<html>`'s style `Arc` when
+/// the values actually differ, so the common horizontal page keeps its shared pointer.
+fn propagate_body_writing_mode(doc: &Document, root: &mut LayoutBox, viewport: Size) {
+    let Some(html_idx) = root.children.iter().position(|c| is_html_element_named(doc, c.node, "html")) else {
+        return;
+    };
+    let html_box = &mut root.children[html_idx];
+    let principal = html_box
+        .children
+        .iter()
+        .find(|c| is_html_element_named(doc, c.node, "body"))
+        .map_or(&html_box.style, |body| &body.style);
+    let (wm, dir, orient) = (principal.writing_mode, principal.direction, principal.text_orientation);
+    let set = |s: &mut ComputedStyle| {
+        s.writing_mode = wm;
+        s.direction = dir;
+        s.text_orientation = orient;
+    };
+    let hs = &html_box.style;
+    if hs.writing_mode != wm || hs.direction != dir || hs.text_orientation != orient {
+        set(Arc::make_mut(&mut html_box.style));
+    }
+    if wm != crate::style::WritingMode::HorizontalTb {
+        // The document box stands for the ICB: in the principal mode it is a same-mode parent of
+        // `<html>` (not an orthogonal flow) and, being the viewport, has a definite block size.
+        let rs = Arc::make_mut(&mut root.style);
+        set(rs);
+        rs.width = Some(Length::Px(viewport.width));
+    }
 }
 
 /// CSS Overflow L4 §"scrollbar-gutter propagation" — `scrollbar-gutter` on the
