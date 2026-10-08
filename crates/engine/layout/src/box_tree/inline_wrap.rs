@@ -1463,6 +1463,84 @@ pub(crate) fn apply_text_overflow_ellipsis(
     }
 }
 
+/// CSS UI L4 §6.2 — `text-overflow: "<string>"`: строки шире `max_width` теряют конец,
+/// на его место встаёт `marker`. В отличие от «…», который дописывается в стиль последнего
+/// фрагмента, метка — отдельный фрагмент со стилем блока-контейнера (§6.2: метка стилизуется
+/// как блок; `text-emphasis` на неё не действует). Метка шире строки обрезается краем бокса
+/// (клип у `overflow`); первый символ строки остаётся всегда.
+pub(crate) fn apply_text_overflow_string(
+    lines: &mut [Vec<InlineFrag>],
+    max_width: f32,
+    marker: &str,
+    block_style: &std::sync::Arc<ComputedStyle>,
+    line_h: f32,
+    m: &dyn TextMeasurer,
+) {
+    let marker_w: f32 = marker
+        .chars()
+        .map(|ch| m.char_width_with_families(ch, block_style.font_size, &block_style.font_family) + block_style.letter_spacing)
+        .sum();
+    let mut marker_style = None;
+    for line in lines.iter_mut() {
+        let Some(last) = line.last() else { continue };
+        if last.x + last.width <= max_width {
+            continue;
+        }
+        let budget = (max_width - marker_w).max(0.0);
+        let mut end_x = 0.0_f32;
+        let mut kept = 0_usize;
+        for f in line.iter_mut() {
+            if f.x + f.width <= budget {
+                end_x = f.x + f.width;
+                kept += 1;
+                continue;
+            }
+            // The frag crosses the budget: keep the chars that still fit (always the line's first).
+            let mut buf = String::new();
+            let mut w = f.x + f.padding_left;
+            for ch in f.text.chars() {
+                let cw = m.char_width_with_families(ch, f.style.font_size, &f.style.font_family) + f.style.letter_spacing;
+                if w + cw > budget && !(kept == 0 && buf.is_empty()) {
+                    break;
+                }
+                buf.push(ch);
+                w += cw;
+            }
+            if !buf.is_empty() {
+                f.text = buf;
+                f.width = w - f.x;
+                f.padding_right = 0.0;
+                end_x = w;
+                kept += 1;
+            }
+            break;
+        }
+        let mut e = line[kept.saturating_sub(1)].clone();
+        line.truncate(kept);
+        e.style = marker_style
+            .get_or_insert_with(|| {
+                let mut st = (**block_style).clone();
+                st.text_emphasis_style = crate::TextEmphasisStyle::None;
+                st.vertical_align = VerticalAlign::Baseline;
+                std::sync::Arc::new(st)
+            })
+            .clone();
+        e.text = marker.to_string();
+        e.x = end_x;
+        e.width = marker_w;
+        // Same half-leading as `apply_inline_vertical_align` gives a baseline-aligned frag.
+        e.y_offset = ((line_h - block_style.font_size) / 2.0).max(0.0);
+        e.padding_left = 0.0;
+        e.padding_right = 0.0;
+        e.is_element_box = false;
+        e.img_src = None;
+        e.img_is_lazy = false;
+        e.bidi_level = 0;
+        e.merged_sources.clear();
+        line.push(e);
+    }
+}
+
 fn truncate_frag_with_ellipsis(
     frag: &mut InlineFrag,
     avail: f32,

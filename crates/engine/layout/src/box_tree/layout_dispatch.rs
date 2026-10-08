@@ -1074,12 +1074,25 @@ pub(super) fn dispatch_box(
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
             // container flow (`line_clamp_flow`), not run by run; here it only takes priority
             // over text-overflow:ellipsis (both cannot apply simultaneously).
-            if !s.line_clamp.is_some_and(|n| n > 0)
-                && s.text_overflow == TextOverflow::Ellipsis
-                && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
-            {
-                // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
-                apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
+            // CSS UI L4 §6.1: text-overflow требует overflow != visible; метка — значение
+            // правой стороны строки (левая сторона не рисуется: нет прокрутки к её краю).
+            if s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible {
+                let clamped = s.line_clamp.is_some_and(|n| n > 0);
+                match &s.text_overflow_right {
+                    TextOverflow::Ellipsis if !clamped => {
+                        apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
+                    }
+                    // Внутри line-clamp метка нужна строкам до отсечки; на последней видимой
+                    // строке (n-й) стоит «…» отсечки — её не трогаем.
+                    TextOverflow::Str(marker) => {
+                        let upto = match s.line_clamp {
+                            Some(n) if n > 0 && lines.len() > n as usize => n as usize - 1,
+                            _ => lines.len(),
+                        };
+                        apply_text_overflow_string(&mut lines[..upto], content_width, marker, &b.style, line_h, m);
+                    }
+                    _ => {}
+                }
             }
         } else {
             *lines = one_line_fallback(segments);
