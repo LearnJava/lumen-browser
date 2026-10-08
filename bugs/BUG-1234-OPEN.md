@@ -32,3 +32,7 @@
 (2 229 из 2 229 — здесь ещё и свойство не поддержано, `assert_true: 'from' value should be supported`, см. `mask-border` в `CSS-SPECS.md`);
 `clip-path/animations/clip-path-transition-crash.html` (TIMEOUT: `document.getAnimations()[0]` — `undefined` после смены `clip-path`, в логе
 `Cannot read properties of undefined (reading 'finished')`) и 55 reftest `clip-path/animations/*` (`reftest-wait`, см. WPT-RUN-15).
+
+## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
+
+`filter`/`backdrop-filter`: WAAPI `el.animate({filter:["blur(0px)","blur(20px)"]})` + `pause()` + `currentTime=2000` — `getComputedStyle().filter` даёт `blur(20px)`, ожидается `blur(10px)` (интерполяции нет); 7 id `filter-effects/animation/*` (672 из 954 сабтестов) и 20 reftest `css-filters-animation-*`/`css-backdrop-filters-animation-*` (в снимке видна конечная точка). `color-interpolation-filters` — `'from' value should be supported`: свойства нет в разборе.

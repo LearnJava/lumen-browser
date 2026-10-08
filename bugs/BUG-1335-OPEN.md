@@ -36,3 +36,7 @@ WPT-RUN-14 срез 11, `css/CSS2/{backgrounds,borders}/*-applies-to-*.xht`: 34 
 ## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
 
 A/B с `table{width:fit-content}` на 356 id с таблицей: 26 → `identical`/`thin-only`; 10 из них в кластере «таблица без `width`» (`floats-clear/margin-collapse-165.xht`, `-166.xht`, `tables/anonymous-table-box-width-001.xht`), 16 — в `table-anonymous-objects-*` (BUG-1362, там эта правка закрывает только часть).
+
+## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
+
+`css/css-tables`: 23 testharness-id падают на ширине таблицы, равной ширине контейнера (`html5-table-formatting-1/2`, `html-to-css-mapping-1`, `caption`, `tbody-height-redistribution`, `visibility-collapse-col-*`/`-colspan-*`/`-rowcol-*`, `visibility-hidden-col-001`, `visibility-hidden-nested-001`, `distribution-algo-1/2`, `computing-table-width-1`, `colspan-001…003`): `got 492` (`main{float:left;width:50%}`), `got 1008`, `got 1024`. Внутри `float`/`inline-block` ширина верна, но у таблицы с несколькими колонками — максимальная колонка вместо суммы ([BUG-1531](BUG-1531-OPEN.md)).
