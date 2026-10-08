@@ -59,6 +59,20 @@ impl TextShaper for RustybuzzShaper {
         // properties by `rustybuzz::shape` itself
         // (`UnicodeBuffer::guess_segment_properties`) — it only fills what
         // is not already set, so the explicit direction/script above stand.
+        //
+        // Exception: an explicit left-to-right request over text whose guessed
+        // script is natively right-to-left. HarfBuzz's `ensure_native_direction`
+        // would reverse the buffer back to logical order, but a caller asking
+        // for LTR passes text already in visual order (UAX #9 L2) and wants the
+        // glyphs left to right. A neutral script suppresses that reversal.
+        if script.is_none() && direction == ShapeDirection::LeftToRight {
+            let mut probe = rustybuzz::UnicodeBuffer::new();
+            probe.push_str(text);
+            probe.guess_segment_properties();
+            if is_native_rtl_script(probe.script()) {
+                buffer.set_script(rustybuzz::script::COMMON);
+            }
+        }
 
         let rb_features: Vec<rustybuzz::Feature> = features
             .iter()
@@ -89,6 +103,15 @@ impl TextShaper for RustybuzzShaper {
 /// crate's own `GSUB`/`GPOS` engine.
 pub fn active_text_shaper() -> &'static dyn TextShaper {
     &RustybuzzShaper
+}
+
+/// Scripts HarfBuzz treats as natively right-to-left.
+fn is_native_rtl_script(script: rustybuzz::Script) -> bool {
+    const RTL: [&[u8; 4]; 10] = [
+        b"Arab", b"Hebr", b"Syrc", b"Thaa", b"Nkoo", b"Samr", b"Mand", b"Adlm", b"Rohg", b"Mani",
+    ];
+    let tag = script.tag().to_bytes();
+    RTL.iter().any(|t| **t == tag)
 }
 
 #[cfg(test)]
@@ -141,6 +164,22 @@ mod tests {
         );
         assert_eq!(shaped.len(), 2);
         assert!(shaped[0].x_advance > 0);
+    }
+
+    #[test]
+    fn explicit_ltr_over_hebrew_keeps_visual_order() {
+        // "א cba" is already visual (RTL override): clusters must stay
+        // ascending, not be reversed back to logical order.
+        let shaped = RustybuzzShaper.shape(
+            BUNDLED_FONT,
+            "\u{5d0} cba",
+            ShapeDirection::LeftToRight,
+            None,
+            &[],
+            &[],
+        );
+        let clusters: Vec<u32> = shaped.iter().map(|g| g.cluster).collect();
+        assert!(clusters.windows(2).all(|w| w[0] <= w[1]), "{clusters:?}");
     }
 
     #[test]
