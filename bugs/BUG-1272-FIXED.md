@@ -1,6 +1,6 @@
 # BUG-1272 — RTL-фрагмент с латиницей и ивритом рисуется задом наперёд: CPU-растр шейпит его как RTL-прогон второй раз
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 2 — `css/css-writing-modes`, кластер bidi)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_text` — вызов `active_text_shaper().shape(…, ShapeDirection::LeftToRight, None, …)`)
 
@@ -47,3 +47,11 @@
 WPT `css/css-writing-modes/bidi-*`, `block-*`/`inline-*` с `embed|override|isolate|plaintext|normal|unset` (94 reftest,
 кластер в `docs/wpt-vendor-notes/css.md` §css-writing-modes); пример — `bidi-override-001.html`: обе строки должны
 совпасть с `reference/bidi-override-001.html`.
+
+## Исправление (2026-10-08, P3)
+
+`RustybuzzShaper::shape` (`crates/engine/font/src/text_shaper.rs`): при явном `LeftToRight` без заданного скрипта,
+если угаданный скрипт нативно RTL (иврит, арабский и др.), буферу ставится нейтральный `Zyyy`; `ensure_native_direction`
+больше не разворачивает визуальную строку обратно. Правка в шейпере покрывает все вызовы (`cpu_raster.rs`,
+`varied_text.rs`). Тест: `explicit_ltr_over_hebrew_keeps_visual_order`; графтесты 27/151 сдвинулись к Edge
+(151: 6,26 → 6,21 %).
