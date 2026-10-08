@@ -789,6 +789,13 @@ pub(crate) fn page_source_for_automation_url(url: &str) -> PageSource {
 /// caller surfaces a clear diagnostic instead of loading the file. `file→file`
 /// (a local page opening another local page) and non-web openers are allowed.
 pub(crate) fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<PageSource, String> {
+    // BUG-1268: `about:blank` is not a network resource — `PageSource::url`
+    // sent it to the fetcher, which failed it as `unsupported scheme: about`
+    // and left that error on the tab (`window.open()` / `win.location =
+    // 'about:blank'`).
+    if url == "about:blank" {
+        return Ok(PageSource::AboutBlank);
+    }
     if !url.starts_with("file://") {
         return Ok(PageSource::url(url));
     }
@@ -807,6 +814,13 @@ pub(crate) fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn js_navigation_to_about_blank_is_not_a_network_fetch() {
+        let opener = PageSource::url("http://localhost/");
+        assert!(matches!(resolve_js_navigation("about:blank", &opener), Ok(PageSource::AboutBlank)));
+        assert!(matches!(resolve_js_navigation("http://x/", &opener), Ok(PageSource::Url { .. })));
+    }
 
     #[test]
     fn javascript_url_code_extracts_source() {

@@ -2567,7 +2567,7 @@ raw-логов контрольных прогонов (`run9-ctl`, `capab`, 13 
 разных (одинаковы в обоих повторах режима, различны между режимами) — 4:
 `webstorage/storage_local_setitem_quotaexceedederr` (CRASH от сторожа памяти
 ↔ TIMEOUT, 0 сабтестов в обоих — балл 0), два `performance-timeline/*` —
-жертвы [BUG-1268](../../bugs/BUG-1268-OPEN.md) (см. ниже) и один
+жертвы [BUG-1268](../../bugs/BUG-1268-FIXED.md) (см. ниже) и один
 `dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-body`
 (OK 1/2 → TIMEOUT).
 
@@ -2580,7 +2580,7 @@ raw-логов контрольных прогонов (`run9-ctl`, `capab`, 13 
 Вывод для любых будущих изменений порядка: тесты одного каталога, которые
 порознь проходят, а пачкой — нет, — это не регрессия движка.
 
-**Найдено попутно — [BUG-1268](../../bugs/BUG-1268-OPEN.md).** После
+**Найдено попутно — [BUG-1268](../../bugs/BUG-1268-FIXED.md).** После
 `FileAPI/url/url-in-tags-revoke.window.html` (и
 `FileAPI/BlobURL/cross-partition.https.html`) следующий тест в том же
 `lumen` получает ERROR навигации, не начавшись: `unsupported scheme: blob`
@@ -2650,7 +2650,7 @@ TIMEOUT через 2 с при пороге 1.5 с и таймауте 30 с; `o
 62 в обоих `off`-прогонах TIMEOUT с 0 сабтестов**, то есть вердикт не изменился
 ни у одного. id, меняющих статус: 5 между двумя `off`, 11 между двумя новыми,
 8–10 между режимами. Устойчиво разных (одинаковы внутри режима, различны
-между режимами) — два, оба жертвы [BUG-1268](../../bugs/BUG-1268-OPEN.md)
+между режимами) — два, оба жертвы [BUG-1268](../../bugs/BUG-1268-FIXED.md)
 («document was never replaced» после `FileAPI/BlobURL/*`/`clear-site-data`):
 `FileAPI/BlobURL/opaque-origin.html` ERROR → TIMEOUT 0/2,
 `webstorage/event_case_sensitive.html` TIMEOUT 0/2 → ERROR — ранние TIMEOUT
@@ -2716,7 +2716,7 @@ TIMEOUT. Теперь окно видимое, но не активируетс�
 * `html/dom/reflection-metadata.html` (OK ↔ ERROR «Got results from
   /html/dom/idlharness…») и `url/historical.any.html` (OK ↔ TIMEOUT) — жертвы
   предыдущего теста в том же `lumen` (`idlharness.https.html?exclude=…` и
-  `url/failure.html` соответственно), класс [BUG-1268](../../bugs/BUG-1268-OPEN.md):
+  `url/failure.html` соответственно), класс [BUG-1268](../../bugs/BUG-1268-FIXED.md):
   `--shared-queue` раскладывает очередь по-разному, и в no-paint предыдущим
   оказался другой тест. Изолированно (`--processes 1`, оба теста подряд,
   2 прогона на режим) — в обоих режимах OK с одинаковыми сабтестами.
@@ -2874,7 +2874,7 @@ cProfile показывал ~2 с, без профайлера хвост пос
 разных — два, оба в пользу нового режима и оба известного класса:
 `performance-timeline/supportedEntryTypes.any.html` ERROR → OK («document was
 never replaced» после `web-locks/partitioned-web-locks…https` —
-[BUG-1268](../../bugs/BUG-1268-OPEN.md), жертва переехала со сдвигом
+[BUG-1268](../../bugs/BUG-1268-FIXED.md), жертва переехала со сдвигом
 расписания) и `cookies/samesite/multiple-samesite-attributes.https.html`
 TIMEOUT («navigated away to …/postToParent.py») → OK.
 
@@ -2937,7 +2937,7 @@ TIMEOUT), после убитого браузера в логе нет ни о�
 плечах), в котором 6-секундных остановок мало. Балл в разбросе повторов
 (712.62…718.11). id, меняющих статус: 42 внутри `off`, 48 внутри `new`.
 Устойчиво разных — три, все «документ не заменён» после навигации, класс
-[BUG-1268](../../bugs/BUG-1268-OPEN.md) (зависит от предыдущего теста в
+[BUG-1268](../../bugs/BUG-1268-FIXED.md) (зависит от предыдущего теста в
 процессе, а предыдущий сменился вместе с расписанием):
 `cookies/secure/set-from-wss.https.sub.html` OK → ERROR,
 `loading/early-hints/modulepreload-as-worker-cross-origin.h2.window.html` и
