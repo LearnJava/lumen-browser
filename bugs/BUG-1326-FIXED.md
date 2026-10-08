@@ -1,6 +1,6 @@
 # BUG-1326 — `tab-size`: табуляция — фиксированные N × 8 px после текста, а не до следующей позиции табуляции в единицах ширины пробела
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 9, `css/css-text`, первая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — измеритель `measure_text_w_varied(…, tab_size, …)` и ветка `preserves_whitespace()` (:600); `style/apply/text.rs` — разбор `tab-size`)
 
@@ -36,3 +36,15 @@ WPT-RUN-14 срез 9: `css/css-text/tab-size/` — 10 reftest `thick` (`tab-siz
 ## Дополнение: WPT-RUN-14 срез 10 (2026-10-06, `css/css-text`, часть 2)
 
 `white-space/` — ещё 20 не зелёных id про табуляцию (`break-spaces-tab-*`, `pre-wrap-tab-*`, `tab-stop-threshold-*`, `tab-bidi-001`, `tab-position-with-text-align`, `text-indent-tab-positions-001`), 16 из них с `pre-wrap`/`break-spaces`. Проба: `<i>a</i>	<i>b</i>` в `white-space: pre` — `x` второго элемента 11 (табуляция между элементами пропадает целиком, см. [BUG-1327](BUG-1327-OPEN.md)); `a	<i>b</i>` — 75 (N × 8 px).
+
+## Причина и исправление
+
+Ширина табуляции считалась как `tab_size` px для каждого `\t` внутри `measure_text_w_varied`, а число из `tab-size: N` на каскаде превращалось в `N × 8` px — без позиции на строке и без ширины пробела. Теперь:
+
+* `TabStops` (`inline_wrap.rs`) — шаг табуляции: для числа `N × (ширина U+0020 + letter-spacing + word-spacing)`, для длины — она сама; минимальная отрисованная ширина — `0.5ch` (меньший остаток пропускает позицию).
+* `measure_text_tabbed` и `push_tabbed_frags` — табуляция идёт до следующей позиции от начала строки (с учётом `text-indent` и предыдущих фрагментов); каждая табуляция — отдельный `InlineFrag` с реальной шириной в `style.tab_size`, поэтому paint рисует её той же шириной и не менялся. Применено в ветке `white-space: pre` и в `pre-wrap`/`break-spaces` (`inline_wrap_preserved.rs`; решение о переносе меряет токены с реальной позиции).
+* Внутренние ширины (`intrinsic.rs`, маркер списка) брали `tab_size × ширина пробела` — то есть px, умноженные на пробел; теперь берут шаг `TabStops::unit`.
+
+Тесты: `box_tree/tests/tab_size.rs` (9 штук: все строки таблицы симптомов, `pre-wrap`, минимальная ширина, сброс на новой строке), `pre_element_tab_renders_with_tab_size` обновлён под три фрагмента (текст / табуляция / текст).
+
+**Остаток — [BUG-1461](BUG-1461-OPEN.md):** метрики пробела берутся у стиля сегмента, а CSS Text L3 §4.2 требует у блочного контейнера (`tab-size-integer-004`). WPT-прогон `tab-size/` после правки не делался (нужен WPT-venv); по коду должны позеленеть те reftest, где контейнер и сегмент не расходятся по шрифту и интервалам.

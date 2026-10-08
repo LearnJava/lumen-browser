@@ -451,18 +451,18 @@ fn pre_element_newline_creates_two_lines() {
 
 #[test]
 fn pre_element_tab_renders_with_tab_size() {
-    // tab-size: 4 → 4*8=32px; char width=8px each.
-    // "a\tb" → 'a'=8 + '\t'=32 + 'b'=8 = 48px width frag.
-    let root = lay_measured("<pre>a\tb</pre>", "pre { tab-size: 4; }", 800.0);
+    // tab-size: 4 → stops every 4 spaces = 32px (space = 8px); char width=8px each.
+    // "a	b": 'a'=8, the tab runs to the stop at 32 (24px), 'b'=8.
+    let root = lay_measured("<pre>a	b</pre>", "pre { tab-size: 4; }", 800.0);
     let pre_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
     let run = pre_box.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
     if let BoxKind::InlineRun { lines, .. } = &run.kind {
         assert_eq!(lines.len(), 1);
-        let frag = &lines[0][0];
-        // text should be preserved verbatim including \t
-        assert!(frag.text.contains('\t'), "tab should be preserved in text: {:?}", frag.text);
-        // width: 'a'(8) + '\t'(32) + 'b'(8) = 48
-        assert!((frag.width - 48.0).abs() < 0.01, "expected width=48, got {}", frag.width);
+        let frags = &lines[0];
+        assert_eq!(frags.len(), 3, "text / tab / text: {frags:?}");
+        assert_eq!(frags[1].text, "	", "tab must be preserved in text");
+        assert!((frags[1].width - 24.0).abs() < 0.01, "tab width {}", frags[1].width);
+        assert!((frags[2].x - 32.0).abs() < 0.01, "b at {}", frags[2].x);
     } else {
         panic!("expected InlineRun");
     }

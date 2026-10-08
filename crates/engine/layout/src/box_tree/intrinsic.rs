@@ -17,8 +17,7 @@ fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasur
         segments.iter().map(|seg| {
             let ls = seg.style.letter_spacing;
             let fams = &seg.style.font_family;
-            let ts = seg.style.tab_size
-                * m.char_width_with_families(' ', seg.style.font_size, fams);
+            let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
             measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
         }).sum()
     })
@@ -527,8 +526,7 @@ pub(crate) fn preferred_inline_block_width(
                 .map(|seg| {
                     let ls = seg.style.letter_spacing;
                     let fams = &seg.style.font_family;
-                    let ts = seg.style.tab_size
-                        * m.char_width_with_families(' ', seg.style.font_size, fams);
+                    let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
                     measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
                 })
                 .sum()
@@ -788,7 +786,7 @@ pub(crate) fn min_content_outer_width_of_contents(
                     let ls = seg.style.letter_spacing;
                     let fams = &seg.style.font_family;
                     let fs = seg.style.font_size;
-                    let ts = seg.style.tab_size * m.char_width_with_families(' ', fs, fams);
+                    let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
                     let piece =
                         |t: &str| measure_text_w_families(t, fs, ls, ts, fams, m);
                     let no_wrap = seg.style.white_space.is_nowrap()
@@ -1120,7 +1118,7 @@ pub(crate) fn form_control_fit_content_width(
         FormControlKind::Select { selected_text } => {
             let widget_fs = select_widget_font_size(em);
             let label_w = measurer.map_or(0.0, |m| {
-                let tab = s.tab_size * m.char_width_with_families(' ', widget_fs, &s.font_family);
+                let tab = super::inline_wrap::TabStops::of(s, m).unit;
                 measure_text_w_families(
                     selected_text,
                     widget_fs,
