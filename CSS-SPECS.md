@@ -432,6 +432,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `:is(S)` | ✅ | full matching, style.rs:7690 |
 | `:where(S)` | ✅ | zero-specificity matching, style.rs:7690 |
 | `:has(S)` | ✅ | relational matching (`matches_relative`), style.rs:7696 |
+| `:open` / `:closed` | ⬜ | не разбираются (WPT-RUN-14 S20, 2026-10-08): `querySelector(':open')` → `SyntaxError`; `details:open`, `dialog:open`, `select:open`, `input:open` не работают. Selectors 4 §10.4 (в HTML `:open` — `<details>`, `<dialog>`, `<select>`/`<input>` с открытым выбором). WPT `selectors/open-pseudo.html`, `selectors/invalidation/open-pseudo-class-in-has.html` (9 сабтестов), `css-pseudo/input-element-pseudo-open*.optional.html` |
+| `:playing` / `:paused` / `:seeking` / `:buffering` / `:stalled` / `:muted` / `:volume-locked` | ⬜ | не разбираются (S20): `querySelector(':playing')` → `SyntaxError`. Selectors 4 §10.2 (состояние медиа-элемента). WPT `selectors/media/*` (6 id), `selectors/invalidation/media-pseudo-classes-in-has.html`, `media-loading-pseudo-classes-in-has.sub.html` — тесты вызывают `assert_implements` и без селекторов не доходят до проверок |
+| `:heading()` со списком, `:has-slotted` | 🟡 | S20: `:heading` и `:heading(1)` разбираются, `:heading(1, 2)` и `:heading(2n+1)` (список `<an+b>`) → `SyntaxError` (`selectors/heading.html` 28 из 182 сабтестов, `parse-heading.html`); `:has-slotted` не разбирается (`parse-has-slotted.tentative.html`, 23 сабтеста) |
 
 ### [T1] Media Queries
 
@@ -652,7 +655,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Rule | Status | Notes |
 |------|--------|-------|
 | `@charset` | ✅ | parsed; ignored (UTF-8 only) |
-| `@namespace` | ✅ | parsed; no XML namespaces |
+| `@namespace` | 🟡 | разбирается и не хранится (WPT-RUN-14 S20, 2026-10-08, [BUG-1454](bugs/BUG-1454-OPEN.md)): префикс `ns\|E`, `\|E`, `[ns\|attr]` не сопоставляются с пространством имён элемента (в модели оно есть — `QualName.namespace`), умолчание `@namespace "url"` не ограничивает голые типы. 100 id `css-namespaces` и `selectors/old-tests/*.xml` |
 | `@import` | ✅ | URL extracted + file loaded (shell `inline_css_imports`): recursive fetch (file/http via prefetch cache), imported rules prepended (Cascade L4 §6.5), media-query gate, cycle/depth guard; nested imports resolve against the sheet's own URL. Streaming progressive frames apply on the final layout pass |
 | `@media` | ✅ | condition eval + re-eval on resize (Tier1 #12); residual is JS-side only — `matchMedia` live change events, see WQ#11 |
 | `@supports` | ✅ | feature detection incl. `selector()`/`font-tech()`/`font-format()` (Tier3 #36) |
