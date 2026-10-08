@@ -1,6 +1,8 @@
 # BUG-1273 — снимок `--screenshot` и IPC `Screenshot` (reftest-исполнитель WPT) не дожидаются `@font-face url()`: Ahem не применяется ни в одном reftest
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
+
+**Исправление:** `dump_mode.rs::load_web_fonts_before_snapshot` блокирующе грузит `pending_web_fonts` (общее ядро `frames.rs::fetch_web_fonts_blocking`, с CSP `font-src`), регистрирует в реестре и измерителе, пересчитывает layout до `settle_after_load`. Проба `XXXX` Ahem = 10 000 px; тест `tests/screenshot_web_fonts.rs`. Числа PASS срезов WPT-RUN-14 (css-writing-modes, WOFF2, css-text) прежние — не валидны, нужен повторный прогон.
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 2 — `css/css-writing-modes`)
 **Область:** shell (`crates/shell/src/dump_mode.rs::render_source_to_png`, `page_pipeline.rs` — `pending_web_fonts`)
 

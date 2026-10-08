@@ -212,6 +212,7 @@ pub(crate) fn render_source_to_png(
         None,
     )?;
 
+    load_web_fonts_before_snapshot(&mut parsed, &raw.base, &event_sink, vp);
     settle_after_load(&mut parsed, vp);
 
     // Программные скроллы контейнеров, запрошенные скриптами страницы
@@ -281,6 +282,58 @@ pub(crate) fn render_source_to_png(
     // Pixels are ready — mark the moment the page is first fully rendered.
     lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
+}
+
+/// BUG-1273: снимок делается «после `document.fonts.ready`» (так его берёт
+/// reftest-исполнитель WPT), а у однократного headless-пути нет цикла событий,
+/// куда приходит `LoadEvent::FontLoaded`. Поэтому `url()`-источники `@font-face`,
+/// которые `parse_and_layout` оставил в `pending_web_fonts`, грузятся здесь
+/// блокирующим fetch, регистрируются в реестре рендера и измерителе, и layout
+/// пересчитывается до снимка. Без веб-шрифтов функция ничего не делает.
+fn load_web_fonts_before_snapshot(
+    parsed: &mut crate::page_pipeline::ParsedPage,
+    base: &crate::ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    vp: Size,
+) {
+    if parsed.pending_web_fonts.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut parsed.pending_web_fonts);
+    let (csp_gate, referrer_policy) = {
+        let Ok(doc) = parsed.document.lock() else { return };
+        let root = doc.root();
+        (
+            crate::csp_enforce::document_csp_policy(&doc, root),
+            crate::resource_base::document_referrer_policy(&doc),
+        )
+    };
+    let self_origin = base.origin();
+    let _s = lumen_core::trace::span("web-fonts", "font");
+    let (loaded, _blocked) = crate::frames::fetch_web_fonts_blocking(
+        pending, base, sink, None, csp_gate.as_ref(), self_origin.as_ref(), referrer_policy,
+    );
+    if loaded.is_empty() {
+        return;
+    }
+    for (wf, variation_settings) in loaded {
+        parsed.font_registry.register_from_bytes(
+            &wf.family, wf.weight, wf.style, &wf.unicode_range, wf.bytes.clone(),
+            wf.ascent_override, wf.descent_override, wf.size_adjust, wf.line_gap_override,
+            variation_settings,
+        );
+        parsed.measurer.register_family_with_overrides(
+            &wf.family, wf.bytes, wf.unicode_range, wf.ascent_override, wf.descent_override,
+            wf.size_adjust, wf.line_gap_override,
+        );
+    }
+    let layout = {
+        let Ok(doc) = parsed.document.lock() else { return };
+        lumen_layout::layout_measured_hyp(
+            &doc, &parsed.stylesheet, vp, &parsed.measurer, &NullHyphenationProvider, false,
+        )
+    };
+    parsed.layout = layout;
 }
 
 /// Максимум кадров `requestAnimationFrame`, которые снимок прокручивает после `load`.

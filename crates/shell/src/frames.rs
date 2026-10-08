@@ -1034,38 +1034,23 @@ fn frame_measurer(
     }
 }
 
-/// Синхронно грузит `@font-face` ребёнка (FRAME-5): `local()` — уже
-/// синхронно внутри [`load_font_faces`] (системный индекс в памяти), `url()` —
-/// блокирующим fetch здесь же, тем же приёмом, что [`fetch_frame_subresources`]
-/// уже применяет к картинкам ребёнка.
-///
-/// В отличие от страницы (PH3-19: async fetch + `FontLoaded` + FOUT-relayout,
-/// чтобы не держать первый paint), у фрейма загрузка и так уже синхронная до
-/// первого layout (срезы 11/12 — картинки и стили). Заводить отдельный
-/// async+relayout канал ради одних лишь шрифтов было бы непропорционально
-/// M-размеру этой задачи; расплата — фрейм с медленным веб-шрифтом чуть дольше
-/// показывает первый paint, а не мигает FOUT (в обмен де-факто лучший UX).
-/// GAP-CSPENF срез 25: `csp_gate` is the CHILD's own policy (computed once by
-/// the caller, same one-shot read as [`fetch_frame_subresources`]'s
-/// `csp_gate`) — `font-src`/`default-src` against a frame's own `@font-face
-/// url()` was named as not covered by срез 19 (which only gated the
-/// top-level page's fonts). `local()` sources are unaffected, same as the
-/// top-level path — CSP's fetch directives govern network fetches, not the
-/// system font lookup `load_font_faces` already resolved above. Returns the
-/// resolved URL of every blocked source alongside the registry/web-fonts, so
-/// the caller can dispatch `securitypolicyviolation` once its JS runtime
-/// exists (this function runs before that, same ordering constraint as
-/// `fetch_frame_subresources`'s `blocked_by_img_src`).
-pub(crate) fn load_frame_fonts(
-    font_faces: &[lumen_css_parser::FontFaceRule],
+/// `font-variation-settings` дескриптора `@font-face`: пары (тег оси, значение).
+type VariationSettings = Vec<([u8; 4], f32)>;
+
+/// Синхронно (блокирующим fetch) грузит `url()`-источники `@font-face`:
+/// общее ядро [`load_frame_fonts`] и headless-снимка (`dump_mode`, BUG-1273).
+/// Каждый источник идёт через `font-src`-гейт и `upgrade-insecure-requests`;
+/// возвращает загруженные шрифты вместе с их `font-variation-settings`
+/// дескриптора и URL-ы, заблокированные CSP.
+pub(crate) fn fetch_web_fonts_blocking(
+    pending: Vec<crate::subresources::PendingWebFont>,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
-) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
-    let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
+) -> (Vec<(LoadedWebFont, VariationSettings)>, Vec<String>) {
     let mut blocked_by_font_src = Vec::new();
     let mut web_fonts = Vec::with_capacity(pending.len());
     for pf in pending {
@@ -1111,11 +1096,56 @@ pub(crate) fn load_frame_fonts(
             .and_then(lumen_font::parse_metric_override_percent);
         let line_gap_override = pf.line_gap_override_str.as_deref()
             .and_then(lumen_font::parse_metric_override_percent);
-        web_fonts.push(LoadedWebFont {
-            family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
-            ascent_override, descent_override, size_adjust, line_gap_override, bytes,
-        });
+        let variation_settings = pf.variation_settings_str.as_deref()
+            .map(lumen_font::parse_variation_settings)
+            .unwrap_or_default();
+        web_fonts.push((
+            LoadedWebFont {
+                family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
+                ascent_override, descent_override, size_adjust, line_gap_override, bytes,
+            },
+            variation_settings,
+        ));
     }
+    (web_fonts, blocked_by_font_src)
+}
+
+/// Синхронно грузит `@font-face` ребёнка (FRAME-5): `local()` — уже
+/// синхронно внутри [`load_font_faces`] (системный индекс в памяти), `url()` —
+/// блокирующим fetch здесь же, тем же приёмом, что [`fetch_frame_subresources`]
+/// уже применяет к картинкам ребёнка.
+///
+/// В отличие от страницы (PH3-19: async fetch + `FontLoaded` + FOUT-relayout,
+/// чтобы не держать первый paint), у фрейма загрузка и так уже синхронная до
+/// первого layout (срезы 11/12 — картинки и стили). Заводить отдельный
+/// async+relayout канал ради одних лишь шрифтов было бы непропорционально
+/// M-размеру этой задачи; расплата — фрейм с медленным веб-шрифтом чуть дольше
+/// показывает первый paint, а не мигает FOUT (в обмен де-факто лучший UX).
+/// GAP-CSPENF срез 25: `csp_gate` is the CHILD's own policy (computed once by
+/// the caller, same one-shot read as [`fetch_frame_subresources`]'s
+/// `csp_gate`) — `font-src`/`default-src` against a frame's own `@font-face
+/// url()` was named as not covered by срез 19 (which only gated the
+/// top-level page's fonts). `local()` sources are unaffected, same as the
+/// top-level path — CSP's fetch directives govern network fetches, not the
+/// system font lookup `load_font_faces` already resolved above. Returns the
+/// resolved URL of every blocked source alongside the registry/web-fonts, so
+/// the caller can dispatch `securitypolicyviolation` once its JS runtime
+/// exists (this function runs before that, same ordering constraint as
+/// `fetch_frame_subresources`'s `blocked_by_img_src`).
+pub(crate) fn load_frame_fonts(
+    font_faces: &[lumen_css_parser::FontFaceRule],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+    self_origin: Option<&lumen_network::Origin>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
+    let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
+    let (loaded, blocked_by_font_src) = fetch_web_fonts_blocking(
+        pending, base, sink, cookie_jar, csp_gate, self_origin, referrer_policy,
+    );
+    let web_fonts = loaded.into_iter().map(|(wf, _)| wf).collect();
     (registry, web_fonts, blocked_by_font_src)
 }
 
