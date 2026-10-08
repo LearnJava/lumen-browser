@@ -75,5 +75,5 @@
 печатает `dispatch_preload_hints`: это событие для devtools, не запрос.
 
 Побочные находки: `<link nonce>` под `style-src 'nonce-…'` не применяется окончательным
-гейтом ([BUG-1464](BUG-1464-OPEN.md), на p11 `#a` остаётся чёрным); прогрев
-`preload`/`modulepreload`/`prefetch` по-прежнему идёт в обход CSP ([BUG-1465](BUG-1465-OPEN.md)).
+гейтом ([BUG-1486](BUG-1486-OPEN.md), на p11 `#a` остаётся чёрным); прогрев
+`preload`/`modulepreload`/`prefetch` по-прежнему идёт в обход CSP ([BUG-1487](BUG-1487-OPEN.md)).

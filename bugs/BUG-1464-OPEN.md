@@ -1,33 +1,18 @@
-# BUG-1464 — `<link rel=stylesheet nonce>` блокируется под `style-src 'nonce-…'`
+# BUG-1464 — `Selection.toString()`: смещения считаются в байтах UTF-8 и `text-transform` не применяется
 
 **Статус:** OPEN
-**Заведён:** 2026-09-26 (P3, по ходу [BUG-1185](BUG-1185-FIXED.md); свидетель — свой сервер).
-**Область:** shell (`crates/shell/src/stylesheets.rs:141` — гейт `<link rel=stylesheet>` зовёт
-`csp_enforce::style_src_blocked`, а тот спрашивает URL-only `fetch_directive_allows`; то же на
-`:400`, `:535` и в событиях `page_pipeline.rs:1682`, `frames.rs:2561`).
+**Заведён:** 2026-10-08 (P6, остаток [BUG-1328](BUG-1328-FIXED.md))
+**Область:** dom/js (`crates/engine/dom/src/selection.rs::range_text_filtered` — `utf8_floor` над смещениями Range; `crates/js/src/v8_runtime/install/dom_editing.rs` — `_lumen_get_selection_text`, `_lumen_get_range_text`)
 
 ## Симптом
 
-`Content-Security-Policy: script-src 'nonce-k'; style-src 'nonce-k'`,
-`<link nonce=k rel=stylesheet href=/red4.css><div id=a>A</div>`, лист `#a{color:rgb(255,0,0)}`.
+1. Смещения Range/Selection по DOM — единицы UTF-16, а `range_text_filtered` режет строку как байты UTF-8 и округляет вниз до границы символа. Узел `"ぁ"` (3 байта), `setBaseAndExtent(node, 0, node, 1)` → `toString()` даёт `""` (смещение 1 попадает внутрь символа и округляется до 0). Для кириллицы и CJK выделение одного символа так же пустое, для двух — обрезается по байтам.
+2. `Selection.toString()` не применяет `text-transform`: у `<span style="text-transform:uppercase">abc</span>` выделение целиком даёт `"abc"` (Chrome/Firefox — `"ABC"`), у `full-size-kana`/`full-width`/`math-auto` — исходный символ. У DOM нет стилей, поэтому нужен канал от layout (как `user_select_none_text_nodes`).
 
-| | Lumen dev-release | Chrome 153 |
-|---|---|---|
-| `getComputedStyle(a).color` | `rgb(0, 0, 0)` | `rgb(255, 0, 0)` |
+## Как найдено
 
-Скрипт с тем же nonce (`<script nonce=k src=/s4.js>`) исполняется: гейт скриптов с BUG-1124 идёт
-через `script_element_fetch_allows`. Для `<link>` nonce элемента не передаётся вовсе, и
-nonce-only список читается как «ни один источник не подходит». Проверка с nonce уже есть —
-`CspPolicy::style_element_fetch_allows` (BUG-1175, пока зовётся только из JS-гейта
-`element_src_gate` и раннего прогрева BUG-1185).
+WPT-RUN-14 срез 10, `css/css-text/text-transform/text-transform-full-size-kana-009.html` (58 сабтестов) и `math/text-transform-math-auto-003.html` (112 сабтестов) — оба проверяют `Selection.toString()` после `setBaseAndExtent`. После [BUG-1328](BUG-1328-FIXED.md) (раскладка делает преобразование) по-прежнему 0/170.
 
-## Репро
+## Что делать
 
-Сервер `target/bug1183/server.py` (worktree `p3-work`), страница `/p11.html`; проба
-`target/bug1183/lumen_probe.py`.
-
-## Что сделать
-
-В окончательном гейте `<link rel=stylesheet>` читать `nonce` элемента и спрашивать
-`style_element_fetch_allows`; события `securitypolicyviolation` — тем же предикатом.
-Критерий: на `/p11.html` `a` красный, события нет; без nonce — чёрный и одно событие.
+Перевести смещения в `range_text_filtered` (и соседние места, где Range режет текстовый узел) на UTF-16 → байты; для `toString()` передавать из layout функцию «преобразованный текст узла» (`TextTransformExtra::apply` + регистр) и применять её к вырезанному фрагменту. Затем снять `FAIL` в `tests/wpt/metadata/css/css-text/text-transform/text-transform-full-size-kana-009.html.ini` и `math/text-transform-math-auto-003.html.ini`.

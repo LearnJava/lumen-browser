@@ -407,9 +407,8 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "text-transform" => {
-            // CSS Text L3: none | uppercase | lowercase | capitalize.
-            // `full-width` / `full-size-kana` отложены (CJK-специфика).
-            // `full-width` / `full-size-kana` / `math-auto` хранятся (CSSOM), но текст не меняют.
+            // CSS Text L3/L4: none | math-auto | [capitalize | uppercase | lowercase] ||
+            // full-width || full-size-kana. Текст преобразует `TextTransformExtra::apply`.
             if let Some((case, extra)) = TextTransformExtra::parse(val) {
                 style.text_transform = case;
                 style.text_extra.transform = extra;

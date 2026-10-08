@@ -1,23 +1,17 @@
-# BUG-1465 — прогрев `preload`/`modulepreload`/`prefetch` идёт в обход CSP
+# BUG-1465 — `text-transform: full-width`: схлопнутый пробел между inline-боксами остаётся U+0020
 
 **Статус:** OPEN
-**Заведён:** 2026-09-26 (P3, по ходу [BUG-1185](BUG-1185-FIXED.md); по коду, живьём не снят).
-**Область:** shell (`crates/shell/src/page_pipeline.rs:260` `warm_preload_cache` — зовётся из
-`page_load.rs` `feed_preload_and_emit` и из `parse_and_layout`; политик не получает).
+**Заведён:** 2026-10-08 (P6, остаток [BUG-1328](BUG-1328-FIXED.md))
+**Область:** layout (`crates/engine/layout/src/box_tree/inline_build.rs` — ветка `NodeData::Text(_)` без сегмента: схлопываемый пробельный узел дописывает `' '` к предыдущему сегменту)
 
 ## Симптом
 
-BUG-1185 закрыл ранний прогрев `<script src>`/`<link rel=stylesheet>` гейтом CSP. Соседний
-прогрев author-хинтов — `<link rel=preload as=…>`, `modulepreload`, `prefetch` (BUG-1116) —
-по-прежнему шлёт запрос, не глядя на политику: под `script-src 'none'`
-`<link rel=preload as=script href=/x.js>` даст `GET /x.js`. CSP3 §4.1.2 запрещает сам запрос;
-Chrome его не шлёт.
+CSS Text L3 §2.1: `full-width` превращает в U+3000 пробел, **оставшийся после схлопывания** (`text-transform-fullwidth-006`: `x<span>   </span>x` → `x`, U+3000, `x`). Пробельный узел `<span> </span>` (или `   `) между inline-боксами не даёт сегмента — `collect_inline_segments` дописывает U+0020 в конец предыдущего сегмента, не глядя на `text-transform` узла, и `full-width` его не затрагивает. Внутри `white-space: pre*` преобразование работает (после BUG-1328).
 
-## Что сделать
+## Как найдено
 
-Передать в `warm_preload_cache` политики (заголовок ответа + `<meta>` из
-`PreloadScanner::meta_csp`, в `parse_and_layout` — `document_csp_policy`) и проверять хинт по
-директиве его назначения: `as=script`/`modulepreload` → `script-src-elem`, `as=style` →
-`style-src-elem`, `image` → `img-src`, `font` → `font-src`, `audio|video|track` → `media-src`,
-`fetch` → `connect-src`, `prefetch` → `default-src` (CSP3 §6.8.1). Критерий: свой сервер не
-видит запроса к запрещённому источнику.
+[BUG-1328](BUG-1328-FIXED.md): `text-transform-fullwidth-001.xht` (пара `[<span> </span>]` против `[　]`), `-006`, `-008`.
+
+## Что делать
+
+В ветке схлопываемого узла, если у его стиля `text_extra.transform.full_width`, дописывать к предыдущему сегменту U+3000 вместо U+0020 — и убедиться, что `wrap_inline_run` не склеивает его как обычный пробел (см. [BUG-1462](BUG-1462-OPEN.md)). `-006`/`-008` проверяются с Ahem ([BUG-1273](BUG-1273-FIXED.md)) — после правки перепрогнать.

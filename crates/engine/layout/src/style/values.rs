@@ -18,6 +18,7 @@ pub mod rule_list;
 pub mod scroll;
 pub mod text_cssom;
 pub mod text_size_adjust;
+pub mod text_transform_map;
 pub mod timing;
 pub mod transform;
 pub mod typography;

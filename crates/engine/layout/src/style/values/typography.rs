@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::style::computed::ComputedStyle;
 use crate::style::values::color::Color;
+use crate::style::values::text_transform_map;
 use crate::style::TextWrapMode;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -458,8 +459,8 @@ pub enum TextTransform {
 
 /// CSS Text L3 §3.4 / Text L4 §3.4 — дополнительные компоненты `text-transform`:
 /// `full-width`, `full-size-kana` и самостоятельное `math-auto`. Хранятся ради
-/// computed-значения (CSSOM) и наследования; преобразование текста не применяют —
-/// `TextTransform::apply` их не читает.
+/// computed-значения (CSSOM) и наследования; преобразование текста — `TextTransformExtra::apply`
+/// (`TextTransform::apply` их не читает).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TextTransformExtra {
     pub full_width: bool,
@@ -508,6 +509,30 @@ impl TextTransformExtra {
         let count = val.split_whitespace().count();
         if !any || (lone && count != 1) { return None; }
         Some((case.unwrap_or(TextTransform::None), extra))
+    }
+
+    /// Применяет `text-transform` целиком: регистр (`case`), затем `full-width` и
+    /// `full-size-kana`; `math-auto` — курсив только для текста из одного символа
+    /// (CSS Text L4: значение рассчитано на содержимое `<mi>`).
+    pub fn apply(self, case: TextTransform, s: &str) -> String {
+        if self.math_auto {
+            let mut chars = s.chars();
+            return match (chars.next(), chars.next()) {
+                (Some(ch), None) => text_transform_map::math_italic(ch).unwrap_or(ch).to_string(),
+                _ => s.to_string(),
+            };
+        }
+        let cased = case.apply(s);
+        if !self.full_width && !self.full_size_kana {
+            return cased;
+        }
+        cased
+            .chars()
+            .map(|ch| {
+                let ch = if self.full_width { text_transform_map::full_width(ch) } else { ch };
+                if self.full_size_kana { text_transform_map::full_size_kana(ch) } else { ch }
+            })
+            .collect()
     }
 
     /// Каноническая запись computed-значения: `<case> full-width full-size-kana`
