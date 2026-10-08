@@ -43,3 +43,10 @@ WPT-RUN-14 срез 18: `css-fonts/parsing/*-invalid.html` (25 файлов) и 
 
 `css/css-fonts/parsing/font-weight-invalid.html`, `font-weight-valid.html`, `css/css-masking/parsing/mask-repeat-invalid.html`,
 `mask-size-valid.html`.
+
+## Дополнение WPT-RUN-14 срез 19 (2026-10-08)
+
+Тот же механизм у свойств `css-images`: `el.style.objectFit = "bogus"` и `el.style.imageRendering = "bogus"` читаются назад как записаны (проба,
+setter-страница из `getComputedStyle`/`style`); `style.objectPosition = "10%"` читается `10%` (канон `10% center`). Затронуто (по сообщениям):
+`css-images/parsing/object-fit-{invalid,valid,computed}.html`, `object-position-{invalid,valid,computed}.html`, `image-rendering-invalid.html` —
+около 40 сабтестов из 546 «images прочее».
