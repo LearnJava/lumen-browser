@@ -230,13 +230,15 @@ fn truncate_flow(b: &mut LayoutBox, cut_abs: f32, viewport: Size, measurer: Opti
         )
         .min()
         .unwrap_or(b.children.len());
-    // The clamp point lies behind a retained empty box that follows the last visible line: the
-    // line is no longer the end of the clamped content and takes no ellipsis.
+    // The clamp point lies behind a retained empty wrapper of an absolutely positioned box that
+    // follows the last visible line: the line is no longer the end of the clamped content and
+    // takes no ellipsis. A bare empty box (`<br>`) is no such marker.
     let marker_after = b.children.iter().enumerate().any(|(i, c)| {
         i < hidden_from
             && is_in_flow_baseline_source(c)
             && (c.rect.y - cut_abs).abs() <= EPS
             && c.rect.height <= EPS
+            && c.children.iter().any(|g| matches!(g.style.position, Position::Absolute | Position::Fixed))
     });
     let mut idx = 0;
     b.children.retain(|c| {
