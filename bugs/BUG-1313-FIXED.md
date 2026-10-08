@@ -39,6 +39,6 @@ WPT-RUN-14 срез 7: `alignment/grid-content-distribution-026/027.html`, `grid
 Тесты: `box_tree/tests/grid_overflow_align.rs`. WPT: `grid-content-distribution-026/027` — PASS; остальные id
 доходят до своих проверок, но целиком не проходят из-за других дефектов: `grid-items-minimum-width-001` 30/44
 (остаток — [BUG-1414](BUG-1414-OPEN.md)), `-002` (`inline-grid` перебивается `grid.css` — [BUG-1413](BUG-1413-OPEN.md)),
-`grid-content-alignment-overflow-001/002` (высоты с `min-/max-height` — [BUG-1314](BUG-1314-OPEN.md), scroll-размеры —
+`grid-content-alignment-overflow-001/002` (высоты с `min-/max-height` — [BUG-1314](BUG-1314-FIXED.md), scroll-размеры —
 [BUG-1415](BUG-1415-OPEN.md)), `grid-minimum-size-grid-items-021` (used-значения `grid-template-*` у `getComputedStyle`
 и размеры изображений — к этой правке отношения не имеет).

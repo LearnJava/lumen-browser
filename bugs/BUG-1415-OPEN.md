@@ -12,7 +12,7 @@
 `scrollHeight` 230 вместо 260, 230 вместо 150, 200 вместо 205.
 
 Высоты `fit-content` контейнера с `min-/max-height` из тех же файлов (`height expected 100 but got 250`) — это
-[BUG-1314](BUG-1314-OPEN.md), не этот дефект.
+[BUG-1314](BUG-1314-FIXED.md), не этот дефект.
 
 ## Как проверить
 

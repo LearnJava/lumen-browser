@@ -1223,4 +1223,7 @@ pub(super) fn finish_container_height(
         let ch = contained_content_height(size_contained, s, em, viewport, content_height);
         ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
     };
+    // CSS 2.1 §10.4 / Sizing L3 §5: clamp after track sizing — `max-height` does not
+    // take part in resolving the row tracks (BUG-1314).
+    super::layout_cache::clamp_min_max_height(b, s, em, available_height, viewport, padding_top, padding_bottom, 0.0);
 }
