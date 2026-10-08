@@ -35,3 +35,7 @@ WPT-RUN-14 срез 20: 358 сабтестов `Failed to execute 'insertRule' o
 ## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
 
 `css-view-transitions/parsing/pseudo-elements-{valid,valid-with-classes,invalid,invalid-with-classes}.html` — 100 + 164 + 675 + 20 сабтестов с этой же причиной (`insertRule` на листе отсоединённого `<style>` — `IndexSizeError`; пробы `.tmp/s22/p10.py`, `p11.py`): тест ждёт `SyntaxError` на невалидный селектор, получает `IndexSizeError`.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+`css/cssom/CSSStyleSheet-modify-after-removal.html` (1 id): `sh = style.sheet; head.removeChild(style); sh.cssRules.length` — `0`, `style.sheet` — `null` (ожидается: таблица остаётся доступной для `insertRule` и `cssRules`).

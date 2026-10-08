@@ -35,3 +35,7 @@ WPT-RUN-14 срез 20: `css-pseudo/marker-default-styles.html` (32/32), `marker
 ## Как проверить
 
 Таблица выше; `css/css-pseudo/marker-default-styles.html`, `marker-computed-content.html`.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+`css/css-lists`: `marker-quotes`, `marker-webkit-text-fill-color`, `marker-dynamic-content-change`, `nested-marker-styling`, `marker-counter` — маркер не получает свой стиль. Пересекается с BUG-1548 (ширина `inside`-маркера) и BUG-1568.
