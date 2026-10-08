@@ -29,3 +29,7 @@ WPT-RUN-14 срез 15: `css/CSS2/syntax/escapes-001…014` (9), `escaped-ident-
 ## Как проверить
 
 `css/CSS2/syntax/escapes-002.xht`, `escaped-ident-spaces-001.xht`, `uri-005.xht`.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+Строки `content`/`symbols` — отдельный дефект [BUG-1572](BUG-1572-OPEN.md): `content: "\2022 x"` печатается буквально. Проба `symbols: \2023` (идентификатор, а не строка) — тот же класс, что здесь (2 id `counter-style-at-rule/`: `descriptor-suffix`, `name-case-sensitivity`).

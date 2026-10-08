@@ -32,3 +32,7 @@ WPT-RUN-14 срез 22: `css-properties-values-api/at-property-cssom.html` (39 �
 ## Как проверить
 
 Таблица выше; `css/css-properties-values-api/at-property-cssom.html`.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+`css/cssom` и `css-lists`: `style.length` — строка `""` (`typeof` `string`), `style.item` — не функция; `document.styleSheets === document.styleSheets` — `false`, `styleSheets[0].cssRules === cssRules` — `false`, `document.adoptedStyleSheets === document.adoptedStyleSheets` — `false` (`StyleSheetList*`, `adoptedstylesheets-*`, 21 id; BUG-1555). Идентичность — тот же дефект «обёртка создаётся заново при каждом чтении».

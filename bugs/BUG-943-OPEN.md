@@ -39,3 +39,7 @@ Workspace-wide `grep -rn currentCSSZoom crates/` — ноль совпадени
 
 Небольшой, самодостаточный кусок работы — один читающий член плюс один
 альтернативный расчёт размера, не новая подсистема.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+`css/cssom-view`: `Element-currentCSSZoom.html`, `client-props-zoom`, `getBoundingClientRect-zoom`, `getClientRects-zoom`, `scroll-zoom`, `scrollTo-zoom`, `offsetTop-offsetLeft-with-zoom`, `image-x-y-zoom` (8 id). Проба: `typeof Element.prototype.currentCSSZoom` — `undefined`; `client-props-zoom`: `clientWidth expected 64 but got 256`.
