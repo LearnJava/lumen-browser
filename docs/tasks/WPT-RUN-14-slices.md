@@ -65,7 +65,7 @@
 | S16 | css-overflow + css-sizing | `css/css-overflow,css/css-sizing` | 1 498 | `.tmp/wpt-run14/overflow-sizing` |
 | S17 | css-multicol + css-contain | `css/css-multicol,css/css-contain` | 1 297 | `.tmp/wpt-run14/multicol-contain` |
 | S18 | css-fonts + css-masking + WOFF2 | `css/css-fonts,css/css-masking,css/WOFF2` | 1 392 | `.tmp/wpt-run14/fonts-masking` |
-| S19 | css-images + css-values + css-color | `css/css-images,css/css-values,css/css-color` | ~1 371 | `.tmp/wpt-run14/images-values-color` |
+| S19 | css-images + css-values + css-color | `css/css-images,css/css-values,css/css-color` | 1 371 | `.tmp/wpt-run14/images-values-color` |
 | S20 | selectors + css-pseudo + css-nesting + css-namespaces + css-cascade | `css/selectors,css/css-pseudo,css/css-nesting,css/css-namespaces,css/css-cascade` | ~1 371 | `.tmp/wpt-run14/selectors-pseudo` |
 | S21 | css-anchor-position + css-position + css-display | `css/css-anchor-position,css/css-position,css/css-display` | ~1 126 | `.tmp/wpt-run14/anchor-position-display` |
 | S22 | css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins | `css/css-view-transitions,css/css-conditional,css/css-variables,css/css-properties-values-api,css/css-mixins` | ~1 350 | `.tmp/wpt-run14/view-transitions-variables` |
