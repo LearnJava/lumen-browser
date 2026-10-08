@@ -227,6 +227,35 @@ fn collect_scroll_containers_abspos_overlapping_child_still_contributes() {
 }
 
 #[test]
+fn collect_scroll_containers_abspos_beyond_reachable_side_contributes() {
+    // CSS Overflow L3 §3.3: only the *start* sides of each axis are unreachable. A box wholly
+    // below the padding box (a dropdown under its anchor, `line-clamp-with-abspos-019`) is
+    // reachable by scrolling and grows scrollHeight; so does one wholly to the right in LTR.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { position: relative; overflow: auto; width: 100px; height: 100px; }          #child { position: absolute; width: 50px; height: 50px; top: 120px; left: 0; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_height - 170.0).abs() < 0.5,
+        "expected scroll_height=170 (child wholly below the padding box counts), got {}",
+        containers[0].scroll_height
+    );
+}
+
+#[test]
+fn collect_scroll_containers_abspos_beyond_start_inline_side_in_rtl_is_unreachable() {
+    // In RTL the inline start is the right side: a box wholly to its right is unreachable.
+    let right = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { position: relative; direction: rtl; overflow: auto; width: 100px; height: 100px; }          #child { position: absolute; width: 50px; height: 50px; top: 0; left: 120px; }",
+    );
+    let c = collect_scroll_containers(&right);
+    assert!((c[0].scroll_width - 100.0).abs() < 0.5, "right of an RTL box is unreachable, got {}", c[0].scroll_width);
+}
+
+#[test]
 fn collect_scroll_containers_scroll_width_floor_is_padding_box_not_border_box() {
     // BUG-504 (WPT `overflow-outside-padding.html`): scrollWidth's floor must
     // be the padding-box size (CSS Overflow L3 §3.3), not the border-box

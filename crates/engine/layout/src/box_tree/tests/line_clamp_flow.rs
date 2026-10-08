@@ -111,3 +111,28 @@ fn unprefixed_clamp_wins_over_an_earlier_prefixed_one() {
     let r = rects(&html, "#c{-webkit-line-clamp:3;line-clamp:2}", &["c"]);
     assert_eq!(r[0].height, 20.0, "{r:?}");
 }
+
+#[test]
+fn float_below_the_clamp_line_is_hidden_with_its_line() {
+    let html = format!(
+        r#"<div id="c">{}<div id="f" style="float:left;width:10px;height:10px"></div>{}</div>"#,
+        rows(2),
+        rows(2)
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse("body{margin:0}#c{line-height:0;line-clamp:2}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    assert!(super::find_by_id_all(&root, &doc, "f").is_none(), "поплавок скрытой строки остался");
+}
+
+#[test]
+fn float_above_the_clamp_line_stays() {
+    let html = format!(
+        r#"<div id="c"><div id="f" style="float:left;width:10px;height:10px"></div>{}</div>"#,
+        rows(4)
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse("body{margin:0}#c{line-height:0;line-clamp:2}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    assert!(super::find_by_id_all(&root, &doc, "f").is_some(), "поплавок видимой строки пропал");
+}

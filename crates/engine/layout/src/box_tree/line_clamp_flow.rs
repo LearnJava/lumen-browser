@@ -60,6 +60,24 @@ fn clamp_mode(b: &LayoutBox) -> Option<Mode> {
     }
 }
 
+/// How many lines of an inline run laid out as `lines` stay visible when `text-wrap: balance`
+/// has to balance them *after* clamping: the `line-clamp: <n>` of the run's own style, when the
+/// run has more lines than that. `None` — balance the whole run. The count is per run, so a run
+/// that follows other lines of the same container is still given the whole `n`.
+pub(super) fn balance_limit(s: &ComputedStyle, lines: usize) -> Option<usize> {
+    let n = s.line_clamp.filter(|&n| n > 0)? as usize;
+    if is_vertical_flow(s) || lines <= n {
+        return None;
+    }
+    if s.line_clamp_legacy
+        && !(matches!(s.display, Display::WebkitBox | Display::WebkitInlineBox)
+            && s.box_orient == crate::style::WebkitBoxOrient::Vertical)
+    {
+        return None;
+    }
+    Some(n)
+}
+
 fn is_vertical_flow(s: &ComputedStyle) -> bool {
     !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
 }
@@ -180,9 +198,63 @@ pub(super) fn apply_cut(b: &mut LayoutBox, cut: Cut, viewport: Size, measurer: O
     truncate_flow(b, cut_abs, viewport, measurer);
 }
 
+/// Поплавок, чья margin-кромка целиком ниже линии отсечки: он принадлежит скрытой строке
+/// (CSS Overflow L4 §line-clamp) и скрывается вместе с ней. Поплавок выше линии остаётся,
+/// даже если вылезает за неё.
+fn is_hidden_float(c: &LayoutBox, cut_abs: f32, parent_width: f32, viewport: Size) -> bool {
+    if c.style.float_side == FloatSide::None || matches!(c.style.position, Position::Absolute | Position::Fixed) {
+        return false;
+    }
+    let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, parent_width, viewport);
+    c.rect.y - mt >= cut_abs - EPS
+}
+
 fn truncate_flow(b: &mut LayoutBox, cut_abs: f32, viewport: Size, measurer: Option<&dyn TextMeasurer>) {
-    b.children.retain(|c| !(is_in_flow_baseline_source(c) && c.rect.y >= cut_abs - EPS));
     let width = b.rect.width;
+    // Everything from the first in-flow box that has height below the cut — or that follows a box
+    // the cut runs through — is hidden. A box without height standing before that point (an empty
+    // `position: relative` wrapper holding an absolutely positioned child) still *precedes* the
+    // clamp point and stays.
+    let hidden_from = b
+        .children
+        .iter()
+        .position(|c| {
+            is_in_flow_baseline_source(c) && c.rect.y >= cut_abs - EPS && c.rect.height > EPS
+        })
+        .into_iter()
+        .chain(
+            b.children
+                .iter()
+                .position(|c| is_in_flow_baseline_source(c) && c.rect.y < cut_abs - EPS && c.rect.y + c.rect.height > cut_abs + EPS)
+                .map(|i| i + 1),
+        )
+        .min()
+        .unwrap_or(b.children.len());
+    // The clamp point lies behind a retained empty wrapper of an absolutely positioned box that
+    // follows the last visible line: the line is no longer the end of the clamped content and
+    // takes no ellipsis. A bare empty box (`<br>`) is no such marker.
+    let marker_after = b.children.iter().enumerate().any(|(i, c)| {
+        i < hidden_from
+            && is_in_flow_baseline_source(c)
+            && (c.rect.y - cut_abs).abs() <= EPS
+            && c.rect.height <= EPS
+            && c.children.iter().any(|g| matches!(g.style.position, Position::Absolute | Position::Fixed))
+    });
+    let mut idx = 0;
+    b.children.retain(|c| {
+        let i = idx;
+        idx += 1;
+        if is_hidden_float(c, cut_abs, width, viewport) {
+            return false;
+        }
+        // Whitespace placeholders below the cut would still stretch the scrollable overflow.
+        if matches!(c.kind, BoxKind::Skip) && c.rect.y > cut_abs + EPS {
+            return false;
+        }
+        // A margin between the last visible line and the box puts the clamp point before it.
+        let precedes = i < hidden_from && c.rect.y <= cut_abs + EPS;
+        !(is_in_flow_baseline_source(c) && c.rect.y >= cut_abs - EPS && !precedes)
+    });
     for c in b.children.iter_mut().filter(|c| is_in_flow_baseline_source(c)) {
         let bottom = c.rect.y + c.rect.height;
         if bottom < cut_abs - EPS {
@@ -200,8 +272,12 @@ fn truncate_flow(b: &mut LayoutBox, cut_abs: f32, viewport: Size, measurer: Opti
             let keep = (((cut_abs - c.rect.y) / line_h).round() as usize).clamp(1, old_n);
             lines.truncate(keep);
             c.rect.height = line_h * keep as f32;
-            if let (Some(m), Some(last)) = (measurer, lines.last_mut()) {
-                ellipsize_last_line(last, c.rect.width, c.style.font_size, m);
+            let ends_at_cut = (c.rect.y + c.rect.height - cut_abs).abs() <= EPS;
+            if let (Some(m), Some(last)) = (measurer, lines.last_mut())
+                && !(marker_after && ends_at_cut)
+            {
+                let rtl = c.style.direction == crate::style::Direction::Rtl;
+                ellipsize_last_line(last, c.rect.width, c.style.font_size, m, rtl);
             }
         }
     }
