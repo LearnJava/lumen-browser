@@ -40,7 +40,7 @@
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
-    owns_paint_layer, BoxKind, Cursor, Display, LayoutBox,
+    owns_paint_layer, paint_child_order, BoxKind, Cursor, Display, LayoutBox,
     Mat4, PointerEvents, TransformFn, UserSelect,
 };
 
@@ -128,7 +128,10 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
-    for child in &b.children {
+    // `order` на flex/grid-детях меняет и paint order, а с ним и hit-test.
+    let order = paint_child_order(b);
+    let children = (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]);
+    for child in children {
         match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
             (true, Some(z)) if z < 0 => negative.push((child, z)),
@@ -216,7 +219,10 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
-    for child in &b.children {
+    // `order` на flex/grid-детях меняет и paint order, а с ним и hit-test.
+    let order = paint_child_order(b);
+    let children = (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]);
+    for child in children {
         match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
             (true, Some(z)) if z < 0 => negative.push((child, z)),
@@ -713,6 +719,24 @@ mod tests {
         let above_pos = nodes.iter().position(|&n| n == above).expect(".above hit");
         let below_pos = nodes.iter().position(|&n| n == below).expect(".below hit — sibling, not just ancestor");
         assert!(above_pos < below_pos, "выше по z-index — раньше в списке");
+    }
+
+    #[test]
+    fn grid_item_with_higher_order_is_topmost_in_hit_test() {
+        // BUG-1312: два grid-item в одной ячейке; `order:1` рисуется поверх `order:0`,
+        // хотя стоит раньше в DOM — значит, и клик достаётся ему.
+        let html = r#"<div class="g"><div class="hi"></div><div class="lo"></div></div>"#;
+        let css = "
+            .g { display: grid; width: 200px; height: 100px; }
+            .g > div { grid-area: 1 / 1; }
+            .hi { order: 1; }
+        ";
+        let (doc, root) = build(html, css);
+        let r = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(r.node, by_class(&doc, "hi"));
+        let nodes: Vec<_> = hit_test_all(Point::new(10.0, 10.0), &root).iter().map(|h| h.node).collect();
+        let pos = |n| nodes.iter().position(|&x| x == n).expect("hit");
+        assert!(pos(by_class(&doc, "hi")) < pos(by_class(&doc, "lo")));
     }
 
     #[test]
