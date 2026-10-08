@@ -396,6 +396,26 @@ fn line_clamp_last_line_ends_with_ellipsis() {
     assert!(last.ends_with('\u{2026}'), "last line must end with '…', got: {last:?}");
 }
 
+/// `<br>` — пустой бокс на линии отсечки, но не маркер скрытого абсолютного потомка:
+/// многоточие остаётся на последней видимой строке.
+#[test]
+fn line_clamp_ellipsis_survives_br_at_the_clamp_point() {
+    let doc = lumen_html_parser::parse("<div>L1<br>L2<br>L3<br>L4</div>");
+    let sheet = lumen_css_parser::parse("div { line-clamp: 3; font-size: 16px; line-height: 32px; }");
+    let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+    fn texts(b: &box_tree::LayoutBox, out: &mut Vec<String>) {
+        if let box_tree::BoxKind::InlineRun { lines, .. } = &b.kind
+            && let Some(l) = lines.last()
+        {
+            out.push(l.iter().map(|f| f.text.as_str()).collect());
+        }
+        b.children.iter().for_each(|c| texts(c, out));
+    }
+    let mut all = Vec::new();
+    texts(&root, &mut all);
+    assert!(all.iter().any(|t| t.starts_with("L3") && t.ends_with('\u{2026}')), "L3 lost its '…': {all:?}");
+}
+
 /// line-clamp: 1 → одна строка, совпадает с text-overflow поведением.
 #[test]
 fn line_clamp_one_line() {
