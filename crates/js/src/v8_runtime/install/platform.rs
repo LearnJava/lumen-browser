@@ -674,6 +674,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // `text-transform` over a text string with the layout's own casing rules, so that
+    // `innerText` matches what is painted (BUG-1329). `value` is the computed
+    // `text-transform`, `lang` the element's `lang`/`xml:lang` ("" when unset).
+    reg!(scope, ctx, store,
+        "_lumen_text_transform",
+        |text: String, value: String, lang: String| -> String {
+            lumen_layout::style::transform_text_by_value(&value, &lang, &text)
+        }
+    );
+
     // Canonical sizing serialization for inline-`style` `width`/`height`
     // (CSS Sizing L3 §4, CSSOM-2/BUG-484 third slice) — same role as
     // `_lumen_css_canonical_length` above, but the grammar additionally
