@@ -751,10 +751,13 @@ pub(crate) fn wrap_inline_run(
             // Перенос перед этим словом разрешён? Запрещён он только на стыке
             // подсегментов, разрезанных капителью внутри слова.
             let breakable = !is_seg_first || !no_break_before;
+            // Слово не влезает в остаток строки. Для мягкого переноса и
+            // `word-break: break-all` это достаточное условие, в том числе когда
+            // слово начинает строку и переполняет контейнер в одиночку
+            // (CSS Text L3 §5.2, §6.1).
+            let overflows = breakable && current_x + gap + pre + word_w > max_width;
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
-            let needs_wrap = !current_line.is_empty()
-                && breakable
-                && current_x + gap + pre + word_w > max_width;
+            let needs_wrap = !current_line.is_empty() && overflows;
 
             // CSS Text L3 §5.5 `line-break` — soft wrap opportunities *inside*
             // the word. CJK text carries no spaces, so `split_css_whitespace` hands
@@ -833,7 +836,7 @@ pub(crate) fn wrap_inline_run(
                 continue;
             }
 
-            if needs_wrap {
+            if overflows {
                 // CSS Text L3 §6: try hyphenation before hard wrap.
                 let hyph_result = if hyphens != Hyphens::None {
                     let mut break_pts = shy_positions.clone();
@@ -939,9 +942,12 @@ pub(crate) fn wrap_inline_run(
                     continue;
                 }
 
-                // No hyphenation break found — normal wrap.
-                result.push(std::mem::take(&mut current_line));
-                current_x = 0.0;
+                // No hyphenation break found — normal wrap. A word that starts the
+                // line has nowhere to wrap to: it stays and overflows.
+                if needs_wrap {
+                    result.push(std::mem::take(&mut current_line));
+                    current_x = 0.0;
+                }
             }
 
             // CSS Text L3 §8.1: overflow-wrap: break-word / anywhere — char-break
