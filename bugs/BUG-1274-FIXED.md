@@ -1,6 +1,6 @@
 # BUG-1274 — `writing-mode` с `<body>` не становится главным режимом документа: вертикальный `<body>` прижат к левому краю
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 2 — `css/css-writing-modes/wm-propagation-*`)
 **Область:** layout (корень дерева боксов / ICB; не локализовано — `grep -i "principal"` по `crates/` пуст)
 
@@ -32,3 +32,7 @@ CSS Writing Modes L3 §8 (Principal Writing Mode): `writing-mode`/`direction` `<
 
 WPT `css/css-writing-modes/wm-propagation-*` (29 id: 27 reftest и 2 testharness), например
 `wm-propagation-body-032.html` против `block-flow-direction-025-ref.xht`.
+
+## Исправление
+
+`propagate_body_writing_mode` ([entry.rs](../crates/engine/layout/src/box_tree/entry.rs)): `writing-mode`/`direction`/`text-orientation` `<body>` копируются на `<html>` и на корневой бокс (ICB, ширина = вьюпорт). Тест `body_vertical_rl_is_principal_mode_and_starts_at_right_edge`. Не охвачено: инкрементальные входы (как и gutter-проход), `scrollLeft` у vertical-rl.

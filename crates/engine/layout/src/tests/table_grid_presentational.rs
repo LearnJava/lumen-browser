@@ -2291,3 +2291,17 @@ fn grid_template_shorthand_stores_line_names() {
     assert_eq!(s.grid_template_row_line_names, vec![vec!["r1"], vec!["r2"]]);
     assert_eq!(s.grid_template_col_line_names, vec![vec!["c1"], vec!["c2"]]);
 }
+
+// ─── Principal writing mode (CSS Writing Modes L3 §8, BUG-1274) ─────
+
+#[test]
+fn body_vertical_rl_is_principal_mode_and_starts_at_right_edge() {
+    let root = lay_full(
+        r#"<html><body style="writing-mode:vertical-rl;margin:0"><div style="width:100px;height:100px"></div></body></html>"#,
+        "",
+    );
+    let (html, body) = html_and_body(&root);
+    assert_eq!(html.style.writing_mode, crate::style::WritingMode::VerticalRl, "режим body переходит на html");
+    assert_eq!(body.rect.x, 700.0, "блочный поток вертикального документа идёт от правого края");
+    assert_eq!(html.rect.x + html.rect.width, 800.0);
+}

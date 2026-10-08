@@ -145,7 +145,7 @@ pub(crate) fn is_inline_content(
     match &doc.get(id).data {
         // Control-only text (after BUG-120 stripping) is no more inline content
         // than whitespace-only text: it must not open an inline run / line box.
-        NodeData::Text(s) => !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)),
+        NodeData::Text(s) => !s.chars().all(|c| is_wrap_whitespace(c) || is_invisible_control(c)),
         NodeData::Element { .. } => {
             if is_image_element(doc, id)
                 || is_inline_replaced_media_element(doc, id)
@@ -523,7 +523,7 @@ pub(crate) fn inline_run_lead_space(b: &LayoutBox, measurer: Option<&dyn TextMea
     let starts_ws = segments
         .iter()
         .find(|seg| !seg.text.is_empty())
-        .is_some_and(|seg| seg.text.starts_with(|c: char| c.is_whitespace()));
+        .is_some_and(|seg| seg.text.starts_with(|c: char| is_wrap_whitespace(c)));
     if starts_ws { inline_space_width(b, measurer) } else { 0.0 }
 }
 
@@ -555,7 +555,7 @@ pub(crate) fn inline_run_advance(b: &LayoutBox, measurer: Option<&dyn TextMeasur
             .iter()
             .rev()
             .find(|seg| !seg.text.is_empty())
-            .is_some_and(|seg| seg.text.ends_with(|c: char| c.is_whitespace()));
+            .is_some_and(|seg| seg.text.ends_with(|c: char| is_wrap_whitespace(c)));
         if ends_ws { inline_space_width(b, measurer) } else { 0.0 }
     };
     extent + trail
@@ -923,7 +923,7 @@ pub(crate) fn collect_inline_segments(
                     byte_offset += 1; // the \n character
                 }
                 let stripped = strip_invisible_controls(line);
-                if !stripped.chars().all(|c| c.is_whitespace()) {
+                if !stripped.chars().all(is_wrap_whitespace) {
                     let text = inherited.text_transform.apply(&stripped);
                     let kind = if *need_first_letter && !text.trim().is_empty() {
                         *need_first_letter = false;
@@ -995,7 +995,7 @@ pub(crate) fn collect_inline_segments(
             if let Some(last) = out.last_mut()
                 && !last.forced_break
                 && !last.style.white_space.preserves_whitespace()
-                && !last.text.ends_with(|c: char| c.is_whitespace())
+                && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
             {
                 last.text.push(' ');
             }

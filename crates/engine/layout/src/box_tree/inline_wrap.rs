@@ -234,7 +234,7 @@ pub(crate) fn caps_synthesis(
                 });
                 no_break.push(
                     out.len() > start + 1
-                        && !prev_ch.is_some_and(|c: char| c.is_whitespace()),
+                        && !prev_ch.is_some_and(|c: char| is_wrap_whitespace(c)),
                 );
                 prev_role = Some(role);
             }
@@ -380,7 +380,7 @@ fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
         let ls = seg.style.letter_spacing;
         let tab = seg.style.tab_size;
         let families = &seg.style.font_family;
-        for raw in seg.text.split_whitespace() {
+        for raw in split_css_whitespace(&seg.text) {
             let (display, _) = strip_soft_hyphens(raw);
             let w = measure_text_w_families(&display, em, ls, tab, families, m);
             max_w = max_w.max(w);
@@ -472,7 +472,7 @@ pub(crate) fn pretty_wrap(
     // single InlineFrag, so check word count, not frag count.
     let last_word_count: usize = greedy_lines
         .last()
-        .map(|l| l.iter().map(|f| f.text.split_whitespace().count()).sum())
+        .map(|l| l.iter().map(|f| split_css_whitespace(&f.text).count()).sum())
         .unwrap_or(0);
     if last_word_count != 1 || greedy_lines.len() < 2 {
         return greedy_lines;
@@ -494,8 +494,8 @@ pub(crate) fn pretty_wrap(
     let last_frag = penult.last().unwrap();
     let last_word_w = last_frag
         .text
-        .split_whitespace()
-        .last()
+        .split(is_wrap_whitespace)
+        .rfind(|w| !w.is_empty())
         .map(|w| {
             let (display, _) = strip_soft_hyphens(w);
             measure_text_w_families(
@@ -524,7 +524,7 @@ pub(crate) fn pretty_wrap(
     // didn't blow up by more than 1 line.
     let trial_last_words: usize = trial
         .last()
-        .map(|l| l.iter().map(|f| f.text.split_whitespace().count()).sum())
+        .map(|l| l.iter().map(|f| split_css_whitespace(&f.text).count()).sum())
         .unwrap_or(0);
     if trial_last_words >= 2 && trial.len() <= target + 1 {
         trial
@@ -598,8 +598,8 @@ pub(crate) fn wrap_inline_run(
 
         // Does this segment's source text carry collapsible whitespace at its
         // edges? Used to decide the boundary gap with the previous segment.
-        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
-        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
+        let seg_lead_ws = seg.text.starts_with(|c: char| is_wrap_whitespace(c));
+        let seg_trail_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
 
         // Pre-mode: whitespace preserved, no word wrapping, tabs are tab_size wide.
         if white_space.preserves_whitespace() {
@@ -692,8 +692,8 @@ pub(crate) fn wrap_inline_run(
             continue;
         }
 
-        // Collect words; split_whitespace preserves U+00AD within tokens.
-        let raw_words: Vec<&str> = seg.text.split_whitespace().collect();
+        // Collect words; split_css_whitespace preserves U+00AD within tokens.
+        let raw_words: Vec<&str> = split_css_whitespace(&seg.text).collect();
         if raw_words.is_empty() {
             // Whitespace-only segment (rare in collapsing mode): propagate the gap.
             if seg_lead_ws || seg_trail_ws {
@@ -720,7 +720,7 @@ pub(crate) fn wrap_inline_run(
             let (display_word, shy_positions) = strip_soft_hyphens(raw_word);
 
             // Byte offset of this word within seg.text — used for Selection/Range mapping.
-            // raw_word is a subslice produced by split_whitespace(), so pointer arithmetic is valid.
+            // raw_word is a subslice produced by split_css_whitespace(), so pointer arithmetic is valid.
             let frag_source_offset = {
                 let raw_ptr = raw_word.as_ptr() as usize;
                 let seg_ptr = seg.text.as_ptr() as usize;
@@ -757,7 +757,7 @@ pub(crate) fn wrap_inline_run(
                 && current_x + gap + pre + word_w > max_width;
 
             // CSS Text L3 §5.5 `line-break` — soft wrap opportunities *inside*
-            // the word. CJK text carries no spaces, so `split_whitespace` hands
+            // the word. CJK text carries no spaces, so `split_css_whitespace` hands
             // us whole paragraphs here; without this the run would either
             // overflow the container or be pushed onto a line of its own.
             // Only relevant when the word does not fit as-is; `word-break:
@@ -1240,12 +1240,12 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
             });
-            prev_trailing_ws = seg.text.ends_with(|c: char| c.is_whitespace());
+            prev_trailing_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
             continue;
         }
-        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
-        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
-        let text: String = seg.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let seg_lead_ws = seg.text.starts_with(|c: char| is_wrap_whitespace(c));
+        let seg_trail_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
+        let text: String = split_css_whitespace(&seg.text).collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             if seg_lead_ws || seg_trail_ws {
                 prev_trailing_ws = true;

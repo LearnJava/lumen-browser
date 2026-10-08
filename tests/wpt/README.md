@@ -335,7 +335,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   Both captures are cropped to the viewport before comparing (a whole-page
   `--screenshot` of a taller test used to come out `size-differs` regardless
   of what is on screen); `--viewport 800x600` matches wptrunner, `--ahem`
-  makes `font-family: Ahem` resolve over `file://` ([BUG-1273](../../bugs/BUG-1273-OPEN.md)
+  makes `font-family: Ahem` resolve over `file://` ([BUG-1273](../../bugs/BUG-1273-FIXED.md)
   — the reftest executor itself never waits for `@font-face url()`), and
   `--output` names the result file. WPT-RUN-14 S2.
   Scoring — including "an id that never ran scores 0" — is written down in

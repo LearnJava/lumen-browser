@@ -1,6 +1,6 @@
 # BUG-1314 — высота flex-/grid-контейнера игнорирует `min-height`/`max-height` (и логические `*-block-size`)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 8, `css/css-grid`, вторая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/flex.rs`, `grid.rs` — `--dump-layout` печатает `min-h=`/`max-h=`, то есть значение разобрано и дошло до `ComputedStyle`, но размер контейнера по нему не зажимается)
 
@@ -30,3 +30,9 @@ WPT-RUN-14 срез 8: `css/css-grid/grid-model/grid-min-max-height-001.html` (8
 ## Как проверить
 
 `css/css-grid/grid-model/grid-min-max-height-001.html`, `grid-box-sizing-001.html`, `layout-algorithm/grid-stretch-respects-min-size-001.html`.
+
+## Исправление
+
+`layout_cache::clamp_min_max_height` — тот же зажим `[min-height, max-height]` (сначала max, потом min; `box-sizing` и padding/border учтены), что раньше сидел внутри `finalize_block_height`, вынесен в общую функцию и вызывается ещё и из хвоста flex-контейнера (`flex_trampoline::finish_frame`) и grid-контейнера (`grid_trampoline::finish_container_height`). Для grid зажим идёт после track sizing, `max-height` в разрешении строк не участвует. Логические `min-/max-block-size` уже приходили как `min_height`/`max_height` (`style/logical.rs`). Тесты — `box_tree/tests/container_min_max_height.rs`.
+
+**Не сделано (за рамками пункта):** увеличенная `min-height` высота column-flex-контейнера не раздаётся элементам через `flex-grow`/`justify-content` — главный размер там по-прежнему считается от высоты до зажима; вертикальные writing-modes идут через `grid_vertical::finish_container`, где зажим был и раньше. WPT-страницы из «Как проверить» в `tests/wpt` не вендорены, прогнаны только зонды таблицы выше (`grid`/`flex`/`inline-grid` — все строки дали ожидаемое).

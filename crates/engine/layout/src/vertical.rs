@@ -452,10 +452,15 @@ pub(crate) fn lay_out_vertical_inline_run(
     };
     let banded = floats.is_some_and(|fc| !fc.is_empty());
 
+    // CSS Text L3 §7.1: the indent shifts the first column along the inline
+    // axis (downwards); a percentage is of the container's inline size.
+    let text_indent = s.text_indent.resolve_or_zero(em, content_inline, viewport);
+
     *lines = wrap_inline_run_vertical(
         segments,
         wrap_budget,
         em,
+        text_indent,
         viewport,
         m,
         hp,
@@ -501,6 +506,7 @@ pub(crate) fn wrap_inline_run_vertical(
     segments: &[InlineSegment],
     max_height: f32,
     container_font_size: f32,
+    text_indent: f32,
     viewport: Size,
     m: &dyn TextMeasurer,
     _hp: &dyn HyphenationProvider,
@@ -520,7 +526,7 @@ pub(crate) fn wrap_inline_run_vertical(
     let mut line_end = line_start + first_budget;
     let mut result: Vec<Vec<InlineFrag>> = vec![Vec::new()];
     let mut current_line: &mut Vec<InlineFrag> = result.last_mut().unwrap();
-    let mut current_y: f32 = line_start;
+    let mut current_y: f32 = line_start + text_indent;
     let mut prev_trailing_ws: bool = false;
 
     for seg in segments {
@@ -1050,5 +1056,33 @@ mod tests {
             "expected no reduction (200), got {}",
             c.rect.height,
         );
+    }
+
+    fn first_run_lines(b: &LayoutBox) -> Option<&Vec<Vec<crate::InlineFrag>>> {
+        if let BoxKind::InlineRun { lines, .. } = &b.kind
+            && !lines.is_empty()
+        {
+            return Some(lines);
+        }
+        b.children.iter().find_map(first_run_lines)
+    }
+
+    #[test]
+    fn vertical_text_indent_shifts_first_column_only() {
+        struct Fixed8;
+        impl crate::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 {
+                8.0
+            }
+        }
+        let doc = lumen_html_parser::parse("<div id=v>aaaa bbbb cccc dddd eeee ffff</div>");
+        let sheet = lumen_css_parser::parse(
+            "#v { writing-mode: vertical-lr; height: 100px; text-indent: 40px; font-size: 20px; }",
+        );
+        let root = crate::box_tree::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let lines = first_run_lines(&root).expect("run missing");
+        assert!(lines.len() > 1, "expected wrap, got {} columns", lines.len());
+        assert!((lines[0][0].x - 40.0).abs() < 0.5, "first col x={}", lines[0][0].x);
+        assert!(lines[1][0].x.abs() < 0.5, "second col x={}", lines[1][0].x);
     }
 }

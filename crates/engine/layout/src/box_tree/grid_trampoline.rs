@@ -607,6 +607,7 @@ fn finish_probe_pass(init: &mut GridInit) {
             init.s.align_content,
             init.definite_content_height.map(|h| h - used_row_total).unwrap_or(0.0),
             super::grid::gutter_count(&init.row_collapsed, n_rows as usize) + 1,
+            init.s.content_align_extra.align_safe,
         );
         let row_offsets =
             super::grid::track_offsets(&init.row_heights, &init.row_collapsed, row_gap, ac_extra, ac_start);
@@ -1222,4 +1223,7 @@ pub(super) fn finish_container_height(
         let ch = contained_content_height(size_contained, s, em, viewport, content_height);
         ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
     };
+    // CSS 2.1 §10.4 / Sizing L3 §5: clamp after track sizing — `max-height` does not
+    // take part in resolving the row tracks (BUG-1314).
+    super::layout_cache::clamp_min_max_height(b, s, em, available_height, viewport, padding_top, padding_bottom, 0.0);
 }
