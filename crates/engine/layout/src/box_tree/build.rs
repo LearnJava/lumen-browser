@@ -219,6 +219,7 @@ fn build_ruby_group_box(
             );
         } else {
             if !pending.is_empty() {
+                super::segment_break::collapse_segment_breaks(&mut pending);
                 children.push(anon_inline_run(
                     owner_id, parent_style, std::mem::take(&mut pending), BoxRole::AnonymousInlineRun,
                 ));
@@ -230,6 +231,7 @@ fn build_ruby_group_box(
         }
     }
     if !pending.is_empty() {
+        super::segment_break::collapse_segment_breaks(&mut pending);
         children.push(anon_inline_run(owner_id, parent_style, pending, BoxRole::AnonymousInlineRun));
     }
     let mut bstyle = anon_style(parent_style);
@@ -1220,6 +1222,7 @@ fn build_box_inner(
                 // CSS §4.1.2 white-space collapsing: whitespace between
                 // inline-level siblings collapses to a single space.
                 let mut had_ws = false;
+                let mut had_break = false;
                 // CSS Pseudo-elements L4 §5.1: first letter of this inline run hasn't been
                 // split out yet. Passed through all collect_inline_segments calls in this loop.
                 let mut need_first_letter = true;
@@ -1247,6 +1250,7 @@ fn build_box_inner(
                         // contains whitespace (a bare U+0001 is zero-advance in Edge).
                         NodeData::Text(s) if is_discardable_text(s, style.white_space) => {
                             had_ws |= s.chars().any(is_collapsible_whitespace);
+                            had_break |= s.contains('\n');
                             i += 1;
                             continue;
                         }
@@ -1268,8 +1272,10 @@ fn build_box_inner(
                             && !last.style.white_space.preserves_whitespace()
                             && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
                         {
-                            last.text.push(' ');
+                            let gap = super::segment_break::folded_gap(&last.text, had_break);
+                            last.text.push(gap);
                         }
+                        had_break = false;
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, &mut pending_escapes, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
@@ -1308,6 +1314,7 @@ fn build_box_inner(
                         }
                         row_items.push(build_box_or_reuse(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                         had_ws = false;
+                        had_break = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
                         && probe_display(doc, sheet, cid, &style, viewport, dark_mode, counters)
