@@ -169,7 +169,7 @@ use pseudo_text::{
 use pseudo_text::is_first_letter_box;
 
 mod entry;
-use entry::{is_collapsible_whitespace, is_invisible_control, strip_invisible_controls};
+use entry::{is_collapsible_whitespace, is_invisible_control, is_wrap_whitespace, split_css_whitespace, strip_invisible_controls};
 #[cfg(test)]
 use entry::{apply_font_size_adjust, font_size_adjust_used};
 pub use entry::{

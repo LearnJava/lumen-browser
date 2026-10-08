@@ -56,7 +56,7 @@ fn build_ruby_box(
     };
     let skipped = |node: NodeId| match &doc.get(node).data {
         NodeData::Comment(_) | NodeData::Doctype { .. } => true,
-        NodeData::Text(t) => t.chars().all(char::is_whitespace),
+        NodeData::Text(t) => t.chars().all(is_wrap_whitespace),
         _ => is_ruby_parenthesis_element(doc, node),
     };
 
@@ -208,7 +208,7 @@ fn build_ruby_group_box(
             continue;
         }
         if let NodeData::Text(s) = &doc.get(cid).data
-            && s.chars().all(char::is_whitespace)
+            && s.chars().all(is_wrap_whitespace)
         {
             continue;
         }
@@ -1246,9 +1246,9 @@ fn build_box_inner(
                         // but contributes an inter-segment space only if it actually
                         // contains whitespace (a bare U+0001 is zero-advance in Edge).
                         NodeData::Text(s)
-                            if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) =>
+                            if s.chars().all(|c| is_wrap_whitespace(c) || is_invisible_control(c)) =>
                         {
-                            had_ws |= s.chars().any(char::is_whitespace);
+                            had_ws |= s.chars().any(is_wrap_whitespace);
                             i += 1;
                             continue;
                         }
@@ -1268,7 +1268,7 @@ fn build_box_inner(
                             && let Some(last) = pending.last_mut()
                             && !last.forced_break
                             && !last.style.white_space.preserves_whitespace()
-                            && !last.text.ends_with(|c: char| c.is_whitespace())
+                            && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
                         {
                             last.text.push(' ');
                         }

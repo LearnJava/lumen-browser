@@ -1,6 +1,6 @@
 # BUG-1323 — U+00A0, U+202F, U+2007 (класс GL) ведут себя как пробел: по ним переносится строка
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-08
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 9, `css/css-text`, первая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:383,676,1228` и `inline_build.rs:148,526,558,926,998` — текст режется `str::split_whitespace()` / `char::is_whitespace()`, а у Rust `White_Space` входят NBSP, NNBSP, FIGURE SPACE; CSS Text L3 §4.1.1 «document white space» — только U+0020, U+0009, U+000A, U+000C, U+000D)
 
@@ -30,3 +30,7 @@ WPT-RUN-14 срез 9: `css/css-text/i18n/css3-text-line-break-baspglwj-120/121/
 ## Как проверить
 
 `css/css-text/i18n/css3-text-line-break-baspglwj-120.html`, `-121.html`, `-124.html`; проба выше — высота блока с NBSP = 30.
+
+## Исправление
+
+`entry.rs::is_wrap_whitespace` — Unicode white space без U+00A0, U+202F, U+2007 — и `split_css_whitespace` на его основе заменили `str::split_whitespace()` и `char::is_whitespace()` в `inline_wrap.rs` (разбиение на слова, края сегмента, `balance_wrap`/`pretty_wrap`), `inline_build.rs`, `build.rs`, `intrinsic.rs` (min-content), `pseudo_text.rs` (счёт слов для `::first-line`). Прочие Unicode-пробелы (EN SPACE, IDEOGRAPHIC SPACE — класс BA) остаются точками переноса, как и раньше; полная таблица UAX #14 — `LINEBREAK-UAX14`. Тест — `box_tree/tests/nbsp_no_wrap.rs`.

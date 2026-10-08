@@ -949,6 +949,20 @@ pub(crate) fn is_collapsible_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0c}')
 }
 
+/// Word separators for line breaking: Unicode white space except the
+/// no-break spaces U+00A0, U+202F, U+2007 (UAX #14 class GL), which are not CSS
+/// document white space (CSS Text L3 §4.1.1) and must stay inside the word
+/// (BUG-1323). Other Unicode spaces (EN SPACE, IDEOGRAPHIC SPACE…) are class BA —
+/// they stay break opportunities.
+pub(crate) fn is_wrap_whitespace(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{202f}' | '\u{2007}')
+}
+
+/// `str::split_whitespace` over [`is_wrap_whitespace`].
+pub(crate) fn split_css_whitespace(s: &str) -> impl Iterator<Item = &str> {
+    s.split(is_wrap_whitespace).filter(|w| !w.is_empty())
+}
+
 /// Removes invisible control characters (see [`is_invisible_control`]) from `s`.
 /// Borrows the input unchanged when no such characters are present (common case).
 pub(crate) fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {

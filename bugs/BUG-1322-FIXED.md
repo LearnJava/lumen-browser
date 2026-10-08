@@ -18,7 +18,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 9: `css/css-text/i18n/css3-text-line-break-baspglwj-*` (113 файлов по 4 сабтеста: `white-space:normal|pre-line|pre-wrap|break-spaces`) — `pre-wrap` падает в 102 из 113, `break-spaces` — в 102. 22 файла падают **только** на этих двух сабтестах (`normal` и `pre-line` зелёные) — 22 id / 44 сабтеста; остальные ещё и по `LINEBREAK-UAX14`/[BUG-1323](BUG-1323-OPEN.md). В 136 не зелёных id текст теста содержит `white-space: pre-wrap|break-spaces` (`i18n/` 105, `overflow-wrap/` 12, `line-break/` 8, `letter-spacing/` 7, `text-align/` 3, `hyphens/` 1) — часть из них, возможно, упирается в этот же дефект; сколько — не проверено.
+WPT-RUN-14 срез 9: `css/css-text/i18n/css3-text-line-break-baspglwj-*` (113 файлов по 4 сабтеста: `white-space:normal|pre-line|pre-wrap|break-spaces`) — `pre-wrap` падает в 102 из 113, `break-spaces` — в 102. 22 файла падают **только** на этих двух сабтестах (`normal` и `pre-line` зелёные) — 22 id / 44 сабтеста; остальные ещё и по `LINEBREAK-UAX14`/[BUG-1323](BUG-1323-FIXED.md). В 136 не зелёных id текст теста содержит `white-space: pre-wrap|break-spaces` (`i18n/` 105, `overflow-wrap/` 12, `line-break/` 8, `letter-spacing/` 7, `text-align/` 3, `hyphens/` 1) — часть из них, возможно, упирается в этот же дефект; сколько — не проверено.
 
 ## Что делать
 
