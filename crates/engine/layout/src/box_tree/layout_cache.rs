@@ -305,9 +305,30 @@ pub(super) fn finalize_block_height(
     {
         b.rect.height = ph + s.border_top_width + s.border_bottom_width;
     }
-    // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с width: max
-    // сначала, потом min → «min побеждает max». Content оверфлоу-ит коробку
-    // если min режет ниже — это правильное поведение CSS.
+    clamp_min_max_height(b, s, em, available_height, viewport, padding_top, padding_bottom, cb);
+}
+
+/// CSS 2.1 §10.4: clamp the border-box height to [min-height, max-height]. Симметрия с width:
+/// max сначала, потом min → «min побеждает max». Content оверфлоу-ит коробку если min режет
+/// ниже — это правильное поведение CSS. Общий хвост block-, flex- и grid-контейнеров.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn clamp_min_max_height(
+    b: &mut LayoutBox,
+    s: &ComputedStyle,
+    em: f32,
+    available_height: Option<f32>,
+    viewport: Size,
+    padding_top: f32,
+    padding_bottom: f32,
+    cb: f32,
+) {
+    let stretch_margins = |l: &Length| -> f32 {
+        if matches!(l, Length::Stretch) {
+            s.margin_top.resolve_or_zero(em, cb, viewport) + s.margin_bottom.resolve_or_zero(em, cb, viewport)
+        } else {
+            0.0
+        }
+    };
     let outer_vert = |v: f32| match s.box_sizing {
         BoxSizing::ContentBox => v + padding_top + padding_bottom
             + s.border_top_width + s.border_bottom_width,

@@ -1414,6 +1414,11 @@ fn finish_frame(
         let ch = contained_content_height(frame.init.size_contained, &s, em, viewport, content_height);
         ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
     };
+    // CSS 2.1 §10.4 / Sizing L3 §5: the container's border-box height is clamped to
+    // [min-height, max-height] after it is resolved (BUG-1314).
+    super::layout_cache::clamp_min_max_height(
+        &mut frame.b, &s, em, frame.init.available_height, viewport, padding_top, padding_bottom, 0.0,
+    );
 
     let flex_abs: Vec<(usize, f32, f32)> = frame
         .b
