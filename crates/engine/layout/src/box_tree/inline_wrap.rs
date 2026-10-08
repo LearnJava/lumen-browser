@@ -1131,7 +1131,7 @@ pub(crate) fn align_one_line(
                 TextAlignLast::Center  => TextAlign::Center,
                 TextAlignLast::Start   => TextAlign::Start,
                 TextAlignLast::End     => TextAlign::End,
-                TextAlignLast::Justify => TextAlign::Start,
+                TextAlignLast::Justify | TextAlignLast::MatchParent => TextAlign::Start,
             }
         } else {
             text_align

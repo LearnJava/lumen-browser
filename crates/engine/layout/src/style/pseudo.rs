@@ -207,6 +207,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.font_palette = parent.font_palette.clone();
     style.font_palette_resolved = parent.font_palette_resolved.clone();
     style.text_transform = parent.text_transform;
+    style.text_extra = parent.text_extra;
     style.white_space = parent.white_space;
     style.white_space_collapse = parent.white_space_collapse;
     style.text_indent = parent.text_indent.clone();
@@ -314,6 +315,7 @@ pub fn merge_pseudo_inherited(
         font_optical_sizing,
         font_size_adjust,
         text_transform,
+        text_extra,
         letter_spacing,
         word_spacing,
         text_decoration_line,

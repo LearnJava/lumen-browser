@@ -50,7 +50,7 @@ use crate::style::{
     Resize, ScrollMarkerGroup, ScrollTargetGroup, ScrollbarGutter, ScrollbarWidth, ScrollBehavior,
     ScrollInitialTarget, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin,
     SvgPaint, SvgPaintOrder,
-    TextAlign, TextAlignLast, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
+    TextAlign, TextAlignLast, TextCssomExtra, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
@@ -197,6 +197,9 @@ pub struct ComputedStyle {
     /// `auto` (initial): renderer injects `opsz = font_size` variation axis.
     pub font_optical_sizing: FontOpticalSizing,
     pub text_transform: TextTransform,
+    /// Компоненты `text-transform` / `text-indent` / `tab-size`, которых layout не читает
+    /// (BUG-1325). Inherited.
+    pub text_extra: TextCssomExtra,
     pub white_space: WhiteSpace,
     /// CSS Text L4 §3.1 — `white-space-collapse`. Inherited. Longhand-компонента
     /// `white-space`; хранится для каскада/наследования, layout читает
@@ -1256,6 +1259,8 @@ impl ComputedStyle {
             font_palette_resolved: None,
             font_optical_sizing: FontOpticalSizing::Auto,
             text_transform: TextTransform::None,
+            // Initial `tab-size` is `8` (spaces), the same as the 64 px in `tab_size` below.
+            text_extra: TextCssomExtra { tab_size_number: Some(8.0), ..TextCssomExtra::default() },
             white_space: WhiteSpace::Normal,
             white_space_collapse: WhiteSpaceCollapse::Collapse,
             text_indent: Length::Px(0.0),
@@ -1629,6 +1634,7 @@ impl ComputedStyle {
             font_palette_resolved: inherited.font_palette_resolved.clone(),
             font_optical_sizing: inherited.font_optical_sizing,
             text_transform: inherited.text_transform,
+            text_extra: inherited.text_extra,
             white_space: inherited.white_space,
             white_space_collapse: inherited.white_space_collapse,
             text_indent: inherited.text_indent.clone(),

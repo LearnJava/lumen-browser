@@ -263,10 +263,11 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     match s.text_align {
         TextAlign::Left => {}
-        TextAlign::Start => {}
+        TextAlign::Start | TextAlign::MatchParent => {}
         TextAlign::End => out.push_str(" text-align=end"),
         TextAlign::Center => out.push_str(" text-align=center"),
         TextAlign::Right => out.push_str(" text-align=right"),
+        TextAlign::Justify => out.push_str(" text-align=justify"),
     }
     if matches!(s.direction, Direction::Rtl) {
         out.push_str(" direction=rtl");

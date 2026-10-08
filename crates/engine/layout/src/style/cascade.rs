@@ -1318,6 +1318,15 @@ pub(crate) fn compute_style_shareable(
         }
     }
 
+    // CSS Text L3 §7.1 — `text-align: match-parent`.
+    if style.text_align == crate::style::TextAlign::MatchParent {
+        style.text_align = if doc.document_element() == Some(node) {
+            crate::style::TextAlign::Start
+        } else {
+            crate::style::resolve_match_parent(inherited.text_align, inherited.direction)
+        };
+    }
+
     // CSS Display L3 §2.7 — blockification: the root element's own box can
     // never be eliminated (there is nothing above it to splice its children
     // into), so a `display: contents` document element computes to `block`
