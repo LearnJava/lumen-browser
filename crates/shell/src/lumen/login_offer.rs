@@ -50,6 +50,53 @@ impl Lumen {
         }
     }
 
+    /// UX-AUTOFILL срез 3: после клика в поле имени/почты/телефона/адреса
+    /// открывает под ним список сохранённых для сайта значений (начинающихся
+    /// с введённого). Карты, пароли, анонимный профиль и поля с
+    /// `autocomplete=off` подсказок не получают. Выбор строки заменяет значение
+    /// поля тем же путём, что и исправление орфографии.
+    pub(crate) fn try_open_autofill_menu(&mut self, field: Option<NodeId>) {
+        use page_context_menu::{SpellTarget, SpellTargetKind};
+        let Some(field) = field else { return };
+        if self.active_profile_is_anonymous() {
+            return;
+        }
+        let Some(store) = autofill_store::global() else { return };
+        let Some(origin) = self.source.url_str().and_then(password_store::origin_of) else {
+            return;
+        };
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let Ok(doc) = src.document.lock() else { return };
+        // Поля форм с паролем в `find_autofill_forms` не входят — их ведёт login_form.
+        let kind = autofill_form::find_autofill_forms(&doc)
+            .iter()
+            .flat_map(|f| f.fields.iter())
+            .find(|f| f.node == field)
+            .map(|f| f.kind);
+        let Some(kind) = kind.filter(|k| !k.is_card()) else { return };
+        let text = doc.control_value(field).into_owned();
+        drop(doc);
+        let values = autofill_store::field_suggestions(store, &origin, kind.key(), &text);
+        let Some(rect) = self.layout_box.as_ref().and_then(|lb| forms::find_layout_box(lb, field)).map(|b| b.rect)
+        else {
+            return;
+        };
+        let (ox, oy) = self.page_offset();
+        let target = SpellTarget {
+            node: field,
+            word_end: text.len(),
+            text,
+            word_start: 0,
+            kind: SpellTargetKind::Input,
+        };
+        self.page_context_menu.open_values(
+            rect.x + ox - self.scroll_x,
+            rect.y + rect.height + oy - self.scroll_y,
+            values,
+            target,
+        );
+    }
+
     /// Подстановка сохранённого аккаунта в форму входа свежезагруженной страницы
     /// (срез 3). Вызывается из `apply_loaded_page`; в анонимном профиле и без
     /// хранилища ничего не делает. Отправку формы не запускает.

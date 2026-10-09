@@ -516,6 +516,9 @@ impl Lumen {
                 js.notify_focus_changed(focus_idx);
             });
         }
+        if frame_target.is_none() {
+            self.try_open_autofill_menu(new_focused);
+        }
         // BUG-480 срез 16: точка внутри содержимого фрейма адресует под-документ,
         // и на этом путь родителя кончается. Ранний возврат — не оптимизация:
         // событие внутри вложенного browsing context родительскому документу
