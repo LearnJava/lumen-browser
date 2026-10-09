@@ -2434,6 +2434,13 @@ impl Lumen {
                 if host.is_empty() { None } else { Some(format!("{}{}", scheme, host.to_ascii_lowercase())) }
             });
             self.permission.set_origin(origin);
+            // UX-PERMISSIONS-3: a saved answer shows in `Notification.permission`
+            // without the page having to call requestPermission().
+            use crate::panels::permission_panel::{PermissionKind, PermissionState};
+            let saved = self.permission.state_for(PermissionKind::Notifications);
+            if saved != PermissionState::Ask {
+                self.settle_page_permission(saved);
+            }
         }
 
         // PH3-19: store the page's FontRegistry for dynamic web-font registration

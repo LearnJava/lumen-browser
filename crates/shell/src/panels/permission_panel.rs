@@ -234,14 +234,40 @@ impl PermissionPanel {
         self.pending.len() != before
     }
 
-    /// Flip panel visibility.
-    pub fn toggle(&mut self) {
-        self.visible = !self.visible;
+    /// Flip panel visibility. Hiding the popover dismisses pending requests
+    /// (see [`Self::close`]); the returned flag is the same.
+    pub fn toggle(&mut self) -> bool {
+        if self.visible {
+            return self.close();
+        }
+        self.visible = true;
+        false
+    }
+
+    /// Hide the popover. A page request still waiting for an answer is
+    /// dropped; returns `true` when a `Notifications` one was, so the caller
+    /// settles the page's promise as `default` (dismissed).
+    pub fn close(&mut self) -> bool {
+        self.visible = false;
+        let dismissed = self.pending.contains(&PermissionKind::Notifications);
+        self.pending.clear();
+        dismissed
+    }
+
+    /// Swap the backing store (the Anonymous profile gets an in-memory one so
+    /// nothing it decides reaches the disk). The cache is rebuilt from it.
+    pub fn set_store(&mut self, store: Arc<Permissions>) {
+        self.store = Some(store);
+        self.permissions.clear();
+        self.pending.clear();
+        self.load_current_origin();
     }
 
     /// Update the current origin on navigation (does not clear stored grants).
     pub fn set_origin(&mut self, origin: Option<String>) {
         self.current_origin = origin;
+        // A request waiting for an answer belonged to the page we left.
+        self.pending.clear();
         self.load_current_origin();
     }
 

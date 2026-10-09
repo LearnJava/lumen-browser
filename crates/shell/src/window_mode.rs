@@ -656,7 +656,8 @@ fn run_window_mode_inner(
         control_panel_mini_open: false,
         control_panel_info_open: false,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
-        permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store),
+        permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
+        permissions_disk_store: permissions_store,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),
@@ -776,6 +777,8 @@ fn run_window_mode_inner(
         cert_panel: panels::cert_panel::CertPanel::new(),
         cert_interstitial: panels::cert_interstitial::CertInterstitial::new(),
     };
+    // UX-PERMISSIONS-3: a persisted Anonymous profile must not write decisions to disk.
+    app.sync_permission_store();
     // BUG-411: seed the shields fallback from the persisted "Блокировать
     // рекламу" setting and push it at the process-global filter, which
     // `config::init_adblock` deliberately leaves off. Before this the setting

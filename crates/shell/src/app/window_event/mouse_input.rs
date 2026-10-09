@@ -501,6 +501,7 @@ impl Lumen {
                                 if self.active_profile_is_anonymous() {
                                     self.reset_anonymous_cookie_jar();
                                 }
+                                self.sync_permission_store();
                             }
                             self.profile_menu.visible = false;
                             // CC-6: re-sync the CSS chrome's data-profile (no-op off the flag).
@@ -587,7 +588,11 @@ impl Lumen {
                             self.request_redraw();
                         }
                         panels::permission_panel::PermissionHit::Close => {
-                            self.permission.visible = false;
+                            if self.permission.close() {
+                                self.settle_page_permission(
+                                    panels::permission_panel::PermissionState::Ask,
+                                );
+                            }
                             self.request_redraw();
                         }
                         panels::permission_panel::PermissionHit::Empty => {}

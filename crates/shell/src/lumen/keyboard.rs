@@ -826,7 +826,9 @@ impl Lumen {
                 self.request_redraw();
             }
             KeyCommand::TogglePermissions => {
-                self.permission.toggle();
+                if self.permission.toggle() {
+                    self.settle_page_permission(panels::permission_panel::PermissionState::Ask);
+                }
                 self.request_redraw();
             }
             KeyCommand::ToggleCookieBannerDismiss => {
