@@ -551,6 +551,18 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .dl-actions button{ font-size:10.5px; padding:4px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; gap:4px; }
 .dl-actions button:hover{ background:var(--surface-2); }
 
+/* ---------- Login bar (UX-PASSWORDS) ---------- */
+.login-bar{
+  position:fixed; right:378px; top:92px; width:340px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; gap:10px; padding:12px; z-index:640;
+}
+.login-bar.open{ display:flex; }
+.login-actions{ display:flex; gap:6px; justify-content:flex-end; }
+.login-actions button{ font-size:11px; padding:5px 10px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); }
+.login-actions button:hover{ background:var(--surface-2); }
+.login-actions button.primary{ border-color:var(--accent); background:var(--accent); color:#fff; }
+
 /* ---------- Update bar (UPD-9) ---------- */
 .update-bar{
   position:fixed; right:18px; top:92px; width:340px; background:var(--surface-0); color:var(--text-primary);
@@ -823,6 +835,19 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
   <div class="upd-actions">
     <button id="updDownloadBtn" data-action="download-update">Скачать</button>
     <button class="hidden" id="updRestartBtn" data-action="restart-to-update">Перезапустить и обновить</button>
+  </div>
+</div>
+
+<!-- ================= LOGIN BAR (UX-PASSWORDS) ================= -->
+<div class="login-bar" id="loginBar">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-lock"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="loginTitle">Сохранить пароль?</div><div class="upd-meta" id="loginMeta"></div></div>
+    <button class="upd-close" data-action="dismiss-login" aria-label="Закрыть"><svg class="icon"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="login-actions">
+    <button data-action="never-save-login">Никогда для этого сайта</button>
+    <button class="primary" id="loginSaveBtn" data-action="save-login">Сохранить</button>
   </div>
 </div>
 

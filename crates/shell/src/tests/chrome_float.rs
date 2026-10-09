@@ -271,3 +271,41 @@ fn upd9_update_bar_detaches_paints_and_routes_its_button() {
         "restart button is hidden until the archive is staged"
     );
 }
+
+/// UX-PASSWORDS: `#loginBar` отцепляется как `#updateBar` и не налезает на него
+/// по горизонтали, а кнопка «Сохранить» разрешается в `SaveLogin`.
+#[test]
+fn login_bar_detaches_and_routes_its_buttons() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let bar = doc.find_by_id(lumen_chrome::ids::LOGIN_BAR).expect("has #loginBar");
+
+    let model = lumen_chrome::ChromeModel {
+        login_offer: lumen_chrome::ChromeLoginOfferModel {
+            open: true,
+            title: "Сохранить пароль?".to_owned(),
+            meta: "example.com · anna".to_owned(),
+            save_label: "Сохранить".to_owned(),
+        },
+        update: lumen_chrome::ChromeUpdateModel { bar_open: true, ..Default::default() },
+        ..lumen_chrome::ChromeModel::default()
+    };
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let (rect, detached) = take_floating_panel(&mut layout, bar, lumen_chrome::ids::LOGIN_BAR)
+        .expect("open #loginBar must be detachable");
+    assert!(rect.right() < 1920.0 - 18.0 - 340.0 + 0.5, "не должен перекрывать #updateBar: {rect:?}");
+    assert!(fills_rect(&paint_ordered(&detached.removed), rect), "bar background must paint");
+
+    let press = |id| {
+        let node = doc.find_by_id(id).expect("button id");
+        let r = lumen_layout::find_box_by_node(&detached.removed, node).expect("button box").rect;
+        let hit = hit_test(Point::new(r.x + r.width / 2.0, r.y + r.height / 2.0), &detached.removed)
+            .expect("press hits the bar");
+        action_at(&doc, &hit)
+    };
+    assert_eq!(press(lumen_chrome::ids::LOGIN_SAVE_BTN), Some(lumen_chrome::ChromeAction::SaveLogin));
+}

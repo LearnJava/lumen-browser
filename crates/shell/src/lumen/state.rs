@@ -1247,6 +1247,9 @@ pub(crate) struct Lumen {
     pub(crate) downloads: download::DownloadManager,
     /// UPD-9: self-update infobar/settings state (`update_ui.rs`).
     pub(crate) update_ui: update_ui::UpdateUi,
+    /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);
+    /// `None` — панель скрыта.
+    pub(crate) login_offer: Option<password_store::LoginOffer>,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.
