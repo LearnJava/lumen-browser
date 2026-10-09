@@ -1755,6 +1755,8 @@ pub(crate) struct Lumen {
     /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
     /// window / Close others / Close to the right. Hidden unless `open`.
     pub(crate) tab_context_menu: tabs::context_menu::TabContextMenu,
+    /// UX-REOPEN-TAB: stack of recently closed tabs (Ctrl+Shift+T).
+    pub(crate) closed_tabs: tabs::closed::ClosedTabs,
     /// Page-level spell-check suggestion menu (P3-spell slice 3): opened by
     /// right-clicking a misspelled word in a focused text `<input>`. Hidden
     /// unless open.

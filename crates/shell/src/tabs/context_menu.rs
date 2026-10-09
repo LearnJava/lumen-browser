@@ -5,9 +5,9 @@
 //! viewport-locked `DisplayList`; `item_at` maps a CSS-px `(x, y)` to the menu
 //! row under it (used both for click dispatch and hover highlight).
 //!
-//! Menu items (8): Duplicate / Pin·Unpin / Move to new window / Add to new
+//! Menu items (9): Duplicate / Pin·Unpin / Move to new window / Add to new
 //! group / Collapse·Expand group / Remove from group / Close others / Close
-//! tabs to the right. The actual mutations are performed by the shell — this
+//! tabs to the right / Reopen closed tab. The actual mutations are performed by the shell — this
 //! module only describes geometry, rendering, and hit-testing.
 //!
 //! Visual constants follow the dark-chrome aesthetic of `strip.rs`.
@@ -47,6 +47,8 @@ pub fn menu_height() -> f32 {
 /// An action the user can pick from the tab context menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    /// Reopen the most recently closed tab (Ctrl+Shift+T).
+    ReopenClosed,
     /// Duplicate the target tab (open a copy of its page right after it).
     Duplicate,
     /// Toggle the pinned flag of the target tab.
@@ -67,7 +69,7 @@ pub enum MenuAction {
 }
 
 /// Fixed top-to-bottom order of menu rows.
-const ITEMS: [MenuAction; 8] = [
+const ITEMS: [MenuAction; 9] = [
     MenuAction::Duplicate,
     MenuAction::TogglePin,
     MenuAction::MoveToNewWindow,
@@ -76,12 +78,14 @@ const ITEMS: [MenuAction; 8] = [
     MenuAction::RemoveFromGroup,
     MenuAction::CloseOthers,
     MenuAction::CloseRight,
+    MenuAction::ReopenClosed,
 ];
 
 /// Russian label for a row. `target_pinned` toggles the Pin/Unpin wording;
 /// `target_collapsed` toggles the Collapse/Expand wording.
 fn label(action: MenuAction, target_pinned: bool, target_collapsed: bool) -> &'static str {
     match action {
+        MenuAction::ReopenClosed => "Открыть закрытую вкладку",
         MenuAction::Duplicate => "Дублировать",
         MenuAction::TogglePin => {
             if target_pinned {
@@ -254,7 +258,10 @@ pub fn build_overlay(menu: &TabContextMenu, window_w: f32, window_h: f32) -> Dis
         }
 
         // Dividers: above the group rows and above the destructive "close" rows.
-        if action == MenuAction::AddToNewGroup || action == MenuAction::CloseOthers {
+        if matches!(
+            action,
+            MenuAction::AddToNewGroup | MenuAction::CloseOthers | MenuAction::ReopenClosed
+        ) {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(x0 + 8.0, row_y - 1.0, MENU_W - 16.0, 1.0),
                 color: DIVIDER,

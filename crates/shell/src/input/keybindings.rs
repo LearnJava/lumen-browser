@@ -62,6 +62,8 @@ pub(crate) enum KeyCommand {
     HintModeOpen,
     /// Открыть новую вкладку (Ctrl+T).
     NewTab,
+    /// Открыть последнюю закрытую вкладку (Ctrl+Shift+T).
+    ReopenClosedTab,
     /// Закрыть текущую вкладку или выйти, если вкладка последняя (Ctrl+W).
     CloseTab,
     /// Переключиться на следующую вкладку циклически (Ctrl+Tab).
@@ -172,6 +174,7 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::CloseTab),
         KeyCode::KeyT if ctrl_only => Some(KeyCommand::NewTab),
+        KeyCode::KeyT if ctrl_and_shift => Some(KeyCommand::ReopenClosedTab),
         KeyCode::Tab if ctrl_only => Some(KeyCommand::NextTab),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
         KeyCode::KeyF if no_mods => Some(KeyCommand::HintModeOpen),

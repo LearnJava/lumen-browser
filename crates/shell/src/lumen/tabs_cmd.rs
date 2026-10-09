@@ -222,6 +222,9 @@ impl Lumen {
             return;
         }
         let closing_id = self.tab_strip.tabs[idx].id;
+        if let Some(closed) = self.closed_tab_record(idx) {
+            self.closed_tabs.push(closed);
+        }
         // Remove from lifecycle manager.
         self.lifecycle_mgr.close_tab(closing_id as u64);
         // GAP-NAVCTX срез 4 (BUG-797): drop this tab's window.open()/opener
@@ -257,6 +260,68 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// Describe the tab at `idx` for the closed-tabs stack. `None` for a tab
+    /// without a real URL (blank / never loaded).
+    fn closed_tab_record(&self, idx: usize) -> Option<tabs::closed::ClosedTab> {
+        let entry = self.tab_strip.tabs.get(idx)?;
+        let (url, title, scroll_x, scroll_y) = if idx == self.tab_strip.active {
+            (
+                crate::session_persist::source_url_string(&self.source)?,
+                self.title.clone().unwrap_or_default(),
+                self.scroll_x,
+                self.scroll_y,
+            )
+        } else if let Some(snap) = self.bg_tabs.get(&entry.id) {
+            (
+                crate::session_persist::source_url_string(&snap.source)?,
+                snap.title.clone().unwrap_or_default(),
+                snap.scroll_x,
+                snap.scroll_y,
+            )
+        } else {
+            let meta = self.hibernated_tabs.get(&entry.id)?;
+            (meta.url.clone(), meta.title.clone(), 0.0, 0.0)
+        };
+        if url.is_empty() {
+            return None;
+        }
+        let title = if title.is_empty() { entry.title.clone() } else { title };
+        Some(tabs::closed::ClosedTab {
+            url,
+            title,
+            scroll_x,
+            scroll_y,
+            pinned: entry.pinned,
+            container: entry.container,
+            group_id: entry.group_id,
+        })
+    }
+
+    /// Ctrl+Shift+T: reopen the most recently closed tab in a new tab, with
+    /// its pin / container / group and scroll offset.
+    pub(crate) fn reopen_closed_tab(&mut self) {
+        let Some(closed) = self.closed_tabs.pop() else {
+            return;
+        };
+        self.open_new_tab();
+        let idx = self.tab_strip.active;
+        if closed.pinned {
+            self.tab_strip.toggle_pin(idx);
+        }
+        self.tab_strip.set_tab_container(idx, closed.container);
+        if let Some(gid) = closed.group_id
+            && self.tab_strip.group(gid).is_some()
+        {
+            self.tab_strip.assign_to_group(idx, gid);
+        }
+        self.navigate_to(PageSource::from_arg(Some(&closed.url)));
+        if closed.scroll_x != 0.0 || closed.scroll_y != 0.0 {
+            self.pending_restore_scroll = Some((closed.scroll_x, closed.scroll_y));
+        }
+        self.relayout_chrome_host();
+        self.request_redraw();
+    }
+
     /// Execute a tab context-menu action (CC-4) on `tab_context_menu.target_idx`.
     pub(crate) fn exec_tab_menu_action(
         &mut self,
@@ -274,6 +339,7 @@ impl Lumen {
                 self.request_redraw();
             }
             MenuAction::Duplicate => self.duplicate_tab(idx),
+            MenuAction::ReopenClosed => self.reopen_closed_tab(),
             MenuAction::MoveToNewWindow => self.move_tab_to_new_window(idx, event_loop),
             MenuAction::AddToNewGroup => {
                 // CC-6: bundle the target tab into a fresh group, cycling the
@@ -321,7 +387,9 @@ impl Lumen {
                     self.switch_tab(idx);
                 }
                 let keep = self.tab_strip.active;
+                let records = self.closed_tab_records();
                 let removed = self.tab_strip.close_others(keep);
+                self.remember_closed(records, &removed);
                 self.discard_tab_resources(&removed);
                 self.request_redraw();
             }
@@ -332,12 +400,30 @@ impl Lumen {
                 if active > idx && !self.tab_strip.is_pinned(active) {
                     self.switch_tab(idx);
                 }
+                let records = self.closed_tab_records();
                 let removed = self.tab_strip.close_right(idx);
+                self.remember_closed(records, &removed);
                 self.discard_tab_resources(&removed);
                 self.request_redraw();
             }
 }
         }
+
+    /// `(tab id, record)` for every open tab that has one, in strip order.
+    fn closed_tab_records(&self) -> Vec<(usize, tabs::closed::ClosedTab)> {
+        (0..self.tab_strip.len())
+            .filter_map(|i| Some((self.tab_strip.tabs[i].id, self.closed_tab_record(i)?)))
+            .collect()
+    }
+
+    /// Push the `records` of the tabs listed in `removed` onto the closed stack.
+    fn remember_closed(&mut self, records: Vec<(usize, tabs::closed::ClosedTab)>, removed: &[usize]) {
+        for (id, rec) in records {
+            if removed.contains(&id) {
+                self.closed_tabs.push(rec);
+            }
+        }
+    }
 
     /// Drop the cached page resources of background tabs removed in bulk
     /// (CC-4 "Close others" / "Close to the right"). Mirrors the background
