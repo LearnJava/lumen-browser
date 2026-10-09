@@ -34,3 +34,7 @@ WPT-RUN-14 срез 20: `css-cascade/scope-implicit.html` и ещё 12 `scope-*`
 ## Как проверить
 
 Проба из таблицы; `css/css-cascade/scope-implicit.html`, `scope-nesting.html`.
+
+## Дополнение: WPT-RUN-14 срез 26 (2026-10-09)
+
+У `ShadowRoot` разворачивание `DocumentFragment` не работает ни в одном из методов, включая `appendChild` и `insertBefore(fragment, null)` (у `Element` эти два работают — см. выше): `r.appendChild(tpl.content.cloneNode(true))` кладёт в shadow root узел `#document-fragment`, детей фрагмента там нет. Это отдельная запись — [BUG-1577](BUG-1577-OPEN.md) (вместе с `ShadowRoot.getElementById`, ломающим 27 id `css-shadow`).

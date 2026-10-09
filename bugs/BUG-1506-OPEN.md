@@ -36,3 +36,7 @@ WPT-RUN-14 срез 22: `css-properties-values-api/at-property-cssom.html` (39 �
 ## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 
 `css/cssom` и `css-lists`: `style.length` — строка `""` (`typeof` `string`), `style.item` — не функция; `document.styleSheets === document.styleSheets` — `false`, `styleSheets[0].cssRules === cssRules` — `false`, `document.adoptedStyleSheets === document.adoptedStyleSheets` — `false` (`StyleSheetList*`, `adoptedstylesheets-*`, 21 id; BUG-1555). Идентичность — тот же дефект «обёртка создаётся заново при каждом чтении».
+
+## Повторное измерение: WPT-RUN-14 срез 26 (2026-10-09)
+
+Те же `cssRules is not iterable` / `styleSheets is not iterable` в `css-page` (`page-rule-declarations-000/001/003/004`, `page-orientation.tentative` — `ERROR` на загрузке, 5 id) и `css-shadow/stylesheet-title-002` (`host.shadowRoot.styleSheets is not iterable`). `typeof document.styleSheets[Symbol.iterator]` и `typeof cssRules[Symbol.iterator]` — `undefined`.
