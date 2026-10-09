@@ -758,6 +758,7 @@ impl Lumen {
                 }
             }
             KeyCommand::NewTab => self.open_new_tab(),
+            KeyCommand::ReopenClosedTab => self.reopen_closed_tab(),
             KeyCommand::CloseTab => {
                 let idx = self.tab_strip.active;
                 self.close_tab(idx, event_loop);

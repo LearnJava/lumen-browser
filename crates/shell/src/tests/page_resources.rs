@@ -1511,6 +1511,14 @@ fn keybinding_ctrl_w_close_tab() {
 }
 
 #[test]
+fn keybinding_ctrl_shift_t_reopens_closed_tab() {
+    assert_eq!(
+        keybinding_for(KeyCode::KeyT, ModifiersState::CONTROL | ModifiersState::SHIFT),
+        Some(KeyCommand::ReopenClosedTab),
+    );
+}
+
+#[test]
 fn keybinding_ctrl_escape_is_none() {
     // Esc + любые модификаторы — не наша команда (рамп для будущего).
     assert_eq!(
