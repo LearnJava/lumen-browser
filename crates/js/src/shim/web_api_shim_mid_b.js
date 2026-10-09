@@ -825,8 +825,33 @@ navigator.clipboard = {
             } catch(e) { reject(e); }
         });
     },
-    read:  function() { return Promise.resolve([]); },
+    // UX-PERMISSIONS-5: read() asks like readText(); the OS clipboard is exposed
+    // as one text/plain item (empty clipboard → no items).
+    read:  function() {
+        return navigator.clipboard.readText().then(function(text) {
+            return text === '' ? [] : [new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }) })];
+        });
+    },
     write: function() { return Promise.resolve(undefined); },
+};
+// Clipboard API §6: ClipboardItem — a map of MIME type → Blob (or Promise<Blob>).
+globalThis.ClipboardItem = class ClipboardItem {
+    constructor(items) {
+        if (items === null || typeof items !== 'object' || Object.keys(items).length === 0) {
+            throw new TypeError("Failed to construct 'ClipboardItem': at least one type is required.");
+        }
+        this._items = items;
+        this.presentationStyle = 'unspecified';
+    }
+    get types() { return Object.keys(this._items); }
+    getType(type) {
+        var v = this._items[type];
+        if (v === undefined) {
+            return Promise.reject(new DOMException('Type ' + type + ' not found', 'NotFoundError'));
+        }
+        return Promise.resolve(v);
+    }
+    static supports(type) { return type === 'text/plain' || type === 'text/html'; }
 };
 }
 
