@@ -1868,3 +1868,78 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 ### Повторные замеры
 
 [BUG-1234](../../bugs/BUG-1234-OPEN.md) (граница 5 свойств), [BUG-1293](../../bugs/BUG-1293-OPEN.md) (старт перехода), [BUG-491](../../bugs/BUG-491-OPEN.md) (состав `css-borders`), [BUG-1455](../../bugs/BUG-1455-OPEN.md) (`@page`, `@keyframes`, `@starting-style` в `cssRules`), [BUG-1506](../../bugs/BUG-1506-OPEN.md) (итерация `cssRules`/`styleSheets`), [BUG-1440](../../bugs/BUG-1440-OPEN.md) (`DocumentFragment` в `ShadowRoot`), [BUG-1284](../../bugs/BUG-1284-OPEN.md) (`nowrap` у `inline-block`).
+
+
+## css-ruby + css-layout-api + css-box + motion + css-highlight-api + css-paint-api + css-viewport + mediaqueries — вердикт и кластеры (WPT-RUN-14 срез 27, 2026-10-09)
+
+Прогон: `run_corpus.py --prefixes css/css-ruby,css/css-layout-api,css/css-box,css/motion,css/css-highlight-api,css/css-paint-api,css/css-viewport,css/mediaqueries --out-dir .tmp/wpt-run14/ruby-box-motion-mq`, сборка `dev-release` от `main` `7feb5e4ec` (бинарь от 2026-10-08, движок не менялся), 8 шардов по 22–35 с (`--processes 7`, `--max-browser-gb 4`). Повторный прогон на чистом каталоге (`ruby-box-motion-mq-2`) — 0 расхождений из 1 059 (сравнение по `(status, [(subtest, status)])`). `score_audit.py`: «no leak», 1 059 из 1 059 id имеют вердикт; `type_audit.py`: reftest 786, testharness 231, crashtest 42. Пиксельный разбор — `reftest_pixdiff.py --viewport 800x600 --ahem` (646 reftest `FAIL`).
+
+| Модуль | id | выполнено | зелёных | не зелёных | score |
+|---|---|---|---|---|---|
+| `css-box` | 150 | 150 | 22 | 128 | 40.70 (27.1 %) |
+| `css-highlight-api` | 122 | 122 | 32 | 90 | 33.60 (27.5 %) |
+| `css-layout-api` | 153 | 153 | 32 | 121 | 32.73 (21.4 %) |
+| `css-paint-api` | 118 | 118 | 3 | 115 | 3.62 (3.1 %) |
+| `css-ruby` | 176 | 176 | 58 | 118 | 60.48 (34.4 %) |
+| `css-viewport` | 101 | 101 | 49 | 52 | 52.06 (51.5 %) |
+| `mediaqueries` | 93 | 93 | 28 | 65 | 39.62 (42.6 %) |
+| `motion` | 146 | 146 | 40 | 106 | 43.16 (29.6 %) |
+| **итого** | **1 059** | **1 059** | **264** | **795** | **305.98 = 28.89 %** |
+
+«Не зелёный» — id, у которого упал хотя бы один сабтест или статус не `PASS`/`OK`. Сравнение с 2026-08-18 (`score_audit`: reftest и https обнулены): 150.62 / 1 059 = 14.22 % — с 5.59 % цифру не сравнивать.
+
+| Тип | id | score | доля |
+|---|---|---|---|
+| reftest | 786 | 140.00 | 45.8 % |
+| testharness | 231 (сабтесты 5 812 из 7 438) | 123.98 | 40.5 % |
+| crashtest | 42 | 42.00 | 13.7 % |
+
+795 не зелёных: 646 reftest `FAIL` (640 `thick`, 2 `identical`, 1 `thin-only`, 3 `no-match-ref`), 141 testharness `OK` с упавшими сабтестами, 5 `ERROR` (все `mediaqueries/preferences-*.https.html`), 3 `TIMEOUT` (`css-viewport/zoom/zoom-iframe-dynamic`, `mediaqueries/mq-dynamic-empty-children`, `mediaqueries/test_media_queries`). Весь `css-viewport/zoom/explicit-inherit/*` (8 id) пиксельный разбор сначала записал как `no-match-ref`: `<link rel=match href=flex-basis-ref.html>` написан без кавычек, а регэксп их требовал. Исправлено в `tests/wpt/reftest_pixdiff.py` (кавычки необязательны), 8 id пересчитаны — все `thick`.
+
+### Главное
+
+1. **Houdini не работает** ([BUG-779](../../bugs/BUG-779-OPEN.md)): `css-paint-api` 3,1 % и `css-layout-api` 21,4 %, 236 не зелёных id, из них 229 — `reftest-wait`, то есть зависят ещё и от WPT-RUN-15. `CSS.paintWorklet.addModule(url)` возвращает выполненный промис и ничего не загружает; `registerPaint` определён и в странице (в спецификации его там нет), но `paint(foo)` в `background` рисуется заглушкой — на `--screenshot` ни одного зелёного пикселя, `getComputedStyle().backgroundImage` — `none`. `CSS.layoutWorklet`, `registerLayout`, `Worklet` — `undefined`, `display: layout(x)` разбирается (`CSS.supports` — `true`) и не действует. Задача `PAINT-WORKLET` (P1, `ROADMAP.md:1119`).
+2. **`margin-trim` нет вовсе** ([BUG-1586](../../bugs/BUG-1586-OPEN.md), ДОРАБОТКА): 108 id. `CSS.supports("margin-trim","block")` — `false`, зелёный бокс внутри `margin-trim:block` остаётся на `y=30` вместо `y=0`. Строка в `CSS-SPECS.md:183` для P4.
+3. **Motion Path: проценты и формы пути** ([BUG-1587](../../bugs/BUG-1587-OPEN.md), [BUG-1588](../../bugs/BUG-1588-OPEN.md), [BUG-1589](../../bugs/BUG-1589-OPEN.md)): `offset-distance: 100%` при `path("M0 0 h 200")` двигает бокс 10×10 на 14,1 px — на диагональ самого бокса, а не на 200 (длину пути); замкнутый путь не оборачивается. Все формы `offset-path`, кроме `path()` и `ray()` (`circle`, `ellipse`, `inset`, `polygon`, `rect`, `xywh`, `shape`, `url(#id)`, `<coord-box>`), принимаются и не действуют. `getComputedStyle` не отдаёт ни одного `offset-*`; `offset-position` как свойства нет. 99 id.
+4. **Media Queries 4** ([BUG-1593](../../bugs/BUG-1593-OPEN.md), [BUG-1594](../../bugs/BUG-1594-OPEN.md)): запрос, в котором есть вложенные скобки, `or`, `not (…)` внутри скобок, диапазонный синтаксис, `calc()`, единицы `cm`/`in`/`pt`/`vw`/`ex`/`ch`/`%` или безразмерный `0`, становится `not all` — правило молча не применяется (32 reftest). Известная фича с недопустимым значением (`(prefers-color-scheme: 0)`) тоже `not all` вместо `general-enclosed` (21 файл, 93 из 299 сабтестов).
+5. **`ruby-overhang` нет** ([BUG-1590](../../bugs/BUG-1590-OPEN.md), ДОРАБОТКА): 42 id. В `css-ruby` есть и более общий дефект ([BUG-1591](../../bugs/BUG-1591-OPEN.md)): блок или `inline-block` в `<rt>` схлопывается в 0×0 и сдвигает `<ruby>` на `x=393`; блоки в `<ruby>` не инлайнизируются; `<rbc>` — `HTMLUnknownElement`.
+6. **`zoom` не масштабирует** тени, `outline`, `border-spacing`, смещения `transform`, `flex-basis`, размеры SVG и `contain-intrinsic-size` ([BUG-1592](../../bugs/BUG-1592-OPEN.md)): 42 id, 40 из них `thick`. `margin`, `padding`, `border-width`, `border-radius`, `width`, `top`/`left`, `gap` масштабируются.
+7. **Не вошло в этот срез.** `css-highlight-api` — тот же дефект, что [BUG-1457](../../bugs/BUG-1457-OPEN.md) (HIGHLIGHT-PAINT): `CSS.highlights.set()` + `::highlight(x)` не дают ни одного пикселя; 90 id. `iframe.contentWindow` — `null` (BUG-480) ломает ещё минимум 5 id.
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** в порядке таблицы скрипта `.tmp/s27/cls2.py` (результат — `.tmp/s27/final.json`; один id — один кластер, сумма 795). Пиксельный класс — `reftest_pixdiff.py`. Колонка «сабтестов» — упавших из всех у id кластера (для reftest — прочерк). «Проба» — причина установлена пробой (`--dump-layout`/`--screenshot` + `console.log`) на этом срезе; «по именам» — группа выделена по именам файлов и сообщениям, причина не изолирована.
+
+| Кластер | id | сабтестов | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|
+| `margin-trim`: блок (`block-container-*`, 36), flex (23), grid (7), multicol (7) | 73 | — / 172 из 234 | `css-box/margin-trim/block-container-block-end-last-child-with-border.html`, `css-box/margin-trim/flex-block-trimmed-only.html` | проба: свойства нет вовсе | P4 | [BUG-1586](../../bugs/BUG-1586-OPEN.md), ДОРАБОТКА → `CSS-SPECS.md:183` |
+| `margin-trim`: `computed-margin-values/*` (32) и CSSOM (`inheritance`, `parsing/margin-trim*`, 3) | 35 | см. выше | `css-box/margin-trim/computed-margin-values/flexbox-row-block.html`, `css-box/parsing/margin-trim.html` | то же | P4 | [BUG-1586](../../bugs/BUG-1586-OPEN.md) |
+| `css-box/animation/{margin,padding}-*-composition/-interpolation` | 10 | 439 из 648 | `css-box/animation/padding-bottom-composition.html` | проба: в режиме `@keyframes` значение остаётся `50px`; `animation-composition` не разбирается; вклад двух причин не разделён | P4 | [BUG-1234](../../bugs/BUG-1234-OPEN.md), строка `animation-composition` в `CSS-SPECS.md` |
+| `css-box/parsing/*`: невалидное принимается (`max-width: complex`, `padding` из 5 значений), `calc()` не канонизируется, `clear`/`float: inline-start` → `left` | 10 | 39 из 97 | `css-box/parsing/max-width-invalid.html`, `css-box/parsing/padding-valid.html` | по именам и сообщениям | P4 | не заведено |
+| `css-highlight-api`: reftest раскраски `::highlight()` (`painting/*` и корень) | 85 | — | `css-highlight-api/highlight-image.html`, `css-highlight-api/painting/custom-highlight-painting-001.html` | проба: 0 зелёных px при `CSS.highlights.set` + `::highlight(x){background-color:green}`; computed — `rgba(0, 0, 0, 0)` | P1 | [BUG-1457](../../bugs/BUG-1457-OPEN.md) (HIGHLIGHT-PAINT) |
+| `css-highlight-api`: IDL, `insertRule`, `highlightsFromPoint`, `text-underline-offset: from-font` | 5 | 38 из 69 | `css-highlight-api/idlharness.window.html`, `css-highlight-api/highlight-pseudo-parsing.html` | по сообщениям: `Highlight`/`HighlightRegistry` перечислимы и записываемы; `insertRule` в оторванный лист (BUG-1439); `contentWindow` `null` (BUG-480) | P3 | [BUG-1457](../../bugs/BUG-1457-OPEN.md) (дополнение), BUG-1439, BUG-480 |
+| `css-layout-api` (Houdini Layout) | 121 | 8 из 11 | `css-layout-api/auto-block-size/flex.https.html`, `css-layout-api/crash-multicol.https.html` | проба: `CSS.layoutWorklet`, `registerLayout`, `Worklet` — `undefined`; 115 id `reftest-wait` | P1 | [BUG-779](../../bugs/BUG-779-OPEN.md), `PAINT-WORKLET` (`ROADMAP.md:1119`) |
+| `css-paint-api` (Houdini Paint) | 115 | 3 из 8 | `css-paint-api/background-repeat-x.https.html`, `css-paint-api/parsing/paint-function-valid.https.html` | проба: `addModule` не выполняет модуль; `paint()` — заглушка; 114 id `reftest-wait`; `paint( mypaint )` не канонизируется | P1 | [BUG-779](../../bugs/BUG-779-OPEN.md), `PAINT-WORKLET` |
+| `ruby-overhang` | 42 | 13 из 15 | `css-ruby/ruby-overhang-spaces-001.html`, `css-ruby/parsing/ruby-overhang-valid.html` | проба: `CSS.supports("ruby-overhang","spaces")` — `false`, в `crates/` только комментарий | P4 | [BUG-1590](../../bugs/BUG-1590-OPEN.md), ДОРАБОТКА → `CSS-SPECS.md:124` |
+| `css-ruby` прочее: инлайнизация блоков (6), `block-ruby` (4), `ruby-box-generation` (5), аннотация-блок (`ruby-align-001*`, 3) | 18 | — / 16 из 31 | `css-ruby/ruby-inlinize-blocks-001.html`, `css-ruby/ruby-align-001.html` | проба: блок и `inline-block` в `<rt>` — 0×0, `<ruby>` на `x=393`; `getComputedStyle(div).display` в `<ruby>` — `block` | P1 | [BUG-1591](../../bugs/BUG-1591-OPEN.md) |
+| `css-ruby` прочее: `autohide` (4), `tab-in-base` (3), `intrinsic-isize` (3), `line-break*` (6), `whitespace` (7), прочее (35: `bidi`, `float`, `pseudo-first-*`, `justification` и др.) | 58 | см. выше | `css-ruby/ruby-autohide-004.html`, `css-ruby/ruby-tab-in-base-002.html`, `css-ruby/line-spacing.html` | по именам; не изолировано | P1 | не заведено (в [BUG-1591](../../bugs/BUG-1591-OPEN.md): «остальные 58 id») |
+| `zoom`: тени, `outline`, `border-spacing`, `transform`, `flex-basis`, SVG, `contain-intrinsic-size` | 42 | — | `css-viewport/zoom/box-shadow.html`, `css-viewport/zoom/border-spacing.html`, `css-viewport/zoom/explicit-inherit/flex-basis.html` | проба: тень 20 px вместо 40, `border-spacing` 10 px вместо 20, `translate(50px)` на 50 px вместо 100 | P4 | [BUG-1592](../../bugs/BUG-1592-OPEN.md) |
+| `zoom`: CSSOM (`getComputedStyle().zoom` — `""`, `zoom-interpolation` NaN) | 9 | 66 из 338 | `css-viewport/zoom/parsing/zoom-computed.html`, `css-viewport/computedStyle-zoom.html` | проба: `getPropertyValue("zoom")` — `""` | P3 | BUG-943, BUG-1050 (дополнение BUG-943) |
+| `zoom-iframe-dynamic` | 1 | 1 из 1 | `css-viewport/zoom/zoom-iframe-dynamic.html` | по коду теста: ждёт `resize` в `iframe.contentWindow`; TIMEOUT воспроизведён 2 раза | P1 | BUG-480 (дополнение) |
+| `mediaqueries`: условия (`calc`, `ex`/`ch`, диапазоны, `or`, вложенные `not`, `min-color`, `device-*`, `color-gamut`) | 33 | — / 3 из 3 | `mediaqueries/mq-range-001.html`, `mediaqueries/negation-001.html`, `mediaqueries/mq-calc-003.html` | проба: 65 запросов из `@media` дали таблицу «`not all` / применяется» | P4 | [BUG-1593](../../bugs/BUG-1593-OPEN.md) |
+| `mediaqueries`: `general-enclosed` и сериализация | 21 | 93 из 299 | `mediaqueries/prefers-color-scheme.html`, `mediaqueries/match-media-parsing.html`, `mediaqueries/mq-invalid-media-type-005.html` | проба: `matchMedia("(prefers-color-scheme: 0)").media` — `not all`; `(min-resolution: 1x)` → `1dppx` | P4 | [BUG-1594](../../bugs/BUG-1594-OPEN.md), BUG-1553 |
+| `mediaqueries`: `@custom-media` | 3 | 17 из 24 | `mediaqueries/at-custom-media-cssom.html` | `CSSCustomMediaRule` не создаётся | P4 | не заведено (`CSS-SPECS.md:93`) |
+| `mediaqueries`: `navigator.preferences` | 5 | 66 из 66 | `mediaqueries/preferences-colorScheme.tentative.https.html` | проба: `typeof navigator.preferences` — `undefined` | P3 | не заведено (`.tentative`) |
+| `mediaqueries`: iframe (`contentWindow` `null`, TIMEOUT) | 3 | 23 из 23 | `mediaqueries/media-query-matches-in-iframe.html`, `mediaqueries/test_media_queries.html` | по коду тестов; два TIMEOUT воспроизведены повторно | P1 | BUG-480 (дополнение) |
+| `motion`: `offset-distance: N%`, `ray()` | 31 | — | `motion/offset-path-ray-006.html`, `motion/offset-distance-002.html` | проба: процент от диагонали бокса, не от длины пути; замкнутый путь не оборачивается | P4 | [BUG-1587](../../bugs/BUG-1587-OPEN.md) |
+| `motion`: формы `offset-path` (29), `url()` (12), `<coord-box>` (4) | 45 | — | `motion/offset-path-shape-circle-004.html`, `motion/offset-path-url-002.html`, `motion/offset-path-coord-box-003.html` | проба: бокс остаётся на месте | P4 | [BUG-1588](../../bugs/BUG-1588-OPEN.md), ДОРАБОТКА → `CSS-SPECS.md:107` |
+| `motion`: CSSOM, `offset-position` | 23 | 629 из 714 | `motion/parsing/offset-distance-computed.html`, `motion/animation/offset-position-interpolation.html` | проба: `getComputedStyle` — `""` для шести `offset-*`; `CSS.supports("offset-position","normal")` — `false` | P3 | [BUG-1589](../../bugs/BUG-1589-OPEN.md) |
+| `motion` прочее: анимации и `offset-anchor` с `transform-box` | 7 | — | `motion/animation/reftests/offset-path-with-transforms-001.html`, `motion/offset-anchor-transform-box-fill-box-001.html` | по именам | P4 | не заведено |
+
+### Не разобрано
+
+Меньше 20 id и без записи: `css-box/parsing/*` (10), 58 id `css-ruby` без изолированной причины (см. таблицу), `css-viewport/zoom/image-intrinsic-size` и `iframe-zoom-nested` (`identical` при `--screenshot`: тест и эталон равны, но wptrunner их не принял), 7 id `motion` (анимация пути, `offset-anchor` с `transform-box`), `mediaqueries/min-width-tables-001`, `prefers-color-scheme-svg-as-image`, `viewport-script-dynamic` (3 reftest в «условиях» без пробы). Ограничения среза: `margin-trim` — число id и разбивка по именам файлов, пикселей внутри групп не измеряли; `zoom` — проба покрывает тени, `outline`, `border-spacing`, `transform`, `flex-basis`, SVG, `contain-intrinsic-height`, остальные (`canvas`, `stroke`, `text-*`, `scroll-padding`) названы по именам файлов; `mediaqueries/test_media_queries` и `mq-dynamic-empty-children` — TIMEOUT воспроизведены по 2–4 раза, причина (iframe) выведена из кода теста; `css-highlight-api` 14 reftest — `reftest-wait` (WPT-RUN-15). Во всех 8 модулях 229 из 236 не зелёных Houdini-id — `reftest-wait`: их вердикт может измениться после WPT-RUN-15.
+
+### Повторные замеры
+
+[BUG-779](../../bugs/BUG-779-OPEN.md) (Houdini, `registerLayout`, `Worklet`), [BUG-1457](../../bugs/BUG-1457-OPEN.md) (`css-highlight-api`: 90 id), [BUG-943](../../bugs/BUG-943-OPEN.md) (`getComputedStyle().zoom`), [BUG-480](../../bugs/BUG-480-OPEN.md) (`contentWindow` `null`: ещё 5 id), [BUG-1234](../../bugs/BUG-1234-OPEN.md) (`css-box/animation/*`).

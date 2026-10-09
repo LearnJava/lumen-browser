@@ -43,3 +43,7 @@ Workspace-wide `grep -rn currentCSSZoom crates/` — ноль совпадени
 ## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 
 `css/cssom-view`: `Element-currentCSSZoom.html`, `client-props-zoom`, `getBoundingClientRect-zoom`, `getClientRects-zoom`, `scroll-zoom`, `scrollTo-zoom`, `offsetTop-offsetLeft-with-zoom`, `image-x-y-zoom` (8 id). Проба: `typeof Element.prototype.currentCSSZoom` — `undefined`; `client-props-zoom`: `clientWidth expected 64 but got 256`.
+
+## Повторное измерение: WPT-RUN-14 срез 27 (2026-10-09)
+
+`css/css-viewport/zoom/parsing/zoom-computed.html`, `zoom-computed-with-sign-expression.html` (24 сабтеста): `assert_true: zoom doesn't seem to be supported in the computed style` — `getComputedStyle(el).getPropertyValue("zoom")` — `""`; `computedStyle-zoom.html` — `expected "1" but got ""`; `zoom/animations/zoom-interpolation.html` — 2 из 202 сабтестов зелёные (`expected 1.5 +/- 0.01 but got NaN`); `zoom/svg-computed-style.html` — 26 из 88. Всего `css-viewport` с упавшими сабтестами — 9 id (66 из 338). `Element.currentCSSZoom` по-прежнему `undefined`.
