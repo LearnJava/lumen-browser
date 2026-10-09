@@ -1250,6 +1250,9 @@ pub(crate) struct Lumen {
     /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);
     /// `None` — панель скрыта.
     pub(crate) login_offer: Option<password_store::LoginOffer>,
+    /// UX-PASSWORDS срез 3: подставленный на странице аккаунт; панель
+    /// «Другой аккаунт» показывается, если у сайта их несколько.
+    pub(crate) login_fill: Option<password_store::LoginFill>,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.

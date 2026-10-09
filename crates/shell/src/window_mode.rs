@@ -574,6 +574,7 @@ fn run_window_mode_inner(
         ),
         update_ui: update_ui::UpdateUi::new(),
         login_offer: None,
+        login_fill: None,
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),

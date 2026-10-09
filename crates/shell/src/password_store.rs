@@ -65,6 +65,50 @@ pub fn plan_offer(store: &SavedLogins, origin: &str, creds: &Credentials) -> Opt
     })
 }
 
+/// Подставленный на странице сохранённый аккаунт; при нескольких аккаунтах
+/// сайта пользователь листает их кнопкой «Другой аккаунт».
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginFill {
+    pub origin: String,
+    /// Логины сайта, последний использованный первым.
+    pub usernames: Vec<String>,
+    /// Индекс подставленного логина в `usernames`.
+    pub index: usize,
+    pub target: crate::login_form::FillTarget,
+}
+
+impl LoginFill {
+    pub fn current(&self) -> &str {
+        &self.usernames[self.index]
+    }
+
+    /// Перейти к следующему аккаунту по кругу.
+    pub fn advance(&mut self) {
+        self.index = (self.index + 1) % self.usernames.len();
+    }
+}
+
+/// Какой аккаунт подставить в форму: введённый сайтом логин, если он сохранён,
+/// иначе последний использованный (только при пустом поле логина).
+/// `None` — для origin ничего не сохранено или хранилище молчит.
+pub fn plan_fill(
+    store: &SavedLogins,
+    origin: &str,
+    target: crate::login_form::FillTarget,
+    prefilled_username: &str,
+) -> Option<LoginFill> {
+    let usernames = store.usernames_for(origin).ok()?;
+    let index = if prefilled_username.is_empty() {
+        0
+    } else {
+        usernames.iter().position(|u| u == prefilled_username)?
+    };
+    if usernames.is_empty() {
+        return None;
+    }
+    Some(LoginFill { origin: origin.to_owned(), usernames, index, target })
+}
+
 /// Общее хранилище процесса; `None` в приватных режимах и если файлы не открылись.
 pub fn global() -> Option<&'static SavedLogins> {
     static STORE: std::sync::OnceLock<Option<SavedLogins>> = std::sync::OnceLock::new();
@@ -146,6 +190,33 @@ mod tests {
         let s = store();
         s.never_save(SITE).unwrap();
         assert!(plan_offer(&s, SITE, &creds("anna", "pw")).is_none());
+    }
+
+    #[test]
+    fn fill_picks_latest_account_and_cycles() {
+        use crate::login_form::FillTarget;
+        let s = store();
+        s.save(SITE, "anna", "a", 1).unwrap();
+        s.save(SITE, "boris", "b", 2).unwrap();
+        let t = FillTarget { username: None, password: lumen_dom::NodeId::from_index(0) };
+        let mut f = plan_fill(&s, SITE, t, "").unwrap();
+        assert_eq!(f.current(), "boris");
+        f.advance();
+        assert_eq!(f.current(), "anna");
+        f.advance();
+        assert_eq!(f.current(), "boris");
+    }
+
+    #[test]
+    fn fill_respects_prefilled_username_and_empty_store() {
+        use crate::login_form::FillTarget;
+        let s = store();
+        let t = FillTarget { username: None, password: lumen_dom::NodeId::from_index(0) };
+        assert!(plan_fill(&s, SITE, t, "").is_none());
+        s.save(SITE, "anna", "a", 1).unwrap();
+        s.save(SITE, "boris", "b", 2).unwrap();
+        assert_eq!(plan_fill(&s, SITE, t, "anna").unwrap().current(), "anna");
+        assert!(plan_fill(&s, SITE, t, "stranger").is_none());
     }
 
     #[test]

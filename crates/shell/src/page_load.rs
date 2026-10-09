@@ -2125,6 +2125,7 @@ impl Lumen {
         self.sync_engine_js_state();
         // The new runtime starts empty; re-seed it with the current Navigation state.
         self.commit_nav_state();
+        self.autofill_saved_login();
         // Cross-document unification (see `pending_post_reload_traversal`): a
         // multi-step traversal landed on a same-document entry of the document
         // that just finished loading — apply its popstate/URL update now, on
