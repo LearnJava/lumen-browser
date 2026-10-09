@@ -655,7 +655,32 @@ impl Lumen {
         // открыта именно вкладка «Пароли».
         let passwords_store = password_store::global().filter(|_| !self.active_profile_is_anonymous());
         let passwords = if self.settings_panel.visible && self.chrome_settings_section == "passwords" {
-            passwords_store.and_then(|s| s.list().ok()).unwrap_or_default()
+            passwords_store
+                .and_then(|s| s.list().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(origin, _)| origin != card_store::ORIGIN)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // UX-AUTOFILL срез 5: значения форм и карты читаются так же — только на своей вкладке.
+        let autofill_store = autofill_store::global().filter(|_| !self.active_profile_is_anonymous());
+        let autofill_open = self.settings_panel.visible && self.chrome_settings_section == "autofill";
+        let autofill: Vec<(String, String, String)> = if autofill_open {
+            autofill_store
+                .and_then(|s| s.list_all().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| (e.origin, e.field_name, e.value))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let cards: Vec<(String, String)> = if autofill_open {
+            passwords_store
+                .map(|s| card_store::saved_cards(s).iter().map(|c| (c.last4(), c.label())).collect())
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -665,6 +690,9 @@ impl Lumen {
             fingerprint_on: self.settings_panel.draft.fingerprint_mode != "off",
             passwords,
             passwords_available: passwords_store.is_some(),
+            autofill,
+            cards,
+            autofill_available: autofill_store.is_some(),
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1231,6 +1259,35 @@ impl Lumen {
                     let _ = store.delete(&origin, &user);
                     self.relayout_chrome_host();
                 }
+            }
+            ChromeAction::DeleteAutofillEntry => {
+                let origin = self.chrome_data_attr(nid, "data-af-origin").filter(|o| !o.is_empty());
+                let field = self.chrome_data_attr(nid, "data-af-field").filter(|f| !f.is_empty());
+                let value = self.chrome_data_attr(nid, "data-af-value");
+                if let (Some(origin), Some(field), Some(value), Some(store)) =
+                    (origin, field, value, autofill_store::global())
+                {
+                    let _ = store.delete(&origin, &field, &value);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::DeleteSavedCard => {
+                let last4 = self.chrome_data_attr(nid, "data-card-last4").filter(|l| !l.is_empty());
+                if let (Some(last4), Some(store)) = (last4, password_store::global()) {
+                    let _ = store.delete(card_store::ORIGIN, &last4);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ClearAutofill => {
+                if let Some(store) = autofill_store::global() {
+                    let _ = store.clear();
+                }
+                if let Some(store) = password_store::global() {
+                    for card in card_store::saved_cards(store) {
+                        let _ = store.delete(card_store::ORIGIN, &card.last4());
+                    }
+                }
+                self.relayout_chrome_host();
             }
             ChromeAction::OpenBookmark => {
                 if let Some(url) = self.chrome_data_attr(nid, "data-bm-url").filter(|u| !u.is_empty()) {

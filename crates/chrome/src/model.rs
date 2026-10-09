@@ -314,6 +314,13 @@ pub struct ChromeSettingsModel {
     pub passwords: Vec<(String, String)>,
     /// `false` — хранилище недоступно (приватный режим, Tor): раздел это говорит.
     pub passwords_available: bool,
+    /// Сохранённые значения форм для раздела «Автозаполнение» (UX-AUTOFILL,
+    /// срез 5): `(origin, ключ поля, значение)`.
+    pub autofill: Vec<(String, String, String)>,
+    /// Сохранённые карты: `(последние четыре цифры, подпись)`; номер сюда не попадает.
+    pub cards: Vec<(String, String)>,
+    /// `false` — хранилище автозаполнения недоступно (приватный режим, Tor).
+    pub autofill_available: bool,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -1090,6 +1097,7 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
     }
     let Some(main) = find_by_class(doc, "set-main") else { return };
     bind_passwords(doc, settings);
+    bind_autofill(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1142,6 +1150,64 @@ fn bind_passwords(doc: &mut Document, settings: &ChromeSettingsModel) {
         set_attr(doc, del, "data-login-origin", origin);
         set_attr(doc, del, "data-login-user", username);
         set_attr(doc, del, "aria-label", "Удалить пароль");
+        append_text(doc, del, "Удалить");
+        attach_child(doc, row, del);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Перестраивает `#afList` из [`ChromeSettingsModel::autofill`] и
+/// [`ChromeSettingsModel::cards`] (UX-AUTOFILL, срез 5).
+fn bind_autofill(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(desc) = doc.find_by_id(crate::ids::AF_DESC) {
+        let text = if !settings.autofill_available {
+            "Автозаполнение недоступно в приватном или анонимном профиле."
+        } else if settings.autofill.is_empty() && settings.cards.is_empty() {
+            "Сохранённых данных форм нет. Они появятся после отправки формы и согласия на сохранение."
+        } else {
+            "Значения форм хранятся открытым текстом, карты — зашифрованными; код проверки карты не сохраняется."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::AF_LIST) else { return };
+    remove_children_with_class(doc, list, "af-row");
+    type Row<'a> = (String, String, Vec<(&'a str, &'a str)>);
+    let mut rows: Vec<Row<'_>> = Vec::new();
+    for (last4, label) in &settings.cards {
+        rows.push((label.clone(), "Платёжная карта".to_owned(), vec![("data-action", "delete-saved-card"), ("data-card-last4", last4)]));
+    }
+    for (origin, field, value) in &settings.autofill {
+        rows.push((
+            value.clone(),
+            format!("{origin} · {field}"),
+            vec![
+                ("data-action", "delete-autofill-entry"),
+                ("data-af-origin", origin),
+                ("data-af-field", field),
+                ("data-af-value", value),
+            ],
+        ));
+    }
+    for (title_text, desc_text, attrs) in rows {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row af-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, &title_text);
+        attach_child(doc, text, title);
+        let desc = doc.create_element(QualName::html("div"));
+        set_attr(doc, desc, "class", "st-desc");
+        append_text(doc, desc, &desc_text);
+        attach_child(doc, text, desc);
+        attach_child(doc, row, text);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "upd-check");
+        for (k, v) in attrs {
+            set_attr(doc, del, k, v);
+        }
+        set_attr(doc, del, "aria-label", "Удалить");
         append_text(doc, del, "Удалить");
         attach_child(doc, row, del);
         attach_child(doc, list, row);
@@ -3711,6 +3777,35 @@ mod tests {
             doc.get(main).children.iter().copied().filter(|&c| has_class(&doc, c, "active")).collect();
         assert_eq!(active_sections.len(), 1);
         assert_eq!(doc.get(active_sections[0]).get_attr("data-set"), Some("appearance"));
+    }
+
+    #[test]
+    fn settings_autofill_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "autofill".to_owned(),
+                autofill: vec![("https://a.test".into(), "email".into(), "a@b.c".into())],
+                cards: vec![("1111".into(), "•••• 1111".into())],
+                autofill_available: true,
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::AF_LIST).expect("#afList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2, "образец заменён строками модели: карта, затем значение");
+        let card_del = find_descendants_by_class(&doc, rows[0], "upd-check")[0];
+        assert_eq!(doc.get(card_del).get_attr("data-action"), Some("delete-saved-card"));
+        assert_eq!(doc.get(card_del).get_attr("data-card-last4"), Some("1111"));
+        let del = find_descendants_by_class(&doc, rows[1], "upd-check")[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("delete-autofill-entry"));
+        assert_eq!(doc.get(del).get_attr("data-af-origin"), Some("https://a.test"));
+        assert_eq!(doc.get(del).get_attr("data-af-field"), Some("email"));
+        assert_eq!(doc.get(del).get_attr("data-af-value"), Some("a@b.c"));
     }
 
     #[test]

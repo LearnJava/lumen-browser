@@ -1238,6 +1238,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <button class="item active" data-action="set-settings-section" data-section="privacy">Privacy</button>
                 <button class="item" data-action="set-settings-section" data-section="appearance">Appearance</button>
                 <button class="item" data-action="set-settings-section" data-section="passwords">Пароли</button>
+                <button class="item" data-action="set-settings-section" data-section="autofill">Автозаполнение</button>
                 <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
                 <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
                 <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
@@ -1317,6 +1318,13 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <div class="set-section" data-set="passwords">
                   <div class="set-block"><h3>Сохранённые пароли</h3><div class="desc" id="pwDesc">Пароли хранятся зашифрованными ключом профиля. Здесь виден только список аккаунтов.</div>
                     <div id="pwList"><div class="set-row pw-row"><div class="st-text"><div class="st-title">example.com</div><div class="st-desc">user</div></div><button class="upd-check" data-action="delete-saved-login" data-login-origin="https://example.com" data-login-user="user" aria-label="Удалить пароль">Удалить</button></div></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="autofill">
+                  <div class="set-block"><h3>Автозаполнение</h3><div class="desc" id="afDesc">Значения форм хранятся открытым текстом, карты — зашифрованными; код проверки карты не сохраняется.</div>
+                    <div id="afList"><div class="set-row af-row"><div class="st-text"><div class="st-title">•••• 1111</div><div class="st-desc">Платёжная карта</div></div><button class="upd-check" data-action="delete-saved-card" data-card-last4="1111" aria-label="Удалить">Удалить</button></div><div class="set-row af-row"><div class="st-text"><div class="st-title">user@example.com</div><div class="st-desc">https://example.com · email</div></div><button class="upd-check" data-action="delete-autofill-entry" data-af-origin="https://example.com" data-af-field="email" data-af-value="user@example.com" aria-label="Удалить">Удалить</button></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Очистить всё</div><div class="st-desc">Удаляет все сохранённые значения форм и карты</div></div><button class="upd-check" data-action="clear-autofill">Очистить</button></div>
                   </div>
                 </div>
 

@@ -136,6 +136,24 @@ impl Autofill {
         Ok(out)
     }
 
+    /// Все записи для страницы управления: по сайту, полю, затем свежие первыми.
+    pub fn list_all(&self) -> Result<Vec<AutofillEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("autofill mutex poisoned".into()))?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT origin, field_name, value, frequency, last_used
+                 FROM autofill ORDER BY origin, field_name, last_used DESC",
+            )
+            .map_err(|e| Error::Storage(format!("autofill list_all prepare: {e}")))?;
+        let rows = stmt
+            .query_map([], row_to_entry)
+            .map_err(|e| Error::Storage(format!("autofill list_all query: {e}")))?;
+        rows.map(|r| r.map_err(|e| Error::Storage(format!("autofill row: {e}")))).collect()
+    }
+
     /// Самое популярное значение для поля.
     pub fn best_for(&self, origin: &str, field_name: &str) -> Result<Option<String>> {
         let entries = self.suggestions(origin, field_name, 1)?;
@@ -209,6 +227,19 @@ mod tests {
 
     fn make() -> Autofill {
         Autofill::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn list_all_spans_origins_and_fields() {
+        let a = make();
+        a.record("https://b/", "email", "b@x", 1).unwrap();
+        a.record("https://a/", "tel", "123", 1).unwrap();
+        a.record("https://a/", "email", "a@x", 1).unwrap();
+        let all: Vec<_> = a.list_all().unwrap().into_iter().map(|e| (e.origin, e.field_name)).collect();
+        assert_eq!(
+            all,
+            [("https://a/".into(), "email".into()), ("https://a/".into(), "tel".into()), ("https://b/".into(), "email".into())]
+        );
     }
 
     #[test]
