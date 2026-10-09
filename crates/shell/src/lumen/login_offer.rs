@@ -50,6 +50,24 @@ impl Lumen {
         }
     }
 
+    /// UX-AUTOFILL срез 4: после отправки формы с номером карты предлагает
+    /// сохранить карту. Только по кнопке «Сохранить карту»; CVC не читается.
+    pub(crate) fn offer_to_save_card(&mut self, form: NodeId) {
+        if self.active_profile_is_anonymous() || password_store::global().is_none() {
+            return;
+        }
+        let card = self.layout_source.as_ref().and_then(|src| {
+            let doc = src.document.lock().ok()?;
+            card_store::collect_card(&doc, form)
+        });
+        let store = password_store::global();
+        let offer = card.zip(store).and_then(|(c, s)| card_store::plan_offer(s, c));
+        if offer.is_some() || self.card_offer.is_some() {
+            self.card_offer = offer;
+            self.relayout_chrome_host();
+        }
+    }
+
     /// UX-AUTOFILL срез 3: после клика в поле имени/почты/телефона/адреса
     /// открывает под ним список сохранённых для сайта значений (начинающихся
     /// с введённого). Карты, пароли, анонимный профиль и поля с
@@ -73,10 +91,23 @@ impl Lumen {
             .flat_map(|f| f.fields.iter())
             .find(|f| f.node == field)
             .map(|f| f.kind);
-        let Some(kind) = kind.filter(|k| !k.is_card()) else { return };
+        let Some(kind) = kind else { return };
         let text = doc.control_value(field).into_owned();
+        self.card_menu.clear();
+        let values = if kind == autofill_form::FieldKind::CardNumber {
+            // Карты — только из зашифрованного хранилища и только у поля номера.
+            let cards = password_store::global().map(card_store::saved_cards).unwrap_or_default();
+            self.card_menu = cards
+                .iter()
+                .map(|c| (c.label(), card_store::fill_values(&doc, field, c)))
+                .collect();
+            self.card_menu.iter().map(|(l, _)| l.clone()).collect()
+        } else if kind.is_card() {
+            Vec::new()
+        } else {
+            autofill_store::field_suggestions(store, &origin, kind.key(), &text)
+        };
         drop(doc);
-        let values = autofill_store::field_suggestions(store, &origin, kind.key(), &text);
         let Some(rect) = self.layout_box.as_ref().and_then(|lb| forms::find_layout_box(lb, field)).map(|b| b.rect)
         else {
             return;
@@ -166,6 +197,18 @@ impl Lumen {
     /// Данные для `#loginBar`; пароль в модель не попадает.
     pub(crate) fn login_offer_model(&self) -> lumen_chrome::ChromeLoginOfferModel {
         if self.login_offer.is_none()
+            && let Some(c) = self.card_offer.as_ref()
+        {
+            return lumen_chrome::ChromeLoginOfferModel {
+                open: true,
+                title: "Сохранить карту?".to_owned(),
+                meta: format!("{} · зашифровано, без кода CVC", c.label()),
+                save_label: "Сохранить карту".to_owned(),
+                never_label: "Не сейчас".to_owned(),
+                ..Default::default()
+            };
+        }
+        if self.login_offer.is_none()
             && let Some(o) = self.autofill_offer.as_ref()
         {
             let host = o.origin.split_once("://").map_or(o.origin.as_str(), |(_, h)| h);
@@ -217,6 +260,23 @@ impl Lumen {
 
     pub(crate) fn dispatch_login_action(&mut self, action: lumen_chrome::ChromeAction) {
         use lumen_chrome::ChromeAction;
+        if self.login_offer.is_none()
+            && let Some(card) = self.card_offer.take()
+        {
+            if action == ChromeAction::SaveLogin
+                && let Some(store) = password_store::global()
+            {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                if let Err(e) = card_store::save(store, &card, now) {
+                    eprintln!("autofill: карта не сохранена: {e}");
+                }
+            }
+            self.relayout_chrome_host();
+            return;
+        }
         if self.login_offer.is_none()
             && let Some(offer) = self.autofill_offer.take()
         {

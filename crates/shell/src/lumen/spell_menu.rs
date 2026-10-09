@@ -198,6 +198,25 @@ impl Lumen {
         let Some(target) = self.page_context_menu.target().cloned() else { return };
         match action {
             SpellMenuAction::Use(replacement) => {
+                // UX-AUTOFILL срез 4: строка карты заполняет несколько полей формы.
+                let card_fill = self
+                    .card_menu
+                    .iter()
+                    .find(|(label, _)| *label == replacement)
+                    .map(|(_, f)| f.clone());
+                self.card_menu.clear();
+                if let Some(fills) = card_fill {
+                    for (node, value) in fills {
+                        if let Some(src) = self.layout_source.as_mut()
+                            && let Ok(mut doc) = src.document.lock()
+                        {
+                            forms::set_value(&mut doc, node, &value);
+                        }
+                        self.form_state.entry(node).or_default().value = value;
+                    }
+                    self.relayout_form();
+                    return;
+                }
                 match target.kind {
                     SpellTargetKind::Input => {
                         let new_val = target.apply(&replacement);

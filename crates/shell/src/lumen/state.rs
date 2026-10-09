@@ -1260,6 +1260,10 @@ pub(crate) struct Lumen {
     /// UX-AUTOFILL срез 2: предложение запомнить значения формы (та же панель
     /// `#loginBar`, что и у паролей; пароль и автозаполнение друг друга не вытесняют).
     pub(crate) autofill_offer: Option<autofill_store::AutofillOffer>,
+    /// UX-AUTOFILL срез 4: карта, которую предложено сохранить (отдельное явное подтверждение).
+    pub(crate) card_offer: Option<card_store::Card>,
+    /// Карты в открытом списке у поля номера: подпись строки → (поле, значения) для подстановки.
+    pub(crate) card_menu: Vec<(String, Vec<(NodeId, String)>)>,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.
