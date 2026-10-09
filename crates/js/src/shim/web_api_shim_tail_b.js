@@ -2596,8 +2596,6 @@ var _LUMEN_SELECTABLE_INPUT_TYPES = {
 // `option.selected = …` / `select.selectedIndex = …`. Absent means «follow the
 // `selected` content attribute», which is the markup default.
 var _lumen_option_selected = {};
-// nid → { start, end, direction } for text-entry controls.
-var _lumen_selection_state = {};
 // nid → indeterminate flag for checkboxes (never reflected as an attribute).
 var _lumen_indeterminate = {};
 // nid → true while an activation behaviour is running on that node, so a
@@ -3525,10 +3523,17 @@ function _lumen_selection_applies(nid) {
     t = (t === null) ? 'text' : String(t).toLowerCase();
     return _LUMEN_SELECTABLE_INPUT_TYPES[t] === 1;
 }
+// The selection lives in the document (`_lumen_get_text_selection`), shared
+// with the shell's caret: Home/Shift+arrows/typing there show up here, and
+// `setSelectionRange()` here moves the caret there. Offsets are UTF-16 units.
+var _LUMEN_SELECTION_DIRS = ['none', 'forward', 'backward'];
 function _lumen_selection_of(nid) {
-    var s = _lumen_selection_state[nid];
-    if (s === undefined) { s = { start: 0, end: 0, direction: 'none' }; _lumen_selection_state[nid] = s; }
-    return s;
+    var raw = _lumen_u2n(_lumen_get_text_selection(nid));
+    var len = String(_lumen_make_element(nid).value || '').length;
+    if (raw === null) return { start: len, end: len, direction: 'none' };
+    var p = String(raw).split(',');
+    var start = Math.min(Number(p[0]), len), end = Math.min(Number(p[1]), len);
+    return { start: Math.min(start, end), end: end, direction: _LUMEN_SELECTION_DIRS[Number(p[2])] || 'none' };
 }
 // Named `_lumen_set_text_selection`, not `…_set_selection`: the latter is the
 // native that drives the *document* selection (`window.getSelection()`), and a
@@ -3540,8 +3545,8 @@ function _lumen_set_text_selection(nid, start, end, direction) {
     if (start > len) start = len;
     if (end > len) end = len;
     if (end < start) start = end;
-    var dir = (direction === 'forward' || direction === 'backward') ? direction : 'none';
-    _lumen_selection_state[nid] = { start: start, end: end, direction: dir };
+    var dir = (direction === 'forward') ? 1 : (direction === 'backward') ? 2 : 0;
+    _lumen_set_text_selection_native(nid, start, end, dir);
     // §4.10.5.4 step 4: queue a `select` event when the selection actually moves.
     _lumen_dispatch_rich(nid, new Event('select', { bubbles: true, cancelable: false }));
 }
@@ -3942,7 +3947,7 @@ HTMLFormElement.prototype.reset = function() {
         // the wrapper, so nothing stale survives the reset.
         _lumen_clear_dirty_value(cn);
         delete _input_values[cn];
-        delete _lumen_selection_state[cn];
+        _lumen_clear_text_selection(cn);
         delete _lumen_indeterminate[cn];
         // Dropping the dirty checkedness restores `checked` to its default —
         // the `checked` content attribute (BUG-444, same shape as the dirty
@@ -6749,7 +6754,7 @@ function _lumen_gc_collect(nids) {
         delete _lumen_element_wrappers[nid];
         // BUG-383 per-nid form state.
         delete _lumen_option_selected[nid];
-        delete _lumen_selection_state[nid];
+        _lumen_clear_text_selection(nid);
         delete _lumen_indeterminate[nid];
         delete _lumen_click_in_progress[nid];
     }

@@ -418,6 +418,7 @@ mod v8_gap_p3gcjsdom_wrapper_refcount;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug951_label_focus;
+mod v8_ux_selection_api;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug623_window_find;

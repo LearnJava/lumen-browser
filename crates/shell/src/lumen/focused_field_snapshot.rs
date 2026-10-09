@@ -84,6 +84,7 @@ impl Lumen {
             Some(src) => self.focused_field_snapshot.refresh(&src.document, self.focused_node),
             None => self.focused_field_snapshot.clear(),
         }
+        self.absorb_script_selection_nonblocking();
     }
 }
 
