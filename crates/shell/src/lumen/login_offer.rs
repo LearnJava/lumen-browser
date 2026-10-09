@@ -28,6 +28,28 @@ impl Lumen {
         }
     }
 
+    /// UX-AUTOFILL срез 2: после отправки формы без пароля предлагает запомнить
+    /// введённые имя, почту, телефон и адрес. Платёжные поля не затрагиваются.
+    /// На диск ничего не пишет — только по кнопке «Сохранить».
+    pub(crate) fn offer_to_save_autofill(&mut self, form: NodeId) {
+        if self.active_profile_is_anonymous() {
+            return;
+        }
+        let Some(store) = autofill_store::global() else { return };
+        let Some(origin) = self.source.url_str().and_then(password_store::origin_of) else {
+            return;
+        };
+        let values = self.layout_source.as_ref().and_then(|src| {
+            let doc = src.document.lock().ok()?;
+            Some(autofill_store::collect_values(&doc, form))
+        });
+        let offer = values.and_then(|v| autofill_store::plan_offer(store, &origin, v));
+        if offer.is_some() || self.autofill_offer.is_some() {
+            self.autofill_offer = offer;
+            self.relayout_chrome_host();
+        }
+    }
+
     /// Подстановка сохранённого аккаунта в форму входа свежезагруженной страницы
     /// (срез 3). Вызывается из `apply_loaded_page`; в анонимном профиле и без
     /// хранилища ничего не делает. Отправку формы не запускает.
@@ -96,6 +118,19 @@ impl Lumen {
 
     /// Данные для `#loginBar`; пароль в модель не попадает.
     pub(crate) fn login_offer_model(&self) -> lumen_chrome::ChromeLoginOfferModel {
+        if self.login_offer.is_none()
+            && let Some(o) = self.autofill_offer.as_ref()
+        {
+            let host = o.origin.split_once("://").map_or(o.origin.as_str(), |(_, h)| h);
+            return lumen_chrome::ChromeLoginOfferModel {
+                open: true,
+                title: "Запомнить данные формы?".to_owned(),
+                meta: format!("{host} · полей: {}", o.entries.len()),
+                save_label: "Сохранить".to_owned(),
+                never_label: "Не сейчас".to_owned(),
+                ..Default::default()
+            };
+        }
         if self.login_offer.is_none() && self.login_gen.is_some() && self.login_fill.is_none() {
             let host = self.source.url_str().and_then(password_store::origin_of).unwrap_or_default();
             let host = host.split_once("://").map_or(host.as_str(), |(_, h)| h).to_owned();
@@ -129,11 +164,31 @@ impl Lumen {
             save_label: if o.update { "Обновить" } else { "Сохранить" }.to_owned(),
             fill: false,
             generate: false,
+            never_label: String::new(),
         }
     }
 
     pub(crate) fn dispatch_login_action(&mut self, action: lumen_chrome::ChromeAction) {
         use lumen_chrome::ChromeAction;
+        if self.login_offer.is_none()
+            && let Some(offer) = self.autofill_offer.take()
+        {
+            if action == ChromeAction::SaveLogin
+                && let Some(store) = autofill_store::global()
+            {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                for (key, value) in &offer.entries {
+                    if let Err(e) = store.record(&offer.origin, key, value, now) {
+                        eprintln!("autofill: {e}");
+                    }
+                }
+            }
+            self.relayout_chrome_host();
+            return;
+        }
         if self.login_offer.is_none() {
             match action {
                 ChromeAction::NextLogin => self.cycle_login_fill(),
