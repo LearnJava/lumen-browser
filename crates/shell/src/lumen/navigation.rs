@@ -8,6 +8,7 @@
 //! [`super::nav_state`].
 
 use crate::*;
+use super::dialogs::PendingLeave;
 
 impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
@@ -44,7 +45,7 @@ impl Lumen {
         // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
         // блокирующий `query` встаёт в очередь **после** него — read-after-eval
         // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
-        let listen = self.navigate_listeners_present();
+        let listen = self.navigate_listeners_present() && !self.leave_confirmed;
         if listen {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -77,6 +78,15 @@ impl Lumen {
             if let Some(&(false, true)) = intercept.last() {
                 self.fire_navigate_error();
                 return;
+            }
+        }
+        // UX-DIALOGS: «prompt to unload» — the page may ask the user to confirm
+        // leaving. Browser-initiated (forced) navigations skip the question.
+        let mut unload_fired = false;
+        if can_intercept {
+            match self.beforeunload_gate(PendingLeave::Navigate(source.clone())) {
+                None => return,
+                Some(fired) => unload_fired = fired,
             }
         }
         click_log::log_nav(&source.describe());
@@ -156,7 +166,9 @@ impl Lumen {
         // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
         // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-            j.fire_beforeunload();
+            if !unload_fired {
+                j.fire_beforeunload();
+            }
             j.unload_document(persisted);
         });
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
@@ -343,7 +355,7 @@ impl Lumen {
         // BUG-639: the target entry's key, so `NavigateEvent.destination`
         // describes that entry (`key`/`id`/`index`/`getState()`).
         let dest_key = self.nav_back.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
-        let listen = self.navigate_listeners_present();
+        let listen = self.navigate_listeners_present() && !self.leave_confirmed;
         if listen {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
@@ -371,6 +383,19 @@ impl Lumen {
             if let Some(&(false, true)) = intercept.last() {
                 self.fire_navigate_error();
                 return;
+            }
+        }
+        // UX-DIALOGS: a cross-document step runs «prompt to unload»; a
+        // same-document (`pushState`) one never does.
+        let cross_document = self
+            .nav_back
+            .last()
+            .is_some_and(|e| e.same_doc_state_json.is_none() || self.traversal_crossed_document);
+        let mut unload_fired = false;
+        if cross_document {
+            match self.beforeunload_gate(PendingLeave::Back) {
+                None => return,
+                Some(fired) => unload_fired = fired,
             }
         }
         let Some(prev) = self.nav_back.pop() else { return };
@@ -437,7 +462,9 @@ impl Lumen {
         // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
         // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-            j.fire_beforeunload();
+            if !unload_fired {
+                j.fire_beforeunload();
+            }
             j.unload_document(outgoing_parkable);
         });
         // Push current page to forward stack.
@@ -540,7 +567,7 @@ impl Lumen {
         // BUG-639: the target entry's key, so `NavigateEvent.destination`
         // describes that entry (`key`/`id`/`index`/`getState()`).
         let dest_key = self.nav_fwd.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
-        let listen = self.navigate_listeners_present();
+        let listen = self.navigate_listeners_present() && !self.leave_confirmed;
         if listen {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
@@ -568,6 +595,19 @@ impl Lumen {
             if let Some(&(false, true)) = intercept.last() {
                 self.fire_navigate_error();
                 return;
+            }
+        }
+        // UX-DIALOGS: a cross-document step runs «prompt to unload»; a
+        // same-document (`pushState`) one never does.
+        let cross_document = self
+            .nav_fwd
+            .last()
+            .is_some_and(|e| e.same_doc_state_json.is_none() || self.traversal_crossed_document);
+        let mut unload_fired = false;
+        if cross_document {
+            match self.beforeunload_gate(PendingLeave::Forward) {
+                None => return,
+                Some(fired) => unload_fired = fired,
             }
         }
         let Some(next) = self.nav_fwd.pop() else { return };
@@ -624,7 +664,9 @@ impl Lumen {
         // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
         // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-            j.fire_beforeunload();
+            if !unload_fired {
+                j.fire_beforeunload();
+            }
             j.unload_document(outgoing_parkable);
         });
         let cur_display = self.display_url.take();

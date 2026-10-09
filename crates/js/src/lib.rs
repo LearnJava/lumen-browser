@@ -25,6 +25,7 @@ pub mod download_bindings;
 pub mod network_log_bindings;
 pub mod pip_bindings;
 pub mod clipboard;
+pub mod dialog;
 pub mod contacts;
 pub mod cookie_banner;
 pub mod cookie_store;

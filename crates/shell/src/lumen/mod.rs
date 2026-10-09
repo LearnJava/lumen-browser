@@ -16,6 +16,7 @@ mod bfcache;
 pub(crate) mod click;
 mod content_visibility;
 mod cursor;
+mod dialogs;
 mod docking;
 mod file_picker;
 mod find_bar;
@@ -64,6 +65,7 @@ mod viewport;
 mod viewport_sync;
 
 pub(crate) use doc_select::build_page_with_selection_highlight;
+pub(crate) use dialogs::PendingLeave;
 pub(crate) use state::Lumen;
 pub(crate) use focused_field_snapshot::FocusedFieldSnapshot;
 pub(crate) use select_dropdown_snapshot::SelectDropdownSnapshot;

@@ -568,6 +568,18 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .login-bar.generate .offer-only{ display:none; }
 .login-actions button.primary{ border-color:var(--accent); background:var(--accent); color:#fff; }
 
+/* ---------- Page dialog (UX-DIALOGS) ---------- */
+.dialog-box{
+  position:fixed; left:calc(50% - 210px); top:120px; width:420px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 24px 60px rgba(0,0,0,.32);
+  display:none; flex-direction:column; gap:12px; padding:16px; z-index:700;
+}
+.dialog-box.open{ display:flex; }
+.dialog-box .dlg-msg{ font-size:12.5px; margin-top:6px; white-space:pre-wrap; max-height:240px; overflow:hidden; }
+.dialog-box .dlg-input{ display:none; border:1px solid var(--accent); border-radius:var(--radius-sm); padding:6px 8px; font-size:12.5px; background:var(--surface-0); }
+.dialog-box.has-input .dlg-input{ display:block; }
+.dialog-box.no-cancel #dialogCancelBtn{ display:none; }
+
 /* ---------- Update bar (UPD-9) ---------- */
 .update-bar{
   position:fixed; right:18px; top:92px; width:340px; background:var(--surface-0); color:var(--text-primary);
@@ -855,6 +867,19 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
     <button class="fill-only" id="loginNextBtn" data-action="next-login">Другой аккаунт</button>
     <button class="offer-only" id="loginNeverBtn" data-action="never-save-login">Никогда для этого сайта</button>
     <button class="primary offer-only" id="loginSaveBtn" data-action="save-login">Сохранить</button>
+  </div>
+</div>
+
+<!-- ================= PAGE DIALOG (UX-DIALOGS) ================= -->
+<div class="dialog-box" id="dialogBox" role="alertdialog">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-bell"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="dialogTitle"></div><div class="dlg-msg" id="dialogMessage"></div></div>
+  </div>
+  <div class="dlg-input" id="dialogInput"></div>
+  <div class="login-actions">
+    <button id="dialogCancelBtn" data-action="dialog-cancel">Отмена</button>
+    <button class="primary" id="dialogOkBtn" data-action="dialog-ok">OK</button>
   </div>
 </div>
 

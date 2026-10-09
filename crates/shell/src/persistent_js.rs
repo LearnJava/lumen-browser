@@ -661,12 +661,19 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Run the spec's «prompt to unload a document» steps (HTML LS §7.4.5) —
     /// dispatch `beforeunload` on the outgoing page.
     ///
-    /// The page's answer («I asked to stay») is deliberately not honoured: that
-    /// needs a user-facing confirm dialog, which this engine does not have.
-    /// See BUG-834 and `_lumen_fire_beforeunload` in the JS shim.
+    /// The page's answer is not read here: the user-initiated navigations ask
+    /// through [`Self::beforeunload_wants_prompt`] first (UX-DIALOGS) and only
+    /// fall back to this when that query had no answer in time. See BUG-834 and
+    /// `_lumen_fire_beforeunload` in the JS shim.
     #[allow(dead_code)]
     fn fire_beforeunload(&self) {
         self.eval_js("_lumen_fire_beforeunload()");
+    }
+    /// UX-DIALOGS: dispatch `beforeunload` and report whether the page asks the
+    /// user to confirm leaving (it set `returnValue`/`preventDefault()` and has
+    /// had a user gesture). The handlers have run once by the time this returns.
+    fn beforeunload_wants_prompt(&self) -> bool {
+        matches!(self.eval_js_value("_lumen_beforeunload_wants_prompt()").as_deref(), Ok("true"))
     }
     /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
     ///

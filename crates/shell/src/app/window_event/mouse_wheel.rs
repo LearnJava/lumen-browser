@@ -8,6 +8,10 @@ use crate::*;
 
 impl Lumen {
     pub(crate) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        // UX-DIALOGS: модальный диалог страницы не отдаёт колесо странице.
+        if self.page_dialog.is_some() {
+            return;
+        }
         // ADR-032, срез 3: колесо дошло сюда, значит рендер-поток его не взял;
         // базой служит смещение, которое он уже успел набрать.
         self.adopt_scroll_feedback();

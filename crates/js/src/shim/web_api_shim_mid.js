@@ -13814,9 +13814,27 @@ Object.setPrototypeOf(document, HTMLDocument.prototype);
     });
 })();
 
-var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
-var confirm  = function()  { return false; };
-var prompt   = function()  { return null; };
+// UX-DIALOGS: the native blocks this thread until the user answers in the
+// browser chrome (`lumen_js::dialog`); without a UI side (tests, dump modes) it
+// answers at once: alert accepted, confirm/prompt dismissed.
+function _lumen_dialog_origin() {
+    try { return location.host || location.protocol; } catch (e) { return ''; }
+}
+var alert    = function(m) {
+    var text = arguments.length ? String(m) : '';
+    _lumen_console_log('[alert] ' + text);
+    _lumen_dialog('alert', text, '', _lumen_dialog_origin());
+};
+var confirm  = function(m) {
+    var text = arguments.length ? String(m) : '';
+    return _lumen_dialog('confirm', text, '', _lumen_dialog_origin()).charAt(0) === '1';
+};
+var prompt   = function(m, d) {
+    var text = arguments.length ? String(m) : '';
+    var def = (d === undefined) ? '' : String(d);
+    var r = _lumen_dialog('prompt', text, def, _lumen_dialog_origin());
+    return r.charAt(0) === '1' ? r.slice(1) : null;
+};
 var print    = function()  { _lumen_print_dialog(); };
 
 // ── HTML LS §4.12.1 'prepare the script element' (BUG-571) ───────────────────

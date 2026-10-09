@@ -18,7 +18,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use lumen_dom::{Attribute, Document, Namespace, NodeData, NodeId, QualName};
 
+mod dialog;
 mod login_bar;
+pub use dialog::ChromeDialogModel;
 pub use login_bar::ChromeLoginOfferModel;
 mod update_bar;
 pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
@@ -117,6 +119,8 @@ pub struct ChromeModel {
     pub update: ChromeUpdateModel,
     /// `#loginBar` «сохранить пароль?» (UX-PASSWORDS).
     pub login_offer: ChromeLoginOfferModel,
+    /// `#dialogBox` — `alert`/`confirm`/`prompt` страницы (UX-DIALOGS).
+    pub dialog: ChromeDialogModel,
 }
 
 /// `#demoBar` floating control panel snapshot (CC-18) — the panel itself
@@ -843,6 +847,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_right_sidebar(doc, &model.right_sidebar);
     update_bar::bind_update(doc, &model.update);
     login_bar::bind_login_offer(doc, &model.login_offer);
+    dialog::bind_dialog(doc, &model.dialog);
 }
 
 /// Like [`bind_model`], but also reports what the call actually changed, split
