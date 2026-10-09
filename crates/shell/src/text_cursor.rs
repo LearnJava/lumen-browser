@@ -118,9 +118,153 @@ pub(crate) fn sanitize_paste(
     }
 }
 
+/// How an edit changes the value — decides whether it joins the previous undo
+/// group (UX-UNDO).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum EditKind {
+    /// Typed character; `word_start` = a non-space typed right after a space.
+    Typing { word_start: bool },
+    Backspace,
+    DeleteForward,
+    /// Paste, cut: always its own group.
+    Other,
+}
+
+/// Value and caret of a field at one point of its undo history.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct FieldSnapshot {
+    pub(crate) value: String,
+    pub(crate) cursor: usize,
+}
+
+/// Pause that closes a run of typing into its own undo step.
+const UNDO_GROUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(1000);
+/// Oldest steps are dropped past this many.
+const UNDO_LIMIT: usize = 200;
+
+/// Per-field undo/redo stack (UX-UNDO). Snapshot based: a step stores the
+/// value and caret *before* the edit, so undo restores both. Consecutive
+/// typing / Backspace / Delete merge into one step until a pause, a word
+/// start, a change of kind or a caret jump.
+#[derive(Default, Debug)]
+pub(crate) struct FieldHistory {
+    undo: Vec<FieldSnapshot>,
+    redo: Vec<FieldSnapshot>,
+    /// Value the last recorded edit (or undo/redo) left behind; a field whose
+    /// value differs was changed from outside (script, form reset), so the
+    /// stacks no longer describe it.
+    after: Option<String>,
+    last: Option<(EditKind, usize, std::time::Instant)>,
+}
+
+impl FieldHistory {
+    /// Record an edit that turns `before` into `after_value`, leaving the caret
+    /// at `after_cursor`.
+    pub(crate) fn record(
+        &mut self,
+        before: FieldSnapshot,
+        kind: EditKind,
+        after_value: &str,
+        after_cursor: usize,
+        now: std::time::Instant,
+    ) {
+        if self.after.as_deref().is_some_and(|a| a != before.value) {
+            self.undo.clear();
+            self.last = None;
+        }
+        let merge = !self.undo.is_empty()
+            && self.last.is_some_and(|(k, cur, at)| {
+                kind != EditKind::Other
+                    && !matches!(kind, EditKind::Typing { word_start: true })
+                    && std::mem::discriminant(&k) == std::mem::discriminant(&kind)
+                    && cur == before.cursor
+                    && now.duration_since(at) < UNDO_GROUP_PAUSE
+            });
+        if !merge {
+            self.undo.push(before);
+            if self.undo.len() > UNDO_LIMIT {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        self.after = Some(after_value.to_owned());
+        self.last = Some((kind, after_cursor, now));
+    }
+
+    /// Step back: `current` goes to the redo stack, the previous state is returned.
+    pub(crate) fn undo(&mut self, current: &FieldSnapshot) -> Option<FieldSnapshot> {
+        self.step(current, true)
+    }
+
+    /// Step forward again after an undo.
+    pub(crate) fn redo(&mut self, current: &FieldSnapshot) -> Option<FieldSnapshot> {
+        self.step(current, false)
+    }
+
+    fn step(&mut self, current: &FieldSnapshot, back: bool) -> Option<FieldSnapshot> {
+        if self.after.as_deref().is_some_and(|a| a != current.value) {
+            *self = FieldHistory::default();
+            return None;
+        }
+        let (from, to) = if back { (&mut self.undo, &mut self.redo) } else { (&mut self.redo, &mut self.undo) };
+        let target = from.pop()?;
+        to.push(current.clone());
+        self.after = Some(target.value.clone());
+        self.last = None;
+        Some(target)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snap(v: &str, c: usize) -> FieldSnapshot {
+        FieldSnapshot { value: v.to_owned(), cursor: c }
+    }
+
+    #[test]
+    fn history_groups_typing_and_undoes_whole_run() {
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + std::time::Duration::from_millis(n);
+        let mut h = FieldHistory::default();
+        let ty = EditKind::Typing { word_start: false };
+        h.record(snap("", 0), ty, "a", 1, ms(0));
+        h.record(snap("a", 1), ty, "ab", 2, ms(100));
+        h.record(snap("ab", 2), ty, "abc", 3, ms(200));
+        assert_eq!(h.undo(&snap("abc", 3)), Some(snap("", 0)));
+        assert_eq!(h.undo(&snap("", 0)), None);
+        assert_eq!(h.redo(&snap("", 0)), Some(snap("abc", 3)));
+    }
+
+    #[test]
+    fn history_splits_on_pause_word_start_and_kind() {
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + std::time::Duration::from_millis(n);
+        let mut h = FieldHistory::default();
+        let ty = EditKind::Typing { word_start: false };
+        h.record(snap("", 0), ty, "a", 1, ms(0));
+        h.record(snap("a", 1), ty, "ab", 2, ms(2000));
+        h.record(snap("ab", 2), EditKind::Typing { word_start: true }, "ab c", 4, ms(2100));
+        h.record(snap("ab c", 4), EditKind::Backspace, "ab ", 3, ms(2200));
+        assert_eq!(h.undo(&snap("ab ", 3)), Some(snap("ab c", 4)));
+        assert_eq!(h.undo(&snap("ab c", 4)), Some(snap("ab", 2)));
+        assert_eq!(h.undo(&snap("ab", 2)), Some(snap("a", 1)));
+        assert_eq!(h.undo(&snap("a", 1)), Some(snap("", 0)));
+    }
+
+    #[test]
+    fn history_new_edit_clears_redo_and_external_change_resets() {
+        let t0 = std::time::Instant::now();
+        let mut h = FieldHistory::default();
+        h.record(snap("a", 1), EditKind::Other, "ab", 2, t0);
+        assert!(h.undo(&snap("ab", 2)).is_some());
+        h.record(snap("a", 1), EditKind::Other, "ax", 2, t0);
+        assert_eq!(h.redo(&snap("ax", 2)), None);
+        // the script rewrote the value: nothing to undo into
+        assert_eq!(h.undo(&snap("zzz", 3)), None);
+        assert_eq!(h.undo(&snap("ax", 2)), None);
+    }
 
     #[test]
     fn insert_in_middle() {

@@ -2323,6 +2323,7 @@ impl Lumen {
         self.form_state.clear();
         self.frame_text_cursor.clear();
         self.frame_text_selection_anchor.clear();
+        self.field_history.clear();
         self.text_drag = None;
         self.doc_select = None;
         self.validation_tooltip = None;

@@ -1186,6 +1186,9 @@ pub(crate) struct Lumen {
     /// alongside `frame_text_cursor` on navigation/tab reset — see that
     /// field's doc comment.
     pub(crate) frame_text_selection_anchor: HashMap<(usize, NodeId), usize>,
+    /// Undo/redo stacks of typeable fields (UX-UNDO), keyed by frame index
+    /// (`None` = the page) and `NodeId`. Cleared with `frame_text_cursor`.
+    pub(crate) field_history: HashMap<(Option<usize>, NodeId), FieldHistory>,
     /// `<input type="color">` ВНУТРИ содержимого фрейма, чей picker-оверлей
     /// открыт (FRAME-6), keyed the same way [`Self::frame_text_cursor`] is —
     /// `NodeId` уникален лишь внутри своего документа. Зеркало страничного
