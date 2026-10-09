@@ -373,6 +373,13 @@ impl SafeBrowsingList {
         threat: &ThreatType,
         added_at: i64,
     ) -> Result<()> {
+        let hash = Self::url_hash(url)?;
+        self.add_hash(list_name, &hash, threat, added_at)
+    }
+
+    /// SHA-256 канонического выражения URL — ключ, под которым его ищет
+    /// [`Self::lookup_url`].
+    pub fn url_hash(url: &Url) -> Result<[u8; 32]> {
         let host = url
             .host_ascii()
             .map_err(|e| Error::Storage(format!("safe_browsing add_url host: {e}")))?
@@ -390,8 +397,43 @@ impl SafeBrowsingList {
             Some(q) => format!("{host}{}?{q}", if path == "/" { "/" } else { &path }),
             None => format!("{host}{}", if path == "/" { "/" } else { &path }),
         };
-        let hash = sha256(expr.as_bytes());
-        self.add_hash(list_name, &hash, threat, added_at)
+        Ok(sha256(expr.as_bytes()))
+    }
+
+    /// Атомарно заменить содержимое списка: одна транзакция, старые записи
+    /// `list_name` удаляются, `hashes` вставляются с одним `threat`. Нужна
+    /// для загрузки фидов в сотни тысяч записей (`add_hash` по одному — по
+    /// коммиту на запись). Возвращает число вставленных строк.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub fn replace_list(
+        &self,
+        list_name: &str,
+        hashes: &[[u8; 32]],
+        threat: &ThreatType,
+        added_at: i64,
+    ) -> Result<usize> {
+        let code = threat.as_code();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Storage(format!("safe_browsing replace_list: {e}")))?;
+        tx.execute("DELETE FROM safe_browsing WHERE list_name = ?1", params![list_name])
+            .map_err(|e| Error::Storage(format!("safe_browsing replace_list: {e}")))?;
+        {
+            let mut ins = tx
+                .prepare(
+                    "INSERT OR REPLACE INTO safe_browsing(list_name, full_hash, threat_type, added_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                )
+                .map_err(|e| Error::Storage(format!("safe_browsing replace_list: {e}")))?;
+            for h in hashes {
+                ins.execute(params![list_name, &h[..], code, added_at])
+                    .map_err(|e| Error::Storage(format!("safe_browsing replace_list: {e}")))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| Error::Storage(format!("safe_browsing replace_list: {e}")))?;
+        Ok(hashes.len())
     }
 
     /// Прямой lookup по полному хэшу (32 байта). Возвращает первое
@@ -560,6 +602,20 @@ impl RequestFilter for SafeBrowsingFilter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn replace_list_swaps_contents_atomically() {
+        let l = SafeBrowsingList::open_in_memory().unwrap();
+        let old = Url::parse("https://old-feed.example/a").unwrap();
+        let new = Url::parse("https://new-feed.example/b").unwrap();
+        l.add_url("feed", &old, &ThreatType::Malware, 1).unwrap();
+        let n = l
+            .replace_list("feed", &[SafeBrowsingList::url_hash(&new).unwrap()], &ThreatType::Malware, 2)
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(l.lookup_url(&old).unwrap().is_none());
+        assert!(l.lookup_url(&new).unwrap().is_some());
+    }
+
     use super::*;
 
     // ── ThreatType ──────────────────────────────────────────────────────────

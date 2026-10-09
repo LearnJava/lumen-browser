@@ -281,6 +281,15 @@ fn run_window_mode_inner(
             .ok();
     }
 
+    // UX-SECURITY-UI: фоновая загрузка списков фишинга/вредоносных сайтов.
+    {
+        let http = config::global().apply_http(lumen_network::HttpClient::new());
+        std::thread::Builder::new()
+            .name("threat-feeds".to_owned())
+            .spawn(move || crate::threat_feeds::refresh(&http))
+            .ok();
+    }
+
     // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
     // Created by main() (not here) so front-ends spawned before the window
     // exists (bidi_spawn) already hold a valid handle — see call site.
