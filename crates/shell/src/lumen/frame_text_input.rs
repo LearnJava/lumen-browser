@@ -395,6 +395,21 @@ impl Lumen {
         }
     }
 
+    /// UX-IME-4: composition-событие на поле фрейма — прямым `eval_js` по
+    /// хэндлу фрейма, как [`Self::dispatch_frame_key`].
+    #[allow(unused_variables)] // js.eval_js читается только под feature = "v8"
+    pub(crate) fn frame_composition_event(&self, idx: usize, nid: lumen_dom::NodeId, kind: &str, data: &str) {
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
+            js.eval_js(&format!(
+                "_lumen_dispatch_composition_at({}, '{}', '{}')",
+                nid.index(),
+                kind,
+                escape_js_string(data)
+            ));
+        }
+    }
+
     /// Ввести символ во typeable-поле фрейма, адресуемом `self.focused_frame`
     /// (зеркало [`Self::inject_char`]). `true` — символ принят полем.
     pub(crate) fn inject_frame_char(&mut self, ch: char) -> bool {

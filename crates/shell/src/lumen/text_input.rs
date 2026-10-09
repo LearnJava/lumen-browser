@@ -644,10 +644,14 @@ impl Lumen {
     }
 
     /// Fire a trusted composition event at the focused page text field
-    /// (UX-IME). Frames have their own JS context, so they get none.
+    /// (UX-IME); a focused frame field gets it in the frame's own JS context.
     fn page_composition_event(&self, kind: &str, data: &str) {
+        if let Some((idx, nid)) = self.focused_frame {
+            self.frame_composition_event(idx, nid, kind, data);
+            return;
+        }
         let Some(nid) = self.focused_node else { return };
-        if self.focused_frame.is_some() || self.typeable_field(nid).is_none() {
+        if self.typeable_field(nid).is_none() {
             return;
         }
         route_eval_js(
@@ -783,7 +787,6 @@ impl Lumen {
     /// underline. Page coordinates; `None` unless a non-empty preedit is live
     /// in a page-level (not frame, not address-bar) field.
     pub(crate) fn ime_preedit_overlay(&self) -> Option<lumen_paint::DisplayList> {
-        use lumen_layout::{Color, CssColor, FontStyle, FontWeight};
         let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
         if self.address_bar.is_open() || self.focused_frame.is_some() {
             return None;
@@ -791,42 +794,48 @@ impl Lumen {
         let nid = self.focused_node?;
         let field_lb = forms::find_layout_box(self.layout_box.as_ref()?, nid)?;
         let caret = self.page_caret_rect(nid)?;
-        let style = &field_lb.style;
-        let fs = style.font_size;
-        let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
-        let width = width.min((field_lb.rect.x + field_lb.rect.width - caret.x).max(fs));
-        let bg = match style.background_color {
-            Some(CssColor::Rgba(c)) if c.a == 255 => c,
-            _ => Color { r: 255, g: 255, b: 255, a: 255 },
+        Some(preedit_commands(text, field_lb, caret))
+    }
+
+    /// UX-IME-4: the same preedit for a focused field INSIDE a frame, shifted
+    /// into page coordinates and clipped to the frame's viewport.
+    pub(crate) fn ime_frame_preedit_overlay(&self) -> Option<lumen_paint::DisplayList> {
+        let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
+        if self.address_bar.is_open() {
+            return None;
+        }
+        let (fidx, nid) = self.focused_frame?;
+        let handle = self.frames.get(fidx)?;
+        let field_lb = forms::find_layout_box(handle.layout.as_ref()?, nid)?;
+        let (kind, value, cursor) = if let Some((_, _, c, v)) = self.focused_frame_input_caret() {
+            (TypeableField::Input, v, c)
+        } else {
+            let (_, _, c, v) = self.focused_frame_textarea_caret()?;
+            (TypeableField::Textarea, v, c)
         };
-        let line_h = fs * 1.2;
-        let rect = lumen_core::geom::Rect::new(caret.x, caret.y, width, line_h.min(caret.height.max(fs)));
-        let fg = style.color;
-        Some(vec![
-            lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
-            lumen_paint::DisplayCommand::FillRect { rect, color: bg },
-            lumen_paint::DisplayCommand::DrawText {
-                font_stretch: lumen_layout::FontStretch::NORMAL,
-                rect,
-                text: text.to_string(),
-                font_size: fs,
-                color: fg,
-                font_family: style.font_family.clone(),
-                font_weight: FontWeight::NORMAL,
-                font_style: FontStyle::Normal,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            },
-            lumen_paint::DisplayCommand::FillRect {
-                rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
-                color: fg,
-            },
-            lumen_paint::DisplayCommand::PopClip,
-        ])
+        let caret = match kind {
+            TypeableField::Input => forms::input_caret_rect(field_lb, &value, cursor),
+            TypeableField::Textarea => {
+                let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+                let m = lumen_paint::FontMeasurer::new(&font).ok()?;
+                let fs = field_lb.style.font_size;
+                let measure = |s: &str| -> f32 {
+                    use lumen_layout::TextMeasurer;
+                    s.chars().map(|c| m.char_width(c, fs)).sum()
+                };
+                forms::textarea_caret_rect(field_lb, &value, cursor, &measure)
+            }
+        };
+        let (ox, oy) = crate::frames::frame_page_origin(&self.frames, fidx)?;
+        let shift = |r: lumen_core::geom::Rect| lumen_core::geom::Rect { x: r.x + ox, y: r.y + oy, ..r };
+        let mut moved = field_lb.clone();
+        moved.rect = shift(moved.rect);
+        let mut cmds = vec![lumen_paint::DisplayCommand::PushClipRect {
+            rect: lumen_core::geom::Rect::new(ox, oy, handle.viewport.width, handle.viewport.height),
+        }];
+        cmds.extend(preedit_commands(text, &moved, shift(caret)));
+        cmds.push(lumen_paint::DisplayCommand::PopClip);
+        Some(cmds)
     }
 
     /// UX-IME-3: the in-progress composition in the open address bar — preedit
@@ -892,6 +901,48 @@ impl Lumen {
             }
         }
     }
+}
+
+/// Preedit patch + text + underline at `caret`, clipped to the field box
+/// (UX-IME-2/4). `field_lb` and `caret` share one coordinate space.
+fn preedit_commands(text: &str, field_lb: &lumen_layout::LayoutBox, caret: lumen_core::geom::Rect) -> lumen_paint::DisplayList {
+    use lumen_layout::{Color, CssColor, FontStyle, FontWeight};
+    let style = &field_lb.style;
+    let fs = style.font_size;
+    let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
+    let width = width.min((field_lb.rect.x + field_lb.rect.width - caret.x).max(fs));
+    let bg = match style.background_color {
+        Some(CssColor::Rgba(c)) if c.a == 255 => c,
+        _ => Color { r: 255, g: 255, b: 255, a: 255 },
+    };
+    let line_h = fs * 1.2;
+    let rect = lumen_core::geom::Rect::new(caret.x, caret.y, width, line_h.min(caret.height.max(fs)));
+    let fg = style.color;
+    vec![
+        lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
+        lumen_paint::DisplayCommand::FillRect { rect, color: bg },
+        lumen_paint::DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect,
+            text: text.to_string(),
+            font_size: fs,
+            color: fg,
+            font_family: style.font_family.clone(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        },
+        lumen_paint::DisplayCommand::FillRect {
+            rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
+            color: fg,
+        },
+        lumen_paint::DisplayCommand::PopClip,
+    ]
 }
 
 /// Clipboard command on a focused text field (UX-CLIPBOARD).
