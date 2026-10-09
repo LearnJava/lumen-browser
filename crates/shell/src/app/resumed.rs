@@ -63,6 +63,9 @@ impl Lumen {
             }
         }
 
+        // UX-IME: winit 0.30 keeps IME off until asked, so no `Ime::*` events
+        // (and no Windows IME at all) reached the shell before.
+        window.set_ime_allowed(true);
         self.window = Some(window.clone());
 
         // Сбрасываем состояние предыдущего streaming-цикла — новая страница.

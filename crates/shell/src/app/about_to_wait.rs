@@ -16,6 +16,7 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &MainHandle<'_>) {
+        self.flush_ime_cancel();
         // UX-DIALOGS: первым делом — JS-поток может стоять в `alert`, и тогда
         // остальные чтения движка вернутся пустыми (`js_blocked`).
         self.poll_page_dialog();
