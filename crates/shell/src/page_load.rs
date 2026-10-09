@@ -997,10 +997,15 @@ impl Lumen {
     /// `load_failed`/`load_error_message` — so `reload()` retries the exact
     /// URL the interstitial was blocking.
     pub(crate) fn proceed_cert_interstitial(&mut self) {
+        let is_threat = self.cert_interstitial.threat.is_some();
         let Some((_url, host)) = self.cert_interstitial.proceed() else {
             return;
         };
-        lumen_network::tls::bypass::allow_host(&host);
+        if is_threat {
+            crate::threat_store::allow_host(&host);
+        } else {
+            lumen_network::tls::bypass::allow_host(&host);
+        }
         self.relayout_chrome_host();
         self.reload();
     }
@@ -1501,6 +1506,20 @@ impl Lumen {
             // загрузки. Для File/Snapshot/Static тело уже в памяти, поэтому его
             // достаточно нарезать на STREAM_CHUNK_BYTES (прежнее поведение).
             let raw = if let PageSource::Url { url, .. } = &source {
+                // UX-SECURITY-UI: адрес из базы Safe Browsing не загружаем.
+                if let Some((list, threat)) = crate::threat_store::check(url) {
+                    let host = lumen_core::url::Url::parse(url)
+                        .map_or_else(|_| url.clone(), |u| u.host().to_owned());
+                    let _ = proxy.send_event(LoadEvent::ThreatBlocked(
+                        url.clone(),
+                        host,
+                        list,
+                        threat,
+                        tab_id,
+                        generation,
+                    ));
+                    return;
+                }
                 // BUG-757: база preload-хинтов — адрес, с которого РЕАЛЬНО
                 // течёт тело (его приносит сам chunk), а не запрошенный: после
                 // редиректа они разные, и относительный `src` уходил на
@@ -3021,6 +3040,10 @@ pub(crate) enum LoadEvent {
     /// "Proceed anyway"), the structured reason, tab id, and generation (U-1);
     /// see [`Self::EarlyPreloadHints`] (BUG-1214).
     CertError(String, String, lumen_core::error::CertError, usize, u64),
+    /// UX-SECURITY-UI срез 2: адрес навигации найден в локальной базе Safe
+    /// Browsing, загрузка не начата. Поля: URL, хост, имя списка, тип угрозы,
+    /// вкладка, поколение.
+    ThreatBlocked(String, String, String, lumen_storage::ThreatType, usize, u64),
     /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →
     /// layout) выполнен на фоновом потоке; готовый результат применяется на
     /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Предпоследнее
