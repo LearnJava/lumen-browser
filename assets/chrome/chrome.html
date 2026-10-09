@@ -300,6 +300,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
   border-radius:var(--radius-md); padding:6px 8px; display:none; align-items:center; gap:6px;
 }
 .omnibox-warn.show{ display:flex; }
+/* UX-ZOOM: индикатор масштаба страницы; виден только при масштабе ≠ 100 %, клик сбрасывает. */
+.zoom-btn{ display:none; height:22px; padding:0 6px; border-radius:var(--radius-md); border:none; background:var(--accent-soft); color:var(--accent); font-size:11px; align-items:center; justify-content:center; }
+.zoom-btn.show{ display:flex; }
 
 .dropdown{
   position:absolute; top:38px; left:0; right:0; background:var(--surface-0); border:1px solid var(--stroke);
@@ -982,6 +985,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button class="lock-btn" id="lockBtn" data-action="open-cert-viewer" aria-label="Просмотр сертификата"><svg class="icon"><use href="#i-lock"/></svg></button>
             <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" role="combobox" aria-autocomplete="list">
             <div class="omnibox-actions">
+              <button class="zoom-btn" id="zoomBtn" data-action="zoom-reset" aria-label="Сбросить масштаб страницы"><span id="zoomLabel">100%</span></button>
               <button class="tb-btn" title="В закладки"><svg class="icon"><use href="#i-star"/></svg></button>
               <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" data-action="toggle-shield-popover" aria-label="Экран приватности"><svg class="icon"><use href="#i-shield"/></svg></button>
             </div>

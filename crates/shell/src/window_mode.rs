@@ -701,6 +701,7 @@ fn run_window_mode_inner(
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
         laid_out_zoom_factor: zoom::ZOOM_DEFAULT,
+        zoom_host: None,
         pending_zoom_relayout: None,
         display_url: None,
         current_history_state_json: String::from("null"),

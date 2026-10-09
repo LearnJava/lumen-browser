@@ -511,6 +511,7 @@ impl Lumen {
         // the (inherently async, no synchronous geometry consumer) zoom relayout
         // off the UI thread; otherwise fall back to the synchronous path. Either
         // path clears the pending state and (on apply) resets the preview to 1:1.
+        self.sync_site_zoom();
         if let Some(deadline) = self.pending_zoom_relayout {
             if std::time::Instant::now() >= deadline {
                 // Consume the debounce regardless of path so it fires once per

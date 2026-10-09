@@ -153,6 +153,17 @@ impl Lumen {
             self.request_redraw();
             return;
         }
+        // UX-ZOOM: Ctrl+wheel zooms the page instead of scrolling it.
+        if self.modifiers.control_key() {
+            let lines = match delta {
+                MouseScrollDelta::LineDelta(_, l) => l,
+                MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+            };
+            if lines != 0.0 {
+                self.step_page_zoom(lines > 0.0);
+            }
+            return;
+        }
         // winit отдаёт два типа дельты:
         // - LineDelta(cols, lines): mouse wheel notch, нет momentum.
         // - PixelDelta({x, y}): тачпад, device px, делим на DPR.

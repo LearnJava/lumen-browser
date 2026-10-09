@@ -543,6 +543,9 @@ pub struct OmniboxModel {
     /// `Some(message)` shows `#omniWarn` (adds `.show`) with this spoof-guard
     /// warning text; `None` hides it.
     pub warning: Option<String>,
+    /// `Some(percent)` shows the `#zoomBtn` page-zoom indicator with this
+    /// label (UX-ZOOM); `None` — zoom is 100 % and the button stays hidden.
+    pub zoom_percent: Option<u32>,
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
@@ -1469,6 +1472,14 @@ fn bind_permission_row(doc: &mut Document, row: NodeId, state: ChromePermState) 
 fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     if let Some(input) = doc.find_by_id(crate::ids::OMNI_INPUT) {
         set_attr(doc, input, "value", &omnibox.value);
+    }
+    if let Some(btn) = doc.find_by_id(crate::ids::ZOOM_BTN) {
+        set_class_token(doc, btn, "show", omnibox.zoom_percent.is_some());
+    }
+    if let (Some(label), Some(percent)) =
+        (doc.find_by_id(crate::ids::ZOOM_LABEL), omnibox.zoom_percent)
+    {
+        set_text(doc, label, &format!("{percent}%"));
     }
     let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
     set_class_token(doc, warn, "show", omnibox.warning.is_some());
@@ -2791,7 +2802,7 @@ mod tests {
     fn omnibox_value_is_written_to_the_input_element() {
         let mut doc = parse_asset();
         let model = ChromeModel {
-            omnibox: OmniboxModel { value: "https://example.com".to_owned(), warning: None },
+            omnibox: OmniboxModel { value: "https://example.com".to_owned(), ..Default::default() },
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -2800,10 +2811,32 @@ mod tests {
     }
 
     #[test]
+    fn omnibox_zoom_indicator_follows_the_model() {
+        let mut doc = parse_asset();
+        let btn = doc.find_by_id(crate::ids::ZOOM_BTN).expect("asset has #zoomBtn");
+        let label = doc.find_by_id(crate::ids::ZOOM_LABEL).expect("asset has #zoomLabel");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
+        let model = ChromeModel {
+            omnibox: OmniboxModel { zoom_percent: Some(150), ..Default::default() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, btn, "show"));
+        let text = match &doc.get(doc.get(label).children[0]).data {
+            NodeData::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(text, "150%");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
+    }
+
+    #[test]
     fn omnibox_warning_shows_the_warn_banner_with_its_message() {
         let mut doc = parse_asset();
         let model = ChromeModel {
-            omnibox: OmniboxModel { value: String::new(), warning: Some("spoof risk".to_owned()) },
+            omnibox: OmniboxModel { value: String::new(), warning: Some("spoof risk".to_owned()), ..Default::default() },
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);

@@ -1307,7 +1307,19 @@ impl V8JsRuntime {
     /// backs `window.visualViewport.scale` as of GAP-VVPORT срез 3 — see
     /// [`Self::update_meta_viewport_scale`].
     pub fn update_zoom_factor(&self, zoom: f32) {
-        *self.zoom_factor.lock().unwrap_or_else(|e| e.into_inner()) = zoom;
+        let changed = {
+            let mut g = self.zoom_factor.lock().unwrap_or_else(|e| e.into_inner());
+            let changed = (*g - zoom).abs() > f32::EPSILON;
+            *g = zoom;
+            changed
+        };
+        // UX-ZOOM: a zoom step reflows the layout viewport, so the page sees
+        // `resize` (the caller pushed the new viewport size just before this).
+        if changed {
+            let _ = self.eval(
+                "if(typeof _lumen_fire_window_resize_event==='function')_lumen_fire_window_resize_event();",
+            );
+        }
     }
 
     /// Update `<meta name=viewport initial-scale>` of the current document,

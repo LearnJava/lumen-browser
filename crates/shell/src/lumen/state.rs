@@ -485,6 +485,9 @@ pub(crate) struct Lumen {
     /// layout viewport: `effective = physical / (meta_scale * zoom_factor)`.
     /// Resets to 1.0 on tab switch (stored in `PageSnapshot` for background tabs).
     pub(crate) zoom_factor: f32,
+    /// Host `zoom_factor` is remembered under (UX-ZOOM); `None` for pages without
+    /// an `http(s)` host. `sync_site_zoom` re-reads the stored zoom when it changes.
+    pub(crate) zoom_host: Option<String>,
     /// Zoom factor the current display list was laid out at (ADR-016 M0.3).
     ///
     /// Transform-first zoom lets `zoom_factor` diverge from this between a
