@@ -262,6 +262,7 @@ fn run_window_mode_inner(
     // the per-tab checkbox flips it via lumen_network::set_global_adblock_enabled.
     // Returns the persistent store; offline-first (cached lists / bundled fallback).
     let adblock_store = config::init_adblock();
+    crate::threat_store::install_subresource_filter();
 
     // Background refresh of external filter lists (EasyList/EasyPrivacy):
     // conditional GET of any list past its ~4-day expiry, then hot-swap the

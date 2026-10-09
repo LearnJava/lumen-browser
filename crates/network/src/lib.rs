@@ -175,6 +175,23 @@ fn global_adblock_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
     }
 }
 
+/// Process-global safe-browsing filter for **subresources** (UX-SECURITY-UI-4).
+/// Independent of the ad-block toggle: the top-level document is handled by the
+/// shell's interstitial, so this one never sees `is_top_level` requests.
+static GLOBAL_THREAT_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::RequestFilter>>> =
+    std::sync::RwLock::new(None);
+
+/// Install (or replace) the process-global subresource threat filter.
+pub fn install_global_threat_filter(filter: Arc<dyn lumen_core::ext::RequestFilter>) {
+    if let Ok(mut guard) = GLOBAL_THREAT_FILTER.write() {
+        *guard = Some(filter);
+    }
+}
+
+fn global_threat_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
+    GLOBAL_THREAT_FILTER.read().ok().and_then(|g| g.clone())
+}
+
 // BUG-295 (WebDriver BiDi `network.setOfflineStatus` / `emulation.setUserAgentOverride`):
 // same process-global pattern as the ad-block toggle above — checked at the one
 // `fetch_with_redirect` chokepoint every fetch path (top-level navigation, JS
@@ -2628,7 +2645,23 @@ fn fetch_with_redirect(
         return Err(Error::Network(format!("blocked: {reason}")));
     }
 
-    // BUG-295 remainder: `network.addIntercept` + `continueRequest`/`failRequest` —
+    // UX-SECURITY-UI-4: подресурс с адреса из базы Safe Browsing не грузим,
+    // даже если блокировщик рекламы выключен.
+    if !is_top_level
+        && let Some(f) = global_threat_filter()
+        && let Some(reason) = f.should_block_ctx(url, &filter_ctx)
+    {
+        if let Some(s) = sink {
+            s.emit(&Event::RequestBlocked {
+                tab_id,
+                url: url.clone(),
+                reason: reason.clone(),
+            });
+        }
+        return Err(Error::Network(format!("blocked: {reason}")));
+    }
+
+    // BUG-295 remainder: `network.addIntercept` +`continueRequest`/`failRequest` —
     // after the ad-block filter (no point pausing a request that would be
     // blocked anyway), before CORS preflight / Started: a paused request that
     // gets failed follows the same "no RequestStarted/RequestCompleted"

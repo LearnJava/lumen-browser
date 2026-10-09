@@ -57,7 +57,7 @@ fn check_in(list: &SafeBrowsingList, url: &str) -> Option<(String, ThreatType)> 
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
-    if allowed().lock().is_ok_and(|s| s.contains(&parsed.host().to_ascii_lowercase())) {
+    if is_allowed(parsed.host()) {
         return None;
     }
     match list.lookup_url(&parsed) {
@@ -67,6 +67,38 @@ fn check_in(list: &SafeBrowsingList, url: &str) -> Option<(String, ThreatType)> 
             None
         }
     }
+}
+
+/// Фильтр подресурсов (UX-SECURITY-UI-4): запрос к адресу из базы блокируется,
+/// если хост документа не разрешён кнопкой «Всё равно перейти».
+pub struct SubresourceThreatFilter;
+
+impl lumen_core::ext::RequestFilter for SubresourceThreatFilter {
+    fn should_block(&self, url: &Url) -> Option<String> {
+        check(url.as_str()).map(|(list, t)| format!("{} ({list})", t.as_code()))
+    }
+
+    fn should_block_ctx(
+        &self,
+        url: &Url,
+        ctx: &lumen_core::ext::RequestContext<'_>,
+    ) -> Option<String> {
+        if ctx.document_host.is_some_and(is_allowed) {
+            return None;
+        }
+        self.should_block(url)
+    }
+}
+
+/// Установить фильтр подресурсов в сетевой слой; без базы ничего не делает.
+pub fn install_subresource_filter() {
+    if global().is_some() {
+        lumen_network::install_global_threat_filter(std::sync::Arc::new(SubresourceThreatFilter));
+    }
+}
+
+fn is_allowed(host: &str) -> bool {
+    allowed().lock().is_ok_and(|s| s.contains(&host.to_ascii_lowercase()))
 }
 
 /// Заголовок и пояснение экрана для типа угрозы.
@@ -123,5 +155,14 @@ mod tests {
         let (title, msg) = describe(&ThreatType::SocialEngineering, "x.example");
         assert!(title.contains("фишинг"));
         assert!(msg.contains("x.example"));
+    }
+
+    #[test]
+    fn subresource_filter_skips_allowed_document_host() {
+        use lumen_core::ext::{RequestContext, RequestFilter};
+        allow_host("Doc-Allowed.example");
+        let ctx = RequestContext { document_host: Some("doc-allowed.example"), ..RequestContext::unknown() };
+        let url = Url::parse("https://anything.example/x.js").unwrap();
+        assert!(SubresourceThreatFilter.should_block_ctx(&url, &ctx).is_none());
     }
 }
