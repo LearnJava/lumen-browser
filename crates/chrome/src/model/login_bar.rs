@@ -20,12 +20,15 @@ pub struct ChromeLoginOfferModel {
     pub save_label: String,
     /// Режим «подставлен сохранённый аккаунт»: вместо «Сохранить» — «Другой аккаунт».
     pub fill: bool,
+    /// Режим «предложить сгенерированный пароль» (форма регистрации): кнопка «Использовать».
+    pub generate: bool,
 }
 
 pub(super) fn bind_login_offer(doc: &mut Document, offer: &ChromeLoginOfferModel) {
     if let Some(bar) = doc.find_by_id(crate::ids::LOGIN_BAR) {
         set_class_token(doc, bar, "open", offer.open);
         set_class_token(doc, bar, "fill", offer.fill);
+        set_class_token(doc, bar, "generate", offer.generate);
     }
     if let Some(n) = doc.find_by_id(crate::ids::LOGIN_TITLE) {
         set_text(doc, n, &offer.title);
@@ -58,6 +61,7 @@ mod tests {
                 meta: "example.com · anna".into(),
                 save_label: "Сохранить".into(),
                 fill: false,
+                generate: false,
             },
             ..ChromeModel::default()
         };
