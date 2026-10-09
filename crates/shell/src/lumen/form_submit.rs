@@ -93,6 +93,7 @@ impl Lumen {
                         }
                     }
                     self.offer_to_save_login(form);
+                    self.offer_to_save_autofill(form);
                     // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
                     //
                     // Кодируем сразу в байты и с настоящим `Content-Type`:

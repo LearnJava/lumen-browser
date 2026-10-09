@@ -1257,6 +1257,9 @@ pub(crate) struct Lumen {
     /// пароль (поля нового пароля и подтверждения). Сам пароль не хранится —
     /// создаётся по кнопке.
     pub(crate) login_gen: Option<Vec<NodeId>>,
+    /// UX-AUTOFILL срез 2: предложение запомнить значения формы (та же панель
+    /// `#loginBar`, что и у паролей; пароль и автозаполнение друг друга не вытесняют).
+    pub(crate) autofill_offer: Option<autofill_store::AutofillOffer>,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.

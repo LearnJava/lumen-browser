@@ -22,6 +22,8 @@ pub struct ChromeLoginOfferModel {
     pub fill: bool,
     /// Режим «предложить сгенерированный пароль» (форма регистрации): кнопка «Использовать».
     pub generate: bool,
+    /// Текст на кнопке `#loginNeverBtn`; пусто — «Никогда для этого сайта».
+    pub never_label: String,
 }
 
 pub(super) fn bind_login_offer(doc: &mut Document, offer: &ChromeLoginOfferModel) {
@@ -38,6 +40,10 @@ pub(super) fn bind_login_offer(doc: &mut Document, offer: &ChromeLoginOfferModel
     }
     if let Some(n) = doc.find_by_id(crate::ids::LOGIN_SAVE_BTN) {
         set_text(doc, n, &offer.save_label);
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::LOGIN_NEVER_BTN) {
+        let label = if offer.never_label.is_empty() { "Никогда для этого сайта" } else { &offer.never_label };
+        set_text(doc, n, label);
     }
 }
 
@@ -62,6 +68,7 @@ mod tests {
                 save_label: "Сохранить".into(),
                 fill: false,
                 generate: false,
+                never_label: String::new(),
             },
             ..ChromeModel::default()
         };

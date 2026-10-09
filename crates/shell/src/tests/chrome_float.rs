@@ -291,6 +291,7 @@ fn login_bar_detaches_and_routes_its_buttons() {
             save_label: "Сохранить".to_owned(),
             fill: false,
             generate: false,
+            never_label: String::new(),
         },
         update: lumen_chrome::ChromeUpdateModel { bar_open: true, ..Default::default() },
         ..lumen_chrome::ChromeModel::default()
