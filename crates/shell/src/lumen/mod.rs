@@ -22,6 +22,7 @@ mod find_bar;
 mod focus_tab;
 mod focused_field_snapshot;
 mod form_submit;
+mod login_offer;
 mod frame_dynamic;
 mod frame_form_submit;
 mod frame_forms;

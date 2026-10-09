@@ -50,6 +50,54 @@ pub fn find_login_forms(doc: &Document) -> Vec<LoginForm> {
         .collect()
 }
 
+/// Что пользователь ввёл в форму: логин и тот пароль, который сайт будет считать
+/// актуальным (при смене пароля — новый, а не текущий).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
+    pub kind: LoginKind,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("username", &self.username)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Введённые логин и пароль формы `form`; `None`, если в ней нет поля пароля
+/// или пароль пуст.
+pub fn credentials(doc: &Document, form: NodeId) -> Option<Credentials> {
+    let lf = find_login_forms(doc).into_iter().find(|f| f.form == Some(form))?;
+    let password_node = match lf.kind {
+        LoginKind::SignIn | LoginKind::SignUp => *lf.passwords.first()?,
+        LoginKind::ChangePassword => lf
+            .passwords
+            .iter()
+            .copied()
+            .find(|&id| has_autocomplete(doc, id, "new-password"))
+            .or_else(|| lf.passwords.get(1).copied())?,
+    };
+    let password = doc.control_value(password_node).into_owned();
+    if password.is_empty() {
+        return None;
+    }
+    let username = lf
+        .username
+        .map(|id| doc.control_value(id).trim().to_owned())
+        .unwrap_or_default();
+    Some(Credentials { username, password, kind: lf.kind })
+}
+
+fn has_autocomplete(doc: &Document, id: NodeId, token: &str) -> bool {
+    doc.get(id)
+        .get_attr("autocomplete")
+        .is_some_and(|v| v.split_whitespace().any(|t| t.eq_ignore_ascii_case(token)))
+}
+
 fn build(doc: &Document, form: Option<NodeId>, members: &[NodeId]) -> Option<LoginForm> {
     let passwords: Vec<NodeId> = members
         .iter()
@@ -226,5 +274,41 @@ mod tests {
         assert_eq!(f.len(), 2);
         assert_eq!(f[0].kind, LoginKind::SignIn);
         assert_eq!(f[1].kind, LoginKind::SignUp);
+    }
+
+    #[test]
+    fn credentials_read_typed_values() {
+        let (mut doc, f) = forms(
+            r#"<form><input name="u"><input type="password" name="p"></form>"#,
+        );
+        let (u, p) = (f[0].username.unwrap(), f[0].passwords[0]);
+        doc.set_control_value(u, " anna ");
+        doc.set_control_value(p, "s3cret");
+        let c = credentials(&doc, f[0].form.unwrap()).unwrap();
+        assert_eq!((c.username.as_str(), c.password.as_str()), ("anna", "s3cret"));
+    }
+
+    #[test]
+    fn credentials_empty_password_is_none() {
+        let (doc, f) = forms(r#"<form><input name="u" value="a"><input type="password"></form>"#);
+        assert!(credentials(&doc, f[0].form.unwrap()).is_none());
+    }
+
+    #[test]
+    fn credentials_change_password_takes_the_new_one() {
+        let (doc, f) = forms(
+            r#"<form><input type="password" autocomplete="current-password" value="old">
+               <input type="password" autocomplete="new-password" value="fresh"></form>"#,
+        );
+        let c = credentials(&doc, f[0].form.unwrap()).unwrap();
+        assert_eq!(c.password, "fresh");
+        assert_eq!(c.kind, LoginKind::ChangePassword);
+    }
+
+    #[test]
+    fn credentials_debug_hides_password() {
+        let (doc, f) = forms(r#"<form><input type="password" value="topsecret"></form>"#);
+        let c = credentials(&doc, f[0].form.unwrap()).unwrap();
+        assert!(!format!("{c:?}").contains("topsecret"));
     }
 }
