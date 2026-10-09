@@ -651,10 +651,20 @@ impl Lumen {
                 })
                 .collect(),
         };
+        // UX-PASSWORDS срез 5: список читается из SQLite, поэтому только пока
+        // открыта именно вкладка «Пароли».
+        let passwords_store = password_store::global().filter(|_| !self.active_profile_is_anonymous());
+        let passwords = if self.settings_panel.visible && self.chrome_settings_section == "passwords" {
+            passwords_store.and_then(|s| s.list().ok()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let settings = lumen_chrome::ChromeSettingsModel {
             active_section: self.chrome_settings_section.clone(),
             ad_block_on: self.settings_panel.draft.shields_enabled,
             fingerprint_on: self.settings_panel.draft.fingerprint_mode != "off",
+            passwords,
+            passwords_available: passwords_store.is_some(),
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1213,6 +1223,14 @@ impl Lumen {
                 crate::site_memory::forget_all();
                 self.refresh_history();
                 self.relayout_chrome_host();
+            }
+            ChromeAction::DeleteSavedLogin => {
+                let origin = self.chrome_data_attr(nid, "data-login-origin").filter(|o| !o.is_empty());
+                let user = self.chrome_data_attr(nid, "data-login-user");
+                if let (Some(origin), Some(user), Some(store)) = (origin, user, password_store::global()) {
+                    let _ = store.delete(&origin, &user);
+                    self.relayout_chrome_host();
+                }
             }
             ChromeAction::OpenBookmark => {
                 if let Some(url) = self.chrome_data_attr(nid, "data-bm-url").filter(|u| !u.is_empty()) {

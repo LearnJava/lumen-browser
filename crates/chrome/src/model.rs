@@ -309,6 +309,11 @@ pub struct ChromeSettingsModel {
     /// `SettingsPanel::draft.fingerprint_mode != "off"` — binds the
     /// "Блокировать фингерпринтинг" toggle.
     pub fingerprint_on: bool,
+    /// Сохранённые логины для раздела «Пароли» (UX-PASSWORDS, срез 5):
+    /// `(origin, username)`. Пароли сюда не попадают.
+    pub passwords: Vec<(String, String)>,
+    /// `false` — хранилище недоступно (приватный режим, Tor): раздел это говорит.
+    pub passwords_available: bool,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -1084,6 +1089,7 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
         }
     }
     let Some(main) = find_by_class(doc, "set-main") else { return };
+    bind_passwords(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1098,6 +1104,47 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
         if let Some(&fp) = toggles.get(1) {
             set_class_token(doc, fp, "on", settings.fingerprint_on);
         }
+    }
+}
+
+/// Перестраивает `#pwList` из [`ChromeSettingsModel::passwords`] и меняет
+/// `#pwDesc`, если хранилище недоступно (UX-PASSWORDS, срез 5).
+fn bind_passwords(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(desc) = doc.find_by_id(crate::ids::PW_DESC) {
+        let text = if !settings.passwords_available {
+            "Менеджер паролей недоступен в приватном или анонимном профиле."
+        } else if settings.passwords.is_empty() {
+            "Сохранённых паролей нет. Они появятся после входа на сайт и согласия на сохранение."
+        } else {
+            "Пароли хранятся зашифрованными ключом профиля. Здесь виден только список аккаунтов."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::PW_LIST) else { return };
+    remove_children_with_class(doc, list, "pw-row");
+    for (origin, username) in &settings.passwords {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row pw-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, origin);
+        attach_child(doc, text, title);
+        let desc = doc.create_element(QualName::html("div"));
+        set_attr(doc, desc, "class", "st-desc");
+        append_text(doc, desc, if username.is_empty() { "(без логина)" } else { username });
+        attach_child(doc, text, desc);
+        attach_child(doc, row, text);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "upd-check");
+        set_attr(doc, del, "data-action", "delete-saved-login");
+        set_attr(doc, del, "data-login-origin", origin);
+        set_attr(doc, del, "data-login-user", username);
+        set_attr(doc, del, "aria-label", "Удалить пароль");
+        append_text(doc, del, "Удалить");
+        attach_child(doc, row, del);
+        attach_child(doc, list, row);
     }
 }
 
@@ -3667,6 +3714,30 @@ mod tests {
     }
 
     #[test]
+    fn settings_passwords_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "passwords".to_owned(),
+                passwords: vec![("https://a.test".into(), "anna".into()), ("https://b.test".into(), String::new())],
+                passwords_available: true,
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::PW_LIST).expect("#pwList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2, "статический образец заменён строками модели");
+        let del = find_descendants_by_class(&doc, rows[0], "upd-check")[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("delete-saved-login"));
+        assert_eq!(doc.get(del).get_attr("data-login-origin"), Some("https://a.test"));
+        assert_eq!(doc.get(del).get_attr("data-login-user"), Some("anna"));
+    }
+
+    #[test]
     fn settings_privacy_toggles_reflect_ad_block_and_fingerprint_state() {
         let mut doc = parse_asset();
         let model = ChromeModel {
@@ -3674,6 +3745,7 @@ mod tests {
                 active_section: "privacy".to_owned(),
                 ad_block_on: true,
                 fingerprint_on: false,
+                ..ChromeSettingsModel::default()
             },
             ..ChromeModel::default()
         };

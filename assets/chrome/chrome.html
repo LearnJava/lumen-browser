@@ -1237,6 +1237,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <button class="item" data-action="set-settings-section" data-section="general">General</button>
                 <button class="item active" data-action="set-settings-section" data-section="privacy">Privacy</button>
                 <button class="item" data-action="set-settings-section" data-section="appearance">Appearance</button>
+                <button class="item" data-action="set-settings-section" data-section="passwords">Пароли</button>
                 <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
                 <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
                 <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
@@ -1310,6 +1311,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   <div class="set-block"><h3>Вкладки</h3>
                     <div class="set-row"><div class="st-text"><div class="st-title">Раскладка</div><div class="st-desc">Вертикальный сайдбар или горизонтальная лента</div></div><a class="link" href="javascript:void(0)">Вертикальные ▾</a></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Скругления</div><div class="st-desc">Макс. 6px — без пилюль (правило дизайн-системы)</div></div><span class="st-desc" style="font-family:var(--font-mono)">2/4/6px</span></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="passwords">
+                  <div class="set-block"><h3>Сохранённые пароли</h3><div class="desc" id="pwDesc">Пароли хранятся зашифрованными ключом профиля. Здесь виден только список аккаунтов.</div>
+                    <div id="pwList"><div class="set-row pw-row"><div class="st-text"><div class="st-title">example.com</div><div class="st-desc">user</div></div><button class="upd-check" data-action="delete-saved-login" data-login-origin="https://example.com" data-login-user="user" aria-label="Удалить пароль">Удалить</button></div></div>
                   </div>
                 </div>
 
