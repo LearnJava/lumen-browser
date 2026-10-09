@@ -55,10 +55,42 @@ pub fn drain_notifications(queue: &NotificationQueue) -> Vec<NotificationRequest
 /// - `true` → `"granted"` — shell opted in (e.g. user toggled in per-site prefs).
 ///
 /// Must be called after the core DOM install.
-#[cfg(feature = "v8-backend")]
+#[cfg(all(test, feature = "v8-backend"))]
 pub(crate) fn install_notifications_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     allow: bool,
+) -> lumen_core::JsResult<()> {
+    install_notifications_mode(rt, if allow { NotifPermMode::Granted } else { NotifPermMode::Denied })
+}
+
+/// How `Notification.permission` / `requestPermission()` are answered.
+#[cfg(feature = "v8-backend")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum NotifPermMode {
+    /// Fixed `denied`.
+    Denied,
+    /// Fixed `granted`.
+    Granted,
+    /// UX-PERMISSIONS-2: starts at `default`; `requestPermission()` queues a
+    /// prompt for the shell and settles when the user answers.
+    Interactive,
+}
+
+/// JS source that settles the page's pending `Notification.requestPermission()`
+/// promises with the user's answer (`granted` / `denied` / `default`).
+pub fn settle_script(state: &str) -> String {
+    let s = match state {
+        "granted" | "denied" => state,
+        _ => "default",
+    };
+    format!("if (typeof _lumen_notification_settle === 'function') _lumen_notification_settle('{s}');")
+}
+
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_notifications_mode(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    mode: NotifPermMode,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn3};
     use lumen_core::ext::JsRuntime as _;
@@ -82,8 +114,23 @@ pub(crate) fn install_notifications_bindings_v8(
     let close = into_v8_fn1(move |_id: u32| {});
     rt.register_native("_lumen_notification_close", close)?;
 
-    let perm = if allow { "granted" } else { "denied" };
-    let request_permission = into_v8_fn0(move || -> String { perm.to_string() });
+    let perm = match mode {
+        NotifPermMode::Denied => "denied",
+        NotifPermMode::Granted => "granted",
+        NotifPermMode::Interactive => "default",
+    };
+    let prompts = rt.permission_request_queue();
+    let request_permission = into_v8_fn0(move || -> String {
+        if mode != NotifPermMode::Interactive {
+            return perm.to_string();
+        }
+        if let Ok(mut q) = prompts.lock()
+            && !q.iter().any(|n| n == "notifications")
+        {
+            q.push("notifications".to_string());
+        }
+        "pending".to_string()
+    });
     rt.register_native("_lumen_notification_request_permission", request_permission)?;
 
     rt.eval(&format!("globalThis.__LUMEN_NOTIF_PERM = '{perm}';"))?;
@@ -258,6 +305,26 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
    * W3C spec §6.1: asks the shell for the current permission level.
    * Phase 0: no interactive dialog — shell returns a fixed value at init.
    */
+  // Calls waiting for the user's answer in the interactive mode.
+  var _waiting = [];
+  function _apply(result) {
+    var moved = (result !== _permission);
+    _permission = result;
+    // W3C Permissions §"permission state change": navigator.permissions
+    // reports 'notifications' straight off Notification.permission, so any
+    // PermissionStatus the page holds for it has to hear about the move
+    // (BUG-386). Resolved at call time, not captured at install: the
+    // Permissions shim installs after this one.
+    if (moved && typeof _lumen_permission_state_changed === 'function') {
+      try { _lumen_permission_state_changed('notifications'); } catch(e) {}
+    }
+  }
+  function _finish(result, callback, resolve) {
+    if (typeof callback === 'function') {
+      try { callback(result); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
+    }
+    resolve(result);
+  }
   Notification.requestPermission = function(callback) {
     return new Promise(function(resolve) {
       var result;
@@ -266,21 +333,29 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
       } catch(e) {
         result = 'denied';
       }
-      var moved = (result !== _permission);
-      _permission = result;
-      // W3C Permissions §"permission state change": navigator.permissions
-      // reports 'notifications' straight off Notification.permission, so any
-      // PermissionStatus the page holds for it has to hear about the move
-      // (BUG-386). Resolved at call time, not captured at install: the
-      // Permissions shim installs after this one.
-      if (moved && typeof _lumen_permission_state_changed === 'function') {
-        try { _lumen_permission_state_changed('notifications'); } catch(e) {}
+      if (result === 'pending') {
+        // Already decided → no prompt; otherwise wait for the shell.
+        if (_permission === 'granted' || _permission === 'denied') {
+          _finish(_permission, callback, resolve);
+        } else {
+          _waiting.push(function(r) { _finish(r, callback, resolve); });
+        }
+        return;
       }
-      if (typeof callback === 'function') {
-        try { callback(result); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
-      }
-      resolve(result);
+      _apply(result);
+      _finish(result, callback, resolve);
     });
+  };
+
+  /**
+   * Internal: the shell reports the user's answer to a prompt raised by
+   * requestPermission() (UX-PERMISSIONS-2). `default` = dismissed.
+   */
+  __lumen_C._lumen_notification_settle = function(state) {
+    if (state !== 'granted' && state !== 'denied') state = 'default';
+    _apply(state);
+    var w = _waiting; _waiting = [];
+    for (var i = 0; i < w.length; i++) w[i](state);
   };
 
   /**
@@ -371,6 +446,28 @@ mod tests_v8 {
         assert_eq!(
             rt.eval("Notification.permission").unwrap(),
             JsValue::String("denied".to_string())
+        );
+    }
+
+    #[test]
+    fn interactive_request_waits_for_settle() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        install_notifications_mode(&rt, NotifPermMode::Interactive).unwrap();
+        assert_eq!(
+            rt.eval("Notification.permission").unwrap(),
+            JsValue::String("default".to_string())
+        );
+        rt.eval("var got = null; Notification.requestPermission().then(function(p) { got = p; });")
+            .unwrap();
+        assert_eq!(rt.take_permission_requests(), vec!["notifications".to_string()]);
+        rt.eval("0").unwrap();
+        assert_eq!(rt.eval("got").unwrap(), JsValue::Null);
+        rt.eval(&settle_script("granted")).unwrap();
+        assert_eq!(rt.eval("got").unwrap(), JsValue::String("granted".to_string()));
+        assert_eq!(
+            rt.eval("Notification.permission").unwrap(),
+            JsValue::String("granted".to_string())
         );
     }
 

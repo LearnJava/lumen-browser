@@ -1415,7 +1415,10 @@ impl Lumen {
                         _ => None,
                     };
                     if let Some(state) = state {
-                        self.permission.set_permission(kind, state);
+                        let waited = self.permission.answer(kind, state);
+                        if waited && kind == panels::permission_panel::PermissionKind::Notifications {
+                            self.settle_page_permission(state);
+                        }
                         self.relayout_chrome_host();
                     }
                 }
@@ -1742,6 +1745,19 @@ impl Lumen {
         let popover = doc.find_by_id(lumen_chrome::ids::PERM_POPOVER)?;
         let idx = doc.get(popover).children.iter().copied().filter(|&c| has_class(c, "perm-row")).position(|c| c == cur)?;
         panels::permission_panel::PermissionKind::ALL.get(idx).copied()
+    }
+
+    /// UX-PERMISSIONS-2: hand the user's answer to the page's pending
+    /// `Notification.requestPermission()` promises.
+    pub(crate) fn settle_page_permission(&self, state: panels::permission_panel::PermissionState) {
+        use panels::permission_panel::PermissionState;
+        let name = match state {
+            PermissionState::Allow => "granted",
+            PermissionState::Deny => "denied",
+            PermissionState::Ask => "default",
+        };
+        let script = lumen_js::notifications_bindings::settle_script(name);
+        let _ = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| j.eval_js(&script));
     }
 
     /// BUG-411: push the shields state of the current host into the
