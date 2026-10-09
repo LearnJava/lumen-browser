@@ -92,6 +92,23 @@ pub fn credentials(doc: &Document, form: NodeId) -> Option<Credentials> {
     Some(Credentials { username, password, kind: lf.kind })
 }
 
+/// Поля формы входа, которые можно заполнить сохранённым аккаунтом.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FillTarget {
+    pub username: Option<NodeId>,
+    pub password: NodeId,
+}
+
+/// Первая форма входа (`SignIn`) с пустым полем пароля. Регистрацию и смену
+/// пароля не трогаем: там сохранённый пароль не нужен.
+pub fn fill_target(doc: &Document) -> Option<FillTarget> {
+    find_login_forms(doc).into_iter().find_map(|f| {
+        let password = *f.passwords.first()?;
+        (f.kind == LoginKind::SignIn && doc.control_value(password).is_empty())
+            .then_some(FillTarget { username: f.username, password })
+    })
+}
+
 fn has_autocomplete(doc: &Document, id: NodeId, token: &str) -> bool {
     doc.get(id)
         .get_attr("autocomplete")
@@ -286,6 +303,17 @@ mod tests {
         doc.set_control_value(p, "s3cret");
         let c = credentials(&doc, f[0].form.unwrap()).unwrap();
         assert_eq!((c.username.as_str(), c.password.as_str()), ("anna", "s3cret"));
+    }
+
+    #[test]
+    fn fill_target_skips_filled_and_sign_up_forms() {
+        let (doc, f) = forms(r#"<form><input name="u"><input type="password"></form>"#);
+        let t = fill_target(&doc).unwrap();
+        assert_eq!((t.username, t.password), (f[0].username, f[0].passwords[0]));
+        let (doc, _) = forms(r#"<form><input type="password" value="x"></form>"#);
+        assert!(fill_target(&doc).is_none());
+        let (doc, _) = forms(r#"<form><input type="password" autocomplete="new-password"></form>"#);
+        assert!(fill_target(&doc).is_none());
     }
 
     #[test]

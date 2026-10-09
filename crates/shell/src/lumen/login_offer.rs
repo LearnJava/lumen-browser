@@ -27,8 +27,61 @@ impl Lumen {
         }
     }
 
+    /// Подстановка сохранённого аккаунта в форму входа свежезагруженной страницы
+    /// (срез 3). Вызывается из `apply_loaded_page`; в анонимном профиле и без
+    /// хранилища ничего не делает. Отправку формы не запускает.
+    pub(crate) fn autofill_saved_login(&mut self) {
+        self.login_fill = None;
+        if self.active_profile_is_anonymous() {
+            return;
+        }
+        let Some(store) = password_store::global() else { return };
+        let Some(origin) = self.source.url_str().and_then(password_store::origin_of) else {
+            return;
+        };
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let Ok(mut doc) = src.document.lock() else { return };
+        let Some(target) = login_form::fill_target(&doc) else { return };
+        let prefilled = target.username.map(|u| doc.control_value(u).trim().to_owned()).unwrap_or_default();
+        let Some(fill) = password_store::plan_fill(store, &origin, target, &prefilled) else { return };
+        if !write_fill(store, &mut doc, &fill) {
+            return;
+        }
+        drop(doc);
+        if fill.usernames.len() > 1 {
+            self.login_fill = Some(fill);
+            self.relayout_chrome_host();
+        }
+    }
+
+    /// «Другой аккаунт»: подставить следующий сохранённый логин.
+    fn cycle_login_fill(&mut self) {
+        let (Some(fill), Some(store)) = (self.login_fill.as_mut(), password_store::global()) else {
+            return;
+        };
+        fill.advance();
+        if let Some(src) = self.layout_source.as_ref()
+            && let Ok(mut doc) = src.document.lock()
+        {
+            write_fill(store, &mut doc, fill);
+        }
+        self.relayout_chrome_host();
+    }
+
     /// Данные для `#loginBar`; пароль в модель не попадает.
     pub(crate) fn login_offer_model(&self) -> lumen_chrome::ChromeLoginOfferModel {
+        if self.login_offer.is_none()
+            && let Some(f) = self.login_fill.as_ref()
+        {
+            let host = f.origin.split_once("://").map_or(f.origin.as_str(), |(_, h)| h);
+            return lumen_chrome::ChromeLoginOfferModel {
+                open: true,
+                title: "Подставлен сохранённый пароль".to_owned(),
+                meta: format!("{host} · {} ({} из {})", f.current(), f.index + 1, f.usernames.len()),
+                fill: true,
+                ..Default::default()
+            };
+        }
         let Some(o) = self.login_offer.as_ref() else { return Default::default() };
         let host = o.origin.split_once("://").map_or(o.origin.as_str(), |(_, h)| h);
         let who = if o.username.is_empty() { host.to_owned() } else { format!("{host} · {}", o.username) };
@@ -37,11 +90,23 @@ impl Lumen {
             title: if o.update { "Обновить пароль?" } else { "Сохранить пароль?" }.to_owned(),
             meta: who,
             save_label: if o.update { "Обновить" } else { "Сохранить" }.to_owned(),
+            fill: false,
         }
     }
 
     pub(crate) fn dispatch_login_action(&mut self, action: lumen_chrome::ChromeAction) {
         use lumen_chrome::ChromeAction;
+        if self.login_offer.is_none() {
+            match action {
+                ChromeAction::NextLogin => self.cycle_login_fill(),
+                ChromeAction::DismissLogin => {
+                    self.login_fill = None;
+                    self.relayout_chrome_host();
+                }
+                _ => {}
+            }
+            return;
+        }
         let Some(offer) = self.login_offer.take() else { return };
         if let Some(store) = password_store::global() {
             let now = std::time::SystemTime::now()
@@ -61,4 +126,14 @@ impl Lumen {
         }
         self.relayout_chrome_host();
     }
+}
+
+/// Записать выбранный аккаунт в поля формы; `false`, если пароль не расшифровался.
+fn write_fill(store: &lumen_storage::SavedLogins, doc: &mut lumen_dom::Document, fill: &password_store::LoginFill) -> bool {
+    let Ok(Some(saved)) = store.get(&fill.origin, fill.current()) else { return false };
+    if let Some(u) = fill.target.username {
+        forms::set_value(doc, u, &saved.username);
+    }
+    forms::set_value(doc, fill.target.password, &saved.password);
+    true
 }

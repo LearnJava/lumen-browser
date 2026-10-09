@@ -975,6 +975,7 @@ impl Lumen {
             ChromeAction::ZoomReset => self.reset_page_zoom(),
             ChromeAction::SaveLogin
             | ChromeAction::NeverSaveLogin
+            | ChromeAction::NextLogin
             | ChromeAction::DismissLogin => self.dispatch_login_action(action),
             ChromeAction::OpenCertViewer => {
                 let cert = self.cert_info.clone();
