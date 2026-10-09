@@ -216,6 +216,8 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
       }
 
       if (wantAudio && typeof __lumen_start_audio_capture === 'function') {
+        // UX-PERMISSIONS-4: ask the user (or replay the saved answer) first.
+        var _capture = function() {
         // Parse audio constraints.
         var deviceId = '';
         var sampleRate = 0;
@@ -228,11 +230,9 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
 
         var handleId = __lumen_start_audio_capture(deviceId, sampleRate, channelCount);
         if (handleId < 0) {
-          return Promise.reject(
-            new DOMException(
-              'Permission denied: audio capture failed or no microphone available',
-              'NotAllowedError'
-            )
+          throw new DOMException(
+            'Permission denied: audio capture failed or no microphone available',
+            'NotAllowedError'
           );
         }
 
@@ -289,8 +289,15 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
           }
         };
 
-        var stream = new MediaStream([track]);
-        return Promise.resolve(stream);
+        return new MediaStream([track]);
+        };
+        if (typeof _lumen_ask_permission !== 'function') return Promise.resolve().then(_capture);
+        return _lumen_ask_permission('microphone').then(function(state) {
+          if (state !== 'granted') {
+            throw new DOMException('Permission denied by user', 'NotAllowedError');
+          }
+          return _capture();
+        });
       }
 
       // No audio constraints or no capture provider — reject.

@@ -2439,7 +2439,7 @@ impl Lumen {
             use crate::panels::permission_panel::{PermissionKind, PermissionState};
             let saved = self.permission.state_for(PermissionKind::Notifications);
             if saved != PermissionState::Ask {
-                self.settle_page_permission(saved);
+                self.settle_page_permission(PermissionKind::Notifications, saved);
             }
         }
 

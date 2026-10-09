@@ -826,8 +826,8 @@ impl Lumen {
                 self.request_redraw();
             }
             KeyCommand::TogglePermissions => {
-                if self.permission.toggle() {
-                    self.settle_page_permission(panels::permission_panel::PermissionState::Ask);
+                for kind in self.permission.toggle() {
+                    self.settle_page_permission(kind, panels::permission_panel::PermissionState::Ask);
                 }
                 self.request_redraw();
             }

@@ -803,12 +803,16 @@ if (_lumen_secure_context !== false) {
 if (_lumen_secure_context !== false) {
 navigator.clipboard = {
     readText: function() {
-        return new Promise(function(resolve, reject) {
-            try {
-                var text = (typeof _lumen_clipboard_read === 'function')
-                    ? _lumen_clipboard_read() : '';
-                resolve(typeof text === 'string' ? text : '');
-            } catch(e) { reject(e); }
+        // UX-PERMISSIONS-4: reading the OS clipboard needs the user's consent.
+        var ask = (typeof _lumen_ask_permission === 'function')
+            ? _lumen_ask_permission('clipboard-read') : Promise.resolve('granted');
+        return ask.then(function(state) {
+            if (state !== 'granted') {
+                throw new DOMException('Read permission denied.', 'NotAllowedError');
+            }
+            var text = (typeof _lumen_clipboard_read === 'function')
+                ? _lumen_clipboard_read() : '';
+            return typeof text === 'string' ? text : '';
         });
     },
     writeText: function(text) {

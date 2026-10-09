@@ -325,7 +325,22 @@ fn navigator_clipboard_stub_read_resolves_string() {
                  navigator.clipboard.readText().then(function(v) { ok = typeof v === 'string'; });",
     )
     .unwrap();
+    // UX-PERMISSIONS-4: the read waits for the user's answer.
+    assert_eq!(rt.take_permission_requests(), vec!["clipboard-read".to_string()]);
+    assert!(!bool_eval(&rt, "ok"));
+    rt.eval(&crate::notifications_bindings::settle_script("clipboard-read", "granted")).unwrap();
     assert!(bool_eval(&rt, "ok"));
+}
+
+#[test]
+fn navigator_clipboard_read_rejected_when_denied() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        "var err = '';                  navigator.clipboard.readText().catch(function(e) { err = e.name; });",
+    )
+    .unwrap();
+    rt.eval(&crate::notifications_bindings::settle_script("clipboard-read", "denied")).unwrap();
+    assert!(bool_eval(&rt, "err === 'NotAllowedError'"));
 }
 
 // BUG-765: `navigator.clipboard` must be entirely absent on an insecure origin.
