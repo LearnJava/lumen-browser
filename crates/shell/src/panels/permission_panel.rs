@@ -126,6 +126,9 @@ pub struct PermissionPanel {
     pub permissions: HashMap<(String, PermissionKind), PermissionState>,
     /// Persistent backing store; `None` = in-memory only.
     store: Option<Arc<Permissions>>,
+    /// Kinds the page asked for and the user has not answered yet
+    /// (UX-PERMISSIONS-2).
+    pending: Vec<PermissionKind>,
 }
 
 impl PermissionPanel {
@@ -136,6 +139,7 @@ impl PermissionPanel {
             current_origin: None,
             permissions: HashMap::new(),
             store: None,
+            pending: Vec::new(),
         }
     }
 
@@ -201,6 +205,33 @@ impl PermissionPanel {
     pub fn revoke(&mut self, origin: &str, kind: PermissionKind) {
         self.permissions.remove(&(origin.to_string(), kind));
         self.persist(origin, kind, PermissionState::Ask);
+    }
+
+    /// The page asked for `kind`. A saved answer is returned at once;
+    /// otherwise the request waits, the popover opens and `None` is returned —
+    /// the answer comes from [`Self::answer`].
+    pub fn request(&mut self, kind: PermissionKind) -> Option<PermissionState> {
+        match self.state_for(kind) {
+            PermissionState::Ask => {}
+            decided => return Some(decided),
+        }
+        if self.current_origin.is_none() {
+            return Some(PermissionState::Deny);
+        }
+        if !self.pending.contains(&kind) {
+            self.pending.push(kind);
+        }
+        self.visible = true;
+        None
+    }
+
+    /// Record the user's answer for `kind` and report whether a page request
+    /// was waiting for it (the caller then settles the page's promise).
+    pub fn answer(&mut self, kind: PermissionKind, state: PermissionState) -> bool {
+        self.set_permission(kind, state);
+        let before = self.pending.len();
+        self.pending.retain(|k| *k != kind);
+        self.pending.len() != before
     }
 
     /// Flip panel visibility.
@@ -487,6 +518,30 @@ mod tests {
         // Click the label area (left side of row), not the button.
         let hit = hit_test(&p, r.x + 30.0, r.y + HEADER_H + 15.0, r);
         assert_eq!(hit, Some(PermissionHit::Empty));
+    }
+
+    #[test]
+    fn request_without_decision_waits_and_opens_popover() {
+        let mut p = make_panel(Some("https://a.test"));
+        p.visible = false;
+        assert_eq!(p.request(PermissionKind::Notifications), None);
+        assert!(p.visible);
+        assert_eq!(p.pending, &[PermissionKind::Notifications]);
+        assert!(p.answer(PermissionKind::Notifications, PermissionState::Allow));
+        assert!(p.pending.is_empty());
+        assert_eq!(p.request(PermissionKind::Notifications), Some(PermissionState::Allow));
+    }
+
+    #[test]
+    fn request_without_origin_is_denied() {
+        let mut p = make_panel(None);
+        assert_eq!(p.request(PermissionKind::Notifications), Some(PermissionState::Deny));
+    }
+
+    #[test]
+    fn answer_without_request_reports_false() {
+        let mut p = make_panel(Some("https://a.test"));
+        assert!(!p.answer(PermissionKind::Camera, PermissionState::Deny));
     }
 
     #[test]

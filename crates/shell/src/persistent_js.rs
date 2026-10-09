@@ -568,6 +568,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// notifications were created since the last drain.
     #[allow(dead_code)]
     fn take_notification_requests(&self) -> Vec<(String, String)>;
+    /// Drain permission prompts raised by the page (`"notifications"`,
+    /// UX-PERMISSIONS-2); the shell asks the user and settles the promises.
+    fn take_permission_requests(&self) -> Vec<String>;
     /// Purge JS-side per-node caches for nodes that have been detached from
     /// the DOM and have zero live JS references.
     ///
@@ -1344,6 +1347,9 @@ impl PersistentJs for V8PersistentJs {
             .into_iter()
             .map(|r| (r.title, r.body))
             .collect()
+    }
+    fn take_permission_requests(&self) -> Vec<String> {
+        self.rt.take_permission_requests()
     }
     fn gc_collect(&self, dead_nids: &[u32]) {
         if dead_nids.is_empty() {

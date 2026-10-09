@@ -8328,7 +8328,7 @@
        "title": "UX-PERMISSIONS: сохранение и управление разрешениями",
        "status": "planned",
        "size": "M",
-       "note": "Разрешения сайтов только на сессию (DS-8, `permission_panel.rs`); хранилище `Permissions` есть. Объём: сохранение решений по сайту, таблица разрешений в `about:settings` с отзывом, запрос разрешения от страницы через popover. СДЕЛАНО 2026-10-09 (срез 1): `permissions.db` в `<exe>/data/` (общий с push_store), `PermissionPanel::with_store` пишет/читает решения, раздел «Разрешения» в about:settings с «Отозвать» (`bind_site_permissions`, `RevokeSitePermission`). ОСТАЛОСЬ: запрос разрешения от страницы через popover (getUserMedia/Notification/clipboard сейчас не спрашивают), Anonymous-профиль не должен писать на диск."
+       "note": "Разрешения сайтов только на сессию (DS-8, `permission_panel.rs`); хранилище `Permissions` есть. Объём: сохранение решений по сайту, таблица разрешений в `about:settings` с отзывом, запрос разрешения от страницы через popover. СДЕЛАНО 2026-10-09 (срез 1): `permissions.db` в `<exe>/data/` (общий с push_store), `PermissionPanel::with_store` пишет/читает решения, раздел «Разрешения» в about:settings с «Отозвать» (`bind_site_permissions`, `RevokeSitePermission`). СДЕЛАНО (срез 2): `Notification.requestPermission()` спрашивает через popover (начальное `default`, сохранённый ответ закрывает промис сразу, кнопки allow/deny settle'ят его). ОСТАЛОСЬ: getUserMedia/clipboard пока не спрашивают, сохранённый ответ не применяется к `Notification.permission` до вызова requestPermission, закрытие popover без ответа не settle'ит промис, Anonymous-профиль не должен писать на диск."
       },
       {
        "id": "UX-SECURITY-UI",

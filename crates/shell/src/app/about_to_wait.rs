@@ -1432,6 +1432,22 @@ impl Lumen {
             notification::show_os_notification(&title, &body);
         }
 
+        // UX-PERMISSIONS-2: `Notification.requestPermission()` asks for a decision.
+        // A saved answer settles the page at once, otherwise the popover opens
+        // and the click on its allow/deny button settles it (chrome_ui).
+        for name in self.drain_query_js(|j| j.take_permission_requests()).unwrap_or_default() {
+            if name != "notifications" {
+                continue;
+            }
+            match self.permission.request(panels::permission_panel::PermissionKind::Notifications) {
+                Some(state) => self.settle_page_permission(state),
+                None => {
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                }
+            }
+        }
+
         // window.open() popup requests: each entry opens a new tab and navigates it
         // to the requested URL.  Executed after the page render so the current tab
         // stays visible while the new tab loads.

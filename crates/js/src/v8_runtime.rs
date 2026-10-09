@@ -1112,8 +1112,11 @@ impl V8JsRuntime {
         install_v8!(navigation_api::install_navigation_api_v8);
         install_v8!(navigator_bindings::install_navigator_bindings_v8);
         install_v8!(network_log_bindings::install_network_log_bindings_v8);
-        // Default permission: "denied" (mirrors lib.rs::install_dom's hardcoded `false`).
-        if let Err(e) = crate::notifications_bindings::install_notifications_bindings_v8(self, false)
+        // UX-PERMISSIONS-2: starts at "default"; requestPermission() prompts via the shell.
+        if let Err(e) = crate::notifications_bindings::install_notifications_mode(
+            self,
+            crate::notifications_bindings::NotifPermMode::Interactive,
+        )
         {
             eprintln!("v8: notifications_bindings::install_notifications_bindings_v8 failed: {e}");
         }
