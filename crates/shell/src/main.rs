@@ -128,6 +128,8 @@ mod image_cache;
 mod memory_poll;
 mod newtab;
 mod input;
+#[allow(dead_code)] // UX-AUTOFILL: потребители — срезы 2–4
+mod autofill_form;
 mod login_form;
 mod password_store;
 mod links;
