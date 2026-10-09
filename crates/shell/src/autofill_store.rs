@@ -57,6 +57,26 @@ pub fn plan_offer(store: &Autofill, origin: &str, values: Vec<(&'static str, Str
     (new_count > 0).then(|| AutofillOffer { origin: origin.to_owned(), entries: values, new_count })
 }
 
+/// Сколько значений показывает выпадающая подсказка у поля.
+pub const MENU_LIMIT: usize = 5;
+
+/// Значения для подсказки у поля `key`: сохранённые для сайта, начинающиеся с
+/// уже введённого (без учёта регистра), кроме точного совпадения. Порядок —
+/// как в хранилище (частота, затем давность).
+pub fn field_suggestions(store: &Autofill, origin: &str, key: &str, typed: &str) -> Vec<String> {
+    let typed = typed.trim().to_lowercase();
+    let Ok(known) = store.suggestions(origin, key, KNOWN_LIMIT) else { return Vec::new() };
+    known
+        .into_iter()
+        .map(|e| e.value)
+        .filter(|v| {
+            let lv = v.to_lowercase();
+            lv != typed && lv.starts_with(&typed)
+        })
+        .take(MENU_LIMIT)
+        .collect()
+}
+
 /// Общее хранилище процесса; `None` в приватных режимах и если файл не открылся.
 pub fn global() -> Option<&'static Autofill> {
     static STORE: std::sync::OnceLock<Option<Autofill>> = std::sync::OnceLock::new();
@@ -99,6 +119,22 @@ mod tests {
             <input autocomplete="cc-number" value="4111"><input autocomplete="cc-csc" value="123"></form>"#,
         );
         assert_eq!(got, [("email", "a@b.c".to_owned()), ("address-level2", "Омск".to_owned())]);
+    }
+
+    #[test]
+    fn field_suggestions_filter_by_typed_prefix() {
+        let store = Autofill::open_in_memory().unwrap();
+        for v in ["Омск", "Орёл", "Томск"] {
+            store.record(SITE, "address-level2", v, 1).unwrap();
+        }
+        store.record(SITE, "email", "a@b.c", 1).unwrap();
+        let all = field_suggestions(&store, SITE, "address-level2", "");
+        assert_eq!(all.len(), 3);
+        let mut o = field_suggestions(&store, SITE, "address-level2", " о");
+        o.sort();
+        assert_eq!(o, ["Омск", "Орёл"]);
+        assert!(field_suggestions(&store, SITE, "address-level2", "омск").is_empty());
+        assert!(field_suggestions(&store, "https://other.org", "address-level2", "").is_empty());
     }
 
     #[test]

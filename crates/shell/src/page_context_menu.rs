@@ -118,6 +118,9 @@ pub struct PageContextMenu {
     items: Vec<SpellMenuAction>,
     /// Context for applying the chosen action.
     target: Option<SpellTarget>,
+    /// `false` — строки «Добавить в словарь»/«Пропустить» отсутствуют: меню
+    /// значений автозаполнения (UX-AUTOFILL срез 3), а не орфографии.
+    spell_footer: bool,
 }
 
 impl PageContextMenu {
@@ -129,12 +132,25 @@ impl PageContextMenu {
             suggestions.into_iter().take(5).map(SpellMenuAction::Use).collect();
         items.push(SpellMenuAction::AddToDict);
         items.push(SpellMenuAction::Ignore);
+        self.spell_footer = true;
         self.items = items;
         self.target = Some(target);
         self.anchor_x = x;
         self.anchor_y = y;
         self.hovered = None;
         self.open = true;
+    }
+
+    /// UX-AUTOFILL срез 3: открыть меню сохранённых значений под полем.
+    /// `target.text` — введённое сейчас; выбор строки заменяет его целиком.
+    pub fn open_values(&mut self, x: f32, y: f32, values: Vec<String>, target: SpellTarget) {
+        self.items = values.into_iter().take(5).map(SpellMenuAction::Use).collect();
+        self.spell_footer = false;
+        self.target = Some(target);
+        self.anchor_x = x;
+        self.anchor_y = y;
+        self.hovered = None;
+        self.open = !self.items.is_empty();
     }
 
     /// Hide the menu and drop its context.
@@ -163,6 +179,9 @@ impl PageContextMenu {
     /// Index of the first "Add to dictionary" / "Ignore" row (the divider sits
     /// above it). Equals the suggestion count.
     fn divider_row(&self) -> usize {
+        if !self.spell_footer {
+            return usize::MAX;
+        }
         self.items.len().saturating_sub(2)
     }
 
@@ -312,6 +331,20 @@ mod tests {
             target(),
         );
         m
+    }
+
+    #[test]
+    fn values_menu_has_no_spell_rows() {
+        let mut m = PageContextMenu::default();
+        m.open_values(100.0, 50.0, vec!["Омск".to_owned(), "Орёл".to_owned()], target());
+        assert!(m.is_open());
+        assert_eq!(row_count(&m), 2);
+        assert_eq!(
+            m.action_at(110.0, 50.0 + PAD_Y + 1.0, 1024.0, 720.0),
+            Some(SpellMenuAction::Use("Омск".to_owned()))
+        );
+        m.open_values(100.0, 50.0, Vec::new(), target());
+        assert!(!m.is_open());
     }
 
     #[test]
