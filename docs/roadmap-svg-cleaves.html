@@ -8322,9 +8322,9 @@
       {
        "id": "UX-IME",
        "title": "UX-IME: композиция ввода и окно кандидатов",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "IME: `Ime::Preedit`/`Commit` обрабатываются (`lumen/text_input.rs:437-456`), но отрисовка preedit-подчёркивания и позиция окна кандидатов (`set_ime_cursor_area`) не проверены; `compositionstart/update/end` для страницы. Срез 1 сделан: `set_ime_allowed(true)` при создании окна (в winit 0.30 без него Windows IME вообще не присылал `Ime::*`), `Commit` вставляет текст в поле страницы/фрейма/адресную строку, `compositionstart/update/end` уходят на фокусное поле страницы (`_lumen_dispatch_composition_at`), `set_ime_cursor_area` ставит окно кандидатов у каретки. Срез 2: preedit-текст с подчёркиванием у каретки поля страницы (`ime_preedit_overlay`). Срез 3: preedit в адресной строке (`ime_omnibox_preedit_overlay`, по правому краю поля как каретка). Остаток: preedit в полях фреймов; события композиции во фреймах; проверка руками на японском/китайском IME."
+       "note": "IME: `Ime::Preedit`/`Commit` обрабатываются (`lumen/text_input.rs:437-456`), но отрисовка preedit-подчёркивания и позиция окна кандидатов (`set_ime_cursor_area`) не проверены; `compositionstart/update/end` для страницы. Срез 1 сделан: `set_ime_allowed(true)` при создании окна (в winit 0.30 без него Windows IME вообще не присылал `Ime::*`), `Commit` вставляет текст в поле страницы/фрейма/адресную строку, `compositionstart/update/end` уходят на фокусное поле страницы (`_lumen_dispatch_composition_at`), `set_ime_cursor_area` ставит окно кандидатов у каретки. Срез 2: preedit-текст с подчёркиванием у каретки поля страницы (`ime_preedit_overlay`). Срез 3: preedit в адресной строке (`ime_omnibox_preedit_overlay`, по правому краю поля как каретка). Срез 4: preedit в полях фреймов (`ime_frame_preedit_overlay`) и composition-события во фрейме (`frame_composition_event`). Закрыто по решению пользователя 2026-10-10 без ручной проверки; остаток: проверка руками на японском/китайском IME (не выполнена)."
       },
       {
        "id": "UX-FORM-SUBMITTER",
