@@ -560,3 +560,16 @@ fn navigator_clipboard_read_asks_and_returns_items() {
     assert!(bool_eval(&rt, "n === 0"));
     assert!(bool_eval(&rt, "new ClipboardItem({'text/plain': new Blob(['a'])}).types[0] === 'text/plain'"));
 }
+
+#[test]
+fn navigator_clipboard_write_accepts_text_plain_item() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        "var done = false; var bad = ''; \
+         navigator.clipboard.write([new ClipboardItem({'text/plain': new Blob(['hi'])})]).then(function() { done = true; }); \
+         navigator.clipboard.write([new ClipboardItem({'image/png': new Blob(['x'])})]).catch(function(e) { bad = e.name; });",
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "done"));
+    assert!(bool_eval(&rt, "bad === 'NotAllowedError'"));
+}
