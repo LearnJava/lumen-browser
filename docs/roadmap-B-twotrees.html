@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-10",
  "counts": {
-  "open": 398,
+  "open": 399,
   "fixed": 1131,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1532,
+ "total_bugs": 1533,
  "phases": [
   {
    "id": "P0",
@@ -8356,10 +8356,11 @@
        "title": "UX-ANTIBOT: капчи и антибот-проверки",
        "status": "done",
        "size": "M",
-       "note": "Совместимость с антибот-защитой и капчами: глобальный объект отличается от браузерного (внутренние имена `_lumen_*` на `window`, BUG-378 закрыт частично), `navigator.webdriver` отсутствует (BUG-754 — решение модели). Объём: спрятать внутренние имена, `navigator.webdriver === false`, проверка на реальных капчах (reCAPTCHA, hCaptcha, Cloudflare Turnstile).",
+       "note": "Совместимость с антибот-защитой и капчами: глобальный объект отличается от браузерного (внутренние имена `_lumen_*` на `window`, BUG-378 закрыт частично), `navigator.webdriver` отсутствует (BUG-754 — решение модели). Объём: спрятать внутренние имена, `navigator.webdriver === false`, проверка на реальных капчах (reCAPTCHA, hCaptcha, Cloudflare Turnstile). Итог 2026-10-10: имена скрыты (BUG-753), `navigator.webdriver === false` (BUG-754), reCAPTCHA и hCaptcha рендерятся, Turnstile — в BUG-1595.",
        "bugs": [
         "BUG-378",
-        "BUG-754"
+        "BUG-754",
+        "BUG-1595"
        ]
       },
       {
@@ -11248,6 +11249,13 @@
    "status": "open",
    "title": "`matchMedia(\"(prefers-color-scheme: 0)\").media` — `not all` вместо исходного запроса; `matchMedia(\"(min-resolution: 1x)\").media` — `(min-resolution: 1dppx)`, `(…",
    "component": "css-parser/js (`matchMedia().media` и `mediaText`: общий случай и сериализация)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1595": {
+   "status": "open",
+   "title": "`turnstile.render()` возвращает id, но iframe не создаётся, `callback`/`error-callback` не вызываются, токена нет (reCAPTCHA и hCaptcha рендерятся)",
+   "component": "js/shell (исполнение `challenges.cloudflare.com/turnstile/v0/*/api.js`)",
    "date": null,
    "debtor": false
   },
