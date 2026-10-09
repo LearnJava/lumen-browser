@@ -33,6 +33,7 @@ mod hint_mode;
 mod keyboard;
 mod nav_state;
 mod navigation;
+mod crash;
 mod newtab_page;
 mod omnibox_bar;
 mod page_snapshot;

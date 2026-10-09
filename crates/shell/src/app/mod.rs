@@ -24,7 +24,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
-        self.on_user_event(event);
+        self.guard_event("user_event", |l| l.on_user_event(event));
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -32,7 +32,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.on_about_to_wait(&MainHandle::Direct(event_loop));
+        self.poll_engine_crash();
+        self.guard_event("about_to_wait", |l| l.on_about_to_wait(&MainHandle::Direct(event_loop)));
     }
 
     fn device_event(
@@ -50,7 +51,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        self.on_window_event(&MainHandle::Direct(event_loop), window_id, event);
+        self.guard_event("window_event", |l| {
+            l.on_window_event(&MainHandle::Direct(event_loop), window_id, event);
+        });
     }
 }
 
