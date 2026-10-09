@@ -539,6 +539,12 @@ pub(crate) struct Lumen {
     /// начала drag-а — это даёт «закреплённый под пальцем» thumb (стандартный
     /// scrollbar UX).
     pub(crate) scroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Активный drag горизонтального thumb-а страницы (UX-SCROLLBAR).
+    /// В `ScrollDrag` поля `*_y` несут X: `(start_scroll_x, start_mouse_x)`.
+    pub(crate) hscroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Состояния thumb-ов (вертикальный, горизонтальный) на последней
+    /// отрисовке: смена при движении мыши запрашивает перерисовку.
+    pub(crate) last_thumb_states: (scrollbar::ThumbState, scrollbar::ThumbState),
     /// Активный drag СОБСТВЕННОГО scrollbar-thumb-а фрейма (FRAME-3
     /// remainder) — зеркало [`Self::scroll_drag`], но должен помнить ЕЩЁ и
     /// КАКОЙ фрейм: несколько фреймов на странице держат независимые

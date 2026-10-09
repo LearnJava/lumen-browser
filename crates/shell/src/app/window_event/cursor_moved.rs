@@ -194,6 +194,18 @@ impl Lumen {
             );
             self.scroll_to(target);
         }
+        // UX-SCROLLBAR: активный drag горизонтального thumb-а страницы.
+        if let Some(drag) = self.hscroll_drag {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            let cursor_x_css = (position.x as f32) / dpr;
+            let (vw, _, v_present) = self.hbar_layout();
+            let target = scrollbar::hscroll_for(&drag, cursor_x_css, self.content_width, vw, v_present);
+            self.scroll_x_by(target - self.scroll_x);
+        }
         // FRAME-3 remainder: активный drag СОБСТВЕННОГО scrollbar-а фрейма —
         // тот же приём, что выше у страничного `scroll_drag`, но целевой
         // фрейм несёт свой индекс (несколько фреймов держат независимые

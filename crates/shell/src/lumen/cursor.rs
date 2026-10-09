@@ -9,6 +9,68 @@
 use crate::*;
 
 impl Lumen {
+    /// Геометрия горизонтальной полосы страницы: `(ширина области страницы,
+    /// её левый край в окне, есть ли вертикальная полоса)`.
+    pub(crate) fn hbar_layout(&self) -> (f32, f32, bool) {
+        (
+            self.page_content_width_css(),
+            self.docked_panel_offsets().0,
+            self.content_height > self.viewport_height_css(),
+        )
+    }
+
+    /// Куда попала точка (сырые оконные CSS px) относительно горизонтальной
+    /// полосы страницы. `None` при `--no-scrollbar`.
+    pub(crate) fn hscroll_hit(&self, x_css: f32, y_css: f32) -> scrollbar::TrackClick {
+        if self.no_scrollbar {
+            return scrollbar::TrackClick::None;
+        }
+        let (vw, origin_x, v_present) = self.hbar_layout();
+        scrollbar::classify_hscroll_click(
+            x_css,
+            y_css,
+            self.scroll_x,
+            self.content_width,
+            vw,
+            self.viewport_height_css(),
+            origin_x,
+            v_present,
+        )
+    }
+
+    /// Окраска thumb-ов страницы `(вертикальный, горизонтальный)`: drag —
+    /// `Active`, курсор над thumb-ом — `Hover`, иначе `Idle`.
+    pub(crate) fn page_thumb_states(&self) -> (scrollbar::ThumbState, scrollbar::ThumbState) {
+        use scrollbar::{ThumbState, TrackClick};
+        let hover = self.renderer.as_ref().zip(self.cursor_position).map(|(r, pos)| {
+            let dpr = (r.scale_factor() as f32).max(1e-6);
+            let (x, y) = ((pos.x as f32) / dpr, (pos.y as f32) / dpr);
+            let v = scrollbar::classify_track_click(
+                x,
+                y,
+                self.scroll_y,
+                self.content_height,
+                self.viewport_width_css(),
+                self.viewport_height_css(),
+            );
+            (v == TrackClick::Thumb, self.hscroll_hit(x, y) == TrackClick::Thumb)
+        });
+        let (v_hover, h_hover) = hover.unwrap_or((false, false));
+        let pick = |dragging: bool, hovering: bool| {
+            if dragging {
+                ThumbState::Active
+            } else if hovering {
+                ThumbState::Hover
+            } else {
+                ThumbState::Idle
+            }
+        };
+        (
+            pick(self.scroll_drag.is_some(), v_hover),
+            pick(self.hscroll_drag.is_some(), h_hover),
+        )
+    }
+
     /// Пересчитать желаемый `CursorIcon` по текущей позиции курсора и
     /// при изменении вызвать `Window::set_cursor`. CursorMoved может
     /// дёргаться сотни раз в секунду — `last_cursor_icon` кэширует
@@ -32,7 +94,21 @@ impl Lumen {
             self.viewport_width_css(),
             self.viewport_height_css(),
         );
-        let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
+        let hscroll_icon = cursor_icon_for_hover(
+            self.hscroll_hit(x_css, y_css),
+            self.hscroll_drag.is_some(),
+        );
+        let scrollbar_icon = match cursor_icon_for_hover(hover, self.scroll_drag.is_some()) {
+            CursorIcon::Default => hscroll_icon,
+            icon => icon,
+        };
+
+        // UX-SCROLLBAR: hover/active окраска thumb-а — перерисовать при смене.
+        let thumb_states = self.page_thumb_states();
+        if thumb_states != self.last_thumb_states {
+            self.last_thumb_states = thumb_states;
+            self.request_redraw();
+        }
 
         // FRAME-3 remainder: собственный scrollbar фрейма — та же
         // приоритетность, что у страничного, но проверяется РАНЬШЕ (мышь
