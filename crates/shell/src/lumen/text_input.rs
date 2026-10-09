@@ -776,6 +776,57 @@ impl Lumen {
         }
     }
 
+    /// UX-IME-2: the in-progress composition of the focused page field —
+    /// preedit text drawn at the caret over a field-coloured patch, with an
+    /// underline. Page coordinates; `None` unless a non-empty preedit is live
+    /// in a page-level (not frame, not address-bar) field.
+    pub(crate) fn ime_preedit_overlay(&self) -> Option<lumen_paint::DisplayList> {
+        use lumen_layout::{Color, CssColor, FontStyle, FontWeight};
+        let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
+        if self.address_bar.is_open() || self.focused_frame.is_some() {
+            return None;
+        }
+        let nid = self.focused_node?;
+        let field_lb = forms::find_layout_box(self.layout_box.as_ref()?, nid)?;
+        let caret = self.page_caret_rect(nid)?;
+        let style = &field_lb.style;
+        let fs = style.font_size;
+        let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
+        let width = width.min((field_lb.rect.x + field_lb.rect.width - caret.x).max(fs));
+        let bg = match style.background_color {
+            Some(CssColor::Rgba(c)) if c.a == 255 => c,
+            _ => Color { r: 255, g: 255, b: 255, a: 255 },
+        };
+        let line_h = fs * 1.2;
+        let rect = lumen_core::geom::Rect::new(caret.x, caret.y, width, line_h.min(caret.height.max(fs)));
+        let fg = style.color;
+        Some(vec![
+            lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
+            lumen_paint::DisplayCommand::FillRect { rect, color: bg },
+            lumen_paint::DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
+                rect,
+                text: text.to_string(),
+                font_size: fs,
+                color: fg,
+                font_family: style.font_family.clone(),
+                font_weight: FontWeight::NORMAL,
+                font_style: FontStyle::Normal,
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                highlight_name: None,
+                text_orientation: None,
+            },
+            lumen_paint::DisplayCommand::FillRect {
+                rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
+                color: fg,
+            },
+            lumen_paint::DisplayCommand::PopClip,
+        ])
+    }
+
     /// Caret rectangle of the focused page field in page coordinates.
     fn page_caret_rect(&self, nid: lumen_dom::NodeId) -> Option<lumen_core::geom::Rect> {
         let (kind, value) = self.focused_field_snapshot.field(nid)?;
