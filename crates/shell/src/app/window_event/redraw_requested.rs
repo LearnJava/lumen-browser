@@ -78,7 +78,8 @@ impl Lumen {
             let scroll_y = self.scroll_y;
             let settled = self.scroll_anim.is_none()
                 && self.momentum_anim.is_none()
-                && self.scroll_drag.is_none();
+                && self.scroll_drag.is_none()
+                && self.hscroll_drag.is_none();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 let moved = j.set_page_scroll_y(scroll_y);
                 if moved {
@@ -712,12 +713,25 @@ impl Lumen {
             // FRAME-3 remainder: собственный scrollbar каждого видимого
             // фрейма — то же приём, добавлен в ту же полосу overlay-а рядом
             // со страничным.
-            let mut scrollbar_cmds = scrollbar::build_scrollbar_overlay(
+            let (v_state, h_state) = self.page_thumb_states();
+            self.last_thumb_states = (v_state, h_state);
+            let mut scrollbar_cmds = scrollbar::build_scrollbar_overlay_with_state(
                 self.scroll_y,
                 self.content_height,
                 self.viewport_width_css(),
                 self.viewport_height_css(),
+                v_state,
             );
+            let (hbar_vw, hbar_x, v_present) = self.hbar_layout();
+            scrollbar_cmds.extend(scrollbar::build_hscrollbar_overlay(
+                self.scroll_x,
+                self.content_width,
+                hbar_vw,
+                self.viewport_height_css(),
+                hbar_x,
+                v_present,
+                h_state,
+            ));
             scrollbar_cmds.extend(frames::frame_scrollbar_overlay(
                 &self.frames,
                 self.scroll_x,

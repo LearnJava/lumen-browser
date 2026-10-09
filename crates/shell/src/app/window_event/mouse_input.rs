@@ -870,6 +870,25 @@ impl Lumen {
                 return;
             }
 
+            // UX-SCROLLBAR: горизонтальная полоса страницы (ниже фреймов,
+            // выше вертикальной: уголок принадлежит вертикальной).
+            match self.hscroll_hit(x_css, y_css) {
+                scrollbar::TrackClick::Thumb => {
+                    self.hscroll_drag = Some(scrollbar::ScrollDrag::new(self.scroll_x, x_css));
+                    self.request_redraw();
+                    return;
+                }
+                scrollbar::TrackClick::Above => {
+                    self.scroll_x_by(-page_step(self.page_content_width_css()));
+                    return;
+                }
+                scrollbar::TrackClick::Below => {
+                    self.scroll_x_by(page_step(self.page_content_width_css()));
+                    return;
+                }
+                scrollbar::TrackClick::None => {}
+            }
+
             let vh = self.viewport_height_css();
             match scrollbar::classify_track_click(
                 x_css,
@@ -884,6 +903,7 @@ impl Lumen {
                         self.scroll_y,
                         y_css,
                     ));
+                    self.request_redraw();
                 }
                 scrollbar::TrackClick::Above => {
                     // Клик по track выше thumb-а — прыжок на страницу вверх.
@@ -1028,6 +1048,7 @@ impl Lumen {
             // offset it produced stays, only the tracking stops.
             self.floating_panel_end_drag();
             self.scroll_drag = None;
+            self.hscroll_drag = None;
             self.frame_scroll_drag = None;
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —
             // the selection itself stays, only the drag tracking stops.
