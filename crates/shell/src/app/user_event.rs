@@ -468,6 +468,24 @@ impl Lumen {
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
                 self.pending_mpa_view_transition_snapshot = None;
             }
+            LoadEvent::ThreatBlocked(url, host, list, threat, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
+                if generation != self.load_generation { return; }
+                self.nav_start = None;
+                self.load_failed = true;
+                let msg = format!("{} ({list})", threat.as_code());
+                self.cert_interstitial.open_threat(url, host, list, threat);
+                self.load_error_message = Some(msg.clone());
+                click_log::log_load_err(&self.source.describe(), &msg);
+                health_log::log_load_error(&self.source.describe(), &msg);
+                eprintln!("Сайт в базе Safe Browsing {}: {msg}", self.source.describe());
+                self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                self.pending_mpa_view_transition_snapshot = None;
+            }
             LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles } => {
                 self.on_frame_nav_done(&host_doc, host, &old_doc, generation, handles);
             }
