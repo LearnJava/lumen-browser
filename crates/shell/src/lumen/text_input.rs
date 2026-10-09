@@ -750,6 +750,8 @@ impl Lumen {
                 self.end_composition("");
             }
         }
+        // The preedit overlays are repainted from `ime_composing`.
+        self.request_redraw();
     }
 
     /// Tell the OS where the caret is so the IME candidate window opens next
@@ -822,6 +824,49 @@ impl Lumen {
             lumen_paint::DisplayCommand::FillRect {
                 rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
                 color: fg,
+            },
+            lumen_paint::DisplayCommand::PopClip,
+        ])
+    }
+
+    /// UX-IME-3: the in-progress composition in the open address bar — preedit
+    /// text with an underline, right-aligned to the field's caret edge (the
+    /// same simplified flush-right placement the omnibox caret uses). Window
+    /// coordinates; `None` unless a non-empty preedit is live.
+    pub(crate) fn ime_omnibox_preedit_overlay(&self, pal: &crate::panels::themes::Palette) -> Option<lumen_paint::DisplayList> {
+        use lumen_layout::{FontStyle, FontWeight};
+        let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
+        if !self.address_bar.is_open() {
+            return None;
+        }
+        let field = self.chrome_omni_input_rect?;
+        let fs = (field.height * 0.5).clamp(10.0, 20.0);
+        let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
+        let width = width.min((field.width - 16.0).max(fs));
+        let x = (field.x + field.width - 8.0 - width).max(field.x + 4.0);
+        let rect = lumen_core::geom::Rect::new(x, field.y + 4.0, width, (field.height - 8.0).max(fs));
+        Some(vec![
+            lumen_paint::DisplayCommand::PushClipRect { rect: field },
+            lumen_paint::DisplayCommand::FillRect { rect, color: pal.input_bg },
+            lumen_paint::DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
+                rect,
+                text: text.to_string(),
+                font_size: fs,
+                color: pal.text,
+                font_family: Vec::new(),
+                font_weight: FontWeight::NORMAL,
+                font_style: FontStyle::Normal,
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                highlight_name: None,
+                text_orientation: None,
+            },
+            lumen_paint::DisplayCommand::FillRect {
+                rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
+                color: pal.text,
             },
             lumen_paint::DisplayCommand::PopClip,
         ])
