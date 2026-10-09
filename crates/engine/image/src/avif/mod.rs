@@ -8,14 +8,9 @@
 //!   только первый кадр; полная анимация — Wave 3.
 //! - ICC-профиль не извлекается (icc_profile поле → None).
 //!
-//! Фактическое декодирование требует feature `avif` в Cargo.toml lumen-image:
-//! `cargo build -p lumen-image --features avif`. Без неё `is_avif()` работает,
-//! `decode_avif()` возвращает `AvifError::Decode`.
-//!
-//! Feature "avif" подтягивает `image = "0.25"` с её feature "avif-native" →
-//! `dav1d` (C, через `dav1d-sys`) + `mp4parse`. Без системного dav1d в
-//! pkg-config сборка клонирует videolan/dav1d по сети и собирает его
-//! meson+ninja(+nasm) — GAP-avif срез 1, `docs/tasks/ph3-avif.md`.
+//! Декодирование всегда включено и не требует системных библиотек:
+//! контейнер разбирает `avif-parse`, AV1 — `rav1d` (Rust-порт dav1d, без `asm`).
+//! Feature `avif` в Cargo.toml осталась пустой для совместимости.
 
 /// Ошибка декодирования AVIF.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,12 +57,9 @@ pub fn is_avif(bytes: &[u8]) -> bool {
 ///
 /// Возвращает `(ширина, высота, rgba8_данные)`.
 ///
-/// Требует feature `avif` в lumen-image: `cargo build --features avif`.
-/// Без этой feature возвращает [`AvifError::Decode`] с пояснением.
-///
 /// # Errors
 /// - [`AvifError::InvalidSignature`] — сигнатура AVIF не найдена.
-/// - [`AvifError::Decode`] — декодирование не удалось (или feature отключена).
+/// - [`AvifError::Decode`] — декодирование не удалось.
 pub fn decode_avif(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AvifError> {
     if !is_avif(bytes) {
         return Err(AvifError::InvalidSignature);
@@ -75,22 +67,240 @@ pub fn decode_avif(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AvifError> {
     decode_avif_impl(bytes)
 }
 
-#[cfg(feature = "avif")]
 fn decode_avif_impl(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AvifError> {
-    use image::{GenericImageView as _, ImageFormat};
-    let img = image::load_from_memory_with_format(bytes, ImageFormat::Avif)
-        .map_err(|e| AvifError::Decode(format!("libavif: {e}")))?;
-    let (w, h) = img.dimensions();
-    let rgba = img.into_rgba8();
-    Ok((w, h, rgba.into_raw()))
+    let data = avif_parse::read_avif(&mut &bytes[..])
+        .map_err(|e| AvifError::Decode(format!("avif-parse: {e:?}")))?;
+    let color = decode_av1(&data.primary_item)?;
+    let alpha = match data.alpha_item.as_deref() {
+        Some(a) => Some(decode_av1(a)?),
+        None => None,
+    };
+    to_rgba8(&color, alpha.as_ref(), data.premultiplied_alpha)
 }
 
-#[cfg(not(feature = "avif"))]
-fn decode_avif_impl(_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AvifError> {
-    Err(AvifError::Decode(
-        "AVIF: включите feature 'avif' в lumen-image (требует dav1d, см. docs/tasks/ph3-avif.md)"
-            .to_string(),
-    ))
+/// Распакованный AV1-кадр: плоскости приведены к `u16`.
+struct Frame {
+    w: usize,
+    h: usize,
+    layout: u32,
+    bpc: u32,
+    full_range: bool,
+    mtrx: u32,
+    planes: [Vec<u16>; 3],
+    /// Ширина плоскостей (Y, U/V).
+    stride: [usize; 2],
+}
+
+/// Предел площади кадра: защита от декомпрессионной бомбы (~256 МБ RGBA).
+const MAX_PIXELS: u32 = 64 * 1024 * 1024;
+
+/// Закрывает контекст rav1d на любом выходе из `decode_av1`.
+struct CtxGuard(Option<rav1d::include::dav1d::dav1d::Dav1dContext>);
+
+impl Drop for CtxGuard {
+    fn drop(&mut self) {
+        // SAFETY: контекст получен из `dav1d_open` и закрывается ровно один раз.
+        unsafe { rav1d::src::lib::dav1d_close(Some(core::ptr::NonNull::from(&mut self.0))) };
+    }
+}
+
+fn decode_av1(obu: &[u8]) -> Result<Frame, AvifError> {
+    use core::ptr::NonNull;
+    use rav1d::include::dav1d::data::Dav1dData;
+    use rav1d::include::dav1d::dav1d::Dav1dSettings;
+    use rav1d::include::dav1d::picture::Dav1dPicture;
+    use std::mem::MaybeUninit;
+
+    const EAGAIN: i32 = -11;
+    let err = |what: &str, code: i32| AvifError::Decode(format!("rav1d: {what} ({code})"));
+
+    let mut settings = MaybeUninit::<Dav1dSettings>::uninit();
+    // SAFETY: `dav1d_default_settings` полностью инициализирует переданную структуру.
+    let mut settings = unsafe {
+        rav1d::src::lib::dav1d_default_settings(NonNull::from(&mut settings).cast());
+        settings.assume_init()
+    };
+    settings.n_threads = 1;
+    settings.max_frame_delay = 1;
+    settings.frame_size_limit = MAX_PIXELS;
+
+    let mut guard = CtxGuard(None);
+    // SAFETY: оба указателя валидны на запись/чтение на время вызова.
+    let rc = unsafe {
+        rav1d::src::lib::dav1d_open(Some(NonNull::from(&mut guard.0)), Some(NonNull::from(&mut settings)))
+    };
+    if rc.0 < 0 || guard.0.is_none() {
+        return Err(err("open", rc.0));
+    }
+
+    let mut data = MaybeUninit::<Dav1dData>::uninit();
+    // SAFETY: `dav1d_data_create` пишет в `data` и возвращает буфер длины `obu.len()`.
+    let mut data = unsafe {
+        let buf = rav1d::src::lib::dav1d_data_create(Some(NonNull::from(&mut data).cast()), obu.len());
+        if buf.is_null() {
+            return Err(AvifError::Decode("rav1d: data_create".into()));
+        }
+        core::ptr::copy_nonoverlapping(obu.as_ptr(), buf, obu.len());
+        data.assume_init()
+    };
+
+    let mut pic: Option<Dav1dPicture> = None;
+    let mut outcome = Err(AvifError::Decode("rav1d: кадр не получен".into()));
+    loop {
+        if data.sz > 0 {
+            // SAFETY: контекст и данные валидны; `sz` уменьшается по мере потребления.
+            let rc = unsafe { rav1d::src::lib::dav1d_send_data(guard.0, Some(NonNull::from(&mut data))) };
+            if rc.0 < 0 && rc.0 != EAGAIN {
+                outcome = Err(err("send_data", rc.0));
+                break;
+            }
+        }
+        let mut out = MaybeUninit::<Dav1dPicture>::uninit();
+        // SAFETY: `dav1d_get_picture` всегда пишет в `out`.
+        let rc = unsafe { rav1d::src::lib::dav1d_get_picture(guard.0, Some(NonNull::from(&mut out).cast())) };
+        if rc.0 == 0 {
+            // SAFETY: при коде 0 картинка инициализирована.
+            pic = Some(unsafe { out.assume_init() });
+            break;
+        }
+        if rc.0 != EAGAIN {
+            outcome = Err(err("get_picture", rc.0));
+            break;
+        }
+        if data.sz == 0 {
+            break; // данные кончились, кадра нет
+        }
+    }
+    // SAFETY: освобождает остаток данных (no-op, если всё потреблено).
+    unsafe { rav1d::src::lib::dav1d_data_unref(Some(NonNull::from(&mut data))) };
+
+    let Some(mut pic) = pic else { return outcome };
+    let frame = copy_picture(&pic);
+    // SAFETY: картинка получена из `dav1d_get_picture` и освобождается один раз.
+    unsafe { rav1d::src::lib::dav1d_picture_unref(Some(NonNull::from(&mut pic))) };
+    frame
+}
+
+fn copy_picture(pic: &rav1d::include::dav1d::picture::Dav1dPicture) -> Result<Frame, AvifError> {
+    let w = pic.p.w as usize;
+    let h = pic.p.h as usize;
+    let layout = pic.p.layout;
+    let bpc = pic.p.bpc as u32;
+    if w == 0 || h == 0 || !matches!(bpc, 8 | 10 | 12) {
+        return Err(AvifError::Decode(format!("rav1d: неподдерживаемый кадр {w}x{h} bpc={bpc}")));
+    }
+    let (cw, ch) = match layout {
+        1 => (w.div_ceil(2), h.div_ceil(2)),
+        2 => (w.div_ceil(2), h),
+        _ => (w, h),
+    };
+    let (mtrx, full_range) = match pic.seq_hdr {
+        // SAFETY: seq_hdr принадлежит картинке и жив до `picture_unref`.
+        Some(p) => unsafe { (p.as_ref().mtrx, p.as_ref().color_range != 0) },
+        None => (2, true),
+    };
+    let nplanes = if layout == 0 { 1 } else { 3 };
+    let mut planes: [Vec<u16>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for (i, plane) in planes.iter_mut().enumerate().take(nplanes) {
+        let (pw, ph) = if i == 0 { (w, h) } else { (cw, ch) };
+        let stride = pic.stride[usize::from(i != 0)];
+        let base = pic.data[i].ok_or_else(|| AvifError::Decode("rav1d: нет плоскости".into()))?;
+        let bytes_per = if bpc == 8 { 1 } else { 2 };
+        plane.reserve_exact(pw * ph);
+        for y in 0..ph {
+            // SAFETY: rav1d гарантирует `ph` строк по `stride` байт, в каждой минимум `pw` сэмплов.
+            let row = unsafe {
+                core::slice::from_raw_parts(
+                    base.as_ptr().cast::<u8>().offset(y as isize * stride),
+                    pw * bytes_per,
+                )
+            };
+            if bpc == 8 {
+                plane.extend(row.iter().map(|&v| u16::from(v)));
+            } else {
+                plane.extend(row.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])));
+            }
+        }
+    }
+    Ok(Frame { w, h, layout, bpc, full_range, mtrx, planes, stride: [w, cw] })
+}
+
+/// Нормализованное значение (0..1) сэмпла яркости/альфы с учётом диапазона.
+fn norm(v: u16, bpc: u32, full_range: bool) -> f32 {
+    let v = f32::from(v);
+    if full_range {
+        v / f32::from((1u16 << bpc) - 1)
+    } else {
+        let s = f32::from(1u16 << (bpc - 8));
+        ((v - 16.0 * s) / (219.0 * s)).clamp(0.0, 1.0)
+    }
+}
+
+fn to_rgba8(
+    c: &Frame,
+    alpha: Option<&Frame>,
+    premultiplied: bool,
+) -> Result<(u32, u32, Vec<u8>), AvifError> {
+    if let Some(a) = alpha
+        && (a.w != c.w || a.h != c.h)
+    {
+        return Err(AvifError::Decode("AVIF: размер альфа-канала не совпадает с цветом".into()));
+    }
+    let maxv = f32::from((1u16 << c.bpc) - 1);
+    let scale = f32::from(1u16 << (c.bpc - 8));
+    // (Kr, Kb) по matrix_coefficients (ITU-T H.273).
+    let (kr, kb) = match c.mtrx {
+        4..=6 => (0.299_f32, 0.114_f32),
+        7 => (0.212, 0.087),
+        9 | 10 => (0.2627, 0.0593),
+        _ => (0.2126, 0.0722),
+    };
+    let kg = 1.0 - kr - kb;
+    let identity = c.mtrx == 0 && c.layout == 3;
+    let (yoff, yscale, csc, half) = if c.full_range {
+        (0.0, 1.0 / maxv, 1.0 / maxv, (maxv + 1.0) / 2.0)
+    } else {
+        (16.0 * scale, 1.0 / (219.0 * scale), 1.0 / (224.0 * scale), 128.0 * scale)
+    };
+    let mut out = vec![0u8; c.w * c.h * 4];
+    for y in 0..c.h {
+        for x in 0..c.w {
+            let yv = f32::from(c.planes[0][y * c.stride[0] + x]);
+            let (r, g, b) = if c.layout == 0 {
+                let l = ((yv - yoff) * yscale).clamp(0.0, 1.0);
+                (l, l, l)
+            } else {
+                let (cx, cy) = match c.layout {
+                    1 => (x / 2, y / 2),
+                    2 => (x / 2, y),
+                    _ => (x, y),
+                };
+                let ci = cy * c.stride[1] + cx;
+                let u = f32::from(c.planes[1][ci]);
+                let v = f32::from(c.planes[2][ci]);
+                if identity {
+                    let n = |s: f32| ((s - yoff) * yscale).clamp(0.0, 1.0);
+                    (n(v), n(yv), n(u))
+                } else {
+                    let yn = (yv - yoff) * yscale;
+                    let cb = (u - half) * csc;
+                    let cr = (v - half) * csc;
+                    let r = yn + 2.0 * (1.0 - kr) * cr;
+                    let b = yn + 2.0 * (1.0 - kb) * cb;
+                    let g = (yn - kr * r - kb * b) / kg;
+                    (r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0))
+                }
+            };
+            let a = alpha.map_or(1.0, |al| norm(al.planes[0][y * al.stride[0] + x], al.bpc, al.full_range));
+            let un = if premultiplied && a > 0.0 { 1.0 / a } else { 1.0 };
+            let o = (y * c.w + x) * 4;
+            out[o] = ((r * un).min(1.0) * 255.0 + 0.5) as u8;
+            out[o + 1] = ((g * un).min(1.0) * 255.0 + 0.5) as u8;
+            out[o + 2] = ((b * un).min(1.0) * 255.0 + 0.5) as u8;
+            out[o + 3] = (a * 255.0 + 0.5) as u8;
+        }
+    }
+    Ok((c.w as u32, c.h as u32, out))
 }
 
 /// Реализация [`lumen_core::ext::ImageDecoder`] для AVIF.
