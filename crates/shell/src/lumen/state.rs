@@ -1385,6 +1385,9 @@ pub(crate) struct Lumen {
     /// `Ctrl+Shift+P` toggles visibility.  State is in-memory only (no
     /// persistence across sessions).
     pub(crate) permission: panels::permission_panel::PermissionPanel,
+    /// On-disk permission store (`permissions.db`); `permission` uses it except
+    /// while the Anonymous profile is active (see `sync_permission_store`).
+    pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,
     /// Right-docked sidebar web panel state (7D.3).
     ///
     /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.

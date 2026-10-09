@@ -939,6 +939,20 @@ impl Lumen {
             Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
     }
 
+    /// UX-PERMISSIONS-3: Anonymous decides into a fresh in-memory store (as
+    /// with its cookie jar), every other profile into `permissions.db`.
+    /// Call after the active profile changed and once at startup.
+    pub(crate) fn sync_permission_store(&mut self) {
+        let store = if self.active_profile_is_anonymous() {
+            lumen_storage::Permissions::open_in_memory().ok().map(Arc::new)
+        } else {
+            Some(Arc::clone(&self.permissions_disk_store))
+        };
+        if let Some(store) = store {
+            self.permission.set_store(store);
+        }
+    }
+
     /// BUG-934: the CC-5 chrome hit-test + `data-action` dispatch (originally
     /// inline in `on_mouse_input`'s `Pressed` branch), shared with automation
     /// clicks (`Lumen::handle_automation_click`) so `AutomationCommand::Click`/
@@ -1545,6 +1559,7 @@ impl Lumen {
                     if self.active_profile_is_anonymous() {
                         self.reset_anonymous_cookie_jar();
                     }
+                    self.sync_permission_store();
                     self.relayout_chrome_host();
                 }
             }
