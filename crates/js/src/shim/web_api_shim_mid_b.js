@@ -1545,6 +1545,17 @@ function _lumen_fire_beforeunload() {
     return !!evt.defaultPrevented || String(evt.returnValue) !== '';
 }
 
+// UX-DIALOGS: «prompt to unload a document» (HTML LS §7.4.5) for the shell:
+// dispatches `beforeunload` once and answers whether the page asked to stay.
+// Only a page the user has interacted with may prompt (sticky activation) — the
+// rule that stops a page from trapping a visitor it never heard from.
+function _lumen_beforeunload_wants_prompt() {
+    var asked = _lumen_fire_beforeunload();
+    var active = false;
+    try { active = navigator.userActivation.hasBeenActive === true; } catch (e) {}
+    return !!(asked && active);
+}
+
 // «unload a document» (HTML LS §7.4.6). The order is fixed by the spec:
 // pagehide → visibilityState 'hidden' → unload, and `unload` fires ONLY for a
 // document that is not salvageable — i.e. one the shell could not retain

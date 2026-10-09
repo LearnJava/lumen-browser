@@ -264,7 +264,7 @@ impl Lumen {
         // silently discarded. Painted separately, unclipped, via
         // `chrome_floating_dl` (`RedrawRequested`).
         let mut floating_detached = Vec::new();
-        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR] {
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::DIALOG_BOX] {
             if let Some(node) = doc.find_by_id(id)
                 && let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id)
             {
@@ -752,6 +752,7 @@ impl Lumen {
             right_sidebar,
             update: self.update_ui.chrome_model(),
             login_offer: self.login_offer_model(),
+            dialog: self.page_dialog_model(),
         }
     }
 
@@ -1009,6 +1010,8 @@ impl Lumen {
                     move || { flag.set(true); },
                 );
             }
+            ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
+            ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
             ChromeAction::NewTab => self.open_new_tab(),
             ChromeAction::ZoomReset => self.reset_page_zoom(),
             ChromeAction::SaveLogin

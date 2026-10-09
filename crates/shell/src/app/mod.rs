@@ -232,6 +232,10 @@ impl Lumen {
 
         match event {
             WindowEvent::CloseRequested => {
+                // UX-DIALOGS: the page may ask to confirm closing the window.
+                if self.beforeunload_gate(crate::lumen::PendingLeave::CloseWindow).is_none() {
+                    return;
+                }
                 self.save_session_on_close();
                 self.save_full_session();
                 event_loop.exit();

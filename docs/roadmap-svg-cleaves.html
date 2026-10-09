@@ -8287,9 +8287,9 @@
       {
        "id": "UX-DIALOGS",
        "title": "UX-DIALOGS: alert/confirm/prompt и beforeunload",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Модальные диалоги: `alert`/`confirm`/`prompt` без UI, запрос `beforeunload` вычисляется, но не исполняется (нет диалога подтверждения) — набранный текст теряется при уходе со страницы. Объём: модальный диалог в движковом chrome (`ChromeModalKind`), блокировка страницы на время диалога, `beforeunload` для закрытия вкладки/навигации/выхода."
+       "note": "ЗАКРЫТ 2026-10-09: `alert`/`confirm`/`prompt` блокируют JS-поток (`lumen_js::dialog`, нативная `_lumen_dialog`) до ответа в плавающей панели хрома `#dialogBox` (кнопки, Enter/Esc, текст `prompt`; страница и хром не получают ввода, `js_blocked` отключает блокирующие чтения движка); `beforeunload` (`_lumen_beforeunload_wants_prompt`, только после жеста пользователя) спрашивает перед `navigate_to`/назад/вперёд, закрытием активной вкладки и окна, обработчики выполняются один раз. Остаток: диалог не привязан к вкладке (показывается в окне, где опрошен), `reload` и `location.reload()` без вопроса, `beforeunload` во фреймах не спрашивает."
       },
       {
        "id": "UX-HISTORY-PERSIST",

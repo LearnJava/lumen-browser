@@ -419,6 +419,8 @@ impl V8JsRuntime {
 
             install::install_print(scope, ctx, store, Arc::clone(&print_requests))?;
 
+            install::install_dialogs(scope, ctx, store)?;
+
             install::install_dialog_focus(
                 scope,
                 ctx,

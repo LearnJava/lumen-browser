@@ -121,6 +121,10 @@ impl Lumen {
             if self.floating_panel_press(x_css, y_css, event_loop) {
                 return;
             }
+            // UX-DIALOGS: модальный диалог страницы — остальное не кликается.
+            if self.page_dialog.is_some() {
+                return;
+            }
             // F2-6: a press on a docked panel's inner edge begins a
             // resize drag; the click never reaches the page / panels.
             if let Some(edge) = self.resize_edge_at(x_css, y_css) {

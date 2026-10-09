@@ -1250,6 +1250,16 @@ pub(crate) struct Lumen {
     /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);
     /// `None` — панель скрыта.
     pub(crate) login_offer: Option<password_store::LoginOffer>,
+    /// UX-DIALOGS: открытый модальный диалог страницы (`#dialogBox`); пока он
+    /// есть, страница и остальной хром не получают ввода.
+    pub(crate) page_dialog: Option<super::dialogs::PageDialog>,
+    /// UX-DIALOGS: UI-сторона посредника `lumen_js::dialog` подключена.
+    pub(crate) page_dialog_wired: bool,
+    /// UX-DIALOGS: уход со страницы, ждущий ответа на `beforeunload`-диалог.
+    pub(crate) pending_leave: Option<super::dialogs::PendingLeave>,
+    /// UX-DIALOGS: пользователь подтвердил уход — повторный вход в навигацию
+    /// не спрашивает и не перепосылает события.
+    pub(crate) leave_confirmed: bool,
     /// UX-PASSWORDS срез 3: подставленный на странице аккаунт; панель
     /// «Другой аккаунт» показывается, если у сайта их несколько.
     pub(crate) login_fill: Option<password_store::LoginFill>,

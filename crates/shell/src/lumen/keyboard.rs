@@ -27,6 +27,11 @@ impl Lumen {
             return;
         };
 
+        // UX-DIALOGS: модальный диалог страницы забирает весь ввод.
+        if self.handle_page_dialog_key(code, key_event, event_loop) {
+            return;
+        }
+
         // Командная палитра — модальный overlay: пока открыта, перехватывает все
         // клавиши (Esc/Enter/↑/↓/Backspace/печать). Ctrl+K (toggle) пропускается
         // в глобальный keybinding-путь ниже, чтобы закрыть палитру.

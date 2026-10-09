@@ -210,6 +210,12 @@ impl Lumen {
 
     /// Close the tab at `idx`. If it was the last tab, exits the app instead.
     pub(crate) fn close_tab(&mut self, idx: usize, event_loop: &crate::browser_thread::MainHandle<'_>) {
+        // UX-DIALOGS: closing the live tab is a «prompt to unload» too.
+        if idx == self.tab_strip.active
+            && self.beforeunload_gate(super::dialogs::PendingLeave::CloseTab(idx)).is_none()
+        {
+            return;
+        }
         if self.tab_strip.len() == 1 {
             // Last tab — exit.
             event_loop.exit();
