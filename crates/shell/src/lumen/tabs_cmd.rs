@@ -71,6 +71,7 @@ impl Lumen {
         self.nav_fwd = Vec::new();
         self.form_state = HashMap::new();
         self.frame_text_cursor = HashMap::new();
+        self.field_history = HashMap::new();
         self.frame_text_selection_anchor = HashMap::new();
         self.text_drag = None;
         self.doc_select = None;

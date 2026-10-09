@@ -257,7 +257,7 @@ use crate::js_escape::js_string_literal;
 use crate::js_escape::{escape_js_string, escape_js_string_char};
 use crate::text_cursor::{
     char_len, char_range, delete_char_after, delete_char_before, delete_char_range, insert_char_at,
-    insert_str_at, parse_maxlength, sanitize_paste,
+    insert_str_at, parse_maxlength, sanitize_paste, EditKind, FieldHistory, FieldSnapshot,
 };
 use crate::panels::doc_pip_os_window::DocPipOsWindow;
 use crate::panels::pip_os_window::PipOsWindow;

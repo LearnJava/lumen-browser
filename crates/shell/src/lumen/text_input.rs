@@ -47,6 +47,55 @@ impl EditAction {
             EditAction::DeleteForward => (delete_char_after(current, cursor), cursor),
         }
     }
+
+    /// Undo-grouping class of this edit (UX-UNDO); anything that replaces a
+    /// selection is its own step.
+    pub(crate) fn history_kind(&self, current: &str, cursor: usize, had_selection: bool) -> EditKind {
+        if had_selection {
+            return EditKind::Other;
+        }
+        match self {
+            EditAction::InsertChar(ch) => EditKind::Typing {
+                word_start: !ch.is_whitespace()
+                    && cursor > 0
+                    && current.chars().nth(cursor - 1).is_some_and(char::is_whitespace),
+            },
+            EditAction::InsertStr(_) => EditKind::Other,
+            EditAction::Backspace => EditKind::Backspace,
+            EditAction::DeleteForward => EditKind::DeleteForward,
+        }
+    }
+}
+
+/// Undo / redo command on a focused text field (UX-UNDO).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HistoryOp {
+    Undo,
+    Redo,
+}
+
+impl HistoryOp {
+    pub(crate) fn input_type(self) -> &'static str {
+        match self {
+            HistoryOp::Undo => "historyUndo",
+            HistoryOp::Redo => "historyRedo",
+        }
+    }
+}
+
+/// Ctrl+Z → undo, Ctrl+Y / Ctrl+Shift+Z → redo.
+pub(crate) fn history_op_for(code: KeyCode, mods: ModifiersState) -> Option<HistoryOp> {
+    if mods == ModifiersState::CONTROL {
+        return match code {
+            KeyCode::KeyZ => Some(HistoryOp::Undo),
+            KeyCode::KeyY => Some(HistoryOp::Redo),
+            _ => None,
+        };
+    }
+    if mods == ModifiersState::CONTROL | ModifiersState::SHIFT && code == KeyCode::KeyZ {
+        return Some(HistoryOp::Redo);
+    }
+    None
 }
 
 impl Lumen {
@@ -324,7 +373,9 @@ impl Lumen {
         let Some(nid) = self.focused_node else { return false };
         let Some((kind, current)) = self.typeable_field(nid) else { return false };
         let cursor = self.field_cursor(nid, &current);
-        let (next, next_cursor) = match self.field_selection_range(nid, cursor) {
+        let selection = self.field_selection_range(nid, cursor);
+        let history_kind = action.history_kind(&current, cursor, selection.is_some());
+        let (next, next_cursor) = match selection {
             Some((start, end)) => {
                 let spliced = delete_char_range(&current, start, end);
                 match action {
@@ -341,24 +392,72 @@ impl Lumen {
         if next == current {
             return true;
         }
+        self.field_history.entry((None, nid)).or_default().record(
+            FieldSnapshot { value: current, cursor },
+            history_kind,
+            &next,
+            next_cursor,
+            std::time::Instant::now(),
+        );
+        self.write_field_value(nid, kind, &next);
+        true
+    }
+
+    /// Store `next` as the page field's value: DOM, the runtime overlay and the
+    /// JS shadow, then relayout.
+    fn write_field_value(&mut self, nid: lumen_dom::NodeId, kind: TypeableField, next: &str) {
         if let Some(src) = self.layout_source.as_mut()
             && let Ok(mut doc) = src.document.lock()
         {
             match kind {
-                TypeableField::Input => forms::set_value(&mut doc, nid, &next),
-                TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, &next),
+                TypeableField::Input => forms::set_value(&mut doc, nid, next),
+                TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, next),
             }
         }
         // Runtime value overlay used by form submission and constraint
         // validation (`forms::collect_form_entries`) — kept in step with the DOM
         // exactly like the spellcheck-replace path does.
-        self.form_state.entry(nid).or_default().value = next.clone();
+        self.form_state.entry(nid).or_default().value = next.to_owned();
         route_eval_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
-            format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(&next)),
+            format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(next)),
         );
         self.relayout_form();
+    }
+
+    /// Ctrl+Z / Ctrl+Y in the focused page `<input>` / `<textarea>` (UX-UNDO).
+    /// `true` iff a typeable field was focused (even with nothing to undo).
+    /// Fires a cancelable `beforeinput` and then `input`, `inputType`
+    /// `historyUndo` / `historyRedo`; cancelling leaves the field as it was.
+    pub(crate) fn field_history_op(&mut self, op: HistoryOp) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((kind, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current);
+        let here = FieldSnapshot { value: current, cursor };
+        let Some(hist) = self.field_history.get_mut(&(None, nid)) else { return true };
+        let Some(target) = (match op {
+            HistoryOp::Undo => hist.undo(&here),
+            HistoryOp::Redo => hist.redo(&here),
+        }) else {
+            return true;
+        };
+        let ty = op.input_type();
+        if !self.page_input_event(nid, "beforeinput", ty, None) {
+            if let Some(hist) = self.field_history.get_mut(&(None, nid)) {
+                match op {
+                    HistoryOp::Undo => hist.redo(&target),
+                    HistoryOp::Redo => hist.undo(&target),
+                };
+            }
+            return true;
+        }
+        let len = char_len(&target.value);
+        let slot = self.form_state.entry(nid).or_default();
+        slot.cursor = Some(target.cursor.min(len));
+        slot.selection_anchor = None;
+        self.write_field_value(nid, kind, &target.value);
+        self.page_input_event(nid, "input", ty, None);
         true
     }
 
@@ -712,6 +811,26 @@ mod clipboard_tests {
         assert_eq!(clipboard_op_for(KeyCode::Delete, s), Some(ClipboardOp::Cut));
         assert_eq!(clipboard_op_for(KeyCode::KeyV, ModifiersState::empty()), None);
         assert_eq!(clipboard_op_for(KeyCode::KeyV, c | s), None);
+    }
+
+    #[test]
+    fn key_to_history_op() {
+        let c = ModifiersState::CONTROL;
+        let s = ModifiersState::SHIFT;
+        assert_eq!(history_op_for(KeyCode::KeyZ, c), Some(HistoryOp::Undo));
+        assert_eq!(history_op_for(KeyCode::KeyY, c), Some(HistoryOp::Redo));
+        assert_eq!(history_op_for(KeyCode::KeyZ, c | s), Some(HistoryOp::Redo));
+        assert_eq!(history_op_for(KeyCode::KeyZ, ModifiersState::empty()), None);
+        assert_eq!(history_op_for(KeyCode::KeyY, c | s), None);
+    }
+
+    #[test]
+    fn history_kind_word_start() {
+        let k = |a: &EditAction, cur: &str, c, sel| a.history_kind(cur, c, sel);
+        assert_eq!(k(&EditAction::InsertChar('b'), "a ", 2, false), EditKind::Typing { word_start: true });
+        assert_eq!(k(&EditAction::InsertChar('b'), "a", 1, false), EditKind::Typing { word_start: false });
+        assert_eq!(k(&EditAction::InsertChar('b'), "a ", 2, true), EditKind::Other);
+        assert_eq!(k(&EditAction::Backspace, "ab", 2, false), EditKind::Backspace);
     }
 
     #[test]

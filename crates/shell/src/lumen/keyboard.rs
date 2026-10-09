@@ -12,7 +12,7 @@
 //! `handle_key` differ.
 
 use crate::*;
-use super::text_input::clipboard_op_for;
+use super::text_input::{clipboard_op_for, history_op_for};
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -452,6 +452,24 @@ impl Lumen {
                 self.frame_field_clipboard_op(op)
             } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
                 self.field_clipboard_op(op)
+            } else {
+                false
+            };
+            if handled {
+                self.request_redraw();
+                return;
+            }
+        }
+
+        // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z in a focused typeable field (UX-UNDO).
+        if let Some(op) = history_op_for(code, self.modifiers) {
+            let in_frame = self
+                .focused_frame
+                .is_some_and(|(idx, nid)| self.frame_typeable_field(idx, nid).is_some());
+            let handled = if in_frame {
+                self.frame_field_history_op(op)
+            } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+                self.field_history_op(op)
             } else {
                 false
             };

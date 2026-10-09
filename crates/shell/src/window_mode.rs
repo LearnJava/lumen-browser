@@ -557,6 +557,7 @@ fn run_window_mode_inner(
         focused_node: None,
         focused_frame: None,
         frame_text_cursor: HashMap::new(),
+        field_history: HashMap::new(),
         frame_text_selection_anchor: HashMap::new(),
         frame_color_picker: None,
         frame_date_picker: None,

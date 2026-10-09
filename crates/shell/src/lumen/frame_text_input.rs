@@ -22,7 +22,7 @@
 use crate::*;
 
 use super::text_input::{
-    ClipboardOp, ClipboardReply, EditAction, field_meta_in, input_event_script, write_clipboard_nonempty,
+    ClipboardOp, ClipboardReply, EditAction, HistoryOp, field_meta_in, input_event_script, write_clipboard_nonempty,
 };
 
 impl Lumen {
@@ -210,7 +210,9 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
         let cursor = self.frame_field_cursor(idx, nid, &current);
-        let (next, next_cursor) = match self.frame_field_selection_range(idx, nid, cursor) {
+        let selection = self.frame_field_selection_range(idx, nid, cursor);
+        let history_kind = action.history_kind(&current, cursor, selection.is_some());
+        let (next, next_cursor) = match selection {
             Some((start, end)) => {
                 let spliced = delete_char_range(&current, start, end);
                 match action {
@@ -226,9 +228,22 @@ impl Lumen {
         if next == current {
             return true;
         }
+        self.field_history.entry((Some(idx), nid)).or_default().record(
+            FieldSnapshot { value: current, cursor },
+            history_kind,
+            &next,
+            next_cursor,
+            std::time::Instant::now(),
+        );
+        self.write_frame_field_value(idx, nid, kind, &next)
+    }
+
+    /// Store `next` as the frame field's value: its document, the JS shadow of
+    /// the frame, then a frame refresh. `false` when the frame is gone.
+    fn write_frame_field_value(&mut self, idx: usize, nid: NodeId, kind: TypeableField, next: &str) -> bool {
         if !self.with_frame_doc(idx, |doc| match kind {
-            TypeableField::Input => forms::set_value(doc, nid, &next),
-            TypeableField::Textarea => forms::set_textarea_text(doc, nid, &next),
+            TypeableField::Input => forms::set_value(doc, nid, next),
+            TypeableField::Textarea => forms::set_textarea_text(doc, nid, next),
         }) {
             return false;
         }
@@ -237,10 +252,42 @@ impl Lumen {
             js.eval_js(&format!(
                 "_lumen_set_field_value({}, '{}')",
                 nid.index(),
-                escape_js_string(&next)
+                escape_js_string(next)
             ));
         }
         self.refresh_frames(Some(idx));
+        true
+    }
+
+    /// Ctrl+Z / Ctrl+Y in a frame field — mirror of
+    /// [`super::text_input::Lumen::field_history_op`] (UX-UNDO).
+    pub(crate) fn frame_field_history_op(&mut self, op: HistoryOp) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let here = FieldSnapshot { value: current, cursor };
+        let Some(hist) = self.field_history.get_mut(&(Some(idx), nid)) else { return true };
+        let Some(target) = (match op {
+            HistoryOp::Undo => hist.undo(&here),
+            HistoryOp::Redo => hist.redo(&here),
+        }) else {
+            return true;
+        };
+        let ty = op.input_type();
+        if !self.frame_clip_input_event(idx, nid, "beforeinput", ty, None) {
+            if let Some(hist) = self.field_history.get_mut(&(Some(idx), nid)) {
+                match op {
+                    HistoryOp::Undo => hist.redo(&target),
+                    HistoryOp::Redo => hist.undo(&target),
+                };
+            }
+            return true;
+        }
+        let len = char_len(&target.value);
+        self.frame_text_cursor.insert((idx, nid), target.cursor.min(len));
+        self.frame_text_selection_anchor.remove(&(idx, nid));
+        self.write_frame_field_value(idx, nid, kind, &target.value);
+        self.frame_clip_input_event(idx, nid, "input", ty, None);
         true
     }
 
