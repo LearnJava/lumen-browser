@@ -545,3 +545,18 @@ fn cross_origin_isolated_is_false() {
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
 }
+
+#[test]
+fn navigator_clipboard_read_asks_and_returns_items() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        "var n = -1; var denied = ''; \
+         navigator.clipboard.read().then(function(items) { n = items.length; });",
+    )
+    .unwrap();
+    assert_eq!(rt.take_permission_requests(), vec!["clipboard-read".to_string()]);
+    rt.eval(&crate::notifications_bindings::settle_script("clipboard-read", "granted")).unwrap();
+    // No native binding in tests → empty clipboard → no items.
+    assert!(bool_eval(&rt, "n === 0"));
+    assert!(bool_eval(&rt, "new ClipboardItem({'text/plain': new Blob(['a'])}).types[0] === 'text/plain'"));
+}
