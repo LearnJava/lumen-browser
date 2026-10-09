@@ -135,6 +135,23 @@ enum LoopMode {
     Thread(std::sync::mpsc::Receiver<browser_thread::UiMsg>),
 }
 
+/// Открыть хранилище в `<exe>/data/<file>`; при ошибке (нет прав, битый файл)
+/// падаем на in-memory — окно важнее истории.
+#[allow(clippy::expect_used)]  // in-memory SQLite не падает, docs/lint-policy.md §10
+fn open_persistent<T, E: std::fmt::Display + std::fmt::Debug>(
+    file: &str,
+    open: impl FnOnce(std::path::PathBuf) -> Result<T, E>,
+    in_memory: impl FnOnce() -> Result<T, E>,
+    what: &str,
+) -> T {
+    let dir = adblock::browser_data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    open(dir.join(file)).unwrap_or_else(|e| {
+        eprintln!("[lumen] {what}: {e}; using in-memory store");
+        in_memory().expect("in-memory store always opens")
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_window_mode_inner(
@@ -526,10 +543,20 @@ fn run_window_mode_inner(
         load_failed: false,
         load_error_message: None,
         nav_start: None,
-        history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
+        history_fts: open_persistent(
+            "history_fts.db",
+            HistoryFts::open,
+            HistoryFts::open_in_memory,
+            "history_fts init",
+        ),
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
-        next_history_id: 1,
+        // Rowid в history_fts переживает перезапуск: микросекунды эпохи
+        // не пересекаются с rowid прошлых сессий.
+        next_history_id: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(1),
         hyp_provider: Arc::new(KnuthLiangHyphenation::new()),
         animated_gifs: HashMap::new(),
         gif_last_frame: HashMap::new(),
@@ -633,7 +660,12 @@ fn run_window_mode_inner(
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         tab_groups: lumen_storage::TabGroups::open_in_memory().expect("tab_groups in-memory"),
-        history_store: History::open_in_memory().expect("history_store in-memory"),
+        history_store: open_persistent(
+            "history.db",
+            History::open,
+            History::open_in_memory,
+            "history_store init",
+        ),
         history_panel: panels::history_panel::HistoryPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
