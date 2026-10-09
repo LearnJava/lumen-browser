@@ -98,12 +98,7 @@ tracy-client = { workspace = true, optional = true }
 lumen-paint = { workspace = true, features = ["cpu-render"] }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
-# `avif` feature intentionally NOT enabled here (GAP-avif срез 1, 2026-09-21):
-# it now maps to `image`'s `avif-native` (dav1d via `dav1d-sys`, needs system
-# `dav1d` through `pkg-config`), which this toolchain doesn't have — enabling
-# it breaks `cargo build -p lumen-shell` outright. AVIF stays sniff-only Err
-# in the shipped binary until a `pkg-config`+`dav1d` path exists on the build
-# host; see `crates/engine/image/Cargo.toml` and `docs/tasks/ph3-avif.md`.
+# AVIF decodes by default in lumen-image (avif-parse + rav1d, pure Rust; UX-IMAGE-FORMATS).
 lumen-image.workspace = true
 # GAP-MEDIADECODE срез 7 (feature "ffmpeg-video"), see [features] above.
 lumen-media-ffmpeg = { workspace = true, optional = true }
