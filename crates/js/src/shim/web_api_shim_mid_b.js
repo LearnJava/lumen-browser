@@ -1516,6 +1516,16 @@ function _lumen_dispatch_composition(type, data) {
     _lumen_dispatch(nid, evt);
 }
 
+// UX-IME: composition event aimed at a node by id (the focused text field),
+// without going through the global `_ime_active_element`. UI Events §5.3:
+// composition events bubble and are not cancelable.
+function _lumen_dispatch_composition_at(nid, type, data) {
+    var evt = new Event(type, { bubbles: true, isTrusted: true });
+    evt.data = String(data);
+    evt.locale = '';
+    _lumen_dispatch(nid, evt);
+}
+
 // ── Page lifecycle events: pageshow / pagehide (HTML Living Standard §8.6) ───
 // _lumen_bfcache_persisted is set to true by an injected init script when the
 // shell restores a page from bfcache. Pages can read event.persisted to detect

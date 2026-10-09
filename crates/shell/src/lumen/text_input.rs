@@ -643,6 +643,65 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Fire a trusted composition event at the focused page text field
+    /// (UX-IME). Frames have their own JS context, so they get none.
+    fn page_composition_event(&self, kind: &str, data: &str) {
+        let Some(nid) = self.focused_node else { return };
+        if self.focused_frame.is_some() || self.typeable_field(nid).is_none() {
+            return;
+        }
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "_lumen_dispatch_composition_at({}, '{}', '{}')",
+                nid.index(),
+                kind,
+                escape_js_string(data)
+            ),
+        );
+    }
+
+    /// Close an open composition: the sink event plus `compositionend`.
+    fn end_composition(&mut self, data: &str) {
+        use lumen_core::event::{Event, TabId};
+        if self.ime_composing.take().is_some() {
+            self.event_sink
+                .emit(&Event::ImeCompositionEnded { tab_id: TabId(0), data: data.to_owned() });
+            self.page_composition_event("compositionend", data);
+        }
+    }
+
+    /// Insert IME-committed text where typed characters would go: the open
+    /// address bar, a frame field, or a page field.
+    fn insert_ime_text(&mut self, text: &str) {
+        if self.address_bar.is_open() {
+            self.address_bar.append_str(text);
+            let sugg = self.query_omnibox_suggestions();
+            self.address_bar.set_suggestions(sugg);
+            self.relayout_chrome_host();
+        } else if self.focused_frame.is_some() {
+            for ch in text.chars() {
+                self.inject_frame_char(ch);
+            }
+        } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+            for ch in text.chars() {
+                self.inject_char(ch);
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// winit sends `Preedit("")` right before every `Commit` (and alone on
+    /// cancel). The empty preedit therefore only marks the composition as
+    /// "text cleared"; if no `Commit` follows in the same event-loop batch
+    /// this closes it as a cancel with empty data.
+    pub(crate) fn flush_ime_cancel(&mut self) {
+        if self.ime_composing.as_deref() == Some("") {
+            self.end_composition("");
+        }
+    }
+
     pub(crate) fn handle_ime(&mut self, ime: &Ime) {
         use lumen_core::event::{Event, TabId};
         let tab_id = TabId(0);
@@ -650,12 +709,13 @@ impl Lumen {
             Ime::Enabled => {
                 // Не диспатчим compositionstart сразу — ждём первый Preedit
                 // с текстом (браузеры так же: событие только когда есть данные).
+                self.update_ime_cursor_area();
             }
             Ime::Preedit(text, _cursor) if text.is_empty() => {
-                // Пустой preedit = конец composition без Commit (отмена).
-                if self.ime_composing.take().is_some() {
-                    self.event_sink
-                        .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
+                // Не закрываем сразу: за пустым preedit идёт Commit (winit
+                // гарантирует) и `compositionend` должен нести его текст.
+                if self.ime_composing.is_some() {
+                    self.ime_composing = Some(String::new());
                 }
             }
             Ime::Preedit(text, _cursor) => {
@@ -663,32 +723,79 @@ impl Lumen {
                     // Первый непустой preedit — начало composition.
                     self.event_sink
                         .emit(&Event::ImeCompositionStarted { tab_id });
+                    self.page_composition_event("compositionstart", "");
+                    self.update_ime_cursor_area();
                 }
                 self.ime_composing = Some(text.clone());
                 self.event_sink.emit(&Event::ImeCompositionUpdated {
                     tab_id,
                     data: text.clone(),
                 });
+                self.page_composition_event("compositionupdate", text);
             }
             Ime::Commit(text) => {
-                // Commit приходит после пустого Preedit (winit гарантирует),
-                // но на случай если нет — сбрасываем composing сами.
-                self.ime_composing = None;
-                self.event_sink.emit(&Event::ImeCompositionEnded {
-                    tab_id,
-                    data: text.clone(),
-                });
+                if self.ime_composing.is_none() {
+                    // Commit без Preedit (прямой ввод через IME) — события
+                    // всё равно идут парой start/end.
+                    self.event_sink.emit(&Event::ImeCompositionStarted { tab_id });
+                    self.page_composition_event("compositionstart", "");
+                    self.ime_composing = Some(String::new());
+                }
+                self.page_composition_event("compositionupdate", text);
+                self.end_composition(text);
+                self.insert_ime_text(text);
             }
             Ime::Disabled => {
                 // IME деактивирован. Если composition была открыта — закрываем.
-                if self.ime_composing.take().is_some() {
-                    self.event_sink
-                        .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
-                }
+                self.end_composition("");
             }
         }
     }
 
+    /// Tell the OS where the caret is so the IME candidate window opens next
+    /// to it instead of at the window corner (UX-IME). Physical pixels.
+    pub(crate) fn update_ime_cursor_area(&self) {
+        let Some(window) = self.window.as_ref() else { return };
+        let dpr = self.renderer.as_ref().map_or(1.0_f64, |r| r.scale_factor()).max(1e-6);
+        // CSS px, window coordinates.
+        let rect = if self.address_bar.is_open() {
+            self.chrome_omni_input_rect.map(|f| (f.x + f.width - 8.0, f.y + 4.0, 2.0, (f.height - 8.0).max(1.0)))
+        } else if let Some(nid) = self.focused_node.filter(|_| self.focused_frame.is_none()) {
+            self.page_caret_rect(nid).map(|r| {
+                let (ox, oy) = self.page_offset();
+                (r.x + ox - self.scroll_x, r.y + oy - self.scroll_y, r.width.max(1.0), r.height.max(1.0))
+            })
+        } else {
+            None
+        };
+        if let Some((x, y, w, h)) = rect {
+            window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(f64::from(x) * dpr, f64::from(y) * dpr),
+                winit::dpi::PhysicalSize::new(f64::from(w) * dpr, f64::from(h) * dpr),
+            );
+        }
+    }
+
+    /// Caret rectangle of the focused page field in page coordinates.
+    fn page_caret_rect(&self, nid: lumen_dom::NodeId) -> Option<lumen_core::geom::Rect> {
+        let (kind, value) = self.focused_field_snapshot.field(nid)?;
+        let len = char_len(&value);
+        let cursor = self.form_state.get(&nid).and_then(|s| s.cursor).unwrap_or(len).min(len);
+        let field_lb = forms::find_layout_box(self.layout_box.as_ref()?, nid)?;
+        match kind {
+            TypeableField::Input => Some(forms::input_caret_rect(field_lb, &value, cursor)),
+            TypeableField::Textarea => {
+                let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+                let m = lumen_paint::FontMeasurer::new(&font).ok()?;
+                let fs = field_lb.style.font_size;
+                let measure = |s: &str| -> f32 {
+                    use lumen_layout::TextMeasurer;
+                    s.chars().map(|c| m.char_width(c, fs)).sum()
+                };
+                Some(forms::textarea_caret_rect(field_lb, &value, cursor, &measure))
+            }
+        }
+    }
 }
 
 /// Clipboard command on a focused text field (UX-CLIPBOARD).
