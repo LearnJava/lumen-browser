@@ -8364,7 +8364,7 @@
        "title": "UX-PARTITION: менеджер БД и разделение по сайтам",
        "status": "planned",
        "size": "L",
-       "note": "ADR-012 (разделение хранилищ по сайту) — только стратегия, менеджера БД нет, ~36 хранилищ открываются по отдельности. Объём: менеджер БД профиля, ключ partition (top-level site) во всех хранилищах, очистка данных одного сайта. Срез 1 сделан (2026-10-10): `PartitionKey` + `clear_site_data` в `partition.rs`; остаётся менеджер БД и partition-ключ в схемах, вызов из shell."
+       "note": "ADR-012 (разделение хранилищ по сайту) — только стратегия, менеджера БД нет, ~36 хранилищ открываются по отдельности. Объём: менеджер БД профиля, ключ partition (top-level site) во всех хранилищах, очистка данных одного сайта. Срез 1 сделан (2026-10-10): `PartitionKey` + `clear_site_data` в `partition.rs`. Срез 2 (2026-10-10): кнопка «Очистить» в about:settings → «Разрешения» → «Данные сайта» (`ClearSiteData`, `Lumen::clear_site_data`: cookies активного профиля, permissions, cache_storage, autofill, IDB, localStorage/sessionStorage в памяти); остаётся менеджер БД, partition-ключ в схемах, подключение http_cache/hsts/service_workers/push/notifications к shell (в shell они in-memory или не хранятся)."
       },
       {
        "id": "UX-IMPORT",

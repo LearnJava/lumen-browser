@@ -704,6 +704,12 @@ impl Lumen {
             } else {
                 Vec::new()
             },
+            current_site: self
+                .permission
+                .current_origin
+                .as_deref()
+                .and_then(lumen_storage::PartitionKey::parse)
+                .map(|k| k.site().to_owned()),
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1317,6 +1323,15 @@ impl Lumen {
                     .and_then(|k| panels::permission_panel::PermissionKind::ALL.into_iter().find(|p| p.label() == k));
                 if let (Some(origin), Some(kind)) = (origin, kind) {
                     self.permission.revoke(&origin, kind);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ClearSiteData => {
+                let site = self
+                    .chrome_data_attr(nid, "data-site")
+                    .and_then(|s| lumen_storage::PartitionKey::parse(&s));
+                if let Some(site) = site {
+                    self.clear_site_data(&site);
                     self.relayout_chrome_host();
                 }
             }

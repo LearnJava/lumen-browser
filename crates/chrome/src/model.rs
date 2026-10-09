@@ -332,6 +332,9 @@ pub struct ChromeSettingsModel {
     /// Решения сайтов для раздела «Разрешения» (UX-PERMISSIONS):
     /// `(origin, вид, разрешено?)`.
     pub site_permissions: Vec<(String, String, bool)>,
+    /// Top-level site текущей страницы для «Данные сайта» (UX-PARTITION);
+    /// `None` — страницы без сайта (`file:`, пустая вкладка).
+    pub current_site: Option<String>,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -1112,6 +1115,7 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
     bind_passwords(doc, settings);
     bind_autofill(doc, settings);
     bind_site_permissions(doc, settings);
+    bind_site_data(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1206,6 +1210,17 @@ fn bind_site_permissions(doc: &mut Document, settings: &ChromeSettingsModel) {
         append_text(doc, del, "Отозвать");
         attach_child(doc, row, del);
         attach_child(doc, list, row);
+    }
+}
+
+/// Блок «Данные сайта»: имя сайта и `data-site` кнопки очистки (UX-PARTITION).
+fn bind_site_data(doc: &mut Document, settings: &ChromeSettingsModel) {
+    let site = settings.current_site.as_deref().unwrap_or("");
+    if let Some(name) = doc.find_by_id(crate::ids::SITE_DATA_SITE) {
+        set_text(doc, name, if site.is_empty() { "Нет открытого сайта" } else { site });
+    }
+    if let Some(btn) = doc.find_by_id(crate::ids::SITE_DATA_BTN) {
+        set_attr(doc, btn, "data-site", site);
     }
 }
 
@@ -3882,6 +3897,25 @@ mod tests {
         assert_eq!(doc.get(del).get_attr("data-action"), Some("revoke-site-permission"));
         assert_eq!(doc.get(del).get_attr("data-perm-origin"), Some("https://a.test"));
         assert_eq!(doc.get(del).get_attr("data-perm-kind"), Some("Camera"));
+    }
+
+    #[test]
+    fn settings_site_data_button_carries_current_site() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "permissions".to_owned(),
+                current_site: Some("a.test".into()),
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let btn = doc.find_by_id(crate::ids::SITE_DATA_BTN).expect("#siteDataBtn");
+        assert_eq!(doc.get(btn).get_attr("data-action"), Some("clear-site-data"));
+        assert_eq!(doc.get(btn).get_attr("data-site"), Some("a.test"));
     }
 
     #[test]

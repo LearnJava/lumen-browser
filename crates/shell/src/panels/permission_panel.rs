@@ -223,6 +223,12 @@ impl PermissionPanel {
         self.persist(origin, kind, PermissionState::Ask);
     }
 
+    /// Drop the in-memory decisions of every origin on `site`
+    /// (UX-PARTITION «clear site data»; the store rows go via `clear_site`).
+    pub fn forget_site(&mut self, site: &lumen_storage::PartitionKey) {
+        self.permissions.retain(|(origin, _), _| !site.matches(origin));
+    }
+
     /// The page asked for `kind`. A saved answer is returned at once;
     /// otherwise the request waits, the popover opens and `None` is returned —
     /// the answer comes from [`Self::answer`].
