@@ -163,6 +163,7 @@ impl Lumen {
     /// external mutation (JS `input.value = …`, spellcheck replace) can shrink
     /// the value out from under a stale cursor.
     fn field_cursor(&mut self, nid: lumen_dom::NodeId, current: &str) -> usize {
+        self.absorb_script_selection(nid, current);
         let len = char_len(current);
         let slot = self.form_state.entry(nid).or_default();
         let c = *slot.cursor.get_or_insert(len);
@@ -249,6 +250,7 @@ impl Lumen {
         let slot = self.form_state.entry(nid).or_default();
         slot.cursor = Some(next);
         slot.selection_anchor = None;
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -262,6 +264,7 @@ impl Lumen {
         let slot = self.form_state.entry(nid).or_default();
         slot.cursor = Some(target);
         slot.selection_anchor = None;
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -281,6 +284,7 @@ impl Lumen {
             slot.selection_anchor = Some(cursor);
         }
         slot.cursor = Some(next);
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -298,6 +302,7 @@ impl Lumen {
             slot.selection_anchor = Some(cursor);
         }
         slot.cursor = Some(target);
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -390,6 +395,7 @@ impl Lumen {
         slot.cursor = Some(next_cursor);
         slot.selection_anchor = None;
         if next == current {
+            self.publish_text_selection_for(nid, &current);
             return true;
         }
         self.field_history.entry((None, nid)).or_default().record(
@@ -418,6 +424,7 @@ impl Lumen {
         // validation (`forms::collect_form_entries`) — kept in step with the DOM
         // exactly like the spellcheck-replace path does.
         self.form_state.entry(nid).or_default().value = next.to_owned();
+        self.publish_text_selection_for(nid, next);
         route_eval_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
@@ -543,6 +550,7 @@ impl Lumen {
                 let slot = self.form_state.entry(nid).or_default();
                 slot.selection_anchor = Some(0);
                 slot.cursor = Some(char_len(&current));
+                self.publish_text_selection_for(nid, &current);
             }
             ClipboardOp::Copy | ClipboardOp::Cut => {
                 let Some((start, end)) = sel else { return true };

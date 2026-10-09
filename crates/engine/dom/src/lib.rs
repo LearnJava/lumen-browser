@@ -513,6 +513,17 @@ pub enum DocumentMode {
     LimitedQuirks,
 }
 
+/// A text selection of a form control: UTF-16 offsets plus direction
+/// (`0` none, `1` forward, `2` backward).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSelection {
+    pub start: u32,
+    pub end: u32,
+    pub dir: u8,
+    /// Written by a script and not yet applied to the shell's caret.
+    pub from_script: bool,
+}
+
 // ── Selection / Range ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -686,6 +697,12 @@ pub struct Document {
     /// Serialised: the text a user typed must survive tab hibernation.
     #[serde(default)]
     dirty_values: HashMap<NodeId, String>,
+    /// Text selection of a typeable `<input>`/`<textarea>` (HTML LS §4.10.5.4),
+    /// in UTF-16 code units — the one place the shell's caret and the script's
+    /// `selectionStart`/`setSelectionRange()` meet (UX-SELECTION-API). Not
+    /// serialised, like the shell's own cursor.
+    #[serde(skip)]
+    text_selections: HashMap<NodeId, TextSelection>,
     /// Runtime («dirty») checkedness of a checkbox/radio `<input>`, keyed by
     /// its `NodeId` — the same shape as [`Document::dirty_values`], for the
     /// same reason (BUG-444). HTML LS §4.10.5.5 distinguishes *checkedness*
@@ -842,6 +859,7 @@ impl Document {
             embedded_documents: HashMap::new(),
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
+            text_selections: HashMap::new(),
             dirty_checkedness: HashMap::new(),
             content_journal: ContentJournal::default(),
             design_mode: false,
@@ -1089,6 +1107,33 @@ impl Document {
     pub fn set_control_value(&mut self, id: NodeId, value: impl Into<String>) {
         self.content_journal.note(id);
         self.dirty_values.insert(id, value.into());
+    }
+
+    /// The control's text selection, if one was ever recorded.
+    pub fn text_selection(&self, id: NodeId) -> Option<TextSelection> {
+        self.text_selections.get(&id).copied()
+    }
+
+    /// Record the control's text selection. `from_script` marks a write the
+    /// shell has not yet seen ([`Document::take_script_selection`]).
+    pub fn set_text_selection(&mut self, id: NodeId, start: u32, end: u32, dir: u8, from_script: bool) {
+        self.text_selections.insert(id, TextSelection { start, end, dir, from_script });
+    }
+
+    /// Forget the control's selection (form reset, node teardown).
+    pub fn clear_text_selection(&mut self, id: NodeId) {
+        self.text_selections.remove(&id);
+    }
+
+    /// The selection a script wrote that the shell has not applied yet; the
+    /// flag is cleared by this read.
+    pub fn take_script_selection(&mut self, id: NodeId) -> Option<TextSelection> {
+        let sel = self.text_selections.get_mut(&id)?;
+        if !sel.from_script {
+            return None;
+        }
+        sel.from_script = false;
+        Some(*sel)
     }
 
     /// Drop the control's dirty value, so it falls back to its default —

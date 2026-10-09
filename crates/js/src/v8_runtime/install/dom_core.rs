@@ -820,6 +820,27 @@ pub(crate) fn install_node_properties(
                 doc.dirty_value(nid).map(|s| s.to_string())
             }
         );
+        // ── Text selection of <input>/<textarea> (UX-SELECTION-API) ─────────
+        // Held in the document so the shell's caret and `selectionStart` /
+        // `setSelectionRange()` read and write the same slot. Reply is
+        // `"start,end,dir"` (UTF-16 offsets; dir 0 none / 1 forward / 2 backward).
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_get_text_selection", move |node_id: u32| -> Option<String> {
+            let doc = d.lock().unwrap();
+            doc.text_selection(NodeId::from_raw(node_id))
+                .map(|s| format!("{},{},{}", s.start, s.end, s.dir))
+        });
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_set_text_selection_native",
+            move |node_id: u32, start: u32, end: u32, dir: u32| {
+                let mut doc = d.lock().unwrap();
+                doc.set_text_selection(NodeId::from_raw(node_id), start, end, dir as u8, true);
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_clear_text_selection", move |node_id: u32| {
+            d.lock().unwrap().clear_text_selection(NodeId::from_raw(node_id));
+        });
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
