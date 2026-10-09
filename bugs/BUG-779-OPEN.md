@@ -104,3 +104,18 @@ this is a straightforward "not yet built" entry, not a regression).
 - `idlharness.https.any.js`'s actual assertions were not run (blocked by
   both the TLS gap and the unvendored `WebIDLParser.js`/`idlharness.js`
   helpers, same documented gap as every other idlharness-based category).
+
+## Повторное измерение: WPT-RUN-14 срез 27 (2026-10-09)
+
+`css/css-paint-api` — 118 id, 3 зелёных (3,1 %); `css/css-layout-api` — 153 id, 32 зелёных (21,4 %). Из 236 не зелёных 229 — `reftest-wait` с `/common/worklet-reftest.js`, поэтому они зависят ещё и от WPT-RUN-15 (снимок после снятия класса); пробой это разделено только для Paint API.
+
+Проба (`--screenshot` 800×600, `#foo{width:200px;height:200px;background:paint(foo)}`):
+
+| вызов | у нас | ожидается |
+|---|---|---|
+| `registerPaint('foo', class{paint(ctx){ctx.fillStyle='rgb(0,128,0)';ctx.fillRect(0,0,100,100)}})` вызван прямо из страницы (в спецификации он доступен только внутри worklet), затем снимок | 0 зелёных px, `getComputedStyle(#foo).backgroundImage` — `none` | зелёный квадрат 100×100 |
+| `CSS.paintWorklet.addModule(blobUrl)` | промис выполнен сразу, модуль не загружен | модуль выполнен, `registerPaint` вызван |
+| `typeof CSS.layoutWorklet`, `typeof registerLayout`, `typeof Worklet` | `undefined` ×3 | `object`, `function`, `function` |
+| `CSS.supports("display","layout(foo)")` | `true` | `true` |
+
+Рисование `paint()` отсутствует и в растре: `BackgroundImage::Paint` в `display_list/background_mask.rs:440` — заглушка. Задача PAINT-WORKLET (`ROADMAP.md`).

@@ -1790,3 +1790,7 @@ shell 1610+2 ok (без изменений — новый путь не имее
 ## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 
 `css/cssom` и `css/cssom-view`: 19 id падают на `iframe.contentDocument === null` (`elementsFromPoint.html`, `elementFromPoint.html`, `elementsFromPoint-iframes`, `MediaQueryList-*` ×6, `scrollingElement`, `scrolling-quirks-vs-nonquirks`, `computed-style-002/003/004`, `getComputedStyle-dynamic-subdoc`, `getComputedStyle-detached-subtree`, `insertRule-across-context`, `CSSStyleSheet-constructable`, `CSSStyleSheet-modify-after-removal`).
+
+## Повторное измерение: WPT-RUN-14 срез 27 (2026-10-09)
+
+Тот же дефект `contentWindow`/`contentDocument` — `null` для созданного скриптом `<iframe>` — вероятно, ломает ещё 5 id (причина прочитана из кода теста, пробой не проверена; TIMEOUT воспроизведены по два раза): `css/mediaqueries/media-query-matches-in-iframe.html` (22 из 22 сабтестов, `Cannot read properties of null (reading 'getBoundingClientRect')`), `css/mediaqueries/mq-dynamic-empty-children.html` (TIMEOUT: ждёт `load` у `iframe.srcdoc`), `css/mediaqueries/test_media_queries.html` (TIMEOUT 20 с `LUMEN_WPT_HARD_CAP`, воспроизведён 4 раза; стоит на `onload="run()"` → `getElementById("subdoc").contentDocument`), `css/css-viewport/zoom/zoom-iframe-dynamic.html` (TIMEOUT, ждёт `resize` в `iframe.contentWindow`), `css/css-highlight-api/HighlightRegistry-highlightsFromPoint.html`.

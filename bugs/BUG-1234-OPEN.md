@@ -46,3 +46,7 @@
 - **WAAPI из JS (`el.animate`) тот же набор свойств интерполирует**: `margin-left` 18.3 px через 1 с из 6 с, `z-index` 5 на 50 %, `vertical-align` 10px, `text-shadow`, `display` — то есть интерполятор в JS-шиме шире, чем в `animation.rs`.
 
 Следствие: 56 id / 2 614 сабтестов `css-animations` (`animation-base-response-*`, `animation-iteration-count-*`, `display-interpolation`, `text-decoration-inset-auto`, `animate-with-color-mix`…) и `css-transitions` (`z-index-interpolation`, `vertical-align-interpolation`, `text-shadow-interpolation`, `all-interpolates-same-as-explicit-property`: 21 из 32) — кластер AT08 в `docs/wpt-vendor-notes/css.md` §css-page + css-animations + … . Эти id не разделены с BUG-1305 (neutral keyframe) и BUG-1293 (старт).
+
+## Дополнение: WPT-RUN-14 срез 27 (2026-10-09)
+
+`css/css-box/animation/{margin,padding}-{top,right,bottom,left}-composition.html`, `margin-interpolation.html`, `padding-interpolation.html` — 10 id, 439 из 648 сабтестов не зелёные. Режим «Compositing Web Animations» (`el.animate`) в `padding-bottom-composition` зелёный на 16 из 20, режим «Compositing CSS Animations» (`@keyframes` с `animation-composition`) — 0 из 20: `getComputedStyle().paddingBottom` остаётся `50px` на 0/50/100 %. Две известные причины, их вклад не разделён: CSS-анимация не меняет `padding-*`/`margin-*` (их нет в списке из пяти свойств выше), и `animation-composition` не разбирается (`CSS.supports("animation-composition","add")` — `false`, строка `animation-composition` в `CSS-SPECS.md`).
