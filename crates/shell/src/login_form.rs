@@ -109,6 +109,16 @@ pub fn fill_target(doc: &Document) -> Option<FillTarget> {
     })
 }
 
+/// Поля нового пароля и подтверждения первой формы регистрации (`SignUp`) с
+/// пустым новым паролем; пусто, если такой формы нет.
+pub fn new_password_fields(doc: &Document) -> Vec<NodeId> {
+    find_login_forms(doc)
+        .into_iter()
+        .find(|f| f.kind == LoginKind::SignUp && f.passwords.first().is_some_and(|&p| doc.control_value(p).is_empty()))
+        .map(|f| f.passwords)
+        .unwrap_or_default()
+}
+
 fn has_autocomplete(doc: &Document, id: NodeId, token: &str) -> bool {
     doc.get(id)
         .get_attr("autocomplete")
@@ -197,6 +207,16 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let f = find_login_forms(&doc);
         (doc, f)
+    }
+
+    #[test]
+    fn new_password_fields_cover_signup_only() {
+        let (doc, _) = forms(r#"<form><input type="password" autocomplete="new-password"><input type="password"></form>"#);
+        assert_eq!(new_password_fields(&doc).len(), 2);
+        let (doc, _) = forms(r#"<form><input type="password"></form>"#);
+        assert!(new_password_fields(&doc).is_empty());
+        let (doc, _) = forms(r#"<form><input type="password" autocomplete="new-password" value="x"></form>"#);
+        assert!(new_password_fields(&doc).is_empty());
     }
 
     fn name_of(doc: &Document, id: Option<NodeId>) -> Option<String> {

@@ -23,6 +23,7 @@ impl Lumen {
         let offer = password_store::plan_offer(store, &origin, &creds);
         if offer.is_some() || self.login_offer.is_some() {
             self.login_offer = offer;
+            self.login_gen = None;
             self.relayout_chrome_host();
         }
     }
@@ -32,6 +33,7 @@ impl Lumen {
     /// хранилища ничего не делает. Отправку формы не запускает.
     pub(crate) fn autofill_saved_login(&mut self) {
         self.login_fill = None;
+        self.login_gen = None;
         if self.active_profile_is_anonymous() {
             return;
         }
@@ -41,7 +43,15 @@ impl Lumen {
         };
         let Some(src) = self.layout_source.as_ref() else { return };
         let Ok(mut doc) = src.document.lock() else { return };
-        let Some(target) = login_form::fill_target(&doc) else { return };
+        let Some(target) = login_form::fill_target(&doc) else {
+            let fields = login_form::new_password_fields(&doc);
+            drop(doc);
+            if !fields.is_empty() {
+                self.login_gen = Some(fields);
+                self.relayout_chrome_host();
+            }
+            return;
+        };
         let prefilled = target.username.map(|u| doc.control_value(u).trim().to_owned()).unwrap_or_default();
         let Some(fill) = password_store::plan_fill(store, &origin, target, &prefilled) else { return };
         if !write_fill(store, &mut doc, &fill) {
@@ -52,6 +62,22 @@ impl Lumen {
             self.login_fill = Some(fill);
             self.relayout_chrome_host();
         }
+    }
+
+    /// «Использовать»: записать сгенерированный пароль в поля нового пароля и
+    /// подтверждения. Пароль живёт только в полях формы; сохранение — штатным
+    /// предложением после отправки.
+    fn use_generated_password(&mut self) {
+        let Some(fields) = self.login_gen.take() else { return };
+        if let Some(pw) = password_store::generate_password_os()
+            && let Some(src) = self.layout_source.as_ref()
+            && let Ok(mut doc) = src.document.lock()
+        {
+            for f in fields {
+                forms::set_value(&mut doc, f, &pw);
+            }
+        }
+        self.relayout_chrome_host();
     }
 
     /// «Другой аккаунт»: подставить следующий сохранённый логин.
@@ -70,6 +96,17 @@ impl Lumen {
 
     /// Данные для `#loginBar`; пароль в модель не попадает.
     pub(crate) fn login_offer_model(&self) -> lumen_chrome::ChromeLoginOfferModel {
+        if self.login_offer.is_none() && self.login_gen.is_some() && self.login_fill.is_none() {
+            let host = self.source.url_str().and_then(password_store::origin_of).unwrap_or_default();
+            let host = host.split_once("://").map_or(host.as_str(), |(_, h)| h).to_owned();
+            return lumen_chrome::ChromeLoginOfferModel {
+                open: true,
+                title: "Создать надёжный пароль?".to_owned(),
+                meta: host,
+                generate: true,
+                ..Default::default()
+            };
+        }
         if self.login_offer.is_none()
             && let Some(f) = self.login_fill.as_ref()
         {
@@ -91,6 +128,7 @@ impl Lumen {
             meta: who,
             save_label: if o.update { "Обновить" } else { "Сохранить" }.to_owned(),
             fill: false,
+            generate: false,
         }
     }
 
@@ -99,8 +137,10 @@ impl Lumen {
         if self.login_offer.is_none() {
             match action {
                 ChromeAction::NextLogin => self.cycle_login_fill(),
+                ChromeAction::UseGeneratedPassword => self.use_generated_password(),
                 ChromeAction::DismissLogin => {
                     self.login_fill = None;
+                    self.login_gen = None;
                     self.relayout_chrome_host();
                 }
                 _ => {}

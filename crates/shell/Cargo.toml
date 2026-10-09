@@ -74,6 +74,10 @@ lumen-a11y.workspace = true
 lumen-devtools.workspace = true
 lumen-knowledge.workspace = true
 lumen-storage.workspace = true
+# Why this dependency (getrandom): permanent. Same OS-CSPRNG primitive already used by
+# lumen-core/lumen-storage/lumen-network; generates passwords (UX-PASSWORDS-4). No trait
+# anchor needed: a one-call wrapper over the OS, nothing to graduate to.
+getrandom = "0.2"
 # Optional local AI layer (feature "ai"), see docs/tasks/ph3-ai-module.md + ADR-019.
 lumen-ai = { workspace = true, optional = true }
 lumen-js = { workspace = true, optional = true }

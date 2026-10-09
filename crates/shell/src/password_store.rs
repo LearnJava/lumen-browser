@@ -109,6 +109,48 @@ pub fn plan_fill(
     Some(LoginFill { origin: origin.to_owned(), usernames, index, target })
 }
 
+/// Длина сгенерированного пароля.
+pub const GENERATED_LEN: usize = 20;
+
+/// Алфавит без неоднозначных символов (`0/O`, `1/l/I`); по 4 класса для проверки состава.
+const LOWER: &[u8] = b"abcdefghijkmnopqrstuvwxyz";
+const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
+const DIGIT: &[u8] = b"23456789";
+const SYMBOL: &[u8] = b"-_.!@#$%^&*";
+
+/// Случайный пароль: минимум по одному символу каждого класса, равномерный
+/// выбор (отбраковка смещённых байтов), перемешивание Фишера — Йетса.
+/// `fill` — источник случайных байт (в проде — CSPRNG ОС).
+pub fn generate_password(mut fill: impl FnMut(&mut [u8])) -> String {
+    let all: Vec<u8> = [LOWER, UPPER, DIGIT, SYMBOL].concat();
+    let mut below = |n: usize| -> usize {
+        // Наибольшее кратное n в диапазоне байта: остальное отбрасываем.
+        let limit = 256 - 256 % n;
+        loop {
+            let mut b = [0u8; 1];
+            fill(&mut b);
+            if (b[0] as usize) < limit {
+                return b[0] as usize % n;
+            }
+        }
+    };
+    let mut out: Vec<u8> = [LOWER, UPPER, DIGIT, SYMBOL].iter().map(|c| c[below(c.len())]).collect();
+    while out.len() < GENERATED_LEN {
+        out.push(all[below(all.len())]);
+    }
+    for i in (1..out.len()).rev() {
+        out.swap(i, below(i + 1));
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Пароль из CSPRNG ОС; `None`, если источник недоступен.
+pub fn generate_password_os() -> Option<String> {
+    let mut ok = true;
+    let pw = generate_password(|buf| ok &= getrandom::getrandom(buf).is_ok());
+    ok.then_some(pw)
+}
+
 /// Общее хранилище процесса; `None` в приватных режимах и если файлы не открылись.
 pub fn global() -> Option<&'static SavedLogins> {
     static STORE: std::sync::OnceLock<Option<SavedLogins>> = std::sync::OnceLock::new();
@@ -217,6 +259,26 @@ mod tests {
         s.save(SITE, "boris", "b", 2).unwrap();
         assert_eq!(plan_fill(&s, SITE, t, "anna").unwrap().current(), "anna");
         assert!(plan_fill(&s, SITE, t, "stranger").is_none());
+    }
+
+    #[test]
+    fn generated_password_has_all_classes_and_length() {
+        let mut seed = 12345u32;
+        let pw = generate_password(|b| {
+            for x in b {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                *x = (seed >> 24) as u8;
+            }
+        });
+        assert_eq!(pw.len(), GENERATED_LEN);
+        for class in [LOWER, UPPER, DIGIT, SYMBOL] {
+            assert!(pw.bytes().any(|c| class.contains(&c)), "{pw}");
+        }
+    }
+
+    #[test]
+    fn os_passwords_differ() {
+        assert_ne!(generate_password_os(), generate_password_os());
     }
 
     #[test]

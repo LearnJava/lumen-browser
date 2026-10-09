@@ -976,6 +976,7 @@ impl Lumen {
             ChromeAction::SaveLogin
             | ChromeAction::NeverSaveLogin
             | ChromeAction::NextLogin
+            | ChromeAction::UseGeneratedPassword
             | ChromeAction::DismissLogin => self.dispatch_login_action(action),
             ChromeAction::OpenCertViewer => {
                 let cert = self.cert_info.clone();

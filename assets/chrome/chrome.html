@@ -561,9 +561,11 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .login-actions{ display:flex; gap:6px; justify-content:flex-end; }
 .login-actions button{ font-size:11px; padding:5px 10px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); }
 .login-actions button:hover{ background:var(--surface-2); }
-.login-bar .fill-only{ display:none; }
+.login-bar .fill-only, .login-bar .gen-only{ display:none; }
 .login-bar.fill .fill-only{ display:inline-block; }
 .login-bar.fill .offer-only{ display:none; }
+.login-bar.generate .gen-only{ display:inline-block; }
+.login-bar.generate .offer-only{ display:none; }
 .login-actions button.primary{ border-color:var(--accent); background:var(--accent); color:#fff; }
 
 /* ---------- Update bar (UPD-9) ---------- */
@@ -849,6 +851,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
     <button class="upd-close" data-action="dismiss-login" aria-label="Закрыть"><svg class="icon"><use href="#i-x"/></svg></button>
   </div>
   <div class="login-actions">
+    <button class="primary gen-only" id="loginGenBtn" data-action="use-generated-password">Использовать</button>
     <button class="fill-only" id="loginNextBtn" data-action="next-login">Другой аккаунт</button>
     <button class="offer-only" data-action="never-save-login">Никогда для этого сайта</button>
     <button class="primary offer-only" id="loginSaveBtn" data-action="save-login">Сохранить</button>

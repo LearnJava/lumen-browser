@@ -1253,6 +1253,10 @@ pub(crate) struct Lumen {
     /// UX-PASSWORDS срез 3: подставленный на странице аккаунт; панель
     /// «Другой аккаунт» показывается, если у сайта их несколько.
     pub(crate) login_fill: Option<password_store::LoginFill>,
+    /// UX-PASSWORDS срез 4: форма регистрации, которой предложен сгенерированный
+    /// пароль (поля нового пароля и подтверждения). Сам пароль не хранится —
+    /// создаётся по кнопке.
+    pub(crate) login_gen: Option<Vec<NodeId>>,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.

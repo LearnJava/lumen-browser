@@ -290,6 +290,7 @@ fn login_bar_detaches_and_routes_its_buttons() {
             meta: "example.com · anna".to_owned(),
             save_label: "Сохранить".to_owned(),
             fill: false,
+            generate: false,
         },
         update: lumen_chrome::ChromeUpdateModel { bar_open: true, ..Default::default() },
         ..lumen_chrome::ChromeModel::default()
