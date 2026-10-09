@@ -2,9 +2,10 @@
 //! bar on the left side of the window (where a lock icon would sit).
 //!
 //! Models the allow/deny/ask state for four browser permissions — Camera,
-//! Microphone, Notifications, Clipboard — for the current page origin. State is
-//! in-memory only (no cross-session persistence); a `StorageBackend` hook-up is
-//! a future task.
+//! Microphone, Notifications, Clipboard — for the current page origin. With a
+//! store attached ([`PermissionPanel::with_store`], UX-PERMISSIONS) decisions
+//! persist across sessions in `lumen_storage::Permissions`; without one the
+//! state is in-memory only.
 //!
 //! The legacy display-list renderer was removed in CC-15-4 — under the engine
 //! chrome the rows live in `#permPopover`. The frozen design gave it only two
@@ -16,6 +17,9 @@
 //! Toggled with `Ctrl+Shift+P`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use lumen_storage::{PermissionKind as StoreKind, PermissionState as StoreState, Permissions};
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -51,6 +55,35 @@ impl PermissionKind {
         PermissionKind::Notifications,
         PermissionKind::Clipboard,
     ];
+
+    fn to_store(self) -> StoreKind {
+        match self {
+            Self::Camera => StoreKind::Camera,
+            Self::Microphone => StoreKind::Microphone,
+            Self::Notifications => StoreKind::Notifications,
+            Self::Clipboard => StoreKind::Clipboard,
+        }
+    }
+
+    fn from_store(k: &StoreKind) -> Option<Self> {
+        match k {
+            StoreKind::Camera => Some(Self::Camera),
+            StoreKind::Microphone => Some(Self::Microphone),
+            StoreKind::Notifications => Some(Self::Notifications),
+            StoreKind::Clipboard => Some(Self::Clipboard),
+            _ => None,
+        }
+    }
+
+    /// Human-readable label for the settings table.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Camera => "Camera",
+            Self::Microphone => "Microphone",
+            Self::Notifications => "Notifications",
+            Self::Clipboard => "Clipboard",
+        }
+    }
 }
 
 /// Grant state for a single permission on a single origin.
@@ -91,6 +124,8 @@ pub struct PermissionPanel {
     ///
     /// Defaults to [`PermissionState::Ask`] when the pair is absent.
     pub permissions: HashMap<(String, PermissionKind), PermissionState>,
+    /// Persistent backing store; `None` = in-memory only.
+    store: Option<Arc<Permissions>>,
 }
 
 impl PermissionPanel {
@@ -100,7 +135,72 @@ impl PermissionPanel {
             visible: false,
             current_origin: None,
             permissions: HashMap::new(),
+            store: None,
         }
+    }
+
+    /// Attach a persistent store. Decisions made from now on are written
+    /// through; the current origin's saved decisions are loaded.
+    pub fn with_store(mut self, store: Arc<Permissions>) -> Self {
+        self.store = Some(store);
+        self.load_current_origin();
+        self
+    }
+
+    /// Pull saved decisions for `current_origin` from the store into the cache.
+    fn load_current_origin(&mut self) {
+        let (Some(store), Some(origin)) = (self.store.clone(), self.current_origin.clone()) else {
+            return;
+        };
+        for kind in PermissionKind::ALL {
+            let state = match store.query(&origin, &kind.to_store(), now_unix()) {
+                Ok(StoreState::Granted) => PermissionState::Allow,
+                Ok(StoreState::Denied) => PermissionState::Deny,
+                _ => PermissionState::Ask,
+            };
+            self.permissions.insert((origin.clone(), kind), state);
+        }
+    }
+
+    /// Write one decision through to the store (`Ask` = revoke the record).
+    fn persist(&self, origin: &str, kind: PermissionKind, state: PermissionState) {
+        let Some(store) = &self.store else { return };
+        let r = match state {
+            PermissionState::Allow => store.set(origin, &kind.to_store(), StoreState::Granted, None),
+            PermissionState::Deny => store.set(origin, &kind.to_store(), StoreState::Denied, None),
+            PermissionState::Ask => store.revoke(origin, &kind.to_store()),
+        };
+        if let Err(e) = r {
+            eprintln!("[lumen] permissions persist: {e}");
+        }
+    }
+
+    /// All saved non-default decisions as `(origin, kind, state)`, for the
+    /// `about:settings` table. Empty without a store.
+    pub fn saved(&self) -> Vec<(String, PermissionKind, PermissionState)> {
+        let Some(store) = &self.store else { return Vec::new() };
+        let now = now_unix();
+        store
+            .list_all()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e.expires_at.is_none_or(|x| x > now))
+            .filter_map(|e| {
+                let kind = PermissionKind::from_store(&e.kind)?;
+                let state = match e.state {
+                    StoreState::Granted => PermissionState::Allow,
+                    StoreState::Denied => PermissionState::Deny,
+                    StoreState::Prompt => return None,
+                };
+                Some((e.origin, kind, state))
+            })
+            .collect()
+    }
+
+    /// Revoke a saved decision for any origin (settings table "revoke").
+    pub fn revoke(&mut self, origin: &str, kind: PermissionKind) {
+        self.permissions.remove(&(origin.to_string(), kind));
+        self.persist(origin, kind, PermissionState::Ask);
     }
 
     /// Flip panel visibility.
@@ -111,6 +211,7 @@ impl PermissionPanel {
     /// Update the current origin on navigation (does not clear stored grants).
     pub fn set_origin(&mut self, origin: Option<String>) {
         self.current_origin = origin;
+        self.load_current_origin();
     }
 
     /// Return the stored state for `kind` at the current origin.
@@ -138,7 +239,9 @@ impl PermissionPanel {
             .get(&(origin.clone(), kind))
             .copied()
             .unwrap_or_default();
-        self.permissions.insert((origin.clone(), kind), current.cycle());
+        let next = current.cycle();
+        self.permissions.insert((origin.clone(), kind), next);
+        self.persist(origin, kind, next);
     }
 
     /// Set the state for `kind` at the current origin directly (CC-9's
@@ -153,7 +256,15 @@ impl PermissionPanel {
             return;
         };
         self.permissions.insert((origin.clone(), kind), state);
+        self.persist(origin, kind, state);
     }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl Default for PermissionPanel {
@@ -378,4 +489,22 @@ mod tests {
         assert_eq!(hit, Some(PermissionHit::Empty));
     }
 
+    #[test]
+    fn decisions_persist_across_panels_and_revoke() {
+        let store = Arc::new(Permissions::open_in_memory().unwrap());
+        let mut a = PermissionPanel::new().with_store(store.clone());
+        a.set_origin(Some("https://a.test".into()));
+        a.set_permission(PermissionKind::Camera, PermissionState::Allow);
+        a.set_permission(PermissionKind::Clipboard, PermissionState::Deny);
+
+        let mut b = PermissionPanel::new().with_store(store);
+        b.set_origin(Some("https://a.test".into()));
+        assert_eq!(b.state_for(PermissionKind::Camera), PermissionState::Allow);
+        assert_eq!(b.state_for(PermissionKind::Clipboard), PermissionState::Deny);
+        assert_eq!(b.saved().len(), 2);
+
+        b.revoke("https://a.test", PermissionKind::Camera);
+        assert_eq!(b.state_for(PermissionKind::Camera), PermissionState::Ask);
+        assert_eq!(b.saved().len(), 1);
+    }
 }
