@@ -8312,9 +8312,9 @@
       {
        "id": "UX-HISTORY-PERSIST",
        "title": "UX-HISTORY-PERSIST: история на диске",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "История посещений теряется при перезапуске: `history_store: History::open_in_memory()` (`window_mode.rs:621`), так же `history_fts`/`search_history` (`:526-528`); CAPABILITIES: «history/search in-memory only». Объём: файл в `<exe>/data/` (как downloads.db), in-memory для Tor/анонимного профиля, очистка истории за период."
+       "note": "История посещений теряется при перезапуске: `history_store: History::open_in_memory()` (`window_mode.rs:621`), так же `history_fts`/`search_history` (`:526-528`); CAPABILITIES: «history/search in-memory only». ЗАКРЫТ 2026-10-09: `history.db`/`history_fts.db` в `<exe>/data/` (`open_persistent` в window_mode.rs, откат на in-memory при ошибке), Anonymous не пишет (DS-16), «Очистить» чистит и FTS; очистка за период (`History::delete_older_than`) без UI — не сделано. Исходный объём: файл в `<exe>/data/` (как downloads.db), in-memory для Tor/анонимного профиля, очистка истории за период."
       },
       {
        "id": "UX-REOPEN-TAB",
