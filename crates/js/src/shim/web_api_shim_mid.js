@@ -1713,6 +1713,31 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// UX-CLIPBOARD: trusted copy/cut/paste on a focused text field. `text` seeds
+// `clipboardData` only for `paste` (copy/cut handlers fill it themselves via
+// `setData`). Reply: 'N' = not cancelled (shell runs the default action);
+// 'P<text>' = cancelled, <text> is what the handler put in clipboardData.
+function _lumen_dispatch_clipboard_event(nid, type, text) {
+    var dt = new DataTransfer();
+    if (type === 'paste') dt.setData('text/plain', String(text));
+    var evt = new ClipboardEvent(type, {
+        bubbles: true, cancelable: true, isTrusted: true, clipboardData: dt
+    });
+    _lumen_dispatch_rich(nid, evt);
+    return evt.defaultPrevented ? 'P' + (dt.getData('text/plain') || '') : 'N';
+}
+
+// UX-CLIPBOARD: trusted `beforeinput` (cancelable) / `input` after a clipboard
+// edit. Reply '1' = not cancelled.
+function _lumen_dispatch_input_event(nid, type, inputType, data) {
+    var evt = new InputEvent(type, {
+        bubbles: true, cancelable: type === 'beforeinput', isTrusted: true,
+        inputType: inputType, data: data == null ? null : String(data)
+    });
+    _lumen_dispatch_rich(nid, evt);
+    return evt.defaultPrevented ? '0' : '1';
+}
+
 // ── DOMTokenList (classList) ──────────────────────────────────────────────────
 
 // DOM §7.1: one DOMTokenList over an arbitrary space-separated attribute.

@@ -28,6 +28,9 @@ use crate::*;
 /// paths rather than duplicated.
 pub(crate) enum EditAction {
     InsertChar(char),
+    /// Paste (UX-CLIPBOARD): text already sanitized by
+    /// `text_cursor::sanitize_paste`.
+    InsertStr(String),
     Backspace,
     DeleteForward,
 }
@@ -39,6 +42,7 @@ impl EditAction {
     pub(crate) fn apply(&self, current: &str, cursor: usize) -> (String, usize) {
         match self {
             EditAction::InsertChar(ch) => insert_char_at(current, cursor, *ch),
+            EditAction::InsertStr(text) => insert_str_at(current, cursor, text),
             EditAction::Backspace => delete_char_before(current, cursor),
             EditAction::DeleteForward => (delete_char_after(current, cursor), cursor),
         }
@@ -325,6 +329,7 @@ impl Lumen {
                 let spliced = delete_char_range(&current, start, end);
                 match action {
                     EditAction::InsertChar(ch) => insert_char_at(&spliced, start, ch),
+                    EditAction::InsertStr(text) => insert_str_at(&spliced, start, &text),
                     EditAction::Backspace | EditAction::DeleteForward => (spliced, start),
                 }
             }
@@ -414,6 +419,111 @@ impl Lumen {
         consumed
     }
 
+    /// Ctrl+A / Ctrl+C / Ctrl+X / Ctrl+V in the focused page `<input>` /
+    /// `<textarea>` (UX-CLIPBOARD). `true` iff a typeable field was focused
+    /// and so consumed the key (even when there was nothing to copy).
+    ///
+    /// copy/cut/paste fire a cancelable trusted `ClipboardEvent` first; cut and
+    /// paste also fire a cancelable `beforeinput` and, after the edit, `input`
+    /// (`deleteByCut` / `insertFromPaste`). Cancelling any of them skips the
+    /// default action, as in a browser. Password fields never put their value
+    /// on the clipboard.
+    pub(crate) fn field_clipboard_op(&mut self, op: ClipboardOp) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((kind, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current);
+        let sel = self.field_selection_range(nid, cursor);
+        let (maxlength, password) = self
+            .layout_source
+            .as_ref()
+            .and_then(|src| src.document.lock().ok())
+            .map(|doc| field_meta_in(&doc, nid))
+            .unwrap_or((None, false));
+        match op {
+            ClipboardOp::SelectAll => {
+                let slot = self.form_state.entry(nid).or_default();
+                slot.selection_anchor = Some(0);
+                slot.cursor = Some(char_len(&current));
+            }
+            ClipboardOp::Copy | ClipboardOp::Cut => {
+                let Some((start, end)) = sel else { return true };
+                if password {
+                    return true;
+                }
+                let cut = op == ClipboardOp::Cut;
+                let name = if cut { "cut" } else { "copy" };
+                if let ClipboardReply::Cancelled(data) = self.page_clipboard_event(nid, name, "") {
+                    write_clipboard_nonempty(&data);
+                    return true;
+                }
+                write_clipboard_nonempty(&char_range(&current, start, end));
+                if cut && self.page_input_event(nid, "beforeinput", "deleteByCut", None) {
+                    self.edit_focused_field_at_cursor(EditAction::Backspace);
+                    self.page_input_event(nid, "input", "deleteByCut", None);
+                }
+            }
+            ClipboardOp::Paste => {
+                use lumen_core::ext::ClipboardProvider;
+                let raw = platform::clipboard::PlatformClipboard.read_text();
+                if raw.is_empty() {
+                    return true;
+                }
+                if let ClipboardReply::Cancelled(_) = self.page_clipboard_event(nid, "paste", &raw) {
+                    return true;
+                }
+                let replaced = sel.map_or(0, |(s, e)| e - s);
+                let text = sanitize_paste(
+                    &raw,
+                    kind == TypeableField::Textarea,
+                    maxlength,
+                    char_len(&current),
+                    replaced,
+                );
+                if text.is_empty() {
+                    return true;
+                }
+                if self.page_input_event(nid, "beforeinput", "insertFromPaste", Some(&text)) {
+                    self.edit_focused_field_at_cursor(EditAction::InsertStr(text.clone()));
+                    self.page_input_event(nid, "input", "insertFromPaste", Some(&text));
+                }
+            }
+        }
+        true
+    }
+
+    /// Fire the trusted clipboard event on page node `nid` and read back
+    /// whether (and with what data) a handler cancelled it. Goes through the
+    /// query path so a handler's `preventDefault()` is known before the shell
+    /// decides to run the default action.
+    fn page_clipboard_event(&self, nid: lumen_dom::NodeId, kind: &str, text: &str) -> ClipboardReply {
+        let script = format!(
+            "_lumen_dispatch_clipboard_event({}, '{}', '{}')",
+            nid.index(),
+            kind,
+            escape_js_string(text)
+        );
+        let reply = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |js| js.eval_js_completion(&script).ok().flatten(),
+        )
+        .flatten();
+        ClipboardReply::parse(reply.as_deref())
+    }
+
+    /// Fire `beforeinput` / `input` for a clipboard edit; `true` = not cancelled
+    /// (only `beforeinput` is cancelable).
+    fn page_input_event(&self, nid: lumen_dom::NodeId, kind: &str, input_type: &str, data: Option<&str>) -> bool {
+        let script = input_event_script(nid.index(), kind, input_type, data);
+        route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |js| js.eval_js_completion(&script).ok().flatten(),
+        )
+        .flatten()
+        .is_none_or(|r| r != "0")
+    }
+
     /// Send one `_lumen_dispatch_key_event` for an injected/typed key.
     ///
     /// `key` must already be escaped for a single-quoted JS literal
@@ -474,6 +584,84 @@ impl Lumen {
 
 }
 
+/// Clipboard command on a focused text field (UX-CLIPBOARD).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ClipboardOp {
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+}
+
+/// Which clipboard command a key press is, if any: Ctrl+A/C/X/V and the
+/// legacy Ctrl+Insert (copy) / Shift+Insert (paste) / Shift+Delete (cut).
+pub(crate) fn clipboard_op_for(code: KeyCode, mods: ModifiersState) -> Option<ClipboardOp> {
+    if mods == ModifiersState::CONTROL {
+        return match code {
+            KeyCode::KeyA => Some(ClipboardOp::SelectAll),
+            KeyCode::KeyC | KeyCode::Insert => Some(ClipboardOp::Copy),
+            KeyCode::KeyX => Some(ClipboardOp::Cut),
+            KeyCode::KeyV => Some(ClipboardOp::Paste),
+            _ => None,
+        };
+    }
+    if mods == ModifiersState::SHIFT {
+        return match code {
+            KeyCode::Insert => Some(ClipboardOp::Paste),
+            KeyCode::Delete => Some(ClipboardOp::Cut),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// What the page's clipboard-event handlers decided.
+pub(crate) enum ClipboardReply {
+    /// Not cancelled (or no JS to ask): run the default action.
+    Proceed,
+    /// `preventDefault()` was called; the payload is whatever the handler put
+    /// into `clipboardData` (copy/cut write that instead of the selection).
+    Cancelled(String),
+}
+
+impl ClipboardReply {
+    /// Parse `_lumen_dispatch_clipboard_event`'s reply (`'N'` / `'P<data>'`).
+    pub(crate) fn parse(reply: Option<&str>) -> Self {
+        match reply.and_then(|r| r.strip_prefix('P')) {
+            Some(data) => ClipboardReply::Cancelled(data.to_owned()),
+            None => ClipboardReply::Proceed,
+        }
+    }
+}
+
+/// `_lumen_dispatch_input_event(...)` call for a clipboard edit.
+pub(crate) fn input_event_script(nid: usize, kind: &str, input_type: &str, data: Option<&str>) -> String {
+    let data = match data {
+        Some(d) => format!("'{}'", escape_js_string(d)),
+        None => "null".to_owned(),
+    };
+    format!("_lumen_dispatch_input_event({nid}, '{kind}', '{input_type}', {data})")
+}
+
+/// Put `text` on the OS clipboard unless it is empty (an empty write would
+/// wipe the user's clipboard for no reason).
+pub(crate) fn write_clipboard_nonempty(text: &str) {
+    if !text.is_empty() {
+        use lumen_core::ext::ClipboardProvider;
+        platform::clipboard::PlatformClipboard.write_text(text);
+    }
+}
+
+/// `maxlength` and whether the control is a password field, for the clipboard
+/// commands — read from an already-locked `doc`.
+pub(crate) fn field_meta_in(doc: &lumen_dom::Document, nid: lumen_dom::NodeId) -> (Option<usize>, bool) {
+    let Some(node) = doc.try_get(nid) else { return (None, false) };
+    (
+        parse_maxlength(node.get_attr("maxlength")),
+        matches!(node.input_type(), Some(lumen_dom::InputType::Password)),
+    )
+}
+
 /// [`Lumen::typeable_field`] against an already-locked `doc` — shared with
 /// the redraw path's non-blocking snapshot (BUG-1108), which must read the
 /// same classification without ever waiting for the lock itself.
@@ -506,4 +694,46 @@ pub(crate) fn typeable_field_in(
         return None;
     }
     Some((TypeableField::Input, doc.control_value(nid).into_owned()))
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+
+    #[test]
+    fn key_to_clipboard_op() {
+        let c = ModifiersState::CONTROL;
+        let s = ModifiersState::SHIFT;
+        assert_eq!(clipboard_op_for(KeyCode::KeyV, c), Some(ClipboardOp::Paste));
+        assert_eq!(clipboard_op_for(KeyCode::KeyX, c), Some(ClipboardOp::Cut));
+        assert_eq!(clipboard_op_for(KeyCode::KeyC, c), Some(ClipboardOp::Copy));
+        assert_eq!(clipboard_op_for(KeyCode::KeyA, c), Some(ClipboardOp::SelectAll));
+        assert_eq!(clipboard_op_for(KeyCode::Insert, s), Some(ClipboardOp::Paste));
+        assert_eq!(clipboard_op_for(KeyCode::Delete, s), Some(ClipboardOp::Cut));
+        assert_eq!(clipboard_op_for(KeyCode::KeyV, ModifiersState::empty()), None);
+        assert_eq!(clipboard_op_for(KeyCode::KeyV, c | s), None);
+    }
+
+    #[test]
+    fn reply_parse() {
+        assert!(matches!(ClipboardReply::parse(None), ClipboardReply::Proceed));
+        assert!(matches!(ClipboardReply::parse(Some("N")), ClipboardReply::Proceed));
+        match ClipboardReply::parse(Some("Pabc")) {
+            ClipboardReply::Cancelled(d) => assert_eq!(d, "abc"),
+            ClipboardReply::Proceed => panic!("must be cancelled"),
+        }
+    }
+
+    #[test]
+    fn insert_str_edit_action_splices_selection() {
+        let (next, cur) = EditAction::InsertStr("XY".into()).apply("abcd", 2);
+        assert_eq!((next.as_str(), cur), ("abXYcd", 4));
+    }
+
+    #[test]
+    fn input_event_script_escapes_data() {
+        let s = input_event_script(7, "input", "insertFromPaste", Some("it's"));
+        assert_eq!(s, r#"_lumen_dispatch_input_event(7, 'input', 'insertFromPaste', 'it\'s')"#);
+        assert!(input_event_script(7, "input", "deleteByCut", None).ends_with("null)"));
+    }
 }

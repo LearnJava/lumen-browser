@@ -8242,7 +8242,7 @@
       {
        "id": "UX-CLIPBOARD",
        "title": "UX-CLIPBOARD: вставка, вырезание, выделить всё в полях",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Буфер обмена в полях страницы: Ctrl+V/Ctrl+X/Ctrl+A в `<input>`/`<textarea>` (страница и фрейм). В `crates/shell/src` слово paste есть только в `address_bar.rs`/`platform/clipboard.rs`; биндингов Ctrl+V/X/A для полей нет (`input/keybindings.rs` знает только Ctrl+Alt+V/Ctrl+Shift+V/A). Есть: `PlatformClipboard` (`ClipboardProvider`), вставка в позицию курсора (`text_cursor.rs`, FRAME-2), замена выделения при наборе (FRAME-7 срез 7). Объём: вставка с заменой выделения, вырезание, «выделить всё»; события `paste`/`cut`/`copy`/`beforeinput` с отменой; `maxlength`; перевод строк в однострочном поле. Сначала проверить руками — gap выведен по коду."
       },
