@@ -687,6 +687,10 @@ impl Lumen {
             framed.append(&mut overlay_buf);
             overlay_buf = framed;
         }
+        // UX-IME-3: address-bar preedit, painted above the chrome document.
+        if let Some(mut cmds) = self.ime_omnibox_preedit_overlay(&pal) {
+            overlay_buf.append(&mut cmds);
+        }
         // BUG-1059: `#demoBar`/`#infoPanel` (CC-18) — detached from
         // `chrome_layout`'s tree in `relayout_chrome_host` precisely because
         // they sit *inside* `chrome_page_host_rect` and would otherwise fall
