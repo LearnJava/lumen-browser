@@ -588,8 +588,9 @@ impl Lumen {
                             self.request_redraw();
                         }
                         panels::permission_panel::PermissionHit::Close => {
-                            if self.permission.close() {
+                            for kind in self.permission.close() {
                                 self.settle_page_permission(
+                                    kind,
                                     panels::permission_panel::PermissionState::Ask,
                                 );
                             }

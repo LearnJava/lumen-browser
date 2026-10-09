@@ -75,6 +75,22 @@ impl PermissionKind {
         }
     }
 
+    /// Permission name the page-side prompt queue uses for this kind
+    /// (`navigator.permissions` names; clipboard is the read side).
+    pub fn page_name(self) -> &'static str {
+        match self {
+            Self::Camera => "camera",
+            Self::Microphone => "microphone",
+            Self::Notifications => "notifications",
+            Self::Clipboard => "clipboard-read",
+        }
+    }
+
+    /// Inverse of [`Self::page_name`].
+    pub fn from_page_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.page_name() == name)
+    }
+
     /// Human-readable label for the settings table.
     pub fn label(self) -> &'static str {
         match self {
@@ -235,23 +251,21 @@ impl PermissionPanel {
     }
 
     /// Flip panel visibility. Hiding the popover dismisses pending requests
-    /// (see [`Self::close`]); the returned flag is the same.
-    pub fn toggle(&mut self) -> bool {
+    /// (see [`Self::close`]); the returned kinds are the same.
+    pub fn toggle(&mut self) -> Vec<PermissionKind> {
         if self.visible {
             return self.close();
         }
         self.visible = true;
-        false
+        Vec::new()
     }
 
     /// Hide the popover. A page request still waiting for an answer is
-    /// dropped; returns `true` when a `Notifications` one was, so the caller
-    /// settles the page's promise as `default` (dismissed).
-    pub fn close(&mut self) -> bool {
+    /// dropped; returns the kinds that were waiting, so the caller settles the
+    /// page's promises as `default` (dismissed).
+    pub fn close(&mut self) -> Vec<PermissionKind> {
         self.visible = false;
-        let dismissed = self.pending.contains(&PermissionKind::Notifications);
-        self.pending.clear();
-        dismissed
+        std::mem::take(&mut self.pending)
     }
 
     /// Swap the backing store (the Anonymous profile gets an in-memory one so
@@ -556,6 +570,17 @@ mod tests {
         assert!(p.answer(PermissionKind::Notifications, PermissionState::Allow));
         assert!(p.pending.is_empty());
         assert_eq!(p.request(PermissionKind::Notifications), Some(PermissionState::Allow));
+    }
+
+    #[test]
+    fn page_names_round_trip_and_close_reports_kinds() {
+        for k in PermissionKind::ALL {
+            assert_eq!(PermissionKind::from_page_name(k.page_name()), Some(k));
+        }
+        let mut p = make_panel(Some("https://a.test"));
+        assert_eq!(p.request(PermissionKind::Microphone), None);
+        assert_eq!(p.close(), vec![PermissionKind::Microphone]);
+        assert!(p.close().is_empty());
     }
 
     #[test]

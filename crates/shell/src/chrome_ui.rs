@@ -1430,8 +1430,8 @@ impl Lumen {
                     };
                     if let Some(state) = state {
                         let waited = self.permission.answer(kind, state);
-                        if waited && kind == panels::permission_panel::PermissionKind::Notifications {
-                            self.settle_page_permission(state);
+                        if waited {
+                            self.settle_page_permission(kind, state);
                         }
                         self.relayout_chrome_host();
                     }
@@ -1764,14 +1764,18 @@ impl Lumen {
 
     /// UX-PERMISSIONS-2: hand the user's answer to the page's pending
     /// `Notification.requestPermission()` promises.
-    pub(crate) fn settle_page_permission(&self, state: panels::permission_panel::PermissionState) {
+    pub(crate) fn settle_page_permission(
+        &self,
+        kind: panels::permission_panel::PermissionKind,
+        state: panels::permission_panel::PermissionState,
+    ) {
         use panels::permission_panel::PermissionState;
         let name = match state {
             PermissionState::Allow => "granted",
             PermissionState::Deny => "denied",
             PermissionState::Ask => "default",
         };
-        let script = lumen_js::notifications_bindings::settle_script(name);
+        let script = lumen_js::notifications_bindings::settle_script(kind.page_name(), name);
         let _ = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| j.eval_js(&script));
     }
 

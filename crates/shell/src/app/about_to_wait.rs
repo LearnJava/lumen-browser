@@ -1436,11 +1436,11 @@ impl Lumen {
         // A saved answer settles the page at once, otherwise the popover opens
         // and the click on its allow/deny button settles it (chrome_ui).
         for name in self.drain_query_js(|j| j.take_permission_requests()).unwrap_or_default() {
-            if name != "notifications" {
+            let Some(kind) = panels::permission_panel::PermissionKind::from_page_name(&name) else {
                 continue;
-            }
-            match self.permission.request(panels::permission_panel::PermissionKind::Notifications) {
-                Some(state) => self.settle_page_permission(state),
+            };
+            match self.permission.request(kind) {
+                Some(state) => self.settle_page_permission(kind, state),
                 None => {
                     self.relayout_chrome_host();
                     self.request_redraw();

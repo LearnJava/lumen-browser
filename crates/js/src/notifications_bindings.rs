@@ -77,14 +77,21 @@ pub(crate) enum NotifPermMode {
     Interactive,
 }
 
-/// JS source that settles the page's pending `Notification.requestPermission()`
-/// promises with the user's answer (`granted` / `denied` / `default`).
-pub fn settle_script(state: &str) -> String {
+/// JS source that settles the page's pending prompt for `name`
+/// (`notifications`, `microphone`, `clipboard-read`) with the user's answer
+/// (`granted` / `denied` / `default`).
+pub fn settle_script(name: &str, state: &str) -> String {
     let s = match state {
         "granted" | "denied" => state,
         _ => "default",
     };
-    format!("if (typeof _lumen_notification_settle === 'function') _lumen_notification_settle('{s}');")
+    if name == "notifications" {
+        return format!(
+            "if (typeof _lumen_notification_settle === 'function') _lumen_notification_settle('{s}');"
+        );
+    }
+    let n: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    format!("if (typeof _lumen_permission_settle === 'function') _lumen_permission_settle('{n}', '{s}');")
 }
 
 #[cfg(feature = "v8-backend")]
@@ -132,6 +139,23 @@ pub(crate) fn install_notifications_mode(
         "pending".to_string()
     });
     rt.register_native("_lumen_notification_request_permission", request_permission)?;
+
+    // UX-PERMISSIONS-4: the same queue serves the other prompting APIs
+    // (`getUserMedia` → "microphone", `clipboard.readText()` → "clipboard-read").
+    // Outside the interactive mode the native is absent and `_lumen_ask_permission`
+    // grants at once, as those APIs did before they could ask.
+    if mode == NotifPermMode::Interactive {
+        let prompts = rt.permission_request_queue();
+        let prompt = crate::v8_compat::into_v8_fn1(move |name: String| -> bool {
+            if let Ok(mut q) = prompts.lock()
+                && !q.contains(&name)
+            {
+                q.push(name);
+            }
+            true
+        });
+        rt.register_native("_lumen_permission_prompt", prompt)?;
+    }
 
     rt.eval(&format!("globalThis.__LUMEN_NOTIF_PERM = '{perm}';"))?;
     rt.eval(NOTIFICATIONS_SHIM)?;
@@ -347,6 +371,23 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
     });
   };
 
+  // UX-PERMISSIONS-4: generic prompt for the other powerful APIs. Resolves
+  // with 'granted' / 'denied' / 'default' (dismissed); without a shell prompt
+  // queue (non-interactive runtime) it grants at once.
+  var _asks = {};
+  __lumen_C._lumen_ask_permission = function(name) {
+    return new Promise(function(resolve) {
+      if (typeof _lumen_permission_prompt !== 'function') { resolve('granted'); return; }
+      (_asks[name] = _asks[name] || []).push(resolve);
+      try { _lumen_permission_prompt(name); } catch (e) { _lumen_permission_settle(name, 'denied'); }
+    });
+  };
+  __lumen_C._lumen_permission_settle = function(name, state) {
+    if (state !== 'granted' && state !== 'denied') state = 'default';
+    var w = _asks[name] || []; _asks[name] = [];
+    for (var i = 0; i < w.length; i++) w[i](state);
+  };
+
   /**
    * Internal: the shell reports the user's answer to a prompt raised by
    * requestPermission() (UX-PERMISSIONS-2). `default` = dismissed.
@@ -463,12 +504,34 @@ mod tests_v8 {
         assert_eq!(rt.take_permission_requests(), vec!["notifications".to_string()]);
         rt.eval("0").unwrap();
         assert_eq!(rt.eval("got").unwrap(), JsValue::Null);
-        rt.eval(&settle_script("granted")).unwrap();
+        rt.eval(&settle_script("notifications", "granted")).unwrap();
         assert_eq!(rt.eval("got").unwrap(), JsValue::String("granted".to_string()));
         assert_eq!(
             rt.eval("Notification.permission").unwrap(),
             JsValue::String("granted".to_string())
         );
+    }
+
+    #[test]
+    fn generic_prompt_queues_and_settles_per_name() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        install_notifications_mode(&rt, NotifPermMode::Interactive).unwrap();
+        rt.eval("var got = null; _lumen_ask_permission('microphone').then(function(p) { got = p; });")
+            .unwrap();
+        assert_eq!(rt.take_permission_requests(), vec!["microphone".to_string()]);
+        rt.eval(&settle_script("clipboard-read", "granted")).unwrap();
+        assert_eq!(rt.eval("got").unwrap(), JsValue::Null);
+        rt.eval(&settle_script("microphone", "denied")).unwrap();
+        assert_eq!(rt.eval("got").unwrap(), JsValue::String("denied".to_string()));
+    }
+
+    #[test]
+    fn generic_prompt_grants_without_shell_queue() {
+        let rt = rt_with_notifications(false);
+        rt.eval("var got = null; _lumen_ask_permission('microphone').then(function(p) { got = p; });")
+            .unwrap();
+        assert_eq!(rt.eval("got").unwrap(), JsValue::String("granted".to_string()));
     }
 
     #[test]
