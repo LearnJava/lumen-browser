@@ -1314,3 +1314,32 @@ fn dispatch_capture_event_no_bubble() {
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+#[test]
+fn lumen_dispatch_clipboard_event_reports_cancel_and_paste_data() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var el = document.getElementById('main');
+                var got = null;
+                el.addEventListener('paste', function(e) { got = e.clipboardData.getData('text/plain'); e.preventDefault(); });
+                el.addEventListener('copy', function(e) { e.clipboardData.setData('text/plain', 'X'); e.preventDefault(); });
+                var n = _lumen_dispatch_clipboard_event(el.__nid__, 'cut', '');
+                [_lumen_dispatch_clipboard_event(el.__nid__, 'paste', "a'b"), got,
+                 _lumen_dispatch_clipboard_event(el.__nid__, 'copy', ''), n].join('|')
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("Pa'b|a'b|PX|N".into()));
+}
+
+#[test]
+fn lumen_dispatch_input_event_beforeinput_is_cancelable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var el = document.getElementById('main');
+                var seen = [];
+                el.addEventListener('beforeinput', function(e) { seen.push(e.inputType + ':' + e.data); e.preventDefault(); });
+                el.addEventListener('input', function(e) { e.preventDefault(); });
+                [_lumen_dispatch_input_event(el.__nid__, 'beforeinput', 'insertFromPaste', 'z'),
+                 _lumen_dispatch_input_event(el.__nid__, 'input', 'insertFromPaste', 'z'), seen.join()].join('|')
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("0|1|insertFromPaste:z".into()));
+}

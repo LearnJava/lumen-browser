@@ -67,6 +67,57 @@ pub(crate) fn delete_char_range(s: &str, start: usize, end: usize) -> String {
     chars[..start].iter().chain(chars[end..].iter()).collect()
 }
 
+/// Chars `[start, end)` of `s` (bounds clamped) — the text a Copy/Cut of the
+/// selection `start..end` puts on the clipboard (UX-CLIPBOARD).
+pub(crate) fn char_range(s: &str, start: usize, end: usize) -> String {
+    s.chars().skip(start).take(end.saturating_sub(start)).collect()
+}
+
+/// Insert `ins` at char index `at` (clamped). Returns the new string and the
+/// cursor's char index right after the inserted text.
+pub(crate) fn insert_str_at(s: &str, at: usize, ins: &str) -> (String, usize) {
+    let mut chars: Vec<char> = s.chars().collect();
+    let at = at.min(chars.len());
+    let ins: Vec<char> = ins.chars().collect();
+    let end = at + ins.len();
+    chars.splice(at..at, ins);
+    (chars.into_iter().collect(), end)
+}
+
+/// `maxlength` content attribute → limit (HTML LS §4.10.5.1: a valid
+/// non-negative integer; anything else means "no limit"). Counted in chars,
+/// like every other cursor position here.
+pub(crate) fn parse_maxlength(attr: Option<&str>) -> Option<usize> {
+    attr?.trim().parse::<usize>().ok()
+}
+
+/// Turn raw clipboard text into what a paste into a field inserts: line
+/// breaks normalized to `\n`; a single-line `<input>` flattens each break to a
+/// space (what Chromium does) while `<textarea>` keeps them; the result is
+/// cut to the room `maxlength` leaves once the `replaced` selection chars are
+/// gone (`current_len - replaced + inserted <= maxlength`).
+pub(crate) fn sanitize_paste(
+    raw: &str,
+    multiline: bool,
+    maxlength: Option<usize>,
+    current_len: usize,
+    replaced: usize,
+) -> String {
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let text: String = if multiline {
+        normalized
+    } else {
+        normalized.replace('\n', " ")
+    };
+    match maxlength {
+        Some(max) => {
+            let room = max.saturating_sub(current_len.saturating_sub(replaced));
+            text.chars().take(room).collect()
+        }
+        None => text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +183,34 @@ mod tests {
     #[test]
     fn delete_char_range_multibyte() {
         assert_eq!(delete_char_range("привет", 2, 5), "прт".to_owned());
+    }
+
+    #[test]
+    fn char_range_slices_by_chars() {
+        assert_eq!(char_range("привет", 1, 4), "рив");
+        assert_eq!(char_range("abc", 2, 9), "c");
+        assert_eq!(char_range("abc", 2, 1), "");
+    }
+
+    #[test]
+    fn insert_str_moves_cursor_past_text() {
+        assert_eq!(insert_str_at("ad", 1, "bc"), ("abcd".to_owned(), 3));
+        assert_eq!(insert_str_at("ad", 9, "é"), ("adé".to_owned(), 3));
+    }
+
+    #[test]
+    fn maxlength_parse() {
+        assert_eq!(parse_maxlength(Some(" 5 ")), Some(5));
+        assert_eq!(parse_maxlength(Some("-1")), None);
+        assert_eq!(parse_maxlength(Some("x")), None);
+        assert_eq!(parse_maxlength(None), None);
+    }
+
+    #[test]
+    fn paste_sanitize_newlines_and_maxlength() {
+        assert_eq!(sanitize_paste("a\r\nb\rc", false, None, 0, 0), "a b c");
+        assert_eq!(sanitize_paste("a\r\nb\rc", true, None, 0, 0), "a\nb\nc");
+        assert_eq!(sanitize_paste("абвгд", false, Some(5), 3, 1), "абв");
+        assert_eq!(sanitize_paste("xyz", false, Some(2), 4, 0), "");
     }
 }

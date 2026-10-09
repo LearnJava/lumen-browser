@@ -12,6 +12,7 @@
 //! `handle_key` differ.
 
 use crate::*;
+use super::text_input::clipboard_op_for;
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -432,6 +433,29 @@ impl Lumen {
                 for ch in text.chars() {
                     self.inject_char(ch);
                 }
+                self.request_redraw();
+                return;
+            }
+        }
+
+        // Clipboard commands in a focused typeable field (page or frame):
+        // Ctrl+A/C/X/V, Ctrl+Insert, Shift+Insert, Shift+Delete (UX-CLIPBOARD).
+        // Before the global table, where Ctrl+A/C/V mean nothing for a field,
+        // and before the cursor branch below, whose Shift+Delete/Insert would
+        // otherwise be dropped. Only when a typeable field actually has focus —
+        // a bare Ctrl+C over page text still copies the selection (above).
+        if let Some(op) = clipboard_op_for(code, self.modifiers) {
+            let in_frame = self
+                .focused_frame
+                .is_some_and(|(idx, nid)| self.frame_typeable_field(idx, nid).is_some());
+            let handled = if in_frame {
+                self.frame_field_clipboard_op(op)
+            } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+                self.field_clipboard_op(op)
+            } else {
+                false
+            };
+            if handled {
                 self.request_redraw();
                 return;
             }

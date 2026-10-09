@@ -21,7 +21,9 @@
 
 use crate::*;
 
-use super::text_input::EditAction;
+use super::text_input::{
+    ClipboardOp, ClipboardReply, EditAction, field_meta_in, input_event_script, write_clipboard_nonempty,
+};
 
 impl Lumen {
     /// Классифицировать `nid` в документе фрейма `idx` как typeable-поле —
@@ -213,6 +215,7 @@ impl Lumen {
                 let spliced = delete_char_range(&current, start, end);
                 match action {
                     EditAction::InsertChar(ch) => insert_char_at(&spliced, start, ch),
+                    EditAction::InsertStr(text) => insert_str_at(&spliced, start, &text),
                     EditAction::Backspace | EditAction::DeleteForward => (spliced, start),
                 }
             }
@@ -239,6 +242,96 @@ impl Lumen {
         }
         self.refresh_frames(Some(idx));
         true
+    }
+
+    /// Ctrl+A / Ctrl+C / Ctrl+X / Ctrl+V во typeable-поле фрейма — зеркало
+    /// [`super::text_input::Lumen::field_clipboard_op`] (UX-CLIPBOARD); события
+    /// уходят в JS-контекст ФРЕЙМА.
+    pub(crate) fn frame_field_clipboard_op(&mut self, op: ClipboardOp) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let sel = self.frame_field_selection_range(idx, nid, cursor);
+        let (maxlength, password) = self
+            .frames
+            .get(idx)
+            .and_then(|h| h.doc.lock().ok())
+            .map(|doc| field_meta_in(&doc, nid))
+            .unwrap_or((None, false));
+        match op {
+            ClipboardOp::SelectAll => {
+                self.frame_text_selection_anchor.insert((idx, nid), 0);
+                self.frame_text_cursor.insert((idx, nid), char_len(&current));
+            }
+            ClipboardOp::Copy | ClipboardOp::Cut => {
+                let Some((start, end)) = sel else { return true };
+                if password {
+                    return true;
+                }
+                let cut = op == ClipboardOp::Cut;
+                let name = if cut { "cut" } else { "copy" };
+                if let ClipboardReply::Cancelled(data) = self.frame_clipboard_event(idx, nid, name, "") {
+                    write_clipboard_nonempty(&data);
+                    return true;
+                }
+                write_clipboard_nonempty(&char_range(&current, start, end));
+                if cut && self.frame_clip_input_event(idx, nid, "beforeinput", "deleteByCut", None) {
+                    self.edit_focused_frame_field_at_cursor(EditAction::Backspace);
+                    self.frame_clip_input_event(idx, nid, "input", "deleteByCut", None);
+                }
+            }
+            ClipboardOp::Paste => {
+                use lumen_core::ext::ClipboardProvider;
+                let raw = platform::clipboard::PlatformClipboard.read_text();
+                if raw.is_empty() {
+                    return true;
+                }
+                if let ClipboardReply::Cancelled(_) = self.frame_clipboard_event(idx, nid, "paste", &raw) {
+                    return true;
+                }
+                let replaced = sel.map_or(0, |(s, e)| e - s);
+                let text = sanitize_paste(
+                    &raw,
+                    kind == TypeableField::Textarea,
+                    maxlength,
+                    char_len(&current),
+                    replaced,
+                );
+                if text.is_empty() {
+                    return true;
+                }
+                if self.frame_clip_input_event(idx, nid, "beforeinput", "insertFromPaste", Some(&text)) {
+                    self.edit_focused_frame_field_at_cursor(EditAction::InsertStr(text.clone()));
+                    self.frame_clip_input_event(idx, nid, "input", "insertFromPaste", Some(&text));
+                }
+            }
+        }
+        true
+    }
+
+    /// Eval `script` в JS-контексте фрейма `idx`, вернуть строковый результат.
+    #[allow(unused_variables)] // js читается только под feature = "v8"
+    fn frame_eval_completion(&self, idx: usize, script: &str) -> Option<String> {
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
+            return js.eval_js_completion(script).ok().flatten();
+        }
+        None
+    }
+
+    fn frame_clipboard_event(&self, idx: usize, nid: NodeId, kind: &str, text: &str) -> ClipboardReply {
+        let script = format!(
+            "_lumen_dispatch_clipboard_event({}, '{}', '{}')",
+            nid.index(),
+            kind,
+            escape_js_string(text)
+        );
+        ClipboardReply::parse(self.frame_eval_completion(idx, &script).as_deref())
+    }
+
+    fn frame_clip_input_event(&self, idx: usize, nid: NodeId, kind: &str, input_type: &str, data: Option<&str>) -> bool {
+        let script = input_event_script(nid.index(), kind, input_type, data);
+        self.frame_eval_completion(idx, &script).is_none_or(|r| r != "0")
     }
 
     /// Отправить один `_lumen_dispatch_key_event` в JS-контекст фрейма `idx` —
