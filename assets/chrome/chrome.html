@@ -1264,6 +1264,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <button class="item" data-action="set-settings-section" data-section="appearance">Appearance</button>
                 <button class="item" data-action="set-settings-section" data-section="passwords">Пароли</button>
                 <button class="item" data-action="set-settings-section" data-section="autofill">Автозаполнение</button>
+                <button class="item" data-action="set-settings-section" data-section="permissions">Разрешения</button>
                 <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
                 <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
                 <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
@@ -1350,6 +1351,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   <div class="set-block"><h3>Автозаполнение</h3><div class="desc" id="afDesc">Значения форм хранятся открытым текстом, карты — зашифрованными; код проверки карты не сохраняется.</div>
                     <div id="afList"><div class="set-row af-row"><div class="st-text"><div class="st-title">•••• 1111</div><div class="st-desc">Платёжная карта</div></div><button class="upd-check" data-action="delete-saved-card" data-card-last4="1111" aria-label="Удалить">Удалить</button></div><div class="set-row af-row"><div class="st-text"><div class="st-title">user@example.com</div><div class="st-desc">https://example.com · email</div></div><button class="upd-check" data-action="delete-autofill-entry" data-af-origin="https://example.com" data-af-field="email" data-af-value="user@example.com" aria-label="Удалить">Удалить</button></div></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Очистить всё</div><div class="st-desc">Удаляет все сохранённые значения форм и карты</div></div><button class="upd-check" data-action="clear-autofill">Очистить</button></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="permissions">
+                  <div class="set-block"><h3>Разрешения сайтов</h3><div class="desc" id="permDesc">Решения сохраняются между сессиями. Отзыв возвращает сайту запрос при следующем обращении.</div>
+                    <div id="permList"><div class="set-row perm-row"><div class="st-text"><div class="st-title">https://example.com</div><div class="st-desc">Camera · разрешено</div></div><button class="upd-check" data-action="revoke-site-permission" data-perm-origin="https://example.com" data-perm-kind="Camera" aria-label="Отозвать">Отозвать</button></div></div>
                   </div>
                 </div>
 

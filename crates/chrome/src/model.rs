@@ -325,6 +325,9 @@ pub struct ChromeSettingsModel {
     pub cards: Vec<(String, String)>,
     /// `false` — хранилище автозаполнения недоступно (приватный режим, Tor).
     pub autofill_available: bool,
+    /// Решения сайтов для раздела «Разрешения» (UX-PERMISSIONS):
+    /// `(origin, вид, разрешено?)`.
+    pub site_permissions: Vec<(String, String, bool)>,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -1103,6 +1106,7 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
     let Some(main) = find_by_class(doc, "set-main") else { return };
     bind_passwords(doc, settings);
     bind_autofill(doc, settings);
+    bind_site_permissions(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1156,6 +1160,45 @@ fn bind_passwords(doc: &mut Document, settings: &ChromeSettingsModel) {
         set_attr(doc, del, "data-login-user", username);
         set_attr(doc, del, "aria-label", "Удалить пароль");
         append_text(doc, del, "Удалить");
+        attach_child(doc, row, del);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Перестраивает `#permList` из [`ChromeSettingsModel::site_permissions`]
+/// (UX-PERMISSIONS): строка на решение, кнопка «Отозвать».
+fn bind_site_permissions(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(desc) = doc.find_by_id(crate::ids::PERM_DESC) {
+        let text = if settings.site_permissions.is_empty() {
+            "Сохранённых решений нет. Они появятся после того, как вы разрешите или запретите доступ сайту."
+        } else {
+            "Решения сохраняются между сессиями. Отзыв возвращает сайту запрос при следующем обращении."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::PERM_LIST) else { return };
+    remove_children_with_class(doc, list, "perm-row");
+    for (origin, kind, allowed) in &settings.site_permissions {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row perm-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, origin);
+        attach_child(doc, text, title);
+        let desc = doc.create_element(QualName::html("div"));
+        set_attr(doc, desc, "class", "st-desc");
+        append_text(doc, desc, &format!("{kind} · {}", if *allowed { "разрешено" } else { "запрещено" }));
+        attach_child(doc, text, desc);
+        attach_child(doc, row, text);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "upd-check");
+        set_attr(doc, del, "data-action", "revoke-site-permission");
+        set_attr(doc, del, "data-perm-origin", origin);
+        set_attr(doc, del, "data-perm-kind", kind);
+        set_attr(doc, del, "aria-label", "Отозвать");
+        append_text(doc, del, "Отозвать");
         attach_child(doc, row, del);
         attach_child(doc, list, row);
     }
@@ -3811,6 +3854,29 @@ mod tests {
         assert_eq!(doc.get(del).get_attr("data-af-origin"), Some("https://a.test"));
         assert_eq!(doc.get(del).get_attr("data-af-field"), Some("email"));
         assert_eq!(doc.get(del).get_attr("data-af-value"), Some("a@b.c"));
+    }
+
+    #[test]
+    fn settings_site_permissions_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "permissions".to_owned(),
+                site_permissions: vec![("https://a.test".into(), "Camera".into(), true)],
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::PERM_LIST).expect("#permList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 1, "образец заменён строкой модели");
+        let del = find_descendants_by_class(&doc, rows[0], "upd-check")[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("revoke-site-permission"));
+        assert_eq!(doc.get(del).get_attr("data-perm-origin"), Some("https://a.test"));
+        assert_eq!(doc.get(del).get_attr("data-perm-kind"), Some("Camera"));
     }
 
     #[test]

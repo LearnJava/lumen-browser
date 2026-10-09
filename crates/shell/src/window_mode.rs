@@ -343,6 +343,13 @@ fn run_window_mode_inner(
         .collect();
     let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
 
+    // UX-PERMISSIONS: решения сайтов на диске; делится с push_store.
+    let permissions_store = Arc::new(open_persistent(
+        "permissions.db",
+        lumen_storage::Permissions::open,
+        lumen_storage::Permissions::open_in_memory,
+        "permissions init",
+    ));
     let mut app = Lumen {
         display_list: Vec::new(),
         display_list_epoch: 1,
@@ -510,7 +517,7 @@ fn run_window_mode_inner(
         ),
         push_store: Arc::new(lumen_storage::PushStore::new(
             Arc::new(lumen_storage::PushSubscriptions::open_in_memory().expect("push_store init")),
-            Arc::new(lumen_storage::Permissions::open_in_memory().expect("push_store permissions init")),
+            permissions_store.clone(),
         )),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
@@ -649,7 +656,7 @@ fn run_window_mode_inner(
         control_panel_mini_open: false,
         control_panel_info_open: false,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
-        permission: panels::permission_panel::PermissionPanel::new(),
+        permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),

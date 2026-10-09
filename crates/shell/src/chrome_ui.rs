@@ -693,6 +693,17 @@ impl Lumen {
             autofill,
             cards,
             autofill_available: autofill_store.is_some(),
+            site_permissions: if self.settings_panel.visible && self.chrome_settings_section == "permissions" {
+                self.permission
+                    .saved()
+                    .into_iter()
+                    .map(|(origin, kind, state)| {
+                        (origin, kind.label().to_owned(), state == panels::permission_panel::PermissionState::Allow)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1272,6 +1283,16 @@ impl Lumen {
                     (origin, field, value, autofill_store::global())
                 {
                     let _ = store.delete(&origin, &field, &value);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::RevokeSitePermission => {
+                let origin = self.chrome_data_attr(nid, "data-perm-origin").filter(|o| !o.is_empty());
+                let kind = self
+                    .chrome_data_attr(nid, "data-perm-kind")
+                    .and_then(|k| panels::permission_panel::PermissionKind::ALL.into_iter().find(|p| p.label() == k));
+                if let (Some(origin), Some(kind)) = (origin, kind) {
+                    self.permission.revoke(&origin, kind);
                     self.relayout_chrome_host();
                 }
             }
