@@ -35,7 +35,7 @@ use journal::ContentJournal;
 mod forms;
 pub use forms::{
     check_form_gate, check_validity_form, collect_dom_form_fields, element_validity,
-    find_ancestor_form, invalid_controls_in_form, set_radio_checked, submit_form, FormInfo,
+    find_ancestor_form, invalid_controls_in_form, set_radio_checked, submit_form, submitter_override, FormInfo,
     FormSubmitEvent, InputMode, InputType, ValidityState,
 };
 #[cfg(test)]

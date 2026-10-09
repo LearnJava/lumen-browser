@@ -414,6 +414,19 @@ impl Lumen {
         nav_base: &ResourceBase,
         uir_override: Option<bool>,
     ) {
+        self.navigate_frame_to_with_body(idx, href, nav_base, uir_override, None);
+    }
+
+    /// [`Self::navigate_frame_to`] с телом запроса: `Some` — отправка формы
+    /// фрейма методом POST (UX-FORM-SUBMITTER).
+    pub(crate) fn navigate_frame_to_with_body(
+        &mut self,
+        idx: usize,
+        href: &str,
+        nav_base: &ResourceBase,
+        uir_override: Option<bool>,
+        nav_body: Option<lumen_network::NavigationBody>,
+    ) {
         // Снимок identity+адреса ДО замены хэндла: после неё `idx` уже не
         // адресует этот фрейм (см. doc `replace_frame_document`).
         let history_step = self
@@ -421,7 +434,7 @@ impl Lumen {
             .get(idx)
             .filter(|h| h.parent_doc.is_none())
             .map(|h| (h.host, h.url.clone()));
-        if !self.replace_frame_document(idx, Some(href), nav_base, uir_override) {
+        if !self.replace_frame_document(idx, Some(href), nav_base, uir_override, nav_body) {
             return;
         }
         let Some((host, prev_url)) = history_step else { return };
@@ -465,6 +478,7 @@ impl Lumen {
         href: Option<&str>,
         nav_base: &ResourceBase,
         uir_override: Option<bool>,
+        nav_body: Option<lumen_network::NavigationBody>,
     ) -> bool {
         let Some(env) = self.frame_env.clone() else {
             let href = href.unwrap_or("about:srcdoc");
@@ -491,7 +505,7 @@ impl Lumen {
         std::thread::spawn(move || {
             let old_doc = Arc::clone(&prep.old_doc);
             let handles =
-                frames::run_frame_navigation(&prep, href.as_deref(), &nav_base, &page_doc, &env, uir_override);
+                frames::run_frame_navigation(&prep, href.as_deref(), &nav_base, &page_doc, &env, uir_override, nav_body.as_ref());
             let _ = proxy.send_event(LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles });
         });
         true
@@ -559,7 +573,7 @@ impl Lumen {
         // История не несёт своей CSP-политики — тот же документ уже был
         // показан раньше, а не заново гейтится: `None` отдаёт решение
         // `csp_gate` хозяина, как и любая другая навигация ХОЗЯИНОМ.
-        self.replace_frame_document(idx, Some(target_url), &nav_base, None)
+        self.replace_frame_document(idx, Some(target_url), &nav_base, None, None)
             .then_some(prev_url)
     }
 
@@ -574,7 +588,7 @@ impl Lumen {
         let Some(h) = self.frames.get(idx) else { return };
         let href = (h.url != "about:srcdoc").then(|| h.url.clone());
         let nav_base = h.base.clone();
-        self.replace_frame_document(idx, href.as_deref(), &nav_base, None);
+        self.replace_frame_document(idx, href.as_deref(), &nav_base, None, None);
     }
 
     /// Фрагментная навигация ВНУТРИ под-документа: `:target`, `location` и

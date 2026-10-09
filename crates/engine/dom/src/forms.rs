@@ -640,6 +640,31 @@ pub fn invalid_controls_in_form(doc: &Document, form_id: NodeId) -> Vec<NodeId> 
     out
 }
 
+/// Value of the `form*` override attribute `attr` (`formaction`, `formmethod`,
+/// `formenctype`, `formtarget`) on the activated `submitter`, HTML LS
+/// §4.10.18.6 — `None` when `submitter` is not a submit button
+/// (`<button>` of type submit, `<input type=submit|image>`) or the attribute is
+/// absent. `formaction` is additionally ignored when empty (§4.10.18.6: the
+/// IDL attribute falls back to the form's `action` then).
+pub fn submitter_override(doc: &Document, submitter: NodeId, attr: &str) -> Option<String> {
+    let node = doc.get(submitter);
+    let tag = node.element_name()?.local.to_ascii_lowercase();
+    let ty = node.get_attr("type").unwrap_or("").to_ascii_lowercase();
+    let is_submit = match tag.as_str() {
+        "button" => !matches!(ty.as_str(), "button" | "reset"),
+        "input" => matches!(ty.as_str(), "submit" | "image"),
+        _ => false,
+    };
+    if !is_submit {
+        return None;
+    }
+    let value = node.get_attr(attr)?;
+    if attr == "formaction" && value.is_empty() {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
 /// Execute HTML5 form submission algorithm (§4.10.22 «Form submission»).
 ///
 /// Performs constraint validation on all submittable controls within `form_id`:
