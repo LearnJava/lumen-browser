@@ -149,6 +149,23 @@ pub(crate) fn fetch_iframe_source(
     send_uir_header: bool,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<FrameSource, FetchError> {
+    fetch_iframe_source_with_body(src, None, base, sink, cookie_jar, send_uir_header, referrer_policy)
+}
+
+/// [`fetch_iframe_source`] с телом навигации: `Some` — отправка формы фрейма
+/// методом POST (UX-FORM-SUBMITTER), запрос идёт тем же путём, что POST-навигация
+/// страницы (`fetch_page`), а адресом под-документа становится конечный URL
+/// ответа. Файловая ветка и инлайновые схемы тело игнорируют.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_iframe_source_with_body(
+    src: &str,
+    body: Option<&lumen_network::NavigationBody>,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    send_uir_header: bool,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Result<FrameSource, FetchError> {
     if src.trim().is_empty() {
         return Ok(FrameSource::Inline(String::new()));
     }
@@ -210,6 +227,19 @@ pub(crate) fn fetch_iframe_source(
                 cookie_jar,
                 referrer_policy,
             );
+            if let Some(body) = body {
+                return match client.fetch_page(&sub_url, Some(body), send_uir_header) {
+                    Ok(resp) => Ok(FrameSource::Url {
+                        html: String::from_utf8_lossy(&resp.body).into_owned(),
+                        url: resp.final_url.to_string(),
+                    }),
+                    Err(e) => {
+                        let reason = format!("POST '{url}' не удался: {e}");
+                        eprintln!("iframe: {reason}");
+                        Err(FetchError { reason, attempted_url: url })
+                    }
+                };
+            }
             match client.fetch_subresource_document(&sub_url, send_uir_header) {
                 Ok(bytes) => Ok(FrameSource::Url {
                     html: String::from_utf8_lossy(&bytes).into_owned(),
@@ -2059,7 +2089,7 @@ pub(crate) fn load_frame_sub_documents(
         if info.loading_lazy {
             continue;
         }
-        handles.extend(spawn_frame(&info, None, parent, depth, base, top_doc, env, parent_js, None));
+        handles.extend(spawn_frame(&info, None, parent, depth, base, top_doc, env, parent_js, None, None));
     }
     handles
 }
@@ -2099,6 +2129,7 @@ pub(crate) fn spawn_frame(
     env: &FrameLoadEnv,
     parent_js: Option<&Arc<dyn PersistentJs>>,
     uir_override: Option<bool>,
+    nav_body: Option<&lumen_network::NavigationBody>,
 ) -> Vec<FrameHandle> {
     // URL родителя и верха для фасадов location/URL у предков (срез 3).
     let parent_url = base_url_string(base);
@@ -2291,8 +2322,9 @@ pub(crate) fn spawn_frame(
                         frame_src_check(&href, nav_base)
                             .map(Err)
                             .unwrap_or_else(|| {
-                                fetch_iframe_source(
+                                fetch_iframe_source_with_body(
                                     &href,
+                                    nav_body,
                                     nav_base,
                                     sink,
                                     cookie_jar.clone(),
@@ -2950,6 +2982,7 @@ pub(crate) fn run_frame_navigation(
     page_doc: &Arc<Mutex<Document>>,
     env: &FrameLoadEnv,
     uir_override: Option<bool>,
+    nav_body: Option<&lumen_network::NavigationBody>,
 ) -> Vec<FrameHandle> {
     spawn_frame(
         &prep.info,
@@ -2961,6 +2994,7 @@ pub(crate) fn run_frame_navigation(
         env,
         prep.parent_js.as_ref(),
         uir_override,
+        nav_body,
     )
 }
 

@@ -1022,6 +1022,43 @@ pub fn enctype_of_form(doc: &Document, form_id: NodeId) -> String {
     }
 }
 
+/// Submit-button overrides of the form's own submission attributes (HTML LS
+/// §4.10.18.6): `formaction`, `formmethod`, `formenctype`, `formtarget` on the
+/// activated `submitter` win over `action`/`method`/`enctype`/`target` of the
+/// form. Values the spec would reject (`formmethod` outside get/post/dialog,
+/// `formenctype` outside the three enctypes) leave the form's own in place.
+pub fn apply_submitter_overrides(
+    doc: &Document,
+    submitter: Option<NodeId>,
+    action: &mut String,
+    method: &mut String,
+    enctype: &mut String,
+    target: &mut String,
+) {
+    let Some(sub) = submitter else { return };
+    if let Some(v) = lumen_dom::submitter_override(doc, sub, "formaction") {
+        *action = v;
+    }
+    if let Some(v) = lumen_dom::submitter_override(doc, sub, "formmethod") {
+        let v = v.to_ascii_lowercase();
+        if matches!(v.as_str(), "get" | "post" | "dialog") {
+            *method = v;
+        }
+    }
+    if let Some(v) = lumen_dom::submitter_override(doc, sub, "formenctype") {
+        let v = v.to_ascii_lowercase();
+        if matches!(
+            v.as_str(),
+            "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain"
+        ) {
+            *enctype = v;
+        }
+    }
+    if let Some(v) = lumen_dom::submitter_override(doc, sub, "formtarget") {
+        *target = v;
+    }
+}
+
 #[allow(dead_code)]
 pub fn build_form_submit(
     doc: &Document,
@@ -1900,6 +1937,52 @@ mod tests {
         doc.append_child(form, q);
         doc.append_child(form, submit);
         (doc, submit)
+    }
+
+    #[test]
+    fn submitter_overrides_win_over_form_attributes() {
+        let (mut doc, submit) = make_submit_doc();
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(submit).data {
+            attrs.push(Attribute { name: QualName::html("formaction"), value: "/other".into() });
+            attrs.push(Attribute { name: QualName::html("formmethod"), value: "POST".into() });
+            attrs.push(Attribute {
+                name: QualName::html("formenctype"),
+                value: "multipart/form-data".into(),
+            });
+            attrs.push(Attribute { name: QualName::html("formtarget"), value: "_top".into() });
+        }
+        let (mut action, mut method) = ("/go".to_owned(), "get".to_owned());
+        let mut enctype = "application/x-www-form-urlencoded".to_owned();
+        let mut target = String::new();
+        apply_submitter_overrides(&doc, Some(submit), &mut action, &mut method, &mut enctype, &mut target);
+        assert_eq!(action, "/other");
+        assert_eq!(method, "post");
+        assert_eq!(enctype, "multipart/form-data");
+        assert_eq!(target, "_top");
+    }
+
+    #[test]
+    fn submitter_overrides_ignore_invalid_values_and_non_submit_buttons() {
+        let (mut doc, submit) = make_submit_doc();
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(submit).data {
+            attrs.push(Attribute { name: QualName::html("formaction"), value: String::new() });
+            attrs.push(Attribute { name: QualName::html("formmethod"), value: "put".into() });
+            attrs.push(Attribute { name: QualName::html("formenctype"), value: "x/y".into() });
+        }
+        let (mut action, mut method) = ("/go".to_owned(), "get".to_owned());
+        let mut enctype = "text/plain".to_owned();
+        let mut target = String::new();
+        apply_submitter_overrides(&doc, Some(submit), &mut action, &mut method, &mut enctype, &mut target);
+        assert_eq!((action.as_str(), method.as_str(), enctype.as_str()), ("/go", "get", "text/plain"));
+
+        // type=button is not a submit button: its formaction is inert.
+        let btn = doc.create_element(QualName::html("button"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(btn).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "button".into() });
+            attrs.push(Attribute { name: QualName::html("formaction"), value: "/x".into() });
+        }
+        apply_submitter_overrides(&doc, Some(btn), &mut action, &mut method, &mut enctype, &mut target);
+        assert_eq!(action, "/go");
     }
 
     #[test]

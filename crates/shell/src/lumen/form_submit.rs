@@ -54,7 +54,25 @@ impl Lumen {
             let doc = src.document.lock().ok()?;
             let root = doc.root();
             let submit_event = lumen_dom::submit_form(&doc, form);
-            let enctype = forms::enctype_of_form(&doc, form);
+            let mut enctype = forms::enctype_of_form(&doc, form);
+            // UX-FORM-SUBMITTER: `formaction`/`formmethod`/`formenctype` кнопки
+            // перекрывают атрибуты формы. `formtarget` у страницы не читается:
+            // вспомогательных окон нет, а навигация и так идёт в текущую вкладку.
+            let (mut action, mut method) = match &submit_event {
+                lumen_dom::FormSubmitEvent::Valid { action, method, .. } => {
+                    (action.clone(), method.clone())
+                }
+                _ => (String::new(), String::new()),
+            };
+            forms::apply_submitter_overrides(
+                &doc, submitter, &mut action, &mut method, &mut enctype, &mut String::new(),
+            );
+            let submit_event = match submit_event {
+                lumen_dom::FormSubmitEvent::Valid { fields, .. } => {
+                    lumen_dom::FormSubmitEvent::Valid { action, method, fields }
+                }
+                other => other,
+            };
             let dialog_node =
                 lumen_dom::find_ancestor_dialog(&doc, submitter.unwrap_or(form));
             let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
