@@ -54,6 +54,11 @@ impl std::fmt::Debug for WebManifests {
 }
 
 impl WebManifests {
+    /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        crate::partition::clear_column(&self.conn, "web_manifest", "web_manifests", "origin", site)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Storage(format!("web_manifest open: {e}")))?;

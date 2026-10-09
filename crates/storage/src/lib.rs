@@ -35,6 +35,7 @@ pub mod omnibox_aliases;
 pub mod newtab_tiles;
 pub mod notifications;
 pub mod print_prefs;
+pub mod partition;
 pub mod permissions;
 pub mod permissions_policy;
 pub mod plugins;
@@ -91,6 +92,7 @@ pub use indexed_db::{IdbStore, NativeIdbStore};
 pub use migrations::{run_migrations, set_common_pragmas, Migration};
 pub use notifications::{Notification, Notifications};
 pub use print_prefs::{PrintPrefs, PrintPrefsSnapshot};
+pub use partition::{clear_site_data, PartitionKey, SiteDataReport, SiteDataTargets};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use permissions_policy::{
     parse_permissions_policy, PermissionsAllowlist, PermissionsPolicies, PermissionsPolicy,

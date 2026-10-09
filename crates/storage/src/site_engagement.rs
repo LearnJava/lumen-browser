@@ -74,6 +74,11 @@ impl std::fmt::Debug for SiteEngagementStore {
 }
 
 impl SiteEngagementStore {
+    /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        crate::partition::clear_column(&self.conn, "site_engagement", "site_engagement", "origin", site)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Storage(format!("site_engagement open: {e}")))?;

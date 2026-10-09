@@ -107,6 +107,12 @@ impl std::fmt::Debug for CookieJar {
 }
 
 impl CookieJar {
+    /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        Ok(crate::partition::clear_column(&self.conn, "cookies", "cookies", "domain", site)?
+            + crate::partition::clear_column(&self.conn, "cookies", "cookies", "top_level_site", site)?)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Storage(format!("cookies open: {e}")))?;
