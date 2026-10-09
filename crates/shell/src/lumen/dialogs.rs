@@ -219,3 +219,10 @@ impl Lumen {
         true
     }
 }
+
+impl Lumen {
+    /// Модель `#securityBox`: сейчас единственный источник — экран ошибки сертификата.
+    pub(crate) fn security_model(&self) -> lumen_chrome::ChromeSecurityModel {
+        self.cert_interstitial.chrome_model()
+    }
+}

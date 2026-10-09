@@ -91,12 +91,11 @@ impl Lumen {
         // while shown — Escape dismisses it ("Back"; the failed navigation's
         // error stays settled, same as any other `LoadError`), Enter
         // triggers "Proceed anyway" (records the session bypass + retries).
-        // Only a keyboard path exists so far — the blocking chrome-DOM
-        // screen with visible Back/Proceed buttons is a follow-up CC
-        // design-asset slice (see `cert_interstitial.rs`'s module doc).
+        // The same two actions are the `#securityBox` buttons (UX-SECURITY-UI).
         if self.cert_interstitial.visible && !key_event.repeat {
             if code == KeyCode::Escape {
                 self.cert_interstitial.close();
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }

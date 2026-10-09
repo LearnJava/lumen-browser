@@ -264,7 +264,7 @@ impl Lumen {
         // silently discarded. Painted separately, unclipped, via
         // `chrome_floating_dl` (`RedrawRequested`).
         let mut floating_detached = Vec::new();
-        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::DIALOG_BOX] {
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX] {
             if let Some(node) = doc.find_by_id(id)
                 && let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id)
             {
@@ -764,6 +764,7 @@ impl Lumen {
             update: self.update_ui.chrome_model(),
             login_offer: self.login_offer_model(),
             dialog: self.page_dialog_model(),
+            security: self.security_model(),
         }
     }
 
@@ -1034,6 +1035,15 @@ impl Lumen {
                     runtime::TaskSource::UserInteraction,
                     move || { flag.set(true); },
                 );
+            }
+            ChromeAction::SecurityProceed => {
+                self.proceed_cert_interstitial();
+                self.request_redraw();
+            }
+            ChromeAction::SecurityBack => {
+                self.cert_interstitial.close();
+                self.relayout_chrome_host();
+                self.request_redraw();
             }
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),

@@ -40,6 +40,8 @@ impl Lumen {
     }
 
     fn navigate_to_inner(&mut self, source: PageSource, can_intercept: bool) {
+        // UX-SECURITY-UI: уход с экрана ошибки сертификата закрывает его.
+        self.cert_interstitial.close();
         // ADR-016 M2.2c-2d: nav dispatch (fire-and-forget) через `route_task_js` +
         // read-after-eval intercept-чтение через `route_query_js`. Под флагом
         // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
