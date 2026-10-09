@@ -1488,6 +1488,17 @@ impl Lumen {
             }
         }
 
+        // UX-IME-4: preedit text of a focused field inside a frame.
+        if let Some(mut cmds) = self.ime_frame_preedit_overlay() {
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut cmds);
+            } else {
+                let mut buf = page_buf.take().unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut cmds);
+                page_buf = Some(buf);
+            }
+        }
+
         // FRAME-7 остаток (1): caret bar for a focused `<input>`/`<textarea>`
         // INSIDE a frame — a shell-side overlay in PAGE coordinates
         // (`frames::frame_page_origin` translates the rect found in the
