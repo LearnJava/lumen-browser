@@ -38,6 +38,7 @@ mod newtab_page;
 mod omnibox_bar;
 mod page_snapshot;
 mod page_views;
+mod page_zoom;
 mod palette;
 mod panel_data;
 mod panel_keys;

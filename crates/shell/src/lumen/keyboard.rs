@@ -957,18 +957,9 @@ impl Lumen {
                 // CC-10: see the matching comment on `ToggleCommandPalette`.
                 self.relayout_chrome_host();
             }
-            KeyCommand::ZoomIn => {
-                self.zoom_factor = zoom::zoom_in(self.zoom_factor);
-                self.begin_zoom_preview();
-            }
-            KeyCommand::ZoomOut => {
-                self.zoom_factor = zoom::zoom_out(self.zoom_factor);
-                self.begin_zoom_preview();
-            }
-            KeyCommand::ZoomReset => {
-                self.zoom_factor = zoom::zoom_reset();
-                self.begin_zoom_preview();
-            }
+            KeyCommand::ZoomIn => self.step_page_zoom(true),
+            KeyCommand::ZoomOut => self.step_page_zoom(false),
+            KeyCommand::ZoomReset => self.reset_page_zoom(),
         }
     }
 

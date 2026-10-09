@@ -683,6 +683,7 @@ impl Lumen {
             omnibox: lumen_chrome::OmniboxModel {
                 value: omnibox_value,
                 warning: omnibox_warning.map(str::to_owned),
+                zoom_percent: zoom::percent_label(self.zoom_factor),
             },
             sidebar_collapsed: self.chrome_sidebar_collapsed,
             dropdown,
@@ -970,6 +971,7 @@ impl Lumen {
                 );
             }
             ChromeAction::NewTab => self.open_new_tab(),
+            ChromeAction::ZoomReset => self.reset_page_zoom(),
             ChromeAction::OpenCertViewer => {
                 let cert = self.cert_info.clone();
                 self.cert_panel.toggle(cert);

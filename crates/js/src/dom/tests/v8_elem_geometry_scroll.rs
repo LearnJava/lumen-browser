@@ -673,6 +673,21 @@ fn device_pixel_ratio_defined_without_get_screen_details() {
     assert_eq!(dpr_on_window, lumen_core::JsValue::Number(1.0));
 }
 
+#[test]
+fn device_pixel_ratio_follows_page_zoom_and_fires_resize() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var resizes = 0; window.addEventListener('resize', function() { resizes++; });")
+        .unwrap();
+    rt.update_zoom_factor(1.5);
+    assert_eq!(rt.eval("devicePixelRatio").unwrap(), lumen_core::JsValue::Number(1.5));
+    assert_eq!(rt.eval("resizes").unwrap(), lumen_core::JsValue::Number(1.0));
+    // Same factor again: nothing changed, no second event.
+    rt.update_zoom_factor(1.5);
+    assert_eq!(rt.eval("resizes").unwrap(), lumen_core::JsValue::Number(1.0));
+    rt.update_zoom_factor(1.0);
+    assert_eq!(rt.eval("window.devicePixelRatio").unwrap(), lumen_core::JsValue::Number(1.0));
+}
+
 // ── CSS Scroll Snap L2 snapchanging/snapchanged events ─────────────────────
 
 #[test]
