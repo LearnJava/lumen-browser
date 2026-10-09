@@ -128,6 +128,8 @@ mod image_cache;
 mod memory_poll;
 mod newtab;
 mod input;
+#[allow(dead_code)] // UX-PASSWORDS: потребители — срезы 2–3
+mod login_form;
 mod links;
 mod lumen;
 mod momentum_anim;
