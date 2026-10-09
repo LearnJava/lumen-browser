@@ -1381,6 +1381,9 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   <div class="set-block"><h3>Разрешения сайтов</h3><div class="desc" id="permDesc">Решения сохраняются между сессиями. Отзыв возвращает сайту запрос при следующем обращении.</div>
                     <div id="permList"><div class="set-row perm-row"><div class="st-text"><div class="st-title">https://example.com</div><div class="st-desc">Camera · разрешено</div></div><button class="upd-check" data-action="revoke-site-permission" data-perm-origin="https://example.com" data-perm-kind="Camera" aria-label="Отозвать">Отозвать</button></div></div>
                   </div>
+                  <div class="set-block"><h3>Данные сайта</h3><div class="desc" id="siteDataDesc">Удаляет cookies, кэш, разрешения, хранилища и службы текущего сайта вместе с его поддоменами.</div>
+                    <div class="set-row"><div class="st-text"><div class="st-title" id="siteDataSite">example.com</div></div><button class="upd-check" id="siteDataBtn" data-action="clear-site-data" data-site="">Очистить</button></div>
+                  </div>
                 </div>
 
                 <div class="set-section" data-set="sync">

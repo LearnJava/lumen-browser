@@ -74,6 +74,33 @@ impl Lumen {
         }
     }
 
+    /// UX-PARTITION: удалить все данные `site` из хранилищ профиля и
+    /// из памяти вкладок (localStorage/sessionStorage, решения разрешений).
+    pub(crate) fn clear_site_data(&mut self, site: &lumen_storage::PartitionKey) {
+        self.ls_storage.retain(|origin, _| !site.matches(origin));
+        self.ss_storage.retain(|origin, _| !site.matches(origin));
+        self.permission.forget_site(site);
+        let jar = self.active_cookie_jar();
+        let targets = lumen_storage::SiteDataTargets {
+            cookies: Some(&*jar),
+            permissions: Some(&*self.permissions_disk_store),
+            cache_storage: Some(&*self.cache_store),
+            autofill: crate::autofill_store::global(),
+            idb_dir: self.idb_dir.as_deref(),
+            ..lumen_storage::SiteDataTargets::default()
+        };
+        let report = lumen_storage::clear_site_data(site, &targets);
+        eprintln!(
+            "clear_site_data {}: удалено {} записей, ошибок {}",
+            site.site(),
+            report.total(),
+            report.failed.len()
+        );
+        for (store, err) in &report.failed {
+            eprintln!("clear_site_data {store}: {err}");
+        }
+    }
+
     pub(crate) fn refresh_read_later(&mut self) {
         let mut entries = self
             .read_later_store
