@@ -131,6 +131,7 @@ mod input;
 #[allow(dead_code)] // UX-AUTOFILL: потребители — срезы 2–4
 mod autofill_form;
 mod autofill_store;
+mod threat_feeds;
 mod threat_store;
 mod card_store;
 mod login_form;
