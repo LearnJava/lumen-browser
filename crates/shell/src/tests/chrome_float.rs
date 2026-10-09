@@ -312,3 +312,41 @@ fn login_bar_detaches_and_routes_its_buttons() {
     };
     assert_eq!(press(lumen_chrome::ids::LOGIN_SAVE_BTN), Some(lumen_chrome::ChromeAction::SaveLogin));
 }
+
+/// UX-SECURITY-UI: `#securityBox` отцепляется как плавающая панель, обе кнопки
+/// разрешаются в свои действия.
+#[test]
+fn security_box_detaches_and_routes_its_buttons() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let bx = doc.find_by_id(lumen_chrome::ids::SECURITY_BOX).expect("has #securityBox");
+
+    let model = lumen_chrome::ChromeModel {
+        security: lumen_chrome::ChromeSecurityModel {
+            open: true,
+            title: "Ваше подключение не защищено".to_owned(),
+            message: "bad.example".to_owned(),
+            detail: "certificate expired".to_owned(),
+            proceed_label: String::new(),
+        },
+        ..lumen_chrome::ChromeModel::default()
+    };
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let (rect, detached) = take_floating_panel(&mut layout, bx, lumen_chrome::ids::SECURITY_BOX)
+        .expect("open #securityBox must be detachable");
+    assert!(fills_rect(&paint_ordered(&detached.removed), rect), "box background must paint");
+
+    let press = |id| {
+        let node = doc.find_by_id(id).expect("button id");
+        let r = lumen_layout::find_box_by_node(&detached.removed, node).expect("button box").rect;
+        let hit = hit_test(Point::new(r.x + r.width / 2.0, r.y + r.height / 2.0), &detached.removed)
+            .expect("press hits the box");
+        action_at(&doc, &hit)
+    };
+    assert_eq!(press(lumen_chrome::ids::SECURITY_PROCEED_BTN), Some(lumen_chrome::ChromeAction::SecurityProceed));
+    assert_eq!(press(lumen_chrome::ids::SECURITY_BACK_BTN), Some(lumen_chrome::ChromeAction::SecurityBack));
+}

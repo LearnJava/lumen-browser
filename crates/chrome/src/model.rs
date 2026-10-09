@@ -19,6 +19,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use lumen_dom::{Attribute, Document, Namespace, NodeData, NodeId, QualName};
 
 mod dialog;
+mod security;
+pub use security::ChromeSecurityModel;
 mod login_bar;
 pub use dialog::ChromeDialogModel;
 pub use login_bar::ChromeLoginOfferModel;
@@ -121,6 +123,8 @@ pub struct ChromeModel {
     pub login_offer: ChromeLoginOfferModel,
     /// `#dialogBox` — `alert`/`confirm`/`prompt` страницы (UX-DIALOGS).
     pub dialog: ChromeDialogModel,
+    /// `#securityBox` — ошибка сертификата / вредоносный сайт (UX-SECURITY-UI).
+    pub security: ChromeSecurityModel,
 }
 
 /// `#demoBar` floating control panel snapshot (CC-18) — the panel itself
@@ -851,6 +855,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     update_bar::bind_update(doc, &model.update);
     login_bar::bind_login_offer(doc, &model.login_offer);
     dialog::bind_dialog(doc, &model.dialog);
+    security::bind_security(doc, &model.security);
 }
 
 /// Like [`bind_model`], but also reports what the call actually changed, split

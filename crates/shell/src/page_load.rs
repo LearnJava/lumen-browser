@@ -1001,6 +1001,7 @@ impl Lumen {
             return;
         };
         lumen_network::tls::bypass::allow_host(&host);
+        self.relayout_chrome_host();
         self.reload();
     }
 
