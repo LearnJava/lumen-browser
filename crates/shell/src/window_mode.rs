@@ -575,6 +575,8 @@ fn run_window_mode_inner(
         update_ui: update_ui::UpdateUi::new(),
         login_offer: None,
         autofill_offer: None,
+        card_offer: None,
+        card_menu: Vec::new(),
         login_fill: None,
         login_gen: None,
         tab_strip: tabs::strip::TabStrip::new(),
