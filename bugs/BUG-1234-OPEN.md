@@ -36,3 +36,13 @@
 ## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
 
 `filter`/`backdrop-filter`: WAAPI `el.animate({filter:["blur(0px)","blur(20px)"]})` + `pause()` + `currentTime=2000` — `getComputedStyle().filter` даёт `blur(20px)`, ожидается `blur(10px)` (интерполяции нет); 7 id `filter-effects/animation/*` (672 из 954 сабтестов) и 20 reftest `css-filters-animation-*`/`css-backdrop-filters-animation-*` (в снимке видна конечная точка). `color-interpolation-filters` — `'from' value should be supported`: свойства нет в разборе.
+
+## Повторное измерение: WPT-RUN-14 срез 26 (2026-10-09)
+
+Граница прохода между CSS-движком и Web Animations из JS измерена пробой (`run_smoke.py` + testharness, `getComputedStyle` через 250–700 мс после старта; 23 свойства, `transition: <свойство> 20s linear`):
+
+- **CSS-переход идёт только у `opacity`, `color`, `background-color`, `transform`, `height`** — у них `transitionrun` приходит и значение промежуточное. Остальные 18 (`width`, `margin-left`, `padding-left`, `left`, `top`, `border-top-width`, `border-top-color`, `border-top-left-radius`, `font-size`, `line-height`, `letter-spacing`, `outline-width`, `box-shadow`, `flex-grow`, `z-index`, `min-width`, `max-width`, `visibility`) за 250–700 мс прыгают к конечному значению, `transitionrun` не приходит, `getAnimations()` пуст.
+- **CSS `@keyframes` — то же**: `margin-left: 0→100px` за 6 с остаётся `0px` на 1,3 / 2,6 / 3,9 с, `opacity`/`background-color`/`transform` идут.
+- **WAAPI из JS (`el.animate`) тот же набор свойств интерполирует**: `margin-left` 18.3 px через 1 с из 6 с, `z-index` 5 на 50 %, `vertical-align` 10px, `text-shadow`, `display` — то есть интерполятор в JS-шиме шире, чем в `animation.rs`.
+
+Следствие: 56 id / 2 614 сабтестов `css-animations` (`animation-base-response-*`, `animation-iteration-count-*`, `display-interpolation`, `text-decoration-inset-auto`, `animate-with-color-mix`…) и `css-transitions` (`z-index-interpolation`, `vertical-align-interpolation`, `text-shadow-interpolation`, `all-interpolates-same-as-explicit-property`: 21 из 32) — кластер AT08 в `docs/wpt-vendor-notes/css.md` §css-page + css-animations + … . Эти id не разделены с BUG-1305 (neutral keyframe) и BUG-1293 (старт).

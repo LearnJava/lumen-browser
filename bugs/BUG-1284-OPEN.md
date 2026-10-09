@@ -28,3 +28,7 @@
 ## Как проверить
 
 Страница выше с `lumen --dump-layout`; затем `css/css-flexbox/scrollbars.html` через `tests/wpt/reftest_pixdiff.py`.
+
+## Подтверждено для `inline-block`: WPT-RUN-14 срез 26 (2026-10-09)
+
+`<div style="width:200px;height:30px;overflow:auto;white-space:nowrap">` с тремя `<span style="display:inline-block;width:150px;height:20px">` (`--dump-layout` + `getBoundingClientRect`): `top` детей 8, 28, 48, `left` у всех 8 — три строки вместо одной, `scrollWidth` 200 (ожидается 450), `scrollHeight` 60. То есть `nowrap` не работает и для `inline-block`, не только для `inline-flex`. Из-за этого в `css-scroll-snap` горизонтальные скроллеры из `inline-block` (`white-space: nowrap`, типичный приём в тестах) не получают горизонтальной прокрутки; `flex` с `flex:none` детьми даёт верный `scrollWidth` (450).
