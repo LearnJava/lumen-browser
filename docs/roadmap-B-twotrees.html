@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-09",
  "counts": {
-  "open": 376,
+  "open": 398,
   "fixed": 1131,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1510,
+ "total_bugs": 1532,
  "phases": [
   {
    "id": "P0",
@@ -808,6 +808,39 @@
      "note": "Плавная прокрутка (CSSOM View §«Scrolling»: `ScrollBehavior`, CSS Overflow 3 `scroll-behavior`): сейчас `el.scrollTo({top:50, behavior:\"smooth\"})` и `scrollIntoView({behavior:\"smooth\"})` прокручивают мгновенно (`scrollTop` 50 сразу), `scroll-behavior: smooth` хранится и на прокрутку не влияет, `scrollend` не приходит. Объём: анимация позиции скроллера по кадрам (easing), прерывание новой прокруткой или жестом, `scrollend`, каскад `scroll-behavior` (корневой скроллер берёт значение с `<html>`), `behavior` в `scroll*()`/`scrollIntoView()`, плавный якорный переход. Масштаб: 24 id `css/cssom-view/` (`scroll-behavior-*`, `smooth-*`, `scrollIntoView-smooth`, `visual-scrollIntoView-*`; 171 из 236 сабтестов, 4 `TIMEOUT`); кластер — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles. Критерий готовности: `scroll-behavior-smooth.html`, `scrollIntoView-smooth.html`, `smooth-scroll-nonstop.html` зелёные.",
      "bugs": [
       "BUG-1560"
+     ]
+    },
+    {
+     "id": "SHADOW-PARTS",
+     "title": "SHADOW-PARTS: ::part() и exportparts",
+     "status": "planned",
+     "size": "L",
+     "note": "CSS Shadow Parts (css-shadow-parts-1) не реализован: `#host::part(p1){color:red}` не действует на `<span part=\"p1\">` в shadow tree, `CSS.supports(\"selector(::part(a))\")` — `false`, `Element.prototype.part` не определён, `exportparts` не читается; в `CSS-SPECS.md` модуль числился «Shadow DOM not planned», хотя Shadow DOM реализован. Объём: разбор `::part(<ident>+)` с хвостом из псевдоклассов и псевдоэлементов (`::part(a):hover`, `::part(a)::before`), сопоставление через `part`/`exportparts` на любую глубину вложенных хостов, каскад с учётом контекста инкапсуляции (BUG-1580 — документ побеждает `:host` в нормальных декларациях), `Element.part` (`DOMTokenList`), инвалидация при смене `part`/`exportparts`, `insertRule`/`CSS.supports` для селектора. Сначала BUG-1577 — без него тесты не доходят до проверки (A/B с обходом: 2 → 8 зелёных из 48 `css/css-shadow/part/*`). Масштаб: 46 id `css/css-shadow` (`part/*`, 177 упавших сабтестов, 5 reftest `thick`); кластер — `docs/wpt-vendor-notes/css.md` §css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap. Критерий готовности: `css/css-shadow/part/simple.html`, `simple-forward.html`, `exportparts-layered.html`, `part-name-idl.html` зелёные в `run_corpus.py --prefixes css/css-shadow/part`.",
+     "bugs": [
+      "BUG-1578",
+      "BUG-1577",
+      "BUG-1580"
+     ]
+    },
+    {
+     "id": "CSSANIM-MODEL",
+     "title": "CSSANIM-MODEL: CSSAnimation/CSSTransition в JS",
+     "status": "planned",
+     "size": "L",
+     "note": "Модель CSS Animations/Transitions в JS (CSS Animations L1 §«CSSAnimation», CSS Transitions L1 §«CSSTransition», Web Animations L1): после GAP-CSSANIM `getAnimations()` возвращает для CSS-анимации `Animation` с пустым `KeyframeEffect` (`web_api_shim_mid_b4.js:761`), чтобы список был ненулевым, а значения рисует Rust-планировщик. Не работает: `typeof CSSAnimation`/`CSSTransition` — `undefined`, `animationName`/`transitionProperty` пусты, `effect.getKeyframes()` — `[]`, `getComputedTiming().duration` — 0, `currentTime`/`startTime` — `null`, `ready` не создаётся, `getAnimations()` сразу после смены стиля пуст (BUG-1293). Объём: настоящие `CSSAnimation`/`CSSTransition` (наследники `Animation`), эффект из `@keyframes` и из пары значений перехода, общий таймлайн с `ready`/`finished`/`pending`, создание при пересчёте стиля, `animation-play-state` ↔ `pause()`/`play()`, замена эффекта (`effect = null`), порядок композиции, `CSSPseudoElement` как цель (CSSOM-11). Масштаб: 57 id / 319 сабтестов `css/css-animations` и `css/css-transitions` (`CSSAnimation-*`, `CSSTransition-*`, `Element-getAnimations*`, `Document-getAnimations`, `KeyframeEffect-*`, `AnimationEffect-*`), ещё около 20 id с TIMEOUT, ждущих события; кластер — `docs/wpt-vendor-notes/css.md` §css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap. Критерий готовности: `CSSAnimation-id.tentative.html`, `Element-getAnimations.tentative.html`, `css-transitions/CSSTransition-ready.tentative.html` зелёные.",
+     "bugs": [
+      "BUG-1581",
+      "BUG-1293"
+     ]
+    },
+    {
+     "id": "PAINT-WORKLET",
+     "title": "PAINT-WORKLET: Houdini Paint API и Layout API",
+     "status": "planned",
+     "size": "XL",
+     "note": "CSS Paint API и CSS Layout API (Houdini): `CSS.paintWorklet.addModule(url)` возвращает выполненный промис и ничего не загружает, `registerPaint` вызывается только вручную, `paint(name)` в `background` рисуется заглушкой (`BackgroundImage::Paint`, `display_list/background_mask.rs:440`), `CSS.layoutWorklet`, `registerLayout`, `Worklet` не существуют, `display: layout(name)` разбирается и не действует. Объём: общий `Worklet` с `addModule` (загрузка и выполнение модуля в изолированном контексте), `registerPaint` + `PaintRenderingContext2D` + `PaintSize` + `inputProperties`, вызов `paint()` при раскладке/отрисовке в обоих растрах, затем `registerLayout` + `LayoutChild`/`LayoutFragment`/`intrinsicSizes()`/`autoBlockSize`. Масштаб: 236 id `css/css-paint-api` (115) и `css/css-layout-api` (121), из них 229 `reftest-wait` (также нужен WPT-RUN-15); кластер — `docs/wpt-vendor-notes/css.md` §css-ruby + css-layout-api + css-box + motion + … (WPT-RUN-14 S27, 2026-10-09). Критерий готовности: `css/css-paint-api/background-repeat-x.https.html`, `css/css-layout-api/auto-block-size/flex.https.html` зелёные.",
+     "bugs": [
+      "BUG-779"
      ]
     }
    ],
@@ -2506,8 +2539,8 @@
       {
        "id": "css-specs-t1",
        "title": "CSS модули — Tier 1 (Critical gaps)",
-       "status": "done",
-       "note": "12✅ 0🟡 0⬜ 0🚫 из 12 модулей CSS-SPECS.md (Tier 1)"
+       "status": "active",
+       "note": "10✅ 2🟡 0⬜ 0🚫 из 12 модулей CSS-SPECS.md (Tier 1)"
       },
       {
        "id": "css-specs-t2",
@@ -2519,7 +2552,7 @@
        "id": "css-specs-t3",
        "title": "CSS модули — Tier 3 (Spec compliance)",
        "status": "active",
-       "note": "5✅ 10🟡 0⬜ 0🚫 из 15 модулей CSS-SPECS.md (Tier 3)"
+       "note": "4✅ 11🟡 0⬜ 0🚫 из 15 модулей CSS-SPECS.md (Tier 3)"
       },
       {
        "id": "css-specs-t4",
@@ -6275,16 +6308,16 @@
       {
        "id": "WPT-RUN-14-S26",
        "title": "WPT-RUN-14-S26: page, animations, transitions, borders",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон `css/{css-page,css-animations,css-transitions,css-shadow,css-borders,css-scroll-snap}` (около 1 194 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон `css/{css-page,css-animations,css-transitions,css-shadow,css-borders,css-scroll-snap}` (1 194 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-09 (ветка `p2-wpt-run14-s26`): 1 194 automatable id, 275.70 = 23.09 % (reftest 90/298, testharness 115.70/597 при 1 523 из 7 543 сабтестов, crashtest 70/75; 224 `print-reftest` в `css-page` без исполнителя — WPT-RUN-8); `css-animations` 39.1 %, `css-transitions` 28.7 %, `css-shadow` 32.1 %, `css-borders` 23.3 %, `css-scroll-snap` 16.5 %, `css-page` 5.3 %; «no leak», повторный прогон на чистом каталоге — 0 расхождений из 970. 734 не зелёных id из 970 выполненных (207 reftest `FAIL`: 161 `thick`, 42 `nosrc`, 4 `thin-only`; 467 `OK` с упавшими сабтестами; 46 `TIMEOUT`; 13 `ERROR`; 1 `SKIP`) разнесены на 31 кластер. Главное: CSS Shadow Parts нет вовсе (`::part()`, `part`, `exportparts`, BUG-1578, ДОРАБОТКА → SHADOW-PARTS) и сначала не даёт проверить даже остальное — `ShadowRoot.getElementById` ищет по документу, а `ShadowRoot.appendChild(DocumentFragment)` вставляет сам фрагмент (BUG-1577: 27 id используют общий помощник; A/B 2 → 8 зелёных из 48); у CSS-анимаций и переходов в JS нет `CSSAnimation`/`CSSTransition`, `getAnimations()` отдаёт пустые оболочки (BUG-1581, ДОРАБОТКА → CSSANIM-MODEL, 57 id), а CSS-движок анимирует только opacity/transform/color/background-color/height — 18 из 23 пробных свойств в переходе прыгают сразу к конечному значению (BUG-1234, 56 id / 2 614 сабтестов); любая запись `el.style.*` скроллера обнуляет его `scrollTop` через 50–150 мс (BUG-1573), программная прокрутка не привязывается к snap (BUG-1574); пока идёт CSS-анимация и другая анимация или цикл rAF, `setTimeout` срабатывает по окончании анимации (BUG-1584, связь с TIMEOUT-id не доказана); CSS Borders 4 (`corner-shape`, `border-shape`, `box-shadow-*`) не реализован — 161 id, из них 42 reftest с `?…` в имени (`nosrc`) пиксельно не проверены (BUG-491). Заведены BUG-1573…1585 (13 записей, 2 из них «ДОРАБОТКА»), задачи SHADOW-PARTS и CSSANIM-MODEL для P1, строка `corner-shape`/`border-shape` в CSS-SPECS для P4; повторные замеры в BUG-491/1234/1293/1440/1455/1506. Не разобрано 35 id в «прочем» (AT09, SH8, BR6); причина по каждому из 84 id «позиция после прокрутки» не разделена между BUG-1573 и BUG-1574. Движок не менялся."
       },
       {
        "id": "WPT-RUN-14-S27",
        "title": "WPT-RUN-14-S27: ruby, box, motion, mediaqueries",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон `css/{css-ruby,css-layout-api,css-box,motion,css-highlight-api,css-paint-api,css-viewport,mediaqueries}` (около 1 059 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон `css/{css-ruby,css-layout-api,css-box,motion,css-highlight-api,css-paint-api,css-viewport,mediaqueries}` (1 059 automatable id), кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-09 (ветка `p2-wpt-run14-s27`): 1 059 automatable id, 305.98 = 28.89 % (reftest 140/786, testharness 123.98/231 при 5 812 из 7 438 сабтестов, crashtest 42/42); `css-viewport` 51.5 %, `css-ruby` 34.4 %, `mediaqueries` 42.6 %, `motion` 29.6 %, `css-highlight-api` 27.5 %, `css-box` 27.1 %, `css-layout-api` 21.4 %, `css-paint-api` 3.1 %; «no leak», повторный прогон на чистом каталоге — 0 расхождений из 1 059. 795 не зелёных id разнесены на 20 кластеров: 646 reftest `FAIL` (640 `thick`, 2 `identical`, 1 `thin-only`, 3 `no-match-ref`), 141 testharness `OK` с упавшими сабтестами, 5 `ERROR`, 3 `TIMEOUT`. Главное: 236 не зелёных id `css-layout-api` (121) и `css-paint-api` (115) — Houdini (`registerPaint`/`registerLayout`, `addModule`), 229 из них `reftest-wait`, то есть зависят и от WPT-RUN-15; `margin-trim` нет вовсе — 108 id (BUG-1586, ДОРАБОТКА → CSS-SPECS.md); `ruby-overhang` нет — 42 id (BUG-1590); `offset-distance: N%` считается от диагонали бокса, а не от длины пути, и `offset-path` кроме `path()`/`ray()` не действует — 76 id (BUG-1587, BUG-1588); Media Queries 4: вложенные скобки, `or`, диапазоны, `calc()`, `cm`/`in`/`vw`/`ex`/`ch`, безразмерный `0` превращают запрос в `not all` — 32 reftest (BUG-1593); `zoom` не масштабирует тени, `outline`, `border-spacing`, смещения `transform`, SVG — 42 id (BUG-1592); в `<rt>` блок и `inline-block` схлопываются в 0×0 (BUG-1591). Заведены BUG-1586…1594 (9 записей, 3 из них «ДОРАБОТКА → CSS-SPECS.md»), задача PAINT-WORKLET для P1, строки `margin-trim`/`ruby-overhang`/Motion Path в CSS-SPECS для P4; повторные замеры в BUG-779/943/480/1457/1234; исправлен `reftest_pixdiff.py` (ссылка `rel=match` без кавычек — 8 id `zoom/explicit-inherit` считались `no-match-ref`). Движок не менялся."
       },
       {
        "id": "WPT-RUN-14-S28",
@@ -8202,7 +8235,7 @@
       {
        "id": "UX-LOADING",
        "title": "UX-LOADING: индикатор загрузки страницы",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Нет индикатора загрузки страницы: во время навигации вкладка и тулбар выглядят как у загруженной страницы. Есть всё сырьё: `Lumen::nav_start` (Some на время навигации, `app/about_to_wait.rs:1302`), класс `.spinner` и `@keyframes spin` в `assets/chrome/chrome.html:241-242` (сейчас только в статичном макете строки «Восстановление…»), `ChromeTabModel` без поля загрузки (`crates/chrome/src/model.rs:550`). Объём: флаг загрузки на вкладку (не один `nav_start` на окно — фоновая вкладка тоже грузится), поле `loading` в `ChromeTabModel` → `.spinner` вместо `.tab-fav`, кнопка «Обновить» → «Остановить» (`data-action=reload`, `chrome.html:974`) с реальной отменой навигации, по желанию тонкая полоса прогресса под омнибоксом. Критерий: на медленной странице (`--maximized`, `LUMEN_NO_ADBLOCK=1`) спиннер виден от клика до RenderDone и гаснет после; Esc/кнопка останавливают загрузку."
       },
@@ -11061,6 +11094,160 @@
    "status": "open",
    "title": "`content: \"\\2022\"` — escape-последовательности в строках `content` не раскрываются: на странице печатается `\\2022`. `content: \"\\2022\"` — escape-последовательнос…",
    "component": "layout (`crates/engine/layout/src/style/parse/content.rs::parse_content_items` — строка берётся срезом `&s[start..i]` без декодирования)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1573": {
+   "status": "open",
+   "title": "Любая мутация `el.style.*` скроллера, его потомка или `body` через ~50–150 мс после записи сбрасывает `scrollTop` контейнера с `overflow:auto` в 0: `c.scrollTop…",
+   "component": "layout/shell (повторная раскладка после мутации инлайн-стиля; точное место не изолировано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1574": {
+   "status": "open",
+   "title": "У контейнера с `scroll-snap-type: y mandatory` вызовы `scrollTo(0,100)`, `scrollTop = 40`, `scrollBy(0,170)` оставляют позицию как есть (100, 40, 210) — привязк…",
+   "component": "layout/shell/js (привязка к snap и `scroll-padding` при программной прокрутке)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1575": {
+   "status": "open",
+   "title": "`getComputedStyle()` отдаёт `\"\"` для `scroll-snap-type`, `scroll-snap-align`, `scroll-snap-stop`, `scroll-initial-target`, `scroll-padding-block/-inline`, `scro…",
+   "component": "layout/js (`selector_query.rs::computed_style_to_map`, разбор scroll-padding/scroll-margin/scroll-snap-*)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1576": {
+   "status": "open",
+   "title": "`typeof SnapEvent` — `undefined`, `onscrollsnapchange` нет ни в `window`, ни в `document`, ни у элемента; события нигде не диспатчатся (`grep -rn \"scrollsnapcha…",
+   "component": "js/layout (события Scroll Snap 2; `scroll_initial_target.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1577": {
+   "status": "open",
+   "title": "`shadowRoot.getElementById(\"a\")` возвращает `null` для узла внутри этого shadow root (реализация зовёт `_lumen_get_element_by_id` — поиск по документу); `Docume…",
+   "component": "js (`web_api_shim_mid.js` — `ShadowRoot.getElementById`/`appendChild`, `DocumentFragment.getElementById`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1578": {
+   "status": "open",
+   "title": "Правило `#host::part(p1){color:red}` не действует на `<span part=\"p1\">` в shadow tree: цвет остаётся чёрным; `CSS.supports(\"selector(::part(a))\")` — `false`; `E…",
+   "component": "css-parser/layout/js (`::part()`, `part`, `exportparts` — нет вовсе)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1579": {
+   "status": "open",
+   "title": "Внутри shadow tree `:host div`, `:host > div`, `:host(.a) div`, `:host > *`, `:host *` не совпадают с потомками (`width:100px` не применяется, остаётся 384px),…",
+   "component": "css-parser/layout (сопоставление `:host(...)` с комбинаторами и внутри `:is()`/`:where()`/`:has()`; `:host-context`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1580": {
+   "status": "open",
+   "title": "Нормальное правило документа для хоста обязано побеждать нормальное правило `:host` из его shadow tree, а `!important` — наоборот (CSS Cascade 5 §6.4.2; важные…",
+   "component": "layout (каскад по контекстам инкапсуляции для `:host` и `::slotted`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1581": {
+   "status": "open",
+   "title": "После GAP-CSSANIM `getAnimations()` возвращает для разметочной CSS-анимации один объект с `playState: \"running\"`, `id` = имя `@keyframes` — но это оболочка: `ty…",
+   "component": "js/layout (`CSSAnimation`/`CSSTransition`, эффект из `@keyframes`, синхронное создание)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1582": {
+   "status": "open",
+   "title": "`el.style.animationDelay = \"infinite\"` → читается `infinite` (ожидается `\"\"`); `transitionDuration = \"-1s\"` принимается; `transitionTimingFunction = \"steps(2,st…",
+   "component": "css-parser/layout/js (разбор и сериализация `animation-*`/`transition-*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1583": {
+   "status": "open",
+   "title": "`new AnimationEvent()` без аргумента не бросает `TypeError` (длина конструктора — 2, ожидается 1); `\"animationName\" in AnimationEvent.prototype`, `\"elapsedTime\"…",
+   "component": "js (IDL `AnimationEvent`/`TransitionEvent`, `idlharness`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1584": {
+   "status": "open",
+   "title": "`<div style=\"animation:o 4s linear\">` + `element.animate(…, {duration:4000})` (или цикл `requestAnimationFrame`): `setTimeout(r, 1000)` срабатывает на 4,1 с (по…",
+   "component": "shell/js (голодание таймеров при активной CSS-анимации; возможна связь с BUG-935)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1585": {
+   "status": "open",
+   "title": "`border: 1.5px solid` → `getComputedStyle(el).borderTopWidth` — `1.5px` (ожидается `1px`), `0.5px` → `0.5px` (должно быть `1px`), `2.7px` → `2.7px` (`2px`); `ou…",
+   "component": "layout (привязка `border-*-width`/`outline-width` к пикселям устройства, CSS Backgrounds 3 §4.2)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1586": {
+   "status": "open",
+   "title": "`margin-trim: block",
+   "component": "css-parser/layout (`margin-trim`: ноль совпадений в `crates/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1587": {
+   "status": "open",
+   "title": "`offset-distance: 100%` у бокса 10×10 при `offset-path: path(\"M0 0 h 200\")` даёт сдвиг `(14.1, 0)` — это диагональ бокса `√(10²+10²)`, а не 200 (длина пути). То…",
+   "component": "layout (`property_trees`/`resolve_motion_transform`: база `offset-distance: N%`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1588": {
+   "status": "open",
+   "title": "`offset-path: circle(100px at 200px 200px)` и все остальные формы, кроме `path()` и `ray()`, разбираются (`CSS.supports` — `true`), но бокс не сдвигается: `x=10…",
+   "component": "layout (`offset-path` кроме `path()`/`ray()`: ничего не делает)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1589": {
+   "status": "open",
+   "title": "`getComputedStyle(el).getPropertyValue(\"offset-path\")` и остальные шесть `offset-*` — `\"\"`; `CSS.supports(\"offset-position\",\"normal\")` — `false`; `el.style.offs…",
+   "component": "layout/js (`computed_style_to_map`: нет `offset-*`; `offset-position` не разбирается)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1590": {
+   "status": "open",
+   "title": "`CSS.supports(\"ruby-overhang\",\"spaces\")` — `false`, `getComputedStyle` — `\"\"`, `<ruby style=\"ruby-overhang:spaces\">あ<rt>ああああああああああ</rt></ruby>` между двумя полн…",
+   "component": "css-parser/layout (`ruby-overhang`: нет разбора и раскладки)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1591": {
+   "status": "open",
+   "title": "`<ruby><rb>X</rb><rt><div style=\"width:50px;height:5px\"></div></rt></ruby>`: `div` — `0×0`, `<rt>` — `800×0`, `<ruby>` смещён на `x=393`; то же для `<span style…",
+   "component": "layout/js (`build_ruby_group_box`: блочное содержимое `<rt>`; инлайнизация; `CSS.supports` для `ruby-*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1592": {
+   "status": "open",
+   "title": "При `zoom: 2` у `box-shadow: 20px 0 0` полоса тени шириной 20 px (ожидается 40), `text-shadow: 20px 0 0` смещён на 20 px, `outline: 10px` рисуется 10 px, `borde…",
+   "component": "layout/paint (`zoom`: непрокрашенные свойства)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1593": {
+   "status": "open",
+   "title": "`@media (width >= 600px)`, `(min-width: 0)`, `(min-width: 10cm)`, `((min-width:0px))`, `(min-width:0px) or (min-height:0px)`, `not ((min-width:99999px) or (mono…",
+   "component": "css-parser (`parser/media.rs`: грамматика условий)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1594": {
+   "status": "open",
+   "title": "`matchMedia(\"(prefers-color-scheme: 0)\").media` — `not all` вместо исходного запроса; `matchMedia(\"(min-resolution: 1x)\").media` — `(min-resolution: 1dppx)`, `(…",
+   "component": "css-parser/js (`matchMedia().media` и `mediaText`: общий случай и сериализация)",
    "date": null,
    "debtor": false
   },
@@ -19123,6 +19310,9 @@
   "css-parser (`lumen_css_parser::Parser::parse_ident`, `crates/engine/css-parser/src/parser.rs`)": [
    "BUG-1065"
   ],
+  "css-parser (`parser/media.rs`: грамматика условий)": [
+   "BUG-1593"
+  ],
   "css-parser (нет обработки нигде в `css-parser`/`layout`)": [
    "BUG-487"
   ],
@@ -19134,6 +19324,9 @@
   ],
   "css-parser, layout (`style/values/scroll.rs`)": [
    "BUG-944"
+  ],
+  "css-parser/js (`matchMedia().media` и `mediaText`: общий случай и сериализация)": [
+   "BUG-1594"
   ],
   "css-parser/layout": [
    "BUG-088",
@@ -19229,6 +19422,12 @@
   "css-parser/layout (`crates/engine/layout/src/style/values/flexgrid.rs` — разбор `grid-template-columns` без верхней границы числа дорожек)": [
    "BUG-1320"
   ],
+  "css-parser/layout (`margin-trim`: ноль совпадений в `crates/`)": [
+   "BUG-1586"
+  ],
+  "css-parser/layout (`ruby-overhang`: нет разбора и раскладки)": [
+   "BUG-1590"
+  ],
   "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\": [
    "BUG-521"
   ],
@@ -19246,6 +19445,12 @@
   ],
   "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"wrap-flow\\": [
    "BUG-507"
+  ],
+  "css-parser/layout (сопоставление `:host(...)` с комбинаторами и внутри `:is()`/`:where()`/`:has()`; `:host-context`)": [
+   "BUG-1579"
+  ],
+  "css-parser/layout/js (разбор и сериализация `animation-*`/`transition-*`)": [
+   "BUG-1582"
   ],
   "css-parser/layout/shell (`crates/engine/layout/src/style/parse/` — разбор `url()` с `<request-url-modifier>`; `crates/shell/src/subresources.rs`)": [
    "BUG-1433"
@@ -19377,6 +19582,9 @@
   ],
   "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
    "BUG-291"
+  ],
+  "js (IDL `AnimationEvent`/`TransitionEvent`, `idlharness`)": [
+   "BUG-1583"
   ],
   "js (IndexedDB-шим, `crates/js/src/shim/idb_shim.js`)": [
    "BUG-990"
@@ -20289,6 +20497,9 @@
   "js/layout (hit-test: `document.elementFromPoint`, `elementsFromPoint`; `crates/js/src/shim/web_api_shim_mid*.js`, `crates/engine/layout/src/`)": [
    "BUG-1557"
   ],
+  "js/layout (события Scroll Snap 2; `scroll_initial_target.rs`)": [
+   "BUG-1576"
+  ],
   "js/network (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_element_src_blocked` → `_lumen_check_element_src`; `crates/network/src/lib.rs` `element_src_gate`)": [
    "BUG-1175"
   ],
@@ -20980,6 +21191,12 @@
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
   ],
+  "layout (`offset-path` кроме `path()`/`ray()`: ничего не делает)": [
+   "BUG-1588"
+  ],
+  "layout (`property_trees`/`resolve_motion_transform`: база `offset-distance: N%`)": [
+   "BUG-1587"
+  ],
   "layout (`style.rs::parse_linear_gradient_angle`) — shared by all 3 paint backends": [
    "BUG-647"
   ],
@@ -21009,6 +21226,9 @@
   ],
   "layout (корень дерева боксов / ICB, не локализовано)": [
    "BUG-1274"
+  ],
+  "layout (привязка `border-*-width`/`outline-width` к пикселям устройства, CSS Backgrounds 3 §4.2)": [
+   "BUG-1585"
   ],
   "layout (разобран на подбаги)": [
    "BUG-725"
@@ -21041,6 +21261,12 @@
   "layout/grid": [
    "BUG-1102"
   ],
+  "layout/js (`build_ruby_group_box`: блочное содержимое `<rt>`; инлайнизация; `CSS.supports` для `ruby-*`)": [
+   "BUG-1591"
+  ],
+  "layout/js (`computed_style_to_map`: нет `offset-*`; `offset-position` не разбирается)": [
+   "BUG-1589"
+  ],
   "layout/js (`crates/engine/layout/src/content_visibility.rs`, `selector_query.rs` — геометрия скрытого поддерева; шим `getBoundingClientRect`)": [
    "BUG-1400"
   ],
@@ -21067,6 +21293,9 @@
   ],
   "layout/js (`crates/engine/layout/src/style/values/typography.rs` — `case_upper`; `box_tree/inline_build.rs` — контекст `capitalize` между текстовыми узлами)": [
    "BUG-1486"
+  ],
+  "layout/js (`selector_query.rs::computed_style_to_map`, разбор scroll-padding/scroll-margin/scroll-snap-*)": [
+   "BUG-1575"
   ],
   "layout/js (сериализация цвета с альфой, `crates/engine/layout/src/selector_query.rs`, `web_api_shim_mid.js`)": [
    "BUG-1424"
@@ -21140,6 +21369,9 @@
   "layout/paint (`style/parse/gradient*.rs`, `style/values/color_mix.rs` — предопределённые цветовые пространства)": [
    "BUG-1432"
   ],
+  "layout/paint (`zoom`: непрокрашенные свойства)": [
+   "BUG-1592"
+  ],
   "layout/paint (бокс-обёртка таблицы)": [
    "BUG-1289"
   ],
@@ -21161,14 +21393,17 @@
   "layout/paint/shell (`crates/engine/paint/src/display_list/walk.rs:1056` — `BeginStickyLayer`; прокрутка вложенного контейнера в `crates/shell`)": [
    "BUG-1468"
   ],
-  "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)": [
-   "BUG-1293"
-  ],
   "layout/shell (`crates/shell/src/subresources.rs`, `crates/engine/image/src/svg.rs` — внутренние размеры и пропорции SVG-картинки)": [
    "BUG-1295"
   ],
   "layout/shell (замещаемые элементы, aspect-ratio)": [
    "BUG-269"
+  ],
+  "layout/shell (повторная раскладка после мутации инлайн-стиля; точное место не изолировано)": [
+   "BUG-1573"
+  ],
+  "layout/shell/js (привязка к snap и `scroll-padding` при программной прокрутке)": [
+   "BUG-1574"
   ],
   "layout/text": [
    "BUG-120"
@@ -21746,6 +21981,9 @@
   ],
   "shell/js (`crates/shell/src/app/about_to_wait.rs` — `opener_tab_id` теперь читается один раз до цикла (P3, 2026-09-29); `lumen_js::window_messaging` — доставка попап → опенер)": [
    "BUG-1212"
+  ],
+  "shell/js (голодание таймеров при активной CSS-анимации; возможна связь с BUG-935)": [
+   "BUG-1584"
   ],
   "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
    "BUG-1355"

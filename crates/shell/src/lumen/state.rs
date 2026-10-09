@@ -256,6 +256,9 @@ pub(crate) struct Lumen {
     /// [`ChromeOverlayFrameCache`]'s doc comment for why "unconditional" (not
     /// "only when bytes changed") is the correct, safe choice here.
     pub(crate) chrome_layout_generation: u64,
+    /// UX-LOADING: `nav_start.is_some()` as last bound into the chrome
+    /// (spinner / stop button); a flip re-binds the chrome.
+    pub(crate) chrome_loading_shown: bool,
     /// PERF-16 срез 2: кэш emit display list по поддереву для хрома — между проходами
     /// [`Self::relayout_chrome_host`] неизменившиеся куски воспроизводятся копированием
     /// (`LUMEN_NO_EMIT_CACHE=1` выключает).

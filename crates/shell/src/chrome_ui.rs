@@ -343,6 +343,10 @@ impl Lumen {
                     title: t.title.clone(),
                     active: Some(t.id) == active_id,
                     sleeping: t.tab_state == TabState::Hibernated,
+                    // UX-LOADING: only the active tab's navigation is live —
+                    // a background tab's streaming events are discarded
+                    // (`mark_bg_tab_needs_reload`), so it is not "loading".
+                    loading: Some(t.id) == active_id && self.nav_start.is_some(),
                     // CC-8: tree-style tabs (7A.2) — a tab with an opener is
                     // rendered as a `.child` row with a `.tree-line` connector.
                     // The asset's CSS only indents one nesting level, so this
@@ -950,6 +954,11 @@ impl Lumen {
     ) {
         use lumen_chrome::ChromeAction;
         match action {
+            ChromeAction::Reload if self.nav_start.is_some() => {
+                // UX-LOADING: while a navigation is in flight the same
+                // button is "Остановить".
+                self.stop_loading();
+            }
             ChromeAction::Reload => {
                 // Mirrors `toolbar::ToolbarHit::Reload` — routed through the
                 // UserInteraction task source rather than called directly

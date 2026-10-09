@@ -1004,6 +1004,20 @@ impl Lumen {
         self.reload();
     }
 
+    /// UX-LOADING: остановить навигацию активной вкладки. Поколение
+    /// увеличивается, поэтому все события фоновой загрузки (`LoadEvent`)
+    /// отбрасываются сверкой `generation != load_generation`; страница
+    /// остаётся такой, какой её успели нарисовать.
+    pub(crate) fn stop_loading(&mut self) {
+        if self.nav_start.take().is_none() {
+            return;
+        }
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.stream_builder = None;
+        self.relayout_chrome_host();
+        self.request_redraw();
+    }
+
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
     /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
     /// предыдущий display_list, печатаем причину в stderr.
