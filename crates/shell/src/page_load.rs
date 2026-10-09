@@ -1022,6 +1022,7 @@ impl Lumen {
     /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
     /// предыдущий display_list, печатаем причину в stderr.
     pub(crate) fn reload(&mut self) {
+        self.restore_crashed_source();
         if matches!(self.source, PageSource::Empty) {
             return;
         }

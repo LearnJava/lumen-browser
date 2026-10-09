@@ -1259,6 +1259,9 @@ pub(crate) struct Lumen {
     /// is evicted from `bg_tabs` and stored in `tab_snapshots`; only this
     /// cheap struct remains in RAM.
     pub(crate) hibernated_tabs: HashMap<usize, tab_lifecycle::TabMetadata>,
+    /// UX-CRASH: HTML показанного экрана падения и исходный источник упавшей
+    /// страницы — `reload()` возвращает его вместо повторного показа экрана.
+    pub(crate) crashed: Option<(String, PageSource)>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     pub(crate) tab_snapshots: lumen_storage::TabSnapshotStore,
     /// SQLite-backed checkpoint store for T2 (BackgroundOld) tabs (ADR-008 §10I).
