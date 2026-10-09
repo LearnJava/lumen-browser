@@ -239,6 +239,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .tab-row:hover .tab-close{ display:flex; }
 .tab-close:hover{ background:var(--stroke); }
 .spinner{ width:12px; height:12px; border-radius:50%; border:1.6px solid var(--stroke); border-top-color:var(--accent); animation:spin .7s linear infinite; }
+.tb-btn .ic-stop{ display:none; }
+.tb-btn.loading .ic-stop{ display:block; }
+.tb-btn.loading .ic-reload{ display:none; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
 
 /* Свернуть сайдбар */
@@ -971,7 +974,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
         <div class="tb-nav">
           <button class="tb-btn"><svg class="icon"><use href="#i-back"/></svg></button>
           <button class="tb-btn"><svg class="icon"><use href="#i-fwd"/></svg></button>
-          <button class="tb-btn" data-action="reload" aria-label="Обновить"><svg class="icon"><use href="#i-reload"/></svg></button>
+          <button class="tb-btn" data-action="reload" aria-label="Обновить"><svg class="icon ic-reload"><use href="#i-reload"/></svg><svg class="icon ic-stop"><use href="#i-x"/></svg></button>
         </div>
 
         <div class="omnibox-wrap">

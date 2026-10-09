@@ -1293,6 +1293,13 @@ impl Lumen {
             self.pending_waits = still_pending;
         }
 
+        // UX-LOADING: спиннер вкладки и кнопка «Остановить» следуют за `nav_start`.
+        if self.chrome_loading_shown != self.nav_start.is_some() {
+            self.chrome_loading_shown = self.nav_start.is_some();
+            self.relayout_chrome_host();
+            self.request_redraw();
+        }
+
         // BUG-1145: ответы движкового потока на eval и сроки ожидания. Приход
         // ответа будит цикл сам (`AutomationWake`), а срок — нет, поэтому
         // ближайший вкладываем в уже выставленный `ControlFlow`.

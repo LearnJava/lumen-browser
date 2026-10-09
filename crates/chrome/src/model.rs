@@ -560,6 +560,10 @@ pub struct ChromeTabModel {
     /// swaps the close button for a `.tab-badge` (mirrors the asset's own
     /// hibernated row, which carries no close button).
     pub sleeping: bool,
+    /// `true` while this tab's navigation is in flight (UX-LOADING) — the
+    /// `.tab-fav` slot becomes a `.spinner`, and for the active tab the
+    /// reload button turns into a stop button.
+    pub loading: bool,
     /// `true` when the tab has an opener (`TabEntry::opener_id`, tree-style
     /// tabs 7A.2) — adds the `.child` class + a `.tree-line` connector span
     /// (CC-8). The asset's CSS only defines indentation for a single nesting
@@ -798,6 +802,11 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     }
     if let Some(container) = find_by_class(doc, "hbar-ws") {
         rebuild_hbar_ws_list(doc, container, &model.workspaces);
+    }
+    if let Some(btn) = find_by_attr(doc, "data-action", "reload") {
+        let loading = model.tabs.iter().any(|t| t.active && t.loading);
+        set_class_token(doc, btn, "loading", loading);
+        set_attr(doc, btn, "aria-label", if loading { "Остановить" } else { "Обновить" });
     }
     bind_omnibox(doc, &model.omnibox);
     bind_dropdown(doc, &model.dropdown);
@@ -1603,8 +1612,8 @@ fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMod
     }
 
     let fav = doc.create_element(QualName::html("span"));
-    set_attr(doc, fav, "class", "tab-fav");
-    append_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    append_text(doc, fav, &fav_text(tab));
     attach_child(doc, row, fav);
 
     let title = doc.create_element(QualName::html("span"));
@@ -1679,7 +1688,8 @@ fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
         rebuild_tab_row_children(doc, row, tab);
         return;
     };
-    set_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    set_text(doc, fav, &fav_text(tab));
     set_text(doc, title, &tab.title);
     idx += 2;
 
@@ -1792,8 +1802,8 @@ fn apply_hbar_tab_attrs(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
 
 fn populate_hbar_tab_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     let fav = doc.create_element(QualName::html("span"));
-    set_attr(doc, fav, "class", "tab-fav");
-    append_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    append_text(doc, fav, &fav_text(tab));
     attach_child(doc, row, fav);
 
     let title = doc.create_element(QualName::html("span"));
@@ -1815,7 +1825,8 @@ fn update_hbar_tab(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
         populate_hbar_tab_children(doc, row, tab);
         return;
     };
-    set_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    set_text(doc, fav, &fav_text(tab));
     set_text(doc, title, &tab.title);
 }
 
@@ -1845,6 +1856,15 @@ fn build_hbar_ws_pill(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
 fn update_hbar_ws_pill(doc: &mut Document, pill: NodeId, ws: &ChromeWorkspaceModel) {
     apply_hbar_ws_pill_attrs(doc, pill, ws);
     set_text(doc, pill, &ws.name);
+}
+
+/// Class of the `.tab-fav` slot: the asset's `.spinner` while loading.
+fn fav_class(tab: &ChromeTabModel) -> &'static str {
+    if tab.loading { "spinner" } else { "tab-fav" }
+}
+
+fn fav_text(tab: &ChromeTabModel) -> String {
+    if tab.loading { String::new() } else { first_letter(&tab.title) }
 }
 
 fn first_letter(s: &str) -> String {
@@ -2140,7 +2160,7 @@ mod tests {
         let mut doc = parse_asset();
         let tab = |title: &str| {
             model_with_tabs(vec![ChromeTabModel {
-                id: 1, title: title.to_owned(), active: true, sleeping: false,
+                id: 1, title: title.to_owned(), active: true, sleeping: false, loading: false,
                 is_child: false, container_color: None, group: None,
             }])
         };
@@ -2196,7 +2216,7 @@ mod tests {
     fn bind_model_tracked_reports_nothing_touched_for_an_unchanged_model() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
+            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
             is_child: false, container_color: None, group: None,
             }]);
         let first = bind_model_tracked(&mut doc, &model);
@@ -2237,17 +2257,17 @@ mod tests {
     fn bind_model_tracked_reports_the_container_when_a_tab_is_added() {
         let mut doc = parse_asset();
         let one_tab = model_with_tabs(vec![ChromeTabModel {
-            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
+            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
             is_child: false, container_color: None, group: None,
             }]);
         bind_model_tracked(&mut doc, &one_tab);
         let two_tabs = model_with_tabs(vec![
             ChromeTabModel {
-                id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
+                id: 1, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
                 is_child: false, container_color: None, group: None,
             },
             ChromeTabModel {
-                id: 2, title: "Beta".to_owned(), active: false, sleeping: false,
+                id: 2, title: "Beta".to_owned(), active: false, sleeping: false, loading: false,
                 is_child: false, container_color: None, group: None,
             },
         ]);
@@ -2293,11 +2313,11 @@ mod tests {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
             ChromeTabModel {
-                id: 7, title: "Alpha".to_owned(), active: true, sleeping: false,
+                id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
                 is_child: false, container_color: None, group: None,
             },
             ChromeTabModel {
-                id: 9, title: "Beta".to_owned(), active: false, sleeping: true,
+                id: 9, title: "Beta".to_owned(), active: false, sleeping: true, loading: false,
                 is_child: false, container_color: None, group: None,
             },
         ]);
@@ -2336,9 +2356,9 @@ mod tests {
     fn rebinding_unchanged_tabs_preserves_row_and_descendant_node_ids() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
-            ChromeTabModel { id: 9, title: "Beta".to_owned(), active: false, sleeping: true, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 9, title: "Beta".to_owned(), active: false, sleeping: true, loading: false, is_child: false, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2368,7 +2388,7 @@ mod tests {
     fn rebinding_a_changed_title_keeps_the_row_id_and_updates_text_in_place() {
         let mut doc = parse_asset();
         let mut model = model_with_tabs(vec![
-            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2399,9 +2419,9 @@ mod tests {
     fn shrinking_the_tab_list_detaches_the_trailing_row_and_keeps_the_survivor_id() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
-            ChromeTabModel { id: 2, title: "Two".to_owned(), active: false, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 2, title: "Two".to_owned(), active: false, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2422,7 +2442,7 @@ mod tests {
     fn toggling_sleeping_keeps_the_row_id_and_swaps_badge_for_close_button() {
         let mut doc = parse_asset();
         let mut model = model_with_tabs(vec![
-            ChromeTabModel { id: 1, title: "One".to_owned(), active: false, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: false, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2437,6 +2457,28 @@ mod tests {
         let children = doc.get(row_after).children.clone();
         assert!(children.iter().any(|&c| has_class(&doc, c, "tab-badge")));
         assert!(!children.iter().any(|&c| has_class(&doc, c, "tab-close")));
+    }
+
+    /// UX-LOADING: `loading` turns the active tab's fav slot into `.spinner`
+    /// and the reload button into the stop button; clearing it restores both.
+    #[test]
+    fn loading_tab_shows_spinner_and_stop_button() {
+        let mut doc = parse_asset();
+        let mut model = model_with_tabs(vec![
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, loading: true, is_child: false, container_color: None, group: None },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let row = doc.get(container).children.iter().copied().find(|&c| has_class(&doc, c, "tab-row")).unwrap();
+        let fav = doc.get(row).children.iter().copied().find(|&c| has_class(&doc, c, "spinner"));
+        assert!(fav.is_some(), "loading tab must carry a .spinner");
+        let btn = find_by_attr(&doc, "data-action", "reload").expect("asset has the reload button");
+        assert!(has_class(&doc, btn, "loading"));
+
+        model.tabs[0].loading = false;
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, fav.unwrap(), "tab-fav"));
+        assert!(!has_class(&doc, btn, "loading"));
     }
 
     /// Same identity-preservation guarantee for the workspace switcher.
@@ -2494,7 +2536,7 @@ mod tests {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
             ChromeTabModel {
-                id: 3, title: "Gamma".to_owned(), active: true, sleeping: false,
+                id: 3, title: "Gamma".to_owned(), active: true, sleeping: false, loading: false,
                 is_child: false, container_color: None, group: None,
             },
         ]);
@@ -2551,7 +2593,7 @@ mod tests {
     fn child_tab_gets_the_child_class_tree_line_and_container_stripe() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 11, title: "Reply".to_owned(), active: false, sleeping: false,
+            id: 11, title: "Reply".to_owned(), active: false, sleeping: false, loading: false,
             is_child: true, container_color: Some("#1F9D55".to_owned()), group: None,
             }]);
         bind_model(&mut doc, &model);
@@ -2584,7 +2626,7 @@ mod tests {
     fn grouped_tab_renders_a_group_stripe_before_the_container_stripe() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 3, title: "Roadmap".to_owned(), active: false, sleeping: false,
+            id: 3, title: "Roadmap".to_owned(), active: false, sleeping: false, loading: false,
             is_child: false, container_color: Some("#1F9D55".to_owned()),
             group: Some(ChromeTabGroup { color: "#8B5CF6".to_owned(), name: "Проект Х".to_owned(), collapsed: false }),
         }]);
@@ -2614,7 +2656,7 @@ mod tests {
     fn collapsed_group_stripe_title_hints_at_the_fold() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 4, title: "Chip".to_owned(), active: false, sleeping: false,
+            id: 4, title: "Chip".to_owned(), active: false, sleeping: false, loading: false,
             is_child: false, container_color: None,
             group: Some(ChromeTabGroup { color: "#3B82F6".to_owned(), name: "Работа".to_owned(), collapsed: true }),
         }]);
@@ -2641,7 +2683,7 @@ mod tests {
     fn ungrouped_tab_has_no_group_stripe() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 5, title: "Solo".to_owned(), active: false, sleeping: false,
+            id: 5, title: "Solo".to_owned(), active: false, sleeping: false, loading: false,
             is_child: false, container_color: None, group: None,
         }]);
         bind_model(&mut doc, &model);
@@ -2664,7 +2706,7 @@ mod tests {
     fn rebinding_a_tab_that_joins_a_group_updates_row_in_place() {
         let mut doc = parse_asset();
         let ungrouped = model_with_tabs(vec![ChromeTabModel {
-            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false,
+            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false, loading: false,
             is_child: false, container_color: None, group: None,
         }]);
         bind_model(&mut doc, &ungrouped);
@@ -2678,7 +2720,7 @@ mod tests {
             .expect("one tab row bound");
 
         let grouped = model_with_tabs(vec![ChromeTabModel {
-            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false,
+            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false, loading: false,
             is_child: false, container_color: None,
             group: Some(ChromeTabGroup { color: "#EF4444".to_owned(), name: "Red".to_owned(), collapsed: false }),
         }]);
@@ -2704,9 +2746,9 @@ mod tests {
     fn bound_tab_rows_carry_role_tab_and_aria_selected_in_both_layouts() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 1, title: "Активная".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 1, title: "Активная".to_owned(), active: true, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
-            ChromeTabModel { id: 2, title: "Пример".to_owned(), active: false, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 2, title: "Пример".to_owned(), active: false, sleeping: false, loading: false, is_child: false, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
