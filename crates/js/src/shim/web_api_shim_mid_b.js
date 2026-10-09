@@ -832,7 +832,22 @@ navigator.clipboard = {
             return text === '' ? [] : [new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }) })];
         });
     },
-    write: function() { return Promise.resolve(undefined); },
+    // UX-PERMISSIONS-6: write() puts the first item's text/plain on the OS clipboard.
+    write: function(items) {
+        if (!items || typeof items.length !== 'number') {
+            return Promise.reject(new TypeError("Failed to execute 'write' on 'Clipboard': parameter 1 is not a sequence."));
+        }
+        var item = items[0];
+        if (!item) { return Promise.resolve(undefined); }
+        if (item.types.indexOf('text/plain') < 0) {
+            return Promise.reject(new DOMException('Type text/plain not supported for write.', 'NotAllowedError'));
+        }
+        return item.getType('text/plain').then(function(blob) {
+            return blob.text();
+        }).then(function(text) {
+            return navigator.clipboard.writeText(text);
+        });
+    },
 };
 // Clipboard API §6: ClipboardItem — a map of MIME type → Blob (or Promise<Blob>).
 globalThis.ClipboardItem = class ClipboardItem {
