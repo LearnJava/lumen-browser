@@ -44,6 +44,22 @@ getrandom = "0.2"
 # the shared secret with the push service's ephemeral key. Already in the
 # dependency graph via lumen-js and lumen-network (same version/features).
 p256 = { version = "0.13", features = ["ecdh"] }
+# Provisional (§5): AES-256-CBC + PKCS#5 PBES2 для импорта паролей Firefox
+# (UX-IMPORT) — `key4.db` расшифровывается стандартным RFC 8018, не
+# внутренним форматом NSS. aes/cbc уже в графе (lumen-js, тот же паттерн
+# `cbc::Decryptor::<aes::Aes256>` — crates/js/src/subtle_crypto.rs); pkcs5 и
+# pbkdf2 — новые записи в Cargo.lock. Неподтверждено против настоящего
+# профиля Firefox — см. doc-comment import_logins_firefox.rs.
+# Graduation: постоянная, пока поддерживается импорт из Firefox.
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pkcs5 = { version = "0.7", features = ["pbes2", "alloc"] }
+# Provisional (§5): PBKDF2-HMAC-SHA256 — та же цель, тестовый шифрующий
+# встречный ход (production-код только расшифровывает через pkcs5).
+pbkdf2 = "0.12"
+# Provisional (§5): NSS выводит "эффективный пароль" как SHA1(globalSalt +
+# masterPassword) — только это, не общий хеш-примитив широкого назначения.
+sha1 = "0.10"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]

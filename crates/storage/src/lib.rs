@@ -30,6 +30,7 @@ pub mod hsts;
 pub mod http_cache;
 pub mod import;
 pub mod import_logins;
+pub mod import_logins_firefox;
 pub mod indexed_db;
 pub mod keyboard_shortcuts;
 pub mod migrations;
