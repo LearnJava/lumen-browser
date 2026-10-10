@@ -1147,6 +1147,8 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
+            // UX-TRANSLATE-4: toolbar button, same toggle as the palette entry.
+            ChromeAction::TranslatePage => self.toggle_page_translation(),
             ChromeAction::OpenPrintDialog => {
                 self.print_panel.toggle();
                 // CC-10: see the matching comment on `ToggleShieldPopover`.
