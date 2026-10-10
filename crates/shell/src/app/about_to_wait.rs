@@ -1382,6 +1382,23 @@ impl Lumen {
         self.downloads.poll();
         self.poll_update_ui();
 
+        // UX-IMPORT: drain the background profile-import thread, if running.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Some(summary) = self.import_manager.poll(
+            &self.bookmarks,
+            &self.history_store,
+            password_store::global(),
+            now_unix,
+        ) {
+            eprintln!("[import] готово: {summary}");
+            notification::show_os_notification("Импорт из браузера", &summary);
+            self.refresh_bookmarks();
+            self.request_redraw();
+        }
+
         // _lumen_network_download(url, filename): start downloads requested by
         // page scripts / <a download>. Relative URLs are resolved against the
         // active document URL.
