@@ -243,6 +243,7 @@ impl Lumen {
                     lumen_chrome::ids::DOWNLOADS_PANEL,
                     lumen_chrome::ids::CP_OVERLAY,
                     lumen_chrome::ids::CERT_OVERLAY,
+                    lumen_chrome::ids::SHORTCUTS_OVERLAY,
                     lumen_chrome::ids::PRINT_OVERLAY,
                 ],
                 doc,
@@ -577,6 +578,29 @@ impl Lumen {
                 fingerprint: "\u{2014}".to_owned(),
             },
         };
+        // UX-CHROME-PANELS: `#shortcutsOverlay` — the shell windows the rows
+        // (the chrome has no wheel-scroll container).
+        let shortcuts = {
+            let panel = &self.shortcuts_panel;
+            let count = panels::shortcuts_panel::ShortcutsPanel::visible_count(self.viewport_height_css());
+            let rows = panel
+                .rows
+                .iter()
+                .enumerate()
+                .skip(panel.first_row)
+                .take(count)
+                .map(|(index, r)| {
+                    let rebinding = panel.rebinding == Some(index);
+                    lumen_chrome::ChromeShortcutRowModel {
+                        index,
+                        label: r.label.to_owned(),
+                        binding: if rebinding { "Нажмите клавишу…".to_owned() } else { r.binding_label() },
+                        rebinding,
+                    }
+                })
+                .collect();
+            lumen_chrome::ChromeShortcutsModel { open: panel.visible, rows }
+        };
         // CC-10b: which `#contentArea` view is shown — mirrors whichever of
         // the three legacy panel `visible` flags is set (kept mutually
         // exclusive by `dispatch_chrome_action`'s `ShowView` handler), same
@@ -779,6 +803,7 @@ impl Lumen {
             site_shields_on: self.shields.enabled_for_current(),
             palette,
             cert,
+            shortcuts,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
                 landscape: self.print_panel.orientation == panels::print_panel::Orientation::Landscape,
@@ -1533,12 +1558,28 @@ impl Lumen {
                     self.print_panel.close();
                     self.relayout_chrome_host();
                 }
+                Some(ChromeModalKind::Shortcuts) => {
+                    self.shortcuts_panel.close();
+                    self.relayout_chrome_host();
+                }
                 None => {}
             },
             // CC-10b: `.set-nav .item`/`.set-section` both carry the same
             // slug on `data-section`/`data-set` — `bind_settings` matches
             // `ChromeSettingsModel::active_section` against either
             // attribute, so this only needs to store the clicked slug.
+            // UX-CHROME-PANELS: click on a `.sc-row` starts a rebind of that row.
+            ChromeAction::RebindShortcut => {
+                let idx = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-sc-index"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                if let Some(idx) = idx.filter(|&i| i < self.shortcuts_panel.rows.len()) {
+                    self.shortcuts_panel.rebinding = Some(idx);
+                    self.relayout_chrome_host();
+                }
+            }
             ChromeAction::SetSettingsSection => {
                 if let Some(section) =
                     self.chrome_doc.as_ref().and_then(|(doc, _)| doc.get(nid).get_attr("data-section"))
@@ -1804,6 +1845,7 @@ impl Lumen {
         let (doc, _) = self.chrome_doc.as_ref()?;
         let cert_overlay = doc.find_by_id(lumen_chrome::ids::CERT_OVERLAY);
         let print_overlay = doc.find_by_id(lumen_chrome::ids::PRINT_OVERLAY);
+        let shortcuts_overlay = doc.find_by_id(lumen_chrome::ids::SHORTCUTS_OVERLAY);
         let mut cur = Some(nid);
         while let Some(id) = cur {
             if Some(id) == cert_overlay {
@@ -1811,6 +1853,9 @@ impl Lumen {
             }
             if Some(id) == print_overlay {
                 return Some(ChromeModalKind::Print);
+            }
+            if Some(id) == shortcuts_overlay {
+                return Some(ChromeModalKind::Shortcuts);
             }
             cur = doc.get(id).parent;
         }
@@ -2292,4 +2337,5 @@ pub(crate) fn chrome_overlay_digest_reuse_disabled() -> bool {
 pub(crate) enum ChromeModalKind {
     Cert,
     Print,
+    Shortcuts,
 }

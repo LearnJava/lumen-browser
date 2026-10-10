@@ -23,7 +23,7 @@ pub use model::{
     ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadModel,
     ChromeDropdownModel, ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
-    ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel,
+    ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel, ChromeShortcutRowModel, ChromeShortcutsModel,
     ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeUpdateAction,
     ChromeDialogModel, ChromeSecurityModel, ChromeLoginOfferModel, ChromeUpdateModel, ChromeWorkspaceModel,
     ControlPanelShape, OmniboxModel, SelectorTouch, NO_DOMAIN_LABEL,

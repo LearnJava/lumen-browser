@@ -285,6 +285,7 @@ impl Lumen {
             if code == KeyCode::Escape {
                 self.shortcuts_panel.cancel_rebind();
                 self.request_redraw();
+                self.relayout_chrome_host();
                 return true;
             }
             let modifier = {
@@ -305,11 +306,13 @@ impl Lumen {
             let key = key.trim_start_matches("Key").trim_start_matches("Digit").to_string();
             self.shortcuts_panel.accept_rebind(modifier, &key);
             self.request_redraw();
+            self.relayout_chrome_host();
             return true;
         }
         if code == KeyCode::Escape {
             self.shortcuts_panel.close();
             self.request_redraw();
+            self.relayout_chrome_host();
             return true;
         }
         false
