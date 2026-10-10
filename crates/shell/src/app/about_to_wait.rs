@@ -1430,6 +1430,14 @@ impl Lumen {
         // `query`; без флага — байт-идентично прежнему `js.take_notification_requests()`).
         for (title, body) in self.drain_query_js(|j| j.take_notification_requests()).unwrap_or_default()
         {
+            // UX-PARTITION-8: след уведомления в профиле, чтобы «Очистить»
+            // данные сайта его находило.
+            if let Some(origin) = self.source.origin_str() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let _ = self.notifications_store.show(&origin, &title, &body, None, "", None, now);
+            }
             notification::show_os_notification(&title, &body);
         }
 
