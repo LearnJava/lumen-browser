@@ -260,18 +260,35 @@ pub fn clear_site_data(site: &PartitionKey, t: &SiteDataTargets<'_>) -> SiteData
 }
 
 /// Удалить файл IndexedDB сайта (`<origin_key>.db` и WAL/SHM-спутники).
+///
+/// Если файл держит открытая страница (на Windows SQLite не даёт его удалить),
+/// файл остаётся, а все таблицы `idb_*` опустошаются через второе соединение.
 fn clear_idb_files(dir: &Path, site: &PartitionKey) -> Result<usize> {
     let base = format!("{}.db", crate::indexed_db::origin_key(site.site()));
-    let mut removed = 0;
-    for suffix in ["", "-wal", "-shm"] {
-        let path = dir.join(format!("{base}{suffix}"));
-        match std::fs::remove_file(&path) {
-            Ok(()) => removed += usize::from(suffix.is_empty()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(Error::Storage(format!("idb remove {}: {e}", path.display()))),
+    let db_path = dir.join(&base);
+    match std::fs::remove_file(&db_path) {
+        Ok(()) => {
+            for suffix in ["-wal", "-shm"] {
+                let _ = std::fs::remove_file(dir.join(format!("{base}{suffix}")));
+            }
+            Ok(1)
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(_) => wipe_idb_rows(&db_path).map(|()| 1),
     }
-    Ok(removed)
+}
+
+/// Опустошить таблицы IndexedDB в файле, открытом другим соединением.
+fn wipe_idb_rows(path: &Path) -> Result<()> {
+    let conn = Connection::open(path)
+        .map_err(|e| Error::Storage(format!("idb wipe open {}: {e}", path.display())))?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| Error::Storage(format!("idb wipe busy: {e}")))?;
+    conn.execute_batch(
+        "DELETE FROM idb_records; DELETE FROM idb_indexes; DELETE FROM idb_stores;
+         DELETE FROM idb_meta; DELETE FROM idb_snapshot;",
+    )
+    .map_err(|e| Error::Storage(format!("idb wipe {}: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -404,6 +421,37 @@ mod tests {
         assert_eq!(left.len(), 1);
         let left = jar.get_for_request("tracker.net", "/", false, 0, Some("other.org")).unwrap();
         assert_eq!(left.len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clear_site_data_wipes_idb_held_open_by_page() {
+        use lumen_core::ext::{IdbRecordOp, IdbSchemaOp};
+        let dir = std::env::temp_dir().join(format!("lumen-partition-idb-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let k = key("example.com");
+        let page = crate::indexed_db::NativeIdbStore::for_origin(k.site(), &dir).unwrap();
+        page.apply_schema(&IdbSchemaOp::CreateStore {
+            db_name: "d".into(),
+            store_name: "s".into(),
+            key_path: None,
+            auto_increment: false,
+        })
+        .unwrap();
+        page.exec_op(&IdbRecordOp::Put {
+            db_name: "d".into(),
+            store_name: "s".into(),
+            key_json: "1".into(),
+            value_json: "2".into(),
+        })
+        .unwrap();
+        let report = clear_site_data(&k, &SiteDataTargets { idb_dir: Some(&dir), ..SiteDataTargets::default() });
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        let got = page
+            .exec_op(&IdbRecordOp::Get { db_name: "d".into(), store_name: "s".into(), key_json: "1".into() })
+            .unwrap();
+        assert!(matches!(got, lumen_core::ext::IdbOpResult::Value(None)), "{got:?}");
+        drop(page);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
