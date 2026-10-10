@@ -535,6 +535,9 @@ fn run_window_mode_inner(
         notifications_store: Arc::new(
             lumen_storage::Notifications::open_in_memory().expect("notifications_store init"),
         ),
+        site_engagement: Arc::new(
+            lumen_storage::SiteEngagementStore::open_in_memory().expect("site_engagement init"),
+        ),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),

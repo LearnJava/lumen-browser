@@ -90,6 +90,7 @@ impl Lumen {
             cache_storage: Some(&*self.cache_store),
             service_workers: Some(&*self.sw_registry),
             notifications: Some(&*self.notifications_store),
+            site_engagement: Some(&*self.site_engagement),
             autofill: crate::autofill_store::global(),
             idb_dir: self.idb_dir.as_deref(),
             ..lumen_storage::SiteDataTargets::default()

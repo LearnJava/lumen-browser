@@ -2388,6 +2388,10 @@ impl Lumen {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let _ = self.history_store.record_visit(url, title, now_secs);
+            // UX-PARTITION-9: счётчик визитов по origin, чтобы «Очистить» находило след.
+            if let Some(origin) = self.source.origin_str() {
+                let _ = self.site_engagement.record_visit(&origin, now_secs);
+            }
         }
         // Clear GIF animation state from previous page.
         self.animated_gifs.clear();

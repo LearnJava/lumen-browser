@@ -876,6 +876,9 @@ pub(crate) struct Lumen {
     /// Session-scoped Web Notifications store (`lumen_storage::Notifications`);
     /// UX-PARTITION: "Clear site data" wipes it per site.
     pub(crate) notifications_store: Arc<lumen_storage::Notifications>,
+    /// Session-scoped per-origin visit counters (`lumen_storage::SiteEngagementStore`);
+    /// UX-PARTITION: "Clear site data" wipes it per site.
+    pub(crate) site_engagement: Arc<lumen_storage::SiteEngagementStore>,
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
