@@ -8394,9 +8394,16 @@
       {
        "id": "UX-IMPORT",
        "title": "UX-IMPORT: импорт из других браузеров",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Импорт закладок, истории и паролей из Chrome/Edge/Firefox: чтение их SQLite-баз (Bookmarks JSON, places.sqlite), пароли Chrome — DPAPI/AES-GCM, Firefox — NSS key4.db. Пароли — после UX-PASSWORDS."
+       "note": "Импорт закладок, истории и паролей из Chrome/Edge/Firefox: чтение их SQLite-баз (Bookmarks JSON, places.sqlite), пароли Chrome/Edge — DPAPI/AES-GCM, Firefox — NSS key4.db (PKCS#5 PBES2/RFC 8018). Действие палитры команд «Import Bookmarks and History»; фоновый поток (`import_manager.rs`), OS-уведомление об итоге; закладки — постоянное хранилище (`bookmarks.db`). Firefox-пароли — остаток в UX-IMPORT-FF-VERIFY."
+      },
+      {
+       "id": "UX-IMPORT-FF-VERIFY",
+       "title": "UX-IMPORT-FF-VERIFY: сверить импорт паролей Firefox с реальным профилем",
+       "status": "planned",
+       "size": "S",
+       "note": "UX-IMPORT: импорт паролей Firefox (`import_logins_firefox.rs`) реализован по открытым описаниям формата `key4.db` (PKCS#5 PBES2 + `SHA1(globalSalt++masterPassword)`), но непроверен на настоящем профиле — песочница без установленного Firefox с сохранённым паролем, тесты только самосогласованны (шифруют синтетические данные и читают обратно тем же `pkcs5`). Нужно: прогнать на реальном профиле Firefox с известным паролем, свериться с decrypted-байтами; если раскладка logins.json-полей (DER SEQUENCE) не совпадает с ожидаемой — исправить `decrypt_entry_field`. Мастер-пароль профиля и 3DES/легаси-схемы шифрования записей всё ещё не поддержаны."
       },
       {
        "id": "UX-SPELLCHECK",
