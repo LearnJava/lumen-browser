@@ -90,6 +90,15 @@ fn shared_http_cache(private: bool) -> Option<Arc<dyn HttpCacheBackend>> {
     HTTP_CACHE.get_or_init(|| build_http_cache(private)).clone()
 }
 
+/// UX-PARTITION: delete every cached response whose URL belongs to `site`.
+/// Returns 0 when the shared cache has not been created yet (nothing cached).
+pub fn clear_http_cache_site(site: &lumen_storage::PartitionKey) -> usize {
+    HTTP_CACHE
+        .get()
+        .and_then(Option::as_ref)
+        .map_or(0, |cache| cache.clear_matching(&|url| site.matches(url)))
+}
+
 /// Construct the HTTP cache backend for the requested privacy mode (no global
 /// state). Split out from [`shared_http_cache`] so it can be unit-tested without
 /// freezing the process-global `OnceLock`.

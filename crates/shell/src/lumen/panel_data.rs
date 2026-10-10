@@ -89,7 +89,8 @@ impl Lumen {
             idb_dir: self.idb_dir.as_deref(),
             ..lumen_storage::SiteDataTargets::default()
         };
-        let report = lumen_storage::clear_site_data(site, &targets);
+        let mut report = lumen_storage::clear_site_data(site, &targets);
+        report.removed.push(("http_cache", crate::config::clear_http_cache_site(site)));
         eprintln!(
             "clear_site_data {}: удалено {} записей, ошибок {}",
             site.site(),
