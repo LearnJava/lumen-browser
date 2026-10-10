@@ -11,7 +11,7 @@
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use lumen_dom::page_translate::{collect_translatable, page_language, TextSegment, TranslationSession};
+use lumen_dom::page_translate::{collect_translatable, detect_language, page_language, TextSegment, TranslationSession};
 use lumen_dom::Document;
 
 /// Язык перевода: (название для промпта модели, код BCP 47).
@@ -75,10 +75,13 @@ impl TranslateManager {
         }
         let (segments, source) = {
             let Ok(d) = doc.lock() else { return false };
-            if page_language(&d).as_deref() == Some(TARGET.1) {
+            let segments = collect_translatable(&d);
+            // Без `<html lang>` язык берём по письменности текста.
+            let source = page_language(&d).or_else(|| detect_language(&segments));
+            if source.as_deref() == Some(TARGET.1) {
                 return false;
             }
-            (collect_translatable(&d), page_language(&d))
+            (segments, source)
         };
         if segments.is_empty() {
             return false;

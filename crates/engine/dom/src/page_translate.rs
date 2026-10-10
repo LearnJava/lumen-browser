@@ -31,6 +31,32 @@ pub fn page_language(doc: &Document) -> Option<String> {
     (!primary.is_empty()).then_some(primary)
 }
 
+/// Язык по преобладающей письменности текста — запасной вариант без `lang`.
+/// Различает только письменности с однозначным языком (кириллица → `ru`,
+/// иероглифы/кана → `ja`, хангыль → `ko`, арабская → `ar`, греческая → `el`);
+/// латиницу не классифицирует (`None`). Нужны ≥ 20 букв и ≥ 60 % одной письменности.
+pub fn detect_language(segments: &[TextSegment]) -> Option<String> {
+    let mut counts = [0usize; 5];
+    let mut total = 0usize;
+    for c in segments.iter().flat_map(|s| s.text.chars()).filter(|c| c.is_alphabetic()) {
+        total += 1;
+        let i = match c as u32 {
+            0x0400..=0x052F => 0,
+            0x3040..=0x30FF | 0x4E00..=0x9FFF => 1,
+            0xAC00..=0xD7AF | 0x1100..=0x11FF => 2,
+            0x0600..=0x06FF => 3,
+            0x0370..=0x03FF => 4,
+            _ => continue,
+        };
+        counts[i] += 1;
+    }
+    if total < 20 {
+        return None;
+    }
+    let (i, &n) = counts.iter().enumerate().max_by_key(|(_, n)| **n)?;
+    (n * 10 >= total * 6).then(|| ["ru", "ja", "ko", "ar", "el"][i].to_string())
+}
+
 /// Текстовые узлы документа в порядке обхода, без служебных элементов,
 /// поддеревьев с `translate="no"` и узлов без букв.
 pub fn collect_translatable(doc: &Document) -> Vec<TextSegment> {
@@ -150,6 +176,14 @@ mod tests {
         assert_eq!(s.revert(&mut doc), 1);
         assert!(matches!(&doc.get(texts[0]).data, NodeData::Text(t) if t == " Hello "));
         assert!(!s.is_active());
+    }
+
+    #[test]
+    fn detects_language_by_script() {
+        let seg = |t: &str| vec![TextSegment { node: NodeId(0), text: t.into() }];
+        assert_eq!(detect_language(&seg("Это достаточно длинный русский текст для проверки")).as_deref(), Some("ru"));
+        assert_eq!(detect_language(&seg("This is a long enough english text sample")), None);
+        assert_eq!(detect_language(&seg("Привет")), None);
     }
 
     #[test]
