@@ -208,7 +208,7 @@ Ph3-v8-migration S12a (ADR-018, 2026-07-14) flipped `lumen-shell`'s default JS e
 
 ### lumen-storage (`crates/storage`)
 - ✅ SQLite everywhere (rusqlite bundled, WAL, prepared-cached); origin-partitioned KV `(origin, top_level_site, key)`.
-- ✅ Cookie jar over SQLite (SameSite, partitioning, PSL), History, Bookmarks (folders/tags, optional AI summary/embedding §12.8), Web Storage backend, IndexedDB store, Service Worker store + interceptor, Cache Storage. ✅ Импорт закладок и истории из профилей Chrome/Edge/Firefox (`lumen_storage::import`; палитра команд → «Import Bookmarks and History», синхронно на UI-потоке, итог в stderr `[import]`); пароли ⬜ (UX-IMPORT).
+- ✅ Cookie jar over SQLite (SameSite, partitioning, PSL), History, Bookmarks (folders/tags, optional AI summary/embedding §12.8), Web Storage backend, IndexedDB store, Service Worker store + interceptor, Cache Storage. ✅ Импорт закладок и истории из профилей Chrome/Edge/Firefox (`lumen_storage::import`; палитра команд → «Import Bookmarks and History», синхронно на UI-потоке, итог в stderr `[import]`); пароли Chrome/Edge ✅ (`import_logins`: ключ из `Local State` через DPAPI, AES-256-GCM `v10`/`v11`; `v20` app-bound пропускается), пароли Firefox (NSS `key4.db`) ⬜.
 - ✅ Profile vault encryption (AES-256-GCM + PBKDF2 100k); HttpCache (RFC 9111 basic), HSTS store (storage layer only — see 🟡 HSTS above, BUG-402), DnsCache, SafeBrowsing (local SB v4), PSL provider.
 - ✅ Many stores: Downloads, Permissions, Autofill, Notifications, Workspaces, TabSessions/Snapshots, SiteEngagement, SearchHistory, TabGroups, PushSubscriptions, BFCache.
 - ⬜ ADR-012 partitioning is **strategy only** — no DB manager; ~36 stores each open their own SQLite file. No schema-migration framework.
