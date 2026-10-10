@@ -219,6 +219,7 @@ impl PageSource {
                 cache_control_no_store: false,
                 csp_header: Vec::new(),
                 referrer_policy_header: None,
+                permissions_policy_header: None,
                 document_referrer: None,
                 report_to_endpoints: HashMap::new(),
                 sync_xhr_document_policy: None,
@@ -237,6 +238,7 @@ impl PageSource {
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
                     referrer_policy_header: None,
+                permissions_policy_header: None,
                 document_referrer: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
@@ -300,6 +302,7 @@ impl PageSource {
                     cache_control_no_store: cache_control_no_store(&resp_headers),
                     csp_header: content_security_policy_header(&resp_headers),
                     referrer_policy_header: referrer_policy_header(&resp_headers),
+                    permissions_policy_header: joined_header(&resp_headers, "permissions-policy"),
                     document_referrer: referrer.clone(),
                     report_to_endpoints: report_to_endpoints(&resp_headers),
                     sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
@@ -319,6 +322,7 @@ impl PageSource {
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
                     referrer_policy_header: None,
+                permissions_policy_header: None,
                 document_referrer: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
@@ -338,6 +342,7 @@ impl PageSource {
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
                     referrer_policy_header: None,
+                permissions_policy_header: None,
                 document_referrer: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
@@ -418,6 +423,7 @@ impl PageSource {
             cache_control_no_store: cache_control_no_store(&resp_headers),
             csp_header: content_security_policy_header(&resp_headers),
             referrer_policy_header: referrer_policy_header(&resp_headers),
+                    permissions_policy_header: joined_header(&resp_headers, "permissions-policy"),
                     document_referrer: referrer.clone(),
             report_to_endpoints: report_to_endpoints(&resp_headers),
             sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
@@ -481,6 +487,9 @@ pub(crate) struct RawPage {
     /// stamped onto the parsed [`Document`] next to `csp_header` for the same
     /// reason — `None` for every non-network source, same as `csp_header`.
     pub(crate) referrer_policy_header: Option<String>,
+    /// Raw `Permissions-Policy` response header text (UX-PARTITION-10); only
+    /// recorded into the profile store, not enforced from here. `None` off-network.
+    pub(crate) permissions_policy_header: Option<String>,
     /// BUG-1156: the `Referer` this navigation sent — becomes `document.referrer`.
     pub(crate) document_referrer: Option<String>,
     /// `{group name -> endpoint URLs}` resolved from the response's

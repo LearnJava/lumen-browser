@@ -98,6 +98,25 @@ fn hash_style_blocks(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher)
     }
 }
 
+/// `href` первого `<link rel~=manifest>` (UX-PARTITION-10), как написан в разметке.
+pub(crate) fn manifest_link_href(doc: &Document) -> Option<String> {
+    fn walk(doc: &Document, id: NodeId) -> Option<String> {
+        let node = doc.get(id);
+        if let NodeData::Element { name, attrs } = &node.data
+            && name.local == "link"
+        {
+            let attr = |n: &str| attrs.iter().find(|a| a.name.local == n).map(|a| a.value.as_str());
+            if attr("rel").is_some_and(|r| r.split_ascii_whitespace().any(|t| t.eq_ignore_ascii_case("manifest")))
+                && let Some(href) = attr("href").map(str::trim).filter(|h| !h.is_empty())
+            {
+                return Some(href.to_owned());
+            }
+        }
+        node.children.iter().find_map(|&c| walk(doc, c))
+    }
+    walk(doc, doc.root())
+}
+
 /// Fingerprint of every `<link>` element's `rel`/`href`/`media` in document
 /// order (BUG-443).
 ///
@@ -331,5 +350,24 @@ mod tests {
         let (blocked, policies) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
         assert!(policies.is_empty());
         assert!(blocked.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod manifest_link_tests {
+    use super::*;
+
+    #[test]
+    fn finds_manifest_link_among_other_links() {
+        let doc = lumen_html_parser::parse(
+            r#"<head><link rel="stylesheet" href="a.css"><link rel="Manifest icon" href=" /m.json "></head>"#,
+        );
+        assert_eq!(manifest_link_href(&doc).as_deref(), Some("/m.json"));
+    }
+
+    #[test]
+    fn none_without_manifest_link() {
+        let doc = lumen_html_parser::parse(r#"<head><link rel="icon" href="/m.json"></head>"#);
+        assert_eq!(manifest_link_href(&doc), None);
     }
 }

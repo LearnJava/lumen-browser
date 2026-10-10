@@ -879,6 +879,13 @@ pub(crate) struct Lumen {
     /// Session-scoped per-origin visit counters (`lumen_storage::SiteEngagementStore`);
     /// UX-PARTITION: "Clear site data" wipes it per site.
     pub(crate) site_engagement: Arc<lumen_storage::SiteEngagementStore>,
+    /// Session-scoped per-origin policy records of the loaded pages (UX-PARTITION-10):
+    /// CSP, Referrer-Policy, Permissions-Policy and the Web App Manifest link.
+    /// "Clear site data" wipes them per site.
+    pub(crate) csp_policies: Arc<lumen_storage::CspPolicies>,
+    pub(crate) referrer_policies: Arc<lumen_storage::ReferrerPolicies>,
+    pub(crate) permissions_policies: Arc<lumen_storage::PermissionsPolicies>,
+    pub(crate) web_manifests: Arc<lumen_storage::WebManifests>,
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
