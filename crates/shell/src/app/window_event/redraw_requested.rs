@@ -993,18 +993,8 @@ impl Lumen {
         // gated off the rollback flag — `#downloadsPanel` in the engine
         // chrome (`bind_downloads`, CC-9) is the only renderer now.
 
-        // DevTools JS console panel: bottom overlay, toggled by F12.
-        if self.devtools_console.visible {
-            let con_win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut con_cmds = devtools::console_panel::build_console_panel(
-                &self.devtools_console,
-                con_win_size,
-            );
-            overlay_buf.append(&mut con_cmds);
-        }
+        // DevTools JS console: `#devtools` in the engine chrome
+        // (`bind_console`), toggled by F12.
 
         // DevTools network panel: bottom overlay, toggled by Ctrl+Shift+E.
         if self.network_panel.visible {

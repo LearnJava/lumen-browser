@@ -1887,6 +1887,7 @@ impl Lumen {
                 }
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
+                    self.relayout_chrome_host();
                     self.request_redraw();
                 }
             }
