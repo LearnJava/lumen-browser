@@ -175,6 +175,10 @@ pub trait HttpCacheBackend: Send + Sync {
     /// Refresh validators and freshness after receiving a 304 Not Modified.
     fn revalidate(&self, url: &str, headers_304: &[(String, String)]);
 
+    /// Delete every entry whose URL satisfies `matches` (UX-PARTITION: clear one
+    /// site's cache). Returns the number of removed entries.
+    fn clear_matching(&self, matches: &dyn Fn(&str) -> bool) -> usize;
+
     /// Number of entries stored. Used in integration tests.
     #[cfg(test)]
     fn len(&self) -> usize {
@@ -344,6 +348,23 @@ impl HttpCacheBackend for HttpCache {
             entry.expires_at = heuristic_freshness(lm);
         }
         entry.must_revalidate = cc.no_cache || cc.must_revalidate;
+    }
+
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn clear_matching(&self, matches: &dyn Fn(&str) -> bool) -> usize {
+        let mut entries = self.entries.lock().unwrap();
+        let mut size = self.current_size_bytes.lock().unwrap();
+        let keys: Vec<String> = entries
+            .iter()
+            .filter(|(k, _)| matches(k))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &keys {
+            if let Some(old) = entries.pop(key) {
+                *size = size.saturating_sub(self.calculate_entry_size(&old));
+            }
+        }
+        keys.len()
     }
 
     #[cfg(test)]
@@ -555,6 +576,23 @@ impl HttpCacheBackend for DiskHttpCache {
                 params![new_etag, new_lm, key],
             );
         }
+    }
+
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn clear_matching(&self, matches: &dyn Fn(&str) -> bool) -> usize {
+        let conn = self.conn.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare("SELECT url FROM cache_entries") else {
+            return 0;
+        };
+        let urls: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map(|rows| rows.filter_map(std::result::Result::ok).collect())
+            .unwrap_or_default();
+        drop(stmt);
+        urls.iter()
+            .filter(|u| matches(u))
+            .filter_map(|u| conn.execute("DELETE FROM cache_entries WHERE url = ?1", params![u]).ok())
+            .sum()
     }
 
     #[cfg(test)]
@@ -1146,6 +1184,24 @@ mod tests {
         let snap = cache2.get("https://example.com/persistent").unwrap();
         assert_eq!(snap.body, b"data");
         assert!(snap.is_fresh);
+    }
+
+    #[test]
+    fn clear_matching_removes_only_matching_urls() {
+        let mem = HttpCache::new();
+        let h = vec![("Cache-Control".to_owned(), "max-age=60".to_owned())];
+        mem.store("https://a.example/x", 200, b"1".to_vec(), &h);
+        mem.store("https://b.example/y", 200, b"2".to_vec(), &h);
+        assert_eq!(mem.clear_matching(&|u| u.contains("a.example")), 1);
+        assert!(mem.get("https://a.example/x").is_none());
+        assert!(mem.get("https://b.example/y").is_some());
+
+        let tmp = TmpDbGuard::new();
+        let disk = DiskHttpCache::new(&tmp.0).unwrap();
+        disk.store("https://a.example/x", 200, b"1".to_vec(), &h);
+        disk.store("https://b.example/y", 200, b"2".to_vec(), &h);
+        assert_eq!(disk.clear_matching(&|u| u.contains("a.example")), 1);
+        assert_eq!(disk.len(), 1);
     }
 
     #[test]
