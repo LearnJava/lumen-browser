@@ -714,6 +714,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 .sc-row.rebinding .sc-key{ color:var(--text-secondary); }
 .sc-hint{ font-size:11px; color:var(--text-secondary); margin-right:auto; align-self:center; }
 
+.ac-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:40px; font-size:12px; border-bottom:1px solid var(--stroke); }
+.ac-pills{ display:flex; gap:4px; }
+.ac-pill{ padding:4px 9px; font-size:11.5px; border:1px solid var(--stroke); border-radius:999px; background:var(--surface-0); }
+.ac-pill:hover{ background:var(--surface-2); }
+.ac-pill.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
+
 /* ---------- Print dialog ---------- */
 .print-body{ display:flex; height:440px; }
 .print-preview{ flex:1; background:var(--surface-1); padding:22px; overflow-y:auto; display:flex; justify-content:center; }
@@ -1602,6 +1608,36 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="modal-foot">
                 <span class="sc-hint">Клик по строке — задать новое сочетание, Esc — отмена</span>
                 <button data-action="close-modal">Закрыть</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Accessibility -->
+          <div class="modal-overlay" id="accessOverlay" data-action="close-modal">
+            <div class="modal">
+              <div class="modal-head">
+                <svg class="icon icon-lg"><use href="#i-gear"/></svg>
+                <h3>Специальные возможности</h3>
+                <button class="modal-close" data-action="close-modal"><svg class="icon"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="modal-body">
+                <div class="ac-row"><span>Размер шрифта</span><div class="ac-pills" id="acFontPills">
+                  <button class="ac-pill" data-action="access-set-font" data-value="0.8">0.8×</button>
+                  <button class="ac-pill active" data-action="access-set-font" data-value="1">1×</button>
+                  <button class="ac-pill" data-action="access-set-font" data-value="1.25">1.25×</button>
+                  <button class="ac-pill" data-action="access-set-font" data-value="1.5">1.5×</button>
+                  <button class="ac-pill" data-action="access-set-font" data-value="2">2×</button>
+                </div></div>
+                <div class="ac-row"><span>Уменьшить анимацию</span><div class="toggle" id="acMotionToggle" data-action="access-toggle-motion"><div class="thumb"></div></div></div>
+                <div class="ac-row"><span>Принудительные цвета</span><div class="toggle" id="acColorsToggle" data-action="access-toggle-colors"><div class="thumb"></div></div></div>
+                <div class="ac-row"><span>Размер курсора</span><div class="ac-pills" id="acCursorPills">
+                  <button class="ac-pill active" data-action="access-set-cursor" data-value="normal">Обычный</button>
+                  <button class="ac-pill" data-action="access-set-cursor" data-value="large">Большой</button>
+                  <button class="ac-pill" data-action="access-set-cursor" data-value="extra">Огромный</button>
+                </div></div>
+              </div>
+              <div class="modal-foot">
+                <button class="primary" data-action="close-modal">Готово</button>
               </div>
             </div>
           </div>

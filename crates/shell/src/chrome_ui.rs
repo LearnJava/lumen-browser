@@ -244,6 +244,7 @@ impl Lumen {
                     lumen_chrome::ids::CP_OVERLAY,
                     lumen_chrome::ids::CERT_OVERLAY,
                     lumen_chrome::ids::SHORTCUTS_OVERLAY,
+                    lumen_chrome::ids::ACCESS_OVERLAY,
                     lumen_chrome::ids::PRINT_OVERLAY,
                 ],
                 doc,
@@ -601,6 +602,28 @@ impl Lumen {
                 .collect();
             lumen_chrome::ChromeShortcutsModel { open: panel.visible, rows }
         };
+        // UX-CHROME-PANELS: `#accessOverlay` mirrors the draft of `A11yPanel`.
+        let access = {
+            let panel = &self.a11y_panel;
+            let m = panel.draft.font_size_multiplier;
+            let font_value = [0.8_f64, 1.0, 1.25, 1.5, 2.0]
+                .iter()
+                .find(|v| (**v - m).abs() < 1e-6)
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let cursor_value = match panel.draft.cursor_size {
+                lumen_storage::CursorSize::Normal => "normal",
+                lumen_storage::CursorSize::Large => "large",
+                lumen_storage::CursorSize::ExtraLarge => "extra",
+            };
+            lumen_chrome::ChromeAccessModel {
+                open: panel.visible,
+                font_value,
+                reduced_motion: panel.draft.reduced_motion,
+                forced_colors: panel.draft.forced_colors,
+                cursor_value: cursor_value.to_owned(),
+            }
+        };
         // CC-10b: which `#contentArea` view is shown — mirrors whichever of
         // the three legacy panel `visible` flags is set (kept mutually
         // exclusive by `dispatch_chrome_action`'s `ShowView` handler), same
@@ -804,6 +827,7 @@ impl Lumen {
             palette,
             cert,
             shortcuts,
+            access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
                 landscape: self.print_panel.orientation == panels::print_panel::Orientation::Landscape,
@@ -1562,6 +1586,7 @@ impl Lumen {
                     self.shortcuts_panel.close();
                     self.relayout_chrome_host();
                 }
+                Some(ChromeModalKind::Access) => self.close_a11y_panel(),
                 None => {}
             },
             // CC-10b: `.set-nav .item`/`.set-section` both carry the same
@@ -1579,6 +1604,39 @@ impl Lumen {
                     self.shortcuts_panel.rebinding = Some(idx);
                     self.relayout_chrome_host();
                 }
+            }
+            // UX-CHROME-PANELS: `#accessOverlay` controls edit the draft;
+            // it is persisted on close (`close_a11y_panel`).
+            ChromeAction::AccessSetFont | ChromeAction::AccessSetCursor => {
+                let value = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-value").map(str::to_owned));
+                match (action, value.as_deref()) {
+                    (ChromeAction::AccessSetFont, Some(v)) => {
+                        if let Ok(m) = v.parse::<f64>() {
+                            self.a11y_panel.draft.font_size_multiplier = m;
+                        }
+                    }
+                    (_, Some(v)) => {
+                        use lumen_storage::CursorSize;
+                        self.a11y_panel.draft.cursor_size = match v {
+                            "large" => CursorSize::Large,
+                            "extra" => CursorSize::ExtraLarge,
+                            _ => CursorSize::Normal,
+                        };
+                    }
+                    _ => {}
+                }
+                self.relayout_chrome_host();
+            }
+            ChromeAction::AccessToggleMotion => {
+                self.a11y_panel.draft.reduced_motion = !self.a11y_panel.draft.reduced_motion;
+                self.relayout_chrome_host();
+            }
+            ChromeAction::AccessToggleColors => {
+                self.a11y_panel.draft.forced_colors = !self.a11y_panel.draft.forced_colors;
+                self.relayout_chrome_host();
             }
             ChromeAction::SetSettingsSection => {
                 if let Some(section) =
@@ -1837,6 +1895,18 @@ impl Lumen {
         }
     }
 
+    /// UX-CHROME-PANELS: persists the accessibility draft, hides the panel and
+    /// re-delivers media changes (prefers-reduced-motion / forced colors).
+    pub(crate) fn close_a11y_panel(&mut self) {
+        let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+        self.a11y_panel.visible = false;
+        self.deliver_a11y_media_changes();
+        // Re-style with the (possibly toggled) forced-colors pref; no page
+        // geometry is read afterwards, so this stays async-safe (M2.2b-6).
+        self.relayout_chrome();
+        self.relayout_chrome_host();
+    }
+
     /// CC-10: which modal `nid` (a `close-modal`-carrying node, or one of its
     /// descendants) belongs to — `#certOverlay` and `#printOverlay` share the
     /// same `data-action` value, so this walks up the tree to disambiguate,
@@ -1846,6 +1916,7 @@ impl Lumen {
         let cert_overlay = doc.find_by_id(lumen_chrome::ids::CERT_OVERLAY);
         let print_overlay = doc.find_by_id(lumen_chrome::ids::PRINT_OVERLAY);
         let shortcuts_overlay = doc.find_by_id(lumen_chrome::ids::SHORTCUTS_OVERLAY);
+        let access_overlay = doc.find_by_id(lumen_chrome::ids::ACCESS_OVERLAY);
         let mut cur = Some(nid);
         while let Some(id) = cur {
             if Some(id) == cert_overlay {
@@ -1856,6 +1927,9 @@ impl Lumen {
             }
             if Some(id) == shortcuts_overlay {
                 return Some(ChromeModalKind::Shortcuts);
+            }
+            if Some(id) == access_overlay {
+                return Some(ChromeModalKind::Access);
             }
             cur = doc.get(id).parent;
         }
@@ -2338,4 +2412,5 @@ pub(crate) enum ChromeModalKind {
     Cert,
     Print,
     Shortcuts,
+    Access,
 }
