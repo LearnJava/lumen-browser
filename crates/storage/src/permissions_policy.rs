@@ -37,6 +37,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
         fetched_at   INTEGER NOT NULL
     ) WITHOUT ROWID;
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE permissions_policies ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS permissions_policies_site_idx ON permissions_policies(site);
+    "#,
 }];
 
 /// Allowlist для одной feature.
@@ -166,7 +173,7 @@ impl std::fmt::Debug for PermissionsPolicies {
 impl PermissionsPolicies {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "permissions_policy", "permissions_policies", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "permissions_policy", "permissions_policies", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -186,6 +193,8 @@ impl PermissionsPolicies {
             .map_err(|e| Error::Storage(format!("permissions_policy pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("permissions_policy init: {e}")))?;
+        crate::partition::backfill_site(&conn, "permissions_policies", "origin")
+            .map_err(|e| Error::Storage(format!("permissions_policy backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -197,12 +206,12 @@ impl PermissionsPolicies {
             .lock()
             .map_err(|_| Error::Storage("permissions_policy mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO permissions_policies (origin, header_text, fetched_at)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO permissions_policies (origin, header_text, fetched_at, site)
+             VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (origin) DO UPDATE SET
                  header_text = excluded.header_text,
                  fetched_at = excluded.fetched_at",
-            params![origin, header_text, fetched_at],
+            params![origin, header_text, fetched_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("permissions_policy store: {e}")))?;
         Ok(())

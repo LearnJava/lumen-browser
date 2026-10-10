@@ -30,6 +30,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
         updated_at INTEGER NOT NULL
     ) WITHOUT ROWID;
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE referrer_policies ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS referrer_policies_site_idx ON referrer_policies(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -102,7 +109,7 @@ impl std::fmt::Debug for ReferrerPolicies {
 impl ReferrerPolicies {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "referrer_policy", "referrer_policies", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "referrer_policy", "referrer_policies", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -122,6 +129,8 @@ impl ReferrerPolicies {
             .map_err(|e| Error::Storage(format!("referrer_policy pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("referrer_policy init: {e}")))?;
+        crate::partition::backfill_site(&conn, "referrer_policies", "origin")
+            .map_err(|e| Error::Storage(format!("referrer_policy backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -134,11 +143,11 @@ impl ReferrerPolicies {
             .lock()
             .map_err(|_| Error::Storage("referrer_policy mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO referrer_policies (origin, policy, updated_at) VALUES (?1, ?2, ?3)
+            "INSERT INTO referrer_policies (origin, policy, updated_at, site) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (origin) DO UPDATE SET
                  policy = excluded.policy,
                  updated_at = excluded.updated_at",
-            params![origin, policy.as_str(), now_unix],
+            params![origin, policy.as_str(), now_unix, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("referrer_policy set: {e}")))?;
         Ok(())

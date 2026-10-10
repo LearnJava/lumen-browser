@@ -29,6 +29,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS wm_installed_idx ON web_manifests(installed);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE web_manifests ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS web_manifests_site_idx ON web_manifests(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +63,7 @@ impl std::fmt::Debug for WebManifests {
 impl WebManifests {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "web_manifest", "web_manifests", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "web_manifest", "web_manifests", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -76,6 +83,8 @@ impl WebManifests {
             .map_err(|e| Error::Storage(format!("web_manifest pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("web_manifest init: {e}")))?;
+        crate::partition::backfill_site(&conn, "web_manifests", "origin")
+            .map_err(|e| Error::Storage(format!("web_manifest backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -93,13 +102,13 @@ impl WebManifests {
             .lock()
             .map_err(|_| Error::Storage("web_manifest mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO web_manifests (origin, manifest_url, manifest_json, fetched_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO web_manifests (origin, manifest_url, manifest_json, fetched_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (origin) DO UPDATE SET
                  manifest_url = excluded.manifest_url,
                  manifest_json = excluded.manifest_json,
                  fetched_at = excluded.fetched_at",
-            params![origin, manifest_url, manifest_json, fetched_at],
+            params![origin, manifest_url, manifest_json, fetched_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("web_manifest store: {e}")))?;
         Ok(())

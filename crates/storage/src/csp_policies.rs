@@ -32,6 +32,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
                 fetched_at   INTEGER NOT NULL
             ) WITHOUT ROWID;
             "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE csp_policies ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS csp_policies_site_idx ON csp_policies(site);
+    "#,
 }];
 
 /// Парсит CSP-заголовок в map `directive → sources`.
@@ -80,7 +87,7 @@ impl std::fmt::Debug for CspPolicies {
 impl CspPolicies {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "csp_policies", "csp_policies", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "csp_policies", "csp_policies", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -100,6 +107,8 @@ impl CspPolicies {
             .map_err(|e| Error::Storage(format!("csp_policies pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("csp_policies init: {e}")))?;
+        crate::partition::backfill_site(&conn, "csp_policies", "origin")
+            .map_err(|e| Error::Storage(format!("csp_policies backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -111,12 +120,12 @@ impl CspPolicies {
             .lock()
             .map_err(|_| Error::Storage("csp_policies mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO csp_policies (origin, header_text, fetched_at)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO csp_policies (origin, header_text, fetched_at, site)
+             VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (origin) DO UPDATE SET
                  header_text = excluded.header_text,
                  fetched_at = excluded.fetched_at",
-            params![origin, header_text, fetched_at],
+            params![origin, header_text, fetched_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("csp_policies store: {e}")))?;
         Ok(())
