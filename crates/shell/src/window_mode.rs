@@ -634,6 +634,7 @@ fn run_window_mode_inner(
             adblock::browser_data_dir().join("downloads.db"),
         ),
         import_manager: import_manager::ImportManager::new(),
+        translate_manager: translate_manager::TranslateManager::default(),
         update_ui: update_ui::UpdateUi::new(),
         login_offer: None,
         page_dialog: None,

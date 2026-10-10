@@ -52,6 +52,48 @@ impl Lumen {
         self.reload();
     }
 
+    /// UX-TRANSLATE: перевести страницу локальной моделью или вернуть оригинал.
+    ///
+    /// Запрос к модели идёт в фоне; подмена текста и relayout — в
+    /// [`Self::poll_page_translation`] из `about_to_wait`.
+    pub(crate) fn toggle_page_translation(&mut self) {
+        let Some(doc) = self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document)) else { return };
+        self.translate_manager.sync_document(Some(&doc));
+        if self.translate_manager.is_running() {
+            return;
+        }
+        if self.translate_manager.is_active() {
+            if self.translate_manager.revert(&doc) > 0 {
+                self.relayout();
+                self.request_redraw();
+            }
+        } else if self.translate_manager.start(&doc) {
+            eprintln!("[translate] запрос к модели отправлен");
+        } else {
+            eprintln!("[translate] переводить нечего или страница уже на целевом языке");
+        }
+    }
+
+    /// UX-TRANSLATE: забрать результат фонового перевода; зовётся каждый тик.
+    pub(crate) fn poll_page_translation(&mut self) {
+        let doc = self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document));
+        self.translate_manager.sync_document(doc.as_ref());
+        match self.translate_manager.poll() {
+            Some(translate_manager::TranslateOutcome::Applied(n)) => {
+                eprintln!("[translate] переведено узлов: {n}");
+                if n > 0 {
+                    self.relayout();
+                    self.request_redraw();
+                }
+            }
+            Some(translate_manager::TranslateOutcome::Failed(e)) => {
+                eprintln!("[translate] не удалось: {e}");
+                notification::show_os_notification("Перевод страницы", &e);
+            }
+            None => {}
+        }
+    }
+
     /// Show syntax-highlighted source of the current page (Ctrl+U, §D-2).
     ///
     /// Uses the already-parsed HTML stored in `layout_source.html_source`.

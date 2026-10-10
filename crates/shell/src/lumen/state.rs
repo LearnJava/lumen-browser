@@ -1267,6 +1267,9 @@ pub(crate) struct Lumen {
     /// палитры «Import Bookmarks and History»; `poll()` зовётся там же, где
     /// [`Self::downloads`].
     pub(crate) import_manager: import_manager::ImportManager,
+    /// UX-TRANSLATE: перевод текущей страницы локальной моделью
+    /// (`translate_manager.rs`); результат подбирается в `about_to_wait`.
+    pub(crate) translate_manager: translate_manager::TranslateManager,
     /// UPD-9: self-update infobar/settings state (`update_ui.rs`).
     pub(crate) update_ui: update_ui::UpdateUi,
     /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);
