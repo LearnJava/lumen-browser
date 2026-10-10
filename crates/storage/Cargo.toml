@@ -46,6 +46,13 @@ getrandom = "0.2"
 p256 = { version = "0.13", features = ["ecdh"] }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
+[target.'cfg(windows)'.dependencies]
+# Provisional (§5): windows-sys — CryptUnprotectData (DPAPI) для ключа паролей Chrome/Edge
+# при импорте (UX-IMPORT). Уже в графе (lumen-a11y, lumen-shell, winit): новых записей
+# в Cargo.lock нет. Trait-anchor: нет, единственный потребитель — import_logins.rs.
+# Graduation: постоянная, пока импорт из Chromium на Windows поддерживается.
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
 [dev-dependencies]
 # Integration test only: serialise a real parsed `Document` to verify the
 # hibernation blob round-trips and actually shrinks (ADR-008 §10J.1).

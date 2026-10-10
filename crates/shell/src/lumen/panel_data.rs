@@ -211,7 +211,7 @@ impl Lumen {
     /// Chrome/Edge/Firefox и показать менеджер закладок. Выполняется
     /// синхронно на UI-потоке; ошибка одного профиля не мешает остальным.
     pub(crate) fn import_browser_data(&mut self) {
-        use lumen_storage::import;
+        use lumen_storage::{import, import_logins};
         let profiles = import::detect_profiles();
         if profiles.is_empty() {
             eprintln!("[import] профили Chrome/Edge/Firefox не найдены");
@@ -228,6 +228,23 @@ impl Lumen {
                 bm.map_err(|e| e.to_string()),
                 hist.map_err(|e| e.to_string()),
             );
+            // Пароли: только Chromium (DPAPI + AES-GCM); Firefox NSS — позже.
+            if matches!(p.browser, import::SourceBrowser::Chrome | import::SourceBrowser::Edge) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let logins = match crate::password_store::global() {
+                    Some(store) => import_logins::read_chromium_logins(&p.dir).and_then(|read| {
+                        import_logins::import_logins(store, &read.logins, now)
+                            .map(|rep| (rep, read.skipped))
+                    }),
+                    None => Err(lumen_core::Error::Storage(
+                        "хранилище паролей недоступно (приватный режим)".into(),
+                    )),
+                };
+                eprintln!("[import] {:?}: пароли {:?}", p.browser, logins.map_err(|e| e.to_string()));
+            }
         }
         self.bookmark_panel.visible = true;
         self.refresh_bookmarks();
