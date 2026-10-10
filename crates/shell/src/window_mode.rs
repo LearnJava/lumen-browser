@@ -535,6 +535,14 @@ fn run_window_mode_inner(
         notifications_store: Arc::new(
             lumen_storage::Notifications::open_in_memory().expect("notifications_store init"),
         ),
+        csp_policies: Arc::new(lumen_storage::CspPolicies::open_in_memory().expect("csp_policies init")),
+        referrer_policies: Arc::new(
+            lumen_storage::ReferrerPolicies::open_in_memory().expect("referrer_policies init"),
+        ),
+        permissions_policies: Arc::new(
+            lumen_storage::PermissionsPolicies::open_in_memory().expect("permissions_policies init"),
+        ),
+        web_manifests: Arc::new(lumen_storage::WebManifests::open_in_memory().expect("web_manifests init")),
         site_engagement: Arc::new(
             lumen_storage::SiteEngagementStore::open_in_memory().expect("site_engagement init"),
         ),

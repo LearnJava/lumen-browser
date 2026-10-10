@@ -1414,6 +1414,7 @@ impl Lumen {
             nav: crate::nav_timing::NavResponseMeta::default(),
             // lumen-driver path has no TLS handshake plumbing to this boundary.
             cert_info: None,
+            response_policies: Default::default(),
             // lumen-driver's headless pipeline has no parse-time snapshot pass.
             prescript_layout_rects: None,
         })
@@ -2131,6 +2132,38 @@ impl Lumen {
         );
     }
 
+    /// UX-PARTITION-10: след политик загруженной страницы в профильных хранилищах,
+    /// чтобы «Очистить» данные сайта их находило. Манифест — только ссылка (тело
+    /// не скачивается).
+    fn record_page_policies(&self, origin: &str, p: &crate::page_pipeline::ResponsePolicies, now: i64) {
+        if !p.csp.is_empty() {
+            let _ = self.csp_policies.store(origin, &p.csp.join(", "), now);
+        }
+        if let Some(policy) = p
+            .referrer
+            .as_deref()
+            .and_then(|h| h.rsplit(',').find_map(lumen_storage::ReferrerPolicy::parse))
+        {
+            let _ = self.referrer_policies.set(origin, policy, now);
+        }
+        if let Some(h) = p.permissions_policy.as_deref() {
+            let _ = self.permissions_policies.store(origin, h, now);
+        }
+        let href = self
+            .layout_source
+            .as_ref()
+            .and_then(|ls| ls.document.lock().ok().and_then(|d| crate::doc_extract::manifest_link_href(&d)));
+        if let Some(href) = href {
+            let resolved = self
+                .source
+                .url_str()
+                .and_then(|base| lumen_core::url::Url::parse(base).ok())
+                .and_then(|b| b.resolve(&href).ok())
+                .map_or(href, |u| u.as_str().to_owned());
+            let _ = self.web_manifests.store(origin, &resolved, "", now);
+        }
+    }
+
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
@@ -2391,6 +2424,7 @@ impl Lumen {
             // UX-PARTITION-9: счётчик визитов по origin, чтобы «Очистить» находило след.
             if let Some(origin) = self.source.origin_str() {
                 let _ = self.site_engagement.record_visit(&origin, now_secs);
+                self.record_page_policies(&origin, &page.response_policies, now_secs);
             }
         }
         // Clear GIF animation state from previous page.

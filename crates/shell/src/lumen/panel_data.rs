@@ -91,6 +91,10 @@ impl Lumen {
             service_workers: Some(&*self.sw_registry),
             notifications: Some(&*self.notifications_store),
             site_engagement: Some(&*self.site_engagement),
+            csp_policies: Some(&*self.csp_policies),
+            referrer_policies: Some(&*self.referrer_policies),
+            permissions_policies: Some(&*self.permissions_policies),
+            web_manifests: Some(&*self.web_manifests),
             autofill: crate::autofill_store::global(),
             idb_dir: self.idb_dir.as_deref(),
             ..lumen_storage::SiteDataTargets::default()

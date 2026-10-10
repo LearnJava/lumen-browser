@@ -144,6 +144,7 @@ pub(crate) fn render_bytes(
             // Stamped in by the `LoadEvent::LoadDone`/`RenderDone` handler from
             // the `RawPage` — `render_bytes` doesn't take it as a parameter.
             cert_info: None,
+            response_policies: ResponsePolicies::default(),
             prescript_layout_rects: parsed.prescript_layout_rects,
         },
         layout_source,
@@ -303,6 +304,14 @@ pub(crate) fn warm_preload_cache(
 
 /// Результат загрузки страницы: что рисовать и как назвать окно.
 /// Расширяется: favicon, current URL, scroll state — позже.
+/// Raw security-policy response headers kept for the profile stores.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResponsePolicies {
+    pub(crate) csp: Vec<String>,
+    pub(crate) referrer: Option<String>,
+    pub(crate) permissions_policy: Option<String>,
+}
+
 pub(crate) struct LoadedPage {
     pub(crate) display_list: DisplayList,
     pub(crate) title: Option<String>,
@@ -359,6 +368,10 @@ pub(crate) struct LoadedPage {
     /// sources, or a request that reused a pooled HTTP/2 connection (see
     /// `lumen_network::Response::cert_info`).
     pub(crate) cert_info: Option<lumen_network::CertInfo>,
+    /// UX-PARTITION-10: raw policy headers of the response, stamped in by the
+    /// `RenderDone` pipeline thread (like `cert_info`) and recorded into the
+    /// profile policy stores by `apply_loaded_page`.
+    pub(crate) response_policies: ResponsePolicies,
     /// GAP-LAYOUTSHIFT срез 4 (BUG-809): the layout geometry snapshot taken
     /// right before any parse-time `<script>` ran (see `parse_time_snapshot`
     /// in [`parse_and_layout`]), if the page had one. `apply_loaded_page`
@@ -404,6 +417,7 @@ impl LoadedPage {
             frame_env: None,
             nav: crate::nav_timing::NavResponseMeta::default(),
             cert_info: None,
+            response_policies: ResponsePolicies::default(),
             prescript_layout_rects: None,
         }
     }

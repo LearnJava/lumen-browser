@@ -339,6 +339,11 @@ impl Lumen {
                     // parameter list.
                     .map(|(mut page, layout_source, js_ctx)| {
                         page.cert_info = raw.cert_info.clone();
+                        page.response_policies = crate::page_pipeline::ResponsePolicies {
+                            csp: raw.csp_header.clone(),
+                            referrer: raw.referrer_policy_header.clone(),
+                            permissions_policy: raw.permissions_policy_header.clone(),
+                        };
                         (page, layout_source, js_ctx)
                     });
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
