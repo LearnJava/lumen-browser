@@ -1400,8 +1400,8 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
 
                 <div class="set-section" data-set="translate">
-                  <div class="set-block"><h3>Перевод страниц</h3><div class="desc">Страница переводится локальной моделью через Ollama, текст не уходит в сеть. Запуск — кнопка в тулбаре или палитра команд. Модель задаётся ключом translate_model в настройках или LUMEN_TRANSLATE_MODEL.</div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Модель</div><div class="st-desc" id="translateModel">phi3:mini</div></div></div>
+                  <div class="set-block"><h3>Перевод страниц</h3><div class="desc">Страница переводится локальной моделью через Ollama, текст не уходит в сеть. Запуск — кнопка в тулбаре или палитра команд. Модель задаётся ниже или переменной LUMEN_TRANSLATE_MODEL (она приоритетнее).</div>
+                    <div class="set-row" data-action="edit-translate-model"><div class="st-text"><div class="st-title">Модель (клик — изменить, Enter — сохранить)</div><div class="st-desc" id="translateModel">phi3:mini</div></div></div>
                   </div>
                   <div class="set-block"><h3>Переводить на</h3><div class="desc">Язык, на который переводится страница.</div>
                     <div id="translateLangList"><div class="set-row translate-lang-row"><div class="st-text"><div class="st-title">Русский</div></div><div class="toggle on" data-action="set-translate-language" data-lang="ru"><div class="thumb"></div></div></div></div>

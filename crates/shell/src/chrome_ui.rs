@@ -725,9 +725,13 @@ impl Lumen {
             } else {
                 Vec::new()
             },
-            translate_model: Some(self.settings_store.translate_model())
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| crate::translate_manager::DEFAULT_MODEL.to_owned()),
+            translate_model: if self.settings_panel.focused_input == Some(panels::settings_panel::SettingInput::TranslateModel) {
+                format!("{}▏", self.settings_panel.translate_model_draft)
+            } else {
+                Some(self.settings_store.translate_model())
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| crate::translate_manager::DEFAULT_MODEL.to_owned())
+            },
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1367,6 +1371,11 @@ impl Lumen {
                     let _ = self.settings_store.set_translate_language(&lang);
                     self.relayout_chrome_host();
                 }
+            }
+            ChromeAction::EditTranslateModel => {
+                self.settings_panel.translate_model_draft = self.settings_store.translate_model();
+                self.settings_panel.focused_input = Some(panels::settings_panel::SettingInput::TranslateModel);
+                self.relayout_chrome_host();
             }
             ChromeAction::ClearSiteData => {
                 let site = self

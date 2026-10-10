@@ -37,6 +37,8 @@ pub enum SettingInput {
     /// The download directory path field.
     #[allow(dead_code, reason = "BUG-421: элементы управления настройками ещё не перенесены в движковый #view-settings")]
     DownloadPath,
+    /// The translation model name (UX-TRANSLATE-7); edited in `translate_model_draft`.
+    TranslateModel,
 }
 
 /// Settings panel UI state.
@@ -48,6 +50,8 @@ pub struct SettingsPanel {
     pub draft: BrowserSettingsSnapshot,
     /// Focused text input field, if any.
     pub focused_input: Option<SettingInput>,
+    /// Text being typed into the translation model field.
+    pub translate_model_draft: String,
     /// Vertical scroll offset within the content area.
     pub scroll_y: f32,
     /// HTTP/3 (QUIC) draft toggle. Persisted separately, to `fingerprint.toml`
@@ -75,6 +79,7 @@ impl SettingsPanel {
             visible: false,
             draft: BrowserSettingsSnapshot::default(),
             focused_input: None,
+            translate_model_draft: String::new(),
             scroll_y: 0.0,
             http3_draft: false,
             tor_active: false,
@@ -137,6 +142,7 @@ impl SettingsPanel {
         match self.focused_input {
             Some(SettingInput::Homepage) => self.draft.homepage.push(ch),
             Some(SettingInput::DownloadPath) => self.draft.download_path.push(ch),
+            Some(SettingInput::TranslateModel) => self.translate_model_draft.push(ch),
             None => {}
         }
     }
@@ -146,6 +152,7 @@ impl SettingsPanel {
         match self.focused_input {
             Some(SettingInput::Homepage) => { self.draft.homepage.pop(); }
             Some(SettingInput::DownloadPath) => { self.draft.download_path.pop(); }
+            Some(SettingInput::TranslateModel) => { self.translate_model_draft.pop(); }
             None => {}
         }
     }
@@ -191,6 +198,18 @@ mod tests {
         let mut p = SettingsPanel::new();
         p.open(BrowserSettingsSnapshot::default());
         p
+    }
+
+    #[test]
+    fn translate_model_input_edits_draft_only() {
+        let mut p = panel_at_origin();
+        p.focused_input = Some(SettingInput::TranslateModel);
+        for ch in "llama3".chars() {
+            p.append_char(ch);
+        }
+        p.backspace();
+        assert_eq!(p.translate_model_draft, "llama");
+        assert!(p.draft.homepage.is_empty() || p.draft.homepage == BrowserSettingsSnapshot::default().homepage);
     }
 
     #[test]
