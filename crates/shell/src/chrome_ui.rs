@@ -797,6 +797,7 @@ impl Lumen {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible,
             profile_slug,
+            profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
                 shape: self.control_panel_shape,
                 mini_open: self.control_panel_mini_open,
@@ -1248,6 +1249,7 @@ impl Lumen {
                 if self.profile_menu.visible {
                     self.refresh_profile_menu_entries();
                 }
+                self.relayout_chrome_host();
             }
             // CC-10b: `data-view` picks the target. `#view-page`/`#view-history`/
             // `#view-bookmarks`/`#view-settings` are mutually exclusive
@@ -1728,6 +1730,7 @@ impl Lumen {
                     && self.profiles.set_active(Some(id)).is_ok()
                 {
                     self.profile_menu.set_active(Some(id));
+                    self.profile_menu.visible = false;
                     // DS-16: Anonymous is ephemeral — mirrors the legacy
                     // overlay's own reset so switching via either site never
                     // carries a cookie over from a previous Anonymous run.

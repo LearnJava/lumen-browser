@@ -15,15 +15,6 @@ use crate::theme_tokens::size;
 /// bars" — see `docs/tasks/p1-design-v3.md` DS-9 step 2/3.
 pub const CHROME_H: f32 = TAB_BAR_HEIGHT + size::TOOLBAR_H;
 
-/// Horizontal padding between the window edge and the outermost cluster.
-const CLUSTER_PAD: f32 = 10.0;
-
-/// Left edge x-coordinate of the profile avatar button (DS-14) — the
-/// leading element of the left cluster, before the nav buttons.
-pub fn avatar_x() -> f32 {
-    CLUSTER_PAD
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

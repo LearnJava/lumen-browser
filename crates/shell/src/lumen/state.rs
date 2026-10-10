@@ -1379,8 +1379,8 @@ pub(crate) struct Lumen {
     /// Persistent workspace storage — SQLite in-memory during testing; wired to
     /// a disk path in production via `Workspaces::open(path)`.
     pub(crate) workspaces: lumen_storage::Workspaces,
-    /// Profile switcher dropdown state (DS-14), anchored below the toolbar
-    /// avatar button (`toolbar::avatar_x()`).
+    /// Profile switcher dropdown state (DS-14); drawn by `#profileMenu`/
+    /// `#profileMenuH` in the engine chrome.
     pub(crate) profile_menu: panels::profile_menu::ProfileMenuPanel,
     /// Persistent profile registry (§9.3, DS-14): profile metadata + which
     /// one is active. Opened from the portable data dir

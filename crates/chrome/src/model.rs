@@ -44,6 +44,9 @@ pub struct ChromeModel {
     /// `"guest"`) for the active profile, or `None` for a non-seeded profile
     /// with no matching CSS branch (the attribute is then omitted).
     pub profile_slug: Option<String>,
+    /// `true` shows the profile dropdown (`#profileMenu`/`#profileMenuH`,
+    /// UX-CHROME-PANELS) — mirrors `ProfileMenuPanel::visible`.
+    pub profile_menu_open: bool,
     /// Open tabs, in strip order.
     pub tabs: Vec<ChromeTabModel>,
     /// Workspaces shown in the sidebar switcher.
@@ -876,6 +879,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
         set_attr(doc, body, "data-demo", model.control_panel.shape.attr_value());
     }
     bind_control_panel(doc, model);
+    bind_profile_menu(doc, model);
     if let Some(sidebar) = doc.find_by_id(crate::ids::SIDEBAR) {
         set_class_token(doc, sidebar, "collapsed", model.sidebar_collapsed);
     }
@@ -1536,6 +1540,20 @@ fn bind_shortcuts(doc: &mut Document, shortcuts: &ChromeShortcutsModel) {
         append_text(doc, key, &row.binding);
         attach_child(doc, node, key);
         attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `.open` on both profile dropdowns (`#profileMenu` in the vertical
+/// sidebar, `#profileMenuH` in the horizontal bar) and marks the item of the
+/// active profile `.active` (UX-CHROME-PANELS).
+fn bind_profile_menu(doc: &mut Document, model: &ChromeModel) {
+    for id in [crate::ids::PROFILE_MENU, crate::ids::PROFILE_MENU_H] {
+        let Some(menu) = doc.find_by_id(id) else { continue };
+        set_class_token(doc, menu, "open", model.profile_menu_open);
+        for item in find_descendants_by_class(doc, menu, "pm-item") {
+            let on = doc.get(item).get_attr("data-profile") == model.profile_slug.as_deref();
+            set_class_token(doc, item, "active", on);
+        }
     }
 }
 
@@ -3559,6 +3577,30 @@ mod tests {
         let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
         let empty = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "cp-empty"));
         assert!(empty.is_some(), "no results must render the .cp-empty state");
+    }
+
+    #[test]
+    fn profile_menus_open_and_mark_active_item() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            profile_menu_open: true,
+            profile_slug: Some("work".to_owned()),
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        for id in [crate::ids::PROFILE_MENU, crate::ids::PROFILE_MENU_H] {
+            let menu = doc.find_by_id(id).expect("asset has the profile menu");
+            assert!(has_class(&doc, menu, "open"), "{id} must be open");
+            let active: Vec<_> = find_descendants_by_class(&doc, menu, "pm-item")
+                .into_iter()
+                .filter(|&i| has_class(&doc, i, "active"))
+                .map(|i| doc.get(i).get_attr("data-profile").unwrap_or("").to_owned())
+                .collect();
+            assert_eq!(active, ["work"], "{id}");
+        }
+        bind_model(&mut doc, &ChromeModel::default());
+        let menu = doc.find_by_id(crate::ids::PROFILE_MENU).expect("menu");
+        assert!(!has_class(&doc, menu, "open"));
     }
 
     #[test]

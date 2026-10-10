@@ -475,45 +475,6 @@ impl Lumen {
                 return;
             }
 
-            // Profile switcher dropdown (DS-14): anchored below the
-            // toolbar avatar button. BUG-403/BUG-404 class: use the
-            // measured `page_offset()` Y, not the legacy-only
-            // `toolbar::CHROME_H` constant, so the hit-test matches
-            // wherever the popover is actually drawn (both chromes).
-            if self.profile_menu.visible {
-                let avatar_x = toolbar::avatar_x();
-                let (_, page_y_offset) = self.page_offset();
-                if let Some(hit) = panels::profile_menu::hit_test(
-                    &self.profile_menu,
-                    x_css,
-                    y_css,
-                    avatar_x,
-                    page_y_offset,
-                ) {
-                    match hit {
-                        panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
-                            if self.profiles.set_active(Some(id)).is_ok() {
-                                self.profile_menu.set_active(Some(id));
-                                // DS-16: Anonymous is ephemeral — every
-                                // time it becomes active, start from a
-                                // fresh in-memory jar so no cookie
-                                // survives a previous Anonymous session.
-                                if self.active_profile_is_anonymous() {
-                                    self.reset_anonymous_cookie_jar();
-                                }
-                                self.sync_permission_store();
-                            }
-                            self.profile_menu.visible = false;
-                            // CC-6: re-sync the CSS chrome's data-profile (no-op off the flag).
-                            self.relayout_chrome_host();
-                        }
-                        panels::profile_menu::ProfileMenuHit::Empty => {}
-                    }
-                    self.request_redraw();
-                    return;
-                }
-            }
-
             // Shields floating panel (7C.4): top-right overlay.
             if self.shields.visible {
                 // BUG-461: `#permPopover`'s real measured rect, not a guess
