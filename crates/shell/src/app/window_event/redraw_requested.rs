@@ -1170,30 +1170,6 @@ impl Lumen {
         // `toolbar::build_toolbar`. Under the engine-drawn chrome
         // (CC-4) it never ran.
 
-        // Profile switcher dropdown (DS-14): BUG-403 — kept as a
-        // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
-        // §CC-15-1 decision), not migrated to `ChromeModel`/`bind_model`
-        // like the CC-9/CC-10 panels. Its hit-test (below, in the
-        // `MouseInput` handler) was already unconditional — this render
-        // call must match, or a click toggles `profile_menu.visible`
-        // with nothing ever drawn (the actual BUG-403 symptom) while
-        // the invisible popover still eats clicks under it. Anchored
-        // via `page_offset()` rather than the legacy-only
-        // `toolbar::CHROME_H` constant so the dropdown lines up with
-        // the engine-drawn toolbar's *measured* bottom edge, not an
-        // assumed one — the same class of drift BUG-404 flags for
-        // `flush_pointer_moves`.
-        if !self.focus.active && self.profile_menu.visible {
-            let (_, page_y_offset) = self.page_offset();
-            let mut pm_cmds = panels::profile_menu::build_panel(
-                &self.profile_menu,
-                toolbar::avatar_x(),
-                page_y_offset,
-                &pal,
-            );
-            overlay_buf.append(&mut pm_cmds);
-        }
-
         // CC-4: tab context menu — drawn above the tab strip.
         if self.tab_context_menu.is_open() {
             let win_w = self.viewport_width_css();

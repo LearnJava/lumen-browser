@@ -199,6 +199,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
   display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:var(--radius-md); width:100%; background:none; border:none; text-align:left;
 }
 .profile-menu .pm-item:hover{ background:var(--surface-2); }
+.profile-menu .pm-item.active{ background:var(--surface-2); font-weight:700; }
+.hbar-profile-wrap{ position:relative; display:flex; align-items:center; }
+.hbar-profile-wrap .profile-menu{ top:30px; left:0; }
 .pm-dot{ width:9px; height:9px; border-radius:50%; flex:none; }
 
 .sb-divider{ height:1px; background:var(--stroke); margin:2px 0; }
@@ -1046,7 +1049,15 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
       <!-- ============ HORIZONTAL TOP ROW 1 ============ -->
       <div class="hbar-row1 horizontal-only row1-horizontal">
         <button class="hbar-menu"><svg class="icon"><use href="#i-menu"/></svg></button>
-        <button class="hbar-profile" data-action="toggle-profile-menu"><span class="pm-dot" style="background:var(--accent)"></span><span id="profileNameH">Костя · Личный</span></button>
+        <div class="hbar-profile-wrap">
+          <button class="hbar-profile" data-action="toggle-profile-menu"><span class="pm-dot" style="background:var(--accent)"></span><span id="profileNameH">Костя · Личный</span></button>
+          <div class="profile-menu" id="profileMenuH">
+            <button class="pm-item" data-action="set-profile" data-profile="personal"><span class="pm-dot" style="background:#0066FF"></span>Личный</button>
+            <button class="pm-item" data-action="set-profile" data-profile="work"><span class="pm-dot" style="background:#8B5CF6"></span>Рабочий</button>
+            <button class="pm-item" data-action="set-profile" data-profile="anonymous"><span class="pm-dot" style="background:#FF3B30"></span>Анонимный</button>
+            <button class="pm-item" data-action="set-profile" data-profile="guest"><span class="pm-dot" style="background:#8E8E93"></span>Гость</button>
+          </div>
+        </div>
         <div class="hbar-divider"></div>
         <div class="hbar-ws">
           <button class="hbar-ws-pill active" data-ws="personal" style="--ws-color:#0066FF" data-action="select-workspace">Личное</button>
