@@ -633,6 +633,7 @@ fn run_window_mode_inner(
         downloads: download::DownloadManager::open_history(
             adblock::browser_data_dir().join("downloads.db"),
         ),
+        import_manager: import_manager::ImportManager::new(),
         update_ui: update_ui::UpdateUi::new(),
         login_offer: None,
         page_dialog: None,
@@ -692,7 +693,14 @@ fn run_window_mode_inner(
         panel_resize: None,
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),
         ai_backend: Box::new(lumen_core::NullAiBackend),
-        bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
+        // UX-IMPORT: закладки переживают перезапуск (раньше были только
+        // in-memory — закладка пропадала при выходе, в т.ч. импортированные).
+        bookmarks: open_persistent(
+            "bookmarks.db",
+            lumen_storage::Bookmarks::open,
+            lumen_storage::Bookmarks::open_in_memory,
+            "bookmarks init",
+        ),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         tab_groups: lumen_storage::TabGroups::open_in_memory().expect("tab_groups in-memory"),
         history_store: open_persistent(

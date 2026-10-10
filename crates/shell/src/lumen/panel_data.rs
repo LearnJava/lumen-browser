@@ -207,57 +207,13 @@ impl Lumen {
     /// [`Self::ai_backend`]: with the default [`lumen_core::NullAiBackend`]
     /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped —
     /// no `feature = "ai"` gate needed here.
-    /// UX-IMPORT: перенести закладки и историю из найденных профилей
-    /// Chrome/Edge/Firefox и показать менеджер закладок. Выполняется
-    /// синхронно на UI-потоке; ошибка одного профиля не мешает остальным.
+    /// UX-IMPORT: запустить фоновый перенос закладок/истории/паролей из
+    /// найденных профилей Chrome/Edge/Firefox (`import_manager.rs`) и
+    /// открыть менеджер закладок сразу — с тем, что уже есть; импортированное
+    /// появится по завершении (`Self::import_manager.poll`, вызывается из
+    /// `about_to_wait`, которое же показывает итог OS-уведомлением).
     pub(crate) fn import_browser_data(&mut self) {
-        use lumen_storage::{import, import_logins};
-        let profiles = import::detect_profiles();
-        if profiles.is_empty() {
-            eprintln!("[import] профили Chrome/Edge/Firefox не найдены");
-        }
-        for p in &profiles {
-            let bm = import::read_bookmarks(p)
-                .and_then(|items| import::import_bookmarks(&self.bookmarks, &items));
-            let hist = import::read_history(p)
-                .and_then(|items| import::import_history(&self.history_store, &items));
-            eprintln!(
-                "[import] {:?} {}: закладки {:?}, история {:?}",
-                p.browser,
-                p.dir.display(),
-                bm.map_err(|e| e.to_string()),
-                hist.map_err(|e| e.to_string()),
-            );
-            // Пароли: Chromium (DPAPI + AES-GCM) и Firefox (key4.db, см.
-            // import_logins_firefox.rs — неподтверждено против реального профиля).
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let logins = match crate::password_store::global() {
-                Some(store) => {
-                    // Разные типы чтения (Chromium/Firefox) сводим к общей паре
-                    // (записи, пропущено) перед записью через общий import_logins.
-                    let read = match p.browser {
-                        import::SourceBrowser::Chrome | import::SourceBrowser::Edge => {
-                            import_logins::read_chromium_logins(&p.dir)
-                                .map(|r| (r.logins, r.skipped))
-                        }
-                        import::SourceBrowser::Firefox => {
-                            lumen_storage::import_logins_firefox::read_firefox_logins(&p.dir)
-                                .map(|r| (r.logins, r.skipped))
-                        }
-                    };
-                    read.and_then(|(items, skipped)| {
-                        import_logins::import_logins(store, &items, now).map(|rep| (rep, skipped))
-                    })
-                }
-                None => Err(lumen_core::Error::Storage(
-                    "хранилище паролей недоступно (приватный режим)".into(),
-                )),
-            };
-            eprintln!("[import] {:?}: пароли {:?}", p.browser, logins.map_err(|e| e.to_string()));
-        }
+        self.import_manager.start();
         self.bookmark_panel.visible = true;
         self.refresh_bookmarks();
     }

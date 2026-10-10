@@ -1262,6 +1262,11 @@ pub(crate) struct Lumen {
     /// Download manager: background download threads, progress channel, and
     /// panel visibility state. Panel toggled via Ctrl+Shift+J.
     pub(crate) downloads: download::DownloadManager,
+    /// UX-IMPORT: фоновый поток импорта закладок/истории/паролей из
+    /// Chrome/Edge/Firefox (`import_manager.rs`). Запускается действием
+    /// палитры «Import Bookmarks and History»; `poll()` зовётся там же, где
+    /// [`Self::downloads`].
+    pub(crate) import_manager: import_manager::ImportManager,
     /// UPD-9: self-update infobar/settings state (`update_ui.rs`).
     pub(crate) update_ui: update_ui::UpdateUi,
     /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);

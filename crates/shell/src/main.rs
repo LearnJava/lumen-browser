@@ -114,6 +114,7 @@ mod engine_bridge;
 mod crash_page;
 mod engine_thread;
 mod download;
+mod import_manager;
 mod find;
 mod frame_ancestry;
 mod frame_dynamic_load;
