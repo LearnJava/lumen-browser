@@ -28,6 +28,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     );
     CREATE INDEX IF NOT EXISTS push_messages_sub_idx ON push_messages(subscription_id, id);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE push_messages ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS push_messages_site_idx ON push_messages(site);
+    "#,
 }];
 
 pub struct PushMessages {
@@ -62,15 +69,15 @@ impl PushMessages {
         })
     }
 
-    /// Queue a decrypted push message for `subscription_id`.
-    pub fn enqueue(&self, subscription_id: i64, plaintext: &[u8], received_at: i64) -> Result<i64> {
+    /// Queue a decrypted push message for `subscription_id` of `origin`.
+    pub fn enqueue(&self, subscription_id: i64, origin: &str, plaintext: &[u8], received_at: i64) -> Result<i64> {
         let conn = self
             .conn
             .lock()
             .map_err(|_| Error::Storage("push_messages mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO push_messages (subscription_id, plaintext, received_at) VALUES (?1, ?2, ?3)",
-            params![subscription_id, plaintext, received_at],
+            "INSERT INTO push_messages (subscription_id, plaintext, received_at, site) VALUES (?1, ?2, ?3, ?4)",
+            params![subscription_id, plaintext, received_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("push_messages enqueue: {e}")))?;
         Ok(conn.last_insert_rowid())
@@ -98,19 +105,9 @@ impl PushMessages {
         Ok(Some(plaintext))
     }
 
-    /// UX-PARTITION: удалить очередь сообщений указанных подписок.
-    pub fn clear_subscriptions(&self, subscription_ids: &[i64]) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| Error::Storage("push_messages mutex poisoned".into()))?;
-        let mut removed = 0;
-        for id in subscription_ids {
-            removed += conn
-                .execute("DELETE FROM push_messages WHERE subscription_id = ?1", params![id])
-                .map_err(|e| Error::Storage(format!("push_messages clear_site: {e}")))?;
-        }
-        Ok(removed)
+    /// UX-PARTITION: удалить очередь сообщений подписок сайта `site`.
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        crate::partition::clear_by_site(&self.conn, "push_messages", "push_messages", site)
     }
 
     /// Number of queued (undelivered) messages for `subscription_id`.
@@ -141,15 +138,15 @@ mod tests {
     #[test]
     fn enqueue_then_take_oldest_returns_plaintext() {
         let m = make();
-        m.enqueue(1, b"hello", 100).unwrap();
+        m.enqueue(1, "https://a.test", b"hello", 100).unwrap();
         assert_eq!(m.take_oldest(1).unwrap(), Some(b"hello".to_vec()));
     }
 
     #[test]
     fn take_oldest_is_fifo() {
         let m = make();
-        m.enqueue(1, b"first", 100).unwrap();
-        m.enqueue(1, b"second", 200).unwrap();
+        m.enqueue(1, "https://a.test", b"first", 100).unwrap();
+        m.enqueue(1, "https://a.test", b"second", 200).unwrap();
         assert_eq!(m.take_oldest(1).unwrap(), Some(b"first".to_vec()));
         assert_eq!(m.take_oldest(1).unwrap(), Some(b"second".to_vec()));
         assert_eq!(m.take_oldest(1).unwrap(), None);
@@ -158,7 +155,7 @@ mod tests {
     #[test]
     fn take_oldest_removes_the_message() {
         let m = make();
-        m.enqueue(1, b"once", 100).unwrap();
+        m.enqueue(1, "https://a.test", b"once", 100).unwrap();
         assert!(m.take_oldest(1).unwrap().is_some());
         assert!(m.take_oldest(1).unwrap().is_none());
     }
@@ -166,8 +163,8 @@ mod tests {
     #[test]
     fn messages_are_isolated_per_subscription() {
         let m = make();
-        m.enqueue(1, b"for-one", 100).unwrap();
-        m.enqueue(2, b"for-two", 100).unwrap();
+        m.enqueue(1, "https://a.test", b"for-one", 100).unwrap();
+        m.enqueue(2, "https://a.test", b"for-two", 100).unwrap();
         assert_eq!(m.take_oldest(1).unwrap(), Some(b"for-one".to_vec()));
         assert_eq!(m.take_oldest(2).unwrap(), Some(b"for-two".to_vec()));
     }
@@ -182,8 +179,8 @@ mod tests {
     fn count_pending_reflects_queue_size() {
         let m = make();
         assert_eq!(m.count_pending(1).unwrap(), 0);
-        m.enqueue(1, b"a", 100).unwrap();
-        m.enqueue(1, b"b", 100).unwrap();
+        m.enqueue(1, "https://a.test", b"a", 100).unwrap();
+        m.enqueue(1, "https://a.test", b"b", 100).unwrap();
         assert_eq!(m.count_pending(1).unwrap(), 2);
         m.take_oldest(1).unwrap();
         assert_eq!(m.count_pending(1).unwrap(), 1);
