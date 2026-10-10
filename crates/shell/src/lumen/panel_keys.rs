@@ -227,7 +227,22 @@ impl Lumen {
         if self.modifiers.control_key() || self.modifiers.super_key() {
             return false;
         }
+        let editing_model = self.settings_panel.focused_input == Some(crate::panels::settings_panel::SettingInput::TranslateModel);
         match code {
+            KeyCode::Escape if !key_event.repeat && editing_model => {
+                self.settings_panel.focused_input = None;
+                self.relayout_chrome_host();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Enter if !key_event.repeat && editing_model => {
+                let model = self.settings_panel.translate_model_draft.trim().to_owned();
+                let _ = self.settings_store.set_translate_model(&model);
+                self.settings_panel.focused_input = None;
+                self.relayout_chrome_host();
+                self.request_redraw();
+                true
+            }
             KeyCode::Escape if !key_event.repeat => {
                 self.close_settings_panel();
                 self.request_redraw();
@@ -235,6 +250,7 @@ impl Lumen {
             }
             KeyCode::Backspace if self.settings_panel.focused_input.is_some() => {
                 self.settings_panel.backspace();
+                self.relayout_chrome_host();
                 self.request_redraw();
                 true
             }
@@ -247,6 +263,7 @@ impl Lumen {
                         for ch in text.chars() {
                             self.settings_panel.append_char(ch);
                         }
+                        self.relayout_chrome_host();
                         self.request_redraw();
                         return true;
                     }
