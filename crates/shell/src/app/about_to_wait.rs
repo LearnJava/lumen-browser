@@ -1382,6 +1382,8 @@ impl Lumen {
         self.downloads.poll();
         self.poll_update_ui();
 
+        self.poll_page_translation();
+
         // UX-IMPORT: drain the background profile-import thread, if running.
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
