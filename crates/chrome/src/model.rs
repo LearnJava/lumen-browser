@@ -340,6 +340,11 @@ pub struct ChromeSettingsModel {
     /// Языки словарей `(стем, включён)` для `#spellLangList`; пусто — словари
     /// не загружены (ещё грузятся или папки `data/spell` нет).
     pub spell_languages: Vec<(String, bool)>,
+    /// Языки перевода страницы `(код, подпись, выбран)` для `#translateLangList`
+    /// (UX-TRANSLATE); пусто — список остаётся статичным.
+    pub translate_languages: Vec<(String, String, bool)>,
+    /// Модель перевода, показанная в `#translateModel`.
+    pub translate_model: String,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -1122,6 +1127,7 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
     bind_site_permissions(doc, settings);
     bind_site_data(doc, settings);
     bind_spelling(doc, settings);
+    bind_translate(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1248,6 +1254,38 @@ fn bind_spelling(doc: &mut Document, settings: &ChromeSettingsModel) {
         set_attr(doc, toggle, "class", if *on { "toggle on" } else { "toggle" });
         set_attr(doc, toggle, "data-action", "toggle-spell-language");
         set_attr(doc, toggle, "data-spell-lang", stem);
+        let thumb = doc.create_element(QualName::html("div"));
+        set_attr(doc, thumb, "class", "thumb");
+        attach_child(doc, toggle, thumb);
+        attach_child(doc, row, toggle);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Раздел «Перевод»: строка на язык перевода (UX-TRANSLATE) и название модели.
+fn bind_translate(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if settings.translate_languages.is_empty() {
+        return;
+    }
+    if let Some(model) = doc.find_by_id(crate::ids::TRANSLATE_MODEL) {
+        set_text(doc, model, &settings.translate_model);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::TRANSLATE_LANG_LIST) else { return };
+    remove_children_with_class(doc, list, "translate-lang-row");
+    for (code, label, on) in &settings.translate_languages {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row translate-lang-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, label);
+        attach_child(doc, text, title);
+        attach_child(doc, row, text);
+        let toggle = doc.create_element(QualName::html("div"));
+        set_attr(doc, toggle, "class", if *on { "toggle on" } else { "toggle" });
+        set_attr(doc, toggle, "data-action", "set-translate-language");
+        set_attr(doc, toggle, "data-lang", code);
         let thumb = doc.create_element(QualName::html("div"));
         set_attr(doc, thumb, "class", "thumb");
         attach_child(doc, toggle, thumb);
@@ -3968,6 +4006,32 @@ mod tests {
         assert!(!has_class(&doc, ru, "on"));
         let en = find_descendants_by_class(&doc, rows[0], "toggle")[0];
         assert!(has_class(&doc, en, "on"));
+    }
+
+    #[test]
+    fn settings_translate_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "translate".to_owned(),
+                translate_languages: vec![("ru".into(), "Русский".into(), false), ("de".into(), "Deutsch".into(), true)],
+                translate_model: "phi3:mini".to_owned(),
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::TRANSLATE_LANG_LIST).expect("#translateLangList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2);
+        let de = find_descendants_by_class(&doc, rows[1], "toggle")[0];
+        assert_eq!(doc.get(de).get_attr("data-action"), Some("set-translate-language"));
+        assert_eq!(doc.get(de).get_attr("data-lang"), Some("de"));
+        assert!(has_class(&doc, de, "on"));
+        let ru = find_descendants_by_class(&doc, rows[0], "toggle")[0];
+        assert!(!has_class(&doc, ru, "on"));
     }
 
     #[test]
