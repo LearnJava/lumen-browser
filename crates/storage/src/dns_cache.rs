@@ -167,6 +167,11 @@ impl DnsCache {
         Ok(n)
     }
 
+    /// UX-PARTITION: удалить записи хостов сайта `site`.
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        crate::partition::clear_column(&self.conn, "dns_cache", "dns_cache", "hostname", site)
+    }
+
     pub fn clear(&self) -> Result<()> {
         let conn = self
             .conn

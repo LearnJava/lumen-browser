@@ -135,6 +135,10 @@ pub struct SiteDataTargets<'a> {
     pub permissions_policies: Option<&'a crate::PermissionsPolicies>,
     /// Web App Manifest.
     pub web_manifests: Option<&'a crate::WebManifests>,
+    /// DNS-кэш (по хосту).
+    pub dns_cache: Option<&'a crate::DnsCache>,
+    /// Регистрации BroadcastChannel.
+    pub broadcast_channels: Option<&'a crate::BroadcastChannels>,
     /// Каталог файлов IndexedDB (`<data>/idb`).
     pub idb_dir: Option<&'a Path>,
 }
@@ -205,6 +209,12 @@ pub fn clear_site_data(site: &PartitionKey, t: &SiteDataTargets<'_>) -> SiteData
     }
     if let Some(s) = t.web_manifests {
         put("web_manifest", s.clear_site(site));
+    }
+    if let Some(s) = t.dns_cache {
+        put("dns_cache", s.clear_site(site));
+    }
+    if let Some(s) = t.broadcast_channels {
+        put("broadcast_channels", s.clear_site(site));
     }
     if let Some(dir) = t.idb_dir {
         put("indexed_db", clear_idb_files(dir, site));
@@ -327,5 +337,51 @@ mod tests {
         let left = jar.get_for_request("tracker.net", "/", false, 0, Some("other.org")).unwrap();
         assert_eq!(left.len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clear_site_covers_dns_broadcast_bfcache_push_messages() {
+        use crate::{BfCache, BfCacheEntry, BfCachePayload, BroadcastChannels, DnsCache};
+        let k = key("example.com");
+
+        let dns = DnsCache::open_in_memory().unwrap();
+        dns.put("www.example.com", &["1.1.1.1".into()], 0, 60).unwrap();
+        dns.put("other.org", &["2.2.2.2".into()], 0, 60).unwrap();
+        let bc = BroadcastChannels::open_in_memory().unwrap();
+        bc.register("https://a.example.com", "ch", "c1", 0).unwrap();
+        bc.register("https://other.org", "ch", "c1", 0).unwrap();
+        let report = clear_site_data(
+            &k,
+            &SiteDataTargets {
+                dns_cache: Some(&dns),
+                broadcast_channels: Some(&bc),
+                ..SiteDataTargets::default()
+            },
+        );
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(report.total(), 2);
+        assert_eq!(dns.count().unwrap(), 1);
+        assert_eq!(bc.count().unwrap(), 1);
+
+        let mut bf = BfCache::new(4);
+        for url in ["https://www.example.com/a", "https://other.org/b"] {
+            bf.store(BfCacheEntry {
+                url: url.into(),
+                payload: BfCachePayload::HtmlSnapshot(String::new()),
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                title: None,
+            });
+        }
+        assert_eq!(bf.clear_site(&k), 1);
+        assert_eq!(bf.len(), 1);
+        assert!(bf.retrieve("https://other.org/b").is_some());
+
+        let msgs = crate::push_messages::PushMessages::open_in_memory().unwrap();
+        msgs.enqueue(1, b"x", 0).unwrap();
+        msgs.enqueue(2, b"y", 0).unwrap();
+        assert_eq!(msgs.clear_subscriptions(&[1]).unwrap(), 1);
+        assert_eq!(msgs.count_pending(1).unwrap(), 0);
+        assert_eq!(msgs.count_pending(2).unwrap(), 1);
     }
 }

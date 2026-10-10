@@ -98,6 +98,21 @@ impl PushMessages {
         Ok(Some(plaintext))
     }
 
+    /// UX-PARTITION: удалить очередь сообщений указанных подписок.
+    pub fn clear_subscriptions(&self, subscription_ids: &[i64]) -> Result<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("push_messages mutex poisoned".into()))?;
+        let mut removed = 0;
+        for id in subscription_ids {
+            removed += conn
+                .execute("DELETE FROM push_messages WHERE subscription_id = ?1", params![id])
+                .map_err(|e| Error::Storage(format!("push_messages clear_site: {e}")))?;
+        }
+        Ok(removed)
+    }
+
     /// Number of queued (undelivered) messages for `subscription_id`.
     pub fn count_pending(&self, subscription_id: i64) -> Result<i64> {
         let conn = self
