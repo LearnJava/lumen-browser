@@ -8,6 +8,9 @@
 
 use crate::*;
 
+/// Console lines `#dt-console` has room for (250 px panel minus its tab row).
+const CONSOLE_VISIBLE_LINES: usize = 8;
+
 impl Lumen {
     /// CC-4 (docs/tasks/p1-css-chrome.md): re-lays-out and re-paints the
     /// engine-drawn chrome document at the current window size. No-op when the
@@ -246,6 +249,7 @@ impl Lumen {
                     lumen_chrome::ids::SHORTCUTS_OVERLAY,
                     lumen_chrome::ids::ACCESS_OVERLAY,
                     lumen_chrome::ids::PRINT_OVERLAY,
+                    lumen_chrome::ids::DEVTOOLS,
                 ],
                 doc,
             )
@@ -602,6 +606,24 @@ impl Lumen {
                 .collect();
             lumen_chrome::ChromeShortcutsModel { open: panel.visible, rows }
         };
+        // UX-CHROME-PANELS: `#devtools` shows the tail of the JS console (the
+        // chrome has no wheel-scroll container, so no scrolling).
+        let console = {
+            let panel = &self.devtools_console;
+            let msgs = panel.messages();
+            let lines = msgs[msgs.len().saturating_sub(CONSOLE_VISIBLE_LINES)..]
+                .iter()
+                .map(|m| lumen_chrome::ChromeConsoleLineModel {
+                    level: match m.level {
+                        devtools::console_panel::ConsoleLevel::Log => 0,
+                        devtools::console_panel::ConsoleLevel::Warn => 1,
+                        devtools::console_panel::ConsoleLevel::Error => 2,
+                    },
+                    text: m.text.clone(),
+                })
+                .collect();
+            lumen_chrome::ChromeConsoleModel { open: panel.visible, total: msgs.len(), lines }
+        };
         // UX-CHROME-PANELS: `#accessOverlay` mirrors the draft of `A11yPanel`.
         let access = {
             let panel = &self.a11y_panel;
@@ -828,6 +850,7 @@ impl Lumen {
             palette,
             cert,
             shortcuts,
+            console,
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1243,7 +1266,14 @@ impl Lumen {
                 self.handle_print_confirm();
                 self.relayout_chrome_host();
             }
-            ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
+            ChromeAction::ToggleDevtools => {
+                self.devtools_console.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ClearConsole => {
+                self.devtools_console.clear();
+                self.relayout_chrome_host();
+            }
             ChromeAction::ToggleProfileMenu => {
                 self.profile_menu.toggle();
                 if self.profile_menu.visible {
@@ -1868,13 +1898,6 @@ impl Lumen {
             // control), and it's still only wired from the legacy
             // `panels::focus_panel` overlay's own hit-test.
             //
-            // `SetDevtoolsTab`: `.dt-tab`'s four static rows (Elements /
-            // Console / Network / Sources, `data-dt-tab="…"`) mock a
-            // multi-panel DevTools UI the engine does not have —
-            // `self.devtools_console: ConsolePanel` is a single JS-console
-            // view with no per-tab data behind Elements/Network/Sources, so
-            // there is nothing to switch between.
-            //
             // `ToggleQaPanel` (CC-18, `#demoBar`'s "QA-панель" button): the
             // QA/tester panel it targets is `strip_qa_panel_html`-excluded
             // from the product build entirely (same exclusion that already
@@ -1893,7 +1916,6 @@ impl Lumen {
             | ChromeAction::ArchiveCard
             | ChromeAction::ToggleSwitch
             | ChromeAction::ToggleFocusTimer
-            | ChromeAction::SetDevtoolsTab
             | ChromeAction::ToggleQaPanel => {}
         }
     }

@@ -511,11 +511,13 @@ body[data-theme="dark"] .hist-banner{ background:#332b06; border-color:#5c4d0f; 
 .dt-tab{ padding:0 12px; height:100%; display:flex; align-items:center; font-size:11.5px; color:var(--text-secondary); border-bottom:2px solid transparent; }
 .dt-tab:hover{ color:var(--text-primary); }
 .dt-tab.active{ color:var(--text-primary); border-bottom-color:var(--accent); font-weight:600; }
-.dt-close{ margin-left:auto; width:22px; height:22px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); }
+.dt-clear{ margin-left:auto; height:22px; padding:0 8px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); font-size:11px; }
+.dt-clear:hover{ background:var(--surface-2); }
+.dt-close{ margin-left:6px; width:22px; height:22px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); }
 .dt-close:hover{ background:var(--surface-2); }
 .dt-panel{ flex:1; overflow-y:auto; display:none; font-family:var(--font-mono); font-size:11.5px; }
 .dt-panel.active{ display:block; }
-.console-line{ padding:4px 10px; border-bottom:1px solid var(--stroke); display:flex; gap:8px; }
+.console-line{ padding:4px 10px; white-space:nowrap; overflow:hidden; border-bottom:1px solid var(--stroke); display:flex; gap:8px; }
 .console-line.error{ background:rgba(224,52,43,.08); border-left:3px solid var(--red-badge); }
 .console-line.warn{ background:rgba(216,164,0,.08); border-left:3px solid var(--yellow); }
 .console-line .ln{ color:var(--text-secondary); }
@@ -1466,47 +1468,14 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button data-action="toggle-find" aria-label="Найти на странице"><svg class="icon"><use href="#i-x"/></svg></button>
           </div>
 
-          <!-- DevTools -->
+          <!-- DevTools: консоль JS (UX-CHROME-PANELS срез 4). Elements/Network/Sources в движке — отдельные панели, здесь только Console. -->
           <div class="devtools" id="devtools">
             <div class="dt-tabs">
-              <div class="dt-tab active" data-action="set-devtools-tab" data-dt-tab="elements">Elements</div>
-              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="console">Console</div>
-              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="network">Network</div>
-              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="sources">Sources</div>
+              <div class="dt-tab active" id="dtConsoleTitle">Console</div>
+              <button class="dt-clear" data-action="clear-console">Очистить</button>
               <button class="dt-close" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
-            <div class="dt-panel active" id="dt-elements">
-              <div class="elements-tree"><span class="tag">&lt;div</span> <span class="attr">class</span>=<span class="val">"tab-row active"</span><span class="tag">&gt;</span>
-  <span class="tag">&lt;span</span> <span class="attr">class</span>=<span class="val">"container-stripe"</span><span class="tag">/&gt;</span>
-  <span class="tag">&lt;span</span> <span class="attr">class</span>=<span class="val">"tab-fav"</span><span class="tag">&gt;</span>L<span class="tag">&lt;/span&gt;</span>
-  <span class="tag">&lt;span</span> <span class="attr">class</span>=<span class="val">"tab-title"</span><span class="tag">&gt;</span>Дизайн-система Lumen<span class="tag">&lt;/span&gt;</span>
-<span class="tag">&lt;/div&gt;</span></div>
-            </div>
-            <div class="dt-panel" id="dt-console">
-              <div class="console-line"><span class="ln">12:04:11</span><span>[wgpu] surface reconfigured 1360×560 @2x</span></div>
-              <div class="console-line warn"><span class="ln">12:04:12</span><span>Deprecated CSS: -webkit-appearance используется в стороннем скрипте</span></div>
-              <div class="console-line error"><span class="ln">12:04:13</span><span>Uncaught TypeError: cannot read property 'focus' of null — omnibox.js:118</span></div>
-              <div class="console-line"><span class="ln">12:04:14</span><span>[shields] заблокировано 6 трекеров на этой странице</span></div>
-            </div>
-            <div class="dt-panel" id="dt-network">
-              <table class="net-table">
-                <tr><th>Status</th><th>Name</th><th>Type</th><th>Size</th><th>Time</th></tr>
-                <tr><td><span class="status-badge s2">200</span></td><td>lumen-ds.figma.com/file</td><td>document</td><td>84 KB</td><td>120 ms</td></tr>
-                <tr><td><span class="status-badge s3">304</span></td><td>fonts/golos-text.woff2</td><td>font</td><td>0 KB</td><td>4 ms</td></tr>
-                <tr><td><span class="status-badge s2">200</span></td><td>api/tabs/sync</td><td>fetch</td><td>2 KB</td><td>38 ms</td></tr>
-                <tr><td><span class="status-badge s4">403</span></td><td>tracker.ads.example/pixel</td><td>xhr</td><td>—</td><td>заблокировано</td></tr>
-                <tr><td><span class="status-badge s4">500</span></td><td>legacy-widget.example/init</td><td>script</td><td>1 KB</td><td>212 ms</td></tr>
-              </table>
-            </div>
-            <div class="dt-panel" id="dt-sources">
-              <div class="dt-src elements-tree"><span class="attr">// omnibox.js</span>
-<span class="tag">function</span> resolveInput(value) {
-  <span class="tag">if</span> (isPunycodeSpoof(value)) {
-    <span class="tag">return</span> toPunycode(value);
-  }
-  <span class="tag">return</span> value;
-}</div>
-            </div>
+            <div class="dt-panel active" id="dt-console"></div>
           </div>
 
           <!-- Downloads panel -->

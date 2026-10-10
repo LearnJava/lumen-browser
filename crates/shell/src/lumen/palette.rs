@@ -143,7 +143,10 @@ impl Lumen {
                     // ADR-016 M2.2b: async-safe chrome-inset relayout.
                     self.relayout_chrome();
                 }
-                PaletteAction::ToggleDevConsole => self.devtools_console.toggle(),
+                PaletteAction::ToggleDevConsole => {
+                    self.devtools_console.toggle();
+                    self.relayout_chrome_host();
+                }
                 PaletteAction::ToggleShields => self.shields.toggle(),
                 PaletteAction::ToggleVimMode => {
                     if self.vim_mode.is_some() {

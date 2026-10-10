@@ -108,6 +108,8 @@ pub struct ChromeModel {
     pub cert: ChromeCertModel,
     /// `#shortcutsOverlay` snapshot (UX-CHROME-PANELS) — mirrors `ShortcutsPanel`.
     pub shortcuts: ChromeShortcutsModel,
+    /// `#devtools` snapshot (UX-CHROME-PANELS) — mirrors `ConsolePanel`.
+    pub console: ChromeConsoleModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -559,6 +561,30 @@ pub struct ChromeShortcutsModel {
     pub rows: Vec<ChromeShortcutRowModel>,
 }
 
+/// One `#dt-console` line (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeConsoleLineModel {
+    /// `0` log, `1` warn, `2` error — same encoding as the JS runtime's
+    /// console buffer.
+    pub level: u8,
+    /// Message text.
+    pub text: String,
+}
+
+/// `#devtools` snapshot (UX-CHROME-PANELS) — mirrors `ConsolePanel`.
+///
+/// `lines` is the already-windowed tail the shell wants visible: the chrome
+/// has no wheel-driven scroll container.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeConsoleModel {
+    /// `true` shows the panel — mirrors `ConsolePanel::visible`.
+    pub open: bool,
+    /// Number of stored messages (shown in the tab title).
+    pub total: usize,
+    /// Lines rendered into `#dt-console`, oldest first.
+    pub lines: Vec<ChromeConsoleLineModel>,
+}
+
 /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeAccessModel {
@@ -909,6 +935,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
     bind_shortcuts(doc, &model.shortcuts);
+    bind_console(doc, &model.console);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
@@ -1516,6 +1543,32 @@ fn bind_cert(doc: &mut Document, cert: &ChromeCertModel) {
     }
     if let Some(fp) = find_descendant_by_class(doc, overlay, "cert-fp") {
         set_text(doc, fp, &cert.fingerprint);
+    }
+}
+
+/// Toggles `#devtools`'s `.open` class, writes the message count into the
+/// tab title and rebuilds the `.console-line`s of `#dt-console` from
+/// [`ChromeConsoleModel::lines`] (UX-CHROME-PANELS).
+fn bind_console(doc: &mut Document, console: &ChromeConsoleModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::DEVTOOLS) else { return };
+    set_class_token(doc, panel, "open", console.open);
+    if let Some(title) = doc.find_by_id(crate::ids::DT_CONSOLE_TITLE) {
+        set_text(doc, title, &format!("Console ({})", console.total));
+    }
+    let Some(list) = doc.find_by_id(crate::ids::DT_CONSOLE) else { return };
+    remove_children_with_class(doc, list, "console-line");
+    for line in &console.lines {
+        let node = doc.create_element(QualName::html("div"));
+        let class = match line.level {
+            1 => "console-line warn",
+            2 => "console-line error",
+            _ => "console-line",
+        };
+        set_attr(doc, node, "class", class);
+        let text = doc.create_element(QualName::html("span"));
+        append_text(doc, text, &line.text);
+        attach_child(doc, node, text);
+        attach_child(doc, list, node);
     }
 }
 
@@ -3577,6 +3630,40 @@ mod tests {
         let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
         let empty = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "cp-empty"));
         assert!(empty.is_some(), "no results must render the .cp-empty state");
+    }
+
+    #[test]
+    fn console_panel_opens_and_renders_lines() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            console: ChromeConsoleModel {
+                open: true,
+                total: 3,
+                lines: vec![
+                    ChromeConsoleLineModel { level: 0, text: "hello".to_owned() },
+                    ChromeConsoleLineModel { level: 1, text: "careful".to_owned() },
+                    ChromeConsoleLineModel { level: 2, text: "boom".to_owned() },
+                ],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::DEVTOOLS).expect("asset has #devtools");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::DT_CONSOLE_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Console (3)");
+        let list = doc.find_by_id(crate::ids::DT_CONSOLE).expect("list");
+        let lines = find_descendants_by_class(&doc, list, "console-line");
+        assert_eq!(lines.len(), 3);
+        assert!(has_class(&doc, lines[1], "warn"));
+        assert!(has_class(&doc, lines[2], "error"));
+        let span = doc.get(lines[0]).children[0];
+        assert_eq!(text_of(&doc, span), "hello");
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::DEVTOOLS).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::DT_CONSOLE).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "console-line").is_empty());
     }
 
     #[test]

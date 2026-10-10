@@ -909,6 +909,7 @@ impl Lumen {
             }
             KeyCommand::DevConsole => {
                 self.devtools_console.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::DevInspector => {
