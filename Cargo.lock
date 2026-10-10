@@ -2696,6 +2696,7 @@ dependencies = [
  "psl",
  "rusqlite",
  "serde",
+ "serde_json",
  "sha2",
  "workspace-hack",
 ]
