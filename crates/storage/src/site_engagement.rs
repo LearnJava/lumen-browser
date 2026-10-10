@@ -37,6 +37,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS se_last_visit_idx ON site_engagement(last_visit DESC);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE site_engagement ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS se_site_idx ON site_engagement(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +83,7 @@ impl std::fmt::Debug for SiteEngagementStore {
 impl SiteEngagementStore {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "site_engagement", "site_engagement", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "site_engagement", "site_engagement", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -96,6 +103,8 @@ impl SiteEngagementStore {
             .map_err(|e| Error::Storage(format!("site_engagement pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("site_engagement init: {e}")))?;
+        crate::partition::backfill_site(&conn, "site_engagement", "origin")
+            .map_err(|e| Error::Storage(format!("site_engagement backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -109,12 +118,12 @@ impl SiteEngagementStore {
             .lock()
             .map_err(|_| Error::Storage("site_engagement mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO site_engagement (origin, visit_count, last_visit, first_visit)
-             VALUES (?1, 1, ?2, ?2)
+            "INSERT INTO site_engagement (origin, visit_count, last_visit, first_visit, site)
+             VALUES (?1, 1, ?2, ?2, ?3)
              ON CONFLICT (origin) DO UPDATE SET
                  visit_count = visit_count + 1,
                  last_visit = MAX(last_visit, excluded.last_visit)",
-            params![origin, now_unix],
+            params![origin, now_unix, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("site_engagement record_visit: {e}")))?;
         Ok(())

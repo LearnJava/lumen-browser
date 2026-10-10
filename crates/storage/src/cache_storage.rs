@@ -38,6 +38,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS cache_origin_name_idx ON cache_entries(origin, cache_name);
             "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE cache_entries ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS cache_site_idx ON cache_entries(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +72,7 @@ impl std::fmt::Debug for CacheStorage {
 impl CacheStorage {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "cache_storage", "cache_entries", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "cache_storage", "cache_entries", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -85,6 +92,8 @@ impl CacheStorage {
             .map_err(|e| Error::Storage(format!("cache_storage pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("cache_storage init: {e}")))?;
+        crate::partition::backfill_site(&conn, "cache_entries", "origin")
+            .map_err(|e| Error::Storage(format!("cache_storage backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -110,8 +119,8 @@ impl CacheStorage {
         conn.execute(
             "INSERT INTO cache_entries
                 (origin, cache_name, request_url, request_method, response_status,
-                 response_headers, response_body, cached_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 response_headers, response_body, cached_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (origin, cache_name, request_url, request_method)
              DO UPDATE SET
                  response_status = excluded.response_status,
@@ -126,7 +135,8 @@ impl CacheStorage {
                 response_status,
                 response_headers,
                 response_body,
-                cached_at
+                cached_at,
+                crate::partition::site_of(origin)
             ],
         )
         .map_err(|e| Error::Storage(format!("cache_storage put: {e}")))?;

@@ -41,6 +41,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     CREATE INDEX IF NOT EXISTS notifications_shown_at_idx
         ON notifications(shown_at DESC);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE notifications ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS notifications_site_idx ON notifications(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +80,7 @@ impl std::fmt::Debug for Notifications {
 impl Notifications {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "notifications", "notifications", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "notifications", "notifications", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -93,6 +100,8 @@ impl Notifications {
             .map_err(|e| Error::Storage(format!("notifications pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("notifications init: {e}")))?;
+        crate::partition::backfill_site(&conn, "notifications", "origin")
+            .map_err(|e| Error::Storage(format!("notifications backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -143,9 +152,9 @@ impl Notifications {
         }
         // Insert новой.
         conn.execute(
-            "INSERT INTO notifications (origin, title, body, icon_url, tag, click_url, shown_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![origin, title, body, icon_url, tag, click_url, shown_at],
+            "INSERT INTO notifications (origin, title, body, icon_url, tag, click_url, shown_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![origin, title, body, icon_url, tag, click_url, shown_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("notifications show: {e}")))?;
         Ok(conn.last_insert_rowid())
