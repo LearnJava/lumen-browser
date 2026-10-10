@@ -1,12 +1,10 @@
 //! UX-IMPORT: пароли Firefox (`key4.db` + `logins.json`).
 //!
-//! **Неподтверждено против настоящего профиля Firefox.** В песочнице нет
-//! установленного Firefox с сохранённым паролем, поэтому ниже — наилучшая
-//! реализация по открытым описаниям формата (`key4.db` — SQLite, стандартный
-//! PKCS#5 PBES2/RFC 8018, в отличие от бинарного `key3.db`); проверено только
-//! то, что сама реализация самосогласованна (тесты шифруют синтетические
-//! данные тем же алгоритмом и читают их обратно через `pkcs5`). Перед тем как
-//! снять эту пометку, нужен прогон на реальном профиле с известным паролем.
+//! **Проверено на настоящем профиле Firefox** (2026-10-10, 6 записей, из них
+//! 5 импортированы, 1 — `chrome://` — пропущена): формат совпал, кроме двух
+//! особенностей NSS в `AlgorithmIdentifier` (IV из 14 байт и PRF без `NULL`),
+//! см. [`fix_nss_algorithm_quirks`]. Ручная сверка — ignored-тест
+//! `real_profile_smoke` (`LUMEN_FF_PROFILE_DIR`).
 //!
 //! Схема: `key4.db.metaData` (`id='password'`) хранит `item1` — `globalSalt`.
 //! `key4.db.nssPrivate.a11` — мастер-ключ (32 байта AES-256), обёрнутый
@@ -90,6 +88,56 @@ fn collect_octet_strings<'a>(buf: &'a [u8], out: &mut Vec<&'a [u8]>) {
 
 const OID_AES256_CBC: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2A];
 
+/// DER: тег + длина + значение.
+fn encode_tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    if value.len() < 128 {
+        out.push(value.len() as u8);
+    } else {
+        let be = (value.len() as u32).to_be_bytes();
+        let trimmed: Vec<u8> = be.iter().copied().skip_while(|&b| b == 0).collect();
+        out.push(0x80 | trimmed.len() as u8);
+        out.extend_from_slice(&trimmed);
+    }
+    out.extend_from_slice(value);
+    out
+}
+
+/// Две особенности NSS в `AlgorithmIdentifier`. Первая: NSS кладёт IV AES-256-CBC в `AlgorithmIdentifier` как `OCTET STRING` из 14
+/// байт: это хвост настоящего 16-байтного IV, чьи первые два байта `04 0E` —
+/// заголовок самого DER-кодирования. `pkcs5` ждёт 16 байт, поэтому
+/// восстанавливаем IV и пересобираем содержащие его `SEQUENCE`.
+fn fix_nss_algorithm_quirks(der: &[u8]) -> Option<Vec<u8>> {
+    let (tag, _, value) = read_tlv(der)?;
+    if tag != 0x30 {
+        return Some(der.to_vec());
+    }
+    // PRF `hmacWithSHA256` без параметров: NSS опускает `NULL`, `pkcs5` его требует.
+    if matches!(read_tlv(value), Some((0x06, h, oid)) if h + oid.len() == value.len()) {
+        let mut with_null = value.to_vec();
+        with_null.extend_from_slice(&[0x05, 0x00]);
+        return Some(encode_tlv(0x30, &with_null));
+    }
+    let is_aes_alg = matches!(read_tlv(value), Some((0x06, _, oid)) if oid == OID_AES256_CBC);
+    let mut body = Vec::new();
+    let mut rest = value;
+    while !rest.is_empty() {
+        let (t, h, v) = read_tlv(rest)?;
+        let whole = &rest[..h + v.len()];
+        if t == 0x30 {
+            body.extend(fix_nss_algorithm_quirks(whole)?);
+        } else if is_aes_alg && t == 0x04 && v.len() == 14 {
+            let mut iv = vec![0x04, 0x0E];
+            iv.extend_from_slice(v);
+            body.extend(encode_tlv(0x04, &iv));
+        } else {
+            body.extend_from_slice(whole);
+        }
+        rest = &rest[h + v.len()..];
+    }
+    Some(encode_tlv(0x30, &body))
+}
+
 /// `a11` — `SEQUENCE { AlgorithmIdentifier, OCTET STRING шифртекст }`.
 /// Алгоритм (PBES1/PBES2) парсит и расшифровывает `pkcs5`; здесь нужно
 /// только отделить его DER-байты от шифртекста.
@@ -102,12 +150,12 @@ fn decrypt_master_key(a11: &[u8], password: &[u8]) -> Option<Vec<u8>> {
     if alg_tag != 0x30 {
         return None;
     }
-    let alg_der = &outer[..alg_header + alg_value.len()];
+    let alg_der = fix_nss_algorithm_quirks(&outer[..alg_header + alg_value.len()])?;
     let (ct_tag, _, ciphertext) = read_tlv(&outer[alg_header + alg_value.len()..])?;
     if ct_tag != 0x04 {
         return None;
     }
-    let scheme = pkcs5::EncryptionScheme::try_from(alg_der).ok()?;
+    let scheme = pkcs5::EncryptionScheme::try_from(alg_der.as_slice()).ok()?;
     let key = scheme.decrypt(password, ciphertext).ok()?;
     (key.len() == 32).then_some(key)
 }
@@ -236,16 +284,27 @@ mod tests {
     /// выведенным PBKDF2 из `password`/`salt`/`iterations` — независимо от
     /// продакшен-кода (там расшифровка идёт через `pkcs5`).
     fn build_pbes2_blob(password: &[u8], salt: &[u8], iterations: u8, iv: &[u8; 16], plain: &[u8]) -> Vec<u8> {
+        build_pbes2_blob_nss(password, salt, iterations, iv, plain, false)
+    }
+
+    /// `nss == true` — форма реального `key4.db`: PRF без `NULL`-параметров и IV
+    /// как 14-байтный `OCTET STRING` (хвост `04 0E <14 байт>`).
+    fn build_pbes2_blob_nss(password: &[u8], salt: &[u8], iterations: u8, iv: &[u8; 16], plain: &[u8], nss: bool) -> Vec<u8> {
         let mut key = [0u8; 32];
         pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password, salt, iterations as u32, &mut key);
         let ciphertext = cbc::Encryptor::<aes::Aes256>::new_from_slices(&key, iv)
             .unwrap()
             .encrypt_padded_vec_mut::<Pkcs7>(plain);
 
-        let prf = der_seq(&[der_oid(OID_HMAC_SHA256), vec![0x05, 0x00]]);
+        let prf = if nss {
+            der_seq(&[der_oid(OID_HMAC_SHA256)])
+        } else {
+            der_seq(&[der_oid(OID_HMAC_SHA256), vec![0x05, 0x00]])
+        };
         let pbkdf2_params = der_seq(&[der_octets(salt), der_small_int(iterations), prf]);
         let kdf = der_seq(&[der_oid(OID_PBKDF2), pbkdf2_params]);
-        let enc = der_seq(&[der_oid(OID_AES256_CBC), der_octets(iv)]);
+        let enc_iv = if nss { der_octets(&iv[2..]) } else { der_octets(iv) };
+        let enc = der_seq(&[der_oid(OID_AES256_CBC), enc_iv]);
         let pbes2_params = der_seq(&[kdf, enc]);
         let alg = der_seq(&[der_oid(OID_PBES2), pbes2_params]);
         der_seq(&[alg, der_octets(&ciphertext)])
@@ -282,6 +341,16 @@ mod tests {
         let key = decrypt_master_key(&blob, &password).unwrap();
         assert_eq!(key, plain);
         assert!(decrypt_master_key(&blob, b"wrong").is_none());
+    }
+
+    #[test]
+    fn master_key_nss_quirks() {
+        let password = Sha1::digest(b"global-salt-test");
+        let plain = [7u8; 32];
+        let mut iv = [3u8; 16];
+        iv[..2].copy_from_slice(&[0x04, 0x0E]);
+        let blob = build_pbes2_blob_nss(&password, b"entry-salt", 5, &iv, &plain, true);
+        assert_eq!(decrypt_master_key(&blob, &password).unwrap(), plain);
     }
 
     #[test]
@@ -334,5 +403,21 @@ mod tests {
         assert_eq!(read.skipped, 2);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ручная сверка с настоящим профилем: `LUMEN_FF_PROFILE_DIR=<копия
+    /// каталога с key4.db и logins.json> cargo test -p lumen-storage
+    /// real_profile -- --ignored --nocapture`. Печатает только агрегаты
+    /// (число записей, хосты, длины), без логинов и паролей.
+    #[test]
+    #[ignore = "нужен настоящий профиль Firefox (LUMEN_FF_PROFILE_DIR)"]
+    fn real_profile_smoke() {
+        let Ok(dir) = std::env::var("LUMEN_FF_PROFILE_DIR") else { return };
+        let read = read_firefox_logins(Path::new(&dir)).expect("профиль читается");
+        for l in &read.logins {
+            println!("host={} user_len={} pass_len={}", l.origin, l.username.len(), l.password.len());
+        }
+        println!("imported={} skipped={}", read.logins.len(), read.skipped);
+        assert!(!read.logins.is_empty());
     }
 }
