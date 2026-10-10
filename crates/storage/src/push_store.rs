@@ -49,6 +49,11 @@ impl PushStore {
             messages: PushMessages::open_in_memory().ok(),
         }
     }
+
+    /// UX-PARTITION: удалить push-подписки сайта.
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> lumen_core::Result<usize> {
+        self.subs.clear_site(site)
+    }
 }
 
 fn now_unix_secs() -> i64 {
