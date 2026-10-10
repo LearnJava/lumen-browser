@@ -869,6 +869,13 @@ pub(crate) struct Lumen {
     /// `(origin, scope)` internally, same pattern as `cache_store`. In-memory
     /// SQLite; persisted only for the lifetime of the session.
     pub(crate) push_store: Arc<lumen_storage::PushStore>,
+    /// Session-scoped SQLite registry of service worker registrations
+    /// (`lumen_storage::ServiceWorkers`). Distinct from `sw_worker_store` (live
+    /// worker handles); UX-PARTITION: "Clear site data" wipes it per site.
+    pub(crate) sw_registry: Arc<lumen_storage::ServiceWorkers>,
+    /// Session-scoped Web Notifications store (`lumen_storage::Notifications`);
+    /// UX-PARTITION: "Clear site data" wipes it per site.
+    pub(crate) notifications_store: Arc<lumen_storage::Notifications>,
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;

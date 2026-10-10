@@ -529,6 +529,12 @@ fn run_window_mode_inner(
             Arc::new(lumen_storage::PushSubscriptions::open_in_memory().expect("push_store init")),
             permissions_store.clone(),
         )),
+        sw_registry: Arc::new(
+            lumen_storage::ServiceWorkers::open_in_memory().expect("sw_registry init"),
+        ),
+        notifications_store: Arc::new(
+            lumen_storage::Notifications::open_in_memory().expect("notifications_store init"),
+        ),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),

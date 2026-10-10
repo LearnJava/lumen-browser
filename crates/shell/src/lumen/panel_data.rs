@@ -88,6 +88,8 @@ impl Lumen {
             cookies: Some(&*jar),
             permissions: Some(&*self.permissions_disk_store),
             cache_storage: Some(&*self.cache_store),
+            service_workers: Some(&*self.sw_registry),
+            notifications: Some(&*self.notifications_store),
             autofill: crate::autofill_store::global(),
             idb_dir: self.idb_dir.as_deref(),
             ..lumen_storage::SiteDataTargets::default()
