@@ -103,6 +103,8 @@ pub struct ChromeModel {
     pub palette: ChromePaletteModel,
     /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
     pub cert: ChromeCertModel,
+    /// `#shortcutsOverlay` snapshot (UX-CHROME-PANELS) — mirrors `ShortcutsPanel`.
+    pub shortcuts: ChromeShortcutsModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
     pub print: ChromePrintModel,
     /// Which `#contentArea` view is shown (CC-10b).
@@ -526,6 +528,32 @@ pub struct ChromeCertModel {
     pub fingerprint: String,
 }
 
+/// One `.sc-row` of `#shortcutsOverlay`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeShortcutRowModel {
+    /// Index into `ShortcutsPanel::rows` — written to `data-sc-index` so a
+    /// click resolves to the right row even though the list is windowed.
+    pub index: usize,
+    /// Action label, e.g. `"Перезагрузить"`.
+    pub label: String,
+    /// Binding badge, e.g. `"Ctrl+R"`, or the rebind prompt.
+    pub binding: String,
+    /// `true` while this row awaits a new keypress.
+    pub rebinding: bool,
+}
+
+/// `#shortcutsOverlay` snapshot (UX-CHROME-PANELS) — mirrors `ShortcutsPanel`.
+///
+/// `rows` is the already-windowed slice the shell wants visible: the chrome
+/// has no wheel-driven scroll container, so the shell owns the scroll offset.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeShortcutsModel {
+    /// `true` shows the overlay — mirrors `ShortcutsPanel::visible`.
+    pub open: bool,
+    /// Rows rendered into `#scList`.
+    pub rows: Vec<ChromeShortcutRowModel>,
+}
+
 /// `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
 /// mirrors `PrintPanel`.
 ///
@@ -859,6 +887,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_popover(doc, model);
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
+    bind_shortcuts(doc, &model.shortcuts);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
     bind_history(doc, &model.history);
@@ -1465,6 +1494,30 @@ fn bind_cert(doc: &mut Document, cert: &ChromeCertModel) {
     }
     if let Some(fp) = find_descendant_by_class(doc, overlay, "cert-fp") {
         set_text(doc, fp, &cert.fingerprint);
+    }
+}
+
+/// Toggles `#shortcutsOverlay`'s `.open` class and rebuilds the `.sc-row`s of
+/// `#scList` from [`ChromeShortcutsModel::rows`] (UX-CHROME-PANELS).
+fn bind_shortcuts(doc: &mut Document, shortcuts: &ChromeShortcutsModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::SHORTCUTS_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", shortcuts.open);
+    let Some(list) = doc.find_by_id(crate::ids::SC_LIST) else { return };
+    remove_children_with_class(doc, list, "sc-row");
+    for row in &shortcuts.rows {
+        let node = doc.create_element(QualName::html("div"));
+        set_attr(doc, node, "class", if row.rebinding { "sc-row rebinding" } else { "sc-row" });
+        set_attr(doc, node, "data-action", "rebind-shortcut");
+        set_attr(doc, node, "data-sc-index", &row.index.to_string());
+        let label = doc.create_element(QualName::html("span"));
+        set_attr(doc, label, "class", "sc-label");
+        append_text(doc, label, &row.label);
+        attach_child(doc, node, label);
+        let key = doc.create_element(QualName::html("span"));
+        set_attr(doc, key, "class", "sc-key");
+        append_text(doc, key, &row.binding);
+        attach_child(doc, node, key);
+        attach_child(doc, list, node);
     }
 }
 
@@ -3462,6 +3515,32 @@ mod tests {
         let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
         let empty = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "cp-empty"));
         assert!(empty.is_some(), "no results must render the .cp-empty state");
+    }
+
+    #[test]
+    fn shortcuts_overlay_rebuilds_rows_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            shortcuts: ChromeShortcutsModel {
+                open: true,
+                rows: vec![
+                    ChromeShortcutRowModel { index: 3, label: "A".into(), binding: "Ctrl+A".into(), rebinding: false },
+                    ChromeShortcutRowModel { index: 4, label: "B".into(), binding: "...".into(), rebinding: true },
+                ],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::SHORTCUTS_OVERLAY).expect("asset has #shortcutsOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let list = doc.find_by_id(crate::ids::SC_LIST).expect("asset has #scList");
+        let rows = find_descendants_by_class(&doc, list, "sc-row");
+        assert_eq!(rows.len(), 2, "seed row must be replaced");
+        assert_eq!(doc.get(rows[1]).get_attr("data-sc-index"), Some("4"));
+        assert!(has_class(&doc, rows[1], "rebinding"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, overlay, "open"));
+        assert!(find_descendants_by_class(&doc, list, "sc-row").is_empty());
     }
 
     #[test]

@@ -715,33 +715,8 @@ impl Lumen {
             // here, gated off the rollback flag — `#view-settings` in the
             // engine chrome owns it now.
 
-            // Keyboard shortcuts panel (§D-4): centred overlay.
-            if self.shortcuts_panel.visible {
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css();
-                let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
-                let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
-                use panels::shortcuts_panel::ShortcutsHit;
-                let lx = x_css - kp_x;
-                let ly = y_css - kp_y;
-                if (0.0..panels::shortcuts_panel::PANEL_W).contains(&lx)
-                    && (0.0..panels::shortcuts_panel::PANEL_H).contains(&ly)
-                {
-                    match self.shortcuts_panel.hit_test(lx, ly) {
-                        ShortcutsHit::Close => {
-                            self.shortcuts_panel.close();
-                        }
-                        ShortcutsHit::StartRebind(idx) => {
-                            self.shortcuts_panel.rebinding = Some(idx);
-                        }
-                        ShortcutsHit::Consumed => {}
-                    }
-                } else {
-                    self.shortcuts_panel.close();
-                }
-                self.request_redraw();
-                return;
-            }
+            // UX-CHROME-PANELS: the shortcuts panel's click hit-test lived
+            // here - `#shortcutsOverlay` in the engine chrome owns it now.
 
             // CC-10b/CC-15-6: the legacy certificate-panel click hit-test
             // lived here, gated off the rollback flag — the engine chrome's

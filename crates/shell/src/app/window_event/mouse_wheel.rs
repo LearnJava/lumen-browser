@@ -126,8 +126,9 @@ impl Lumen {
                 MouseScrollDelta::LineDelta(_, l) => l,
                 MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
             };
-            self.shortcuts_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
-            self.request_redraw();
+            let vh = self.viewport_height_css();
+            self.shortcuts_panel.scroll_rows(-lines.round() as i32, vh);
+            self.relayout_chrome_host();
             return;
         }
         // Certificate viewer panel intercepts the wheel while visible (§D-1).

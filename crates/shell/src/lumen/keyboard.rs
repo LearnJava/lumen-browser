@@ -950,6 +950,7 @@ impl Lumen {
             KeyCommand::ToggleShortcuts => {
                 self.shortcuts_panel.toggle();
                 self.request_redraw();
+                self.relayout_chrome_host();
             }
             KeyCommand::TogglePrint => {
                 self.print_panel.toggle();

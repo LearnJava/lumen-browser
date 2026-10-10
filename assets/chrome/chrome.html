@@ -708,6 +708,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 .modal-foot button:hover{ background:var(--surface-2); }
 .modal-foot button.primary{ background:var(--accent); color:#fff; border-color:var(--accent); }
 
+.sc-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; height:32px; padding:0 4px; font-size:12px; border-bottom:1px solid var(--stroke); }
+.sc-row:hover{ background:var(--surface-2); }
+.sc-row .sc-key{ font-family:var(--font-mono); font-size:11px; color:var(--accent); background:var(--surface-1); border-radius:var(--radius-sm); padding:3px 8px; }
+.sc-row.rebinding .sc-key{ color:var(--text-secondary); }
+.sc-hint{ font-size:11px; color:var(--text-secondary); margin-right:auto; align-self:center; }
+
 /* ---------- Print dialog ---------- */
 .print-body{ display:flex; height:440px; }
 .print-preview{ flex:1; background:var(--surface-1); padding:22px; overflow-y:auto; display:flex; justify-content:center; }
@@ -1578,6 +1584,24 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="modal-foot">
                 <button data-action="close-modal">Закрыть</button>
                 <button class="primary" data-action="close-modal">Экспорт .pem</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Keyboard shortcuts -->
+          <div class="modal-overlay" id="shortcutsOverlay" data-action="close-modal">
+            <div class="modal">
+              <div class="modal-head">
+                <svg class="icon icon-lg"><use href="#i-code"/></svg>
+                <h3>Горячие клавиши</h3>
+                <button class="modal-close" data-action="close-modal"><svg class="icon"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="modal-body">
+                <div class="sc-list" id="scList"><div class="sc-row" data-action="rebind-shortcut" data-sc-index="0"><span class="sc-label">Перезагрузить</span><span class="sc-key">Ctrl+R</span></div></div>
+              </div>
+              <div class="modal-foot">
+                <span class="sc-hint">Клик по строке — задать новое сочетание, Esc — отмена</span>
+                <button data-action="close-modal">Закрыть</button>
               </div>
             </div>
           </div>

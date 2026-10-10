@@ -1160,15 +1160,6 @@ impl Lumen {
             overlay_buf.append(&mut a11y_cmds);
         }
 
-        // Keyboard shortcuts panel (§D-4): centred floating overlay.
-        if self.shortcuts_panel.visible {
-            let win_w = self.viewport_width_css();
-            let win_h = self.viewport_height_css();
-            let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
-            let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
-            self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
-        }
-
         // §12.3 Read-later panel: right-docked overlay.
         if self.read_later_panel.visible {
             let win_w = self.viewport_width_css();
