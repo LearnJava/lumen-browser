@@ -50,6 +50,13 @@ const MIGRATIONS: &[Migration] = &[
     ALTER TABLE push_subscriptions ADD COLUMN private_key TEXT NOT NULL DEFAULT '';
     "#,
     },
+    Migration {
+        version: 3,
+        sql: r#"
+    ALTER TABLE push_subscriptions ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS push_subscriptions_site_idx ON push_subscriptions(site);
+    "#,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +93,7 @@ impl std::fmt::Debug for PushSubscriptions {
 impl PushSubscriptions {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "push_subscriptions", "push_subscriptions", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "push_subscriptions", "push_subscriptions", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -106,6 +113,8 @@ impl PushSubscriptions {
             .map_err(|e| Error::Storage(format!("push_subscriptions pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("push_subscriptions init: {e}")))?;
+        crate::partition::backfill_site(&conn, "push_subscriptions", "origin")
+            .map_err(|e| Error::Storage(format!("push_subscriptions backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -128,8 +137,8 @@ impl PushSubscriptions {
             .lock()
             .map_err(|_| Error::Storage("push_subscriptions mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO push_subscriptions (origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO push_subscriptions (origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (origin, scope) DO UPDATE SET
                  endpoint = excluded.endpoint,
                  p256dh = excluded.p256dh,
@@ -145,7 +154,8 @@ impl PushSubscriptions {
                 auth,
                 private_key,
                 user_visible_only as i32,
-                created_at
+                created_at,
+                crate::partition::site_of(origin)
             ],
         )
         .map_err(|e| Error::Storage(format!("push_subscriptions subscribe: {e}")))?;

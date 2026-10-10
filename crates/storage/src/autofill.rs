@@ -34,6 +34,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     CREATE INDEX IF NOT EXISTS autofill_origin_field_idx
         ON autofill(origin, field_name);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE autofill ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS autofill_site_idx ON autofill(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +65,7 @@ impl std::fmt::Debug for Autofill {
 impl Autofill {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "autofill", "autofill", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "autofill", "autofill", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -79,6 +86,8 @@ impl Autofill {
         set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("autofill pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("autofill init: {e}")))?;
+        crate::partition::backfill_site(&conn, "autofill", "origin")
+            .map_err(|e| Error::Storage(format!("autofill backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -101,12 +110,12 @@ impl Autofill {
             .lock()
             .map_err(|_| Error::Storage("autofill mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO autofill (origin, field_name, value, last_used)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO autofill (origin, field_name, value, last_used, site)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (origin, field_name, value) DO UPDATE SET
                  frequency = frequency + 1,
                  last_used = MAX(last_used, excluded.last_used)",
-            params![origin, field_name, value, now_unix],
+            params![origin, field_name, value, now_unix, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("autofill record: {e}")))?;
         Ok(())
