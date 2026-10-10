@@ -63,7 +63,7 @@ fn err(what: impl std::fmt::Display) -> Error {
 }
 
 /// Стандартный base64 (RFC 4648) без зависимостей; пробелы игнорируются.
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(s.len() * 3 / 4);
     let (mut acc, mut bits) = (0u32, 0u32);
     for c in s.bytes().filter(|c| !c.is_ascii_whitespace()) {

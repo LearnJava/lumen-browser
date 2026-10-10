@@ -72,7 +72,7 @@ pub struct ImportReport {
     pub skipped: usize,
 }
 
-fn importable(url: &str) -> bool {
+pub(crate) fn importable(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
@@ -184,7 +184,7 @@ fn walk_chromium(node: &serde_json::Value, folder: &str, out: &mut Vec<ImportedB
 }
 
 /// Временный каталог, удаляемый при drop.
-struct TempDir(PathBuf);
+pub(crate) struct TempDir(pub(crate) PathBuf);
 
 impl TempDir {
     fn new() -> Result<Self> {
@@ -208,7 +208,7 @@ impl Drop for TempDir {
 }
 
 /// Открыть копию чужой базы (вместе с WAL, если он есть).
-fn open_copy(src: &Path) -> Result<(Connection, TempDir)> {
+pub(crate) fn open_copy(src: &Path) -> Result<(Connection, TempDir)> {
     let guard = TempDir::new()?;
     let dst = guard.0.join("db.sqlite");
     std::fs::copy(src, &dst)

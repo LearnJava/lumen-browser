@@ -228,23 +228,35 @@ impl Lumen {
                 bm.map_err(|e| e.to_string()),
                 hist.map_err(|e| e.to_string()),
             );
-            // Пароли: только Chromium (DPAPI + AES-GCM); Firefox NSS — позже.
-            if matches!(p.browser, import::SourceBrowser::Chrome | import::SourceBrowser::Edge) {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                let logins = match crate::password_store::global() {
-                    Some(store) => import_logins::read_chromium_logins(&p.dir).and_then(|read| {
-                        import_logins::import_logins(store, &read.logins, now)
-                            .map(|rep| (rep, read.skipped))
-                    }),
-                    None => Err(lumen_core::Error::Storage(
-                        "хранилище паролей недоступно (приватный режим)".into(),
-                    )),
-                };
-                eprintln!("[import] {:?}: пароли {:?}", p.browser, logins.map_err(|e| e.to_string()));
-            }
+            // Пароли: Chromium (DPAPI + AES-GCM) и Firefox (key4.db, см.
+            // import_logins_firefox.rs — неподтверждено против реального профиля).
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let logins = match crate::password_store::global() {
+                Some(store) => {
+                    // Разные типы чтения (Chromium/Firefox) сводим к общей паре
+                    // (записи, пропущено) перед записью через общий import_logins.
+                    let read = match p.browser {
+                        import::SourceBrowser::Chrome | import::SourceBrowser::Edge => {
+                            import_logins::read_chromium_logins(&p.dir)
+                                .map(|r| (r.logins, r.skipped))
+                        }
+                        import::SourceBrowser::Firefox => {
+                            lumen_storage::import_logins_firefox::read_firefox_logins(&p.dir)
+                                .map(|r| (r.logins, r.skipped))
+                        }
+                    };
+                    read.and_then(|(items, skipped)| {
+                        import_logins::import_logins(store, &items, now).map(|rep| (rep, skipped))
+                    })
+                }
+                None => Err(lumen_core::Error::Storage(
+                    "хранилище паролей недоступно (приватный режим)".into(),
+                )),
+            };
+            eprintln!("[import] {:?}: пароли {:?}", p.browser, logins.map_err(|e| e.to_string()));
         }
         self.bookmark_panel.visible = true;
         self.refresh_bookmarks();
