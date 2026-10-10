@@ -710,6 +710,12 @@ impl Lumen {
                 .as_deref()
                 .and_then(lumen_storage::PartitionKey::parse)
                 .map(|k| k.site().to_owned()),
+            spell_enabled: crate::assets::SPELL_DICTS.get().is_none_or(|d| d.prefs().enabled),
+            spell_languages: if self.settings_panel.visible && self.chrome_settings_section == "spelling" {
+                crate::assets::SPELL_DICTS.get().map(|d| d.languages()).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1323,6 +1329,22 @@ impl Lumen {
                     .and_then(|k| panels::permission_panel::PermissionKind::ALL.into_iter().find(|p| p.label() == k));
                 if let (Some(origin), Some(kind)) = (origin, kind) {
                     self.permission.revoke(&origin, kind);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ToggleSpellcheck => {
+                if let Some(dicts) = crate::assets::SPELL_DICTS.get() {
+                    let enabled = dicts.prefs().enabled;
+                    dicts.set_enabled(!enabled, &spellcheck::prefs_path());
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ToggleSpellLanguage => {
+                if let (Some(dicts), Some(lang)) =
+                    (crate::assets::SPELL_DICTS.get(), self.chrome_data_attr(nid, "data-spell-lang"))
+                {
+                    let on = dicts.languages().into_iter().find(|(s, _)| *s == lang).is_some_and(|(_, on)| on);
+                    dicts.set_language(&lang, !on, &spellcheck::prefs_path());
                     self.relayout_chrome_host();
                 }
             }

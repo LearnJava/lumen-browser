@@ -283,7 +283,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SpellChecker as _, SuspendedHeap};
+use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_core::ColorSpace;
 use lumen_encoding::KnuthLiangHyphenation;
