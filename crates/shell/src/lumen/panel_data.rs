@@ -80,6 +80,9 @@ impl Lumen {
         self.ls_storage.retain(|origin, _| !site.matches(origin));
         self.ss_storage.retain(|origin, _| !site.matches(origin));
         self.permission.forget_site(site);
+        if let Ok(mut workers) = self.sw_worker_store.lock() {
+            workers.retain(|(origin, _scope), _| !site.matches(origin));
+        }
         let jar = self.active_cookie_jar();
         let targets = lumen_storage::SiteDataTargets {
             cookies: Some(&*jar),
@@ -91,6 +94,10 @@ impl Lumen {
         };
         let mut report = lumen_storage::clear_site_data(site, &targets);
         report.removed.push(("http_cache", crate::config::clear_http_cache_site(site)));
+        match self.push_store.clear_site(site) {
+            Ok(n) => report.removed.push(("push_subscriptions", n)),
+            Err(e) => report.failed.push(("push_subscriptions", e.to_string())),
+        }
         match lumen_storage::clear_hsts_shared_site(site) {
             Ok(n) => report.removed.push(("hsts", n)),
             Err(e) => report.failed.push(("hsts", e.to_string())),
