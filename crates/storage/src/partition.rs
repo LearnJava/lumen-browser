@@ -494,9 +494,9 @@ mod tests {
         assert!(bf.retrieve("https://other.org/b").is_some());
 
         let msgs = crate::push_messages::PushMessages::open_in_memory().unwrap();
-        msgs.enqueue(1, b"x", 0).unwrap();
-        msgs.enqueue(2, b"y", 0).unwrap();
-        assert_eq!(msgs.clear_subscriptions(&[1]).unwrap(), 1);
+        msgs.enqueue(1, "https://example.com", b"x", 0).unwrap();
+        msgs.enqueue(2, "https://other.org", b"y", 0).unwrap();
+        assert_eq!(msgs.clear_site(&k).unwrap(), 1);
         assert_eq!(msgs.count_pending(1).unwrap(), 0);
         assert_eq!(msgs.count_pending(2).unwrap(), 1);
     }

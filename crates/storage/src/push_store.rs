@@ -53,14 +53,7 @@ impl PushStore {
     /// UX-PARTITION: удалить push-подписки сайта и очередь их недоставленных сообщений.
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> lumen_core::Result<usize> {
         if let Some(messages) = &self.messages {
-            let ids: Vec<i64> = self
-                .subs
-                .list_all()?
-                .into_iter()
-                .filter(|s| site.matches(&s.origin))
-                .map(|s| s.id)
-                .collect();
-            messages.clear_subscriptions(&ids)?;
+            messages.clear_site(site)?;
         }
         self.subs.clear_site(site)
     }
@@ -144,7 +137,7 @@ impl PushBackend for PushStore {
         let Some(messages) = self.messages.as_ref() else {
             return false;
         };
-        messages.enqueue(sub.id, &plaintext, now_unix_secs()).is_ok()
+        messages.enqueue(sub.id, &sub.origin, &plaintext, now_unix_secs()).is_ok()
     }
 
     fn push_take_pending(&self, origin: &str, scope: &str) -> Option<Vec<u8>> {
