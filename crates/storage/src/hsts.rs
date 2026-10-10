@@ -45,6 +45,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS hsts_expires_idx ON hsts_hosts(expires_at);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE hsts_hosts ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS hsts_site_idx ON hsts_hosts(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +108,7 @@ impl std::fmt::Debug for HstsStore {
 impl HstsStore {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "hsts", "hsts_hosts", "host", site)
+        crate::partition::clear_by_site(&self.conn, "hsts", "hsts_hosts", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -120,6 +127,8 @@ impl HstsStore {
         set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("hsts pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("hsts init: {e}")))?;
+        crate::partition::backfill_site(&conn, "hsts_hosts", "host")
+            .map_err(|e| Error::Storage(format!("hsts backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -145,8 +154,8 @@ impl HstsStore {
             .lock()
             .map_err(|_| Error::Storage("hsts mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO hsts_hosts (host, max_age_seconds, include_subdomains, preload, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO hsts_hosts (host, max_age_seconds, include_subdomains, preload, expires_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (host) DO UPDATE SET
                  max_age_seconds = excluded.max_age_seconds,
                  include_subdomains = excluded.include_subdomains,
@@ -157,7 +166,8 @@ impl HstsStore {
                 max_age as i64,
                 include_subdomains as i32,
                 preload as i32,
-                expires_at
+                expires_at,
+                crate::partition::site_of(host)
             ],
         )
         .map_err(|e| Error::Storage(format!("hsts upsert: {e}")))?;

@@ -41,6 +41,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
             CREATE INDEX IF NOT EXISTS bc_origin_idx ON broadcast_channels(origin);
             CREATE INDEX IF NOT EXISTS bc_origin_name_idx ON broadcast_channels(origin, channel_name);
             "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+            ALTER TABLE broadcast_channels ADD COLUMN site TEXT NOT NULL DEFAULT '';
+            CREATE INDEX IF NOT EXISTS bc_site_idx ON broadcast_channels(site);
+            "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +89,8 @@ impl BroadcastChannels {
             .map_err(|e| Error::Storage(format!("broadcast_channels pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("broadcast_channels init: {e}")))?;
+        crate::partition::backfill_site(&conn, "broadcast_channels", "origin")
+            .map_err(|e| Error::Storage(format!("broadcast_channels backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -102,11 +111,11 @@ impl BroadcastChannels {
             .lock()
             .map_err(|_| Error::Storage("broadcast_channels mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO broadcast_channels (origin, channel_name, context_id, registered_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO broadcast_channels (origin, channel_name, context_id, registered_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (origin, channel_name, context_id) DO UPDATE SET
                  registered_at = excluded.registered_at",
-            params![origin, channel_name, context_id, registered_at],
+            params![origin, channel_name, context_id, registered_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("broadcast_channels register: {e}")))?;
         let id: i64 = conn
@@ -183,13 +192,7 @@ impl BroadcastChannels {
     /// `channel.close()` — снять регистрацию.
     /// UX-PARTITION: удалить регистрации каналов сайта `site`.
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(
-            &self.conn,
-            "broadcast_channels",
-            "broadcast_channels",
-            "origin",
-            site,
-        )
+        crate::partition::clear_by_site(&self.conn, "broadcast_channels", "broadcast_channels", site)
     }
 
     pub fn unregister(&self, id: i64) -> Result<()> {
