@@ -125,6 +125,32 @@ impl History {
         Ok(())
     }
 
+    /// Импорт из другого браузера: прибавляет `visit_count` к имеющемуся,
+    /// дату берёт более свежую, непустой title импортируемой записи побеждает.
+    pub fn import_visit(
+        &self,
+        url: &str,
+        title: &str,
+        visit_date: i64,
+        visit_count: i64,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("history mutex poisoned".into()))?;
+        conn.execute(
+            "INSERT INTO history (url, title, visit_date, visit_count)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (url) DO UPDATE SET
+                 title = CASE WHEN excluded.title = '' THEN title ELSE excluded.title END,
+                 visit_date = MAX(history.visit_date, excluded.visit_date),
+                 visit_count = history.visit_count + excluded.visit_count",
+            params![url, title, visit_date, visit_count.max(1)],
+        )
+        .map_err(|e| Error::Storage(format!("history import_visit: {e}")))?;
+        Ok(())
+    }
+
     /// Установить favicon-hash для url. Никак не аффектит visit_count.
     pub fn set_favicon(&self, url: &str, favicon_hash: &[u8]) -> Result<()> {
         let conn = self
