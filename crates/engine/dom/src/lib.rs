@@ -30,6 +30,8 @@ pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_
 pub mod vtt;
 pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_tracks, parse_vtt};
 
+pub mod page_translate;
+
 mod journal;
 use journal::ContentJournal;
 mod forms;
