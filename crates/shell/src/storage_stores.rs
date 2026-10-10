@@ -123,6 +123,7 @@ pub(crate) fn idb_store_for_url(
 pub(crate) fn sw_store_for_base(
     base: &ResourceBase,
     backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    registry: Option<&Arc<lumen_storage::ServiceWorkers>>,
 ) -> Option<Arc<dyn lumen_core::ext::SwBackend>> {
     let origin = match base {
         ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
@@ -131,5 +132,75 @@ pub(crate) fn sw_store_for_base(
         })?,
         ResourceBase::File(_) => return None,
     };
-    Some(Arc::new(lumen_storage::SwStore::new(Arc::clone(backend), origin)))
+    let store = lumen_storage::SwStore::new(Arc::clone(backend), origin.clone());
+    Some(match registry {
+        Some(reg) => Arc::new(SwRegistryMirror { inner: store, registry: Arc::clone(reg), origin }),
+        None => Arc::new(store),
+    })
+}
+
+/// `SwBackend`, который помимо снимка регистраций кладёт их в SQLite-реестр
+/// профиля (`ServiceWorkers`), чтобы «Очистить данные сайта» (UX-PARTITION)
+/// видел то, что страница зарегистрировала.
+struct SwRegistryMirror {
+    inner: lumen_storage::SwStore,
+    registry: Arc<lumen_storage::ServiceWorkers>,
+    origin: String,
+}
+
+impl lumen_core::ext::SwBackend for SwRegistryMirror {
+    fn load(&self) -> Option<String> {
+        self.inner.load()
+    }
+
+    fn save(&self, snapshot: &str) {
+        self.inner.save(snapshot);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        sync_sw_registry(&self.registry, &self.origin, snapshot, now);
+    }
+}
+
+/// Привести записи `origin` в реестре к JSON-снимку `[{scope, scriptURL}]`:
+/// новые регистрации вставляются, исчезнувшие — удаляются. Best-effort.
+fn sync_sw_registry(registry: &lumen_storage::ServiceWorkers, origin: &str, snapshot: &str, now: i64) {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(snapshot) else {
+        return;
+    };
+    let mut live = std::collections::HashSet::new();
+    for item in &items {
+        let (Some(scope), Some(script)) = (
+            item.get("scope").and_then(|v| v.as_str()),
+            item.get("scriptURL").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        live.insert(scope.to_string());
+        let _ = registry.register(origin, scope, script, lumen_storage::UpdateViaCache::Imports, now);
+    }
+    if let Ok(existing) = registry.list_for_origin(origin) {
+        for reg in existing.into_iter().filter(|r| !live.contains(&r.scope)) {
+            let _ = registry.unregister(reg.id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod sw_registry_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_is_mirrored_and_pruned() {
+        let reg = lumen_storage::ServiceWorkers::open_in_memory().unwrap();
+        let o = "https://a.example";
+        sync_sw_registry(&reg, o, r#"[{"scope":"/","scriptURL":"https://a.example/sw.js","state":"activated"},{"scope":"/x/","scriptURL":"https://a.example/x.js","state":"installing"}]"#, 10);
+        assert_eq!(reg.list_for_origin(o).unwrap().len(), 2);
+        sync_sw_registry(&reg, o, r#"[{"scope":"/","scriptURL":"https://a.example/sw2.js","state":"activated"}]"#, 11);
+        let l = reg.list_for_origin(o).unwrap();
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].script_url, "https://a.example/sw2.js");
+        sync_sw_registry(&reg, o, "garbage", 12);
+        assert_eq!(reg.count().unwrap(), 1);
+    }
 }
