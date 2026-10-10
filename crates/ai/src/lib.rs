@@ -14,6 +14,8 @@ pub mod generation;
 mod http;
 #[cfg(feature = "ollama")]
 pub mod rag;
+#[cfg(feature = "ollama")]
+pub mod translate;
 
 #[cfg(test)]
 mod tests {
