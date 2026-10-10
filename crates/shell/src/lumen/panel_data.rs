@@ -91,6 +91,10 @@ impl Lumen {
         };
         let mut report = lumen_storage::clear_site_data(site, &targets);
         report.removed.push(("http_cache", crate::config::clear_http_cache_site(site)));
+        match lumen_storage::clear_hsts_shared_site(site) {
+            Ok(n) => report.removed.push(("hsts", n)),
+            Err(e) => report.failed.push(("hsts", e.to_string())),
+        }
         eprintln!(
             "clear_site_data {}: удалено {} записей, ошибок {}",
             site.site(),

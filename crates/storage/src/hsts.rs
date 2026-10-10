@@ -362,6 +362,16 @@ pub fn shared_store(private: bool) -> Option<Arc<dyn HstsEnforcement>> {
         .map(|s| s as Arc<dyn HstsEnforcement>)
 }
 
+/// UX-PARTITION: удалить выученные HSTS-записи `site` из общего store.
+/// 0, если store ещё не создан. Встроенный preload-лист не затрагивается:
+/// он не данные пользователя.
+pub fn clear_shared_site(site: &crate::partition::PartitionKey) -> Result<usize> {
+    match SHARED.get().and_then(Option::as_ref) {
+        Some(store) => store.clear_site(site),
+        None => Ok(0),
+    }
+}
+
 /// Открыть store для запрошенного режима приватности (без глобального
 /// состояния). Отделено от [`shared_store`], чтобы поведение можно было
 /// проверить юнит-тестом, не замораживая процесс-глобальный `OnceLock`.

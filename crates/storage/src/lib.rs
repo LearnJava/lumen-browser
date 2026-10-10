@@ -80,7 +80,7 @@ pub use cache_storage::{CacheStorage, CachedEntry};
 pub use cookies::{default_path, parse_set_cookie, parse_set_cookie_with_psl, Cookie, CookieJar, CookieJarProvider, SameSite};
 pub use csp_policies::{parse_csp_header, CspPolicies, CspPolicy};
 pub use hsts::{
-    default_db_path as hsts_db_path, parse_sts_header, shared_store as shared_hsts_store, HstsEntry,
+    clear_shared_site as clear_hsts_shared_site, default_db_path as hsts_db_path, parse_sts_header, shared_store as shared_hsts_store, HstsEntry,
     HstsStore,
 };
 pub use cached_dns::{CachedDnsResolver, Clock, SystemClock};
