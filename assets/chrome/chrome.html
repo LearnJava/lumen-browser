@@ -1288,6 +1288,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <button class="item" data-action="set-settings-section" data-section="passwords">Пароли</button>
                 <button class="item" data-action="set-settings-section" data-section="autofill">Автозаполнение</button>
                 <button class="item" data-action="set-settings-section" data-section="permissions">Разрешения</button>
+                <button class="item" data-action="set-settings-section" data-section="spelling">Орфография</button>
                 <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
                 <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
                 <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
@@ -1383,6 +1384,15 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   </div>
                   <div class="set-block"><h3>Данные сайта</h3><div class="desc" id="siteDataDesc">Удаляет cookies, кэш, разрешения, хранилища и службы текущего сайта вместе с его поддоменами.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title" id="siteDataSite">example.com</div></div><button class="upd-check" id="siteDataBtn" data-action="clear-site-data" data-site="">Очистить</button></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="spelling">
+                  <div class="set-block"><h3>Проверка орфографии</h3><div class="desc" id="spellDesc">Подчёркивает ошибки в полях ввода; слова проверяются локально, текст никуда не отправляется.</div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Проверять орфографию</div><div class="st-desc">В полях ввода и редактируемых областях</div></div><div class="toggle on" id="spellToggle" data-action="toggle-spellcheck"><div class="thumb"></div></div></div>
+                  </div>
+                  <div class="set-block"><h3>Языки</h3><div class="desc">Словари из папки data/spell. Слово верно, если оно верно хотя бы в одном включённом языке.</div>
+                    <div id="spellLangList"><div class="set-row spell-lang-row"><div class="st-text"><div class="st-title">en_US</div></div><div class="toggle on" data-action="toggle-spell-language" data-spell-lang="en_US"><div class="thumb"></div></div></div></div>
                   </div>
                 </div>
 

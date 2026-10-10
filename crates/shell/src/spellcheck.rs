@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use lumen_core::ext::SpellChecker;
 use lumen_core::geom::Rect;
@@ -23,12 +24,77 @@ pub fn spell_data_dir() -> PathBuf {
     browser_data_dir().join("spell")
 }
 
+/// Пользовательские настройки проверки орфографии (UX-SPELLCHECK):
+/// общий выключатель и отключённые языки (стемы словарей).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpellPrefs {
+    /// Проверка включена.
+    pub enabled: bool,
+    /// Стемы словарей, которые пользователь отключил.
+    pub disabled: HashSet<String>,
+}
+
+impl Default for SpellPrefs {
+    fn default() -> Self {
+        Self { enabled: true, disabled: HashSet::new() }
+    }
+}
+
+/// Путь к файлу настроек: `<exe_dir>/data/spell/prefs.txt`.
+pub fn prefs_path() -> PathBuf {
+    spell_data_dir().join("prefs.txt")
+}
+
+impl SpellPrefs {
+    /// Разбирает текст `enabled=0|1` / `disabled=a,b`; неизвестные строки
+    /// пропускаются, отсутствие файла даёт значения по умолчанию.
+    pub fn parse(text: &str) -> Self {
+        let mut prefs = Self::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            match key.trim() {
+                "enabled" => prefs.enabled = value.trim() != "0",
+                "disabled" => {
+                    prefs.disabled =
+                        value.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                }
+                _ => {}
+            }
+        }
+        prefs
+    }
+
+    /// Сериализует в формат [`Self::parse`] (стемы по алфавиту).
+    pub fn serialize(&self) -> String {
+        let mut stems: Vec<&str> = self.disabled.iter().map(String::as_str).collect();
+        stems.sort_unstable();
+        format!("enabled={}
+disabled={}
+", u8::from(self.enabled), stems.join(","))
+    }
+
+    /// Читает настройки с диска.
+    pub fn load(path: &Path) -> Self {
+        std::fs::read_to_string(path).map(|t| Self::parse(&t)).unwrap_or_default()
+    }
+
+    /// Записывает настройки на диск, создавая папку при необходимости.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, self.serialize())
+    }
+}
+
 /// Комбинированный словарь нескольких локалей. Слово считается верным,
-/// если оно верно хотя бы в одном из подключённых словарей.
+/// если оно верно хотя бы в одном из подключённых и не отключённых словарей.
 #[derive(Debug, Default)]
 pub struct MultiDictionary {
     dicts: Vec<HunspellDictionary>,
+    stems: Vec<String>,
     locale: String,
+    prefs: RwLock<SpellPrefs>,
 }
 
 impl MultiDictionary {
@@ -36,22 +102,95 @@ impl MultiDictionary {
     pub fn empty() -> Self {
         Self {
             dicts: Vec::new(),
+            stems: Vec::new(),
             locale: "null".to_string(),
+            prefs: RwLock::new(SpellPrefs::default()),
         }
     }
 
-    /// Проверяет, загружен ли хотя бы один словарь.
+    /// Нет ни одного действующего словаря: ничего не загружено, проверка
+    /// выключена или все языки отключены.
     pub fn is_empty(&self) -> bool {
-        self.dicts.is_empty()
+        !self.active().any(|_| true)
+    }
+
+    fn prefs_read(&self) -> SpellPrefs {
+        self.prefs.read().map(|p| p.clone()).unwrap_or_default()
+    }
+
+    fn active(&self) -> impl Iterator<Item = &HunspellDictionary> {
+        let prefs = self.prefs_read();
+        self.dicts
+            .iter()
+            .zip(&self.stems)
+            .filter(move |(_, stem)| prefs.enabled && !prefs.disabled.contains(*stem))
+            .map(|(d, _)| d)
+    }
+
+    /// Текущие настройки.
+    pub fn prefs(&self) -> SpellPrefs {
+        self.prefs_read()
+    }
+
+    /// Заменяет настройки (без записи на диск).
+    pub fn set_prefs(&self, prefs: SpellPrefs) {
+        if let Ok(mut p) = self.prefs.write() {
+            *p = prefs;
+        }
+    }
+
+    /// Языки загруженных словарей: `(стем, включён)`.
+    pub fn languages(&self) -> Vec<(String, bool)> {
+        let prefs = self.prefs_read();
+        self.stems.iter().map(|s| (s.clone(), !prefs.disabled.contains(s))).collect()
+    }
+
+    /// Включает/выключает проверку целиком и сохраняет настройки.
+    pub fn set_enabled(&self, enabled: bool, path: &Path) {
+        let mut prefs = self.prefs_read();
+        prefs.enabled = enabled;
+        let _ = prefs.save(path);
+        self.set_prefs(prefs);
+    }
+
+    /// Включает/выключает язык `stem` и сохраняет настройки.
+    pub fn set_language(&self, stem: &str, on: bool, path: &Path) {
+        if !self.stems.iter().any(|s| s == stem) {
+            return;
+        }
+        let mut prefs = self.prefs_read();
+        if on {
+            prefs.disabled.remove(stem);
+        } else {
+            prefs.disabled.insert(stem.to_owned());
+        }
+        let _ = prefs.save(path);
+        self.set_prefs(prefs);
+    }
+
+    /// Локаль действующих словарей (`"null"`, если таких нет).
+    pub fn active_locale(&self) -> String {
+        let prefs = self.prefs_read();
+        let on: Vec<&str> = self
+            .stems
+            .iter()
+            .filter(|s| prefs.enabled && !prefs.disabled.contains(*s))
+            .map(String::as_str)
+            .collect();
+        if on.is_empty() { "null".to_owned() } else { on.join("+") }
     }
 }
 
 impl SpellChecker for MultiDictionary {
     fn check(&self, word: &str) -> bool {
-        if self.dicts.is_empty() {
-            return true;
+        let mut any = false;
+        for d in self.active() {
+            any = true;
+            if d.check(word) {
+                return true;
+            }
         }
-        self.dicts.iter().any(|d| d.check(word))
+        !any
     }
 
     fn suggest(&self, word: &str) -> Vec<String> {
@@ -60,7 +199,7 @@ impl SpellChecker for MultiDictionary {
         }
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for d in &self.dicts {
+        for d in self.active() {
             for s in d.suggest(word) {
                 if seen.insert(s.clone()) {
                     out.push(s);
@@ -157,7 +296,7 @@ pub fn load_dictionaries(dir: &Path) -> MultiDictionary {
     } else {
         stems.join("+")
     };
-    MultiDictionary { dicts, locale }
+    MultiDictionary { dicts, stems, locale, prefs: RwLock::new(SpellPrefs::load(&dir.join("prefs.txt"))) }
 }
 
 /// Извлекает байтовые диапазоны слов в `text`.
@@ -413,6 +552,7 @@ lock/DU
 
         let mut md = MultiDictionary::empty();
         md.dicts = vec![dict1, dict2];
+        md.stems = vec!["en_US".into(), "ru_RU".into()];
         md.locale = "en_US+ru_RU".to_string();
 
         assert!(md.check("walked"));
@@ -425,6 +565,7 @@ lock/DU
         let dict1 = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
         let mut md = MultiDictionary::empty();
         md.dicts = vec![dict1];
+        md.stems = vec!["en_US".into()];
         md.locale = "en_US".to_string();
 
         let sugg = md.suggest("walkk");
@@ -491,6 +632,43 @@ lock/DU
         assert_eq!(md.locale(), "en_US");
         assert!(md.check("walked"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefs_roundtrip_and_defaults() {
+        assert_eq!(SpellPrefs::parse(""), SpellPrefs::default());
+        let mut p = SpellPrefs { enabled: false, disabled: HashSet::new() };
+        p.disabled.insert("ru_RU".to_owned());
+        p.disabled.insert("en_US".to_owned());
+        assert_eq!(SpellPrefs::parse(&p.serialize()), p);
+    }
+
+    #[test]
+    fn prefs_toggle_changes_checking_and_persists() {
+        let dir = std::env::temp_dir().join("lumen_spell_test_prefs");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en_US.aff"), AFF).unwrap();
+        std::fs::write(dir.join("en_US.dic"), DIC).unwrap();
+        let path = dir.join("prefs.txt");
+
+        let md = load_dictionaries(&dir);
+        assert!(!md.check("walkz"));
+        md.set_enabled(false, &path);
+        assert!(md.is_empty() && !md.languages().is_empty());
+        assert!(md.check("walkz"), "выключенная проверка не ругается");
+        md.set_enabled(true, &path);
+        md.set_language("en_US", false, &path);
+        assert!(md.is_empty());
+        assert_eq!(md.active_locale(), "null");
+        assert_eq!(md.languages(), vec![("en_US".to_owned(), false)]);
+
+        let reloaded = load_dictionaries(&dir);
+        assert!(reloaded.is_empty(), "настройки читаются с диска");
+        reloaded.set_language("en_US", true, &path);
+        assert!(!reloaded.check("walkz"));
+        assert_eq!(reloaded.active_locale(), "en_US");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

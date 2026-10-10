@@ -335,6 +335,11 @@ pub struct ChromeSettingsModel {
     /// Top-level site текущей страницы для «Данные сайта» (UX-PARTITION);
     /// `None` — страницы без сайта (`file:`, пустая вкладка).
     pub current_site: Option<String>,
+    /// Проверка орфографии включена (UX-SPELLCHECK) — `#spellToggle`.
+    pub spell_enabled: bool,
+    /// Языки словарей `(стем, включён)` для `#spellLangList`; пусто — словари
+    /// не загружены (ещё грузятся или папки `data/spell` нет).
+    pub spell_languages: Vec<(String, bool)>,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -1116,6 +1121,7 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
     bind_autofill(doc, settings);
     bind_site_permissions(doc, settings);
     bind_site_data(doc, settings);
+    bind_spelling(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1209,6 +1215,43 @@ fn bind_site_permissions(doc: &mut Document, settings: &ChromeSettingsModel) {
         set_attr(doc, del, "aria-label", "Отозвать");
         append_text(doc, del, "Отозвать");
         attach_child(doc, row, del);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Раздел «Орфография»: выключатель и строка на язык словаря (UX-SPELLCHECK).
+fn bind_spelling(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(toggle) = doc.find_by_id(crate::ids::SPELL_TOGGLE) {
+        set_class_token(doc, toggle, "on", settings.spell_enabled);
+    }
+    if let Some(desc) = doc.find_by_id(crate::ids::SPELL_DESC) {
+        let text = if settings.spell_languages.is_empty() {
+            "Словари не загружены: положите пары <язык>.aff и <язык>.dic в папку data/spell и перезапустите браузер."
+        } else {
+            "Подчёркивает ошибки в полях ввода; слова проверяются локально, текст никуда не отправляется."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::SPELL_LANG_LIST) else { return };
+    remove_children_with_class(doc, list, "spell-lang-row");
+    for (stem, on) in &settings.spell_languages {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row spell-lang-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, stem);
+        attach_child(doc, text, title);
+        attach_child(doc, row, text);
+        let toggle = doc.create_element(QualName::html("div"));
+        set_attr(doc, toggle, "class", if *on { "toggle on" } else { "toggle" });
+        set_attr(doc, toggle, "data-action", "toggle-spell-language");
+        set_attr(doc, toggle, "data-spell-lang", stem);
+        let thumb = doc.create_element(QualName::html("div"));
+        set_attr(doc, thumb, "class", "thumb");
+        attach_child(doc, toggle, thumb);
+        attach_child(doc, row, toggle);
         attach_child(doc, list, row);
     }
 }
@@ -3897,6 +3940,34 @@ mod tests {
         assert_eq!(doc.get(del).get_attr("data-action"), Some("revoke-site-permission"));
         assert_eq!(doc.get(del).get_attr("data-perm-origin"), Some("https://a.test"));
         assert_eq!(doc.get(del).get_attr("data-perm-kind"), Some("Camera"));
+    }
+
+    #[test]
+    fn settings_spelling_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "spelling".to_owned(),
+                spell_enabled: false,
+                spell_languages: vec![("en_US".into(), true), ("ru_RU".into(), false)],
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let toggle = doc.find_by_id(crate::ids::SPELL_TOGGLE).expect("#spellToggle");
+        assert!(!has_class(&doc, toggle, "on"));
+        let list = doc.find_by_id(crate::ids::SPELL_LANG_LIST).expect("#spellLangList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2, "статичная демо-строка заменена строками модели");
+        let ru = find_descendants_by_class(&doc, rows[1], "toggle")[0];
+        assert_eq!(doc.get(ru).get_attr("data-action"), Some("toggle-spell-language"));
+        assert_eq!(doc.get(ru).get_attr("data-spell-lang"), Some("ru_RU"));
+        assert!(!has_class(&doc, ru, "on"));
+        let en = find_descendants_by_class(&doc, rows[0], "toggle")[0];
+        assert!(has_class(&doc, en, "on"));
     }
 
     #[test]

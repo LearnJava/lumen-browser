@@ -167,7 +167,7 @@ impl Lumen {
         self.settings_panel
             .set_adblock_subs(self.adblock_store.list_subscriptions().unwrap_or_default());
         self.settings_panel
-            .set_spell_locale(SPELL_DICTS.get().map(|d| d.locale().to_owned()));
+            .set_spell_locale(SPELL_DICTS.get().map(|d| d.active_locale()));
     }
 
     /// Close the settings panel, flushing the draft to every backing store.
