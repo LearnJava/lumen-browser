@@ -31,6 +31,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS dns_expires_idx ON dns_cache(expires_at);
             "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+            ALTER TABLE dns_cache ADD COLUMN site TEXT NOT NULL DEFAULT '';
+            CREATE INDEX IF NOT EXISTS dns_site_idx ON dns_cache(site);
+            "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +84,8 @@ impl DnsCache {
         set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("dns_cache pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("dns_cache init: {e}")))?;
+        crate::partition::backfill_site(&conn, "dns_cache", "hostname")
+            .map_err(|e| Error::Storage(format!("dns_cache backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -97,13 +106,13 @@ impl DnsCache {
             .map_err(|_| Error::Storage("dns_cache mutex poisoned".into()))?;
         let joined = addresses.join(",");
         conn.execute(
-            "INSERT INTO dns_cache (hostname, addresses, cached_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO dns_cache (hostname, addresses, cached_at, expires_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (hostname) DO UPDATE SET
                  addresses = excluded.addresses,
                  cached_at = excluded.cached_at,
                  expires_at = excluded.expires_at",
-            params![hostname, joined, cached_at, cached_at + ttl_seconds.max(0)],
+            params![hostname, joined, cached_at, cached_at + ttl_seconds.max(0), crate::partition::site_of(hostname)],
         )
         .map_err(|e| Error::Storage(format!("dns_cache put: {e}")))?;
         Ok(())
@@ -169,7 +178,7 @@ impl DnsCache {
 
     /// UX-PARTITION: удалить записи хостов сайта `site`.
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "dns_cache", "dns_cache", "hostname", site)
+        crate::partition::clear_by_site(&self.conn, "dns_cache", "dns_cache", site)
     }
 
     pub fn clear(&self) -> Result<()> {
