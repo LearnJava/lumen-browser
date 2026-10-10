@@ -181,6 +181,17 @@ impl BroadcastChannels {
     }
 
     /// `channel.close()` — снять регистрацию.
+    /// UX-PARTITION: удалить регистрации каналов сайта `site`.
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        crate::partition::clear_column(
+            &self.conn,
+            "broadcast_channels",
+            "broadcast_channels",
+            "origin",
+            site,
+        )
+    }
+
     pub fn unregister(&self, id: i64) -> Result<()> {
         let conn = self
             .conn

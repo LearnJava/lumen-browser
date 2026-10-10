@@ -83,6 +83,8 @@ impl Lumen {
         if let Ok(mut workers) = self.sw_worker_store.lock() {
             workers.retain(|(origin, _scope), _| !site.matches(origin));
         }
+        let bfcache_removed = self.bfcache.clear_site(site)
+            + self.bg_tabs.values_mut().map(|t| t.bfcache.clear_site(site)).sum::<usize>();
         let sw_snapshots = self
             .sw_backend
             .lock()
@@ -106,6 +108,7 @@ impl Lumen {
         };
         let mut report = lumen_storage::clear_site_data(site, &targets);
         report.removed.push(("http_cache", crate::config::clear_http_cache_site(site)));
+        report.removed.push(("bfcache", bfcache_removed));
         match sw_snapshots {
             Ok(n) => report.removed.push(("sw_snapshots", n)),
             Err(e) => report.failed.push(("sw_snapshots", e)),

@@ -50,8 +50,18 @@ impl PushStore {
         }
     }
 
-    /// UX-PARTITION: удалить push-подписки сайта.
+    /// UX-PARTITION: удалить push-подписки сайта и очередь их недоставленных сообщений.
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> lumen_core::Result<usize> {
+        if let Some(messages) = &self.messages {
+            let ids: Vec<i64> = self
+                .subs
+                .list_all()?
+                .into_iter()
+                .filter(|s| site.matches(&s.origin))
+                .map(|s| s.id)
+                .collect();
+            messages.clear_subscriptions(&ids)?;
+        }
         self.subs.clear_site(site)
     }
 }
