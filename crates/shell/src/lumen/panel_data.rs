@@ -207,6 +207,32 @@ impl Lumen {
     /// [`Self::ai_backend`]: with the default [`lumen_core::NullAiBackend`]
     /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped —
     /// no `feature = "ai"` gate needed here.
+    /// UX-IMPORT: перенести закладки и историю из найденных профилей
+    /// Chrome/Edge/Firefox и показать менеджер закладок. Выполняется
+    /// синхронно на UI-потоке; ошибка одного профиля не мешает остальным.
+    pub(crate) fn import_browser_data(&mut self) {
+        use lumen_storage::import;
+        let profiles = import::detect_profiles();
+        if profiles.is_empty() {
+            eprintln!("[import] профили Chrome/Edge/Firefox не найдены");
+        }
+        for p in &profiles {
+            let bm = import::read_bookmarks(p)
+                .and_then(|items| import::import_bookmarks(&self.bookmarks, &items));
+            let hist = import::read_history(p)
+                .and_then(|items| import::import_history(&self.history_store, &items));
+            eprintln!(
+                "[import] {:?} {}: закладки {:?}, история {:?}",
+                p.browser,
+                p.dir.display(),
+                bm.map_err(|e| e.to_string()),
+                hist.map_err(|e| e.to_string()),
+            );
+        }
+        self.bookmark_panel.visible = true;
+        self.refresh_bookmarks();
+    }
+
     pub(crate) fn bookmark_current_page(&mut self) {
         let url = self.current_display_url().to_owned();
         if url.is_empty() {

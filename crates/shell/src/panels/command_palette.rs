@@ -73,6 +73,8 @@ pub enum PaletteAction {
     ToggleShields,
     /// Toggle Vim navigation mode.
     ToggleVimMode,
+    /// Import bookmarks and history from Chrome/Edge/Firefox profiles.
+    ImportBrowserData,
 }
 
 impl PaletteAction {
@@ -92,6 +94,7 @@ impl PaletteAction {
             PaletteAction::ToggleDevConsole => "Toggle DevTools Console",
             PaletteAction::ToggleShields => "Toggle Shields",
             PaletteAction::ToggleVimMode => "Toggle Vim Mode",
+            PaletteAction::ImportBrowserData => "Import Bookmarks and History",
         }
     }
 
@@ -111,6 +114,7 @@ impl PaletteAction {
             PaletteAction::ToggleDevConsole => "F12",
             PaletteAction::ToggleShields => "Ctrl+Shift+S",
             PaletteAction::ToggleVimMode => "Ctrl+Alt+V",
+            PaletteAction::ImportBrowserData => "",
         }
     }
 
@@ -131,6 +135,7 @@ impl PaletteAction {
             PaletteAction::ToggleDevConsole,
             PaletteAction::ToggleShields,
             PaletteAction::ToggleVimMode,
+            PaletteAction::ImportBrowserData,
         ]
     }
 }

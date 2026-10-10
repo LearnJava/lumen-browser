@@ -135,6 +135,7 @@ impl Lumen {
                     }
                 }
                 PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
+                PaletteAction::ImportBrowserData => self.import_browser_data(),
                 PaletteAction::ToggleVerticalTabs => {
                     self.vertical_tabs.toggle();
                     self.persist_tab_layout();
