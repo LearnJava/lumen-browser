@@ -1150,16 +1150,6 @@ impl Lumen {
             overlay_buf.append(&mut ws_cmds);
         }
 
-        // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
-        if self.a11y_panel.visible {
-            let win_w = self.viewport_width_css();
-            let win_h = self.viewport_height_css();
-            let win_size = (win_w as u32, win_h as u32);
-            let mut a11y_cmds =
-                panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size, &pal);
-            overlay_buf.append(&mut a11y_cmds);
-        }
-
         // §12.3 Read-later panel: right-docked overlay.
         if self.read_later_panel.visible {
             let win_w = self.viewport_width_css();

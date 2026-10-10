@@ -860,18 +860,11 @@ impl Lumen {
             }
             KeyCommand::ToggleA11y => {
                 if self.a11y_panel.visible {
-                    let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
-                    self.a11y_panel.visible = false;
-                    self.deliver_a11y_media_changes();
-                    // Re-style with the (possibly toggled) forced-colors pref.
-                    // ADR-016 M2.2b-3: async-safe — closing the a11y panel widens
-                    // the content viewport and re-styles under the new
-                    // forced-colors preference, but nothing reads page geometry
-                    // synchronously afterwards, so route off-thread when enabled.
-                    self.relayout_chrome();
+                    self.close_a11y_panel();
                 } else {
                     self.a11y_panel.load_draft(self.a11y_store.snapshot());
                     self.a11y_panel.visible = true;
+                    self.relayout_chrome_host();
                 }
                 self.request_redraw();
             }

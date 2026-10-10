@@ -654,59 +654,8 @@ impl Lumen {
             // hit-test lived here, gated off the rollback flag —
             // `#view-bookmarks` in the engine chrome owns it now.
 
-            // Accessibility settings panel (E-2): centred overlay.
-            if self.a11y_panel.visible {
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css();
-                use panels::a11y_panel::A11yHit;
-                let hit = panels::a11y_panel::hit_test(
-                    &self.a11y_panel,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                );
-                match hit {
-                    A11yHit::Close => {
-                        let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
-                        self.a11y_panel.visible = false;
-                        self.deliver_a11y_media_changes();
-                        // Re-style with the (possibly toggled) forced-colors pref.
-                        // Async-safe (M2.2b-6): closing the panel only shifts
-                        // chrome + re-evaluates forced-colors; no page-geometry
-                        // read follows (just `request_redraw` + `return`).
-                        self.relayout_chrome();
-                    }
-                    A11yHit::FontMultiplier(v) => {
-                        self.a11y_panel.draft.font_size_multiplier = v as f64;
-                    }
-                    A11yHit::ReducedMotion => {
-                        self.a11y_panel.draft.reduced_motion =
-                            !self.a11y_panel.draft.reduced_motion;
-                    }
-                    A11yHit::ForcedColors => {
-                        self.a11y_panel.draft.forced_colors =
-                            !self.a11y_panel.draft.forced_colors;
-                    }
-                    A11yHit::CursorSizeOption(size) => {
-                        self.a11y_panel.draft.cursor_size = size;
-                    }
-                    A11yHit::Inside => { /* swallow */ }
-                    A11yHit::Outside => {
-                        let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
-                        self.a11y_panel.visible = false;
-                        self.deliver_a11y_media_changes();
-                        // Re-style with the (possibly toggled) forced-colors pref.
-                        // Async-safe (M2.2b-6): closing the panel only shifts
-                        // chrome + re-evaluates forced-colors; no page-geometry
-                        // read follows (just `request_redraw` + `return`).
-                        self.relayout_chrome();
-                    }
-                }
-                self.request_redraw();
-                return;
-            }
-
+            // UX-CHROME-PANELS: the accessibility panel's click hit-test lived
+            // here - `#accessOverlay` in the engine chrome owns it now.
             // CC-10b/CC-15-6: the legacy print-dialog click hit-test lived
             // here, gated off the rollback flag — the engine chrome's own
             // print panel owns it now.

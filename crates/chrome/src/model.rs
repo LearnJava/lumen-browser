@@ -105,6 +105,8 @@ pub struct ChromeModel {
     pub cert: ChromeCertModel,
     /// `#shortcutsOverlay` snapshot (UX-CHROME-PANELS) — mirrors `ShortcutsPanel`.
     pub shortcuts: ChromeShortcutsModel,
+    /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
+    pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
     pub print: ChromePrintModel,
     /// Which `#contentArea` view is shown (CC-10b).
@@ -554,6 +556,21 @@ pub struct ChromeShortcutsModel {
     pub rows: Vec<ChromeShortcutRowModel>,
 }
 
+/// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeAccessModel {
+    /// `true` shows the overlay — mirrors `A11yPanel::visible`.
+    pub open: bool,
+    /// `data-value` of the active `#acFontPills` pill (`"1"`, `"1.25"`, …).
+    pub font_value: String,
+    /// `#acMotionToggle` state (prefers-reduced-motion).
+    pub reduced_motion: bool,
+    /// `#acColorsToggle` state (forced colors).
+    pub forced_colors: bool,
+    /// `data-value` of the active `#acCursorPills` pill (`normal`/`large`/`extra`).
+    pub cursor_value: String,
+}
+
 /// `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
 /// mirrors `PrintPanel`.
 ///
@@ -888,6 +905,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
     bind_shortcuts(doc, &model.shortcuts);
+    bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
     bind_history(doc, &model.history);
@@ -1518,6 +1536,32 @@ fn bind_shortcuts(doc: &mut Document, shortcuts: &ChromeShortcutsModel) {
         append_text(doc, key, &row.binding);
         attach_child(doc, node, key);
         attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#accessOverlay`'s `.open` class, moves `.active` between the pills
+/// of `#acFontPills`/`#acCursorPills` and flips the two `.toggle`s' `.on`
+/// (UX-CHROME-PANELS).
+fn bind_access(doc: &mut Document, access: &ChromeAccessModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::ACCESS_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", access.open);
+    for (id, value) in [
+        (crate::ids::AC_FONT_PILLS, access.font_value.as_str()),
+        (crate::ids::AC_CURSOR_PILLS, access.cursor_value.as_str()),
+    ] {
+        let Some(group) = doc.find_by_id(id) else { continue };
+        for pill in find_descendants_by_class(doc, group, "ac-pill") {
+            let on = doc.get(pill).get_attr("data-value") == Some(value);
+            set_class_token(doc, pill, "active", on);
+        }
+    }
+    for (id, on) in [
+        (crate::ids::AC_MOTION_TOGGLE, access.reduced_motion),
+        (crate::ids::AC_COLORS_TOGGLE, access.forced_colors),
+    ] {
+        if let Some(t) = doc.find_by_id(id) {
+            set_class_token(doc, t, "on", on);
+        }
     }
 }
 
@@ -3515,6 +3559,41 @@ mod tests {
         let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
         let empty = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "cp-empty"));
         assert!(empty.is_some(), "no results must render the .cp-empty state");
+    }
+
+    #[test]
+    fn access_overlay_moves_active_pills_and_toggles() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            access: ChromeAccessModel {
+                open: true,
+                font_value: "1.5".into(),
+                reduced_motion: true,
+                forced_colors: false,
+                cursor_value: "large".into(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::ACCESS_OVERLAY).expect("asset has #accessOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let active_of = |doc: &Document, id: &str| -> Vec<String> {
+            let g = doc.find_by_id(id).expect("pill group");
+            find_descendants_by_class(doc, g, "ac-pill")
+                .into_iter()
+                .filter(|&p| has_class(doc, p, "active"))
+                .map(|p| doc.get(p).get_attr("data-value").unwrap_or("").to_owned())
+                .collect()
+        };
+        assert_eq!(active_of(&doc, crate::ids::AC_FONT_PILLS), ["1.5"]);
+        assert_eq!(active_of(&doc, crate::ids::AC_CURSOR_PILLS), ["large"]);
+        let motion = doc.find_by_id(crate::ids::AC_MOTION_TOGGLE).expect("motion toggle");
+        let colors = doc.find_by_id(crate::ids::AC_COLORS_TOGGLE).expect("colors toggle");
+        assert!(has_class(&doc, motion, "on"));
+        assert!(!has_class(&doc, colors, "on"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, overlay, "open"));
+        assert!(!has_class(&doc, motion, "on"));
     }
 
     #[test]
