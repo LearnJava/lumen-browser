@@ -6,8 +6,9 @@
 //! (`.example.com`). [`PartitionKey::matches`] принимает любой из них.
 //!
 //! [`clear_site_data`] обходит переданные хранилища и удаляет всё, что
-//! относится к одному сайту. Схемы не меняются: у каждого хранилища свой
-//! `clear_site`, который выбирает ключи и удаляет совпавшие.
+//! относится к одному сайту. У каждого хранилища свой `clear_site`: либо выбирает
+//! ключи и удаляет совпавшие, либо (cache_storage, service_workers,
+//! notifications, site_engagement) удаляет по колонке `site`.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -69,6 +70,42 @@ fn site_of_host(host: &str) -> String {
         .registrable_domain(host)
         .unwrap_or(host)
         .to_owned()
+}
+
+/// Значение колонки `site` для origin / URL / хоста: top-level site, а при
+/// отсутствии хоста — сама строка в нижнем регистре (чтобы ключ был непустым).
+pub(crate) fn site_of(input: &str) -> String {
+    PartitionKey::parse(input).map_or_else(|| input.to_ascii_lowercase(), |k| k.site)
+}
+
+/// Заполнить колонку `site` у строк, созданных до миграции (`site = ''`).
+pub(crate) fn backfill_site(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE site = ''"))?;
+    let keys = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(stmt);
+    for key in keys {
+        conn.execute(
+            &format!("UPDATE {table} SET site = ?1 WHERE {column} = ?2 AND site = ''"),
+            params![site_of(&key), key],
+        )?;
+    }
+    Ok(())
+}
+
+/// Удалить из `table` строки с `site = site.site()` одним запросом по индексу.
+pub(crate) fn clear_by_site(
+    conn: &Mutex<Connection>,
+    store: &str,
+    table: &str,
+    site: &PartitionKey,
+) -> Result<usize> {
+    let conn = conn
+        .lock()
+        .map_err(|_| Error::Storage(format!("{store} mutex poisoned")))?;
+    conn.execute(&format!("DELETE FROM {table} WHERE site = ?1"), params![site.site()])
+        .map_err(|e| Error::Storage(format!("{store} clear_site delete: {e}")))
 }
 
 /// Удалить из `table` строки, у которых `column` относится к `site`.
@@ -278,6 +315,37 @@ mod tests {
     fn empty_input_has_no_key() {
         assert!(PartitionKey::parse("").is_none());
         assert!(PartitionKey::parse("https:///path").is_none());
+    }
+
+    #[test]
+    fn v1_database_gets_site_column_backfilled() {
+        let path = std::env::temp_dir()
+            .join(format!("lumen-partition-mig-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE site_engagement (
+                    origin TEXT PRIMARY KEY, visit_count INTEGER NOT NULL DEFAULT 0,
+                    total_time_seconds INTEGER NOT NULL DEFAULT 0,
+                    last_visit INTEGER NOT NULL, first_visit INTEGER NOT NULL
+                 ) WITHOUT ROWID;
+                 INSERT INTO site_engagement (origin, visit_count, last_visit, first_visit) VALUES
+                    ('https://a.example.com', 1, 1, 1), ('https://example.com', 1, 1, 1),
+                    ('https://other.org', 1, 1, 1);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+        let store = crate::SiteEngagementStore::open(&path).unwrap();
+        assert_eq!(store.clear_site(&key("example.com")).unwrap(), 2);
+        assert_eq!(store.count().unwrap(), 1);
+        store.record_visit("https://x.example.com", 5).unwrap();
+        assert_eq!(store.clear_site(&key("example.com")).unwrap(), 1);
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
     }
 
     #[test]

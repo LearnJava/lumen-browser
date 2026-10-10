@@ -39,6 +39,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     );
     CREATE INDEX IF NOT EXISTS sw_origin_idx ON service_workers(origin);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE service_workers ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS sw_site_idx ON service_workers(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -94,7 +101,7 @@ impl std::fmt::Debug for ServiceWorkers {
 impl ServiceWorkers {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "service_workers", "service_workers", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "service_workers", "service_workers", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -114,6 +121,8 @@ impl ServiceWorkers {
             .map_err(|e| Error::Storage(format!("service_workers pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("service_workers init: {e}")))?;
+        crate::partition::backfill_site(&conn, "service_workers", "origin")
+            .map_err(|e| Error::Storage(format!("service_workers backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -132,13 +141,20 @@ impl ServiceWorkers {
             .lock()
             .map_err(|_| Error::Storage("service_workers mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO service_workers (origin, scope, script_url, update_via_cache, registered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO service_workers (origin, scope, script_url, update_via_cache, registered_at, site)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (origin, scope) DO UPDATE SET
                  script_url = excluded.script_url,
                  update_via_cache = excluded.update_via_cache,
                  registered_at = excluded.registered_at",
-            params![origin, scope, script_url, update_via_cache.as_str(), registered_at],
+            params![
+                origin,
+                scope,
+                script_url,
+                update_via_cache.as_str(),
+                registered_at,
+                crate::partition::site_of(origin)
+            ],
         )
         .map_err(|e| Error::Storage(format!("service_workers register: {e}")))?;
         let id: i64 = conn
