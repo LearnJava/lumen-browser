@@ -259,7 +259,7 @@ impl Lumen {
                 // the tab's map, so the store outlives the document being built.
                 let ss_store = ss_store_for_base(&raw.base, &mut self.ss_storage);
                 let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
-                let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
+                let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend, Some(&self.sw_registry));
                 // BUG-171 этап 2: тяжёлый финальный pipeline (fetch скриптов →
                 // QuickJS → fetch+декод картинок/CSS/шрифтов → layout) уезжает с
                 // UI-потока на фоновый. Пока он крутится, event loop остаётся
