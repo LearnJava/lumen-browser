@@ -34,6 +34,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS permissions_origin_idx ON permissions(origin);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE permissions ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS permissions_site_idx ON permissions(site);
+    "#,
 }];
 
 /// Известные типы permissions. Произвольные строки тоже допустимы для
@@ -136,7 +143,7 @@ impl std::fmt::Debug for Permissions {
 impl Permissions {
     /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
     pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
-        crate::partition::clear_column(&self.conn, "permissions", "permissions", "origin", site)
+        crate::partition::clear_by_site(&self.conn, "permissions", "permissions", site)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -155,6 +162,8 @@ impl Permissions {
         set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("permissions pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("permissions init: {e}")))?;
+        crate::partition::backfill_site(&conn, "permissions", "origin")
+            .map_err(|e| Error::Storage(format!("permissions backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -173,11 +182,11 @@ impl Permissions {
             .lock()
             .map_err(|_| Error::Storage("permissions mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO permissions (origin, kind, state, expires_at) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO permissions (origin, kind, state, expires_at, site) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (origin, kind) DO UPDATE SET
                  state = excluded.state,
                  expires_at = excluded.expires_at",
-            params![origin, kind.as_str(), state.as_db_str(), expires_at],
+            params![origin, kind.as_str(), state.as_db_str(), expires_at, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("permissions set: {e}")))?;
         Ok(())
