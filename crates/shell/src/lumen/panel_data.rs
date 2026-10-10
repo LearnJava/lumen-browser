@@ -83,6 +83,11 @@ impl Lumen {
         if let Ok(mut workers) = self.sw_worker_store.lock() {
             workers.retain(|(origin, _scope), _| !site.matches(origin));
         }
+        let sw_snapshots = self
+            .sw_backend
+            .lock()
+            .map_err(|e| e.to_string())
+            .and_then(|mut b| b.clear_matching(&|o| site.matches(o)).map_err(|e| e.to_string()));
         let jar = self.active_cookie_jar();
         let targets = lumen_storage::SiteDataTargets {
             cookies: Some(&*jar),
@@ -101,6 +106,10 @@ impl Lumen {
         };
         let mut report = lumen_storage::clear_site_data(site, &targets);
         report.removed.push(("http_cache", crate::config::clear_http_cache_site(site)));
+        match sw_snapshots {
+            Ok(n) => report.removed.push(("sw_snapshots", n)),
+            Err(e) => report.failed.push(("sw_snapshots", e)),
+        }
         match self.push_store.clear_site(site) {
             Ok(n) => report.removed.push(("push_subscriptions", n)),
             Err(e) => report.failed.push(("push_subscriptions", e.to_string())),
