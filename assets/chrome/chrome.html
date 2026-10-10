@@ -1291,6 +1291,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <button class="item" data-action="set-settings-section" data-section="autofill">Автозаполнение</button>
                 <button class="item" data-action="set-settings-section" data-section="permissions">Разрешения</button>
                 <button class="item" data-action="set-settings-section" data-section="spelling">Орфография</button>
+                <button class="item" data-action="set-settings-section" data-section="translate">Перевод</button>
                 <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
                 <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
                 <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
@@ -1395,6 +1396,15 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   </div>
                   <div class="set-block"><h3>Языки</h3><div class="desc">Словари из папки data/spell. Слово верно, если оно верно хотя бы в одном включённом языке.</div>
                     <div id="spellLangList"><div class="set-row spell-lang-row"><div class="st-text"><div class="st-title">en_US</div></div><div class="toggle on" data-action="toggle-spell-language" data-spell-lang="en_US"><div class="thumb"></div></div></div></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="translate">
+                  <div class="set-block"><h3>Перевод страниц</h3><div class="desc">Страница переводится локальной моделью через Ollama, текст не уходит в сеть. Запуск — кнопка в тулбаре или палитра команд. Модель задаётся ключом translate_model в настройках или LUMEN_TRANSLATE_MODEL.</div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Модель</div><div class="st-desc" id="translateModel">phi3:mini</div></div></div>
+                  </div>
+                  <div class="set-block"><h3>Переводить на</h3><div class="desc">Язык, на который переводится страница.</div>
+                    <div id="translateLangList"><div class="set-row translate-lang-row"><div class="st-text"><div class="st-title">Русский</div></div><div class="toggle on" data-action="set-translate-language" data-lang="ru"><div class="thumb"></div></div></div></div>
                   </div>
                 </div>
 

@@ -67,7 +67,11 @@ impl Lumen {
                 self.relayout();
                 self.request_redraw();
             }
-        } else if self.translate_manager.start(&doc) {
+        } else if self.translate_manager.start(
+            &doc,
+            &self.settings_store.translate_language(),
+            &self.settings_store.translate_model(),
+        ) {
             eprintln!("[translate] запрос к модели отправлен");
         } else {
             eprintln!("[translate] переводить нечего или страница уже на целевом языке");

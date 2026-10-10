@@ -716,6 +716,18 @@ impl Lumen {
             } else {
                 Vec::new()
             },
+            translate_languages: if self.settings_panel.visible && self.chrome_settings_section == "translate" {
+                let current = self.settings_store.translate_language();
+                crate::translate_manager::LANGUAGES
+                    .iter()
+                    .map(|(code, _, label)| ((*code).to_owned(), (*label).to_owned(), *code == current))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            translate_model: Some(self.settings_store.translate_model())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| crate::translate_manager::DEFAULT_MODEL.to_owned()),
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -1347,6 +1359,12 @@ impl Lumen {
                 {
                     let on = dicts.languages().into_iter().find(|(s, _)| *s == lang).is_some_and(|(_, on)| on);
                     dicts.set_language(&lang, !on, &spellcheck::prefs_path());
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::SetTranslateLanguage => {
+                if let Some(lang) = self.chrome_data_attr(nid, "data-lang") {
+                    let _ = self.settings_store.set_translate_language(&lang);
                     self.relayout_chrome_host();
                 }
             }

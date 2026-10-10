@@ -14,11 +14,41 @@ use std::sync::{Arc, Mutex};
 use lumen_dom::page_translate::{collect_translatable, detect_language, page_language, TextSegment, TranslationSession};
 use lumen_dom::Document;
 
-/// Язык перевода: (название для промпта модели, код BCP 47).
-const TARGET: (&str, &str) = ("Russian", "ru");
-/// Модель по умолчанию; переопределяется `LUMEN_TRANSLATE_MODEL`.
-#[cfg(feature = "ai")]
-const DEFAULT_MODEL: &str = "phi3:mini";
+/// Языки перевода: (код BCP 47, название для промпта модели, подпись в настройках).
+pub(crate) const LANGUAGES: &[(&str, &str, &str)] = &[
+    ("ru", "Russian", "Русский"),
+    ("en", "English", "English"),
+    ("de", "German", "Deutsch"),
+    ("fr", "French", "Français"),
+    ("es", "Spanish", "Español"),
+    ("it", "Italian", "Italiano"),
+    ("pt", "Portuguese", "Português"),
+    ("uk", "Ukrainian", "Українська"),
+    ("pl", "Polish", "Polski"),
+    ("tr", "Turkish", "Türkçe"),
+    ("zh", "Chinese", "中文"),
+    ("ja", "Japanese", "日本語"),
+    ("ko", "Korean", "한국어"),
+];
+
+/// Язык по коду; неизвестный код (испорченная настройка) → русский.
+fn target_language(code: &str) -> (&'static str, &'static str) {
+    let (code, name, _) = LANGUAGES.iter().find(|(c, _, _)| *c == code).unwrap_or(&LANGUAGES[0]);
+    (name, code)
+}
+
+/// Модель: `LUMEN_TRANSLATE_MODEL` > настройка > умолчание.
+#[cfg_attr(not(feature = "ai"), allow(dead_code, reason = "модель нужна только со сборкой --features ai"))]
+fn resolve_model(configured: &str) -> String {
+    match std::env::var("LUMEN_TRANSLATE_MODEL") {
+        Ok(m) if !m.is_empty() => m,
+        _ if !configured.is_empty() => configured.to_owned(),
+        _ => DEFAULT_MODEL.to_owned(),
+    }
+}
+
+/// Модель по умолчанию.
+pub(crate) const DEFAULT_MODEL: &str = "phi3:mini";
 
 type Translated = Vec<Option<String>>;
 
@@ -67,18 +97,21 @@ impl TranslateManager {
         }
     }
 
-    /// Запускает перевод страницы. `false` — уже идёт запрос, нечего переводить
-    /// или страница уже на целевом языке.
-    pub(crate) fn start(&mut self, doc: &Arc<Mutex<Document>>) -> bool {
+    /// Запускает перевод страницы на язык `target_code` моделью `model` (пусто —
+    /// умолчание). `false` — уже идёт запрос, нечего переводить или страница
+    /// уже на целевом языке.
+    pub(crate) fn start(&mut self, doc: &Arc<Mutex<Document>>, target_code: &str, model: &str) -> bool {
         if self.job.is_some() {
             return false;
         }
+        let target = target_language(target_code);
+        let model = resolve_model(model);
         let (segments, source) = {
             let Ok(d) = doc.lock() else { return false };
             let segments = collect_translatable(&d);
             // Без `<html lang>` язык берём по письменности текста.
             let source = page_language(&d).or_else(|| detect_language(&segments));
-            if source.as_deref() == Some(TARGET.1) {
+            if source.as_deref() == Some(target.1) {
                 return false;
             }
             (segments, source)
@@ -89,7 +122,7 @@ impl TranslateManager {
         let texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
         let (tx, rx) = mpsc::channel();
         let spawned = std::thread::Builder::new().name("lumen-translate".into()).spawn(move || {
-            let _ = tx.send(run_translate(&texts, source.as_deref()));
+            let _ = tx.send(run_translate(&texts, source.as_deref(), target.0, &model));
         });
         if spawned.is_err() {
             return false;
@@ -128,14 +161,13 @@ impl TranslateManager {
 }
 
 #[cfg(feature = "ai")]
-fn run_translate(texts: &[String], source: Option<&str>) -> Result<Translated, String> {
-    let model = std::env::var("LUMEN_TRANSLATE_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
-    let backend = lumen_ai::generation::OllamaGenerationBackend::new(&model);
-    lumen_ai::translate::translate_segments(&backend, texts, TARGET.0, source).map_err(|e| e.to_string())
+fn run_translate(texts: &[String], source: Option<&str>, target: &str, model: &str) -> Result<Translated, String> {
+    let backend = lumen_ai::generation::OllamaGenerationBackend::new(model);
+    lumen_ai::translate::translate_segments(&backend, texts, target, source).map_err(|e| e.to_string())
 }
 
 #[cfg(not(feature = "ai"))]
-fn run_translate(_texts: &[String], _source: Option<&str>) -> Result<Translated, String> {
+fn run_translate(_texts: &[String], _source: Option<&str>, _target: &str, _model: &str) -> Result<Translated, String> {
     Err("браузер собран без --features ai: локальной модели нет".to_owned())
 }
 
@@ -158,7 +190,13 @@ mod tests {
     fn start_on_empty_document_is_noop() {
         let d = Arc::new(Mutex::new(Document::new()));
         let mut m = TranslateManager::default();
-        assert!(!m.start(&d));
+        assert!(!m.start(&d, "ru", ""));
         assert!(!m.is_running());
+    }
+
+    #[test]
+    fn unknown_target_code_falls_back_to_russian() {
+        assert_eq!(target_language("de"), ("German", "de"));
+        assert_eq!(target_language("xx"), ("Russian", "ru"));
     }
 }
