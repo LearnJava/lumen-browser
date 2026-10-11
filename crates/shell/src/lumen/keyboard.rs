@@ -291,6 +291,7 @@ impl Lumen {
             && !key_event.repeat
         {
             self.focus.exit();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }

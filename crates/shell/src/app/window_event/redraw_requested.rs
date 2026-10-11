@@ -1133,15 +1133,7 @@ impl Lumen {
             overlay_buf.append(&mut menu_cmds);
         }
 
-        // Focus mode widget (task #25): floating Pomodoro card with an
-        // arc progress ring, drawn on top of everything (including where
-        // the now-hidden tab bar was).
-        if self.focus.active {
-            let win_w = self.viewport_width_css();
-            let mut focus_cmds =
-                panels::focus_panel::build_panel(&self.focus, win_w, &pal);
-            overlay_buf.append(&mut focus_cmds);
-        }
+        // Focus mode pill: `.focus-timer` in the engine chrome (`bind_focus`).
 
         // Picture-in-picture window (task #21) — drawn last so it floats
         // above all other chrome.
