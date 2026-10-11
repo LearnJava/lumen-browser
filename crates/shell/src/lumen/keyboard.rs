@@ -168,6 +168,7 @@ impl Lumen {
                 input::vim::VimAction::OpenFind => {
                     self.hint.close();
                     self.find.open();
+                    self.relayout_chrome_host();
                     self.request_redraw();
                     return;
                 }
@@ -674,6 +675,7 @@ impl Lumen {
             KeyCommand::FindOpen => {
                 self.hint.close();
                 self.find.open();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::OpenAddressBar => {

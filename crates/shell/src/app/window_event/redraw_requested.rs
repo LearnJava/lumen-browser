@@ -704,6 +704,13 @@ impl Lumen {
             floating.append(&mut overlay_buf);
             overlay_buf = floating;
         }
+        // BUG-1605: popovers and modals salvaged out of `#contentArea` — inside
+        // the host rect the strip clip above removes, painted unclipped here.
+        if let Some(popover_dl) = self.chrome_popover_dl.as_ref().filter(|dl| !dl.is_empty()) {
+            let mut popovers = popover_dl.clone();
+            popovers.append(&mut overlay_buf);
+            overlay_buf = popovers;
+        }
         if let Some(t0) = frame_log_t0 {
             bmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
         }

@@ -250,25 +250,7 @@ impl Lumen {
             take_content_area(
                 &mut layout,
                 id,
-                &[
-                    lumen_chrome::ids::FIND_BAR,
-                    lumen_chrome::ids::DOWNLOADS_PANEL,
-                    lumen_chrome::ids::CP_OVERLAY,
-                    lumen_chrome::ids::CERT_OVERLAY,
-                    lumen_chrome::ids::SHORTCUTS_OVERLAY,
-                    lumen_chrome::ids::ACCESS_OVERLAY,
-                    lumen_chrome::ids::PRINT_OVERLAY,
-                    lumen_chrome::ids::DEVTOOLS,
-                    lumen_chrome::ids::NETWORK_PANEL,
-                    lumen_chrome::ids::INSP_PANEL,
-                    lumen_chrome::ids::READ_LATER_PANEL,
-                    lumen_chrome::ids::PRIVACY_PANEL,
-                    lumen_chrome::ids::NOTE_OVERLAY,
-                    lumen_chrome::ids::TAB_CTX_MENU,
-                    lumen_chrome::ids::PIP_CARD,
-                    lumen_chrome::ids::PAGE_CTX_MENU,
-                    lumen_chrome::ids::WORKSPACE_BAR,
-                ],
+                &SALVAGED_POPOVER_IDS,
                 doc,
             )
         });
@@ -287,6 +269,8 @@ impl Lumen {
         // `FloatingPanelDetachment`'s doc comment for why they'd otherwise be
         // silently discarded. Painted separately, unclipped, via
         // `chrome_floating_dl` (`RedrawRequested`).
+        let popover_nodes: Vec<_> =
+            SALVAGED_POPOVER_IDS.iter().filter_map(|&id| doc.find_by_id(id).map(|n| (n, id))).collect();
         let mut floating_detached = Vec::new();
         for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
             if let Some(node) = doc.find_by_id(id)
@@ -321,7 +305,28 @@ impl Lumen {
             }
         }
         self.chrome_prev_styles = new_styles;
+        // BUG-1605: the salvaged popovers lie inside `chrome_page_host_rect`, so
+        // the strip clip in `build_chrome_overlay_strips` would discard every
+        // one of them. Lift them out for the chrome paint, paint them on their
+        // own (z-index order) and put them back — hit-testing and the next
+        // pass's incremental basis keep seeing them in `layout`.
+        let mut popovers = Vec::new();
+        for (node, id) in popover_nodes {
+            if let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id) {
+                popovers.push(detached);
+            }
+        }
         let dl = paint_ordered_cached(&layout, &mut self.chrome_emit_cache);
+        let mut popover_dl = lumen_paint::DisplayList::new();
+        let mut by_z: Vec<&FloatingPanelDetachment> = popovers.iter().collect();
+        by_z.sort_by_key(|d| d.removed.style.z_index.unwrap_or(0));
+        for d in by_z {
+            popover_dl.extend_from_slice(&paint_ordered(&d.removed));
+        }
+        self.chrome_popover_dl = (!popover_dl.is_empty()).then_some(popover_dl);
+        for d in popovers.into_iter().rev() {
+            let _ = restore_floating_panel(&mut layout, d);
+        }
         // BUG-405 срез 48 (диагностика, п.85): не гейтит поведение — только
         // печать под `LUMEN_FRAME_LOG=2`. `hash_display_list` берёт `dl` как
         // overlay-лейн (content — пустой срез), тот же тотальный хэш, что уже
@@ -2241,6 +2246,29 @@ pub(crate) fn chrome_node_changes(
             .chain(t.structural.then_some((*id, NodeChange::Unattributed)))
     })
 }
+
+/// `#contentArea` children that [`take_content_area`] keeps in the chrome tree
+/// (hit-testing reads them there) and that [`Lumen::relayout_chrome_host`]
+/// paints separately, unclipped — BUG-1605.
+pub(crate) const SALVAGED_POPOVER_IDS: [&str; 17] = [
+    lumen_chrome::ids::FIND_BAR,
+    lumen_chrome::ids::DOWNLOADS_PANEL,
+    lumen_chrome::ids::CP_OVERLAY,
+    lumen_chrome::ids::CERT_OVERLAY,
+    lumen_chrome::ids::SHORTCUTS_OVERLAY,
+    lumen_chrome::ids::ACCESS_OVERLAY,
+    lumen_chrome::ids::PRINT_OVERLAY,
+    lumen_chrome::ids::DEVTOOLS,
+    lumen_chrome::ids::NETWORK_PANEL,
+    lumen_chrome::ids::INSP_PANEL,
+    lumen_chrome::ids::READ_LATER_PANEL,
+    lumen_chrome::ids::PRIVACY_PANEL,
+    lumen_chrome::ids::NOTE_OVERLAY,
+    lumen_chrome::ids::TAB_CTX_MENU,
+    lumen_chrome::ids::PIP_CARD,
+    lumen_chrome::ids::PAGE_CTX_MENU,
+    lumen_chrome::ids::WORKSPACE_BAR,
+];
 
 /// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
 /// (depth-first, first match) — not just its children, but its own box (and

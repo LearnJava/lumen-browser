@@ -194,6 +194,12 @@ pub(crate) struct Lumen {
     /// box. Appended to `overlay_buf` in `RedrawRequested`, unclipped,
     /// independent of [`ChromeOverlayFrameCache`]'s strip-segment cache.
     pub(crate) chrome_floating_dl: Option<lumen_paint::DisplayList>,
+    /// BUG-1605: standalone display list for the popovers/modals salvaged out
+    /// of `#contentArea` (find bar, command palette, `#accessOverlay`, DevTools
+    /// panels, …). They sit *inside* `chrome_page_host_rect`, which the
+    /// 4-strip clip discards, so they are painted from here, unclipped, while
+    /// staying in `chrome_layout` for hit-testing. `None` when none is open.
+    pub(crate) chrome_popover_dl: Option<lumen_paint::DisplayList>,
     /// CC-18 срез 3: per-panel drag offset from the CSS-computed position, in
     /// window CSS px, keyed by element id (`ids::DEMO_BAR`/`ids::INFO_PANEL`).
     ///
