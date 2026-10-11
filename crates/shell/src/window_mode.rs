@@ -688,10 +688,7 @@ fn run_window_mode_inner(
         permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
         permissions_disk_store: permissions_store,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
-        sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),
-        panel_layout: panel_layout::PanelLayout::load(),
-        panel_resize: None,
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),
         ai_backend: Box::new(lumen_core::NullAiBackend),
         // UX-IMPORT: закладки переживают перезапуск (раньше были только

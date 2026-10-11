@@ -14,7 +14,7 @@ impl Lumen {
     pub(crate) fn hbar_layout(&self) -> (f32, f32, bool) {
         (
             self.page_content_width_css(),
-            self.docked_panel_offsets().0,
+            0.0,
             self.content_height > self.viewport_height_css(),
         )
     }
@@ -121,11 +121,7 @@ impl Lumen {
         let frame_scrollbar_icon =
             cursor_icon_for_hover(frame_hover, self.frame_scroll_drag.is_some());
 
-        // F2-6: a docked-panel resize drag (or hovering an edge) shows the
-        // horizontal-resize cursor, ahead of scrollbar/page/chrome hover.
-        let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
-            CursorIcon::EwResize
-        } else if self.point_over_chrome(x_css, y_css) {
+        let desired = if self.point_over_chrome(x_css, y_css) {
             // CC-5: the engine-drawn chrome owns the cursor over its own
             // opaque area (sidebar, toolbar, tab strip) — ahead of
             // scrollbar/page hit-test below, which assume page coordinates.
