@@ -295,7 +295,12 @@ impl Lumen {
             // card. `×` closes, the centre button toggles play/pause, the
             // title bar starts a drag, the body swallows the click.
             if self.pip.active
-                && let Some(hit) = panels::pip_window::hit_test(&self.pip, x_css, y_css)
+                && let Some(hit) = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                    hit.path.iter().find_map(|&nid| {
+                        self.chrome_data_attr(nid, "data-pip")
+                            .and_then(|v| panels::pip_window::PipHit::from_attr(&v))
+                    })
+                })
             {
                 match hit {
                     panels::pip_window::PipHit::Close => self.pip.close(),
@@ -305,6 +310,7 @@ impl Lumen {
                     }
                     panels::pip_window::PipHit::Body => {}
                 }
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }

@@ -5,9 +5,10 @@
 //! another tab.  Conceptually this is ADR-009's `Surface::OsWindow`, but the
 //! `Surface` trait does not yet exist in code, so — like every other shell
 //! panel (`focus_panel`, `command_palette`, …) — it is implemented ad-hoc:
-//! state lives on `Lumen`, [`hit_test`] classifies clicks, and [`build_panel`]
-//! returns a [`DisplayList`].  It is an **in-window overlay**, not a separate OS
-//! window; a real second winit window awaits multi-window support in the shell
+//! state lives on `Lumen`, the card itself is `#pipCard` in the engine chrome
+//! ([`PipWindow::chrome_model`], `bind_pip`) and clicks are classified by
+//! [`PipHit::from_attr`] off its `data-pip` attributes.  It is an **in-window
+//! overlay**, not a separate OS window; a real second winit window awaits multi-window support in the shell
 //! event loop (the genuine blocker on the spec's `Surface::OsWindow`).
 //!
 //! The card shows the video's poster image (the `<video>` placeholder is a grey
@@ -15,12 +16,7 @@
 //! button, and a centred play / pause button.  It can be dragged anywhere inside
 //! the window by its title bar.  Toggled with `Ctrl+Shift+V`.
 
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight, ImageRendering, ObjectFit, ObjectPosition};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
-use crate::theme_tokens::radius;
+use lumen_chrome::ChromePipModel;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -32,31 +28,6 @@ pub const CARD_H: f32 = 180.0;
 
 /// Margin from the window edge to the card when first opened, in CSS px.
 const MARGIN: f32 = 16.0;
-
-/// Height of the translucent title bar overlaid on the top of the card.
-const HEADER_H: f32 = 26.0;
-
-/// Side length of the square `×` close hit-zone in the title bar's top-right.
-const CLOSE_W: f32 = 26.0;
-
-/// Radius of the centred play / pause button in CSS px.
-const PLAY_R: f32 = 24.0;
-
-/// Corner radius of the card in CSS px.
-const CARD_RADIUS: f32 = radius::LG;
-
-/// Dark background for the video frame / letterbox — stays dark in both themes.
-const VIDEO_BG: Color = Color { r: 24, g: 24, b: 30, a: 255 };
-/// Semi-transparent control-bar overlay over the video — stays dark in both themes.
-const HEADER_BG: Color = Color { r: 10, g: 10, b: 14, a: 180 };
-/// Muted-red close-button glyph — semantic colour, theme-invariant.
-const CLOSE_FG: Color = Color { r: 220, g: 150, b: 150, a: 255 };
-/// Semi-transparent black scrim behind the play/pause button over video.
-const BTN_BG: Color = Color { r: 0, g: 0, b: 0, a: 110 };
-/// Play/pause glyph colour — rendered over video, stays light in both themes.
-const BTN_FG: Color = Color { r: 240, g: 240, b: 244, a: 235 };
-
-// ── Panel state ───────────────────────────────────────────────────────────────
 
 /// Picture-in-picture window state.
 ///
@@ -176,7 +147,21 @@ impl Default for PipWindow {
     }
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
+// ── Chrome binding ────────────────────────────────────────────────────────────
+
+impl PipWindow {
+    /// Snapshot for `#pipCard`.
+    pub fn chrome_model(&self) -> ChromePipModel {
+        ChromePipModel {
+            open: self.active,
+            x: self.pos.0,
+            y: self.pos.1,
+            playing: self.playing,
+            title: self.title.clone(),
+            poster: self.poster_url.clone(),
+        }
+    }
+}
 
 /// Result of a click inside the PiP card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,186 +177,17 @@ pub enum PipHit {
     Body,
 }
 
-/// Hit-test a click at window CSS-px `(x, y)` against the PiP card.
-///
-/// Returns `None` when the card is inactive or the point is outside it, so the
-/// click falls through to the page.
-pub fn hit_test(pip: &PipWindow, x: f32, y: f32) -> Option<PipHit> {
-    if !pip.active {
-        return None;
+impl PipHit {
+    /// Parse a `data-pip` attribute value of `#pipCard` or one of its parts.
+    pub fn from_attr(v: &str) -> Option<Self> {
+        match v {
+            "close" => Some(Self::Close),
+            "play" => Some(Self::PlayPause),
+            "header" => Some(Self::Header),
+            "body" => Some(Self::Body),
+            _ => None,
+        }
     }
-    let (cx0, cy0) = pip.pos;
-    if x < cx0 || x >= cx0 + CARD_W || y < cy0 || y >= cy0 + CARD_H {
-        return None;
-    }
-
-    // `×` close zone — top-right corner of the title bar.
-    if x >= cx0 + CARD_W - CLOSE_W && y < cy0 + HEADER_H {
-        return Some(PipHit::Close);
-    }
-
-    // Centre play / pause button (circular).
-    let bcx = cx0 + CARD_W * 0.5;
-    let bcy = cy0 + CARD_H * 0.5;
-    if (x - bcx) * (x - bcx) + (y - bcy) * (y - bcy) <= PLAY_R * PLAY_R {
-        return Some(PipHit::PlayPause);
-    }
-
-    // Title bar (excluding the close zone handled above) — drag handle.
-    if y < cy0 + HEADER_H {
-        return Some(PipHit::Header);
-    }
-
-    Some(PipHit::Body)
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the PiP overlay.  Empty when inactive.
-///
-/// `pal` provides chrome surface colours (border, title text) so the card
-/// respects the active light/dark theme.  Video-area colours (letterbox
-/// background, control-bar scrim, play/pause glyph) are theme-invariant and
-/// remain dark in all themes.
-pub fn build_panel(pip: &PipWindow, pal: &Palette) -> DisplayList {
-    let mut out = DisplayList::with_capacity(10);
-    if !pip.active {
-        return out;
-    }
-
-    let (cx0, cy0) = pip.pos;
-    let radii = CornerRadii {
-        tl: CARD_RADIUS, tl_y: CARD_RADIUS,
-        tr: CARD_RADIUS, tr_y: CARD_RADIUS,
-        br: CARD_RADIUS, br_y: CARD_RADIUS,
-        bl: CARD_RADIUS, bl_y: CARD_RADIUS,
-    };
-
-    // 1px border (slightly larger rounded rect behind the card).
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(cx0 - 1.0, cy0 - 1.0, CARD_W + 2.0, CARD_H + 2.0),
-        radii,
-        color: pal.overlay_border,
-    });
-
-    // Video frame background (grey placeholder).
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(cx0, cy0, CARD_W, CARD_H),
-        radii,
-        color: VIDEO_BG,
-    });
-
-    // Poster image, if any — covers the whole frame.
-    if !pip.poster_url.is_empty() {
-        out.push(DisplayCommand::DrawImage {
-            rect: Rect::new(cx0, cy0, CARD_W, CARD_H),
-            src: pip.poster_url.clone(),
-            alt: String::new(),
-            object_fit: ObjectFit::Cover,
-            object_position: ObjectPosition::default(),
-            image_rendering: ImageRendering::Auto,
-        });
-    }
-
-    // Translucent title bar across the top.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(cx0, cy0, CARD_W, HEADER_H),
-        color: HEADER_BG,
-    });
-
-    // Title text (truncated to fit before the close button).
-    let title = if pip.title.is_empty() {
-        "Picture-in-Picture".to_owned()
-    } else {
-        truncate(&pip.title, 40)
-    };
-    out.push(DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(cx0 + 10.0, cy0 + 6.0, CARD_W - CLOSE_W - 14.0, 16.0),
-        text: title,
-        font_size: 12.0,
-        color: pal.text,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // `×` close glyph.
-    out.push(DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(cx0 + CARD_W - CLOSE_W, cy0 + 5.0, CLOSE_W, 16.0),
-        text: "×".to_owned(),
-        font_size: 15.0,
-        color: CLOSE_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Centre play / pause button: circular scrim + glyph.
-    let bcx = cx0 + CARD_W * 0.5;
-    let bcy = cy0 + CARD_H * 0.5;
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(bcx - PLAY_R, bcy - PLAY_R, PLAY_R * 2.0, PLAY_R * 2.0),
-        radii: CornerRadii {
-            tl: PLAY_R, tl_y: PLAY_R,
-            tr: PLAY_R, tr_y: PLAY_R,
-            br: PLAY_R, br_y: PLAY_R,
-            bl: PLAY_R, bl_y: PLAY_R,
-        },
-        color: BTN_BG,
-    });
-    if pip.playing {
-        // Pause: two vertical bars.
-        let bar_w = 5.0;
-        let bar_h = 22.0;
-        let gap = 5.0;
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(bcx - gap - bar_w, bcy - bar_h * 0.5, bar_w, bar_h),
-            color: BTN_FG,
-        });
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(bcx + gap, bcy - bar_h * 0.5, bar_w, bar_h),
-            color: BTN_FG,
-        });
-    } else {
-        // Play: right-pointing triangle, optically centred.
-        let r = 12.0;
-        out.push(DisplayCommand::DrawSvgPath {
-            vertices: vec![
-                [bcx - r * 0.55, bcy - r],
-                [bcx - r * 0.55, bcy + r],
-                [bcx + r * 0.9, bcy],
-            ],
-            color: BTN_FG,
-        });
-    }
-
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Truncate `s` to at most `max` characters, appending `…` when shortened.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -479,145 +295,23 @@ mod tests {
         assert!(p.pos.1 + CARD_H <= WIN_H);
     }
 
-    // ── Hit-testing ──────────────────────────────────────────────────────────────
+    // ── Chrome binding ───────────────────────────────────────────────────────────
 
     #[test]
-    fn hit_inactive_is_none() {
-        let p = PipWindow::new();
-        assert_eq!(hit_test(&p, 10.0, 10.0), None);
+    fn hit_from_attr_maps_all_parts() {
+        assert_eq!(PipHit::from_attr("close"), Some(PipHit::Close));
+        assert_eq!(PipHit::from_attr("play"), Some(PipHit::PlayPause));
+        assert_eq!(PipHit::from_attr("header"), Some(PipHit::Header));
+        assert_eq!(PipHit::from_attr("body"), Some(PipHit::Body));
+        assert_eq!(PipHit::from_attr("x"), None);
     }
 
     #[test]
-    fn hit_outside_card_is_none() {
-        let p = opened();
-        assert_eq!(hit_test(&p, p.pos.0 - 5.0, p.pos.1 - 5.0), None);
-    }
-
-    #[test]
-    fn hit_close_zone() {
-        let p = opened();
-        let x = p.pos.0 + CARD_W - CLOSE_W * 0.5;
-        let y = p.pos.1 + HEADER_H * 0.5;
-        assert_eq!(hit_test(&p, x, y), Some(PipHit::Close));
-    }
-
-    #[test]
-    fn hit_play_pause_centre() {
-        let p = opened();
-        let x = p.pos.0 + CARD_W * 0.5;
-        let y = p.pos.1 + CARD_H * 0.5;
-        assert_eq!(hit_test(&p, x, y), Some(PipHit::PlayPause));
-    }
-
-    #[test]
-    fn hit_header_is_drag_handle() {
-        let p = opened();
-        // Left part of the title bar, away from the close button.
-        let x = p.pos.0 + 12.0;
-        let y = p.pos.1 + HEADER_H * 0.5;
-        assert_eq!(hit_test(&p, x, y), Some(PipHit::Header));
-    }
-
-    #[test]
-    fn hit_body_swallows() {
-        let p = opened();
-        // Lower-left corner: inside the card, below the header, off the button.
-        let x = p.pos.0 + 8.0;
-        let y = p.pos.1 + CARD_H - 8.0;
-        assert_eq!(hit_test(&p, x, y), Some(PipHit::Body));
-    }
-
-    // ── Rendering ────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_inactive_is_empty() {
-        let p = PipWindow::new();
-        assert!(build_panel(&p, &Palette::DARK).is_empty());
-    }
-
-    #[test]
-    fn build_active_emits_commands() {
-        let p = opened();
-        assert!(!build_panel(&p, &Palette::DARK).is_empty());
-    }
-
-    #[test]
-    fn build_draws_poster_image() {
-        let p = opened();
-        let dl = build_panel(&p, &Palette::DARK);
-        let has_poster = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawImage { src, .. } if src == "poster.jpg")
-        });
-        assert!(has_poster, "PiP must draw the poster image when present");
-    }
-
-    #[test]
-    fn build_without_poster_has_no_image() {
-        let mut p = PipWindow::new();
-        p.open("video.mp4", "", "Tab", WIN_W, WIN_H);
-        let dl = build_panel(&p, &Palette::DARK);
-        let has_image = dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawImage { .. }));
-        assert!(!has_image, "no poster → grey placeholder only, no DrawImage");
-    }
-
-    #[test]
-    fn build_playing_draws_pause_bars() {
-        let p = opened(); // playing
-        let dl = build_panel(&p, &Palette::DARK);
-        // Two FillRect pause bars in addition to header bar = at least 3 FillRect.
-        let fills = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
-            .count();
-        assert!(fills >= 3, "playing state draws two pause bars");
-    }
-
-    #[test]
-    fn build_paused_draws_play_triangle() {
-        let mut p = opened();
-        p.toggle_play(); // now paused
-        let dl = build_panel(&p, &Palette::DARK);
-        let has_triangle = dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }));
-        assert!(has_triangle, "paused state draws a play triangle");
-    }
-
-    #[test]
-    fn build_draws_title() {
-        let p = opened();
-        let dl = build_panel(&p, &Palette::DARK);
-        let has_title = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "My Tab")
-        });
-        assert!(has_title);
-    }
-
-    #[test]
-    fn build_empty_title_uses_fallback() {
-        let mut p = PipWindow::new();
-        p.open("v.mp4", "", "", WIN_W, WIN_H);
-        let dl = build_panel(&p, &Palette::DARK);
-        let has_fallback = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "Picture-in-Picture")
-        });
-        assert!(has_fallback);
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn truncate_short_unchanged() {
-        assert_eq!(truncate("hi", 40), "hi");
-    }
-
-    #[test]
-    fn truncate_long_adds_ellipsis() {
-        let s = "a".repeat(60);
-        let t = truncate(&s, 10);
-        assert_eq!(t.chars().count(), 10);
-        assert!(t.ends_with('…'));
+    fn chrome_model_mirrors_state() {
+        assert!(!PipWindow::new().chrome_model().open);
+        let m = opened().chrome_model();
+        assert!(m.open && m.playing);
+        assert_eq!((m.title.as_str(), m.poster.as_str()), ("My Tab", "poster.jpg"));
+        assert_eq!((m.x, m.y), PipWindow::default_pos(WIN_W, WIN_H));
     }
 }

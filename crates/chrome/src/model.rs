@@ -124,6 +124,8 @@ pub struct ChromeModel {
     pub note: ChromeNoteModel,
     /// `#tabCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `TabContextMenu`.
     pub tab_ctx: ChromeTabCtxModel,
+    /// `#pipCard` snapshot (UX-CHROME-PANELS) — mirrors `PipWindow`.
+    pub pip: ChromePipModel,
     /// `#pageCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `PageContextMenu`.
     pub page_ctx: ChromePageCtxModel,
     /// `#inspPanel` snapshot (UX-CHROME-PANELS) — mirrors `DomInspectorPanel`.
@@ -650,6 +652,23 @@ pub struct ChromeFocusModel {
     pub label: String,
 }
 
+/// `#pipCard` snapshot (UX-CHROME-PANELS) — mirrors `PipWindow`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePipModel {
+    /// `true` shows the card.
+    pub open: bool,
+    /// Left edge in window CSS px.
+    pub x: f32,
+    /// Top edge in window CSS px.
+    pub y: f32,
+    /// Nominally playing — the centre button shows pause bars, else a triangle.
+    pub playing: bool,
+    /// Title-bar text; empty falls back to «Picture-in-Picture».
+    pub title: String,
+    /// Poster image URL; empty leaves the grey frame.
+    pub poster: String,
+}
+
 /// `#tabCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `TabContextMenu`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeTabCtxModel {
@@ -1159,6 +1178,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_focus(doc, &model.focus);
     bind_note(doc, &model.note);
     bind_tab_ctx(doc, &model.tab_ctx);
+    bind_pip(doc, &model.pip);
     bind_page_ctx(doc, &model.page_ctx);
     bind_workspace_bar(doc, model.workspace_bar_open, &model.workspaces);
     bind_access(doc, &model.access);
@@ -1923,6 +1943,28 @@ fn bind_focus(doc: &mut Document, focus: &ChromeFocusModel) {
     }
     if let Some(done) = doc.find_by_id(crate::ids::FOCUS_DONE) {
         set_class_token(doc, done, "show", focus.active && focus.finished);
+    }
+}
+
+/// Toggles `#pipCard`'s `.open`/`.playing` classes, places it at the card's
+/// position and writes the title and poster (UX-CHROME-PANELS).
+fn bind_pip(doc: &mut Document, pip: &ChromePipModel) {
+    let Some(root) = doc.find_by_id(crate::ids::PIP_CARD) else { return };
+    set_class_token(doc, root, "open", pip.open);
+    if !pip.open {
+        return;
+    }
+    set_class_token(doc, root, "playing", pip.playing);
+    set_attr(doc, root, "style", &format!("left:{}px;top:{}px", pip.x, pip.y));
+    if let Some(n) = doc.find_by_id(crate::ids::PIP_TITLE) {
+        let title = if pip.title.is_empty() { "Picture-in-Picture" } else { pip.title.as_str() };
+        set_text(doc, n, title);
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::PIP_POSTER) {
+        set_class_token(doc, n, "empty", pip.poster.is_empty());
+        if !pip.poster.is_empty() {
+            set_attr(doc, n, "src", &pip.poster);
+        }
     }
 }
 
@@ -4469,6 +4511,32 @@ mod tests {
         assert!(!has_class(&doc, bar, "open"));
         let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
         assert!(find_descendants_by_class(&doc, list, "wsb-chip").is_empty());
+    }
+
+    #[test]
+    fn pip_card_opens_places_and_toggles_glyph() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            pip: ChromePipModel {
+                open: true,
+                x: 30.0,
+                y: 50.0,
+                playing: true,
+                title: "Clip".to_owned(),
+                poster: "https://e.test/p.png".to_owned(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let root = doc.find_by_id(crate::ids::PIP_CARD).expect("asset has #pipCard");
+        assert!(has_class(&doc, root, "open") && has_class(&doc, root, "playing"));
+        assert_eq!(doc.get(root).get_attr("style"), Some("left:30px;top:50px"));
+        let title = doc.find_by_id(crate::ids::PIP_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Clip");
+        let poster = doc.find_by_id(crate::ids::PIP_POSTER).expect("poster");
+        assert_eq!(doc.get(poster).get_attr("src"), Some("https://e.test/p.png"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, root, "open"));
     }
 
     #[test]

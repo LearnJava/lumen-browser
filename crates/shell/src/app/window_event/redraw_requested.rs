@@ -1041,12 +1041,7 @@ impl Lumen {
 
         // Focus mode pill: `.focus-timer` in the engine chrome (`bind_focus`).
 
-        // Picture-in-picture window (task #21) — drawn last so it floats
-        // above all other chrome.
-        if self.pip.active {
-            let mut pip_cmds = panels::pip_window::build_panel(&self.pip, &pal);
-            overlay_buf.append(&mut pip_cmds);
-        }
+        // Picture-in-picture card: `#pipCard` in the engine chrome (`bind_pip`).
 
         // Loading spinner for hibernated tab restore >200ms (10K.3).
         if let Some(start_ms) = self.restore_spinner_start_ms {

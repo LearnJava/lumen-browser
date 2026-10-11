@@ -237,6 +237,7 @@ impl Lumen {
                 win_w,
                 win_h,
             );
+            self.relayout_chrome_host();
             self.request_redraw();
         }
         // Pointer Lock: skip normal hover/mousemove dispatch while locked.
