@@ -218,6 +218,9 @@ pub struct ComputedStyle {
     /// только на word-boundary, не между всеми символами. Может быть
     /// отрицательным.
     pub word_spacing: f32,
+    /// Процентная часть `word-spacing` (доля ширины U+0020 шрифта; 0.25 = 25%).
+    /// Резолвится в раскладке, где известна метрика пробела.
+    pub word_spacing_pct: f32,
     pub text_decoration_line: TextDecorationLine,
     /// CSS Text Decoration L3 §3 — `text-decoration-color`. `CurrentColor`
     /// означает «использовать style.color при рендеринге» (initial value по
@@ -1217,6 +1220,7 @@ impl ComputedStyle {
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
+            && (self.word_spacing_pct - other.word_spacing_pct).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
             && self.text_decoration_color == other.text_decoration_color
             && self.text_decoration_style == other.text_decoration_style
@@ -1269,6 +1273,7 @@ impl ComputedStyle {
             text_indent: Length::Px(0.0),
             letter_spacing: 0.0,
             word_spacing: 0.0,
+            word_spacing_pct: 0.0,
             text_decoration_line: TextDecorationLine::default(),
             text_decoration_color: CssColor::CurrentColor,
             text_decoration_style: TextDecorationStyle::Solid,
@@ -1644,6 +1649,7 @@ impl ComputedStyle {
             text_indent: inherited.text_indent.clone(),
             letter_spacing: inherited.letter_spacing,
             word_spacing: inherited.word_spacing,
+            word_spacing_pct: inherited.word_spacing_pct,
             text_decoration_line: inherited.text_decoration_line,
             text_decoration_color: inherited.text_decoration_color,
             text_decoration_style: inherited.text_decoration_style,

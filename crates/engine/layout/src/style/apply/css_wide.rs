@@ -270,6 +270,7 @@ fn apply_css_wide_keyword_with(
         }
         "word-spacing" => {
             style.word_spacing = if inh { inherited.word_spacing } else { init.word_spacing };
+            style.word_spacing_pct = if inh { inherited.word_spacing_pct } else { init.word_spacing_pct };
         }
         "text-decoration-line" | "text-decoration" => {
             style.text_decoration_line = if inh {

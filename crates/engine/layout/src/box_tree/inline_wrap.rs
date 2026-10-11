@@ -116,7 +116,8 @@ impl TabStops {
             Some(n) => {
                 let space = m.char_width_with_families(' ', style.font_size, fams)
                     + style.letter_spacing
-                    + style.word_spacing;
+                    + style.word_spacing
+                    + style.word_spacing_pct * m.char_width_with_families(' ', style.font_size, fams);
                 n * space
             }
             None => style.tab_size,
@@ -874,7 +875,7 @@ pub(crate) fn wrap_inline_run_indented(
         let style = &seg.style;
         let em = style.font_size;
         let ls = style.letter_spacing;
-        let ws = style.word_spacing;
+        let ws = style.word_spacing + style.word_spacing_pct * space_w;
         let inter_word = space_w + ls + ws;
 
         // Resolved padding for this segment's inline box (for paint use).
