@@ -369,21 +369,26 @@ impl NetworkPanel {
         let start = end.saturating_sub(MAX_VISIBLE_LINES);
         let rows = self.entries[start..end]
             .iter()
-            .map(|e| lumen_chrome::ChromeNetworkRowModel {
-                method: e.method.clone(),
-                status: status_label(e),
-                status_class: status_class(e),
-                time: timing_label(e),
-                url: e.url.clone(),
-                blocked: e.blocked,
-                failed: e.failed,
-            })
+            .map(chrome_row)
             .collect();
         lumen_chrome::ChromeNetworkModel { open: self.visible, total, rows }
     }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// One request as a chrome `.net-row` (also used by the inspector's Network tab).
+pub(super) fn chrome_row(e: &NetworkEntry) -> lumen_chrome::ChromeNetworkRowModel {
+    lumen_chrome::ChromeNetworkRowModel {
+        method: e.method.clone(),
+        status: status_label(e),
+        status_class: status_class(e),
+        time: timing_label(e),
+        url: e.url.clone(),
+        blocked: e.blocked,
+        failed: e.failed,
+    }
+}
 
 /// Status text for an entry: `"blocked"`, failure stage, numeric code, or `"…"`.
 fn status_label(entry: &NetworkEntry) -> String {

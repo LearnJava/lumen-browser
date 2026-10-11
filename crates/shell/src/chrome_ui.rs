@@ -68,6 +68,9 @@ impl Lumen {
         if self.privacy.visible {
             self.privacy.refresh();
         }
+        if self.dom_inspector.visible {
+            self.dom_inspector.set_network_entries(self.network_panel.entries_clone());
+        }
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
         // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
@@ -257,6 +260,7 @@ impl Lumen {
                     lumen_chrome::ids::PRINT_OVERLAY,
                     lumen_chrome::ids::DEVTOOLS,
                     lumen_chrome::ids::NETWORK_PANEL,
+                    lumen_chrome::ids::INSP_PANEL,
                     lumen_chrome::ids::READ_LATER_PANEL,
                     lumen_chrome::ids::PRIVACY_PANEL,
                     lumen_chrome::ids::NOTE_OVERLAY,
@@ -872,6 +876,7 @@ impl Lumen {
             shortcuts,
             console,
             network,
+            inspector: self.dom_inspector.chrome_model(),
             read_later,
             privacy,
             focus: self.focus.chrome_model(),
@@ -1298,6 +1303,26 @@ impl Lumen {
             }
             ChromeAction::ToggleNetwork => {
                 self.network_panel.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleInspector => {
+                self.dom_inspector.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabElements => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Elements);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabStyles => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Styles);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabComputed => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Computed);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabNetwork => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Network);
                 self.relayout_chrome_host();
             }
             ChromeAction::ClearNetwork => {

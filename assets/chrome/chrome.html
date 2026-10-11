@@ -668,6 +668,35 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .rl-delete:hover{ background:var(--surface-2); color:var(--red-badge); }
 #rlList:empty::before{ content:"No saved pages yet. Use @read-later <url> to save."; display:block; padding:16px 12px; font-size:12px; color:var(--text-secondary); }
 
+.insp-panel{
+  position:absolute; right:0; top:0; bottom:0; width:300px; background:var(--surface-0);
+  border-left:1px solid var(--stroke); display:none; flex-direction:column; z-index:66; overflow:hidden;
+}
+.insp-panel.open{ display:flex; }
+.insp-header{ display:flex; align-items:center; height:30px; flex:none; padding:0 10px; background:var(--surface-1); font-size:12px; color:var(--text-secondary); }
+.insp-pos{ margin-left:auto; font-size:10.5px; }
+.insp-close{ margin-left:6px; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.insp-close:hover{ background:var(--surface-2); }
+.insp-tabs{ display:flex; height:26px; flex:none; background:var(--surface-1); border-bottom:1px solid var(--stroke); }
+.insp-tab{ flex:1; border:none; background:none; font-size:12px; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.insp-tab:hover{ color:var(--text-primary); }
+.insp-tab.active{ color:var(--text-primary); border-bottom-color:var(--accent); font-weight:600; }
+.insp-label{ padding:6px 10px 0; font-family:var(--font-mono); font-size:13px; color:var(--accent); overflow:hidden; white-space:nowrap; }
+.insp-node{ padding:0 10px 4px; font-family:var(--font-mono); font-size:12px; color:var(--text-secondary); }
+.insp-hint{ padding:8px 10px; font-size:12px; color:var(--text-secondary); }
+.insp-hint:empty{ display:none; }
+#inspRows{ flex:none; font-family:var(--font-mono); font-size:12px; overflow:hidden; }
+.insp-row{ display:flex; gap:6px; height:18px; padding:0 10px; white-space:nowrap; overflow:hidden; }
+.insp-key{ flex:none; max-width:46%; color:var(--blue-badge); overflow:hidden; }
+.insp-val{ flex:1; min-width:0; overflow:hidden; }
+.insp-row.insp-sel .insp-key{ max-width:none; color:var(--accent); }
+.insp-row.insp-sep{ height:1px; margin:2px 10px 0; padding:0; background:var(--stroke); }
+#inspNet{ flex:1; font-family:var(--font-mono); font-size:11.5px; overflow:hidden; }
+#inspNet .net-row{ gap:6px; padding:4px 10px; }
+#inspNet .net-row .net-method{ width:40px; }
+#inspNet .net-row .net-status{ width:40px; }
+#inspNet .net-row .net-time{ width:52px; }
+#inspNet:empty::before{ content:"(no requests yet)"; display:block; padding:8px 10px; color:var(--text-secondary); }
 .privacy-panel{
   position:absolute; right:0; top:0; bottom:0; width:320px; background:var(--surface-0);
   border-left:1px solid var(--stroke); display:none; flex-direction:column; z-index:65; overflow:hidden;
@@ -1556,6 +1585,22 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <button class="dt-close" data-action="toggle-network" aria-label="Network"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
             <div class="dt-panel active" id="dt-network"></div>
+          </div>
+
+          <!-- DevTools: инспектор DOM (UX-CHROME-PANELS срез 11). Подсветка бокса под курсором остаётся слоем страницы. -->
+          <div class="insp-panel" id="inspPanel">
+            <div class="insp-header">Inspector (Ctrl+Shift+I)<span class="insp-pos" id="inspPos"></span><button class="insp-close" data-action="toggle-inspector" aria-label="Inspector"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="insp-tabs">
+              <button class="insp-tab active" id="inspTabElements" data-action="inspector-tab-elements">Elements</button>
+              <button class="insp-tab" id="inspTabStyles" data-action="inspector-tab-styles">Styles</button>
+              <button class="insp-tab" id="inspTabComputed" data-action="inspector-tab-computed">Computed</button>
+              <button class="insp-tab" id="inspTabNetwork" data-action="inspector-tab-network">Network</button>
+            </div>
+            <div class="insp-label" id="inspLabel"></div>
+            <div class="insp-node" id="inspNode"></div>
+            <div class="insp-hint" id="inspHint"></div>
+            <div id="inspRows"></div>
+            <div id="inspNet"></div>
           </div>
 
           <!-- Downloads panel -->

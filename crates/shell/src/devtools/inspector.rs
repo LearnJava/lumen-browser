@@ -35,81 +35,19 @@
 
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId};
-use lumen_layout::{Color, FontStyle, FontWeight, LayoutBox};
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_layout::{Color, LayoutBox};
+use lumen_paint::DisplayCommand;
 
 use super::network_panel::NetworkEntry;
 
-// ── Colours ───────────────────────────────────────────────────────────────────
-
-const PANEL_BG: Color = Color { r: 24, g: 24, b: 28, a: 244 };
-const HEADER_BG: Color = Color { r: 32, g: 33, b: 38, a: 255 };
-const TAB_ACTIVE_BG: Color = Color { r: 24, g: 24, b: 28, a: 255 };
-const TAB_INACTIVE_BG: Color = Color { r: 40, g: 41, b: 48, a: 255 };
-const TAB_ACTIVE_LINE: Color = Color { r: 66, g: 135, b: 245, a: 255 };
-const FG_KEY: Color = Color { r: 130, g: 180, b: 250, a: 255 };
-const FG_VAL: Color = Color { r: 210, g: 212, b: 218, a: 255 };
-const FG_DIM: Color = Color { r: 150, g: 152, b: 160, a: 255 };
-const FG_TAG: Color = Color { r: 240, g: 170, b: 110, a: 255 };
-const FG_TAB: Color = Color { r: 190, g: 192, b: 200, a: 255 };
-const FG_TAB_ACTIVE: Color = Color { r: 220, g: 222, b: 230, a: 255 };
-
 // ── Layout constants ────────────────────────────────────────────────────────────
 
-/// Width of the right-docked side panel in CSS px.
+/// Width of the right-docked side panel in CSS px (`.insp-panel` in `chrome.html`).
 pub const PANEL_WIDTH: f32 = 300.0;
-const HEADER_H: f32 = 30.0;
-/// Height of the tab row below the header.
-pub const TAB_ROW_H: f32 = 26.0;
-const LINE_H: f32 = 18.0;
-const FONT_SIZE: f32 = 12.0;
-const H_PAD: f32 = 10.0;
-/// Width of each of the four inspector tab buttons.
-///
-/// All four are equal: 75 × 4 = 300 = [`PANEL_WIDTH`].
-const TAB_ELEMENTS_W: f32 = 75.0;
-/// Width of the "Styles" tab button (§PH3-1).
-const TAB_STYLES_W: f32 = 75.0;
-/// Width of the "Computed" tab button.
-const TAB_COMPUTED_W: f32 = 75.0;
-/// Width of the "Network" tab button.
-const TAB_NETWORK_W: f32 = 75.0;
 /// Maximum number of property rows visible without scrolling.
 const MAX_VISIBLE_ROWS: usize = 22;
 /// Maximum number of request rows visible on the Network tab without scrolling.
-/// Larger than [`MAX_VISIBLE_ROWS`] because the Network tab has no per-element
-/// label / NodeId header, only a single column-title row.
 const NET_MAX_VISIBLE_ROWS: usize = 24;
-
-/// Selector header colour in the Styles tab (like Chrome DevTools).
-const FG_SELECTOR: Color = Color { r: 200, g: 130, b: 240, a: 255 };
-/// Separator line colour between rule blocks in the Styles tab.
-const STYLES_SEP: Color = Color { r: 48, g: 50, b: 58, a: 255 };
-
-// ── Network tab colours / columns ─────────────────────────────────────────────
-
-/// Method column colour (Network tab).
-const NET_FG_METHOD: Color = Color { r: 130, g: 180, b: 240, a: 255 };
-/// URL column colour (Network tab).
-const NET_FG_URL: Color = Color { r: 210, g: 212, b: 218, a: 255 };
-/// Timing column colour (Network tab).
-const NET_FG_TIME: Color = Color { r: 160, g: 162, b: 170, a: 255 };
-/// 2xx success status colour.
-const NET_STATUS_OK: Color = Color { r: 90, g: 200, b: 120, a: 255 };
-/// 3xx redirect status colour.
-const NET_STATUS_REDIRECT: Color = Color { r: 220, g: 190, b: 90, a: 255 };
-/// 4xx/5xx error, blocked and failed status colour.
-const NET_STATUS_ERROR: Color = Color { r: 237, g: 90, b: 90, a: 255 };
-/// Pending (no status yet) colour.
-const NET_STATUS_PENDING: Color = Color { r: 140, g: 142, b: 150, a: 255 };
-/// Method column X offset within the side panel.
-const NET_COL_METHOD: f32 = H_PAD;
-/// Status column X offset.
-const NET_COL_STATUS: f32 = 52.0;
-/// Timing column X offset.
-const NET_COL_TIME: f32 = 92.0;
-/// URL column X offset.
-const NET_COL_URL: f32 = 140.0;
 
 // ── Types ───────────────────────────────────────────────────────────────────────
 
@@ -252,34 +190,6 @@ impl DomInspectorPanel {
         x >= win_w_css - PANEL_WIDTH
     }
 
-    /// Handle a click that is inside the panel. Switches tab when the click lands
-    /// on the tab row. Returns `true` when the click was consumed.
-    pub fn click_tab_at(&mut self, x: f32, y: f32, win_w_css: f32, top: f32) -> bool {
-        let panel_x = win_w_css - PANEL_WIDTH;
-        let tab_y = top + HEADER_H;
-        if y < tab_y || y > tab_y + TAB_ROW_H {
-            return false;
-        }
-        let local_x = x - panel_x;
-        if local_x < TAB_ELEMENTS_W {
-            self.switch_tab(InspectorTab::Elements);
-            return true;
-        }
-        if local_x < TAB_ELEMENTS_W + TAB_STYLES_W {
-            self.switch_tab(InspectorTab::Styles);
-            return true;
-        }
-        if local_x < TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W {
-            self.switch_tab(InspectorTab::Computed);
-            return true;
-        }
-        if local_x < TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W + TAB_NETWORK_W {
-            self.switch_tab(InspectorTab::Network);
-            return true;
-        }
-        false
-    }
-
     /// Scroll the active tab's list up.
     ///
     /// For the Elements/Styles/Computed tabs "up" means towards the top of the
@@ -417,7 +327,7 @@ pub fn build_box_overlay(
     root: &LayoutBox,
     viewport: Size,
     offset: (f32, f32),
-) -> DisplayList {
+) -> Vec<DisplayCommand> {
     if !panel.visible {
         return Vec::new();
     }
@@ -580,486 +490,91 @@ fn styles_total_lines(rules: &[(String, Vec<(String, String)>)]) -> usize {
     rules.iter().map(|(_, decls)| 1 + decls.len()).sum::<usize>() + rules.len() - 1
 }
 
-// ── Rendering: side panel ─────────────────────────────────────────────────────────
+// ── Chrome model ────────────────────────────────────────────────────────────────
 
-/// Build the right-docked inspector side panel.
-///
-/// `(win_w, win_h)` are window dimensions in CSS px. The panel is anchored to
-/// the right edge below `top` (the tab-bar height) and shows the pinned node's
-/// label, [`NodeId`] and a scrollable property list in the active tab.
-/// Returns an empty list when the inspector is hidden.
-pub fn build_inspector_panel(
-    panel: &DomInspectorPanel,
-    (win_w, win_h): (u32, u32),
-    top: f32,
-) -> DisplayList {
-    if !panel.visible {
-        return Vec::new();
-    }
-
-    let panel_x = win_w as f32 - PANEL_WIDTH;
-    let panel_h = win_h as f32 - top;
-    let mut out: DisplayList = Vec::with_capacity(16 + MAX_VISIBLE_ROWS * 2);
-
-    // Background + left border.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(panel_x, top, PANEL_WIDTH, panel_h),
-        color: PANEL_BG,
-    });
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(panel_x, top, 1.0, panel_h),
-        color: HEADER_BG,
-    });
-
-    // Header.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(panel_x, top, PANEL_WIDTH, HEADER_H),
-        color: HEADER_BG,
-    });
-    out.push(make_text(
-        "Inspector  (Ctrl+Shift+I)".to_string(),
-        panel_x + H_PAD,
-        top + (HEADER_H - FONT_SIZE) / 2.0,
-        PANEL_WIDTH - H_PAD * 2.0,
-        FONT_SIZE,
-        FG_DIM,
-    ));
-
-    // Tab row.
-    let tab_y = top + HEADER_H;
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(panel_x, tab_y, PANEL_WIDTH, TAB_ROW_H),
-        color: HEADER_BG,
-    });
-    draw_tab(
-        &mut out,
-        "Elements",
-        panel_x,
-        tab_y,
-        TAB_ELEMENTS_W,
-        panel.active_tab == InspectorTab::Elements,
-    );
-    draw_tab(
-        &mut out,
-        "Styles",
-        panel_x + TAB_ELEMENTS_W,
-        tab_y,
-        TAB_STYLES_W,
-        panel.active_tab == InspectorTab::Styles,
-    );
-    draw_tab(
-        &mut out,
-        "Computed",
-        panel_x + TAB_ELEMENTS_W + TAB_STYLES_W,
-        tab_y,
-        TAB_COMPUTED_W,
-        panel.active_tab == InspectorTab::Computed,
-    );
-    draw_tab(
-        &mut out,
-        "Network",
-        panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W,
-        tab_y,
-        TAB_NETWORK_W,
-        panel.active_tab == InspectorTab::Network,
-    );
-
-    let content_top = tab_y + TAB_ROW_H;
-
-    // Network tab is page-wide and needs no pinned element: render the request
-    // table directly and return.
-    if panel.active_tab == InspectorTab::Network {
-        build_network_table(&mut out, panel, panel_x, content_top, win_h as f32);
-        return out;
-    }
-
-    let Some(sel) = panel.selected.as_ref() else {
-        out.push(make_text(
-            "Hover a box, then click to inspect.".to_string(),
-            panel_x + H_PAD,
-            content_top + 8.0,
-            PANEL_WIDTH - H_PAD * 2.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-        return out;
-    };
-
-    // Selected element label + NodeId.
-    let mut y = content_top + 6.0;
-    out.push(make_text(
-        sel.label.clone(),
-        panel_x + H_PAD,
-        y,
-        PANEL_WIDTH - H_PAD * 2.0,
-        FONT_SIZE + 1.0,
-        FG_TAG,
-    ));
-    y += LINE_H;
-    out.push(make_text(
-        format!("NodeId({})", sel.node.index()),
-        panel_x + H_PAD,
-        y,
-        PANEL_WIDTH - H_PAD * 2.0,
-        FONT_SIZE,
-        FG_DIM,
-    ));
-    y += LINE_H + 4.0;
-
-    // Styles tab: render rule blocks (selector header + declarations).
-    if panel.active_tab == InspectorTab::Styles {
-        build_styles_tab(&mut out, sel, panel_x, y, top, win_h as f32);
-        return out;
-    }
-
-    // Property rows for Elements / Computed tabs.
-    let (props, scroll_offset) = match panel.active_tab {
-        InspectorTab::Elements => (&sel.props, sel.scroll_offset),
-        InspectorTab::Computed => (&sel.computed_props, sel.computed_scroll_offset),
-        InspectorTab::Styles | InspectorTab::Network => {
-            unreachable!("Styles/Network tabs return early above")
+impl DomInspectorPanel {
+    /// Snapshot for the engine chrome's `#inspPanel` (UX-CHROME-PANELS): the
+    /// visible window of the active tab. The scroll offsets stay here — the
+    /// chrome has no scroll container for it, the wheel is routed to
+    /// [`DomInspectorPanel::scroll_up`]/[`scroll_down`](Self::scroll_down).
+    pub fn chrome_model(&self) -> lumen_chrome::ChromeInspectorModel {
+        use lumen_chrome::{ChromeInspectorModel, ChromeInspectorRowModel as Row};
+        let mut m = ChromeInspectorModel {
+            open: self.visible,
+            tab: match self.active_tab {
+                InspectorTab::Elements => 0,
+                InspectorTab::Styles => 1,
+                InspectorTab::Computed => 2,
+                InspectorTab::Network => 3,
+            },
+            ..ChromeInspectorModel::default()
+        };
+        if !self.visible {
+            return m;
         }
-    };
-
-    let total = props.len();
-    let start = scroll_offset.min(total);
-    let end = (start + MAX_VISIBLE_ROWS).min(total);
-    for (key, val) in &props[start..end] {
-        out.push(make_text(
-            format!("{key}:"),
-            panel_x + H_PAD,
-            y,
-            PANEL_WIDTH * 0.45,
-            FONT_SIZE,
-            FG_KEY,
-        ));
-        out.push(make_text(
-            val.clone(),
-            panel_x + PANEL_WIDTH * 0.46,
-            y,
-            PANEL_WIDTH * 0.5,
-            FONT_SIZE,
-            FG_VAL,
-        ));
-        y += LINE_H;
+        if self.active_tab == InspectorTab::Network {
+            let total = self.network_entries.len();
+            let end = total.saturating_sub(self.network_scroll_offset);
+            let start = end.saturating_sub(NET_MAX_VISIBLE_ROWS);
+            m.net_rows = self.network_entries[start..end]
+                .iter()
+                .map(super::network_panel::chrome_row)
+                .collect();
+            if total > NET_MAX_VISIBLE_ROWS {
+                m.position = format!("{end}/{total}");
+            }
+            return m;
+        }
+        let Some(sel) = self.selected.as_ref() else {
+            m.hint = "Hover a box, then click to inspect.".to_owned();
+            return m;
+        };
+        m.label = sel.label.clone();
+        m.node = format!("NodeId({})", sel.node.index());
+        let (rows, scroll): (Vec<Row>, usize) = match self.active_tab {
+            InspectorTab::Elements => (prop_rows(&sel.props), sel.scroll_offset),
+            InspectorTab::Computed => (prop_rows(&sel.computed_props), sel.computed_scroll_offset),
+            InspectorTab::Styles => {
+                if sel.styles_rules.is_empty() {
+                    m.hint = "(no CSS rules matched)".to_owned();
+                }
+                (style_rows(&sel.styles_rules), sel.styles_scroll_offset)
+            }
+            InspectorTab::Network => (Vec::new(), 0),
+        };
+        let total = rows.len();
+        let start = scroll.min(total);
+        let end = (start + MAX_VISIBLE_ROWS).min(total);
+        if total > MAX_VISIBLE_ROWS {
+            m.position = format!("{end}/{total}");
+        }
+        m.rows = rows[start..end].to_vec();
+        m
     }
+}
 
-    if total > MAX_VISIBLE_ROWS {
-        out.push(make_text(
-            format!("{end}/{total}"),
-            panel_x + PANEL_WIDTH - 60.0,
-            top + (HEADER_H - FONT_SIZE) / 2.0,
-            54.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
+fn prop_rows(props: &[(String, String)]) -> Vec<lumen_chrome::ChromeInspectorRowModel> {
+    props
+        .iter()
+        .map(|(k, v)| lumen_chrome::ChromeInspectorRowModel { kind: 0, key: k.clone(), value: v.clone() })
+        .collect()
+}
+
+/// Flat line list of the Styles tab: per rule a selector line and its
+/// declarations, rules separated by one separator line (counted by
+/// [`styles_total_lines`]).
+fn style_rows(rules: &[(String, Vec<(String, String)>)]) -> Vec<lumen_chrome::ChromeInspectorRowModel> {
+    use lumen_chrome::ChromeInspectorRowModel as Row;
+    let mut out = Vec::new();
+    for (idx, (selector, decls)) in rules.iter().enumerate() {
+        if idx > 0 {
+            out.push(Row { kind: 2, ..Row::default() });
+        }
+        out.push(Row { kind: 1, key: selector.clone(), value: String::new() });
+        out.extend(decls.iter().map(|(k, v)| Row { kind: 0, key: k.clone(), value: v.clone() }));
     }
-
     out
 }
-
-// ── Rendering: Styles tab ──────────────────────────────────────────────────────
-
-/// Render the Styles-tab content into `out`.
-///
-/// Each rule is displayed as a selector header line (FG_SELECTOR) followed by
-/// property:value rows. Rules are separated by a 1 px hairline. Scrolling is
-/// controlled by `sel.styles_scroll_offset` — a flat line count from the top.
-fn build_styles_tab(
-    out: &mut DisplayList,
-    sel: &SelectedNode,
-    panel_x: f32,
-    content_top: f32,
-    header_top: f32,
-    win_h: f32,
-) {
-    if sel.styles_rules.is_empty() {
-        out.push(make_text(
-            "(no CSS rules matched)".into(),
-            panel_x + H_PAD,
-            content_top,
-            PANEL_WIDTH - H_PAD * 2.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-        return;
-    }
-
-    // Build a flat list of visual lines for scrolling.
-    // Each entry: (is_selector, key_or_selector_text, value_or_empty)
-    let mut lines: Vec<(bool, &str, &str)> = Vec::new();
-    for (idx, (selector, decls)) in sel.styles_rules.iter().enumerate() {
-        if idx > 0 {
-            // Separator placeholder: we render a hairline, no text.
-            lines.push((false, "", ""));
-        }
-        lines.push((true, selector.as_str(), ""));
-        for (prop, val) in decls {
-            lines.push((false, prop.as_str(), val.as_str()));
-        }
-    }
-
-    let total = lines.len();
-    let scroll = sel.styles_scroll_offset.min(total);
-    let max_rows = ((win_h - content_top) / LINE_H).floor().max(1.0) as usize;
-    let visible = max_rows.min(MAX_VISIBLE_ROWS);
-    let end = (scroll + visible).min(total);
-
-    // Track whether we need a separator hairline before the current line.
-    // We walk the flat slice and figure out line type to reconstruct separators.
-    let mut y = content_top;
-    let mut sep_pending = false;
-    for (is_sel, key, val) in &lines[scroll..end] {
-        if key.is_empty() && !*is_sel {
-            // Separator line.
-            sep_pending = true;
-            continue;
-        }
-        if sep_pending {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(panel_x + H_PAD, y - 2.0, PANEL_WIDTH - H_PAD * 2.0, 1.0),
-                color: STYLES_SEP,
-            });
-            sep_pending = false;
-        }
-        if *is_sel {
-            out.push(make_text(
-                key.to_string(),
-                panel_x + H_PAD,
-                y,
-                PANEL_WIDTH - H_PAD * 2.0,
-                FONT_SIZE,
-                FG_SELECTOR,
-            ));
-        } else {
-            out.push(make_text(
-                format!("{key}:"),
-                panel_x + H_PAD + 8.0,
-                y,
-                PANEL_WIDTH * 0.42,
-                FONT_SIZE,
-                FG_KEY,
-            ));
-            out.push(make_text(
-                val.to_string(),
-                panel_x + H_PAD + 8.0 + PANEL_WIDTH * 0.43,
-                y,
-                PANEL_WIDTH * 0.5,
-                FONT_SIZE,
-                FG_VAL,
-            ));
-        }
-        y += LINE_H;
-    }
-
-    // Scroll indicator.
-    if total > visible {
-        out.push(make_text(
-            format!("{end}/{total}"),
-            panel_x + PANEL_WIDTH - 60.0,
-            header_top + (HEADER_H - FONT_SIZE) / 2.0,
-            54.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-    }
-}
-
-// ── Rendering: Network tab ──────────────────────────────────────────────────────
-
-/// Render the Network-tab request table into `out`.
-///
-/// Four columns — method / status / time / URL — with a single column-title row
-/// at `content_top`, then up to [`NET_MAX_VISIBLE_ROWS`] request rows. Rows are
-/// shown newest-last (the tail), honouring `panel.network_scroll_offset`.
-/// `win_h` is the window height in CSS px (used to bound the visible row count).
-fn build_network_table(
-    out: &mut DisplayList,
-    panel: &DomInspectorPanel,
-    panel_x: f32,
-    content_top: f32,
-    win_h: f32,
-) {
-    // Column-title row.
-    let title_y = content_top + 4.0;
-    out.push(make_text("Method".into(), panel_x + NET_COL_METHOD, title_y, NET_COL_STATUS - NET_COL_METHOD, FONT_SIZE, FG_DIM));
-    out.push(make_text("Status".into(), panel_x + NET_COL_STATUS, title_y, NET_COL_TIME - NET_COL_STATUS, FONT_SIZE, FG_DIM));
-    out.push(make_text("Time".into(), panel_x + NET_COL_TIME, title_y, NET_COL_URL - NET_COL_TIME, FONT_SIZE, FG_DIM));
-    out.push(make_text("URL".into(), panel_x + NET_COL_URL, title_y, PANEL_WIDTH - NET_COL_URL - H_PAD, FONT_SIZE, FG_DIM));
-
-    let rows_top = title_y + LINE_H + 2.0;
-
-    if panel.network_entries.is_empty() {
-        out.push(make_text(
-            "(no requests yet)".into(),
-            panel_x + H_PAD,
-            rows_top,
-            PANEL_WIDTH - H_PAD * 2.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-        return;
-    }
-
-    // How many rows fit in the remaining height, capped at NET_MAX_VISIBLE_ROWS.
-    let avail = (win_h - rows_top).max(0.0);
-    let fit = (avail / LINE_H).floor() as usize;
-    let visible = fit.clamp(1, NET_MAX_VISIBLE_ROWS);
-
-    // Show the tail: newest rows, scrolled by network_scroll_offset.
-    let total = panel.network_entries.len();
-    let end = total.saturating_sub(panel.network_scroll_offset);
-    let start = end.saturating_sub(visible);
-
-    for (i, entry) in panel.network_entries[start..end].iter().enumerate() {
-        let y = rows_top + i as f32 * LINE_H;
-        out.push(make_text(
-            entry.method.clone(),
-            panel_x + NET_COL_METHOD,
-            y,
-            NET_COL_STATUS - NET_COL_METHOD,
-            FONT_SIZE,
-            NET_FG_METHOD,
-        ));
-        out.push(make_text(
-            net_status_label(entry),
-            panel_x + NET_COL_STATUS,
-            y,
-            NET_COL_TIME - NET_COL_STATUS,
-            FONT_SIZE,
-            net_status_color(entry),
-        ));
-        out.push(make_text(
-            net_timing_label(entry),
-            panel_x + NET_COL_TIME,
-            y,
-            NET_COL_URL - NET_COL_TIME,
-            FONT_SIZE,
-            NET_FG_TIME,
-        ));
-        out.push(make_text(
-            net_truncate_url(&entry.url, PANEL_WIDTH - NET_COL_URL - H_PAD),
-            panel_x + NET_COL_URL,
-            y,
-            PANEL_WIDTH - NET_COL_URL - H_PAD,
-            FONT_SIZE,
-            NET_FG_URL,
-        ));
-    }
-
-    // Scroll indicator when rows overflow.
-    if total > visible {
-        out.push(make_text(
-            format!("{end}/{total}"),
-            panel_x + PANEL_WIDTH - 60.0,
-            content_top - HEADER_H - TAB_ROW_H + (HEADER_H - FONT_SIZE) / 2.0,
-            54.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-    }
-}
-
-/// Status text for a Network-tab row: `"blocked"`, failure stage, numeric code,
-/// or `"…"` while pending.
-fn net_status_label(entry: &NetworkEntry) -> String {
-    if entry.blocked {
-        "blocked".to_string()
-    } else if entry.failed {
-        entry
-            .reason
-            .as_deref()
-            .and_then(|r| r.split(':').next())
-            .unwrap_or("err")
-            .to_string()
-    } else if let Some(code) = entry.status {
-        code.to_string()
-    } else {
-        "…".to_string()
-    }
-}
-
-/// Status colour: green 2xx, amber 3xx, red 4xx/5xx & blocked & failed, grey pending.
-fn net_status_color(entry: &NetworkEntry) -> Color {
-    if entry.blocked || entry.failed {
-        return NET_STATUS_ERROR;
-    }
-    match entry.status {
-        Some(c) if (200..300).contains(&c) => NET_STATUS_OK,
-        Some(c) if (300..400).contains(&c) => NET_STATUS_REDIRECT,
-        Some(_) => NET_STATUS_ERROR,
-        None => NET_STATUS_PENDING,
-    }
-}
-
-/// Timing text: `"123 ms"` once completed, `"…"` pending, `"—"` blocked/failed.
-fn net_timing_label(entry: &NetworkEntry) -> String {
-    if entry.blocked || entry.failed {
-        "—".to_string()
-    } else if let Some(ms) = entry.duration_ms {
-        format!("{ms} ms")
-    } else {
-        "…".to_string()
-    }
-}
-
-/// Truncate a URL to roughly fit `width` CSS px (~6.5 px/char), keeping the tail.
-fn net_truncate_url(url: &str, width: f32) -> String {
-    let max_chars = (width / 6.5).floor().max(8.0) as usize;
-    let count = url.chars().count();
-    if count <= max_chars {
-        return url.to_owned();
-    }
-    let skip = count - (max_chars - 1);
-    let tail: String = url.chars().skip(skip).collect();
-    format!("…{tail}")
-}
-
-/// Emit a single tab button into `out`.
-fn draw_tab(out: &mut DisplayList, label: &str, x: f32, y: f32, w: f32, active: bool) {
-    let bg = if active { TAB_ACTIVE_BG } else { TAB_INACTIVE_BG };
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(x, y, w, TAB_ROW_H),
-        color: bg,
-    });
-    if active {
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y + TAB_ROW_H - 2.0, w, 2.0),
-            color: TAB_ACTIVE_LINE,
-        });
-    }
-    let fg = if active { FG_TAB_ACTIVE } else { FG_TAB };
-    out.push(make_text(
-        label.to_string(),
-        x + 8.0,
-        y + (TAB_ROW_H - FONT_SIZE) / 2.0,
-        w - 16.0,
-        FONT_SIZE,
-        fg,
-    ));
-}
-
-fn make_text(text: String, x: f32, y: f32, w: f32, font_size: f32, color: Color) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(x, y, w, font_size * 1.4),
-        text,
-        font_size,
-        color,
-        // DS-4: DevTools inspector (Elements) panel text is monospace (bundled JetBrains Mono).
-        font_family: vec!["JetBrains Mono".to_string()],
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
-}
-
-// ── Tests ───────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1235,27 +750,6 @@ mod tests {
     }
 
     #[test]
-    fn click_tab_at_switches_tabs() {
-        let mut p = DomInspectorPanel::new();
-        let win_w = 1280.0_f32;
-        let top = 36.0_f32;
-        let panel_x = win_w - PANEL_WIDTH;
-        let tab_y = top + HEADER_H + TAB_ROW_H / 2.0;
-        // Click "Elements" tab.
-        p.switch_tab(InspectorTab::Computed);
-        assert!(p.click_tab_at(panel_x + 10.0, tab_y, win_w, top));
-        assert_eq!(p.active_tab, InspectorTab::Elements);
-        // Click "Styles" tab.
-        assert!(p.click_tab_at(panel_x + TAB_ELEMENTS_W + 5.0, tab_y, win_w, top));
-        assert_eq!(p.active_tab, InspectorTab::Styles);
-        // Click "Computed" tab.
-        assert!(p.click_tab_at(panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + 5.0, tab_y, win_w, top));
-        assert_eq!(p.active_tab, InspectorTab::Computed);
-        // Click outside tab row → not consumed.
-        assert!(!p.click_tab_at(panel_x + 10.0, top + 5.0, win_w, top));
-    }
-
-    #[test]
     fn is_panel_click_detects_right_side() {
         let p = DomInspectorPanel::new();
         let win_w = 1280.0_f32;
@@ -1298,115 +792,12 @@ mod tests {
     }
 
     #[test]
-    fn panel_hidden_returns_empty() {
-        let p = DomInspectorPanel::new();
-        assert!(build_inspector_panel(&p, (1280, 800), 36.0).is_empty());
-    }
-
-    #[test]
-    fn panel_visible_empty_has_header() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        let has_header = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Inspector"))
-        });
-        assert!(has_header);
-    }
-
-    #[test]
-    fn panel_shows_tab_buttons() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        for label in ["Elements", "Styles", "Computed", "Network"] {
-            assert!(
-                dl.iter().any(|c| matches!(
-                    c, DisplayCommand::DrawText { text, .. } if text == label
-                )),
-                "tab button {label} must be drawn"
-            );
-        }
-    }
-
-    #[test]
-    fn panel_shows_selection_label_and_node_id() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        p.select(
-            NodeId::from_index(42),
-            "p#intro".to_string(),
-            vec![("display".into(), "block".into())],
-            vec![],
-            vec![("color".into(), "rgb(0,0,0)".into())],
-        );
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("p#intro")
-        )));
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("NodeId(42)")
-        )));
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("display")
-        )));
-    }
-
-    #[test]
-    fn panel_computed_tab_shows_computed_props() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        p.select(
-            NodeId::from_index(1),
-            "div".into(),
-            vec![("display".into(), "block".into())],
-            vec![],
-            vec![("color".into(), "rgb(255,0,0)".into())],
-        );
-        p.switch_tab(InspectorTab::Computed);
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("color")
-        )));
-    }
-
-    // ── Network tab (CC-9) ────────────────────────────────────────────────────
-
-    /// Build a `Vec<NetworkEntry>` for the Network tab by recording into a real
-    /// [`NetworkLog`] (its fields are private, so this is the only construction
-    /// path). Each `(method, url, status)` becomes one completed entry.
-    fn net_entries(rows: &[(&str, &str, u16)]) -> Vec<NetworkEntry> {
-        use super::super::network_panel::NetworkLog;
-        let mut log = NetworkLog::default();
-        for (m, u, s) in rows {
-            log.record_js(m, u, Some(*s), Some(7));
-        }
-        log.entries.clone()
-    }
-
-    #[test]
     fn network_is_fourth_tab_variant() {
         // Network is the fourth tab (after Elements, Styles, Computed).
         let mut p = DomInspectorPanel::new();
         p.switch_tab(InspectorTab::Network);
         assert_eq!(p.active_tab, InspectorTab::Network);
         assert_ne!(InspectorTab::Network, InspectorTab::default());
-    }
-
-    #[test]
-    fn click_fourth_tab_selects_network() {
-        let mut p = DomInspectorPanel::new();
-        let win_w = 1280.0_f32;
-        let top = 36.0_f32;
-        let panel_x = win_w - PANEL_WIDTH;
-        let tab_y = top + HEADER_H + TAB_ROW_H / 2.0;
-        // Click within the fourth (Network) tab slot.
-        let net_x = panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W + 5.0;
-        assert!(p.click_tab_at(net_x, tab_y, win_w, top));
-        assert_eq!(p.active_tab, InspectorTab::Network);
-        // A click past all four tab buttons is not consumed.
-        let beyond = panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W + TAB_NETWORK_W + 5.0;
-        assert!(!p.click_tab_at(beyond, tab_y, win_w, top));
     }
 
     #[test]
@@ -1417,83 +808,6 @@ mod tests {
         p.set_network_entries(net_entries(&[("GET", "https://a/", 200)]));
         assert_eq!(p.network_scroll_offset, 0);
         assert_eq!(p.network_entries.len(), 1);
-    }
-
-    #[test]
-    fn network_panel_shows_four_tab_buttons() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        for label in ["Elements", "Styles", "Computed", "Network"] {
-            assert!(
-                dl.iter().any(|c| matches!(
-                    c, DisplayCommand::DrawText { text, .. } if text == label
-                )),
-                "tab button {label} must be drawn"
-            );
-        }
-    }
-
-    #[test]
-    fn network_tab_renders_without_selection() {
-        // The Network tab is page-wide: it must render even with no pinned node.
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        p.switch_tab(InspectorTab::Network);
-        assert!(p.selected.is_none());
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        // Column titles are present; the "hover a box" hint is not.
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text == "URL"
-        )));
-        assert!(!dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("Hover a box")
-        )));
-    }
-
-    #[test]
-    fn network_tab_has_four_column_titles() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        p.switch_tab(InspectorTab::Network);
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        for col in ["Method", "Status", "Time", "URL"] {
-            assert!(
-                dl.iter().any(|c| matches!(
-                    c, DisplayCommand::DrawText { text, .. } if text == col
-                )),
-                "column title {col} must be drawn"
-            );
-        }
-    }
-
-    #[test]
-    fn network_tab_empty_shows_hint() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        p.switch_tab(InspectorTab::Network);
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("no requests")
-        )));
-    }
-
-    #[test]
-    fn network_tab_renders_request_row() {
-        let mut p = DomInspectorPanel::new();
-        p.toggle();
-        p.switch_tab(InspectorTab::Network);
-        p.set_network_entries(net_entries(&[("POST", "https://example.com/api", 201)]));
-        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text == "POST"
-        )));
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text == "201"
-        )));
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text.contains("example.com")
-        )));
     }
 
     #[test]
@@ -1529,13 +843,84 @@ mod tests {
         assert_eq!(sel.computed_scroll_offset, 0);
     }
 
+    /// Completed network entries as the shell feeds them (same path as the JS log).
+    fn net_entries(rows: &[(&str, &str, u16)]) -> Vec<NetworkEntry> {
+        use super::super::network_panel::NetworkLog;
+        let mut log = NetworkLog::default();
+        for (m, u, s) in rows {
+            log.record_js(m, u, Some(*s), Some(7));
+        }
+        log.entries.clone()
+    }
+
     #[test]
-    fn net_truncate_url_keeps_tail() {
-        let long = "https://example.com/very/long/path/to/resource.js";
-        let t = net_truncate_url(long, 100.0);
-        assert!(t.starts_with('…'));
-        assert!(t.ends_with("resource.js"));
-        // A short URL is left untouched.
-        assert_eq!(net_truncate_url("https://a/", 400.0), "https://a/");
+    fn chrome_model_hidden_is_closed() {
+        let m = DomInspectorPanel::new().chrome_model();
+        assert!(!m.open);
+        assert!(m.rows.is_empty() && m.net_rows.is_empty());
+    }
+
+    #[test]
+    fn chrome_model_without_selection_shows_hint() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        let m = p.chrome_model();
+        assert!(m.open);
+        assert!(m.hint.starts_with("Hover a box"));
+        assert!(m.label.is_empty());
+    }
+
+    #[test]
+    fn chrome_model_elements_window_and_position() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        let many: Vec<(String, String)> =
+            (0..MAX_VISIBLE_ROWS + 5).map(|i| (format!("k{i}"), "v".into())).collect();
+        p.select(NodeId::from_index(7), "div#a".into(), many, vec![], vec![]);
+        p.scroll_down(2);
+        let m = p.chrome_model();
+        assert_eq!(m.label, "div#a");
+        assert_eq!(m.node, "NodeId(7)");
+        assert_eq!(m.rows.len(), MAX_VISIBLE_ROWS);
+        assert_eq!(m.rows[0].key, "k2");
+        assert_eq!(m.position, format!("{}/{}", MAX_VISIBLE_ROWS + 2, MAX_VISIBLE_ROWS + 5));
+    }
+
+    #[test]
+    fn chrome_model_styles_has_selectors_and_separators() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        let rules = vec![
+            ("a".to_owned(), vec![("color".to_owned(), "red".to_owned())]),
+            ("b".to_owned(), vec![("margin".to_owned(), "0".to_owned())]),
+        ];
+        p.select(NodeId::from_index(1), "x".into(), vec![], rules, vec![]);
+        p.switch_tab(InspectorTab::Styles);
+        let m = p.chrome_model();
+        let kinds: Vec<u8> = m.rows.iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, vec![1, 0, 2, 1, 0]);
+        assert_eq!(m.tab, 1);
+    }
+
+    #[test]
+    fn chrome_model_styles_without_rules_hints() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        p.select(NodeId::from_index(1), "x".into(), vec![], vec![], vec![]);
+        p.switch_tab(InspectorTab::Styles);
+        assert_eq!(p.chrome_model().hint, "(no CSS rules matched)");
+    }
+
+    #[test]
+    fn chrome_model_network_tab_needs_no_selection() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        p.switch_tab(InspectorTab::Network);
+        p.set_network_entries(net_entries(&[("GET", "https://a/x", 200)]));
+        let m = p.chrome_model();
+        assert_eq!(m.tab, 3);
+        assert_eq!(m.net_rows.len(), 1);
+        assert_eq!(m.net_rows[0].status, "200");
+        assert!(m.hint.is_empty());
     }
 }

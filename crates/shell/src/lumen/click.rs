@@ -150,14 +150,8 @@ impl Lumen {
         // its computed style, suppressing normal navigation / JS dispatch.
         if self.dom_inspector.visible {
             let win_w_css = self.viewport_width_css();
-            // Click inside the right-docked panel → UI interaction (tab switch).
+            // Click inside the right-docked panel → the engine chrome owns it.
             if self.dom_inspector.is_panel_click(x_css, win_w_css) {
-                if self.dom_inspector.click_tab_at(
-                    x_css, y_css, win_w_css,
-                    toolbar::CHROME_H,
-                ) {
-                    self.request_redraw();
-                }
                 return;
             }
             // Click on the page → pin the box under cursor.
@@ -204,6 +198,7 @@ impl Lumen {
                     })
                     .unwrap_or_default();
                 self.dom_inspector.select(node, label, props, styles_rules, computed_props);
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             return;

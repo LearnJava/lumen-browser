@@ -122,6 +122,8 @@ pub struct ChromeModel {
     pub focus: ChromeFocusModel,
     /// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
     pub note: ChromeNoteModel,
+    /// `#inspPanel` snapshot (UX-CHROME-PANELS) — mirrors `DomInspectorPanel`.
+    pub inspector: ChromeInspectorModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -714,6 +716,43 @@ pub struct ChromeReadLaterModel {
     pub rows: Vec<ChromeReadLaterRowModel>,
 }
 
+/// One line of `#inspRows` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeInspectorRowModel {
+    /// `0` property row (`key: value`), `1` rule selector header, `2` separator
+    /// between rule blocks.
+    pub kind: u8,
+    /// Property name or selector text.
+    pub key: String,
+    /// Property value (empty for selector and separator lines).
+    pub value: String,
+}
+
+/// `#inspPanel` snapshot (UX-CHROME-PANELS) — mirrors `DomInspectorPanel`.
+///
+/// `rows` and `net_rows` are the already-windowed slices (the shell owns the
+/// wheel scroll). `rows` serves the Elements/Styles/Computed tabs, `net_rows`
+/// the Network tab; the shell leaves the one that does not apply empty.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeInspectorModel {
+    /// `true` shows the panel — mirrors `DomInspectorPanel::visible`.
+    pub open: bool,
+    /// Active tab: `0` Elements, `1` Styles, `2` Computed, `3` Network.
+    pub tab: u8,
+    /// Label of the pinned element (`div#main.card`); empty without selection.
+    pub label: String,
+    /// `NodeId(n)` of the pinned element; empty without selection.
+    pub node: String,
+    /// Placeholder shown instead of rows (`Hover a box…`, `(no CSS rules matched)`).
+    pub hint: String,
+    /// Property / selector lines of the active element tab.
+    pub rows: Vec<ChromeInspectorRowModel>,
+    /// Request rows of the Network tab, oldest first.
+    pub net_rows: Vec<ChromeNetworkRowModel>,
+    /// `shown/total` scroll indicator; empty when everything fits.
+    pub position: String,
+}
+
 /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeAccessModel {
@@ -1066,6 +1105,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_shortcuts(doc, &model.shortcuts);
     bind_console(doc, &model.console);
     bind_network(doc, &model.network);
+    bind_inspector(doc, &model.inspector);
     bind_read_later(doc, &model.read_later);
     bind_privacy(doc, &model.privacy);
     bind_focus(doc, &model.focus);
@@ -1717,8 +1757,14 @@ fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
         set_text(doc, title, &format!("Network ({})", network.total));
     }
     let Some(list) = doc.find_by_id(crate::ids::DT_NETWORK) else { return };
+    bind_net_rows(doc, list, &network.rows);
+}
+
+/// Rebuilds the `.net-row`s of `list` from `rows` (shared by `#dt-network` and
+/// the inspector's Network tab).
+fn bind_net_rows(doc: &mut Document, list: NodeId, rows: &[ChromeNetworkRowModel]) {
     remove_children_with_class(doc, list, "net-row");
-    for row in &network.rows {
+    for row in rows {
         let node = doc.create_element(QualName::html("div"));
         let class = if row.blocked {
             "net-row blocked"
@@ -1748,6 +1794,67 @@ fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
         attach_child(doc, list, node);
     }
 }
+
+/// Toggles `#inspPanel`'s `.open` class, marks the active tab button, writes
+/// the pinned element's label / `NodeId` / placeholder / scroll indicator and
+/// rebuilds the `.insp-row`s of `#inspRows` and the `.net-row`s of `#inspNet`
+/// (UX-CHROME-PANELS).
+fn bind_inspector(doc: &mut Document, insp: &ChromeInspectorModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::INSP_PANEL) else { return };
+    set_class_token(doc, panel, "open", insp.open);
+    for (i, id) in [
+        crate::ids::INSP_TAB_ELEMENTS,
+        crate::ids::INSP_TAB_STYLES,
+        crate::ids::INSP_TAB_COMPUTED,
+        crate::ids::INSP_TAB_NETWORK,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if let Some(tab) = doc.find_by_id(id) {
+            set_class_token(doc, tab, "active", usize::from(insp.tab) == i);
+        }
+    }
+    for (id, value) in [
+        (crate::ids::INSP_LABEL, &insp.label),
+        (crate::ids::INSP_NODE, &insp.node),
+        (crate::ids::INSP_HINT, &insp.hint),
+        (crate::ids::INSP_POS, &insp.position),
+    ] {
+        if let Some(n) = doc.find_by_id(id) {
+            set_text(doc, n, value);
+        }
+    }
+    if let Some(list) = doc.find_by_id(crate::ids::INSP_NET) {
+        bind_net_rows(doc, list, &insp.net_rows);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::INSP_ROWS) else { return };
+    remove_children_with_class(doc, list, "insp-row");
+    for row in &insp.rows {
+        let node = doc.create_element(QualName::html("div"));
+        let class = match row.kind {
+            1 => "insp-row insp-sel",
+            2 => "insp-row insp-sep",
+            _ => "insp-row",
+        };
+        set_attr(doc, node, "class", class);
+        if row.kind != 2 {
+            let key = doc.create_element(QualName::html("span"));
+            set_attr(doc, key, "class", "insp-key");
+            let key_text = if row.kind == 0 { format!("{}:", row.key) } else { row.key.clone() };
+            append_text(doc, key, &key_text);
+            attach_child(doc, node, key);
+            if row.kind == 0 {
+                let val = doc.create_element(QualName::html("span"));
+                set_attr(doc, val, "class", "insp-val");
+                append_text(doc, val, &row.value);
+                attach_child(doc, node, val);
+            }
+        }
+        attach_child(doc, list, node);
+    }
+}
+
 
 /// Toggles `#focusTimer`'s `.open` class, writes the countdown into
 /// `#focusTime`, swaps the play/pause icon and shows `#focusDone` once the
@@ -4222,6 +4329,71 @@ mod tests {
         bind_model(&mut doc, &ChromeModel::default());
         assert!(!has_class(&doc, pill, "open"));
         assert!(!has_class(&doc, done, "show"));
+    }
+
+    #[test]
+    fn inspector_panel_binds_tab_rows_and_network() {
+        let mut doc = parse_asset();
+        let row = |kind: u8, key: &str, value: &str| ChromeInspectorRowModel {
+            kind,
+            key: key.to_owned(),
+            value: value.to_owned(),
+        };
+        let model = ChromeModel {
+            inspector: ChromeInspectorModel {
+                open: true,
+                tab: 1,
+                label: "div#a".to_owned(),
+                node: "NodeId(3)".to_owned(),
+                rows: vec![row(1, ".a", ""), row(0, "color", "red"), row(2, "", "")],
+                position: "3/30".to_owned(),
+                ..ChromeInspectorModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::INSP_PANEL).expect("asset has #inspPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let styles = doc.find_by_id(crate::ids::INSP_TAB_STYLES).expect("styles tab");
+        assert!(has_class(&doc, styles, "active"));
+        let elements = doc.find_by_id(crate::ids::INSP_TAB_ELEMENTS).expect("elements tab");
+        assert!(!has_class(&doc, elements, "active"));
+        let label = doc.find_by_id(crate::ids::INSP_LABEL).expect("label");
+        assert_eq!(text_of(&doc, label), "div#a");
+        let list = doc.find_by_id(crate::ids::INSP_ROWS).expect("rows");
+        let rows = find_descendants_by_class(&doc, list, "insp-row");
+        assert_eq!(rows.len(), 3);
+        assert!(has_class(&doc, rows[0], "insp-sel"));
+        assert!(has_class(&doc, rows[2], "insp-sep"));
+        let keys = find_descendants_by_class(&doc, list, "insp-key");
+        assert_eq!(text_of(&doc, keys[1]), "color:");
+        // Network tab: request rows go to #inspNet, element rows are cleared.
+        let net = ChromeNetworkRowModel {
+            method: "GET".to_owned(),
+            status: "200".to_owned(),
+            status_class: 2,
+            time: "5 ms".to_owned(),
+            url: "https://a.test/".to_owned(),
+            blocked: false,
+            failed: false,
+        };
+        let model = ChromeModel {
+            inspector: ChromeInspectorModel {
+                open: true,
+                tab: 3,
+                net_rows: vec![net],
+                ..ChromeInspectorModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::INSP_ROWS).expect("rows");
+        assert!(find_descendants_by_class(&doc, list, "insp-row").is_empty());
+        let netlist = doc.find_by_id(crate::ids::INSP_NET).expect("net");
+        assert_eq!(find_descendants_by_class(&doc, netlist, "net-row").len(), 1);
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::INSP_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
     }
 
     #[test]
