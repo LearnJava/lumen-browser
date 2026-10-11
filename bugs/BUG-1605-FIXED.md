@@ -1,6 +1,6 @@
 # BUG-1605 — UX-CHROME-PANELS: панель спецвозможностей (`#accessOverlay`, Ctrl+Shift+Q) не появляется в живом окне
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-11
 **Заведён:** 2026-10-11 (живая проверка UI-работы P6 за 2026-10-09/10; регрессия найдена `git bisect`)
 **Область:** shell/chrome (`crates/shell/src/chrome_ui.rs` — `take_content_area`/`salvage_layout_boxes`, сборка модели; `assets/chrome/chrome.html` — `#accessOverlay`; `crates/chrome/src/model.rs` — `bind_access`)
 **Внёсший коммит:** `ff845dc05` «UX-CHROME-PANELS срез 2: панель спецвозможностей в движковом chrome» (в `main` — слияние `4098869e9`)
@@ -54,3 +54,11 @@
 
 1. Найти, где теряется модал: `.open` на `#accessOverlay` в живом `chrome_doc` после Ctrl+Shift+Q → бокс в дереве chrome после `take_content_area` → его команды в итоговом display list.
 2. Тест, который ловит класс целиком: открыть панель через `KeyCommand`/`ChromeAction` на настоящем `Lumen`-цикле и проверить, что в display list кадра есть команды модала (а не только класс в DOM модели).
+
+## Корневая причина и исправление (2026-10-11)
+
+Дело не в `#accessOverlay`, а во всех всплывающих блоках из `#contentArea` (`SALVAGED_POPOVER_IDS`: строка поиска, палитра, модалы, панели DevTools, приватность, «Прочитать позже», меню вкладки и др.). `relayout_chrome_host` оставляет их в дереве chrome, а `build_chrome_overlay_strips` режет весь `chrome_dl` четырьмя полосами вокруг `chrome_page_host_rect` — все они лежат внутри этого прямоугольника, поэтому не рисовались. Раньше их перекрывал легаси-оверлей, который срезы UX-CHROME-PANELS удаляли по одному. Живой проверки (SendInput + захват окна) у срезов не было — только модельные тесты.
+
+Исправление: на время рисования chrome те же блоки отцепляются из `layout` (`take_floating_panel`), рисуются отдельным списком `chrome_popover_dl` по z-index без клипа и возвращаются в дерево (хит-тест и инкрементальный базис видят их на месте). `redraw_requested.rs` кладёт список в `overlay_buf`. Заодно `FindOpen` (Ctrl+F, vim `/`) не вызывал `relayout_chrome_host` — строка поиска не получала `.open`.
+
+Проверено вживую (`.tmp`-зонд, SendInput, `--maximized`): Ctrl+Shift+Q, Ctrl+K, Ctrl+F, F12, Ctrl+Shift+Y, Ctrl+Shift+E, список профилей, кнопка перевода — каждое меняет кадр. Найдено попутно: [BUG-1607](BUG-1607-OPEN.md) (модал сплющен), [BUG-1608](BUG-1608-OPEN.md) (красный тест на `main`).

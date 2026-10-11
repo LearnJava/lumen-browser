@@ -391,6 +391,7 @@ fn run_window_mode_inner(
         chrome_content_area_detached: None,
         chrome_floating_detached: Vec::new(),
         chrome_floating_dl: None,
+        chrome_popover_dl: None,
         chrome_float_offsets: HashMap::new(),
         chrome_float_drag: None,
         chrome_float_last_press: None,
