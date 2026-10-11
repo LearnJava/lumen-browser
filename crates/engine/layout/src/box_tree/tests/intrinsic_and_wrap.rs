@@ -1765,3 +1765,14 @@ fn grid_max_content_column_sizes_to_its_item() {
     let items: Vec<_> = g.children.iter().filter(|c| !matches!(c.kind, super::super::BoxKind::Skip)).collect();
     assert_eq!(items[1].rect.x - items[0].rect.x, 50.0);
 }
+
+/// BUG-1331: Thai has no spaces; `word-break: normal` must wrap it at
+/// dictionary word boundaries instead of overflowing one line.
+#[test]
+fn thai_paragraph_wraps_at_dictionary_boundaries() {
+    use crate::style::{LineBreak, WordBreak};
+    let text = "สวัสดีครับผมชื่อสมชายยินดีที่ได้รู้จัก";
+    let lines = wrap_cjk(text, 100.0, LineBreak::Auto, WordBreak::Normal);
+    assert!(lines.len() > 1, "{lines:?}");
+    assert_eq!(lines.concat(), text);
+}

@@ -1,6 +1,7 @@
 # BUG-1331 — `word-break: normal` не режет тайский, кхмерский и др. (класс SA UAX #14) по словарю
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-11 (P6)
+**Исправление:** `line_break.rs` — прогон SA-серий (тайский, лаосский, бирманский, кхмерский) через trait `ComplexScriptSegmenter` (provisional `icu_segmenter`, compiled data); тесты `thai_paragraph_wraps_at_dictionary_boundaries`, `thai_run_breaks_at_dictionary_words`. `keep-all` пока подавляет и SA (без отдельного разбора).
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 10, `css/css-text`, вторая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/line_break.rs`, `inline_wrap.rs` — для класса SA возможностей переноса нет; `lang` не используется)
 
