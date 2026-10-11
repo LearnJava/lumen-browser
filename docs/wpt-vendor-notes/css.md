@@ -2044,3 +2044,135 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 ### Повторные замеры
 
 [BUG-524](../../bugs/BUG-524-OPEN.md) (`css-scroll-anchoring`: 64 id), [BUG-467](../../bugs/BUG-467-OPEN.md) (`css-font-loading`: 15 id), [BUG-507](../../bugs/BUG-507-OPEN.md) (`css-exclusions`: 12 id), [BUG-521](../../bugs/BUG-521-OPEN.md) (`fill-stroke`: 9 id).
+
+## Сводка по всему `css` — кластер → id → владелец (WPT-RUN-14, агрегирующий срез, 2026-10-11)
+
+Свод таблиц «Кластеры» срезов S1…S28 выше: 747 строк разобраны скриптом по заголовкам таблиц, строки с общей записью (один `BUG-NNN` или одна строка ROADMAP) сложены, id просуммированы. Новых прогонов нет; цифры — те, что записаны в срезах. Статусы записей и очереди сверены с `bugs/`, `BUGS.md`, `ROADMAP.md`, `STATUS-P1…P6.md` на 2026-10-11.
+
+### Покрытие и итог
+
+**Знаменатель — 33 496 automatable id** (сумма знаменателей S1…S28; `manual`/`visual`/`support` в него не входят, в том числе весь `css-gcpm`, `css-round-display`, `css-speech`, `CSS1`). У каждого id есть вердикт, кроме `print-reftest`: исполнителя нет (WPT-RUN-8), id в знаменателе с нулём — S26 224, S4 64, S15 43, S28 26 и по единицам в других срезах. **Итог: 11 922.38 из 33 496 = 35.59 %.**
+
+Оговорки, без которых цифру цитировать нельзя:
+
+1. **Это не один снимок.** Срезы сняты с 2026-10-03 по 2026-10-11 на разных сборках `main`; S28 — на `dev-release` от 2026-10-08, потому что на `main` после UX-LOADING `--bidi-port` не отвечает на `script.evaluate`/`navigate` ([BUG-1597](../../bugs/BUG-1597-OPEN.md)). Пока он открыт, прогон на текущем `main` валидных цифр не даёт; единый пересчёт `css` — после его починки.
+2. Баллы — `score_audit.py`: reftest и crashtest 0/1, testharness — доля пройденных сабтестов.
+3. Сумма id в кластерных таблицах — 22 038. С числом «не зелёных id» из шапок срезов она совпадает у S2…S4, S7…S9, S16…S18, S22…S28 и расходится у S13 (−35), S14 (+67), S15 (−6), S19 (−2), S20 (−8), S21 (−4). Причина расхождения не выяснялась; S14 — срез с нестабильным холодным стартом ([BUG-1273](../../bugs/BUG-1273-FIXED.md)), возможно, дело в нём. S1, S5, S6, S10…S12 числа «не зелёных» в шапке не дают, сверка невозможна. На порядок кластеров это не влияет.
+4. Низкие доли S2, S4, S8, S9 (14–22 %) задают несколько крупных дефектов, а не равномерная слабость модуля: в S8 760 из 998 не зелёных id — `grid-lanes/`; в S4 812 из 878 — фрагментация (flex, блоки и строки, abspos, таблицы, grid).
+
+| Срез | Модули | id | Баллы | Доля |
+|---|---|---|---|---|
+| S1 | css-flexbox | 1 395 | 422.47 | 30.28 % |
+| S2 | css-writing-modes | 1 233 | 173.94 | 14.11 % |
+| S3 | css-ui | 1 121 | 397.82 | 35.49 % |
+| S4 | css-break | 1 177 | 236.67 | 20.11 % |
+| S5 | css-transforms | 928 | 350.51 | 37.77 % |
+| S6 | css-backgrounds | 860 | 296.71 | 34.50 % |
+| S7 | css-grid (1) | 995 | 293.99 | 29.55 % |
+| S8 | css-grid (2) | 1 222 | 240.25 | 19.66 % |
+| S9 | css-text (1) | 1 032 | 223.86 | 21.69 % |
+| S10 | css-text (2) | 931 | 279.50 | 30.02 % |
+| S11 | CSS2: backgrounds, borders | 843 | 358.76 | 42.56 % |
+| S12 | CSS2: normal-flow, margin-padding-clear | 1 496 | 930.10 | 62.17 % |
+| S13 | CSS2: tables, positioning, floats и др. | 1 335 | 430.78 | 32.27 % |
+| S14 | CSS2: text, linebox, fonts, lists и др. | 1 259 | 507.69 | 40.32 % |
+| S15 | CSS2: остальное | 1 424 | 526.72 | 36.99 % |
+| S16 | css-overflow, css-sizing | 1 498 | 487.75 | 32.56 % |
+| S17 | css-multicol, css-contain | 1 297 | 624.28 | 48.13 % |
+| S18 | css-fonts, css-masking, WOFF2 | 1 392 | 584.66 | 42.00 % |
+| S19 | css-images, css-values, css-color | 1 371 | 692.89 | 50.54 % |
+| S20 | selectors, css-pseudo, css-nesting, css-namespaces, css-cascade | 1 371 | 685.62 | 50.01 % |
+| S21 | css-anchor-position, css-position, css-display | 1 126 | 380.03 | 33.75 % |
+| S22 | css-view-transitions, css-conditional, css-variables, css-properties-values-api, css-mixins | 1 350 | 469.74 | 34.80 % |
+| S23 | css-text-decor, css-gaps, css-shapes | 1 143 | 547.90 | 47.94 % |
+| S24 | filter-effects, css-inline, css-tables, css-align | 1 368 | 537.20 | 39.27 % |
+| S25 | css-typed-om, cssom-view, cssom, css-lists, css-counter-styles | 1 282 | 331.68 | 25.87 % |
+| S26 | css-page, css-animations, css-transitions, css-shadow, css-borders, css-scroll-snap | 1 194 | 275.70 | 23.09 % |
+| S27 | css-ruby, css-layout-api, css-box, motion, css-highlight-api, css-paint-api, css-viewport, mediaqueries | 1 059 | 305.98 | 28.89 % |
+| S28 | 30 малых модулей | 794 | 329.18 | 41.46 % |
+| **итого** | | **33 496** | **11 922.38** | **35.59 %** |
+
+### Куда ушли id
+
+Один id — одна строка кластера. Разложение 22 038 id по состоянию записей на 2026-10-11:
+
+| Куда заведено | id | Доля |
+|---|---|---|
+| Открытый `BUG-NNN` или открытая строка ROADMAP | 15 303 | 69.4 % |
+| Уже исправлено (`BUG-NNN-FIXED`, ROADMAP `done`) | 2 885 | 13.1 % |
+| `CSS-SPECS.md` (свойство не разобрано) — очередь P4 | 987 | 4.5 % |
+| Без записи (кластер меньше 20 id или разнородный остаток) | 2 149 | 9.8 % |
+| Не разобрано (причина не установлена пробой) | 714 | 3.2 % |
+
+Открытые записи по очередям (id, ждущие исправления; очередь — по указателю в `STATUS-PN.md`): P3 — 6 356, P1 — 4 814, P6 — 2 377, P4 — 873, P2 — 450, без указателя в очереди — 433. Отдельно `CSS-SPECS.md` (P4) — 987.
+
+### Топ-30 открытых кластеров по числу id
+
+Свод по записи: все срезы, где она встречается, id суммируются. «Очередь» — в каком `STATUS-PN.md` стоит указатель на запись. Первые десять — топ-10 из условия готовности WPT-RUN-14.
+
+| № | Запись | Статус | id | Срезы | Очередь | Главные кластеры |
+|---|---|---|---|---|---|---|
+| 1 | `GRID-LANES` (`ROADMAP.md`) | planned | 760 | S8 | P1 | display: grid-lanes не реализован |
+| 2 | [BUG-1337](../../bugs/BUG-1337-OPEN.md) | OPEN | 747 | S11, S12, S13, S14, S15, S17, S18 | P6 | thin-only: AA-кромка у масштабированной <img> и боксов; thin-only: AA-кромка у масштабированной <img> в эталоне |
+| 3 | [BUG-1366](../../bugs/BUG-1366-OPEN.md) | OPEN | 577 | S14, S15 | P6 | first-letter-punctuation-*; однодвоеточные псевдоэлементы |
+| 4 | `MULTICOL-FRAG` (`ROADMAP.md`) | planned | 464 | S4, S13, S17 | P1 | блоки и строки не режутся; multicol: текст и блоки с детьми в колонках |
+| 5 | `WPT-RUN-15` (`ROADMAP.md`) | planned | 423 | S17, S18, S19, S20, S21, S22, S26 | P2 | рендер перехода: reftest-снимки, *-while-render-blocked,…; reftest-wait: скрипт снимает класс, раннер не ждёт |
+| 6 | `LINEBREAK-UAX14` (`ROADMAP.md`) | planned | 335 | S9 | P1 | i18n/opclns: OP-символ отрывается от следующей буквы; i18n/baspglwj: нет возможности переноса после дефиса,… |
+| 7 | [BUG-1306](../../bugs/BUG-1306-OPEN.md) | OPEN | 334 | S7, S8, S9, S16 | P3 | Ahem: fonts.ready → измерение читает устаревший снимок…; i18n/{ja,zh,other-lang,unknown-lang}: измерение после… |
+| 8 | `FLEX-FRAG` (`ROADMAP.md`) | planned | 278 | S4, S23 | P1 | flex во фрагментации; css-gaps во фрагментированном контейнере |
+| 9 | [BUG-1563](../../bugs/BUG-1563-OPEN.md) | OPEN | 263 | S25 | P3 | Typed OM: new CSSMathSum(a, b) и др. принимают массив, а… |
+| 10 | [BUG-779](../../bugs/BUG-779-OPEN.md) | OPEN | 236 | S27 | P1 (`ROADMAP.md:1121` PAINT-WORKLET, добавлено) | css-layout-api (Houdini Layout); css-paint-api (Houdini Paint) |
+| 11 | `MULTICOL-FRAG-OOF` (`ROADMAP.md`) | planned | 181 | S4, S17 | P1 | abspos во фрагментированном потоке; multicol: abspos / fixed / clip / transform |
+| 12 | [BUG-1264](../../bugs/BUG-1264-OPEN.md) | OPEN | 173 | S2 | P1 | ортогональные потоки |
+| 13 | [BUG-1457](../../bugs/BUG-1457-OPEN.md) | OPEN | 172 | S20, S27 | P1 | css-highlight-api: reftest раскраски ::highlight()…; highlight-псевдоэлементы не рисуются |
+| 14 | [BUG-1362](../../bugs/BUG-1362-OPEN.md) | OPEN | 171 | S13, S24 | P1, P6 | анонимные табличные боксы (CSS 2.1 §17.2.1); Таблицы: ячейка без строки, анонимные табличные боксы |
+| 15 | [BUG-1385](../../bugs/BUG-1385-OPEN.md) | OPEN | 170 | S16 | P3 (`BUGS.md:253`, добавлено) | aspect-ratio: ширина из заданной высоты, незамещаемые; aspect-ratio: auto <ratio> |
+| 16 | `SCROLL-MARKERS` (`ROADMAP.md`) | planned | 165 | S16, S17 | P1 | ::scroll-marker, ::scroll-marker-group,…; multicol: ::column |
+| 17 | [BUG-1570](../../bugs/BUG-1570-OPEN.md) | OPEN | 159 | S25 | P1 | Встроенные counter-style вне списка…; counter-suffix.html |
+| 18 | [BUG-1286](../../bugs/BUG-1286-OPEN.md) | OPEN | 158 | S5 | P3 | SVG: transform-origin, transform-box, CSS-трансформ на… |
+| 19 | [BUG-491](../../bugs/BUG-491-OPEN.md) | OPEN | 153 | S26 | P4 (`CSS-SPECS.md`) | corner-shape: рендер; Парные border-*-radius, box-shadow-*, border-clip |
+| 20 | `GRID-ABSPOS` (`ROADMAP.md`) | planned | 150 | S7, S8 | P1 | abspos внутри grid; subgrid: abspos |
+| 21 | [BUG-1280](../../bugs/BUG-1280-OPEN.md) | OPEN | 135 | S3, S16 | P3 | замещаемые: одна сторона из CSS, процент; aspect-ratio на замещаемом |
+| 22 | `TABLE-FRAG` (`ROADMAP.md`) | planned | 133 | S4, S17 | P1 | таблицы; multicol: таблицы |
+| 23 | [BUG-1520](../../bugs/BUG-1520-OPEN.md) | OPEN | 131 | S23 | P3 | text-emphasis: reftest с эталоном на <ruby> и… |
+| 24 | `GRID-VWM-2` (`ROADMAP.md`) | planned | 126 | S7, S8 | P1 | writing-mode / orthogonal; subgrid: writing-mode / orthogonal |
+| 25 | [BUG-1234](../../bugs/BUG-1234-OPEN.md) | OPEN | 123 | S3, S16, S17, S18, S24, S26, S27 | P3 (`BUGS.md:156`, добавлено) | Значение свойства не интерполируется в…; анимация размеров |
+| 26 | `TABLE-VWM` (`ROADMAP.md`) | planned | 117 | S2 | P1 | таблицы |
+| 27 | `SVG-CLIPPATH` (`ROADMAP.md`) | planned | 114 | S18 | P1 | mask rt: clip-path на SVG-содержимом; mask rt: clip-path: url() / ссылки |
+| 28 | [BUG-1455](../../bugs/BUG-1455-OPEN.md) | OPEN | 114 | S20, S22, S25, S26 | P1 | CSSOM: правила кроме @media/стиля (@font-face,…; CSSCounterStyleRule и дескрипторы @counter-style в CSSOM |
+| 29 | [BUG-1518](../../bugs/BUG-1518-OPEN.md) | OPEN | 111 | S23 | P1 | shape-outside: <shape-box> и <basic-shape> <shape-box> |
+| 30 | [BUG-1586](../../bugs/BUG-1586-OPEN.md) | OPEN | 108 | S27 | P4 (`CSS-SPECS.md`) | margin-trim: блок (block-container-*, 36), flex (23),…; margin-trim: computed-margin-values/* (32) и CSSOM… |
+
+Топ-10 вместе — 4 417 id (20.0 % всех кластеризованных id). Два крупнейших не про раскладку: `BUG-1337` — растр `DrawImage` на дробной позиции даёт 1-px кромку, из-за неё 747 reftest «thin-only» в CSS2 и соседних срезах, `BUG-1366` — однодвоеточные `:before`/`:after`/`:first-line`/`:first-letter` (CSS 2.1 §5.12.3). Оба в очереди P6.
+
+Исправлено после срезов — в топе были бы: [BUG-1277](../../bugs/BUG-1277-FIXED.md) (539), [BUG-1273](../../bugs/BUG-1273-FIXED.md) (446), [BUG-1276](../../bugs/BUG-1276-FIXED.md) (259), [BUG-1322](../../bugs/BUG-1322-FIXED.md) (256), `LINE-CLAMP-BOX` (`ROADMAP.md`) (211), [BUG-1324](../../bugs/BUG-1324-FIXED.md) (119). Их id в таблицах выше не учтены.
+
+### Что не разнесено
+
+Остаток «без записи» и «не разобрано» — кластеры меньше 20 id с разными причинами; заводить на каждый запись значит засорить очереди. Крупнейшие строки «без записи»:
+
+| Срез | Кластер | id |
+|---|---|---|
+| S1 | прочее | 487 |
+| S15 | css1: не разобрано | 89 |
+| S5 | HTML: прочее reftest | 82 |
+| S2 | прочее | 69 |
+| S13 | positioning: не разобрано | 59 |
+| S7 | прочее | 58 |
+| S14 | text: не разобрано | 55 |
+| S16 | css-sizing: не разобрано | 47 |
+
+Крупнейшие строки «не разобрано» (причина пробой не установлена):
+
+| Срез | Кластер | id |
+|---|---|---|
+| S2 | инлайн/baseline в вертикальной строке | 64 |
+| S2 | forms/ | 64 |
+| S20 | не разобрано | 63 |
+| S21 | css-position: прочее (динамическая раскладка abspos, replaced, ::backd… | 31 |
+| S21 | css-anchor-position: прочее (writing-modes, shadow, popover, fieldset,… | 30 |
+| S22 | контейнерные запросы: инвалидация, псевдоэлементы, canvas, counters, c… | 28 |
+
+### Что поправлено в очередях этим срезом
+
+Три записи из топа не стояли ни в одной очереди: `BUG-779` (236 id, `css-layout-api`/`css-paint-api`) — у ROADMAP-задачи `PAINT-WORKLET` (P1) не было указателя в `STATUS-P1.md`; `BUG-1385` (170 id, `aspect-ratio`) и `BUG-1234` (123 id, анимация произвольных свойств) — ни в `STATUS-P3.md`, ни в `STATUS-P6.md`. Указатели добавлены в конец очередей. Ещё 11 открытых записей без указателя (меньше 100 id каждая: `BUG-1467`, `BUG-1372`, `BUG-945`, `BUG-1511`, `GRID-BASELINE-3`, `BUG-1371`, `BUG-1220`, `BUG-1360`, `BUG-480`, `BUG-467`, `BUG-943`) не тронуты — это решение владельцев очередей.

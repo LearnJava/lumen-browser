@@ -60,13 +60,14 @@ DEFAULT_OUT = os.path.join(REPO_ROOT, ".tmp", "wpt-report.html")
 
 # Manifest item types this project's executors can actually produce a result
 # for: testharness (LumenTestharnessExecutor over BiDi), crashtest
-# (LumenCrashtestExecutor over BiDi, WPT-RUN-8-S1: PASS/CRASH/TIMEOUT). The
-# TEST-4 reftest executor is not wired into run_report.py yet — see
-# docs/tasks/p2-test-track.md. Everything else (`reftest`, `print-reftest`,
-# `manual`, `visual`, `support`, ...) never emits `test_start`, so wptrunner
+# (LumenCrashtestExecutor over BiDi, WPT-RUN-8-S1: PASS/CRASH/TIMEOUT),
+# print-reftest (LumenPrintRefTestExecutor over `--print-to-pdf`, WPT-RUN-8-S2:
+# PASS/FAIL/TIMEOUT/CRASH). The TEST-4 reftest executor is not wired into
+# run_report.py yet — see docs/tasks/p2-test-track.md. Everything else
+# (`reftest`, `manual`, `visual`, `support`, ...) never emits `test_start`, so wptrunner
 # reports it as MISSING — permanently, on every run — which
 # `expectations.classify()` then flags as a REGRESSION forever.
-RUNNABLE_ITEM_TYPES = {"testharness", "test262", "crashtest"}
+RUNNABLE_ITEM_TYPES = {"testharness", "test262", "crashtest", "print-reftest"}
 
 _manifest_index_cache = None
 
