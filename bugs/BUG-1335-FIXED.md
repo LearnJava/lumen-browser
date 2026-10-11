@@ -1,6 +1,6 @@
 # BUG-1335 — `<table>` / `display: table` без `width` занимает всю ширину контейнера, если ширина колонок задана не явно
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/box_tree/table.rs:616` `table_intrinsic_content_width`, `layout_dispatch.rs:1778` — охрана `intrinsic > 0.0`)
 
@@ -40,3 +40,8 @@ A/B с `table{width:fit-content}` на 356 id с таблицей: 26 → `ident
 ## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
 
 `css/css-tables`: 23 testharness-id падают на ширине таблицы, равной ширине контейнера (`html5-table-formatting-1/2`, `html-to-css-mapping-1`, `caption`, `tbody-height-redistribution`, `visibility-collapse-col-*`/`-colspan-*`/`-rowcol-*`, `visibility-hidden-col-001`, `visibility-hidden-nested-001`, `distribution-algo-1/2`, `computing-table-width-1`, `colspan-001…003`): `got 492` (`main{float:left;width:50%}`), `got 1008`, `got 1024`. Внутри `float`/`inline-block` ширина верна, но у таблицы с несколькими колонками — максимальная колонка вместо суммы ([BUG-1531](BUG-1531-OPEN.md)).
+
+
+## Исправление (P6, 2026-10-12)
+
+`table_intrinsic_content_width` теперь берёт для колонок без явной ширины max-content ячеек (`scan_row_content_widths`), охрана `> 0` снята (пустая таблица без колонок по-прежнему растягивается); `box_min_max_content_w` учитывает определённый `width` блока. Border-spacing при `collapse` = 0. Тесты: `box_tree/tests/table_shrink_to_fit.rs`. Пиксельный прогон `graphic_tests/run.py` в окружении сессии не удался (калибровка TEST-00, захват экрана) — `dump_golden.py` 12/12. Остаток для вложенных таблиц в ячейке (max-content = 0) — BUG-1531.
