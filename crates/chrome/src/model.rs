@@ -112,6 +112,8 @@ pub struct ChromeModel {
     pub console: ChromeConsoleModel,
     /// `#networkPanel` snapshot (UX-CHROME-PANELS) — mirrors `NetworkPanel`.
     pub network: ChromeNetworkModel,
+    /// `#readLaterPanel` snapshot (UX-CHROME-PANELS) — mirrors `ReadLaterPanel`.
+    pub read_later: ChromeReadLaterModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -621,6 +623,34 @@ pub struct ChromeNetworkModel {
     pub rows: Vec<ChromeNetworkRowModel>,
 }
 
+/// One `.rl-row` of `#rlList` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeReadLaterRowModel {
+    /// Store id; round-trips through `data-read-later-id` on both buttons.
+    pub id: i64,
+    /// Page title.
+    pub title: String,
+    /// `host  ·  date` line.
+    pub meta: String,
+    /// Badge text (`Unread` / `Read` / `Archived`).
+    pub status: String,
+    /// `true` paints the green read badge instead of the blue unread one.
+    pub read: bool,
+}
+
+/// `#readLaterPanel` snapshot (UX-CHROME-PANELS) — mirrors `ReadLaterPanel`.
+///
+/// `rows` is the already-windowed slice (the shell owns the wheel scroll).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeReadLaterModel {
+    /// `true` shows the panel — mirrors `ReadLaterPanel::visible`.
+    pub open: bool,
+    /// Number of saved pages (shown in the header).
+    pub total: usize,
+    /// Rows rendered into `#rlList`.
+    pub rows: Vec<ChromeReadLaterRowModel>,
+}
+
 /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeAccessModel {
@@ -973,6 +1003,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_shortcuts(doc, &model.shortcuts);
     bind_console(doc, &model.console);
     bind_network(doc, &model.network);
+    bind_read_later(doc, &model.read_later);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
@@ -1647,6 +1678,49 @@ fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
             append_text(doc, cell, text);
             attach_child(doc, node, cell);
         }
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#readLaterPanel`'s `.open` class, writes the saved-page count into
+/// the header and rebuilds the `.rl-row`s of `#rlList` from
+/// [`ChromeReadLaterModel::rows`] (UX-CHROME-PANELS).
+fn bind_read_later(doc: &mut Document, rl: &ChromeReadLaterModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::READ_LATER_PANEL) else { return };
+    set_class_token(doc, panel, "open", rl.open);
+    if let Some(title) = doc.find_by_id(crate::ids::RL_TITLE) {
+        let text = if rl.total == 0 { "Read Later".to_owned() } else { format!("Read Later ({})", rl.total) };
+        set_text(doc, title, &text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::RL_LIST) else { return };
+    remove_children_with_class(doc, list, "rl-row");
+    for row in &rl.rows {
+        let node = doc.create_element(QualName::html("div"));
+        set_attr(doc, node, "class", "rl-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "rl-text");
+        // The text block opens the page; it carries the id itself because
+        // `chrome_action_at` only sees the `data-action`-carrying node.
+        set_attr(doc, text, "data-action", "read-later-open");
+        set_attr(doc, text, "data-read-later-id", &row.id.to_string());
+        for (class, value) in [("rl-title", &row.title), ("rl-meta", &row.meta)] {
+            let line = doc.create_element(QualName::html("div"));
+            set_attr(doc, line, "class", class);
+            append_text(doc, line, value);
+            attach_child(doc, text, line);
+        }
+        attach_child(doc, node, text);
+        let badge = doc.create_element(QualName::html("span"));
+        set_attr(doc, badge, "class", if row.read { "rl-badge read" } else { "rl-badge" });
+        append_text(doc, badge, &row.status);
+        attach_child(doc, node, badge);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "rl-delete");
+        set_attr(doc, del, "data-action", "read-later-delete");
+        set_attr(doc, del, "aria-label", "Удалить");
+        set_attr(doc, del, "data-read-later-id", &row.id.to_string());
+        append_text(doc, del, "×");
+        attach_child(doc, node, del);
         attach_child(doc, list, node);
     }
 }
@@ -3782,6 +3856,46 @@ mod tests {
         assert!(!has_class(&doc, panel, "open"));
         let list = doc.find_by_id(crate::ids::DT_NETWORK).expect("list");
         assert!(find_descendants_by_class(&doc, list, "net-row").is_empty());
+    }
+
+    #[test]
+    fn read_later_panel_opens_and_renders_rows() {
+        let mut doc = parse_asset();
+        let row = |id: i64, read: bool| ChromeReadLaterRowModel {
+            id,
+            title: format!("Page {id}"),
+            meta: "example.com  ·  2024-01-15".to_owned(),
+            status: if read { "Read" } else { "Unread" }.to_owned(),
+            read,
+        };
+        let model = ChromeModel {
+            read_later: ChromeReadLaterModel { open: true, total: 2, rows: vec![row(7, false), row(9, true)] },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::READ_LATER_PANEL).expect("asset has #readLaterPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::RL_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Read Later (2)");
+        let list = doc.find_by_id(crate::ids::RL_LIST).expect("list");
+        let rows = find_descendants_by_class(&doc, list, "rl-row");
+        assert_eq!(rows.len(), 2);
+        let badges = find_descendants_by_class(&doc, list, "rl-badge");
+        assert!(!has_class(&doc, badges[0], "read"));
+        assert!(has_class(&doc, badges[1], "read"));
+        let del = find_descendants_by_class(&doc, list, "rl-delete");
+        assert_eq!(doc.get(del[1]).get_attr("data-action"), Some("read-later-delete"));
+        assert_eq!(doc.get(del[1]).get_attr("data-read-later-id"), Some("9"));
+        let open = find_descendants_by_class(&doc, list, "rl-text");
+        assert_eq!(doc.get(open[0]).get_attr("data-action"), Some("read-later-open"));
+        assert_eq!(doc.get(open[0]).get_attr("data-read-later-id"), Some("7"));
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::READ_LATER_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::RL_LIST).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "rl-row").is_empty());
+        let title = doc.find_by_id(crate::ids::RL_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Read Later");
     }
 
     #[test]

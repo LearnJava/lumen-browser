@@ -648,6 +648,26 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .arc-actions button{ width:22px; height:22px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; justify-content:center; color:var(--text-secondary); }
 .arc-actions button:hover{ background:var(--surface-2); color:var(--text-primary); }
 
+.read-later-panel{
+  position:absolute; right:4px; top:4px; width:420px; background:var(--surface-0);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; z-index:70; overflow:hidden;
+}
+.read-later-panel.open{ display:flex; }
+.rl-header{ display:flex; align-items:center; padding:10px 12px; border-bottom:1px solid var(--stroke); font-weight:600; font-size:12.5px; }
+.rl-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.rl-close:hover{ background:var(--surface-2); }
+.rl-row{ display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--stroke); }
+.rl-row:hover{ background:var(--surface-1); }
+.rl-text{ flex:1; min-width:0; }
+.rl-title{ font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rl-meta{ font-size:10.5px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rl-badge{ flex:none; padding:1px 6px; border-radius:var(--radius-sm); font-size:9px; font-weight:700; color:#fff; background:rgba(55,115,210,.86); }
+.rl-badge.read{ background:rgba(55,150,75,.8); }
+.rl-delete{ flex:none; width:22px; height:22px; border:none; background:none; font-size:14px; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.rl-delete:hover{ background:var(--surface-2); color:var(--red-badge); }
+#rlList:empty::before{ content:"No saved pages yet. Use @read-later <url> to save."; display:block; padding:16px 12px; font-size:12px; color:var(--text-secondary); }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1536,6 +1556,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Read-later panel (UX-CHROME-PANELS) -->
+          <div class="read-later-panel" id="readLaterPanel">
+            <div class="rl-header"><span id="rlTitle">Read Later</span><button class="rl-close" data-action="toggle-read-later" aria-label="Read Later"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div id="rlList"><div class="rl-row"><div class="rl-text" data-action="read-later-open"><div class="rl-title">Saved page</div><div class="rl-meta">example.com</div></div><span class="rl-badge">Unread</span><button class="rl-delete" data-action="read-later-delete" aria-label="Удалить">×</button></div></div>
           </div>
 
           <!-- Command palette -->

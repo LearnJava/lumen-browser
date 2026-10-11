@@ -934,6 +934,7 @@ impl Lumen {
                 if self.read_later_panel.visible {
                     self.refresh_read_later();
                 }
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::ToggleReaderView => {
