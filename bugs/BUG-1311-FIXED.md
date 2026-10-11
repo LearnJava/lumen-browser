@@ -1,6 +1,6 @@
 # BUG-1311 — `align-self`/`justify-self: stretch` не растягивает replaced-элемент (`<img>`, `<canvas>`, `<input type=range>`) в grid-области
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-11 (P6)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 7, `css/css-grid`)
 **Область:** layout (`crates/engine/layout/src/box_tree/grid.rs` — `stretch` у item'а с внутренними размерами/пропорцией)
 
@@ -27,3 +27,9 @@ WPT-RUN-14 срез 7: `alignment/replaced-alignment-with-aspect-ratio-001…009
 ## Как проверить
 
 `css/css-grid/alignment/replaced-alignment-with-aspect-ratio-001.html`, `grid-item-aspect-ratio-stretch-1.html`.
+
+## Исправление (2026-10-11)
+
+`<canvas>` помечает подставленный размер `*_is_intrinsic_hint` и получает `aspect_ratio` из bitmap (`build.rs`). В `post_final_item` (`grid_trampoline.rs`) у replaced с пропорцией `normal` = `start`; явный `align-self`/`justify-self: stretch` растягивает auto-ось, вторую выводит из пропорции, при двух `stretch` — область. Тесты: `tests/grid_replaced_stretch.rs`. WPT-прогон не делался; `replaced-alignment-with-aspect-ratio-001` проверен дампом (100×100).
+
+**Остаток:** form controls (`stretch-grid-item-*`, `input type=range`) — BUG-1609.
