@@ -167,30 +167,57 @@ impl Lumen {
             // captures clicks on its buttons / close / body before they
             // reach the page. A click outside the panel closes it.
             if self.downloads.visible {
-                let win = (
-                    self.viewport_width_css() as u32,
-                    self.window_height_css() as u32,
-                );
-                if let Some(action) = download::hit_test(&self.downloads, x_css, y_css, win) {
-                    use download::DownloadAction;
-                    match action {
-                        DownloadAction::Open(id) => {
-                            self.downloads.open_download(id);
+                let path = self.chrome_hit_test(x_css, y_css).map(|h| h.path).unwrap_or_default();
+                let button = path.iter().find_map(|&nid| {
+                    let action = self
+                        .chrome_data_attr(nid, "data-dl")
+                        .and_then(|v| lumen_chrome::ChromeDownloadAction::from_attr(&v));
+                    let id = self.chrome_data_id(nid, "data-dl-id");
+                    action.zip(id).map(|(a, id)| (a, id as u32))
+                });
+                let is_clear =
+                    path.iter().any(|&nid| self.chrome_data_attr(nid, "data-dl").as_deref() == Some("clear"));
+                let in_panel = path.iter().any(|&nid| {
+                    self.chrome_doc
+                        .as_ref()
+                        .is_some_and(|(doc, _)| doc.get(nid).get_attr("id") == Some(lumen_chrome::ids::DOWNLOADS_PANEL))
+                });
+                if let Some((action, raw)) = button {
+                    if let Some(id) = self.downloads.entries().iter().map(|e| e.id).find(|id| id.raw() == raw) {
+                        match action {
+                            lumen_chrome::ChromeDownloadAction::Open => {
+                                self.downloads.open_download(id);
+                            }
+                            lumen_chrome::ChromeDownloadAction::Reveal => {
+                                self.downloads.show_in_folder(id);
+                            }
+                            lumen_chrome::ChromeDownloadAction::Cancel => self.downloads.cancel(id),
                         }
-                        DownloadAction::Reveal(id) => {
-                            self.downloads.show_in_folder(id);
-                        }
-                        DownloadAction::Cancel(id) => {
-                            self.downloads.cancel(id);
-                        }
-                        DownloadAction::ClearFinished => {
-                            self.downloads.clear_finished();
-                        }
-                        DownloadAction::Close | DownloadAction::Outside => {
-                            self.downloads.close();
-                        }
-                        DownloadAction::Inside => {}
                     }
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                    return;
+                }
+                if is_clear {
+                    self.downloads.clear_finished();
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                    return;
+                }
+                // `×` (`data-action="toggle-downloads"`) falls through to the
+                // chrome dispatch below; the rest of the panel swallows the
+                // click, a click outside closes the popover.
+                let on_action = path.iter().any(|&nid| {
+                    self.chrome_doc
+                        .as_ref()
+                        .is_some_and(|(doc, _)| doc.get(nid).get_attr("data-action").is_some())
+                });
+                if in_panel && !on_action {
+                    return;
+                }
+                if !in_panel {
+                    self.downloads.close();
+                    self.relayout_chrome_host();
                     self.request_redraw();
                     return;
                 }

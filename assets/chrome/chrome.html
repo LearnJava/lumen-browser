@@ -551,6 +551,10 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 }
 .downloads-panel.open{ display:flex; }
 .dl-header{ display:flex; align-items:center; padding:10px 12px; border-bottom:1px solid var(--stroke); font-weight:600; font-size:12.5px; }
+.dl-clear{ display:none; margin-left:auto; font-size:10.5px; padding:4px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-secondary); }
+.dl-clear:hover{ background:var(--surface-2); }
+.dl-header.has-finished .dl-clear{ display:block; }
+.dl-header.has-finished .dl-close{ margin-left:6px; }
 .dl-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
 .dl-close:hover{ background:var(--surface-2); }
 .dl-list{ overflow-y:auto; padding:8px; }
@@ -1634,7 +1638,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 
           <!-- Downloads panel -->
           <div class="downloads-panel" id="downloadsPanel">
-            <div class="dl-header">Загрузки<button class="dl-close" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="dl-header">Загрузки<button class="dl-clear" data-dl="clear">Очистить</button><button class="dl-close" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-x"/></svg></button></div>
             <div class="dl-list">
               <div class="dl-card" id="dlActive">
                 <div class="dl-row"><div class="dl-icon">PDF</div><div><div class="dl-name">lumen-design-system.pdf</div><div class="dl-meta" id="dlMeta">2.1 MB — идёт загрузка…</div></div></div>
