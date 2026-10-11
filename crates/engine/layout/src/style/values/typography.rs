@@ -625,8 +625,8 @@ pub fn resolve_match_parent(parent: TextAlign, parent_direction: Direction) -> T
     }
 }
 
-/// Компоненты наследуемых свойств CSS Text, которые движок хранит только ради
-/// computed-значения (CSSOM, BUG-1325): layout их не читает. Всё поле наследуется целиком —
+/// Компоненты наследуемых свойств CSS Text, которые движок хранит ради computed-значения
+/// (CSSOM, BUG-1325); layout читает только `indent_*`. Всё поле наследуется целиком —
 /// `text-transform`, `text-indent` и `tab-size` наследуются все.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TextCssomExtra {
@@ -636,6 +636,10 @@ pub struct TextCssomExtra {
     pub indent_hanging: bool,
     /// `each-line` из `text-indent`.
     pub indent_each_line: bool,
+    /// Безымянный прогон строк идёт после блока в потоке (`<br>`, вложенный `<div>`): его
+    /// первая строка не первая в контейнере, `text-indent` к ней не относится. Выставляет
+    /// layout только на стиле самого прогона.
+    pub indent_continuation: bool,
     /// Язык элемента для регистра `text-transform` (`lang`/`xml:lang`, наследуется).
     pub case_lang: CaseLang,
     /// `tab-size: <number>` — число пробелов, как записано. `None` — задана `<length>`

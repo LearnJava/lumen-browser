@@ -1,6 +1,8 @@
 # BUG-1332 — `text-indent: <длина> each-line` и `hanging` разбираются, но не применяются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6)
+
+**Исправление:** `LineIndent` в `inline_wrap.rs` (позиции первой / после мягкого переноса / после принудительного разрыва строки); флаги `hanging`/`each-line` читает `layout_dispatch.rs`. Прогон после блока в потоке помечается `indent_continuation` (`block_flow_trampoline.rs`): `text-indent` относится к первой строке контейнера, а не к каждому прогону после `<br>`.
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 10, `css/css-text`, вторая половина)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — выбор отступа строки; `style/apply/text.rs` — ключевые слова `each-line`/`hanging` не доходят до `ComputedStyle`)
 

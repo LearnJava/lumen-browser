@@ -670,15 +670,69 @@ pub(crate) fn pretty_wrap(
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
-/// `pre_space` / `post_space` (inline box model: margin + border + padding).
-/// `white_space` controls whether whitespace is preserved (pre/pre-wrap).
+/// CSS Text L3 §7.1: стартовые позиции строк при `text-indent` (с `hanging`/`each-line`).
+#[derive(Clone, Copy)]
+pub(crate) struct LineIndent {
+    /// Отступ первой строки.
+    pub(crate) first: f32,
+    /// Отступ строки, начатой мягким переносом.
+    pub(crate) soft: f32,
+    /// Отступ строки после принудительного разрыва (`<br>`, перевод строки).
+    pub(crate) after_forced: f32,
+}
+
+impl LineIndent {
+    /// Только первая строка отступает на `first`.
+    pub(crate) fn first_line(first: f32) -> Self {
+        Self { first, soft: 0.0, after_forced: 0.0 }
+    }
+
+    /// `length` + флаги `hanging`/`each-line`; `inset` — сдвиг первой строки сверх отступа;
+    /// `continuation` — прогон идёт после блока в потоке, его первая строка не стартовая
+    /// (если не `each-line`).
+    pub(crate) fn new(length: f32, hanging: bool, each_line: bool, inset: f32, continuation: bool) -> Self {
+        let on = |indented: bool| if indented { length } else { 0.0 };
+        let start_line = !continuation || each_line;
+        Self {
+            first: on(start_line != hanging) + inset,
+            soft: on(hanging),
+            after_forced: on(each_line != hanging),
+        }
+    }
+}
+
+/// Отступ только у первой строки; см. [`wrap_inline_run_indented`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
     container_font_size: f32,
     text_indent: f32,
+    viewport: Size,
+    m: &dyn TextMeasurer,
+    hyphens: Hyphens,
+    hp: &dyn HyphenationProvider,
+    white_space: crate::style::WhiteSpace,
+    word_break: WordBreak,
+    overflow_wrap: OverflowWrap,
+    line_break: LineBreak,
+) -> Vec<Vec<InlineFrag>> {
+    wrap_inline_run_indented(
+        segments, max_width, container_font_size, LineIndent::first_line(text_indent),
+        viewport, m, hyphens, hp, white_space, word_break, overflow_wrap, line_break,
+    )
+}
+
+/// Разбивает прогон сегментов на строки, склеивая слова
+/// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
+/// `pre_space` / `post_space` (inline box model: margin + border + padding).
+/// `white_space` controls whether whitespace is preserved (pre/pre-wrap).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wrap_inline_run_indented(
+    segments: &[InlineSegment],
+    max_width: f32,
+    container_font_size: f32,
+    indent: LineIndent,
     viewport: Size,
     m: &dyn TextMeasurer,
     hyphens: Hyphens,
@@ -708,7 +762,7 @@ pub(crate) fn wrap_inline_run(
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
     let mut current_line: Vec<InlineFrag> = Vec::new();
     // CSS Text L3 §7.1: text-indent только на первой строке.
-    let mut current_x = text_indent;
+    let mut current_x = indent.first;
     // CSS Text L3 §4.1.1 — whether the previous segment ended with collapsible
     // whitespace, so the first word of the next segment gets one inter-word gap.
     // A segment boundary with no whitespace on either side joins tightly (e.g.
@@ -725,7 +779,7 @@ pub(crate) fn wrap_inline_run(
         // Forced line break from \n in white-space: pre/pre-wrap text.
         if seg.forced_break {
             result.push(std::mem::take(&mut current_line));
-            current_x = 0.0;
+            current_x = indent.after_forced;
             prev_trailing_ws = false;
             pre_wrap_space_before = false;
             continue;
@@ -748,6 +802,7 @@ pub(crate) fn wrap_inline_run(
                 let starts_space = seg.text.starts_with([' ', '\t']);
                 let params = super::inline_wrap_preserved::PreservedWrap {
                     max_width, viewport, m, white_space, word_break, overflow_wrap, line_break,
+                    soft_x: indent.soft,
                     break_before: !no_break_before
                         && pre_wrap_space_before
                         && (white_space == crate::style::WhiteSpace::BreakSpaces || !starts_space),
@@ -776,7 +831,7 @@ pub(crate) fn wrap_inline_run(
             let gap = if current_line.is_empty() { 0.0 } else { img_space };
             if !current_line.is_empty() && current_x + gap + seg.pre_space + img_w > max_width {
                 result.push(std::mem::take(&mut current_line));
-                current_x = 0.0;
+                current_x = indent.soft;
             }
             let line_gap = if current_line.is_empty() { 0.0 } else { img_space };
             current_x += line_gap + seg.pre_space;
@@ -906,7 +961,7 @@ pub(crate) fn wrap_inline_run(
                             // Nothing fits in what is left of this line — wrap
                             // and measure again against the full width.
                             result.push(std::mem::take(&mut current_line));
-                            current_x = 0.0;
+                            current_x = indent.soft;
                             continue;
                         }
                         // The line is empty and even the shortest chunk
@@ -944,7 +999,7 @@ pub(crate) fn wrap_inline_run(
                     start = end;
                     if start < display_word.len() {
                         result.push(std::mem::take(&mut current_line));
-                        current_x = 0.0;
+                        current_x = indent.soft;
                     }
                 }
                 current_x += post;
@@ -989,7 +1044,7 @@ pub(crate) fn wrap_inline_run(
                         merged_sources: Vec::new(),
                     });
                     result.push(std::mem::take(&mut current_line));
-                    current_x = 0.0;
+                    current_x = indent.soft;
                     // Emit suffix as first fragment on new line.
                     let sfx_w = measure_text_w_varied(&sfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                     current_line.push(InlineFrag {
@@ -1050,7 +1105,7 @@ pub(crate) fn wrap_inline_run(
                         rest = tail;
                         if !rest.is_empty() {
                             result.push(std::mem::take(&mut current_line));
-                            current_x = 0.0;
+                            current_x = indent.soft;
                         }
                     }
                     current_x += post;
@@ -1061,7 +1116,7 @@ pub(crate) fn wrap_inline_run(
                 // line has nowhere to wrap to: it stays and overflows.
                 if needs_wrap {
                     result.push(std::mem::take(&mut current_line));
-                    current_x = 0.0;
+                    current_x = indent.soft;
                 }
             }
 
@@ -1106,7 +1161,7 @@ pub(crate) fn wrap_inline_run(
                     rest = tail;
                     if !rest.is_empty() {
                         result.push(std::mem::take(&mut current_line));
-                        current_x = 0.0;
+                        current_x = indent.soft;
                     }
                 }
                 current_x += post;

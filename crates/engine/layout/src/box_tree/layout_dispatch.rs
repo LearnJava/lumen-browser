@@ -881,7 +881,12 @@ pub(super) fn dispatch_box(
             } else {
                 content_width
             };
-            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport) + first_line_inset;
+            let indent_len = s.text_indent.resolve_or_zero(em, cb, viewport);
+            let text_indent_px = indent_len + first_line_inset;
+            let line_indent = super::inline_wrap::LineIndent::new(
+                indent_len, s.text_extra.indent_hanging, s.text_extra.indent_each_line, first_line_inset,
+                s.text_extra.indent_continuation,
+            );
             // UAX #9 P2–I2 once per paragraph, before any wrapping trial: the
             // result splits segments at embedding-level boundaries, and every
             // re-wrap (::first-line pass B, text-wrap: balance/pretty) must see
@@ -948,8 +953,8 @@ pub(super) fn dispatch_box(
                         fl_seg
                     })
                     .collect();
-                let mut lines_a = wrap_inline_run(
-                    &fl_segments, wrap_width, fls.font_size, text_indent_px, viewport,
+                let mut lines_a = super::inline_wrap::wrap_inline_run_indented(
+                    &fl_segments, wrap_width, fls.font_size, line_indent, viewport,
                     m, Hyphens::None, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                 );
                 if lines_a.len() <= 1 {
@@ -987,7 +992,7 @@ pub(super) fn dispatch_box(
                     all
                 }
             } else {
-                let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
+                let raw_lines = super::inline_wrap::wrap_inline_run_indented(segments, wrap_width, s.font_size, line_indent, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
                 // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
                 // wrapping is active (wrap_width is finite) and text actually wraps.
                 let clamp_balance = line_clamp_flow::balance_limit(&s, raw_lines.len());

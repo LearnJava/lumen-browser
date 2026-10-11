@@ -364,6 +364,14 @@ fn step_child(
             _ => marker_shift = inside_marker_w,
         }
     }
+    // CSS Text L3 §7.1: `text-indent` belongs to the container's first line; a run that
+    // follows an in-flow block (`<br>`, nested `<div>`) continues the container.
+    if frame.init.seen_inflow_child
+        && matches!(frame.b.children[i].kind, BoxKind::InlineRun { .. })
+        && !frame.b.children[i].style.text_extra.indent_continuation
+    {
+        Arc::make_mut(&mut frame.b.children[i].style).text_extra.indent_continuation = true;
+    }
     let child_y = frame.init.child_y;
     // Normal flow: narrow x/width for active floats.
     let flow_left  = frame.init.fc.left_edge_at(child_y, content_x);
