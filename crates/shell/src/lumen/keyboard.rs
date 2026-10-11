@@ -917,6 +917,7 @@ impl Lumen {
             }
             KeyCommand::DevInspector => {
                 self.dom_inspector.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::DevNetwork => {

@@ -36,6 +36,7 @@ impl Lumen {
             } else if lines < 0.0 {
                 self.dom_inspector.scroll_down(lines.abs().ceil() as usize);
             }
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }

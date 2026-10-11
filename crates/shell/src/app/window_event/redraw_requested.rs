@@ -1002,34 +1002,9 @@ impl Lumen {
         // Privacy network panel: `#privacyPanel` in the engine chrome
         // (`bind_privacy`), toggled by Ctrl+Shift+Y.
 
-        // DevTools DOM inspector: right-docked computed-style side panel.
-        // Viewport-locked; the box-model overlay for the hovered node is
-        // emitted into the scrollable page layer below.
-        if self.dom_inspector.visible {
-            let dpr = self
-                .renderer
-                .as_ref()
-                .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                .max(1e-6);
-            let (pw, ph) = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let win_css = (
-                (pw as f32 / dpr) as u32,
-                (ph as f32 / dpr) as u32,
-            );
-            // Feed the inspector's Network tab a fresh request snapshot
-            // from the shared NetworkLog (CC-9).
-            let net_entries = self.network_panel.entries_clone();
-            self.dom_inspector.set_network_entries(net_entries);
-            let mut insp_cmds = devtools::inspector::build_inspector_panel(
-                &self.dom_inspector,
-                win_css,
-                toolbar::CHROME_H,
-            );
-            overlay_buf.append(&mut insp_cmds);
-        }
+        // DevTools DOM inspector side panel: `#inspPanel` in the engine
+        // chrome (`bind_inspector`); the box-model overlay of the hovered node
+        // is emitted into the scrollable page layer below.
 
         // Vertical tab panel: docked left sidebar, below the tab bar.
         // Rendered before the tab bar so tab bar draws on top.
