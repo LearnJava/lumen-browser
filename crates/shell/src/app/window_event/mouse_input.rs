@@ -55,6 +55,7 @@ impl Lumen {
                     let collapsed = group.is_some_and(|g| self.tab_strip.is_collapsed(g));
                     self.tab_context_menu
                         .open_for(idx, pinned, grouped, collapsed, x_css, y_css);
+                    self.relayout_chrome_host();
                     self.request_redraw();
                     return;
                 }
@@ -135,19 +136,17 @@ impl Lumen {
             // click — picking a row runs the action, anywhere else just
             // dismisses it. The click never reaches the page / panels.
             if self.tab_context_menu.is_open() {
-                let win_w = self.viewport_width_css();
-                let win_h = self.window_height_css();
-                let action = tabs::context_menu::action_at(
-                    &self.tab_context_menu,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                );
+                let action = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                    hit.path.iter().find_map(|&nid| {
+                        self.chrome_data_attr(nid, "data-tab-ctx")
+                            .and_then(|v| tabs::context_menu::MenuAction::from_attr(&v))
+                    })
+                });
                 self.tab_context_menu.close();
                 if let Some(action) = action {
                     self.exec_tab_menu_action(action, event_loop);
                 }
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }

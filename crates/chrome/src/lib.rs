@@ -19,7 +19,7 @@
 mod gate;
 mod model;
 pub use model::{
-    ChromeAccessModel, ChromeConsoleLineModel, ChromeConsoleModel, ChromeNetworkModel, ChromeNetworkRowModel, ChromeFocusModel, ChromeInspectorModel, ChromeInspectorRowModel, ChromeNoteModel, ChromePrivacyModel, ChromePrivacyRowModel, ChromeReadLaterModel, ChromeReadLaterRowModel,
+    ChromeAccessModel, ChromeConsoleLineModel, ChromeConsoleModel, ChromeNetworkModel, ChromeNetworkRowModel, ChromeFocusModel, ChromeInspectorModel, ChromeInspectorRowModel, ChromeNoteModel, ChromeTabCtxModel, ChromePrivacyModel, ChromePrivacyRowModel, ChromeReadLaterModel, ChromeReadLaterRowModel,
     bind_model, bind_model_tracked, ChromeArchiveEntryModel, ChromeBookmarkCardModel, ChromeBookmarkFolderModel,
     ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadModel,
     ChromeDropdownModel, ChromeFindModel, ChromeMutations,

@@ -268,6 +268,7 @@ impl Lumen {
             && !key_event.repeat
         {
             self.tab_context_menu.close();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
