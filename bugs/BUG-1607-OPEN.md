@@ -1,9 +1,17 @@
-# BUG-1607 — shell: `bug341_s20_keystroke_moves_subtrees_without_dispatching_workers` красный на `main`
+# BUG-1607 — chrome: `.modal` с `max-height:82%` сплющивается до ~100 px (панель спецвозможностей показывает одну строку)
 
 **Статус:** OPEN
-**Заведён:** 2026-10-11 (замечен при гейте BUG-1605; воспроизведён на чистом `main` `d1bf86fb9`, не из-за правки)
-**Область:** shell/chrome (`crates/shell/src/tests/chrome_incremental.rs:549`)
+**Заведён:** 2026-10-11 (найден живой проверкой при исправлении [BUG-1605](BUG-1605-FIXED.md))
+**Область:** layout (flex column + `max-height:%` внутри `position:absolute; inset:0` flex-контейнера) / `assets/chrome/chrome.html` (`.modal`, `.modal-body`)
 
 ## Симптом
 
-`cargo test -p lumen-shell --bin lumen bug341_s20` падает: нажатие клавиши в омнибоксе запускает 1 rayon fan-out при 11 переиспользованных поддеревьях. Census: `built: 39, reused: 11, prev_index_visited: 19, fanouts: 1, display_probes: 14, style_misses: 21`. Порог «≥8 детей» считает, судя по сообщению теста, переносимых, а не строящихся детей — вероятно, `chrome.html` получил контейнер с ≥8 перестраиваемыми детьми после срезов UX-CHROME-PANELS. Там же `bug341_s21_...` падает только при параллельном прогоне (общий счётчик индекса) и проходит с `--test-threads=1`.
+Ctrl+Shift+Q после BUG-1605 показывает модал «Специальные возможности», но высотой ~100 px: заголовок, одна строка «Размер шрифта» с обрезанными пилюлями и кнопка «Готово» поверх неё; тело с `overflow-y:auto` получило полосу прокрутки. Ожидается высота по содержимому (все четыре строки), как в макете. Палитра команд того же окна рисуется нормально.
+
+## Воспроизведение
+
+`lumen.exe --maximized <страница>`, Ctrl+Shift+Q, снимок окна. Правила: `.modal-overlay{position:absolute; inset:0; display:flex; align-items:center}`, `.modal{max-height:82%; display:flex; flex-direction:column; overflow:hidden}`, `.modal-body{overflow-y:auto; flex:1}`.
+
+## Направление
+
+Выяснить, как layout разрешает процентный `max-height` и авто-высоту flex-колонки с `flex:1; overflow:auto` ребёнком: вероятно, `flex-basis` тела считается как 0 / min-content при определённой высоте контейнера. Проверить `#certOverlay`, `#printOverlay`, `#shortcutsOverlay` — те же классы.
