@@ -1,4 +1,4 @@
-# BUG-1607 — EME: `navigator.requestMediaKeySystemAccess` не определён (696 TypeError в `encrypted-media`)
+# BUG-1610 — EME: `navigator.requestMediaKeySystemAccess` не определён (696 TypeError в `encrypted-media`)
 
 **Статус:** OPEN
 **Заведён:** 2026-10-11 (P2, WPT-RUN-7 срез 68, baseline `encrypted-media`)

@@ -10,4 +10,4 @@ Test category, added 2026-07-28 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 
 ## Регрессионный гейт
 
-WPT-RUN-7 срез 68 (2026-10-11): baseline в `tests/wpt/metadata/encrypted-media/` (99 `.ini`, 69/99 harness OK, 29/256 подтестов), гейт `run_report.py --all --root encrypted-media --recursive --check`. Главная причина провалов — [BUG-1607](../../bugs/BUG-1607-OPEN.md). Подробности — `docs/tasks/p2-test-track.md#test-3-срез-68-2026-10-11`.
+WPT-RUN-7 срез 68 (2026-10-11): baseline в `tests/wpt/metadata/encrypted-media/` (99 `.ini`, 69/99 harness OK, 29/256 подтестов), гейт `run_report.py --all --root encrypted-media --recursive --check`. Главная причина провалов — [BUG-1610](../../bugs/BUG-1610-OPEN.md). Подробности — `docs/tasks/p2-test-track.md#test-3-срез-68-2026-10-11`.

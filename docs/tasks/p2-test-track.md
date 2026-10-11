@@ -2776,7 +2776,7 @@ Khronos WebGL conformance suite (1.0, минимальное подмножес�
 
 `--update-expected --all --root encrypted-media --recursive --processes 8` на `dev-release`, собранном от `main` `74ba2e17c`, — 4:58. 99 id, 98 `.ini` записано (99-й появился при расширении), **69/99 harness OK, 29/256 подтестов**, 98 unexpected results.
 
-**Причины провалов (по логу).** 696 вхождений `TypeError: navigator.requestMediaKeySystemAccess is not a function` (EME в движке нет) — заведён [BUG-1607](../../bugs/BUG-1607-OPEN.md); 6 — `ReferenceError: MediaSource is not defined`.
+**Причины провалов (по логу).** 696 вхождений `TypeError: navigator.requestMediaKeySystemAccess is not a function` (EME в движке нет) — заведён [BUG-1610](../../bugs/BUG-1610-OPEN.md); 6 — `ReferenceError: MediaSource is not defined`.
 
 **Сходимость `--check`.** 14 прогонов по ~6–7 мин. «Сырой» baseline: 5 регрессий + 3 unexpected pass + 5 прочих; расширение `.ini` до объединения базовых и наблюдённых значений (скретч-скрипт, не закоммичен): 7 → 11 → 6 → 2 → 11 → 3 → 9 → 9 → 2 → 7 → 6. Затухания нет: каждый раунд приносил 2–11 новых `TIMEOUT` в других медиа-тестах (`drm-*`, `clearkey-*`, `idlharness`, `media-element-event-handler-attributes`, `missing-sinf`), все — «`OK`/`ERROR` в одном прогоне, `TIMEOUT` в другом». Тест, который хоть раз дал `TIMEOUT`, в остальных прогонах мог закончиться `OK`, поэтому после раунда 12 `TIMEOUT` добавлен в harness-статус всех 40 `drm-*`/`clearkey-*`/`idlharness`/`media-element-*`/`missing-sinf`/`encrypted-media-default-*` тестов разом. Дальше **0 (13), 0 (14)**. Цена: у этих файлов гейт не отличит новый `TIMEOUT` от старого — зато остальные 58 `.ini` и все подтесты остаются точными.
 
