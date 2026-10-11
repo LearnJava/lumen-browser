@@ -79,12 +79,12 @@ impl Lumen {
                 MouseScrollDelta::LineDelta(_, l) => l,
                 MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
             };
-            let max_scroll = self.read_later_panel.max_scroll();
             if lines > 0.0 {
                 self.read_later_panel.scroll_up();
             } else if lines < 0.0 {
-                self.read_later_panel.scroll_down(max_scroll);
+                self.read_later_panel.scroll_down();
             }
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }

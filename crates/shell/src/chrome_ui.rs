@@ -254,6 +254,7 @@ impl Lumen {
                     lumen_chrome::ids::PRINT_OVERLAY,
                     lumen_chrome::ids::DEVTOOLS,
                     lumen_chrome::ids::NETWORK_PANEL,
+                    lumen_chrome::ids::READ_LATER_PANEL,
                 ],
                 doc,
             )
@@ -630,6 +631,8 @@ impl Lumen {
         };
         // UX-CHROME-PANELS: `#networkPanel` mirrors the (already refreshed) `NetworkPanel`.
         let network = self.network_panel.chrome_model();
+        // UX-CHROME-PANELS: `#readLaterPanel` mirrors `ReadLaterPanel`.
+        let read_later = self.read_later_panel.chrome_model();
         // UX-CHROME-PANELS: `#accessOverlay` mirrors the draft of `A11yPanel`.
         let access = {
             let panel = &self.a11y_panel;
@@ -858,6 +861,7 @@ impl Lumen {
             shortcuts,
             console,
             network,
+            read_later,
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1284,6 +1288,33 @@ impl Lumen {
             ChromeAction::ClearNetwork => {
                 self.network_panel.clear_log();
                 self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleReadLater => {
+                self.read_later_panel.toggle();
+                if self.read_later_panel.visible {
+                    self.refresh_read_later();
+                }
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ReadLaterOpen => {
+                if let Some(id) = self.chrome_data_id(nid, "data-read-later-id")
+                    && let Ok(Some(entry)) = self.read_later_store.get(id)
+                {
+                    // Offline HTML snapshot; opening marks the entry as read.
+                    let html = String::from_utf8_lossy(&entry.html_snapshot).into_owned();
+                    let base_url = entry.url.clone();
+                    let _ = self.read_later_store.set_status(id, lumen_knowledge::ReadStatus::Read);
+                    self.read_later_panel.visible = false;
+                    self.navigate_to(PageSource::Snapshot { html, base_url });
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ReadLaterDelete => {
+                if let Some(id) = self.chrome_data_id(nid, "data-read-later-id") {
+                    let _ = self.read_later_store.delete(id);
+                    self.refresh_read_later();
+                    self.relayout_chrome_host();
+                }
             }
             ChromeAction::ClearConsole => {
                 self.devtools_console.clear();

@@ -1129,18 +1129,8 @@ impl Lumen {
             overlay_buf.append(&mut ws_cmds);
         }
 
-        // §12.3 Read-later panel: right-docked overlay.
-        if self.read_later_panel.visible {
-            let win_w = self.viewport_width_css();
-            let tab_h = toolbar::CHROME_H;
-            let mut rl_cmds = panels::read_later_panel::build_panel(
-                &self.read_later_panel,
-                win_w,
-                tab_h,
-                &pal,
-            );
-            overlay_buf.append(&mut rl_cmds);
-        }
+        // §12.3 Read-later panel: `#readLaterPanel` in the engine chrome
+        // (`bind_read_later`), toggled by Ctrl+Shift+R.
 
         // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
         // locked strip at y=0..TAB_BAR_HEIGHT) lived here — removed

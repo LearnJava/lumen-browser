@@ -563,53 +563,8 @@ impl Lumen {
                 }
             }
 
-            // §12.3 Read-later panel (Ctrl+Shift+R): right-docked overlay.
-            if self.read_later_panel.visible {
-                use panels::read_later_panel::ReadLaterHit;
-                let win_w = self.viewport_width_css();
-                let tab_h = toolbar::CHROME_H;
-                let px = win_w - panels::read_later_panel::PANEL_W - 4.0;
-                let py = tab_h + 4.0;
-                let hit = panels::read_later_panel::hit_test(
-                    x_css,
-                    y_css,
-                    px,
-                    py,
-                    &self.read_later_panel.entries,
-                    self.read_later_panel.scroll_offset,
-                );
-                match hit {
-                    ReadLaterHit::Close => {
-                        self.read_later_panel.visible = false;
-                        self.request_redraw();
-                    }
-                    ReadLaterHit::Open(id) => {
-                        // Load from offline HTML snapshot.
-                        if let Ok(Some(entry)) = self.read_later_store.get(id) {
-                            let html = String::from_utf8_lossy(&entry.html_snapshot)
-                                .into_owned();
-                            let base_url = entry.url.clone();
-                            let _ = self.read_later_store.set_status(
-                                id,
-                                lumen_knowledge::ReadStatus::Read,
-                            );
-                            self.read_later_panel.visible = false;
-                            self.navigate_to(PageSource::Snapshot { html, base_url });
-                        }
-                    }
-                    ReadLaterHit::Delete(id) => {
-                        let _ = self.read_later_store.delete(id);
-                        self.refresh_read_later();
-                        self.request_redraw();
-                    }
-                    ReadLaterHit::Inside => { /* swallow */ }
-                    ReadLaterHit::Outside => {
-                        self.read_later_panel.visible = false;
-                        self.request_redraw();
-                    }
-                }
-                return;
-            }
+            // §12.3 Read-later panel: `#readLaterPanel` in the engine chrome
+            // (`read-later-open` / `read-later-delete` / `toggle-read-later`).
 
             // CC-10b/CC-15-6: the legacy bookmark-manager overlay's click
             // hit-test lived here, gated off the rollback flag —

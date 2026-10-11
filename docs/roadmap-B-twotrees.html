@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-11",
  "counts": {
-  "open": 399,
+  "open": 400,
   "fixed": 1131,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1533,
+ "total_bugs": 1534,
  "phases": [
   {
    "id": "P0",
@@ -8424,7 +8424,7 @@
        "title": "UX-CHROME-PANELS: перенос панелей на движковый chrome",
        "status": "planned",
        "size": "L",
-       "note": "~30 панелей (DevTools console/inspector/network, a11y/shortcuts, reader view, source view, split view, переключатель профилей) рисуются старым Rust-оверлеем поверх движкового chrome и расходятся с ним визуально (CAPABILITIES, Chrome rendering). Перенос в `assets/chrome/chrome.html` по одной панели. Срез 1 готов: панель горячих клавиш (`#shortcutsOverlay`, `ChromeShortcutsModel`, окно строк ведёт шелл — у хрома нет контейнера с колесом; легаси-рисование/хит-тест удалены). Срез 2 готов: панель специальных возможностей (`#accessOverlay`, `ChromeAccessModel`, правка черновика `A11yPanel`, сохранение при закрытии — `close_a11y_panel`; легаси-рисование/хит-тест удалены). Срез 3 готов: выпадающий список профилей (`#profileMenu` в боковой панели и новый `#profileMenuH` в горизонтальной полосе, `.open`/`.active` ведёт `bind_profile_menu` по `ChromeModel::profile_menu_open`/`profile_slug`; выбор — `set-profile`, закрывает меню; легаси-рисование/хит-тест удалены). Срез 4 готов: консоль DevTools (`#devtools`, `bind_console`, хвост из 8 сообщений, кнопка «Очистить» — `clear-console`; фиктивные вкладки Elements/Network/Sources из макета удалены; легаси-рисование консоли удалено). Срез 5 готов: панель сети DevTools (`#networkPanel`, `bind_network`, `NetworkPanel::chrome_model` — окно из 12 строк со сдвигом колеса, класс статуса 2/3/4, подсветка blocked/failed, пустое состояние — `:empty::before`; «Очистить» — `clear-network`; легаси-рисование сети удалено)."
+       "note": "~30 панелей (DevTools console/inspector/network, a11y/shortcuts, reader view, source view, split view, переключатель профилей) рисуются старым Rust-оверлеем поверх движкового chrome и расходятся с ним визуально (CAPABILITIES, Chrome rendering). Перенос в `assets/chrome/chrome.html` по одной панели. Срез 1 готов: панель горячих клавиш (`#shortcutsOverlay`, `ChromeShortcutsModel`, окно строк ведёт шелл — у хрома нет контейнера с колесом; легаси-рисование/хит-тест удалены). Срез 2 готов: панель специальных возможностей (`#accessOverlay`, `ChromeAccessModel`, правка черновика `A11yPanel`, сохранение при закрытии — `close_a11y_panel`; легаси-рисование/хит-тест удалены). Срез 3 готов: выпадающий список профилей (`#profileMenu` в боковой панели и новый `#profileMenuH` в горизонтальной полосе, `.open`/`.active` ведёт `bind_profile_menu` по `ChromeModel::profile_menu_open`/`profile_slug`; выбор — `set-profile`, закрывает меню; легаси-рисование/хит-тест удалены). Срез 4 готов: консоль DevTools (`#devtools`, `bind_console`, хвост из 8 сообщений, кнопка «Очистить» — `clear-console`; фиктивные вкладки Elements/Network/Sources из макета удалены; легаси-рисование консоли удалено). Срез 5 готов: панель сети DevTools (`#networkPanel`, `bind_network`, `NetworkPanel::chrome_model` — окно из 12 строк со сдвигом колеса, класс статуса 2/3/4, подсветка blocked/failed, пустое состояние — `:empty::before`; «Очистить» — `clear-network`; легаси-рисование сети удалено). Срез 6 готов: список «Прочитать позже» (`#readLaterPanel`, `bind_read_later`, окно из 8 строк со сдвигом колеса, `read-later-open`/`read-later-delete`/`toggle-read-later`; клик вне панели больше не закрывает её; легаси-рисование/хит-тест удалены)."
       },
       {
        "id": "UX-PROCESS",
@@ -11270,6 +11270,13 @@
    "status": "open",
    "title": "`turnstile.render()` возвращает id, но iframe не создаётся, `callback`/`error-callback` не вызываются, токена нет (reCAPTCHA и hCaptcha рендерятся)",
    "component": "js/shell (исполнение `challenges.cloudflare.com/turnstile/v0/*/api.js`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1596": {
+   "status": "open",
+   "title": "`no_persistent_state` (`--mcp*`/`--bidi-port`/`--tor`) не соблюдается хранилищами окна: `history.db`, `history_fts.db`, `permissions.db`, `bookmarks.db`, `downl…",
+   "component": "shell (`window_mode.rs`: `open_persistent` и прямые открытия хранилищ; `page_load.rs` запись визита)",
    "date": null,
    "debtor": false
   },
@@ -21975,6 +21982,9 @@
   ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
+  ],
+  "shell (`window_mode.rs`: `open_persistent` и прямые открытия хранилищ; `page_load.rs` запись визита)": [
+   "BUG-1596"
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"

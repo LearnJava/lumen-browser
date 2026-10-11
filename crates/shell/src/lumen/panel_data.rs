@@ -143,6 +143,9 @@ impl Lumen {
                 .unwrap_or_default(),
         );
         self.read_later_panel.refresh(entries);
+        if self.read_later_panel.visible {
+            self.relayout_chrome_host();
+        }
     }
 
     pub(crate) fn refresh_bookmarks(&mut self) {
