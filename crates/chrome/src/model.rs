@@ -110,6 +110,8 @@ pub struct ChromeModel {
     pub shortcuts: ChromeShortcutsModel,
     /// `#devtools` snapshot (UX-CHROME-PANELS) — mirrors `ConsolePanel`.
     pub console: ChromeConsoleModel,
+    /// `#networkPanel` snapshot (UX-CHROME-PANELS) — mirrors `NetworkPanel`.
+    pub network: ChromeNetworkModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -585,6 +587,40 @@ pub struct ChromeConsoleModel {
     pub lines: Vec<ChromeConsoleLineModel>,
 }
 
+/// One `.net-row` of `#dt-network` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeNetworkRowModel {
+    /// HTTP method.
+    pub method: String,
+    /// Status text: numeric code, `blocked`, failure stage or `…`.
+    pub status: String,
+    /// `2`/`3`/`4` pick the `.status-badge` colour (2xx / 3xx / 4xx-5xx,
+    /// blocked, failed); `0` is a pending request without a badge colour.
+    pub status_class: u8,
+    /// Timing text (`123 ms`, `…`, `—`).
+    pub time: String,
+    /// Request URL (the chrome clips it with CSS).
+    pub url: String,
+    /// Request was blocked by the shields.
+    pub blocked: bool,
+    /// Request failed at the network level.
+    pub failed: bool,
+}
+
+/// `#networkPanel` snapshot (UX-CHROME-PANELS) — mirrors `NetworkPanel`.
+///
+/// `rows` is the already-windowed slice (the shell owns the wheel scroll),
+/// oldest first.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeNetworkModel {
+    /// `true` shows the panel — mirrors `NetworkPanel::visible`.
+    pub open: bool,
+    /// Number of recorded requests (shown in the tab title).
+    pub total: usize,
+    /// Rows rendered into `#dt-network`.
+    pub rows: Vec<ChromeNetworkRowModel>,
+}
+
 /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeAccessModel {
@@ -936,6 +972,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_cert(doc, &model.cert);
     bind_shortcuts(doc, &model.shortcuts);
     bind_console(doc, &model.console);
+    bind_network(doc, &model.network);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
@@ -1568,6 +1605,48 @@ fn bind_console(doc: &mut Document, console: &ChromeConsoleModel) {
         let text = doc.create_element(QualName::html("span"));
         append_text(doc, text, &line.text);
         attach_child(doc, node, text);
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#networkPanel`'s `.open` class, writes the request count into the
+/// tab title and rebuilds the `.net-row`s of `#dt-network` from
+/// [`ChromeNetworkModel::rows`] (UX-CHROME-PANELS).
+fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::NETWORK_PANEL) else { return };
+    set_class_token(doc, panel, "open", network.open);
+    if let Some(title) = doc.find_by_id(crate::ids::DT_NETWORK_TITLE) {
+        set_text(doc, title, &format!("Network ({})", network.total));
+    }
+    let Some(list) = doc.find_by_id(crate::ids::DT_NETWORK) else { return };
+    remove_children_with_class(doc, list, "net-row");
+    for row in &network.rows {
+        let node = doc.create_element(QualName::html("div"));
+        let class = if row.blocked {
+            "net-row blocked"
+        } else if row.failed {
+            "net-row failed"
+        } else {
+            "net-row"
+        };
+        set_attr(doc, node, "class", class);
+        let status_class = match row.status_class {
+            2 => "net-status status-badge s2",
+            3 => "net-status status-badge s3",
+            4 => "net-status status-badge s4",
+            _ => "net-status status-badge",
+        };
+        for (class, text) in [
+            ("net-method", &row.method),
+            (status_class, &row.status),
+            ("net-time", &row.time),
+            ("net-url", &row.url),
+        ] {
+            let cell = doc.create_element(QualName::html("span"));
+            set_attr(doc, cell, "class", class);
+            append_text(doc, cell, text);
+            attach_child(doc, node, cell);
+        }
         attach_child(doc, list, node);
     }
 }
@@ -3664,6 +3743,45 @@ mod tests {
         assert!(!has_class(&doc, panel, "open"));
         let list = doc.find_by_id(crate::ids::DT_CONSOLE).expect("list");
         assert!(find_descendants_by_class(&doc, list, "console-line").is_empty());
+    }
+
+    #[test]
+    fn network_panel_opens_and_renders_rows() {
+        let mut doc = parse_asset();
+        let row = |status: &str, class: u8, blocked: bool| ChromeNetworkRowModel {
+            method: "GET".to_owned(),
+            status: status.to_owned(),
+            status_class: class,
+            time: "12 ms".to_owned(),
+            url: "https://example.test/a".to_owned(),
+            blocked,
+            failed: false,
+        };
+        let model = ChromeModel {
+            network: ChromeNetworkModel {
+                open: true,
+                total: 2,
+                rows: vec![row("200", 2, false), row("blocked", 4, true)],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::NETWORK_PANEL).expect("asset has #networkPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::DT_NETWORK_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Network (2)");
+        let list = doc.find_by_id(crate::ids::DT_NETWORK).expect("list");
+        let rows = find_descendants_by_class(&doc, list, "net-row");
+        assert_eq!(rows.len(), 2);
+        assert!(has_class(&doc, rows[1], "blocked"));
+        let badges = find_descendants_by_class(&doc, list, "status-badge");
+        assert!(has_class(&doc, badges[0], "s2"));
+        assert!(has_class(&doc, badges[1], "s4"));
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::NETWORK_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::DT_NETWORK).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "net-row").is_empty());
     }
 
     #[test]

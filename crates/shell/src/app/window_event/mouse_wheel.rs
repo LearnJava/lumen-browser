@@ -69,6 +69,7 @@ impl Lumen {
             } else if lines < 0.0 {
                 self.network_panel.scroll_down(lines.abs().ceil() as usize);
             }
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
