@@ -27,10 +27,6 @@ use std::path::PathBuf;
 
 use crate::adblock::browser_data_dir;
 
-/// Stable persistence key + resize id for the left vertical-tabs sidebar.
-pub const ID_VERTICAL_TABS: &str = "vertical-tabs";
-/// Stable persistence key + resize id for the left tree-tabs sidebar.
-pub const ID_TREE_TABS: &str = "tree-tabs";
 /// Stable persistence key + resize id for the right AI assistant sidebar.
 pub const ID_AI: &str = "ai";
 /// Stable persistence key + resize id for the right web sidebar.
@@ -366,8 +362,7 @@ empty =
 
     #[test]
     fn default_dock_matches_compiled_sides() {
-        assert_eq!(default_dock(ID_VERTICAL_TABS), Dock::Left);
-        assert_eq!(default_dock(ID_TREE_TABS), Dock::Left);
+        assert_eq!(default_dock("vertical-tabs"), Dock::Left);
         assert_eq!(default_dock(ID_AI), Dock::Right);
         assert_eq!(default_dock(ID_SIDEBAR), Dock::Right);
         assert_eq!(default_dock("unknown"), Dock::Left);
@@ -376,17 +371,17 @@ empty =
     #[test]
     fn dock_for_falls_back_to_default() {
         let layout = PanelLayout::default();
-        assert_eq!(layout.dock_for(ID_VERTICAL_TABS, Dock::Left), Dock::Left);
+        assert_eq!(layout.dock_for("vertical-tabs", Dock::Left), Dock::Left);
         assert_eq!(layout.dock_for(ID_AI, Dock::Right), Dock::Right);
     }
 
     #[test]
     fn set_dock_overrides_and_reports_change() {
         let mut layout = PanelLayout::default();
-        assert!(layout.set_dock(ID_VERTICAL_TABS, Dock::Right));
-        assert_eq!(layout.dock_for(ID_VERTICAL_TABS, Dock::Left), Dock::Right);
-        assert!(!layout.set_dock(ID_VERTICAL_TABS, Dock::Right)); // unchanged
-        assert!(layout.set_dock(ID_VERTICAL_TABS, Dock::Left)); // changed back
+        assert!(layout.set_dock("vertical-tabs", Dock::Right));
+        assert_eq!(layout.dock_for("vertical-tabs", Dock::Left), Dock::Right);
+        assert!(!layout.set_dock("vertical-tabs", Dock::Right)); // unchanged
+        assert!(layout.set_dock("vertical-tabs", Dock::Left)); // changed back
     }
 
     #[test]
@@ -402,11 +397,11 @@ empty =
     fn side_survives_serialize_parse_roundtrip() {
         let mut layout = PanelLayout::default();
         layout.set_width(ID_AI, 280.0);
-        layout.set_dock(ID_VERTICAL_TABS, Dock::Right);
+        layout.set_dock("vertical-tabs", Dock::Right);
         layout.set_dock(ID_AI, Dock::Left);
         let text = layout.serialize();
         let back = PanelLayout::parse(&text);
-        assert_eq!(back.dock_for(ID_VERTICAL_TABS, Dock::Left), Dock::Right);
+        assert_eq!(back.dock_for("vertical-tabs", Dock::Left), Dock::Right);
         assert_eq!(back.dock_for(ID_AI, Dock::Right), Dock::Left);
         assert_eq!(back.width_for(ID_AI, 200.0), 280.0); // widths still intact
     }
