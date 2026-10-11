@@ -400,6 +400,53 @@ pub(in crate::style) fn apply_ua_heading_style(doc: &Document, node: NodeId, inh
     style.margin_top = LengthOrAuto::Length(Length::Em(margin_em));
     style.margin_bottom = LengthOrAuto::Length(Length::Em(margin_em));
 }
+/// UA stylesheet для блочных элементов с полями (HTML Rendering §15.3.3–§15.3.7, §15.3.12):
+/// `p, dl, pre, menu, ul, ol` — `margin-block: 1em`; `blockquote, figure` — `1em 40px`;
+/// `dd` — `margin-inline-start: 40px`; `ul, ol, menu` — `padding-inline-start: 40px`.
+/// Список, вложенный в `dir/dl/menu/ol/ul`, вертикальных полей не имеет.
+/// Применяется ДО author-каскада. Направление письма не учитывается (физическая левая сторона).
+pub(in crate::style) fn apply_ua_block_margins(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return;
+    };
+    let px = |v: f32| LengthOrAuto::Length(Length::Px(v));
+    let tag = name.local.as_str();
+    let (vertical, side) = match tag {
+        "p" | "pre" => (true, None),
+        "dl" | "menu" | "ul" | "ol" => (true, None),
+        "blockquote" | "figure" => (true, Some(40.0)),
+        "dd" => (false, Some(40.0)),
+        _ => return,
+    };
+    if vertical {
+        let nested = matches!(tag, "dl" | "menu" | "ul" | "ol") && {
+            let mut cur = node_ref.parent;
+            let mut found = false;
+            while let Some(p) = cur {
+                let p_ref = doc.get(p);
+                if let NodeData::Element { name: pname, .. } = &p_ref.data
+                    && matches!(pname.local.as_str(), "dir" | "dl" | "menu" | "ol" | "ul")
+                {
+                    found = true;
+                    break;
+                }
+                cur = p_ref.parent;
+            }
+            found
+        };
+        let v = || if nested { px(0.0) } else { LengthOrAuto::Length(Length::Em(1.0)) };
+        style.margin_top = v();
+        style.margin_bottom = v();
+    }
+    if let Some(s) = side {
+        style.margin_left = px(s);
+        style.margin_right = px(if tag == "dd" { 0.0 } else { s });
+    }
+    if matches!(tag, "ul" | "ol" | "menu") {
+        style.padding_left = Length::Px(40.0);
+    }
+}
 /// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
 ///
 /// Returns UA colors `(border, background, foreground)` for form controls.

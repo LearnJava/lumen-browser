@@ -1890,6 +1890,7 @@ mod tests {
             #card { width: 400px; box-sizing: border-box; }
             .card { padding: 3px; }
             .card:hover { padding: 9px; }
+            ul { padding: 0; }
             .item { height: 20px; }
         "#;
         let doc = parse_html(html);
