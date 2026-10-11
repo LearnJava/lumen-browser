@@ -1099,22 +1099,8 @@ impl Lumen {
             overlay_buf.append(&mut nv_cmds);
         }
 
-        // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
-        // Rendered before the tab bar so tab bar always draws on top.
-        if self.workspace_panel.visible {
-            let win_w = self.viewport_width_css();
-            // Full window height including tab bar — bar is docked at bottom.
-            let win_h = self.viewport_height_css()
-                + toolbar::CHROME_H
-                + panels::workspace_panel::SWITCHER_HEIGHT;
-            let mut ws_cmds = panels::workspace_panel::build_panel(
-                &self.workspace_panel,
-                win_w,
-                win_h,
-                &pal,
-            );
-            overlay_buf.append(&mut ws_cmds);
-        }
+        // Workspace switcher bar: `#workspaceBar` in the engine chrome
+        // (`bind_workspace_bar`), toggled by Ctrl+Shift+W.
 
         // §12.3 Read-later panel: `#readLaterPanel` in the engine chrome
         // (`bind_read_later`), toggled by Ctrl+Shift+R.

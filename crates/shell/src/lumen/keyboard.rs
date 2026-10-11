@@ -818,6 +818,7 @@ impl Lumen {
                 // Viewport height changes — re-layout so content doesn't hide
                 // under bar (ADR-016 M2.2b: async-safe chrome-inset relayout).
                 self.relayout_chrome();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::ToggleShields => {
