@@ -608,38 +608,54 @@ fn decrement_rowspan_map(map: &mut [u32]) {
     }
 }
 
-/// CSS 2.1 §17.5.2 — minimum (shrink-to-fit) content width for a table box.
+/// CSS 2.1 §17.5.2 — shrink-to-fit (max-content) width for a table box without CSS `width`.
 ///
-/// Returns `sum(explicit_column_widths) + (n_cols + 1) * border_spacing_h`.
-/// Cells without an explicit CSS width contribute 0 (effectively auto/min-content).
-/// Used to shrink `display:table` boxes that have no explicit CSS `width`.
-pub(crate) fn table_intrinsic_content_width(b: &LayoutBox, viewport: Size) -> f32 {
-    let h_spacing = b.style.border_spacing_h;
+/// Returns `sum(column_widths) + (n_cols + 1) * border_spacing_h`, where a column with an
+/// explicit cell width takes it and every other column takes its max-content width (needs a
+/// `measurer`; without one, auto columns contribute 0). `None` for a table without columns.
+pub(crate) fn table_intrinsic_content_width(
+    b: &LayoutBox,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Option<f32> {
+    let h_spacing = match b.style.border_collapse {
+        BorderCollapse::Collapse => 0.0,
+        BorderCollapse::Separate => b.style.border_spacing_h,
+    };
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
     let mut rowspan_map: Vec<u32> = Vec::new();
-    for child in &b.children {
-        match &child.kind {
-            BoxKind::TableRow => {
-                scan_row_explicit_widths(child, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
-                decrement_rowspan_map(&mut rowspan_map);
-            }
-            BoxKind::TableRowGroup => {
-                for row in &child.children {
-                    if matches!(row.kind, BoxKind::TableRow) {
-                        scan_row_explicit_widths(row, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
-                        decrement_rowspan_map(&mut rowspan_map);
-                    }
-                }
-            }
-            _ => {}
-        }
+    let rows: Vec<&LayoutBox> = b
+        .children
+        .iter()
+        .flat_map(|child| match &child.kind {
+            BoxKind::TableRow => vec![child],
+            BoxKind::TableRowGroup => child
+                .children
+                .iter()
+                .filter(|r| matches!(r.kind, BoxKind::TableRow))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    for row in &rows {
+        scan_row_explicit_widths(row, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
+        decrement_rowspan_map(&mut rowspan_map);
     }
     let n_cols = col_explicit.len();
     if n_cols == 0 {
-        return 0.0;
+        return None;
     }
-    let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
-    total_explicit + (n_cols + 1) as f32 * h_spacing
+    let mut col_max = vec![0.0f32; n_cols];
+    if let Some(m) = measurer {
+        let mut col_min = vec![0.0f32; n_cols];
+        let mut rs_map: Vec<u32> = Vec::new();
+        for row in &rows {
+            scan_row_content_widths(row, &mut col_min, &mut col_max, &mut rs_map, m, viewport);
+            decrement_rowspan_map(&mut rs_map);
+        }
+    }
+    let total: f32 = (0..n_cols).map(|i| col_explicit[i].unwrap_or(col_max[i])).sum();
+    Some(total + (n_cols + 1) as f32 * h_spacing)
 }
 
 /// CSS 2.1 §17.5.2 — min-content and max-content widths for a slice of boxes.
@@ -694,8 +710,20 @@ fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) ->
                 let pl = b.style.padding_left.resolve_or_zero(em, 0.0, vp);
                 let pr = b.style.padding_right.resolve_or_zero(em, 0.0, vp);
                 let bw = b.style.border_left_width + b.style.border_right_width;
-                let (cmin, cmax) = box_min_max_content_w(&b.children, m, vp);
-                (cmin + pl + pr + bw, cmax + pl + pr + bw)
+                // A definite `width` fixes both contributions (percentages are cyclic → ignored).
+                if let Some(wl) = &b.style.width
+                    && let Some(w) = wl.resolve(em, None, vp)
+                    && w >= 0.0
+                {
+                    let total = match b.style.box_sizing {
+                        BoxSizing::ContentBox => w + pl + pr + bw,
+                        BoxSizing::BorderBox => w.max(pl + pr + bw),
+                    };
+                    (total, total)
+                } else {
+                    let (cmin, cmax) = box_min_max_content_w(&b.children, m, vp);
+                    (cmin + pl + pr + bw, cmax + pl + pr + bw)
+                }
             }
             BoxKind::Skip
             | BoxKind::TableRow

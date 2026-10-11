@@ -1808,13 +1808,13 @@ pub(super) fn dispatch_box(
             // When no explicit CSS width is given, tables use shrink-to-fit: the table box is
             // only as wide as its columns require (total column widths + border-spacing gaps).
             // This differs from block elements which fill the available inline size.
-            if s.width.is_none() {
-                let intrinsic = table_intrinsic_content_width(b, viewport);
-                if intrinsic > 0.0 && intrinsic < content_width {
-                    b.rect.width = (intrinsic + padding_left + padding_right
-                        + s.border_left_width + s.border_right_width).max(0.0);
-                    content_width = intrinsic;
-                }
+            if s.width.is_none()
+                && let Some(intrinsic) = table_intrinsic_content_width(b, viewport, measurer)
+                && intrinsic < content_width
+            {
+                b.rect.width = (intrinsic + padding_left + padding_right
+                    + s.border_left_width + s.border_right_width).max(0.0);
+                content_width = intrinsic;
             }
             // LAYOUT-2 срез 6: column-width/collapse-geometry precompute (native —
             // see `build_table_init`'s doc comment) runs here, but the per-row/
