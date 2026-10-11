@@ -2100,3 +2100,7 @@ CSS-connected сета (BUG-471/CSSOM-4). Этим срезом закрыт п�
 `crates/js/src/v8_runtime/install/dom_core.rs`,
 `crates/js/src/shim/web_api_shim_mid.js`,
 `crates/shell/src/app/about_to_wait.rs`.
+
+## Повторный замер 2026-10-11 (WPT-RUN-14 срез 28, P2)
+
+`css/css-font-loading`: 29 id, зелёных 14, не зелёных 15 (141 из 189 подтестов): `idlharness.https.html` 97 из 143 (нет `FontFaceVariationAxis`, `FontFacePalette(s)`; прототип `FontFace`), 5 TIMEOUT (`font-face-reject`, `fontfaceset-load-css-wide-keywords` 24 из 24, `fontfaceset-load-var`, `fontface-invalid-arraybuffer`, `fontfaceset-worker-fontface-crash`), 3 reftest `thick`. Бинарь от 2026-10-08.
