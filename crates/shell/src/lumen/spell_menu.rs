@@ -179,6 +179,7 @@ impl Lumen {
         match hit {
             Some((suggestions, target)) => {
                 self.page_context_menu.open_for(x_css, y_css, suggestions, target);
+                self.relayout_chrome_host();
                 true
             }
             None => false,

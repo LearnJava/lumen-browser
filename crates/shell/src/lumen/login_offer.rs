@@ -126,6 +126,7 @@ impl Lumen {
             values,
             target,
         );
+        self.relayout_chrome_host();
     }
 
     /// Подстановка сохранённого аккаунта в форму входа свежезагруженной страницы

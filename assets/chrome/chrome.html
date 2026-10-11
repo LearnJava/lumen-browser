@@ -743,6 +743,11 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .tab-ctx.open{ display:block; }
 .tab-ctx-row{ display:block; width:100%; height:28px; padding:0 14px; border:none; background:none; text-align:left; font-size:13px; line-height:28px; color:var(--text-primary); }
 .tab-ctx-row:hover{ background:var(--surface-2); }
+.page-ctx{ position:fixed; display:none; width:230px; padding:5px 0; background:var(--surface-0); border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 8px 24px rgba(0,0,0,.18); z-index:300; }
+.page-ctx.open{ display:block; }
+.page-ctx-row{ display:block; width:100%; height:28px; padding:0 14px; border:none; background:none; text-align:left; font-size:13px; line-height:28px; color:var(--text-primary); }
+.page-ctx-row:hover{ background:var(--surface-2); }
+.page-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
 .tab-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
 
 /* ---------- Find in page ---------- */
@@ -1699,6 +1704,9 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button class="tab-ctx-row" id="tabCtxCloseRight" data-tab-ctx="close-right">Закрыть справа</button>
             <button class="tab-ctx-row sep" id="tabCtxReopen" data-tab-ctx="reopen">Открыть закрытую вкладку</button>
           </div>
+
+          <!-- Page spell / autofill menu (UX-CHROME-PANELS); rows are bound -->
+          <div class="page-ctx" id="pageCtxMenu"></div>
 
           <!-- Note viewer modal (UX-CHROME-PANELS) -->
           <div class="modal-overlay" id="noteOverlay">
