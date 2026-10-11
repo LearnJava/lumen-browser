@@ -65,6 +65,9 @@ impl Lumen {
         if self.network_panel.visible {
             self.network_panel.refresh();
         }
+        if self.privacy.visible {
+            self.privacy.refresh();
+        }
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
         // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
@@ -255,6 +258,7 @@ impl Lumen {
                     lumen_chrome::ids::DEVTOOLS,
                     lumen_chrome::ids::NETWORK_PANEL,
                     lumen_chrome::ids::READ_LATER_PANEL,
+                    lumen_chrome::ids::PRIVACY_PANEL,
                 ],
                 doc,
             )
@@ -633,6 +637,11 @@ impl Lumen {
         let network = self.network_panel.chrome_model();
         // UX-CHROME-PANELS: `#readLaterPanel` mirrors `ReadLaterPanel`.
         let read_later = self.read_later_panel.chrome_model();
+        // UX-CHROME-PANELS: `#privacyPanel` mirrors the (already refreshed) `PrivacyPanel`.
+        let privacy = self.privacy.chrome_model(panels::privacy_panel::list_body_height(
+            self.viewport_height_css() + toolbar::CHROME_H,
+            toolbar::CHROME_H,
+        ));
         // UX-CHROME-PANELS: `#accessOverlay` mirrors the draft of `A11yPanel`.
         let access = {
             let panel = &self.a11y_panel;
@@ -862,6 +871,7 @@ impl Lumen {
             console,
             network,
             read_later,
+            privacy,
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1287,6 +1297,10 @@ impl Lumen {
             }
             ChromeAction::ClearNetwork => {
                 self.network_panel.clear_log();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::TogglePrivacy => {
+                self.privacy.toggle();
                 self.relayout_chrome_host();
             }
             ChromeAction::ToggleReadLater => {

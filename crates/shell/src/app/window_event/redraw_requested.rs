@@ -999,21 +999,8 @@ impl Lumen {
         // DevTools network panel: `#networkPanel` in the engine chrome
         // (`bind_network`), toggled by Ctrl+Shift+E.
 
-        // Privacy network panel (V5): right-docked overlay, Ctrl+Shift+Y.
-        if self.privacy.visible {
-            self.privacy.refresh();
-            let priv_win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut priv_cmds = panels::privacy_panel::build_privacy_panel(
-                &self.privacy,
-                priv_win_size,
-                toolbar::CHROME_H,
-                &pal,
-            );
-            overlay_buf.append(&mut priv_cmds);
-        }
+        // Privacy network panel: `#privacyPanel` in the engine chrome
+        // (`bind_privacy`), toggled by Ctrl+Shift+Y.
 
         // DevTools DOM inspector: right-docked computed-style side panel.
         // Viewport-locked; the box-model overlay for the hovered node is

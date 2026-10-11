@@ -114,6 +114,8 @@ pub struct ChromeModel {
     pub network: ChromeNetworkModel,
     /// `#readLaterPanel` snapshot (UX-CHROME-PANELS) — mirrors `ReadLaterPanel`.
     pub read_later: ChromeReadLaterModel,
+    /// `#privacyPanel` snapshot (UX-CHROME-PANELS) — mirrors `PrivacyPanel`.
+    pub privacy: ChromePrivacyModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -623,6 +625,35 @@ pub struct ChromeNetworkModel {
     pub rows: Vec<ChromeNetworkRowModel>,
 }
 
+/// One `.pv-row` of `#pvList` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePrivacyRowModel {
+    /// Tracker domain (primary line).
+    pub host: String,
+    /// Secondary line: matched filter or HTTP status.
+    pub sub: String,
+    /// `blocked` / `allowed` / `pending` — picks the dot and text colour.
+    pub state: String,
+}
+
+/// `#privacyPanel` snapshot (UX-CHROME-PANELS) — mirrors `PrivacyPanel`.
+///
+/// `rows` is the already-windowed slice, newest first (the shell owns the
+/// wheel scroll).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePrivacyModel {
+    /// `true` shows the panel — mirrors `PrivacyPanel::visible`.
+    pub open: bool,
+    /// Blocked requests in the snapshot.
+    pub blocked: usize,
+    /// Allowed (sent) requests in the snapshot.
+    pub allowed: usize,
+    /// `shown/total` scroll indicator; empty when the list fits.
+    pub position: String,
+    /// Rows rendered into `#pvList`.
+    pub rows: Vec<ChromePrivacyRowModel>,
+}
+
 /// One `.rl-row` of `#rlList` (UX-CHROME-PANELS).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeReadLaterRowModel {
@@ -1004,6 +1035,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_console(doc, &model.console);
     bind_network(doc, &model.network);
     bind_read_later(doc, &model.read_later);
+    bind_privacy(doc, &model.privacy);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
@@ -1678,6 +1710,42 @@ fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
             append_text(doc, cell, text);
             attach_child(doc, node, cell);
         }
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#privacyPanel`'s `.open` class, writes the blocked/allowed tallies
+/// and the scroll indicator, and rebuilds the `.pv-row`s of `#pvList` from
+/// [`ChromePrivacyModel::rows`] (UX-CHROME-PANELS).
+fn bind_privacy(doc: &mut Document, pv: &ChromePrivacyModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::PRIVACY_PANEL) else { return };
+    set_class_token(doc, panel, "open", pv.open);
+    if let Some(n) = doc.find_by_id(crate::ids::PV_BLOCKED) {
+        set_text(doc, n, &format!("{} blocked", pv.blocked));
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::PV_ALLOWED) {
+        set_text(doc, n, &format!("{} allowed", pv.allowed));
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::PV_POSITION) {
+        set_text(doc, n, &pv.position);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::PV_LIST) else { return };
+    remove_children_with_class(doc, list, "pv-row");
+    for row in &pv.rows {
+        let node = doc.create_element(QualName::html("div"));
+        set_attr(doc, node, "class", &format!("pv-row {}", row.state));
+        let dot = doc.create_element(QualName::html("span"));
+        set_attr(doc, dot, "class", "pv-dot");
+        attach_child(doc, node, dot);
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "pv-text");
+        for (class, value) in [("pv-host", &row.host), ("pv-sub", &row.sub)] {
+            let line = doc.create_element(QualName::html("div"));
+            set_attr(doc, line, "class", class);
+            append_text(doc, line, value);
+            attach_child(doc, text, line);
+        }
+        attach_child(doc, node, text);
         attach_child(doc, list, node);
     }
 }
@@ -3896,6 +3964,45 @@ mod tests {
         assert!(find_descendants_by_class(&doc, list, "rl-row").is_empty());
         let title = doc.find_by_id(crate::ids::RL_TITLE).expect("title");
         assert_eq!(text_of(&doc, title), "Read Later");
+    }
+
+    #[test]
+    fn privacy_panel_opens_and_renders_rows() {
+        let mut doc = parse_asset();
+        let row = |host: &str, state: &str| ChromePrivacyRowModel {
+            host: host.to_owned(),
+            sub: "blocked · ||x^".to_owned(),
+            state: state.to_owned(),
+        };
+        let model = ChromeModel {
+            privacy: ChromePrivacyModel {
+                open: true,
+                blocked: 1,
+                allowed: 2,
+                position: "3/9".to_owned(),
+                rows: vec![row("ads.test", "blocked"), row("cdn.test", "allowed")],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::PRIVACY_PANEL).expect("asset has #privacyPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let blocked = doc.find_by_id(crate::ids::PV_BLOCKED).expect("blocked");
+        assert_eq!(text_of(&doc, blocked), "1 blocked");
+        let allowed = doc.find_by_id(crate::ids::PV_ALLOWED).expect("allowed");
+        assert_eq!(text_of(&doc, allowed), "2 allowed");
+        let pos = doc.find_by_id(crate::ids::PV_POSITION).expect("position");
+        assert_eq!(text_of(&doc, pos), "3/9");
+        let list = doc.find_by_id(crate::ids::PV_LIST).expect("list");
+        let rows = find_descendants_by_class(&doc, list, "pv-row");
+        assert_eq!(rows.len(), 2);
+        assert!(has_class(&doc, rows[0], "blocked"));
+        assert!(has_class(&doc, rows[1], "allowed"));
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::PRIVACY_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::PV_LIST).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "pv-row").is_empty());
     }
 
     #[test]

@@ -506,30 +506,8 @@ impl Lumen {
                 }
             }
 
-            // Privacy network panel (V5): right-docked overlay.
-            if self.privacy.visible {
-                let tab_h = toolbar::CHROME_H;
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css() + tab_h;
-                match panels::privacy_panel::hit_test(
-                    &self.privacy,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                    tab_h,
-                ) {
-                    panels::privacy_panel::PrivacyHit::Close => {
-                        self.privacy.visible = false;
-                        self.request_redraw();
-                        return;
-                    }
-                    // Swallow clicks inside the panel so they don't reach
-                    // the page underneath.
-                    panels::privacy_panel::PrivacyHit::Inside => return,
-                    panels::privacy_panel::PrivacyHit::Outside => {}
-                }
-            }
+            // Privacy network panel: `#privacyPanel` in the engine chrome
+            // (`bind_privacy`, `toggle-privacy`).
 
             // Permission popover (7C.2): top-left overlay below tab bar.
             if self.permission.visible {

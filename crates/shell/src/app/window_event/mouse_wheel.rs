@@ -54,6 +54,7 @@ impl Lumen {
             } else if lines < 0.0 {
                 self.privacy.scroll_down(lines.abs().ceil() as usize, body_h);
             }
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
