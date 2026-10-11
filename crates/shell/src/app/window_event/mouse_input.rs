@@ -402,71 +402,8 @@ impl Lumen {
                 }
             }
 
-            // Shields floating panel (7C.4): top-right overlay.
-            if self.shields.visible {
-                // BUG-461: `#permPopover`'s real measured rect, not a guess
-                // anchored to the window edge/`toolbar::CHROME_H`.
-                let popover_rect =
-                    self.chrome_perm_popover_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
-                if let Some(hit) = panels::shields_panel::hit_test(
-                    &self.shields,
-                    x_css,
-                    y_css,
-                    popover_rect,
-                ) {
-                    match hit {
-                        panels::shields_panel::ShieldsHit::Toggle => {
-                            // BUG-411: same per-site flip the engine
-                            // popover's switch performs (this legacy
-                            // hit-test is still ungated — BUG-404).
-                            self.shields.toggle_current_site();
-                            self.sync_adblock_filter();
-                            self.request_redraw();
-                        }
-                        panels::shields_panel::ShieldsHit::Close => {
-                            self.shields.visible = false;
-                            self.request_redraw();
-                        }
-                        panels::shields_panel::ShieldsHit::Empty => {}
-                    }
-                    return;
-                }
-            }
-
             // Privacy network panel: `#privacyPanel` in the engine chrome
             // (`bind_privacy`, `toggle-privacy`).
-
-            // Permission popover (7C.2): top-left overlay below tab bar.
-            if self.permission.visible {
-                // BUG-461: `#permPopover`'s real measured rect, not a guess
-                // anchored to the window edge/`toolbar::CHROME_H`.
-                let popover_rect =
-                    self.chrome_perm_popover_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
-                if let Some(hit) = panels::permission_panel::hit_test(
-                    &self.permission,
-                    x_css,
-                    y_css,
-                    popover_rect,
-                ) {
-                    match hit {
-                        panels::permission_panel::PermissionHit::Toggle(kind) => {
-                            self.permission.cycle_permission(kind);
-                            self.request_redraw();
-                        }
-                        panels::permission_panel::PermissionHit::Close => {
-                            for kind in self.permission.close() {
-                                self.settle_page_permission(
-                                    kind,
-                                    panels::permission_panel::PermissionState::Ask,
-                                );
-                            }
-                            self.request_redraw();
-                        }
-                        panels::permission_panel::PermissionHit::Empty => {}
-                    }
-                    return;
-                }
-            }
 
             // §12.3 Read-later panel: `#readLaterPanel` in the engine chrome
             // (`read-later-open` / `read-later-delete` / `toggle-read-later`).

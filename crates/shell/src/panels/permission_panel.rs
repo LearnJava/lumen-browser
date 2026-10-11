@@ -11,8 +11,8 @@
 //! chrome the rows live in `#permPopover`. The frozen design gave it only two
 //! (Camera, Microphone), which left Notifications/Clipboard unreachable from
 //! the UI until `BUG-411` added the missing two rows to the reference; all four
-//! of `PermissionKind::ALL` are now bound, in that order. `hit_test` is kept
-//! (still called ungated, a `BUG-404` site).
+//! of `PermissionKind::ALL` are now bound, in that order. Clicks on the allow/deny buttons are read from the
+//! chrome hit-test (`data-action="set-permission"`).
 //!
 //! Toggled with `Ctrl+Shift+P`.
 
@@ -20,17 +20,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lumen_storage::{PermissionKind as StoreKind, PermissionState as StoreState, Permissions};
-
-// ── Visual constants ─────────────────────────────────────────────────────────
-
-/// Height of the header row (origin + close button).
-const HEADER_H: f32 = 28.0;
-/// Height of each permission row.
-const ROW_H: f32 = 30.0;
-/// Horizontal padding inside the panel.
-const PAD_X: f32 = 10.0;
-
-const BTN_W: f32 = 54.0;
 
 // ── Permission types ──────────────────────────────────────────────────────────
 
@@ -113,17 +102,6 @@ pub enum PermissionState {
     /// requested.
     #[default]
     Ask,
-}
-
-impl PermissionState {
-    /// Cycle to the next state: Ask → Allow → Deny → Ask.
-    pub fn cycle(self) -> Self {
-        match self {
-            PermissionState::Ask => PermissionState::Allow,
-            PermissionState::Allow => PermissionState::Deny,
-            PermissionState::Deny => PermissionState::Ask,
-        }
-    }
 }
 
 // ── Panel state ───────────────────────────────────────────────────────────────
@@ -304,28 +282,9 @@ impl PermissionPanel {
             .unwrap_or_default()
     }
 
-    /// Cycle the state for `kind` at the current origin to the next value.
-    ///
-    /// Does nothing if `current_origin` is `None`.
-    pub fn cycle_permission(&mut self, kind: PermissionKind) {
-        let Some(ref origin) = self.current_origin.clone() else {
-            return;
-        };
-        let current = self
-            .permissions
-            .get(&(origin.clone(), kind))
-            .copied()
-            .unwrap_or_default();
-        let next = current.cycle();
-        self.permissions.insert((origin.clone(), kind), next);
-        self.persist(origin, kind, next);
-    }
-
     /// Set the state for `kind` at the current origin directly (CC-9's
-    /// engine-rendered popover has two distinct allow/deny buttons — unlike
-    /// the legacy panel's single [`Self::cycle_permission`] toggle button,
-    /// there's no "ask" control to cycle back to, so this sets the state a
-    /// click actually asked for instead of advancing a cycle).
+    /// engine-rendered popover has two distinct allow/deny buttons and no
+    /// "ask" control).
     ///
     /// Does nothing if `current_origin` is `None`.
     pub fn set_permission(&mut self, kind: PermissionKind, state: PermissionState) {
@@ -350,65 +309,6 @@ impl Default for PermissionPanel {
     }
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click inside the permission panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionHit {
-    /// User clicked the toggle button for the given permission kind.
-    Toggle(PermissionKind),
-    /// User closed the panel (clicked the "×").
-    Close,
-    /// Clicked inside the panel but on a non-interactive area.
-    Empty,
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the permission panel.
-///
-/// Returns `None` when the click is outside the panel. BUG-461:
-/// `popover_rect` is `#permPopover`'s real measured layout rect
-/// (`Lumen::chrome_perm_popover_rect`) — the shared engine-drawn popover
-/// this panel's controls now render into — not a guess anchored to the
-/// window's left edge/`toolbar::CHROME_H`, which drifted from where
-/// `chrome.css` actually places it (nested under `.omnibox-wrap`, anchored
-/// to the omnibox/shield button, not the window). The internal
-/// header/row/button proportions below stay a heuristic (the real markup's
-/// shield-stats block and allow/deny button pair don't match this panel's
-/// single-toggle-per-row model — a residual noted in the bug file, not
-/// fixed here), but the outer bound now matches the real box instead of a
-/// stale corner of the window. A zero-sized `popover_rect` (no chrome
-/// layout yet) safely matches nothing.
-pub fn hit_test(_panel: &PermissionPanel, x: f32, y: f32, popover_rect: lumen_core::geom::Rect) -> Option<PermissionHit> {
-    let (px, py, pw, ph) = (popover_rect.x, popover_rect.y, popover_rect.width, popover_rect.height);
-    if x < px || x >= px + pw || y < py || y >= py + ph {
-        return None;
-    }
-
-    let rel_x = x - px;
-    let rel_y = y - py;
-
-    // Close button: top-right 20×20 area of the header.
-    if rel_x >= pw - 20.0 && rel_y < HEADER_H {
-        return Some(PermissionHit::Close);
-    }
-
-    // Permission rows — each is ROW_H tall starting at HEADER_H.
-    for (i, kind) in PermissionKind::ALL.iter().enumerate() {
-        let row_top = HEADER_H + i as f32 * ROW_H;
-        let row_bot = row_top + ROW_H;
-        if rel_y >= row_top && rel_y < row_bot {
-            // Toggle button: right side of the row.
-            let btn_x = pw - PAD_X - BTN_W;
-            if rel_x >= btn_x && rel_x < btn_x + BTN_W {
-                return Some(PermissionHit::Toggle(*kind));
-            }
-            return Some(PermissionHit::Empty);
-        }
-    }
-
-    Some(PermissionHit::Empty)
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -420,25 +320,6 @@ mod tests {
         p.visible = true;
         p.current_origin = origin.map(|s| s.to_owned());
         p
-    }
-
-    const TAB_H: f32 = 36.0;
-
-    // ── PermissionState ──────────────────────────────────────────────────────
-
-    #[test]
-    fn state_cycle_ask_to_allow() {
-        assert_eq!(PermissionState::Ask.cycle(), PermissionState::Allow);
-    }
-
-    #[test]
-    fn state_cycle_allow_to_deny() {
-        assert_eq!(PermissionState::Allow.cycle(), PermissionState::Deny);
-    }
-
-    #[test]
-    fn state_cycle_deny_to_ask() {
-        assert_eq!(PermissionState::Deny.cycle(), PermissionState::Ask);
     }
 
     // ── PermissionPanel ──────────────────────────────────────────────────────
@@ -471,28 +352,9 @@ mod tests {
     }
 
     #[test]
-    fn cycle_permission_advances_state() {
-        let mut p = make_panel(Some("https://example.com"));
-        p.cycle_permission(PermissionKind::Camera);
-        assert_eq!(p.state_for(PermissionKind::Camera), PermissionState::Allow);
-        p.cycle_permission(PermissionKind::Camera);
-        assert_eq!(p.state_for(PermissionKind::Camera), PermissionState::Deny);
-        p.cycle_permission(PermissionKind::Camera);
-        assert_eq!(p.state_for(PermissionKind::Camera), PermissionState::Ask);
-    }
-
-    #[test]
-    fn cycle_without_origin_is_noop() {
-        let mut p = make_panel(None);
-        p.cycle_permission(PermissionKind::Microphone);
-        // Still Ask (no origin → no entry stored).
-        assert_eq!(p.state_for(PermissionKind::Microphone), PermissionState::Ask);
-    }
-
-    #[test]
     fn permissions_are_per_kind() {
         let mut p = make_panel(Some("https://example.com"));
-        p.cycle_permission(PermissionKind::Camera);
+        p.set_permission(PermissionKind::Camera, PermissionState::Allow);
         // Microphone should still be Ask.
         assert_eq!(p.state_for(PermissionKind::Microphone), PermissionState::Ask);
     }
@@ -500,70 +362,13 @@ mod tests {
     #[test]
     fn set_origin_does_not_clear_stored_grants() {
         let mut p = make_panel(Some("https://example.com"));
-        p.cycle_permission(PermissionKind::Notifications);
+        p.set_permission(PermissionKind::Notifications, PermissionState::Allow);
         p.set_origin(Some("https://other.com".to_owned()));
         p.set_origin(Some("https://example.com".to_owned()));
         assert_eq!(
             p.state_for(PermissionKind::Notifications),
             PermissionState::Allow
         );
-    }
-
-    // ── Hit-testing (BUG-461: against a measured popover rect) ────────────────
-
-    fn test_popover_rect() -> lumen_core::geom::Rect {
-        lumen_core::geom::Rect::new(700.0, TAB_H + 4.0, 240.0, 200.0)
-    }
-
-    #[test]
-    fn hit_outside_panel_returns_none() {
-        let p = make_panel(Some("https://example.com"));
-        // Far top-left, well outside the measured popover rect.
-        assert_eq!(hit_test(&p, 0.0, TAB_H + 2.0, test_popover_rect()), None);
-    }
-
-    #[test]
-    fn hit_outside_zero_rect_returns_none() {
-        // No chrome layout yet — a zero-sized rect must match nothing.
-        let p = make_panel(Some("https://example.com"));
-        assert_eq!(hit_test(&p, 0.0, 0.0, lumen_core::geom::Rect::ZERO), None);
-    }
-
-    #[test]
-    fn hit_close_button() {
-        let p = make_panel(Some("https://example.com"));
-        let r = test_popover_rect();
-        let hit = hit_test(&p, r.x + r.width - 5.0, r.y + 5.0, r);
-        assert_eq!(hit, Some(PermissionHit::Close));
-    }
-
-    #[test]
-    fn hit_first_toggle_button() {
-        let p = make_panel(Some("https://example.com"));
-        let r = test_popover_rect();
-        let btn_x = r.x + r.width - PAD_X - BTN_W + BTN_W / 2.0;
-        let btn_y = r.y + HEADER_H + ROW_H / 2.0;
-        let hit = hit_test(&p, btn_x, btn_y, r);
-        assert_eq!(hit, Some(PermissionHit::Toggle(PermissionKind::Camera)));
-    }
-
-    #[test]
-    fn hit_second_toggle_button() {
-        let p = make_panel(Some("https://example.com"));
-        let r = test_popover_rect();
-        let btn_x = r.x + r.width - PAD_X - BTN_W + BTN_W / 2.0;
-        let btn_y = r.y + HEADER_H + ROW_H + ROW_H / 2.0;
-        let hit = hit_test(&p, btn_x, btn_y, r);
-        assert_eq!(hit, Some(PermissionHit::Toggle(PermissionKind::Microphone)));
-    }
-
-    #[test]
-    fn hit_row_label_returns_empty() {
-        let p = make_panel(Some("https://example.com"));
-        let r = test_popover_rect();
-        // Click the label area (left side of row), not the button.
-        let hit = hit_test(&p, r.x + 30.0, r.y + HEADER_H + 15.0, r);
-        assert_eq!(hit, Some(PermissionHit::Empty));
     }
 
     #[test]
