@@ -726,11 +726,20 @@ fn build_box_inner(
                         )
                     }
                 };
+                // Это intrinsic-подсказка, а не авторский размер (grid `stretch` у replaced
+                // растягивает именно такую ось, BUG-1311); пропорция — из размера bitmap.
                 if style.width.is_none() {
-                    Arc::make_mut(&mut style).width = Some(Length::Px(cw as f32 + fill_extra_w));
+                    let st = Arc::make_mut(&mut style);
+                    st.width = Some(Length::Px(cw as f32 + fill_extra_w));
+                    st.width_is_intrinsic_hint = true;
                 }
                 if style.height.is_none() {
-                    Arc::make_mut(&mut style).height = Some(Length::Px(ch as f32 + fill_extra_h));
+                    let st = Arc::make_mut(&mut style);
+                    st.height = Some(Length::Px(ch as f32 + fill_extra_h));
+                    st.height_is_intrinsic_hint = true;
+                }
+                if style.aspect_ratio.is_none() && cw > 0 && ch > 0 {
+                    Arc::make_mut(&mut style).aspect_ratio = Some((cw as f32, ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
