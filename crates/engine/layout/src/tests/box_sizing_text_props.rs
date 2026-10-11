@@ -1176,6 +1176,41 @@ use super::*;
         }
     }
 
+    /// BUG-1334: UA-поля `p/ul/ol/dl/pre/menu/blockquote/figure/dd` и padding списков.
+    #[test]
+    fn block_elements_get_ua_margins_and_list_padding() {
+        let em1 = LengthOrAuto::Length(Length::Em(1.0));
+        let px = |v: f32| LengthOrAuto::Length(Length::Px(v));
+        let style_of = |html: &str, path: &[usize]| {
+            let doc = lumen_html_parser::parse(html);
+            let mut id = doc.body().unwrap();
+            for &i in path {
+                id = doc.get(id).children[i];
+            }
+            crate::style::compute_style(
+                &doc,
+                id,
+                &lumen_css_parser::Stylesheet::default(),
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+                false,
+            )
+        };
+        for tag in ["p", "pre", "dl", "menu", "ul", "ol"] {
+            let st = style_of(&format!("<{tag}>x</{tag}>"), &[0]);
+            assert_eq!(st.margin_top, em1, "{tag} margin-top");
+            assert_eq!(st.margin_bottom, em1, "{tag} margin-bottom");
+        }
+        let ul = style_of("<ul><li>x</li></ul>", &[0]);
+        assert_eq!(ul.padding_left, Length::Px(40.0));
+        let bq = style_of("<blockquote>x</blockquote>", &[0]);
+        assert_eq!((bq.margin_left, bq.margin_right), (px(40.0), px(40.0)));
+        let dd = style_of("<dl><dd>x</dd></dl>", &[0, 0]);
+        assert_eq!((dd.margin_top, dd.margin_left), (px(0.0), px(40.0)));
+        let nested = style_of("<ul><li><ul><li>x</li></ul></li></ul>", &[0, 0, 0]);
+        assert_eq!((nested.margin_top, nested.margin_bottom), (px(0.0), px(0.0)));
+    }
+
     /// UA-дефолты заголовка перекрываются author-CSS (font-size через
     /// pre-pass, margin через main-pass каскада).
     #[test]

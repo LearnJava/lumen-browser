@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn default_style_fields_are_omitted() {
-        let root = lay("<p>x</p>", "");
+        let root = lay("<p>x</p>", "p { margin: 0 }");
         let s = serialize_layout_tree(&root);
         // color, fs, lh, margin, padding не должны попасть — все дефолтные.
         assert!(!s.contains("color="), "{s}");

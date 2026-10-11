@@ -1,6 +1,6 @@
 # BUG-1334 — У `<p>`, `<ul>`, `<ol>`, `<dl>`, `<blockquote>`, `<pre>`, `<figure>`, `<menu>` нет полей и отступов UA-таблицы
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/style/ua.rs` — есть `apply_ua_heading_style` (:386), `apply_ua_hr_style` (:260), `apply_ua_body_margin` (:360), для остальных блочных элементов нет ничего)
 
@@ -38,3 +38,7 @@ WPT-RUN-14 срез 11: почти каждый тест `css/CSS2` начина
 ## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
 
 A/B с `p,ul,ol,dl,blockquote,pre,figure,menu{display:block;margin:1em 0}` на 647 thick/identical id срезов 13: 33 → `identical`/`thin-only`, из них 18 в кластере «У `<p>`… нет UA-полей» (`floats-clear/clear-clearance-calculation-001.xht`, `-002.xht`, `-004.xht`), ещё 15 — раскиданы по другим кластерам (первое совпавшее правило). Новых провалов нет.
+
+## Исправление (2026-10-12, P6)
+
+`apply_ua_block_margins` (`ua.rs`) вызывается из `cascade.rs` рядом с `apply_ua_heading_style`: `p/pre/dl/menu/ul/ol` — `margin-block: 1em`; `blockquote/figure` — ещё `40px` по бокам; `dd` — `margin-left: 40px`; `ul/ol/menu` — `padding-left: 40px`; список внутри `dir/dl/menu/ol/ul` — без вертикальных полей. Направление письма не учитывается (физическая левая сторона). Тест `block_elements_get_ua_margins_and_list_padding`. Обновлены снимки layout и dump-golden `samples/page.html`.
