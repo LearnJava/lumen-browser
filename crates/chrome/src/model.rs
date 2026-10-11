@@ -122,6 +122,8 @@ pub struct ChromeModel {
     pub focus: ChromeFocusModel,
     /// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
     pub note: ChromeNoteModel,
+    /// `#tabCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `TabContextMenu`.
+    pub tab_ctx: ChromeTabCtxModel,
     /// `#inspPanel` snapshot (UX-CHROME-PANELS) — mirrors `DomInspectorPanel`.
     pub inspector: ChromeInspectorModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
@@ -646,6 +648,21 @@ pub struct ChromeFocusModel {
     pub label: String,
 }
 
+/// `#tabCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `TabContextMenu`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeTabCtxModel {
+    /// `true` shows the menu.
+    pub open: bool,
+    /// Left edge in window CSS px (already clamped inside the window).
+    pub x: f32,
+    /// Top edge in window CSS px (already clamped inside the window).
+    pub y: f32,
+    /// Target tab is pinned — the row reads «Открепить».
+    pub pinned: bool,
+    /// Target tab's group is collapsed — the row reads «Развернуть группу».
+    pub collapsed: bool,
+}
+
 /// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeNoteModel {
@@ -1110,6 +1127,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_privacy(doc, &model.privacy);
     bind_focus(doc, &model.focus);
     bind_note(doc, &model.note);
+    bind_tab_ctx(doc, &model.tab_ctx);
     bind_workspace_bar(doc, model.workspace_bar_open, &model.workspaces);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
@@ -1873,6 +1891,23 @@ fn bind_focus(doc: &mut Document, focus: &ChromeFocusModel) {
     }
     if let Some(done) = doc.find_by_id(crate::ids::FOCUS_DONE) {
         set_class_token(doc, done, "show", focus.active && focus.finished);
+    }
+}
+
+/// Toggles `#tabCtxMenu`'s `.open` class, places it at the clamped anchor and
+/// flips the Pin/Collapse row wording (UX-CHROME-PANELS).
+fn bind_tab_ctx(doc: &mut Document, menu: &ChromeTabCtxModel) {
+    let Some(root) = doc.find_by_id(crate::ids::TAB_CTX_MENU) else { return };
+    set_class_token(doc, root, "open", menu.open);
+    if !menu.open {
+        return;
+    }
+    set_attr(doc, root, "style", &format!("left:{}px;top:{}px", menu.x, menu.y));
+    if let Some(n) = doc.find_by_id(crate::ids::TAB_CTX_PIN) {
+        set_text(doc, n, if menu.pinned { "Открепить" } else { "Закрепить" });
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::TAB_CTX_TOGGLE_GROUP) {
+        set_text(doc, n, if menu.collapsed { "Развернуть группу" } else { "Свернуть группу" });
     }
 }
 
@@ -4276,6 +4311,25 @@ mod tests {
         assert!(!has_class(&doc, bar, "open"));
         let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
         assert!(find_descendants_by_class(&doc, list, "wsb-chip").is_empty());
+    }
+
+    #[test]
+    fn tab_ctx_menu_opens_places_and_flips_labels() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            tab_ctx: ChromeTabCtxModel { open: true, x: 40.0, y: 12.0, pinned: true, collapsed: true },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let root = doc.find_by_id(crate::ids::TAB_CTX_MENU).expect("asset has #tabCtxMenu");
+        assert!(has_class(&doc, root, "open"));
+        assert_eq!(doc.get(root).get_attr("style"), Some("left:40px;top:12px"));
+        let pin = doc.find_by_id(crate::ids::TAB_CTX_PIN).expect("pin row");
+        assert_eq!(text_of(&doc, pin), "Открепить");
+        let grp = doc.find_by_id(crate::ids::TAB_CTX_TOGGLE_GROUP).expect("group row");
+        assert_eq!(text_of(&doc, grp), "Развернуть группу");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, root, "open"));
     }
 
     #[test]

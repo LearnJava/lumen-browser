@@ -739,6 +739,12 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .note-comment{ font-size:12px; color:var(--text-secondary); }
 .note-comment:empty{ display:none; }
 
+.tab-ctx{ position:fixed; display:none; width:210px; padding:5px 0; background:var(--surface-0); border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 8px 24px rgba(0,0,0,.18); z-index:300; }
+.tab-ctx.open{ display:block; }
+.tab-ctx-row{ display:block; width:100%; height:28px; padding:0 14px; border:none; background:none; text-align:left; font-size:13px; line-height:28px; color:var(--text-primary); }
+.tab-ctx-row:hover{ background:var(--surface-2); }
+.tab-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1680,6 +1686,19 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button class="focus-exit" data-action="toggle-focus"><svg class="icon" style="stroke:#fff;width:11px;height:11px"><use href="#i-x"/></svg></button>
           </div>
           <div class="focus-done" id="focusDone"><svg class="icon" style="stroke:#fff;width:12px;height:12px"><use href="#i-clock"/></svg>Помодоро завершён — пора сделать перерыв</div>
+
+          <!-- Tab context menu (UX-CHROME-PANELS) -->
+          <div class="tab-ctx" id="tabCtxMenu">
+            <button class="tab-ctx-row" id="tabCtxDuplicate" data-tab-ctx="duplicate">Дублировать</button>
+            <button class="tab-ctx-row" id="tabCtxPin" data-tab-ctx="pin">Закрепить</button>
+            <button class="tab-ctx-row" id="tabCtxNewWindow" data-tab-ctx="new-window">В новое окно</button>
+            <button class="tab-ctx-row sep" id="tabCtxNewGroup" data-tab-ctx="new-group">В новую группу</button>
+            <button class="tab-ctx-row" id="tabCtxToggleGroup" data-tab-ctx="toggle-group">Свернуть группу</button>
+            <button class="tab-ctx-row" id="tabCtxUngroup" data-tab-ctx="ungroup">Убрать из группы</button>
+            <button class="tab-ctx-row sep" id="tabCtxCloseOthers" data-tab-ctx="close-others">Закрыть другие</button>
+            <button class="tab-ctx-row" id="tabCtxCloseRight" data-tab-ctx="close-right">Закрыть справа</button>
+            <button class="tab-ctx-row sep" id="tabCtxReopen" data-tab-ctx="reopen">Открыть закрытую вкладку</button>
+          </div>
 
           <!-- Note viewer modal (UX-CHROME-PANELS) -->
           <div class="modal-overlay" id="noteOverlay">

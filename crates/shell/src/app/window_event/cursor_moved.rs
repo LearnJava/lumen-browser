@@ -404,29 +404,7 @@ impl Lumen {
         // only `settings_panel::tooltip_for`/`build_tooltip`, both
         // deleted with the legacy paint, so every `CursorMoved` while
         // the panel was open cost a `request_redraw()` for nothing.
-        // CC-4: update tab context-menu hover highlight.
-        if self.tab_context_menu.is_open() {
-            let dpr = self
-                .renderer
-                .as_ref()
-                .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                .max(1e-6);
-            let x_css = (position.x as f32) / dpr;
-            let y_css = (position.y as f32) / dpr;
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            let new_hover = tabs::context_menu::item_at(
-                &self.tab_context_menu,
-                x_css,
-                y_css,
-                win_w,
-                win_h,
-            );
-            if new_hover != self.tab_context_menu.hovered {
-                self.tab_context_menu.hovered = new_hover;
-                self.request_redraw();
-            }
-        }
+        // Tab context menu hover: `.tab-ctx-row:hover` in the engine chrome.
         // B-7/CC-CSS-4: Active resize — update element width/height as mouse
         // moves, gated to the axes the grip's `resize` value allows (a pure
         // `resize: vertical` grip must not also change width on a diagonal drag).
