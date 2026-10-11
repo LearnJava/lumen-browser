@@ -7,9 +7,8 @@
 //! time, turned the switch from a pure indicator into the real control: the
 //! per-site state below is what the shell pushes into
 //! `lumen_network::set_global_adblock_enabled`, so flipping it actually stops
-//! (or resumes) request filtering. `hit_test` is deliberately kept (still
-//! called ungated, itself a `BUG-404` site) — see that bug file before
-//! deleting anything here.
+//! (or resumes) request filtering. Clicks come from the chrome hit-test
+//! (`data-action="toggle-site-shields"`).
 //!
 //! Toggled with `Ctrl+Shift+S`.
 //!
@@ -216,51 +215,6 @@ impl ShieldsPanel {
     }
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click inside the shields panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShieldsHit {
-    /// User toggled shields on/off (clicked the shield / toggle area).
-    Toggle,
-    /// User closed the panel (clicked the "×").
-    Close,
-    /// Clicked inside the panel but on a non-interactive area.
-    Empty,
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the shields panel.
-///
-/// Returns `None` when the click is outside the panel. BUG-461:
-/// `popover_rect` is `#permPopover`'s real measured layout rect (the shared
-/// engine-drawn popover this panel's controls are now rendered into —
-/// `Lumen::chrome_perm_popover_rect`), not a guessed box anchored to the
-/// window's right edge/`toolbar::CHROME_H` — that guess drifted from where
-/// `chrome.css` (`.popover{ position:absolute; top:34px; right:0 }`, nested
-/// under `.omnibox-wrap`) actually places it. A zero-sized `popover_rect`
-/// (no chrome layout yet) safely matches nothing.
-pub fn hit_test(_panel: &ShieldsPanel, x: f32, y: f32, popover_rect: lumen_core::geom::Rect) -> Option<ShieldsHit> {
-    let (px, py, pw, ph) = (popover_rect.x, popover_rect.y, popover_rect.width, popover_rect.height);
-    if x < px || x >= px + pw || y < py || y >= py + ph {
-        return None;
-    }
-
-    let rel_x = x - px;
-    let rel_y = y - py;
-
-    // Close button: top-right 20×20 area.
-    if rel_x >= pw - 20.0 && rel_y < 20.0 {
-        return Some(ShieldsHit::Close);
-    }
-
-    // Toggle area: bottom half of the panel.
-    if rel_y >= ph * 0.55 {
-        return Some(ShieldsHit::Toggle);
-    }
-
-    Some(ShieldsHit::Empty)
-}
-
 /// Extract the hostname from an HTTP/HTTPS URL string.
 ///
 /// Returns `None` for non-HTTP/HTTPS schemes and malformed URLs.
@@ -341,8 +295,6 @@ mod tests {
         // With no host, `enabled_for_current` *is* the default.
         assert!(!p.enabled_for_current());
     }
-
-    const TAB_H: f32 = 36.0;
 
     // ── BlockedLog ───────────────────────────────────────────────────────────
 
@@ -459,53 +411,6 @@ mod tests {
         assert_eq!(p.blocked_total_count(), 1);
         p.clear_log();
         assert_eq!(p.blocked_total_count(), 0);
-    }
-
-    // ── Hit-testing (BUG-461: against a measured popover rect) ────────────────
-
-    fn test_popover_rect() -> lumen_core::geom::Rect {
-        lumen_core::geom::Rect::new(700.0, TAB_H + 4.0, 220.0, 90.0)
-    }
-
-    #[test]
-    fn hit_outside_panel_returns_none() {
-        let p = make_panel_visible(true, Some("example.com"));
-        // Click far top-left, well outside the measured popover rect.
-        assert_eq!(hit_test(&p, 0.0, TAB_H + 2.0, test_popover_rect()), None);
-    }
-
-    #[test]
-    fn hit_outside_zero_rect_returns_none() {
-        // No chrome layout yet — a zero-sized rect must match nothing.
-        let p = make_panel_visible(true, Some("example.com"));
-        assert_eq!(hit_test(&p, 0.0, 0.0, lumen_core::geom::Rect::ZERO), None);
-    }
-
-    #[test]
-    fn hit_close_button() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let r = test_popover_rect();
-        // Top-right corner.
-        let hit = hit_test(&p, r.x + r.width - 5.0, r.y + 5.0, r);
-        assert_eq!(hit, Some(ShieldsHit::Close));
-    }
-
-    #[test]
-    fn hit_toggle_area() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let r = test_popover_rect();
-        // Bottom half of panel.
-        let hit = hit_test(&p, r.x + r.width * 0.5, r.y + r.height * 0.8, r);
-        assert_eq!(hit, Some(ShieldsHit::Toggle));
-    }
-
-    #[test]
-    fn hit_empty_area() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let r = test_popover_rect();
-        // Upper middle area (not close, not toggle).
-        let hit = hit_test(&p, r.x + 40.0, r.y + 15.0, r);
-        assert_eq!(hit, Some(ShieldsHit::Empty));
     }
 
     // ── ShieldCountSink ──────────────────────────────────────────────────────

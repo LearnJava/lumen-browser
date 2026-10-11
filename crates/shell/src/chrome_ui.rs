@@ -1066,18 +1066,6 @@ impl Lumen {
             .unwrap_or_default()
     }
 
-    /// BUG-461: `#permPopover`'s real measured rect — the shared popover for
-    /// both the shields panel and the per-site permission panel. Replaces
-    /// `shields_panel`/`permission_panel`'s `panel_origin()` guesses, which
-    /// anchored a hardcoded box size to the window edge/`toolbar::CHROME_H`
-    /// instead of the omnibox-relative position `chrome.css` actually uses
-    /// (`.popover{ position:absolute; top:34px; right:0 }` inside
-    /// `.omnibox-wrap`) — the same `BUG-404`-class drift `page_offset()`
-    /// already fixed for `profile_menu`.
-    pub(crate) fn chrome_perm_popover_rect(&self) -> Option<Rect> {
-        self.chrome_node_rect(lumen_chrome::ids::PERM_POPOVER)
-    }
-
     /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer
     /// attribute off `nid` in the live `chrome_doc` — the id `ChromeModel`
     /// (`crates/chrome/src/model.rs`) stamps on rebuilt tab rows/workspace
@@ -1755,7 +1743,7 @@ impl Lumen {
             // directly per `data-perm` ("allow"/"deny"). Unlike the legacy
             // panel's single cycle button, the design has two distinct
             // buttons with no "ask" control, so this sets state directly
-            // rather than calling `PermissionPanel::cycle_permission`.
+            // rather than cycling.
             ChromeAction::SetPermission => {
                 if let Some(kind) = self.chrome_permission_kind_for_node(nid)
                     && let Some(perm) = self
