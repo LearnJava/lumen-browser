@@ -290,28 +290,8 @@ impl Lumen {
                 return;
             }
 
-            // Focus mode widget (task #25): floating top-right card. A
-            // click on the ring pauses/resumes; the `×` corner exits.
-            if self.focus.active {
-                let win_w = self.viewport_width_css();
-                if let Some(hit) =
-                    panels::focus_panel::hit_test(&self.focus, x_css, y_css, win_w)
-                {
-                    match hit {
-                        panels::focus_panel::FocusHit::TogglePause => {
-                            self.focus.timer.toggle_pause();
-                            if self.focus.timer.running {
-                                let now_ms =
-                                    self.epoch.elapsed().as_secs_f64() * 1000.0;
-                                self.focus.tick(now_ms);
-                            }
-                        }
-                        panels::focus_panel::FocusHit::Exit => self.focus.exit(),
-                    }
-                    self.request_redraw();
-                    return;
-                }
-            }
+            // Focus mode pill: `.focus-timer` in the engine chrome
+            // (`toggle-focus-timer` pauses, `toggle-focus` exits).
 
             // Picture-in-picture window (task #21): floating draggable
             // card. `×` closes, the centre button toggles play/pause, the

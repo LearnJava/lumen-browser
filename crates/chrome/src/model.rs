@@ -118,6 +118,8 @@ pub struct ChromeModel {
     pub read_later: ChromeReadLaterModel,
     /// `#privacyPanel` snapshot (UX-CHROME-PANELS) — mirrors `PrivacyPanel`.
     pub privacy: ChromePrivacyModel,
+    /// `.focus-timer` snapshot (UX-CHROME-PANELS) — mirrors `FocusModePanel`.
+    pub focus: ChromeFocusModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -627,6 +629,19 @@ pub struct ChromeNetworkModel {
     pub rows: Vec<ChromeNetworkRowModel>,
 }
 
+/// `.focus-timer` snapshot (UX-CHROME-PANELS) — mirrors `FocusModePanel`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeFocusModel {
+    /// `true` shows the pill — focus mode is engaged.
+    pub active: bool,
+    /// `true` while the countdown runs (pause icon); `false` shows play.
+    pub running: bool,
+    /// Session complete: shows the `#focusDone` banner.
+    pub finished: bool,
+    /// Remaining time as `MM:SS`.
+    pub label: String,
+}
+
 /// One `.pv-row` of `#pvList` (UX-CHROME-PANELS).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromePrivacyRowModel {
@@ -1038,6 +1053,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_network(doc, &model.network);
     bind_read_later(doc, &model.read_later);
     bind_privacy(doc, &model.privacy);
+    bind_focus(doc, &model.focus);
     bind_workspace_bar(doc, model.workspace_bar_open, &model.workspaces);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
@@ -1714,6 +1730,26 @@ fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
             attach_child(doc, node, cell);
         }
         attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#focusTimer`'s `.open` class, writes the countdown into
+/// `#focusTime`, swaps the play/pause icon and shows `#focusDone` once the
+/// session is complete (UX-CHROME-PANELS). Only the `.open`/`.show` classes
+/// are touched: the design's `body.focus-mode` also hides the sidebar and
+/// toolbar, which would desync the shell's page viewport.
+fn bind_focus(doc: &mut Document, focus: &ChromeFocusModel) {
+    let Some(pill) = doc.find_by_id(crate::ids::FOCUS_TIMER) else { return };
+    set_class_token(doc, pill, "open", focus.active);
+    if let Some(n) = doc.find_by_id(crate::ids::FOCUS_TIME) {
+        let label = if focus.active { focus.label.as_str() } else { "25:00" };
+        set_text(doc, n, label);
+    }
+    if let Some(icon) = doc.find_by_id(crate::ids::FOCUS_TOGGLE_ICON) {
+        set_attr(doc, icon, "href", if focus.running { "#i-pause" } else { "#i-play" });
+    }
+    if let Some(done) = doc.find_by_id(crate::ids::FOCUS_DONE) {
+        set_class_token(doc, done, "show", focus.active && focus.finished);
     }
 }
 
@@ -4101,6 +4137,34 @@ mod tests {
         assert!(!has_class(&doc, bar, "open"));
         let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
         assert!(find_descendants_by_class(&doc, list, "wsb-chip").is_empty());
+    }
+
+    #[test]
+    fn focus_timer_shows_countdown_icon_and_done_banner() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            focus: ChromeFocusModel { active: true, running: true, finished: false, label: "24:59".to_owned() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let pill = doc.find_by_id(crate::ids::FOCUS_TIMER).expect("asset has the focus pill");
+        assert!(has_class(&doc, pill, "open"));
+        let time = doc.find_by_id(crate::ids::FOCUS_TIME).expect("time");
+        assert_eq!(text_of(&doc, time), "24:59");
+        let icon = doc.find_by_id(crate::ids::FOCUS_TOGGLE_ICON).expect("icon");
+        assert_eq!(doc.get(icon).get_attr("href"), Some("#i-pause"));
+        let done = doc.find_by_id(crate::ids::FOCUS_DONE).expect("done");
+        assert!(!has_class(&doc, done, "show"));
+        let model = ChromeModel {
+            focus: ChromeFocusModel { active: true, running: false, finished: true, label: "00:00".to_owned() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert_eq!(doc.get(icon).get_attr("href"), Some("#i-play"));
+        assert!(has_class(&doc, done, "show"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, pill, "open"));
+        assert!(!has_class(&doc, done, "show"));
     }
 
     #[test]

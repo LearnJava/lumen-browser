@@ -1,67 +1,22 @@
 //! Focus mode + Pomodoro timer panel (V4, task #25).
 //!
-//! Focus mode is a distraction-free reading view: while active the shell hides
-//! the tab bar and side panels and overlays a compact Pomodoro countdown widget
-//! in the top-right corner.  The widget draws a circular **arc progress ring**
-//! that fills as the work session elapses, with the remaining time as `MM:SS` in
-//! the centre.
+//! Focus mode shows a compact Pomodoro countdown pill in the top-right corner
+//! (`.focus-timer` in the engine chrome, `bind_focus`, UX-CHROME-PANELS) with
+//! the remaining time as `MM:SS`, a pause/resume button
+//! (`toggle-focus-timer`) and an exit button (`toggle-focus`); a green banner
+//! (`#focusDone`) appears when the session is complete.
 //!
 //! Toggled with `Ctrl+Shift+F` (default 25-minute Pomodoro).  While active,
-//! `Escape` exits focus mode (instead of quitting the app).  Clicking the ring
-//! pauses / resumes the countdown; the small `×` in the card corner exits.
+//! `Escape` exits focus mode (instead of quitting the app).
 //!
 //! All timing math lives in [`PomodoroTimer`] and is driven by a monotonic
 //! wall-clock millisecond timestamp fed from the shell's `about_to_wait` loop,
 //! so it can be unit-tested without a real clock.
 
-use crate::panels::themes::Palette;
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-use std::f32::consts::PI;
-
-// ── Visual constants ─────────────────────────────────────────────────────────
+use lumen_chrome::ChromeFocusModel;
 
 /// Default Pomodoro work-session length in minutes.
 pub const DEFAULT_POMODORO_MIN: u32 = 25;
-
-/// Width of the focus widget card in CSS px.
-const CARD_W: f32 = 150.0;
-
-/// Height of the focus widget card in CSS px.
-const CARD_H: f32 = 168.0;
-
-/// Margin from the top-right window corner to the card in CSS px.
-const CARD_MARGIN: f32 = 14.0;
-
-/// Outer radius of the progress ring in CSS px.
-const RING_OUTER: f32 = 46.0;
-
-/// Inner radius of the progress ring in CSS px (ring thickness = outer − inner).
-const RING_INNER: f32 = 37.0;
-
-/// Vertical offset of the ring centre from the card top in CSS px.
-const RING_CY_OFFSET: f32 = 62.0;
-
-/// Number of triangle segments used to tessellate the full ring (a sweep of
-/// `progress` covers `progress * SEGMENTS` of them).
-const RING_SEGMENTS: usize = 96;
-
-/// Side length of the square `×` exit hit-zone in the card's top-right corner.
-const CLOSE_W: f32 = 22.0;
-
-/// Ring track (annulus background) — fixed dark-on-dark appearance regardless of theme.
-const RING_TRACK: Color = Color { r: 44, g: 44, b: 56, a: 255 };
-/// Ring fill color: active work session (red).
-const RING_FILL: Color = Color { r: 240, g: 96, b: 84, a: 255 };
-/// Ring fill color: paused state (neutral gray).
-const RING_FILL_PAUSED: Color = Color { r: 150, g: 150, b: 160, a: 255 };
-/// Ring fill color: session complete (green).
-const RING_FILL_DONE: Color = Color { r: 90, g: 200, b: 110, a: 255 };
-/// `×` exit button foreground — semantic danger/close color.
-const CLOSE_FG: Color = Color { r: 180, g: 90, b: 90, a: 255 };
-
-const CARD_RADIUS: f32 = 12.0;
 
 // ── Pomodoro timer ────────────────────────────────────────────────────────────
 
@@ -114,14 +69,6 @@ impl PomodoroTimer {
         (self.duration_ms - self.elapsed_ms).max(0.0)
     }
 
-    /// Elapsed fraction in `[0, 1]`.  Returns `1.0` for a zero-length duration.
-    pub fn progress(&self) -> f32 {
-        if self.duration_ms <= 0.0 {
-            return 1.0;
-        }
-        (self.elapsed_ms / self.duration_ms).clamp(0.0, 1.0) as f32
-    }
-
     /// `true` once the full duration has elapsed.
     pub fn is_finished(&self) -> bool {
         self.elapsed_ms >= self.duration_ms
@@ -166,6 +113,9 @@ pub struct FocusModePanel {
     pub active: bool,
     /// The countdown timer; reset on every [`enter`](Self::enter).
     pub timer: PomodoroTimer,
+    /// Label last pushed into the chrome (`#focusTime`); see
+    /// [`FocusModePanel::label_changed`].
+    bound_label: String,
 }
 
 impl FocusModePanel {
@@ -174,6 +124,7 @@ impl FocusModePanel {
         Self {
             active: false,
             timer: PomodoroTimer::new(DEFAULT_POMODORO_MIN),
+            bound_label: String::new(),
         }
     }
 
@@ -211,221 +162,28 @@ impl Default for FocusModePanel {
     }
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click inside the focus widget card.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FocusHit {
-    /// Clicked the ring / card body — pause or resume the countdown.
-    TogglePause,
-    /// Clicked the `×` corner button — exit focus mode.
-    Exit,
-}
-
-/// Top-left corner `(x, y)` of the focus card for window width `window_w`.
-fn card_origin(window_w: f32) -> (f32, f32) {
-    (window_w - CARD_MARGIN - CARD_W, CARD_MARGIN)
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the focus widget card.
-///
-/// Returns `None` when the click is outside the card so it falls through to the
-/// page.  `window_w` is the full window width in CSS px.
-pub fn hit_test(panel: &FocusModePanel, x: f32, y: f32, window_w: f32) -> Option<FocusHit> {
-    if !panel.active {
-        return None;
-    }
-    let (cx0, cy0) = card_origin(window_w);
-    if x < cx0 || x >= cx0 + CARD_W || y < cy0 || y >= cy0 + CARD_H {
-        return None;
-    }
-    // `×` exit zone — top-right corner of the card.
-    let close_left = cx0 + CARD_W - CLOSE_W;
-    if x >= close_left && y < cy0 + CLOSE_W {
-        return Some(FocusHit::Exit);
-    }
-    Some(FocusHit::TogglePause)
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the focus widget overlay.
-///
-/// Rendered as a top-right floating card containing the arc progress ring and
-/// the remaining-time label.  `window_w` is the full window width in CSS px.
-/// `pal` provides the theme palette for surface (non-semantic) colors.
-pub fn build_panel(panel: &FocusModePanel, window_w: f32, pal: &Palette) -> DisplayList {
-    let mut out = DisplayList::with_capacity(8);
-    if !panel.active {
-        return out;
+impl FocusModePanel {
+    /// `.focus-timer` snapshot (UX-CHROME-PANELS).
+    pub fn chrome_model(&self) -> ChromeFocusModel {
+        ChromeFocusModel {
+            active: self.active,
+            running: self.timer.running,
+            finished: self.timer.is_finished(),
+            label: self.timer.label(),
+        }
     }
 
-    let (cx0, cy0) = card_origin(window_w);
-    let radii = CornerRadii {
-        tl: CARD_RADIUS, tl_y: CARD_RADIUS,
-        tr: CARD_RADIUS, tr_y: CARD_RADIUS,
-        br: CARD_RADIUS, br_y: CARD_RADIUS,
-        bl: CARD_RADIUS, bl_y: CARD_RADIUS,
-    };
-
-    // Card background + 1px border (drawn as a slightly larger filled rect).
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(cx0 - 1.0, cy0 - 1.0, CARD_W + 2.0, CARD_H + 2.0),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(cx0, cy0, CARD_W, CARD_H),
-        radii,
-        color: pal.overlay_bg,
-    });
-
-    // Progress ring.
-    let ring_cx = cx0 + CARD_W * 0.5;
-    let ring_cy = cy0 + RING_CY_OFFSET;
-    let progress = panel.timer.progress();
-    let fill = if panel.timer.is_finished() {
-        RING_FILL_DONE
-    } else if panel.timer.running {
-        RING_FILL
-    } else {
-        RING_FILL_PAUSED
-    };
-
-    // Full track ring (background).
-    out.push(DisplayCommand::DrawSvgPath {
-        vertices: ring_triangles(ring_cx, ring_cy, RING_OUTER, RING_INNER, 1.0),
-        color: RING_TRACK,
-    });
-    // Filled portion (clockwise from 12 o'clock).
-    if progress > 0.0 {
-        out.push(DisplayCommand::DrawSvgPath {
-            vertices: ring_triangles(ring_cx, ring_cy, RING_OUTER, RING_INNER, progress),
-            color: fill,
-        });
+    /// `true` when the countdown label differs from the last one the chrome was
+    /// bound with (once per second while running), so the shell relayouts the
+    /// chrome only when the pill's text actually changes.
+    pub fn label_changed(&mut self) -> bool {
+        let label = self.timer.label();
+        if label == self.bound_label {
+            return false;
+        }
+        self.bound_label = label;
+        true
     }
-
-    // Remaining-time label, centred in the ring.
-    let time = panel.timer.label();
-    let time_sz = 24.0;
-    out.push(DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(ring_cx - RING_OUTER, ring_cy - time_sz * 0.55, RING_OUTER * 2.0, time_sz * 1.2),
-        text: time,
-        font_size: time_sz,
-        color: pal.text,
-        font_family: Vec::new(),
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Status line below the ring: "Focus" / "Paused" / "Done".
-    let status = if panel.timer.is_finished() {
-        "Done"
-    } else if panel.timer.running {
-        "Focus"
-    } else {
-        "Paused"
-    };
-    let status_sz = 11.0;
-    out.push(DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(cx0, cy0 + RING_CY_OFFSET + RING_OUTER + 12.0, CARD_W, status_sz * 1.4),
-        text: status.to_owned(),
-        font_size: status_sz,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Hint line.
-    out.push(DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(cx0, cy0 + CARD_H - status_sz * 1.8, CARD_W, status_sz * 1.4),
-        text: "click: pause  ·  Esc: exit".to_owned(),
-        font_size: 9.0,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // `×` exit glyph, top-right corner.
-    out.push(DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(cx0 + CARD_W - CLOSE_W, cy0 + 3.0, CLOSE_W, 16.0),
-        text: "×".to_owned(),
-        font_size: 14.0,
-        color: CLOSE_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Tessellate an annulus sector (ring arc) into a flat triangle list.
-///
-/// The sweep starts at 12 o'clock and goes clockwise covering `fraction` of the
-/// full circle (`fraction` clamped to `[0, 1]`).  `r_outer`/`r_inner` are the
-/// outer/inner radii in CSS px; each ring segment becomes two triangles so the
-/// returned `Vec` length is always a multiple of 3.
-fn ring_triangles(cx: f32, cy: f32, r_outer: f32, r_inner: f32, fraction: f32) -> Vec<[f32; 2]> {
-    let fraction = fraction.clamp(0.0, 1.0);
-    let segments = ((RING_SEGMENTS as f32 * fraction).ceil() as usize).max(1);
-    let total_angle = 2.0 * PI * fraction;
-    // 12 o'clock = -90° in screen space (y grows downward), clockwise sweep.
-    let start = -PI * 0.5;
-
-    let mut verts = Vec::with_capacity(segments * 6);
-    for i in 0..segments {
-        let a0 = start + total_angle * (i as f32 / segments as f32);
-        let a1 = start + total_angle * ((i + 1) as f32 / segments as f32);
-        let (s0, c0) = a0.sin_cos();
-        let (s1, c1) = a1.sin_cos();
-
-        let outer0 = [cx + c0 * r_outer, cy + s0 * r_outer];
-        let outer1 = [cx + c1 * r_outer, cy + s1 * r_outer];
-        let inner0 = [cx + c0 * r_inner, cy + s0 * r_inner];
-        let inner1 = [cx + c1 * r_inner, cy + s1 * r_inner];
-
-        // Two triangles per quad: (outer0, outer1, inner1) and (outer0, inner1, inner0).
-        verts.push(outer0);
-        verts.push(outer1);
-        verts.push(inner1);
-        verts.push(outer0);
-        verts.push(inner1);
-        verts.push(inner0);
-    }
-    verts
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -434,8 +192,6 @@ fn ring_triangles(cx: f32, cy: f32, r_outer: f32, r_inner: f32, fraction: f32) -
 mod tests {
     use super::*;
 
-    const WIN_W: f32 = 1024.0;
-
     // ── Timer ──────────────────────────────────────────────────────────────────
 
     #[test]
@@ -443,7 +199,6 @@ mod tests {
         let t = PomodoroTimer::new(25);
         assert_eq!(t.duration_ms, 25.0 * 60_000.0);
         assert_eq!(t.remaining_ms(), 25.0 * 60_000.0);
-        assert_eq!(t.progress(), 0.0);
         assert!(!t.is_finished());
     }
 
@@ -471,7 +226,6 @@ mod tests {
         assert_eq!(t.elapsed_ms, 60_000.0);
         assert_eq!(t.remaining_ms(), 0.0);
         assert!(t.is_finished());
-        assert_eq!(t.progress(), 1.0);
     }
 
     #[test]
@@ -517,14 +271,6 @@ mod tests {
         t.tick(0.0);
         t.tick(90_000.0); // 1m30s elapsed → 23:30 remaining
         assert_eq!(t.label(), "23:30");
-    }
-
-    #[test]
-    fn progress_midway() {
-        let mut t = PomodoroTimer::new(1);
-        t.tick(0.0);
-        t.tick(30_000.0);
-        assert!((t.progress() - 0.5).abs() < 1e-4);
     }
 
     // ── Panel state ─────────────────────────────────────────────────────────────
@@ -578,117 +324,30 @@ mod tests {
         assert!((p.timer.elapsed_ms - 1000.0).abs() < 1e-6);
     }
 
-    // ── Hit-testing ──────────────────────────────────────────────────────────────
+    // ── Chrome model ────────────────────────────────────────────────────────────
 
     #[test]
-    fn hit_inactive_returns_none() {
-        let p = FocusModePanel::new();
-        let (cx0, cy0) = card_origin(WIN_W);
-        assert_eq!(hit_test(&p, cx0 + 10.0, cy0 + 60.0, WIN_W), None);
-    }
-
-    #[test]
-    fn hit_outside_card_none() {
+    fn chrome_model_reflects_state() {
         let mut p = FocusModePanel::new();
-        p.enter(25);
-        assert_eq!(hit_test(&p, 10.0, 10.0, WIN_W), None);
+        assert!(!p.chrome_model().active);
+        p.enter(1);
+        let m = p.chrome_model();
+        assert!(m.active && m.running && !m.finished);
+        assert_eq!(m.label, "01:00");
+        p.timer.toggle_pause();
+        assert!(!p.chrome_model().running);
+        p.timer.elapsed_ms = p.timer.duration_ms;
+        assert!(p.chrome_model().finished);
     }
 
     #[test]
-    fn hit_close_zone_exit() {
-        let mut p = FocusModePanel::new();
-        p.enter(25);
-        let (cx0, cy0) = card_origin(WIN_W);
-        let x = cx0 + CARD_W - CLOSE_W * 0.5;
-        let y = cy0 + CLOSE_W * 0.5;
-        assert_eq!(hit_test(&p, x, y, WIN_W), Some(FocusHit::Exit));
-    }
-
-    #[test]
-    fn hit_ring_toggle_pause() {
-        let mut p = FocusModePanel::new();
-        p.enter(25);
-        let (cx0, cy0) = card_origin(WIN_W);
-        let x = cx0 + CARD_W * 0.5;
-        let y = cy0 + RING_CY_OFFSET;
-        assert_eq!(hit_test(&p, x, y, WIN_W), Some(FocusHit::TogglePause));
-    }
-
-    // ── Rendering ────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_inactive_empty() {
-        let p = FocusModePanel::new();
-        let dl = build_panel(&p, WIN_W, &Palette::DARK);
-        assert!(dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_active_emits_commands() {
-        let mut p = FocusModePanel::new();
-        p.enter(25);
-        let dl = build_panel(&p, WIN_W, &Palette::DARK);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_draws_time_label() {
-        let mut p = FocusModePanel::new();
-        p.enter(25);
-        let dl = build_panel(&p, WIN_W, &Palette::DARK);
-        let has_time = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "25:00")
-        });
-        assert!(has_time, "panel must draw the MM:SS label");
-    }
-
-    #[test]
-    fn build_panel_emits_ring_path() {
-        let mut p = FocusModePanel::new();
-        p.enter(25);
-        let dl = build_panel(&p, WIN_W, &Palette::DARK);
-        let ring_count = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }))
-            .count();
-        // Track ring is always drawn; the fill ring only when progress > 0.
-        assert!(ring_count >= 1, "panel must draw at least the track ring");
-    }
-
-    #[test]
-    fn build_panel_progressed_emits_two_rings() {
+    fn label_changed_fires_once_per_new_label() {
         let mut p = FocusModePanel::new();
         p.enter(1);
-        p.tick(0.0);
-        p.tick(30_000.0); // 50% progress
-        let dl = build_panel(&p, WIN_W, &Palette::DARK);
-        let ring_count = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }))
-            .count();
-        assert_eq!(ring_count, 2, "track + fill rings expected once progress > 0");
-    }
-
-    // ── Ring tessellation ────────────────────────────────────────────────────────
-
-    #[test]
-    fn ring_triangles_multiple_of_three() {
-        let v = ring_triangles(100.0, 100.0, 40.0, 30.0, 1.0);
-        assert_eq!(v.len() % 3, 0);
-        assert!(!v.is_empty());
-    }
-
-    #[test]
-    fn ring_triangles_zero_fraction_minimal() {
-        // Clamped to at least one segment so it never produces an empty list.
-        let v = ring_triangles(100.0, 100.0, 40.0, 30.0, 0.0);
-        assert_eq!(v.len(), 6);
-    }
-
-    #[test]
-    fn ring_triangles_partial_fewer_than_full() {
-        let full = ring_triangles(100.0, 100.0, 40.0, 30.0, 1.0);
-        let half = ring_triangles(100.0, 100.0, 40.0, 30.0, 0.5);
-        assert!(half.len() < full.len());
+        assert!(p.label_changed());
+        assert!(!p.label_changed());
+        p.timer.tick(0.0);
+        p.timer.tick(2_000.0);
+        assert!(p.label_changed());
     }
 }

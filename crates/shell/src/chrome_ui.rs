@@ -873,6 +873,7 @@ impl Lumen {
             network,
             read_later,
             privacy,
+            focus: self.focus.chrome_model(),
             workspace_bar_open: self.workspace_panel.visible,
             access,
             print: lumen_chrome::ChromePrintModel {
@@ -1895,16 +1896,17 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
-            // CC-18: the floating panel's "Фокус" button is a new
-            // `chrome_doc`-reachable site for the same flag
-            // `KeyCommand::ToggleFocusMode` already flips — real state
-            // (`self.focus.active`), so the legacy ring widget
-            // (`panels::focus_panel`, still the only thing that paints it)
-            // now genuinely appears/disappears from here too. The visual
-            // cutover to the frozen design's own `.focus-timer` pill
-            // (BUG-426) stays unimplemented: `body` never gets a
-            // `focus-mode` class from this action, so nothing paints out of
-            // `chrome_doc` itself yet — a follow-up, not this slice.
+            // CC-18: the "Фокус" button, the pill's exit button and
+            // `KeyCommand::ToggleFocusMode` all flip `self.focus.active`;
+            // the `.focus-timer` pill follows it via `bind_focus`.
+            ChromeAction::ToggleFocusTimer => {
+                self.focus.timer.toggle_pause();
+                if self.focus.timer.running {
+                    let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                    self.focus.tick(now_ms);
+                }
+                self.relayout_chrome_host();
+            }
             ChromeAction::ToggleFocus => {
                 self.focus.toggle(panels::focus_panel::DEFAULT_POMODORO_MIN);
                 if self.focus.active {
@@ -1970,11 +1972,6 @@ impl Lumen {
             // all — no force-HTTPS setting, no extensions/QA-flag store —
             // so a click still can't resolve to anything.
             //
-            // `ToggleFocusTimer`: distinct from `ToggleFocus` above — no
-            // `#demoBar` button reaches it (CC-18's panel has no play/pause
-            // control), and it's still only wired from the legacy
-            // `panels::focus_panel` overlay's own hit-test.
-            //
             // `ToggleQaPanel` (CC-18, `#demoBar`'s "QA-панель" button): the
             // QA/tester panel it targets is `strip_qa_panel_html`-excluded
             // from the product build entirely (same exclusion that already
@@ -1992,7 +1989,6 @@ impl Lumen {
             ChromeAction::DragPanel
             | ChromeAction::ArchiveCard
             | ChromeAction::ToggleSwitch
-            | ChromeAction::ToggleFocusTimer
             | ChromeAction::ToggleQaPanel => {}
         }
     }

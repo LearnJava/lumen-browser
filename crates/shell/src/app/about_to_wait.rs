@@ -2031,6 +2031,9 @@ impl Lumen {
         // redrawing while the ring animates (only while active and running).
         if self.focus.active {
             self.focus.tick(now_ms);
+            if self.focus.label_changed() {
+                self.relayout_chrome_host();
+            }
             if self.focus.timer.running {
                 self.request_redraw();
             }
