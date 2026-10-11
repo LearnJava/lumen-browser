@@ -2756,3 +2756,17 @@ Khronos WebGL conformance suite (1.0, минимальное подмножес�
 - Собственный in-tree дубль WPT-тестов (путь Ladybird из-за 5.5-часового CI) — у Lumen
   вендоринг по категориям уже решает выборочность.
 - Перф-тесты — отдельная дорожка PERF.
+
+### TEST-3: срез 67 (2026-10-11) — `permissions-policy` (264 → 265, WPT-RUN-7-S5, половина): baseline есть, два чистых `--check` подряд получены
+
+`--update-expected --all --root permissions-policy --recursive --processes 8` на `dev-release`, собранном от `main` `74ba2e17c`, — 5:05. 114 id, 103 `.ini` записано, **50/114 harness OK, 47/505 подтестов**, 109 unexpected results.
+
+**Причины провалов (по логу).** 548 вхождений `TypeError: Cannot read properties of undefined (reading 'allowedFeatures')` — хелпер `resources/permissions-policy.js:466` берёт `frame.permissionsPolicy` у `<iframe>`, а `crates/js/src/permissions_policy.rs` ставит только `document.featurePolicy`/`document.permissionsPolicy`. Заведён [BUG-1606](../../bugs/BUG-1606-OPEN.md). Остальное: `navigator.requestMediaKeySystemAccess is not a function` (2), `innerIframe.contentDocument.hasFocus is not a function` (2), `setup is not defined` (2). Заголовок `Permissions-Policy` и атрибут `allow` движком не применяются (Phase 0), так что часть подтестов останется `FAIL` и после BUG-1606.
+
+**Сходимость `--check`.** Всего 22 прогона по ~6 мин. «Сырой» baseline: 24 / 114 / 107 регрессий. Дальше цикл «`--check` → расширение `.ini` до объединения базового и наблюдённых значений (`[PASS, FAIL]`, `[OK, TIMEOUT]`) → `--check`», скрипт-скретч не закоммичен: 4/8/10 → 6/1/2 → 4/4/7 → 3 → 1 → 1, затем 0 (17), 3 (18), 0 (19), 2 (20), **0 (21), 0 (22)**. Флап того же диффузного класса, что [BUG-1022](../../bugs/BUG-1022-FIXED.md) и срезы 55/63/65/66: на одном файле (`permissions-policy-frame-policy-allowed-for-some.https.sub.html`, 76 подтестов) подтесты то `PASS`, то `FAIL`, то `NOTRUN` после таймаута; в `payment-*`, `reporting/serial-*`, `*-header-policy-*` — `OK`/`FAIL` → `TIMEOUT`. Итог: 107 `.ini`, из них 50 с многозначным `expected` (ослабляют гейт на этих файлах).
+
+**Две ловушки скрипта-расширителя.** (1) `expected` в логе `--check` бывает списком (`['FAIL', 'PASS']`), регулярка должна его принимать, иначе такие отклонения молча не расширяются. (2) `.ini` в репозитории с CRLF (`core.autocrlf=true` + `write_expected` пишет `\r\n`), записанный скретчем файл надо привести к CRLF, иначе `git diff` шумит построчно.
+
+**Окружение.** `LUMEN_PROFILE=dev-release`, `MSYS2_ARG_CONV_EXCL='*'`, `MSYS_NO_PATHCONV=1`, Windows 10.
+
+Категорий с baseline: 265. Дальше — `encrypted-media` (вторая половина S5), затем S2…S4, S6.
