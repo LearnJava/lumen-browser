@@ -705,6 +705,11 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .wsb-add{ flex:none; width:30px; height:22px; border:none; border-radius:var(--radius-lg); background:var(--surface-1); font-size:12px; color:var(--green); }
 .wsb-add:hover{ background:var(--surface-2); }
 
+.note-url{ font-family:var(--font-mono); font-size:11px; color:var(--accent); word-break:break-all; margin-bottom:10px; }
+.note-sel{ margin:0 0 10px; padding:8px 10px; border-left:3px solid var(--accent); background:var(--surface-1); font-style:italic; font-size:13px; }
+.note-comment{ font-size:12px; color:var(--text-secondary); }
+.note-comment:empty{ display:none; }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1630,6 +1635,21 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button class="focus-exit" data-action="toggle-focus"><svg class="icon" style="stroke:#fff;width:11px;height:11px"><use href="#i-x"/></svg></button>
           </div>
           <div class="focus-done" id="focusDone"><svg class="icon" style="stroke:#fff;width:12px;height:12px"><use href="#i-clock"/></svg>Помодоро завершён — пора сделать перерыв</div>
+
+          <!-- Note viewer modal (UX-CHROME-PANELS) -->
+          <div class="modal-overlay" id="noteOverlay">
+            <div class="modal">
+              <div class="modal-head">
+                <h3>Заметка</h3>
+                <button class="modal-close" data-action="close-note" aria-label="Закрыть"><svg class="icon"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="modal-body">
+                <div class="note-url" id="noteUrl"></div>
+                <blockquote class="note-sel" id="noteSel"></blockquote>
+                <div class="note-comment" id="noteComment"></div>
+              </div>
+            </div>
+          </div>
 
           <!-- Certificate Viewer -->
           <div class="modal-overlay" id="certOverlay" data-action="close-modal">

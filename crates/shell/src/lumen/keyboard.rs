@@ -83,6 +83,7 @@ impl Lumen {
         // Note viewer overlay: Escape closes it.
         if self.note_viewer.visible && code == KeyCode::Escape && !key_event.repeat {
             self.note_viewer.close();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
