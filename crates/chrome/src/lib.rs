@@ -25,7 +25,7 @@ pub use model::{
     ChromeDropdownModel, ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
     ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel, ChromeShortcutRowModel, ChromeShortcutsModel,
-    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeUpdateAction,
+    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeTabTree, ChromeUpdateAction,
     ChromeDialogModel, ChromeSecurityModel, ChromeLoginOfferModel, ChromeUpdateModel, ChromeWorkspaceModel,
     ControlPanelShape, OmniboxModel, SelectorTouch, NO_DOMAIN_LABEL,
 };

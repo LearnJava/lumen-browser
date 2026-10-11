@@ -23,34 +23,18 @@ impl Lumen {
     /// [`Self::page_content_width_css`]'s horizontal scroll-clamp bound subtract
     /// the same width twice. (They were entries reporting `visible: false` while
     /// the `LUMEN_LEGACY_CHROME` rollback flag existed.)
-    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 2] {
-        [
-            (
-                panel_layout::ID_VERTICAL_TABS,
-                self.vertical_tabs.visible,
-                panels::vertical_tabs::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_TREE_TABS,
-                self.tree_tabs.visible,
-                panels::tree_tabs::PANEL_WIDTH,
-            ),
-        ]
+    ///
+    /// UX-CHROME-PANELS 14: the vertical and tree tab lists moved into the
+    /// engine chrome's `#sidebar` (a flex sibling of `#contentArea`, counted
+    /// by `chrome_page_host_rect`), so nothing is cross-dockable any more.
+    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 0] {
+        []
     }
 
     /// Effective dock side of a cross-dockable sidebar: its persisted override,
     /// falling back to [`panel_layout::default_dock`].
     pub(crate) fn sidebar_dock_side(&self, id: &'static str) -> panel_layout::Dock {
         self.panel_layout.dock_for(id, panel_layout::default_dock(id))
-    }
-
-    /// Left x-origin (CSS px) of a docked sidebar of `width` on `side`: left
-    /// docks hug `x = 0`, right docks hug the window's right edge.
-    pub(crate) fn dock_origin_x(&self, side: panel_layout::Dock, width: f32) -> f32 {
-        match side {
-            panel_layout::Dock::Left => 0.0,
-            panel_layout::Dock::Right => (self.viewport_width_css() - width).max(0.0),
-        }
     }
 
     /// Active left-docked sidebar as `(persist id, current width CSS px)`, or
@@ -102,25 +86,6 @@ impl Lumen {
         // ADR-016 M2.2b: dock side flip shifts the content viewport; async-safe.
         self.relayout_chrome();
         true
-    }
-
-    /// Shift every rect-bearing command in `cmds` right by `dx` CSS px.
-    ///
-    /// Used to re-home a left-relative sidebar display list onto the right edge
-    /// when its dock side is flipped. The tab sidebars emit only `FillRect`,
-    /// `FillRoundedRect`, and `DrawText`; other variants are left untouched.
-    pub(crate) fn offset_overlay_x(cmds: &mut lumen_paint::DisplayList, dx: f32) {
-        if dx == 0.0 {
-            return;
-        }
-        for cmd in cmds.iter_mut() {
-            match cmd {
-                lumen_paint::DisplayCommand::FillRect { rect, .. }
-                | lumen_paint::DisplayCommand::FillRoundedRect { rect, .. }
-                | lumen_paint::DisplayCommand::DrawText { rect, .. } => rect.x += dx,
-                _ => {}
-            }
-        }
     }
 
     /// `(left, right)` docked-sidebar widths in CSS px (0 when not visible).

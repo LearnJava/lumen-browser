@@ -231,6 +231,8 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .tab-row.active{ background:var(--surface-2); border-left-color:var(--ws-color, var(--accent)); }
 .tab-row.child{ margin-left:12px; }
 .tab-row .tree-line{ position:absolute; left:-8px; top:-2px; bottom:14px; width:8px; border-left:1px solid var(--stroke); border-bottom:1px solid var(--stroke); border-radius:0 0 0 4px; }
+.tab-arrow{ width:12px; height:16px; flex:none; border:none; background:none; padding:0; font-size:11px; line-height:16px; color:var(--text-secondary); }
+.tab-arrow:hover{ color:var(--text-primary); }
 .container-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; margin-right:1px; }
 .group-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; margin-right:1px; }
 .tab-fav{ width:14px; height:14px; border-radius:3px; flex:none; display:flex; align-items:center; justify-content:center; background:var(--surface-2); font-size:9px; overflow:hidden; }
@@ -1081,6 +1083,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
         </div>
 
         <div class="tab-row" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab" role="tab" aria-selected="false">
+          <button class="tab-arrow" data-action="toggle-tab-subtree" aria-expanded="true" aria-label="Свернуть ветку">▾</button>
           <span class="tab-fav">M</span>
           <span class="tab-title">Почта — Входящие (12)</span>
           <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>

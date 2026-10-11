@@ -343,6 +343,28 @@ impl Lumen {
         self.chrome_layout = Some((layout, dl));
     }
 
+    /// Strip indices of the sidebar tab list in display order, with the tree
+    /// placement of each row in tree mode (UX-CHROME-PANELS 14,
+    /// `Ctrl+Shift+B`): `tree::visible_order` omits collapsed subtrees and
+    /// gives every row its depth and (with children) a collapse arrow. The flat
+    /// list follows `visible_indices()` (BUG-409: a collapsed group's
+    /// non-leftmost members stay hidden behind the chip row).
+    pub(crate) fn sidebar_tab_order(&self) -> Vec<(usize, Option<lumen_chrome::ChromeTabTree>)> {
+        if !self.tree_tabs.visible {
+            return self.tab_strip.visible_indices().into_iter().map(|i| (i, None)).collect();
+        }
+        tabs::tree::visible_order(&self.tab_strip.tabs, &self.tree_tabs.collapsed)
+            .iter()
+            .map(|r| {
+                let tree = lumen_chrome::ChromeTabTree {
+                    depth: r.depth,
+                    expanded: r.has_children.then(|| !self.tree_tabs.collapsed.contains(&r.id)),
+                };
+                (r.strip_idx, Some(tree))
+            })
+            .collect()
+    }
+
     /// CC-6 (docs/tasks/p1-css-chrome.md): snapshots tab strip, workspaces,
     /// theme, tab layout, and active profile into a [`lumen_chrome::ChromeModel`]
     /// — [`Self::relayout_chrome_host`] binds this before every chrome layout
@@ -355,13 +377,20 @@ impl Lumen {
         // a collapsed group's non-leftmost members stay hidden behind the
         // leftmost (chip) row, mirroring the legacy strip's own collapse
         // behaviour. For a strip with no collapsed groups this is `0..len()`.
-        let tabs = self
-            .tab_strip
-            .visible_indices()
+        let order = self.sidebar_tab_order();
+        // The sidebar list is windowed by `vertical_tabs.scroll_rows` (the
+        // chrome has no wheel-scrollable container).
+        let skip = self
+            .vertical_tabs
+            .scroll_rows
+            .min(panels::vertical_tabs::VerticalTabsPanel::max_scroll_rows(order.len()));
+        let tabs = order
             .into_iter()
-            .map(|i| {
+            .skip(skip)
+            .map(|(i, tree)| {
                 let t = &self.tab_strip.tabs[i];
                 lumen_chrome::ChromeTabModel {
+                    tree,
                     id: t.id,
                     title: t.title.clone(),
                     active: Some(t.id) == active_id,
@@ -843,7 +872,7 @@ impl Lumen {
         };
         lumen_chrome::ChromeModel {
             dark_theme: self.dark_mode,
-            layout_vertical: self.vertical_tabs.visible,
+            layout_vertical: self.vertical_tabs.visible || self.tree_tabs.visible,
             profile_slug,
             profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
@@ -987,6 +1016,12 @@ impl Lumen {
         let (layout, _) = self.chrome_layout.as_ref()?;
         let nid = doc.find_by_id(id)?;
         lumen_layout::find_box_by_node(layout, nid).map(|b| b.rect)
+    }
+
+    /// `#sbTabs` rect (UX-CHROME-PANELS 14): where the wheel scrolls the
+    /// sidebar tab list.
+    pub(crate) fn chrome_sb_tabs_rect(&self) -> Option<Rect> {
+        self.chrome_node_rect(lumen_chrome::ids::SB_TABS)
     }
 
     /// BUG-461: `.cp-box`'s real measured rect — the command palette's
@@ -1617,6 +1652,24 @@ impl Lumen {
                     && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
                 {
                     self.switch_tab(idx);
+                }
+            }
+            // Tree mode (`Ctrl+Shift+B`): the `.tab-arrow` of a parent row
+            // folds/unfolds its subtree.
+            ChromeAction::ToggleTabSubtree => {
+                if let Some(id) = self.chrome_data_id(nid, "data-tab-id") {
+                    let id = id as usize;
+                    let expanding = self.tree_tabs.collapsed.contains(&id);
+                    self.tree_tabs.toggle_collapsed(id);
+                    if expanding {
+                        // Purge stale collapse entries for tabs closed while
+                        // their parent subtree was hidden.
+                        let subtree = tabs::tree::subtree_ids(&self.tab_strip.tabs, id);
+                        let valid: std::collections::HashSet<usize> =
+                            self.tab_strip.tabs.iter().map(|t| t.id).collect();
+                        self.tree_tabs.collapsed.retain(|c| valid.contains(c) || !subtree.contains(c));
+                    }
+                    self.relayout_chrome_host();
                 }
             }
             ChromeAction::CloseTab => {

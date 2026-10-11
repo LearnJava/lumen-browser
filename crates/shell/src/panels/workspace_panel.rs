@@ -78,16 +78,6 @@ impl WorkspacePanel {
     pub fn set_active(&mut self, id: Option<i64>) {
         self.active_id = id;
     }
-
-    /// Accent colour of the currently active workspace (DS-12, level-1
-    /// hierarchy marker). `None` when no workspace is selected or the active
-    /// id no longer matches a cached entry — callers fall back to
-    /// `Palette::accent`.
-    #[must_use]
-    pub fn active_accent(&self) -> Option<Color> {
-        let active_id = self.active_id?;
-        self.workspaces.iter().find(|w| w.id == active_id).map(|w| w.accent)
-    }
 }
 
 impl Default for WorkspacePanel {
@@ -152,22 +142,6 @@ pub fn parse_ws_color(s: &str) -> Color {
 mod tests {
     use super::*;
 
-    fn make_panel(names: &[&str], active: Option<i64>) -> WorkspacePanel {
-        let mut p = WorkspacePanel::new();
-        p.visible = true;
-        p.workspaces = names
-            .iter()
-            .enumerate()
-            .map(|(i, n)| WsEntry {
-                id: i as i64 + 1,
-                name: (*n).to_owned(),
-                accent: Color { r: 100, g: 160, b: 255, a: 255 },
-            })
-            .collect();
-        p.active_id = active;
-        p
-    }
-
     // ── Panel state ──────────────────────────────────────────────────────────
 
     #[test]
@@ -198,25 +172,6 @@ mod tests {
         assert_eq!(p.active_id, Some(3));
         p.set_active(None);
         assert_eq!(p.active_id, None);
-    }
-
-    #[test]
-    fn active_accent_none_when_no_workspace_selected() {
-        let p = make_panel(&["Work"], None);
-        assert_eq!(p.active_accent(), None);
-    }
-
-    #[test]
-    fn active_accent_matches_active_workspace() {
-        let mut p = make_panel(&["Personal", "Work"], Some(2));
-        p.workspaces[1].accent = Color { r: 139, g: 92, b: 246, a: 255 }; // #8B5CF6
-        assert_eq!(p.active_accent(), Some(Color { r: 139, g: 92, b: 246, a: 255 }));
-    }
-
-    #[test]
-    fn active_accent_none_when_id_not_cached() {
-        let p = make_panel(&["Work"], Some(99));
-        assert_eq!(p.active_accent(), None);
     }
 
     // ── Color parsing ────────────────────────────────────────────────────────

@@ -144,22 +144,24 @@ impl Lumen {
             self.request_redraw();
             return;
         }
-        // Vertical tabs panel (GG-4) intercepts the wheel while visible.
-        if self.vertical_tabs.visible {
-            let lines = match delta {
-                MouseScrollDelta::LineDelta(_, l) => l,
-                MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
-            };
-            let tab_h = toolbar::CHROME_H;
-            let win_h = self.viewport_height_css() + tab_h;
-            let panel_h = win_h - tab_h;
-            self.vertical_tabs.scroll_by(
-                -lines * LINE_STEP_CSS_PX,
-                self.tab_strip.len(),
-                panel_h,
-            );
-            self.request_redraw();
-            return;
+        // Sidebar tab list (GG-4): the wheel over `#sbTabs` shifts its row
+        // window; anywhere else it falls through to the page.
+        if (self.vertical_tabs.visible || self.tree_tabs.visible)
+            && let Some(pos) = self.cursor_position
+            && let Some(rect) = self.chrome_sb_tabs_rect()
+        {
+            let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
+            let (x, y) = (pos.x as f32 / dpr, pos.y as f32 / dpr);
+            if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, l) => l,
+                    MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                };
+                let rows = self.sidebar_tab_order().len();
+                self.vertical_tabs.scroll_by(-lines.round() as i32, rows);
+                self.relayout_chrome_host();
+                return;
+            }
         }
         // UX-ZOOM: Ctrl+wheel zooms the page instead of scrolling it.
         if self.modifiers.control_key() {

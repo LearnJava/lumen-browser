@@ -1006,53 +1006,8 @@ impl Lumen {
         // chrome (`bind_inspector`); the box-model overlay of the hovered node
         // is emitted into the scrollable page layer below.
 
-        // Vertical tab panel: docked left sidebar, below the tab bar.
-        // Rendered before the tab bar so tab bar draws on top.
-        if self.vertical_tabs.visible {
-            let win_h = self.viewport_height_css() + toolbar::CHROME_H;
-            let vt_w = self.panel_layout.width_for(
-                panel_layout::ID_VERTICAL_TABS,
-                panels::vertical_tabs::PANEL_WIDTH,
-            );
-            let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
-                &self.tab_strip,
-                toolbar::CHROME_H,
-                win_h,
-                self.vertical_tabs.scroll_y,
-                &pal,
-                vt_w,
-                self.workspace_panel.active_accent(),
-            );
-            // Cross-dock: the panel paints left-relative; re-home it onto
-            // the right edge when flipped there.
-            let vt_side = self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS);
-            Self::offset_overlay_x(&mut vt_cmds, self.dock_origin_x(vt_side, vt_w));
-            overlay_buf.append(&mut vt_cmds);
-        }
-
-        // Tree-style tab panel (7A.2): same slot as vertical_tabs, but with
-        // parent-child indentation and collapse/expand arrows.
-        // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
-        if self.tree_tabs.visible {
-            let win_h = self.viewport_height_css() + toolbar::CHROME_H;
-            let tt_w = self.panel_layout.width_for(
-                panel_layout::ID_TREE_TABS,
-                panels::tree_tabs::PANEL_WIDTH,
-            );
-            let mut tt_cmds = panels::tree_tabs::build_panel(
-                &self.tab_strip,
-                &self.tree_tabs,
-                toolbar::CHROME_H,
-                win_h,
-                &pal,
-                tt_w,
-            );
-            // Cross-dock: re-home the left-relative panel onto the right
-            // edge when flipped there.
-            let tt_side = self.sidebar_dock_side(panel_layout::ID_TREE_TABS);
-            Self::offset_overlay_x(&mut tt_cmds, self.dock_origin_x(tt_side, tt_w));
-            overlay_buf.append(&mut tt_cmds);
-        }
+        // Vertical / tree tab list: `#sbTabs` in the engine chrome sidebar
+        // (`bind_model`; tree mode adds depth + `.tab-arrow` rows).
 
         // Shields floating panel (7C.4): top-right overlay anchored below
         // the tab bar. Refresh blocked counts before rendering — kept

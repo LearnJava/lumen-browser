@@ -148,7 +148,7 @@ fn cc12_bench_model(omnibox_value: &str) -> lumen_chrome::ChromeModel {
             title: format!("Tab {i}"),
             active: i == 0,
             sleeping: false, loading: false,
-            is_child: false,
+            is_child: false, tree: None,
             container_color: None,
             group: None,
         })
