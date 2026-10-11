@@ -350,3 +350,30 @@ fn security_box_detaches_and_routes_its_buttons() {
     assert_eq!(press(lumen_chrome::ids::SECURITY_PROCEED_BTN), Some(lumen_chrome::ChromeAction::SecurityProceed));
     assert_eq!(press(lumen_chrome::ids::SECURITY_BACK_BTN), Some(lumen_chrome::ChromeAction::SecurityBack));
 }
+
+/// UX-CHROME-PANELS срез 21: `#profileFrame` в анонимном профиле отцепляется,
+/// покрывает окно целиком и рисует обводку; вне анонимного — не рисуется.
+#[test]
+fn profile_frame_covers_window_only_for_anonymous() {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let probe = |slug: &str| {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let model = lumen_chrome::ChromeModel {
+            profile_slug: Some(slug.to_owned()),
+            ..lumen_chrome::ChromeModel::default()
+        };
+        let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+        let node = doc.find_by_id(lumen_chrome::ids::PROFILE_FRAME).expect("has #profileFrame");
+        let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+        take_floating_panel(&mut layout, node, lumen_chrome::ids::PROFILE_FRAME)
+            .map(|(rect, d)| (rect, paint_ordered(&d.removed).len()))
+    };
+    let (rect, cmds) = probe("anonymous").expect("anonymous: рамка есть в дереве");
+    assert_eq!((rect.x, rect.y, rect.width, rect.height), (0.0, 0.0, 1920.0, 1040.0));
+    assert!(cmds > 0, "обводка должна рисоваться");
+    let off = probe("personal").map_or(0, |(_, n)| n);
+    assert_eq!(off, 0, "вне анонимного профиля рамка не рисуется");
+}

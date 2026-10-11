@@ -1472,20 +1472,8 @@ impl Lumen {
             }
         }
 
-        // DS-15: Anonymous profile draws a thin red inset outline
-        // around the whole window (design ref: `box-shadow: inset 0
-        // 0 0 2px var(--accent)` on `.app-frame`). Appended last of
-        // all chrome overlays so it sits above every panel/modal —
-        // web content itself is never touched, only the chrome layer.
-        if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_anonymous) {
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            overlay_buf.append(&mut panels::themes::anonymous_border(
-                win_w,
-                win_h,
-                theme_tokens::profile::ANONYMOUS,
-            ));
-        }
+        // DS-15: the anonymous profile's window outline is `#profileFrame`
+        // in the engine chrome (floating, painted via `chrome_floating_dl`).
 
         if let Some(t0) = frame_log_t0 {
             bmarks[2] = t0.elapsed().as_secs_f64() * 1e3;

@@ -5,9 +5,7 @@
 //! The accent does not affect page CSS (`prefers-color-scheme` is still read
 //! from the OS unless the user explicitly locks to light or dark).
 
-use lumen_core::geom::Rect;
 use lumen_layout::Color;
-use lumen_paint::{DisplayCommand, DisplayList};
 
 use crate::theme_tokens;
 
@@ -301,23 +299,6 @@ pub fn desaturate(c: Color) -> Color {
     Color { r: gray, g: gray, b: gray, a: c.a }
 }
 
-/// Anonymous profile window outline (DS-15): a thin red inset frame around
-/// the whole window, matching `box-shadow: inset 0 0 0 2px var(--accent)` on
-/// `.app-frame` in the design reference. `win_w`/`win_h` are the full logical
-/// (CSS px) window size; `color` is `theme_tokens::profile::ANONYMOUS`. The
-/// caller appends this last to the overlay display list so it sits above
-/// every other chrome layer, including modals.
-#[must_use]
-pub fn anonymous_border(win_w: f32, win_h: f32, color: Color) -> DisplayList {
-    const T: f32 = 2.0;
-    vec![
-        DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, win_w, T), color },
-        DisplayCommand::FillRect { rect: Rect::new(0.0, win_h - T, win_w, T), color },
-        DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, T, win_h), color },
-        DisplayCommand::FillRect { rect: Rect::new(win_w - T, 0.0, T, win_h), color },
-    ]
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -468,18 +449,6 @@ mod tests {
         // r == g == b after) rather than staying untouched.
         assert_ne!(Palette::DARK.accent.r, Palette::DARK.accent.g);
         assert_eq!(d.accent.r, d.accent.g);
-    }
-
-    #[test]
-    fn anonymous_border_emits_four_rects_covering_perimeter() {
-        let dl = anonymous_border(1024.0, 720.0, theme_tokens::profile::ANONYMOUS);
-        assert_eq!(dl.len(), 4);
-        for cmd in &dl {
-            let DisplayCommand::FillRect { color, .. } = cmd else {
-                panic!("expected FillRect, got {cmd:?}");
-            };
-            assert_eq!(*color, theme_tokens::profile::ANONYMOUS);
-        }
     }
 
     #[test]
