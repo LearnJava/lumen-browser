@@ -559,10 +559,8 @@ pub struct ChromePaletteModel {
 /// the omnibox dropdown/download cards) — this reuses the `.dd-icon`/
 /// `.dd-text`/`.dd-title`/`.dd-sub` shape `.cp-row .dd-icon{...}`'s own CSS
 /// implies (`assets/chrome/chrome.html`), mirroring [`build_dd_row`].
-/// Row-click activation is out of this slice's DoD — the design carries no
-/// `data-action` for individual result rows (only `#cpOverlay` itself has
-/// one, to close on scrim click); keyboard navigation (`select_next`/`prev`
-/// + Enter) already works independently of rendering.
+/// A row carries `data-cp-index` (its filtered index) rather than a
+/// `data-action`: only `#cpOverlay` itself has one, to close on scrim click.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChromePaletteResultModel {
     /// Main text (`.dd-title`) — command name or bookmark/history title.
@@ -575,6 +573,10 @@ pub struct ChromePaletteResultModel {
     /// `background:var(--surface-2)` style (the same shade `.cp-row:hover`
     /// uses), not a class.
     pub selected: bool,
+    /// Index into the palette's *filtered* list (scroll offset included) —
+    /// stamped as `data-cp-index` so a click resolves to its row through
+    /// the chrome hit test.
+    pub index: usize,
 }
 
 /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`.
@@ -1794,6 +1796,7 @@ fn bind_palette(doc: &mut Document, palette: &ChromePaletteModel) {
 fn build_cp_row(doc: &mut Document, r: &ChromePaletteResultModel) -> NodeId {
     let row = doc.create_element(QualName::html("div"));
     set_attr(doc, row, "class", "cp-row");
+    set_attr(doc, row, "data-cp-index", &r.index.to_string());
     if r.selected {
         set_attr(doc, row, "style", "background:var(--surface-2)");
     }
@@ -4364,11 +4367,13 @@ mod tests {
                         label: "New Tab".to_owned(),
                         sub_label: "Ctrl+T".to_owned(),
                         selected: true,
+                        index: 0,
                     },
                     ChromePaletteResultModel {
                         label: "New Window".to_owned(),
                         sub_label: "".to_owned(),
                         selected: false,
+                        index: 1,
                     },
                 ],
             },
@@ -4385,6 +4390,8 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(doc.get(rows[0]).get_attr("style"), Some("background:var(--surface-2)"));
         assert_eq!(doc.get(rows[1]).get_attr("style"), None);
+        assert_eq!(doc.get(rows[0]).get_attr("data-cp-index"), Some("0"));
+        assert_eq!(doc.get(rows[1]).get_attr("data-cp-index"), Some("1"));
     }
 
     #[test]

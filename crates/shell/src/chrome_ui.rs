@@ -591,6 +591,7 @@ impl Lumen {
                         label: item.title.clone(),
                         sub_label,
                         selected: rank == self.command_palette.selected,
+                        index: rank,
                     }
                 })
             })
@@ -1037,33 +1038,10 @@ impl Lumen {
         self.chrome_node_rect(lumen_chrome::ids::SB_TABS)
     }
 
-    /// BUG-461: `.cp-box`'s real measured rect — the command palette's
-    /// modal box, used as [`panels::command_palette::hit_test`]'s Dismiss
-    /// boundary. `#cpOverlay` (`ids::CP_OVERLAY`) has exactly one child in
-    /// the asset, `.cp-box` itself (see `assets/chrome/chrome.html`), so its
-    /// first child's rect is `.cp-box`'s — no id of its own is needed.
-    pub(crate) fn chrome_cp_box_rect(&self) -> Option<Rect> {
+    /// `true` when `nid` is the chrome element with DOM id `id`.
+    pub(crate) fn chrome_node_id_is(&self, nid: NodeId, id: &str) -> Option<bool> {
         let (doc, _) = self.chrome_doc.as_ref()?;
-        let (layout, _) = self.chrome_layout.as_ref()?;
-        let overlay_id = doc.find_by_id(lumen_chrome::ids::CP_OVERLAY)?;
-        let overlay_box = lumen_layout::find_box_by_node(layout, overlay_id)?;
-        overlay_box.children.first().map(|b| b.rect)
-    }
-
-    /// BUG-461: real measured rects of the currently rendered `.cp-row`
-    /// elements, in `#cpList` tree order — the same `scroll_row`-relative
-    /// window `Lumen::chrome_model_snapshot`'s `palette_results` slices, so
-    /// index `i` here is filtered-index `scroll_row + i`. Replaces the fixed
-    /// `ROW_H`/`INPUT_H` arithmetic `panels::command_palette::hit_test` used
-    /// to compute a row's y-range from — that assumed row height/box width
-    /// could (and did) drift from what `chrome.css` actually renders.
-    pub(crate) fn chrome_cp_row_rects(&self) -> Vec<Rect> {
-        let Some((doc, _)) = self.chrome_doc.as_ref() else { return Vec::new() };
-        let Some((layout, _)) = self.chrome_layout.as_ref() else { return Vec::new() };
-        let Some(list_id) = doc.find_by_id(lumen_chrome::ids::CP_LIST) else { return Vec::new() };
-        lumen_layout::find_box_by_node(layout, list_id)
-            .map(|b| b.children.iter().map(|c| c.rect).collect())
-            .unwrap_or_default()
+        Some(doc.find_by_id(id) == Some(nid))
     }
 
     /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer

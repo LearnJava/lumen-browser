@@ -287,29 +287,24 @@ impl Lumen {
             // Command palette (task #23): modal — captures every click.
             // A click on a row activates it; a click on the scrim closes.
             if self.command_palette.visible {
-                // BUG-461: measured `.cp-box`/`.cp-row` rects from the
-                // engine chrome layout, not a guessed viewport-centred box —
-                // see `Lumen::chrome_cp_box_rect`'s doc comment.
-                let box_rect = self.chrome_cp_box_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
-                let row_rects = self.chrome_cp_row_rects();
-                match panels::command_palette::hit_test(
-                    x_css,
-                    y_css,
-                    box_rect,
-                    &row_rects,
-                    self.command_palette.scroll_row,
-                ) {
-                    panels::command_palette::PaletteHit::Row(filtered_idx) => {
-                        self.command_palette.selected = filtered_idx;
-                        if let Some(item) = self.command_palette.selected_item().cloned() {
-                            self.command_palette.close();
-                            self.activate_palette(&item, event_loop);
-                        }
-                    }
-                    panels::command_palette::PaletteHit::Dismiss => {
+                // `data-cp-index` on a `.cp-row` activates it; a hit on the
+                // `#cpOverlay` scrim itself (not `.cp-box`) closes.
+                let hit = self.chrome_hit_test(x_css, y_css);
+                let row = hit.as_ref().and_then(|h| {
+                    h.path.iter().find_map(|&nid| self.chrome_data_id(nid, "data-cp-index"))
+                });
+                let on_scrim = hit.as_ref().is_none_or(|h| {
+                    h.path.first().and_then(|&nid| self.chrome_node_id_is(nid, lumen_chrome::ids::CP_OVERLAY))
+                        .unwrap_or(true)
+                });
+                if let Some(idx) = row {
+                    self.command_palette.selected = idx as usize;
+                    if let Some(item) = self.command_palette.selected_item().cloned() {
                         self.command_palette.close();
+                        self.activate_palette(&item, event_loop);
                     }
-                    panels::command_palette::PaletteHit::Inside => {}
+                } else if on_scrim {
+                    self.command_palette.close();
                 }
                 self.request_redraw();
                 return;

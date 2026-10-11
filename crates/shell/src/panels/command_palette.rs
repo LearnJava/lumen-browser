@@ -24,7 +24,7 @@
 //! The palette is **modal**: while visible it captures every key and pointer
 //! event (the scrim swallows clicks outside the box, closing the palette).
 //! State lives on `Lumen`; the shell drives it via [`CommandPalette::set_items`]
-//! (on open) and [`hit_test`] (clicks); the legacy display-list renderer was
+//! (on open); clicks resolve through the chrome hit test (`data-cp-index`); the legacy display-list renderer was
 //! removed in CC-15-4 (`#cpOverlay` under the engine chrome), mirroring
 //! the ad-hoc panel convention used by [`super::bookmark_panel`].
 //!
@@ -398,53 +398,6 @@ pub fn fuzzy_score(needle: &str, haystack: &str) -> Option<i32> {
     Some(score)
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click inside the modal palette.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaletteHit {
-    /// Click landed on a result row — carries the index into the *filtered*
-    /// list (use [`CommandPalette::filtered`] to resolve).
-    Row(usize),
-    /// Click inside the box but not on a row (e.g. the input bar).
-    Inside,
-    /// Click on the dimmed scrim outside the box — closes the palette.
-    Dismiss,
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the modal palette.
-///
-/// BUG-461: geometry is no longer guessed from `viewport_w` and hardcoded
-/// widths/heights (that box drifted from the CSS-rendered `.cp-box`, e.g.
-/// 560px assumed vs. 600px real). The caller measures the palette's real
-/// layout boxes from `chrome_layout` instead: `box_rect` is `.cp-box`'s own
-/// rect (the outer Dismiss boundary) and `row_rects` is one entry per
-/// currently rendered `.cp-row`, in the same order
-/// `Lumen::chrome_model_snapshot` built them (`scroll_row`-relative, see its
-/// `palette_results` comment) — `scroll_row` converts a local index back to
-/// the absolute index into `palette.filtered()`.
-pub fn hit_test(
-    x: f32,
-    y: f32,
-    box_rect: lumen_core::geom::Rect,
-    row_rects: &[lumen_core::geom::Rect],
-    scroll_row: usize,
-) -> PaletteHit {
-    if x < box_rect.x
-        || x >= box_rect.x + box_rect.width
-        || y < box_rect.y
-        || y >= box_rect.y + box_rect.height
-    {
-        return PaletteHit::Dismiss;
-    }
-    for (i, r) in row_rects.iter().enumerate() {
-        if x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height {
-            return PaletteHit::Row(scroll_row + i);
-        }
-    }
-    PaletteHit::Inside
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -606,62 +559,4 @@ mod tests {
         p.set_items(vec![PaletteItem::command(PaletteAction::NewTab)]);
         assert_eq!(p.selected, 0);
     }
-
-    // ── Hit-testing (BUG-461: against measured rects, not guessed geometry) ────
-
-    fn test_box_rect() -> lumen_core::geom::Rect {
-        lumen_core::geom::Rect::new(232.0, 90.0, 560.0, 350.0)
-    }
-
-    fn test_row_rects() -> Vec<lumen_core::geom::Rect> {
-        // Input row occupies the top of the box (238..278); rows start below it.
-        (0..3)
-            .map(|i| lumen_core::geom::Rect::new(238.0, 278.0 + i as f32 * 34.0, 548.0, 34.0))
-            .collect()
-    }
-
-    #[test]
-    fn hit_outside_box_dismisses() {
-        // Click far below/left of the box.
-        assert_eq!(
-            hit_test(5.0, 5.0, test_box_rect(), &test_row_rects(), 0),
-            PaletteHit::Dismiss
-        );
-    }
-
-    #[test]
-    fn hit_input_row_is_inside() {
-        // Inside the box, above the first measured row rect.
-        let hit = hit_test(300.0, 100.0, test_box_rect(), &test_row_rects(), 0);
-        assert_eq!(hit, PaletteHit::Inside);
-    }
-
-    #[test]
-    fn hit_first_result_row() {
-        let rows = test_row_rects();
-        let r = rows[0];
-        let hit = hit_test(r.x + 10.0, r.y + r.height * 0.5, test_box_rect(), &rows, 0);
-        assert_eq!(hit, PaletteHit::Row(0));
-    }
-
-    #[test]
-    fn hit_result_row_offsets_by_scroll_row() {
-        let rows = test_row_rects();
-        let r = rows[1];
-        // scroll_row=5 means the 2nd rendered row is filtered-index 6.
-        let hit = hit_test(r.x + 10.0, r.y + r.height * 0.5, test_box_rect(), &rows, 5);
-        assert_eq!(hit, PaletteHit::Row(6));
-    }
-
-    #[test]
-    fn hit_just_outside_measured_box_dismisses() {
-        // Regression guard for the box_rect width mismatch BUG-461 fixed
-        // (assumed 560px centred box vs. the real CSS 600px `.cp-box`): a
-        // click just past the measured box's real edge must dismiss, not
-        // register as `Inside`.
-        let b = test_box_rect();
-        let hit = hit_test(b.x + b.width + 5.0, b.y + 10.0, b, &test_row_rects(), 0);
-        assert_eq!(hit, PaletteHit::Dismiss);
-    }
-
 }

@@ -375,7 +375,7 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   `chrome_perm_popover_rect` read `.cp-box`/`.cp-row`/`#permPopover`'s real boxes out of
   `chrome_layout`, and all three `hit_test()`s now bound-check against those instead of a guessed
   viewport-centred box or a `window_w`/`toolbar::CHROME_H`-anchored corner (the two had drifted —
-  e.g. an assumed 560px palette box against the real CSS 600px `.cp-box`). One parity gap filed:
+  e.g. an assumed 560px palette box against the real CSS 600px `.cp-box`). **Superseded (UX-CHROME-PANELS 20):** `chrome_cp_box_rect`/`chrome_cp_row_rects` and `command_palette::hit_test` are gone — `.cp-row` carries `data-cp-index`, a click resolves through `chrome_hit_test`, a hit on the `#cpOverlay` scrim itself closes. One parity gap filed:
   [BUG-411](../bugs/BUG-411-FIXED.md) (`#permPopover` carried neither the current domain nor the
   shields on/off indicator, and had rows only for Camera/Microphone — Notifications and Clipboard
   were unreachable from the UI). **Fixed 2026-08-20 (P3):** the design reference gained
