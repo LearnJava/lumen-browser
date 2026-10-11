@@ -1447,6 +1447,47 @@ use super::*;
         assert_eq!(p.style.text_indent, Length::Px(25.0));
     }
 
+    /// x первого фрагмента каждой строки абзаца (Fixed8: 8 px на символ).
+    fn indent_line_starts(html: &str, css: &str) -> Vec<f32> {
+        let root = lay_measured(html, css, 100.0);
+        let p = first_element_child(&root);
+        let mut xs = Vec::new();
+        for c in &p.children {
+            if let BoxKind::InlineRun { lines, .. } = &c.kind {
+                xs.extend(lines.iter().filter_map(|l| l.first().map(|f| f.x)));
+            }
+        }
+        xs
+    }
+
+    #[test]
+    fn text_indent_each_line_indents_after_forced_break() {
+        let xs = indent_line_starts("<p>aa bb<br>cc<br>dd</p>", "p { text-indent: 40px each-line; }");
+        assert_eq!(xs, [40.0, 40.0, 40.0]);
+    }
+
+    #[test]
+    fn text_indent_plain_leaves_lines_after_break_flush() {
+        let xs = indent_line_starts("<p>aa bb<br>cc<br>dd</p>", "p { text-indent: 40px; }");
+        assert_eq!(xs, [40.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn text_indent_hanging_indents_all_but_first_line() {
+        let xs = indent_line_starts("<p>aa bb cc dd ee ff</p>", "p { text-indent: 40px hanging; }");
+        assert!(xs.len() >= 2, "{xs:?}");
+        assert_eq!(xs[0], 0.0);
+        assert!(xs[1..].iter().all(|x| *x == 40.0), "{xs:?}");
+    }
+
+    #[test]
+    fn text_indent_hanging_each_line_skips_lines_after_break() {
+        let xs = indent_line_starts("<p>aa bb cc dd ee ff<br>gg</p>", "p { text-indent: 40px hanging each-line; }");
+        assert_eq!(xs[0], 0.0);
+        assert_eq!(xs[1], 40.0);
+        assert_eq!(*xs.last().unwrap(), 0.0, "{xs:?}");
+    }
+
     #[test]
     fn text_indent_shifts_first_line() {
         // С text-indent первое слово начинается со сдвигом.
