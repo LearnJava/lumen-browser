@@ -1429,7 +1429,7 @@ impl Lumen {
                     self.network_panel
                         .record_js_request(&r.method, &r.url, r.status, r.duration_ms);
                 }
-                if self.network_panel.visible {
+                if self.network_panel.visible || self.privacy.visible {
                     self.relayout_chrome_host();
                 }
                 self.request_redraw();

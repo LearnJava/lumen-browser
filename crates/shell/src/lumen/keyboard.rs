@@ -923,6 +923,7 @@ impl Lumen {
             }
             KeyCommand::TogglePrivacy => {
                 self.privacy.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::TogglePip => {

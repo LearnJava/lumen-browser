@@ -668,6 +668,30 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .rl-delete:hover{ background:var(--surface-2); color:var(--red-badge); }
 #rlList:empty::before{ content:"No saved pages yet. Use @read-later <url> to save."; display:block; padding:16px 12px; font-size:12px; color:var(--text-secondary); }
 
+.privacy-panel{
+  position:absolute; right:0; top:0; bottom:0; width:320px; background:var(--surface-0);
+  border-left:1px solid var(--stroke); display:none; flex-direction:column; z-index:65; overflow:hidden;
+}
+.privacy-panel.open{ display:flex; }
+.pv-header{ display:flex; align-items:center; height:34px; flex:none; padding:0 12px; background:var(--surface-1); font-weight:600; font-size:12.5px; }
+.pv-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.pv-close:hover{ background:var(--surface-2); }
+.pv-summary{ display:flex; align-items:center; gap:16px; height:30px; flex:none; padding:0 12px; background:var(--surface-1); border-bottom:1px solid var(--stroke); font-size:12px; font-weight:700; }
+.pv-blocked{ color:var(--red-badge); }
+.pv-allowed{ color:var(--green); }
+.pv-position{ margin-left:auto; font-size:10.5px; font-weight:400; color:var(--text-secondary); }
+.pv-list{ flex:1; overflow:hidden; }
+.pv-row{ display:flex; align-items:center; gap:8px; height:38px; padding:0 12px; }
+.pv-row:nth-child(even){ background:var(--surface-1); }
+.pv-dot{ flex:none; width:8px; height:8px; border-radius:4px; background:var(--green); }
+.pv-row.blocked .pv-dot{ background:var(--red-badge); }
+.pv-row.pending .pv-dot{ background:var(--text-secondary); }
+.pv-text{ flex:1; min-width:0; }
+.pv-host{ font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pv-sub{ font-size:10.5px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pv-row.blocked .pv-sub{ color:var(--red-badge); }
+#pvList:empty::before{ content:"No requests yet"; display:block; padding:14px 12px; font-size:12px; color:var(--text-secondary); }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1556,6 +1580,13 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Privacy network panel (UX-CHROME-PANELS) -->
+          <div class="privacy-panel" id="privacyPanel">
+            <div class="pv-header">Privacy<button class="pv-close" data-action="toggle-privacy" aria-label="Privacy"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="pv-summary"><span class="pv-blocked" id="pvBlocked">0 blocked</span><span class="pv-allowed" id="pvAllowed">0 allowed</span><span class="pv-position" id="pvPosition"></span></div>
+            <div class="pv-list" id="pvList"></div>
           </div>
 
           <!-- Read-later panel (UX-CHROME-PANELS) -->
