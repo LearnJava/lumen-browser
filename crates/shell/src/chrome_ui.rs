@@ -521,6 +521,16 @@ impl Lumen {
                     name: d.filename.clone(),
                     meta,
                     progress_fraction,
+                    actions: match &d.status {
+                        download::DownloadStatus::Done { .. } => vec![
+                            lumen_chrome::ChromeDownloadAction::Open,
+                            lumen_chrome::ChromeDownloadAction::Reveal,
+                        ],
+                        download::DownloadStatus::InProgress | download::DownloadStatus::Pending => {
+                            vec![lumen_chrome::ChromeDownloadAction::Cancel]
+                        }
+                        _ => Vec::new(),
+                    },
                 }
             })
             .collect();
@@ -893,6 +903,7 @@ impl Lumen {
             find,
             downloads_open: self.downloads.visible,
             downloads,
+            downloads_clearable: self.downloads.has_finished_entries(),
             archive_open: self.archive.visible,
             archive,
             popover_open,

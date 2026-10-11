@@ -67,6 +67,9 @@ pub struct ChromeModel {
     pub downloads_open: bool,
     /// Download entries rendered into `#downloadsPanel`'s `.dl-list` (CC-9).
     pub downloads: Vec<ChromeDownloadModel>,
+    /// `true` shows the header «Очистить» button (`.dl-clear`) — at least one
+    /// download is finished (`DownloadManager::has_finished_entries`).
+    pub downloads_clearable: bool,
     /// `true` shows `#archivePanel` (BUG-408) — mirrors `TabArchive::visible`.
     pub archive_open: bool,
     /// Archived-tab entries rendered into `#archivePanel`'s `.arc-list`
@@ -471,6 +474,49 @@ pub struct ChromeDownloadModel {
     /// at this fill (in-flight downloads only); `None` omits the bar
     /// (matches the asset's own "done" cards, which carry no progress track).
     pub progress_fraction: Option<f32>,
+    /// Buttons under the card (`.dl-actions`): Open + Reveal for finished
+    /// downloads, Cancel for in-flight ones, none otherwise.
+    pub actions: Vec<ChromeDownloadAction>,
+}
+
+/// One `.dl-actions` button of a [`ChromeDownloadModel`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromeDownloadAction {
+    /// Open the file (`data-dl="open"`).
+    Open,
+    /// Reveal the file in the OS file manager (`data-dl="reveal"`).
+    Reveal,
+    /// Cancel the transfer (`data-dl="cancel"`).
+    Cancel,
+}
+
+impl ChromeDownloadAction {
+    /// `data-dl` attribute value the shell reads back via the chrome hit-test.
+    pub fn attr(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Reveal => "reveal",
+            Self::Cancel => "cancel",
+        }
+    }
+
+    /// Inverse of [`Self::attr`].
+    pub fn from_attr(v: &str) -> Option<Self> {
+        match v {
+            "open" => Some(Self::Open),
+            "reveal" => Some(Self::Reveal),
+            "cancel" => Some(Self::Cancel),
+            _ => None,
+        }
+    }
+
+    fn icon_and_label(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Open => ("#i-ext", "Открыть"),
+            Self::Reveal => ("#i-folder", "В папке"),
+            Self::Cancel => ("#i-x", "Отмена"),
+        }
+    }
 }
 
 /// One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
@@ -1164,7 +1210,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_omnibox(doc, &model.omnibox);
     bind_dropdown(doc, &model.dropdown);
     bind_find_bar(doc, &model.find);
-    bind_downloads(doc, model.downloads_open, &model.downloads);
+    bind_downloads(doc, model.downloads_open, &model.downloads, model.downloads_clearable);
     bind_archive(doc, model.archive_open, &model.archive);
     bind_popover(doc, model);
     bind_palette(doc, &model.palette);
@@ -2328,9 +2374,12 @@ fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
 
 /// Toggles `#downloadsPanel`'s `.open` class and rebuilds `.dl-card` rows
 /// from `downloads` (CC-9).
-fn bind_downloads(doc: &mut Document, open: bool, downloads: &[ChromeDownloadModel]) {
+fn bind_downloads(doc: &mut Document, open: bool, downloads: &[ChromeDownloadModel], clearable: bool) {
     let Some(panel) = doc.find_by_id(crate::ids::DOWNLOADS_PANEL) else { return };
     set_class_token(doc, panel, "open", open);
+    if let Some(header) = find_by_class(doc, "dl-header") {
+        set_class_token(doc, header, "has-finished", clearable);
+    }
     let Some(list) = find_by_class(doc, "dl-list") else { return };
     remove_children_with_class(doc, list, "dl-card");
     for d in downloads {
@@ -2371,6 +2420,22 @@ fn build_dl_card(doc: &mut Document, d: &ChromeDownloadModel) -> NodeId {
         set_attr(doc, fill, "style", &format!("width:{}%", (fraction.clamp(0.0, 1.0) * 100.0)));
         attach_child(doc, track, fill);
         attach_child(doc, card, track);
+    }
+
+    if !d.actions.is_empty() {
+        let actions = doc.create_element(QualName::html("div"));
+        set_attr(doc, actions, "class", "dl-actions");
+        for action in &d.actions {
+            let (icon, label) = action.icon_and_label();
+            let btn = doc.create_element(QualName::html("button"));
+            set_attr(doc, btn, "data-dl", action.attr());
+            // Own copy of the id: the hit path is read button-first.
+            set_attr(doc, btn, "data-dl-id", &d.id.to_string());
+            append_icon(doc, btn, icon);
+            append_text(doc, btn, label);
+            attach_child(doc, actions, btn);
+        }
+        attach_child(doc, card, actions);
     }
 
     card
@@ -4091,7 +4156,9 @@ mod tests {
                 name: "report.pdf".to_owned(),
                 meta: "1.0 MB — идёт загрузка…".to_owned(),
                 progress_fraction: Some(0.5),
+                actions: vec![ChromeDownloadAction::Cancel],
             }],
+            downloads_clearable: true,
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -4110,6 +4177,12 @@ mod tests {
             .and_then(|&track| doc.get(track).children.iter().copied().find(|&c| has_class(&doc, c, "dl-progress-fill")))
             .expect("in-flight entry must render a progress fill");
         assert_eq!(doc.get(fill).get_attr("style"), Some("width:50%"));
+        let header = find_by_class(&doc, "dl-header").expect("asset has .dl-header");
+        assert!(has_class(&doc, header, "has-finished"));
+        let actions = doc.get(cards[0]).children.iter().copied().find(|&c| has_class(&doc, c, "dl-actions")).expect(".dl-actions");
+        let btn = doc.get(actions).children[0];
+        assert_eq!(doc.get(btn).get_attr("data-dl"), Some("cancel"));
+        assert_eq!(doc.get(btn).get_attr("data-dl-id"), Some("1"));
     }
 
     #[test]

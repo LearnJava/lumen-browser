@@ -21,7 +21,7 @@ mod model;
 pub use model::{
     ChromeAccessModel, ChromeConsoleLineModel, ChromeConsoleModel, ChromeNetworkModel, ChromeNetworkRowModel, ChromeFocusModel, ChromeInspectorModel, ChromeInspectorRowModel, ChromeNoteModel, ChromePipModel, ChromeTabCtxModel, ChromePageCtxModel, ChromePrivacyModel, ChromePrivacyRowModel, ChromeReadLaterModel, ChromeReadLaterRowModel,
     bind_model, bind_model_tracked, ChromeArchiveEntryModel, ChromeBookmarkCardModel, ChromeBookmarkFolderModel,
-    ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadModel,
+    ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadAction, ChromeDownloadModel,
     ChromeDropdownModel, ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
     ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel, ChromeShortcutRowModel, ChromeShortcutsModel,
