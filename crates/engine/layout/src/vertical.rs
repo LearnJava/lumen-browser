@@ -633,7 +633,7 @@ pub(crate) fn wrap_inline_run_vertical(
         let style = &seg.style;
         let em_s = style.font_size;
         let ls = style.letter_spacing;
-        let ws = style.word_spacing;
+        let ws = style.word_spacing + style.word_spacing_pct * space_w;
         let inter_word = space_w + ls + ws;
         let pad_l = style.padding_left.resolve_or_zero(em_s, max_height, viewport);
         let _pad_r = style.padding_right.resolve_or_zero(em_s, max_height, viewport);

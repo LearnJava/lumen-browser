@@ -1625,6 +1625,19 @@ use super::*;
     }
 
     #[test]
+    fn word_spacing_percent_and_calc_kept_as_space_fraction() {
+        // BUG-1333: `%` — доля ширины U+0020, резолвится в раскладке.
+        let root = lay("<p>x</p>", "p { word-spacing: 100%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.word_spacing_pct - 1.0).abs() < 0.001);
+        assert_eq!(p.style.word_spacing, 0.0);
+        let root = lay("<p>x</p>", "p { word-spacing: calc(25% + 2px); }");
+        let p = first_element_child(&root);
+        assert!((p.style.word_spacing_pct - 0.25).abs() < 0.001);
+        assert!((p.style.word_spacing - 2.0).abs() < 0.001);
+    }
+
+    #[test]
     fn word_spacing_normal_keyword() {
         let root = lay(
             "<div><p>x</p></div>",

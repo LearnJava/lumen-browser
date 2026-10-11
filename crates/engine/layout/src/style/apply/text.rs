@@ -395,15 +395,18 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "word-spacing" => {
-            // CSS Text L3 §11.3: normal (= 0) | <length>. `%` требует
-            // метрику space-glyph — Phase 0 не считаем, игнорируем.
+            // CSS Text L3 §11.3: normal (= 0) | <length-percentage>. `%` — доля
+            // ширины U+0020, известной только в раскладке: храним отдельно
+            // (`word_spacing_pct`), для calc() разделяем линейно базой 0 и 1.
             if val.trim() == "normal" {
                 style.word_spacing = 0.0;
-            } else if let Some(px) = parse_length_q(val, is_quirks).and_then(|len| match len {
-                Length::Percent(_) => None,
-                other => other.resolve(em_basis, None, viewport),
-            }) {
-                style.word_spacing = px;
+                style.word_spacing_pct = 0.0;
+            } else if let Some(len) = parse_length_q(val, is_quirks)
+                && let Some(base) = len.resolve(em_basis, Some(0.0), viewport)
+            {
+                let unit = len.resolve(em_basis, Some(1.0), viewport).unwrap_or(base);
+                style.word_spacing = base;
+                style.word_spacing_pct = unit - base;
             }
         }
         "text-transform" => {

@@ -1446,7 +1446,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
     // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
     m.insert("letter-spacing".into(), if style.letter_spacing == 0.0 { "normal".into() } else { px_str(style.letter_spacing) });
-    m.insert("word-spacing".into(), px_str(style.word_spacing));
+    m.insert("word-spacing".into(), px_str(style.word_spacing + style.word_spacing_pct * 0.5 * style.font_size));
     m.insert("text-align".into(), match style.text_align {
         TextAlign::Start => "start",
         TextAlign::End => "end",

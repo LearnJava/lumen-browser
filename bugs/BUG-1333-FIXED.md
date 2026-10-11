@@ -1,6 +1,7 @@
 # BUG-1333 — `word-spacing` в процентах (и `calc()` с `%`) не применяется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
+**Исправлено:** `%` и `calc()` с `%` хранятся в `ComputedStyle::word_spacing_pct` (доля ширины U+0020), резолвятся в `inline_wrap.rs`/`vertical.rs`/`TabStops::of`. `getComputedStyle` отдаёт приближение (0.5em вместо метрики пробела).
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 10, `css/css-text`, вторая половина)
 **Область:** layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `word-spacing`; `getComputedStyle` отдаёт `0px`)
 

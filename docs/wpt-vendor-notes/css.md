@@ -504,7 +504,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | `word-break: auto-phrase` | 7 | — | 7 thick | `word-break/auto-phrase/word-break-auto-phrase-001.html` | не разобрано: значение требует сегментации фраз (как BUG-1331) | P3 | BUG-1331 (предположительно) |
 | `word-break`: `min-content`, `break-boundary` | 6 | — | 6 thick | `word-break/word-break-min-content-001.html`, `break-boundary-2-chars-001.html` | не разобрано | P3 | отдельной записи нет |
 | `text-group-align/` | 5 | — | 5 thick | `text-group-align/text-group-align-right.html` | свойства нет | P4 | `CSS-SPECS.md:76` |
-| `word-spacing/` | 4 | — | 4 thick | `word-spacing/word-spacing-001.html`, `word-spacing-percent-001.html` | проба: `word-spacing: 100%` ничего не добавляет, `calc(25% + 0px)` → `0px` | P3 | [BUG-1333](../../bugs/BUG-1333-OPEN.md) |
+| `word-spacing/` | 4 | — | 4 thick | `word-spacing/word-spacing-001.html`, `word-spacing-percent-001.html` | проба: `word-spacing: 100%` ничего не добавляет, `calc(25% + 0px)` → `0px` | P3 | [BUG-1333](../../bugs/BUG-1333-FIXED.md) |
 | `writing-system/` | 3 | — | 3 no-match | `writing-system/writing-system-line-break-001.html`, `-segment-break-001.html` | не разобрано (по описанию — SA-перенос и сегментные разрывы: BUG-1331/1330) | P3 | BUG-1331/BUG-1330 (предположительно) |
 
 Сумма по таблице: 654 id. Ещё один побочный результат пробы: `getComputedStyle(el).tabSize` и `text-wrap-mode` — `""` (BUG-1325); у `style.textIndent = '10px each-line'` computed — `0px`.
