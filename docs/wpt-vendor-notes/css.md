@@ -1943,3 +1943,104 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 ### Повторные замеры
 
 [BUG-779](../../bugs/BUG-779-OPEN.md) (Houdini, `registerLayout`, `Worklet`), [BUG-1457](../../bugs/BUG-1457-OPEN.md) (`css-highlight-api`: 90 id), [BUG-943](../../bugs/BUG-943-OPEN.md) (`getComputedStyle().zoom`), [BUG-480](../../bugs/BUG-480-OPEN.md) (`contentWindow` `null`: ещё 5 id), [BUG-1234](../../bugs/BUG-1234-OPEN.md) (`css-box/animation/*`).
+
+
+## 30 малых модулей `css` — вердикт и кластеры (WPT-RUN-14 срез 28, 2026-10-11)
+
+Прогон: `run_corpus.py --categories css --prefixes <30 префиксов> --out-dir .tmp/wpt-run14/small-old-1` (повтор — `small-old-2`: 0 расхождений из 768 по `(status, [(subtest, status)])`), 30 шардов, `--processes 7`, `--max-browser-gb 4`. **Бинарь — `dev-release` от 2026-10-08 (main до слияния UX-LOADING `6d4ae2719`)**, не сборка текущего `main`: на `main` `38fe000f4` `--bidi-port` перестаёт отвечать на `script.evaluate` и `navigate` ([BUG-1597](../../bugs/BUG-1597-OPEN.md)), и тот же срез на свежей сборке даёт 34,97 % с недетерминированным набором TIMEOUT (два прогона разошлись на 104 id). Поэтому цифры ниже — движок до UX-LOADING; между 2026-10-08 и 2026-10-11 `crates/engine/{layout,css-parser,paint,html-parser}` не менялись (`git diff --stat 305f2bbeb HEAD` пуст); менялись `crates/js` и `crates/engine/dom` (UX-TRANSLATE, UX-IME и др.), но на CSS-кластеры они не влияют — по пробам выше. `score_audit.py`: «no leak», 768 из 794 id имеют вердикт; 26 — `print-reftest` (`css/printing`, нет исполнителя, WPT-RUN-8). `reftest_pixdiff.py --viewport 800x600` — по 206 FAIL-reftest.
+
+**Итог: 329.18 / 794 = 41.46 %** (reftest 113/319, testharness 194.18/423 при 2 510 из 5 897 сабтестов, crashtest 22/26, print-reftest 0/26). Сравнение с 2026-08-18 (reftest и https обнулены) делать нельзя — там этих модулей отдельно не мерили.
+
+| Модуль | id | выполнено | зелёных | не зелёных |
+|---|---|---|---|---|
+| `compositing` | 80 | 80 | 35 | 45 |
+| `css-color-adjust` | 36 | 36 | 12 | 24 |
+| `css-color-hdr` | 4 | 4 | 2 | 2 |
+| `css-content` | 78 | 78 | 14 | 64 |
+| `css-device-adapt` | 7 | 7 | 5 | 2 |
+| `css-easing` | 14 | 14 | 2 | 12 |
+| `css-env` | 10 | 10 | 9 | 1 |
+| `css-exclusions` | 12 | 12 | 0 | 12 |
+| `css-font-loading` | 29 | 29 | 14 | 15 |
+| `css-forced-color-adjust` | 4 | 4 | 3 | 1 |
+| `css-forms` | 22 | 22 | 2 | 20 |
+| `css-image-animation` | 23 | 23 | 13 | 10 |
+| `css-link-params` | 4 | 4 | 1 | 3 |
+| `css-logical` | 92 | 92 | 20 | 72 |
+| `css-motion-path` | 1 | 1 | 1 | 0 |
+| `css-overscroll-behavior` | 12 | 12 | 1 | 11 |
+| `css-parser-api` | 1 | 1 | 0 | 1 |
+| `css-rhythm` | 35 | 35 | 20 | 15 |
+| `css-scroll-anchoring` | 79 | 79 | 15 | 64 |
+| `css-scrollbars` | 57 | 57 | 23 | 34 |
+| `css-size-adjust` | 5 | 5 | 1 | 4 |
+| `css-style-attr` | 16 | 16 | 13 | 3 |
+| `css-syntax` | 47 | 47 | 24 | 23 |
+| `css-will-change` | 53 | 53 | 27 | 26 |
+| `css-zoom` | 1 | 1 | 1 | 0 |
+| `fetching` | 1 | 1 | 0 | 1 |
+| `fill-stroke` | 11 | 11 | 2 | 9 |
+| `geometry` | 30 | 30 | 11 | 19 |
+| `printing` | 26 | 1 | 1 | 25 (26 без исполнителя) |
+| `reference` | 3 | 3 | 3 | 0 |
+| **итого** | **794** | **768** | **275** | **519** (493 с вердиктом + 26 без исполнителя) |
+
+В столбце «id» — число id с вердиктом (для `printing` — все 26); манифест даёт 803 id, из них 9 не automatable (`manual`/`visual`: `compositing` 8, плюс по одному в `css-font-loading`/`css-forms`), 794 — знаменатель. 26 `print-reftest` без исполнителя: 25 в `printing` и ещё 1 в одном из `compositing`/`css-font-loading`/`css-forms` (в какой — не выяснялось), поэтому суммы по строкам дают 793, а не 794.
+
+«Не зелёный» — как в S27: упал хотя бы один сабтест или статус не `PASS`/`OK`. Не зелёных с вердиктом 493: 206 reftest `FAIL` (180 `thick`, 22 `identical`, 2 `thin-only`, 2 `no-match-ref`), 255 testharness `OK` с упавшими сабтестами, 10 `ERROR`, 21 `TIMEOUT` (из них 10 — `css-scroll-anchoring`/`css-overscroll-behavior`/`css-font-loading`, ждущие событий; остальные — по одному в модуле).
+
+### Главное
+
+1. **Блокер прогонов на `main`: BUG-1597.** UX-LOADING сделал `lumen --bidi-port` глухим к `script.evaluate`/`navigate`. Бисекция по `--first-parent` (6 шагов, сборка каждого) — `6d4ae2719`; с `loading: false` в `chrome_ui.rs:365` ответы возвращаются. Ни один WPT-прогон на сегодняшнем `main` не даёт валидных цифр, пока это не починено. Цена ошибки измерена: `css-logical` на свежей сборке — 17 TIMEOUT из 92 (`--processes 7`) и все testharness TIMEOUT (`--processes 1`) вместо 1.
+2. **`<q>` без кавычек** ([BUG-1598](../../bugs/BUG-1598-OPEN.md)): в UA-таблице нет `q::before/::after`. 45 reftest `css-content`; на четырёх проверенных (`quotes-001/002/003/020`) страничное правило даёт побайтовое совпадение с эталоном.
+3. **`mix-blend-mode` не изолирует группу родителя** ([BUG-1599](../../bugs/BUG-1599-OPEN.md)): вылезшая за родителя часть смешивается с белым фоном — (125,60) красный вместо `#0FF`. 40 id.
+4. **`css-logical`** — 72 из 92 не зелёные ([BUG-1600](../../bugs/BUG-1600-OPEN.md)): порядок каскада логических и физических теряется (`margin-left:1px;margin-inline-start:5px` → 1px), `CSS.supports` ложно для `border-block-start-width`/`min-block-size`/`overflow-block`.
+5. **`will-change`** не создаёт containing block для `translate`/`contain`/`offset-path`/`backdrop-filter`/`position` ([BUG-1602](../../bugs/BUG-1602-OPEN.md)): 26 id.
+6. **`color-scheme: dark` не красит холст** ([BUG-1603](../../bugs/BUG-1603-OPEN.md)); **`DOMMatrix`** не разбирает `"NONE"`/`"none/**/"` и отсутствует в воркере ([BUG-1604](../../bugs/BUG-1604-OPEN.md)); **`An+B`** сериализуется как `1n` ([BUG-1601](../../bugs/BUG-1601-OPEN.md)).
+7. **Прокрутка/якорение** — 64 не зелёных id `css-scroll-anchoring`: алгоритма нет, это ДОРАБОТКА по [BUG-524](../../bugs/BUG-524-OPEN.md) (`overflow-anchor` парсится и ничего не делает, `CSS-SPECS.md:187`), повторный замер добавлен туда.
+
+### Кластеры
+
+Правило отнесения — **первое совпавшее** в порядке таблицы скрипта `.tmp/s28/cls.py` (результат — `.tmp/s28/final.json`; один id — один кластер, сумма 493). Пиксельный класс — `reftest_pixdiff.py`. «Проба» — причина установлена на этом срезе (`--dump-layout`, `--screenshot`, `getBoundingClientRect`); «по именам» — группа выделена по именам файлов и сообщениям.
+
+| Кластер | id | сабтестов | Пример | Причина | Владелец | Куда заведено |
+|---|---|---|---|---|---|---|
+| `css-scroll-anchoring` (алгоритм якорения) | 64 | 75 из 75 | `css-scroll-anchoring/abspos-containing-block-outside-scroller.html` | по коду: `overflow-anchor` парсится, выбора якоря и компенсации прокрутки нет; 44 сообщения `expected N but got N` | P1 | [BUG-524](../../bugs/BUG-524-OPEN.md) (ДОРАБОТКА, повторный замер), `CSS-SPECS.md:187` |
+| `css-content`: `<q>` и `attr()` (`quotes-*`, `quotes-first-letter-*`, `attr-*`) | 45 | — | `css-content/quotes-001.html`, `css-content/attr-case-sensitivity-001.html` | проба: нет UA-правила `q::before/::after`; со страничным правилом 4 из 7 проверенных совпадают с эталоном | P1 | [BUG-1598](../../bugs/BUG-1598-OPEN.md) |
+| `compositing`: `mix-blend-mode` и родственные reftest | 40 | 1 из 1 | `compositing/mix-blend-mode/mix-blend-mode-blended-element-with-transparent-pixels.html` | проба для 1 id; остальные (3D, `canvas`, `iframe`, `mask`, `filter`, SVG) — по именам | P1 | [BUG-1599](../../bugs/BUG-1599-OPEN.md) |
+| `css-logical/parsing/*` | 37 | 243 из 360 | `css-logical/parsing/block-size-invalid.html` | проба: `block-size: none`/`-10px` принимается; `border-block-color` не разбирается как логическое | P4 | [BUG-1600](../../bugs/BUG-1600-OPEN.md) |
+| `css-logical`: used/computed, каскад (`logical-box-*`, `logicalprops-*`, `inheritance`, `getComputedStyle-listing`) | 19 | 462 из 596 | `css-logical/logical-box-margin.html` | проба: порядок объявлений и специфичность теряются | P1 | [BUG-1600](../../bugs/BUG-1600-OPEN.md) |
+| `css-logical`: анимации (`animation-*`, `animations/*`) | 10 | 129 из 195 | `css-logical/animations/float-interpolation.html` | по сообщениям: `float`/`clear` `inline-*` не интерполируются | P4 | [BUG-1600](../../bugs/BUG-1600-OPEN.md), [BUG-1234](../../bugs/BUG-1234-OPEN.md) |
+| `css-logical`: reftest `logical-values-float-clear-*`, `cascading-001` | 6 | — | `css-logical/logical-values-float-clear-1.html`, `css-logical/cascading-001.html` | по именам | P1 | [BUG-1600](../../bugs/BUG-1600-OPEN.md) |
+| `css-syntax` | 23 | 281 из 374 | `css-syntax/anb-serialization.html`, `css-syntax/urange-parsing.html` | проба для `An+B`: `1n` вместо `n`; остальное по сообщениям | P4 | [BUG-1601](../../bugs/BUG-1601-OPEN.md) |
+| `css-will-change`: reftest containing block и стекинг-контекст | 22 | — | `css-will-change/will-change-abspos-cb-001.html`, `css-will-change/will-change-fixpos-cb-translate-1.html` | проба: 5 свойств не создают containing block | P1 | [BUG-1602](../../bugs/BUG-1602-OPEN.md) |
+| `css-will-change`: CSSOM (`computed`, `invalid`, `inheritance`) | 4 | 153 из 153 | `css-will-change/parsing/will-change-invalid.html` | по сообщениям | P4 | [BUG-1602](../../bugs/BUG-1602-OPEN.md) |
+| `css-color-adjust/rendering/dark-color-scheme/*` | 19 | 15 из 15 | `css-color-adjust/rendering/dark-color-scheme/color-scheme-color-initial-affected-by-color-scheme-property.html` | проба: холст белый, `color` чёрный при `color-scheme: dark`; iframe-часть — по именам | P1 | [BUG-1603](../../bugs/BUG-1603-OPEN.md), BUG-480 |
+| `css-color-adjust`: CSSOM | 5 | 47 из 135 | `css-color-adjust/parsing/color-scheme-valid.html` | по сообщениям: `light only` → `only light` | P4 | [BUG-1603](../../bugs/BUG-1603-OPEN.md) |
+| `geometry` | 19 | 802 из 1 392 | `geometry/DOMMatrix-001.html`, `geometry/idlharness.any.worker.html` | проба: `new DOMMatrix("NONE")` бросает; в воркере нет `DOMMatrix` | P3 | [BUG-1604](../../bugs/BUG-1604-OPEN.md) |
+| `css-scrollbars`: `scrollbar-color`/`scrollbar-width` reftest | 19 | — | `css-scrollbars/scrollbar-color-010.html`, `css-scrollbars/viewport-scrollbar.html` | 18 `identical` — `--screenshot` не рисует полосы прокрутки (нечем сравнивать); не изолировано | P1 | не заведено (нужна проба на окне, не `--screenshot`) |
+| `css-scrollbars`: used-размеры (`clientWidth` при `scrollbar-width`) | 15 | 28 из 46 | `css-scrollbars/scrollbar-width-003.html` | по сообщениям: `assert_less_than` — полоса не отнимает ширину | P1 | не заведено (<20) |
+| `css-font-loading` | 15 | 141 из 189 | `css-font-loading/idlharness.https.html`, `css-font-loading/fontfaceset-load-css-wide-keywords.html` | по сообщениям: `FontFaceVariationAxis`, `FontFacePalette(s)` нет, прототип `FontFace` | P3 | [BUG-467](../../bugs/BUG-467-OPEN.md) (ДОРАБОТКА → FONTLOAD), повторный замер |
+| `css-rhythm` (`block-step-*` reftest) | 15 | 18 из 28 | `css-rhythm/content-based-height-rounds-up-to-step-unit.html` | проба: `block-step-size:50px` у блока высотой 20 даёт 20, не 50 | P4 | `CSS-SPECS.md:641` (парсинг есть, раскладки нет — отложено по записи) |
+| `css-forms` (`appearance: base` reftest) | 13 | — | `css-forms/button-base-appearance-rendering.html` | по именам | P4 | `CSS-SPECS.md:658-660` |
+| `css-forms`: псевдоэлементы и computed | 7 | 65 из 65 | `css-forms/parsing/checkmark-pseudo-element.html` | по сообщениям: `insertRule` с `::checkmark`/`::picker-icon` — индекс | P4 | не заведено (<20) |
+| `css-easing` | 12 | 105 из 152 | `css-easing/linear-timing-functions-syntax.html` | по сообщениям: `linear(0 0%, 1 100%)` сериализуется как `linear(0, 1)`; `step-jump-*` | P4 | не заведено (<20) |
+| `css-exclusions` | 12 | 4 из 4 | `css-exclusions/wrap-flow-001.html` | проба: `CSS.supports("wrap-flow","both")` — `false` | P4 | [BUG-507](../../bugs/BUG-507-OPEN.md) (ДОРАБОТКА) |
+| `css-content`: `element()` | 11 | 1 из 1 | `css-content/element-replacement-dynamic.html` | по именам | P4 | `CSS-SPECS.md` (`content: element()`), не заведено |
+| `css-overscroll-behavior` | 11 | 45 из 94 | `css-overscroll-behavior/parsing/overscroll-behavior-valid.html` | по сообщениям; 4 TIMEOUT ждут `scroll`/`wheel` | P4 | не заведено (<20) |
+| `css-image-animation` | 10 | 5 из 5 | `css-image-animation/image-animation-paused-exact-frame.html` | по именам: `image-animation` не разбирается (`CSS.supports` — `false`) | P4 | не заведено (<20) |
+| `fill-stroke` | 9 | 348 из 395 | `fill-stroke/animation/fill-interpolation.html` | по сообщениям; `text-decoration-fill/stroke` — свойства нет | P4 | [BUG-521](../../bugs/BUG-521-OPEN.md) (ДОРАБОТКА) |
+| `css-content`: CSSOM (`content-valid/computed/invalid`) | 8 | 120 из 207 | `css-content/parsing/content-valid.html` | по сообщениям: `counter()` с `/ "alt"` сериализуется иначе | P4 | не заведено (<20) |
+| `css-device-adapt`, `css-env`, `css-link-params`, `css-forced-color-adjust`, `fetching` | 8 | 31 из 32 | `css-link-params/link-parameters-computed.html` | по сообщениям; `link-parameters` — `CSS.supports` ложно | P4 | `CSS-SPECS.md:145` (link-params), не заведено |
+| `compositing`: CSSOM | 5 | 32 из 85 | `compositing/parsing/background-blend-mode-computed-multiple.html` | по сообщениям: список `background-blend-mode` из нескольких значений схлопывается | P4 | не заведено (<20) |
+| `css-size-adjust` | 4 | 117 из 213 | `css-size-adjust/parsing/text-size-adjust-valid.html` | по сообщениям | P4 | `CSS-SPECS.md:773` |
+| `css-style-attr` | 3 | — | `css-style-attr/style-attr-braces-001.xht` | проба: в `style="color:green; color:red }; background:lime"` лишняя `}` обрывает разбор — `background` теряется, `color` остаётся красным | P4 | не заведено (<20) |
+| `css-color-hdr`, `css-parser-api` | 3 | 119 из 164 | `css-color-hdr/parsing.html`, `css-parser-api/idlharness.html` | по сообщениям | P4 | не заведено (<20) |
+
+### Не разобрано
+
+Меньше 20 id и без записи — все строки «не заведено» выше. Ограничения среза: (1) бинарь от 2026-10-08, не `main` — см. BUG-1597; на `main` срез не воспроизводится; (2) 18 `identical` в `css-scrollbars` — `--screenshot` не рисует полосы, поэтому `scrollbar-color`/`scrollbar-width` не проверены вовсе; (3) причины в строках «по именам» и «по сообщениям» не изолированы пробой; (4) `css/css-gcpm`, `css-round-display`, `css-speech`, `CSS1` не входят ни в один срез S1…S28; по `tests/wpt/metadata/MANIFEST.json` в них только `manual`/`visual`/`support` (0 automatable id) — вердикта они не требуют; (5) `css-logical/cascading-001` и `logicalprops-with-variables` — путь, по которому падает тест, пробой не воспроизведён.
+
+### Повторные замеры
+
+[BUG-524](../../bugs/BUG-524-OPEN.md) (`css-scroll-anchoring`: 64 id), [BUG-467](../../bugs/BUG-467-OPEN.md) (`css-font-loading`: 15 id), [BUG-507](../../bugs/BUG-507-OPEN.md) (`css-exclusions`: 12 id), [BUG-521](../../bugs/BUG-521-OPEN.md) (`fill-stroke`: 9 id).
