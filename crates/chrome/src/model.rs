@@ -120,6 +120,8 @@ pub struct ChromeModel {
     pub privacy: ChromePrivacyModel,
     /// `.focus-timer` snapshot (UX-CHROME-PANELS) — mirrors `FocusModePanel`.
     pub focus: ChromeFocusModel,
+    /// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
+    pub note: ChromeNoteModel,
     /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
     pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
@@ -642,6 +644,19 @@ pub struct ChromeFocusModel {
     pub label: String,
 }
 
+/// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeNoteModel {
+    /// `true` shows the modal.
+    pub open: bool,
+    /// Source URL the note was taken on.
+    pub url: String,
+    /// Highlighted text from the source page.
+    pub selection: String,
+    /// User comment; empty hides the row.
+    pub comment: String,
+}
+
 /// One `.pv-row` of `#pvList` (UX-CHROME-PANELS).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromePrivacyRowModel {
@@ -1054,6 +1069,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_read_later(doc, &model.read_later);
     bind_privacy(doc, &model.privacy);
     bind_focus(doc, &model.focus);
+    bind_note(doc, &model.note);
     bind_workspace_bar(doc, model.workspace_bar_open, &model.workspaces);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
@@ -1750,6 +1766,22 @@ fn bind_focus(doc: &mut Document, focus: &ChromeFocusModel) {
     }
     if let Some(done) = doc.find_by_id(crate::ids::FOCUS_DONE) {
         set_class_token(doc, done, "show", focus.active && focus.finished);
+    }
+}
+
+/// Toggles `#noteOverlay`'s `.open` class and writes the note's URL, quoted
+/// selection and comment into the modal body (UX-CHROME-PANELS).
+fn bind_note(doc: &mut Document, note: &ChromeNoteModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::NOTE_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", note.open);
+    for (id, value) in [
+        (crate::ids::NOTE_URL, &note.url),
+        (crate::ids::NOTE_SEL, &note.selection),
+        (crate::ids::NOTE_COMMENT, &note.comment),
+    ] {
+        if let Some(n) = doc.find_by_id(id) {
+            set_text(doc, n, value);
+        }
     }
 }
 
@@ -4137,6 +4169,31 @@ mod tests {
         assert!(!has_class(&doc, bar, "open"));
         let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
         assert!(find_descendants_by_class(&doc, list, "wsb-chip").is_empty());
+    }
+
+    #[test]
+    fn note_modal_opens_and_shows_fields() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            note: ChromeNoteModel {
+                open: true,
+                url: "https://a.test/p".to_owned(),
+                selection: "quoted".to_owned(),
+                comment: "mine".to_owned(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::NOTE_OVERLAY).expect("asset has #noteOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let url = doc.find_by_id(crate::ids::NOTE_URL).expect("url");
+        assert_eq!(text_of(&doc, url), "https://a.test/p");
+        let sel = doc.find_by_id(crate::ids::NOTE_SEL).expect("selection");
+        assert_eq!(text_of(&doc, sel), "quoted");
+        let cmt = doc.find_by_id(crate::ids::NOTE_COMMENT).expect("comment");
+        assert_eq!(text_of(&doc, cmt), "mine");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, overlay, "open"));
     }
 
     #[test]

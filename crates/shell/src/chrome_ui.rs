@@ -259,6 +259,7 @@ impl Lumen {
                     lumen_chrome::ids::NETWORK_PANEL,
                     lumen_chrome::ids::READ_LATER_PANEL,
                     lumen_chrome::ids::PRIVACY_PANEL,
+                    lumen_chrome::ids::NOTE_OVERLAY,
                     lumen_chrome::ids::WORKSPACE_BAR,
                 ],
                 doc,
@@ -874,6 +875,7 @@ impl Lumen {
             read_later,
             privacy,
             focus: self.focus.chrome_model(),
+            note: self.note_viewer.chrome_model(),
             workspace_bar_open: self.workspace_panel.visible,
             access,
             print: lumen_chrome::ChromePrintModel {
@@ -1300,6 +1302,10 @@ impl Lumen {
             }
             ChromeAction::ClearNetwork => {
                 self.network_panel.clear_log();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::CloseNote => {
+                self.note_viewer.close();
                 self.relayout_chrome_host();
             }
             ChromeAction::TogglePrivacy => {

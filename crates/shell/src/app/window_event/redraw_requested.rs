@@ -1089,15 +1089,7 @@ impl Lumen {
             self.shields.refresh();
         }
 
-        // Note viewer overlay (§12.2, GG-2): floating annotation panel.
-        if self.note_viewer.visible {
-            let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size, &pal);
-            overlay_buf.append(&mut nv_cmds);
-        }
+        // Note viewer: `#noteOverlay` in the engine chrome (`bind_note`).
 
         // Workspace switcher bar: `#workspaceBar` in the engine chrome
         // (`bind_workspace_bar`), toggled by Ctrl+Shift+W.

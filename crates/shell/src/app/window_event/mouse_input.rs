@@ -549,23 +549,7 @@ impl Lumen {
             // here, gated off the rollback flag — `#view-history` in the
             // engine chrome owns it now.
 
-            // Note viewer overlay (§12.2, GG-2): click [×] to close.
-            if self.note_viewer.visible {
-                let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                    let s = w.inner_size();
-                    (s.width, s.height)
-                });
-                if let Some(hit) = self.note_viewer.hit_test(x_css, y_css, win_size) {
-                    match hit {
-                        panels::note_viewer::NoteHit::Close => {
-                            self.note_viewer.close();
-                            self.request_redraw();
-                        }
-                        panels::note_viewer::NoteHit::Body => {}
-                    }
-                    return;
-                }
-            }
+            // Note viewer: `#noteOverlay` in the engine chrome (`close-note`).
 
             // CC-10b/CC-15-6: the legacy AI-sidebar click hit-test lived
             // here, gated off the rollback flag — `#rightSidebar` in the

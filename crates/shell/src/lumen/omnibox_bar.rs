@@ -93,6 +93,7 @@ impl Lumen {
                 && let Ok(Some(note)) = self.notes_store.get(id)
             {
                 self.note_viewer.open(id, &note.url, &note.selection, &note.comment);
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             return;
