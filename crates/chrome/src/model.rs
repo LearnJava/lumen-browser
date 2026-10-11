@@ -51,6 +51,8 @@ pub struct ChromeModel {
     pub tabs: Vec<ChromeTabModel>,
     /// Workspaces shown in the sidebar switcher.
     pub workspaces: Vec<ChromeWorkspaceModel>,
+    /// `true` shows `#workspaceBar` (UX-CHROME-PANELS) — mirrors `WorkspacePanel::visible`.
+    pub workspace_bar_open: bool,
     /// Omnibox `#omniInput` value + spoof-warning banner (CC-7).
     pub omnibox: OmniboxModel,
     /// `true` narrows the vertical sidebar to its icon rail (`#sidebar.collapsed`,
@@ -1036,6 +1038,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_network(doc, &model.network);
     bind_read_later(doc, &model.read_later);
     bind_privacy(doc, &model.privacy);
+    bind_workspace_bar(doc, model.workspace_bar_open, &model.workspaces);
     bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
@@ -1712,6 +1715,65 @@ fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
         }
         attach_child(doc, list, node);
     }
+}
+
+/// Toggles `#workspaceBar`'s `.open` class and rebuilds the `.wsb-chip`s of
+/// `#wsbChips` from `workspaces` (UX-CHROME-PANELS).
+fn bind_workspace_bar(doc: &mut Document, open: bool, workspaces: &[ChromeWorkspaceModel]) {
+    let Some(bar) = doc.find_by_id(crate::ids::WORKSPACE_BAR) else { return };
+    set_class_token(doc, bar, "open", open);
+    let Some(list) = doc.find_by_id(crate::ids::WSB_CHIPS) else { return };
+    // Reconciled in place (not cleared and rebuilt): `bind_model` runs on every
+    // chrome relayout, and fresh node ids would dirty a hidden subtree on every
+    // keystroke (BUG-341).
+    reconcile_row_list(doc, list, "wsb-chip", workspaces, build_wsb_chip, update_wsb_chip, None);
+}
+
+fn apply_wsb_chip_attrs(doc: &mut Document, chip: NodeId, ws: &ChromeWorkspaceModel) {
+    set_attr(doc, chip, "class", if ws.active { "wsb-chip active" } else { "wsb-chip" });
+    set_attr(doc, chip, "style", &format!("--ws-color:{}", ws.color));
+}
+
+/// Both buttons carry their own `data-ws-id`: `chrome_action_at` only sees the
+/// `data-action`-carrying node.
+fn build_wsb_chip(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
+    let chip = doc.create_element(QualName::html("div"));
+    apply_wsb_chip_attrs(doc, chip, ws);
+    let name = doc.create_element(QualName::html("button"));
+    set_attr(doc, name, "class", "wsb-name");
+    set_attr(doc, name, "data-action", "select-workspace");
+    set_attr(doc, name, "data-ws-id", &ws.id.to_string());
+    append_text(doc, name, &ws.name);
+    attach_child(doc, chip, name);
+    let del = doc.create_element(QualName::html("button"));
+    set_attr(doc, del, "class", "wsb-del");
+    set_attr(doc, del, "data-action", "delete-workspace");
+    set_attr(doc, del, "data-ws-id", &ws.id.to_string());
+    set_attr(doc, del, "aria-label", "Удалить пространство");
+    append_text(doc, del, "×");
+    attach_child(doc, chip, del);
+    chip
+}
+
+fn update_wsb_chip(doc: &mut Document, chip: NodeId, ws: &ChromeWorkspaceModel) {
+    let children: Vec<NodeId> = doc.get(chip).children.clone();
+    let (Some(&name), Some(&del)) = (children.first(), children.get(1)) else {
+        for child in children {
+            detach_node(doc, child);
+        }
+        let fresh = build_wsb_chip(doc, ws);
+        let kids: Vec<NodeId> = doc.get(fresh).children.clone();
+        for k in kids {
+            attach_child(doc, chip, k);
+        }
+        apply_wsb_chip_attrs(doc, chip, ws);
+        return;
+    };
+    apply_wsb_chip_attrs(doc, chip, ws);
+    let id = ws.id.to_string();
+    set_attr(doc, name, "data-ws-id", &id);
+    set_text(doc, name, &ws.name);
+    set_attr(doc, del, "data-ws-id", &id);
 }
 
 /// Toggles `#privacyPanel`'s `.open` class, writes the blocked/allowed tallies
@@ -4003,6 +4065,42 @@ mod tests {
         assert!(!has_class(&doc, panel, "open"));
         let list = doc.find_by_id(crate::ids::PV_LIST).expect("list");
         assert!(find_descendants_by_class(&doc, list, "pv-row").is_empty());
+    }
+
+    #[test]
+    fn workspace_bar_opens_and_renders_chips() {
+        let mut doc = parse_asset();
+        let ws = |id: i64, active: bool| ChromeWorkspaceModel {
+            id,
+            name: format!("WS {id}"),
+            active,
+            color: "#0066FF".to_owned(),
+        };
+        let model = ChromeModel {
+            workspaces: vec![ws(4, true), ws(8, false)],
+            workspace_bar_open: true,
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let bar = doc.find_by_id(crate::ids::WORKSPACE_BAR).expect("asset has #workspaceBar");
+        assert!(has_class(&doc, bar, "open"));
+        let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
+        let chips = find_descendants_by_class(&doc, list, "wsb-chip");
+        assert_eq!(chips.len(), 2);
+        assert!(has_class(&doc, chips[0], "active"));
+        assert!(!has_class(&doc, chips[1], "active"));
+        let dels = find_descendants_by_class(&doc, list, "wsb-del");
+        assert_eq!(doc.get(dels[1]).get_attr("data-action"), Some("delete-workspace"));
+        assert_eq!(doc.get(dels[1]).get_attr("data-ws-id"), Some("8"));
+        let names = find_descendants_by_class(&doc, list, "wsb-name");
+        assert_eq!(doc.get(names[0]).get_attr("data-action"), Some("select-workspace"));
+        assert_eq!(doc.get(names[0]).get_attr("data-ws-id"), Some("4"));
+        assert_eq!(text_of(&doc, names[0]), "WS 4");
+        bind_model(&mut doc, &ChromeModel::default());
+        let bar = doc.find_by_id(crate::ids::WORKSPACE_BAR).expect("bar");
+        assert!(!has_class(&doc, bar, "open"));
+        let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
+        assert!(find_descendants_by_class(&doc, list, "wsb-chip").is_empty());
     }
 
     #[test]

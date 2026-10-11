@@ -595,62 +595,8 @@ impl Lumen {
             // here, gated off the rollback flag — `#rightSidebar` in the
             // engine chrome owns it now.
 
-            // Workspace switcher bar (7A.3): clicks in the bottom bar area.
-            if self.workspace_panel.visible {
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css()
-                    + toolbar::CHROME_H
-                    + panels::workspace_panel::SWITCHER_HEIGHT;
-                if let Some(hit) = panels::workspace_panel::hit_test(
-                    &self.workspace_panel,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                ) {
-                    match hit {
-                        panels::workspace_panel::WorkspaceHit::SwitchTo(id) => {
-                            self.workspace_panel.set_active(Some(id));
-                            self.request_redraw();
-                        }
-                        panels::workspace_panel::WorkspaceHit::DeleteWorkspace(id) => {
-                            // Never delete the last workspace — require at least one.
-                            if self.workspace_panel.workspaces.len() > 1 {
-                                let _ = self.workspaces.delete(id);
-                                self.refresh_workspaces();
-                                // If the deleted workspace was active, switch to first.
-                                if self.workspace_panel.active_id == Some(id) {
-                                    let first_id = self
-                                        .workspace_panel
-                                        .workspaces
-                                        .first()
-                                        .map(|w| w.id);
-                                    self.workspace_panel.set_active(first_id);
-                                }
-                                self.request_redraw();
-                            }
-                        }
-                        panels::workspace_panel::WorkspaceHit::NewWorkspace => {
-                            let idx = self.workspace_panel.workspaces.len();
-                            let name = format!("Workspace {}", idx + 1);
-                            let color = panels::workspace_panel::default_color_for_index(idx);
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs() as i64)
-                                .unwrap_or(0);
-                            if let Ok(id) =
-                                self.workspaces.create(&name, color, "", None, now)
-                            {
-                                self.refresh_workspaces();
-                                self.workspace_panel.set_active(Some(id));
-                            }
-                            self.request_redraw();
-                        }
-                        panels::workspace_panel::WorkspaceHit::Empty => {}
-                    }
-                    return;
-                }
-            }
+            // Workspace switcher bar: `#workspaceBar` in the engine chrome
+            // (`select-workspace` / `delete-workspace` / `add-workspace`).
 
             // Split-view focus routing: clicking in the right pane
             // transfers focus there; clicking in the left pane transfers

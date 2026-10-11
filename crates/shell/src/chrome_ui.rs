@@ -259,6 +259,7 @@ impl Lumen {
                     lumen_chrome::ids::NETWORK_PANEL,
                     lumen_chrome::ids::READ_LATER_PANEL,
                     lumen_chrome::ids::PRIVACY_PANEL,
+                    lumen_chrome::ids::WORKSPACE_BAR,
                 ],
                 doc,
             )
@@ -872,6 +873,7 @@ impl Lumen {
             network,
             read_later,
             privacy,
+            workspace_bar_open: self.workspace_panel.visible,
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1587,6 +1589,21 @@ impl Lumen {
             ChromeAction::SelectWorkspace => {
                 if let Some(id) = self.chrome_data_id(nid, "data-ws-id") {
                     self.workspace_panel.set_active(Some(id));
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::DeleteWorkspace => {
+                // Never delete the last workspace — require at least one.
+                if let Some(id) = self.chrome_data_id(nid, "data-ws-id")
+                    && self.workspace_panel.workspaces.len() > 1
+                {
+                    let _ = self.workspaces.delete(id);
+                    self.refresh_workspaces();
+                    // If the deleted workspace was active, switch to the first.
+                    if self.workspace_panel.active_id == Some(id) {
+                        let first_id = self.workspace_panel.workspaces.first().map(|w| w.id);
+                        self.workspace_panel.set_active(first_id);
+                    }
                     self.relayout_chrome_host();
                 }
             }

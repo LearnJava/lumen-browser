@@ -692,6 +692,19 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .pv-row.blocked .pv-sub{ color:var(--red-badge); }
 #pvList:empty::before{ content:"No requests yet"; display:block; padding:14px 12px; font-size:12px; color:var(--text-secondary); }
 
+.workspace-bar{
+  position:absolute; left:0; right:0; bottom:0; height:32px; background:var(--surface-0);
+  border-top:1px solid var(--stroke); display:none; align-items:center; gap:6px; padding:0 8px 0 6px; z-index:66;
+}
+.workspace-bar.open{ display:flex; }
+.wsb-chips{ flex:1; display:flex; align-items:center; gap:6px; overflow:hidden; }
+.wsb-chip{ display:flex; align-items:center; height:22px; max-width:160px; border-radius:var(--radius-lg); background:var(--surface-1); border-bottom:2px solid transparent; font-size:11px; color:var(--text-secondary); }
+.wsb-chip.active{ background:var(--surface-2); border-bottom-color:var(--ws-color, var(--accent)); color:var(--text-primary); }
+.wsb-name{ border:none; background:none; padding:0 4px 0 10px; font-size:11px; color:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wsb-del{ border:none; background:none; width:18px; font-size:11px; color:var(--red-badge); }
+.wsb-add{ flex:none; width:30px; height:22px; border:none; border-radius:var(--radius-lg); background:var(--surface-1); font-size:12px; color:var(--green); }
+.wsb-add:hover{ background:var(--surface-2); }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1580,6 +1593,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Workspace switcher bar (UX-CHROME-PANELS) -->
+          <div class="workspace-bar" id="workspaceBar">
+            <div class="wsb-chips" id="wsbChips"><div class="wsb-chip"><button class="wsb-name" data-action="select-workspace">Default</button><button class="wsb-del" data-action="delete-workspace" aria-label="Удалить пространство">×</button></div></div>
+            <button class="wsb-add" data-action="add-workspace" aria-label="Новое пространство">+</button>
           </div>
 
           <!-- Privacy network panel (UX-CHROME-PANELS) -->
