@@ -34,7 +34,8 @@ from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_free_por
 from ..environment import wait_for_service
 from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executorlumen import (  # noqa: F401
-    LumenCrashtestExecutor, LumenRefTestExecutor, LumenTestharnessExecutor)
+    LumenCrashtestExecutor, LumenPrintRefTestExecutor, LumenRefTestExecutor,
+    LumenTestharnessExecutor)
 
 #: Prefix of the stderr line `crates/bidi-server/src/server.rs::spawn` prints
 #: once per process (ADR-024 §Access model, DEVX-15).
@@ -97,6 +98,7 @@ __wptrunner__ = {
     "executor": {
         "testharness": "LumenTestharnessExecutor",
         "reftest": "LumenRefTestExecutor",
+        "print-reftest": "LumenPrintRefTestExecutor",
         "crashtest": "LumenCrashtestExecutor",
     },
 }
@@ -129,7 +131,10 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
     # python run_report.py --all --root forced-colors-mode --recursive`.
     return {
         "binary": kwargs["binary"],
-        "ipc_mode": test_type == "reftest",
+        # WPT-RUN-8-S2: print-reftest keeps a cheap `--ipc-server` process as
+        # its browser object only; the pages come from a `--print-to-pdf` child
+        # per screenshot (`LumenPrintRefTestExecutor`).
+        "ipc_mode": test_type in ("reftest", "print-reftest"),
         "ca_cert_path": kwargs.get("ca_cert_path"),
         "forced_colors": os.environ.get("LUMEN_FORCED_COLORS") == "1",
         # PERF-10: `LUMEN_NO_PAINT=1` -> `--no-paint` (DOM+JS+layout, no GPU
@@ -454,7 +459,8 @@ class LumenBrowser(WebDriverBrowser):
 
     def executor_browser(self):
         if self.ipc_mode:
-            return ExecutorBrowser, {"ipc_port": self.port, "ipc_token": self.ipc_token}
+            return ExecutorBrowser, {"ipc_port": self.port, "ipc_token": self.ipc_token,
+                                     "binary": self.binary, "env": self.env}
         # BUG-498: `token` must be forwarded here — the executor process
         # only sees this `ExecutorBrowser` view, never `self` directly.
         return ExecutorBrowser, {"bidi_url": self.url, "token": self.token}
