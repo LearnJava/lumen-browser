@@ -62,6 +62,9 @@ impl Lumen {
         // CC-6: rebind ChromeModel from current shell state before every
         // layout pass — no separate dirty flag, `bind_model` is cheap (a
         // handful of attribute/text mutations + two small list rebuilds).
+        if self.network_panel.visible {
+            self.network_panel.refresh();
+        }
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
         // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
@@ -250,6 +253,7 @@ impl Lumen {
                     lumen_chrome::ids::ACCESS_OVERLAY,
                     lumen_chrome::ids::PRINT_OVERLAY,
                     lumen_chrome::ids::DEVTOOLS,
+                    lumen_chrome::ids::NETWORK_PANEL,
                 ],
                 doc,
             )
@@ -624,6 +628,8 @@ impl Lumen {
                 .collect();
             lumen_chrome::ChromeConsoleModel { open: panel.visible, total: msgs.len(), lines }
         };
+        // UX-CHROME-PANELS: `#networkPanel` mirrors the (already refreshed) `NetworkPanel`.
+        let network = self.network_panel.chrome_model();
         // UX-CHROME-PANELS: `#accessOverlay` mirrors the draft of `A11yPanel`.
         let access = {
             let panel = &self.a11y_panel;
@@ -851,6 +857,7 @@ impl Lumen {
             cert,
             shortcuts,
             console,
+            network,
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1268,6 +1275,14 @@ impl Lumen {
             }
             ChromeAction::ToggleDevtools => {
                 self.devtools_console.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleNetwork => {
+                self.network_panel.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ClearNetwork => {
+                self.network_panel.clear_log();
                 self.relayout_chrome_host();
             }
             ChromeAction::ClearConsole => {

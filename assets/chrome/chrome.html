@@ -528,6 +528,14 @@ body[data-theme="dark"] .hist-banner{ background:#332b06; border-color:#5c4d0f; 
 .status-badge.s2{ background:rgba(31,157,85,.14); color:var(--green); }
 .status-badge.s3{ background:rgba(11,111,224,.14); color:var(--blue-badge); }
 .status-badge.s4{ background:rgba(224,52,43,.14); color:var(--red-badge); }
+.net-row{ display:flex; gap:10px; padding:4px 10px; border-bottom:1px solid var(--stroke); white-space:nowrap; overflow:hidden; }
+.net-row.blocked{ background:rgba(224,52,43,.08); border-left:3px solid var(--red-badge); }
+.net-row.failed{ background:rgba(216,164,0,.08); border-left:3px solid var(--yellow); }
+.net-row .net-method{ flex:none; width:48px; color:var(--blue-badge); }
+.net-row .net-status{ flex:none; width:52px; }
+.net-row .net-time{ flex:none; width:64px; color:var(--text-secondary); }
+.net-row .net-url{ flex:1; overflow:hidden; }
+#dt-network:empty::before{ content:"(no requests yet)"; display:block; padding:6px 10px; color:var(--text-secondary); }
 .elements-tree{ padding:10px; white-space:pre; line-height:1.7; }
 .elements-tree .tag{ color:#0B6FE0; } .elements-tree .attr{ color:#8B5CF6; } .elements-tree .val{ color:#1F9D55; }
 body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="dark"] .elements-tree .attr{ color:#c4a7ff; } body[data-theme="dark"] .elements-tree .val{ color:#7de3a3; }
@@ -1476,6 +1484,16 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <button class="dt-close" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
             <div class="dt-panel active" id="dt-console"></div>
+          </div>
+
+          <!-- DevTools: сеть (UX-CHROME-PANELS срез 5). Класс devtools даёт позицию и высоту консоли. -->
+          <div class="devtools" id="networkPanel">
+            <div class="dt-tabs">
+              <div class="dt-tab active" id="dtNetworkTitle">Network</div>
+              <button class="dt-clear" data-action="clear-network">Очистить</button>
+              <button class="dt-close" data-action="toggle-network" aria-label="Network"><svg class="icon"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="dt-panel active" id="dt-network"></div>
           </div>
 
           <!-- Downloads panel -->

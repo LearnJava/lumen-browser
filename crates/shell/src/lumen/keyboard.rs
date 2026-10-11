@@ -918,6 +918,7 @@ impl Lumen {
             }
             KeyCommand::DevNetwork => {
                 self.network_panel.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::TogglePrivacy => {

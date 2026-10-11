@@ -996,19 +996,8 @@ impl Lumen {
         // DevTools JS console: `#devtools` in the engine chrome
         // (`bind_console`), toggled by F12.
 
-        // DevTools network panel: bottom overlay, toggled by Ctrl+Shift+E.
-        if self.network_panel.visible {
-            self.network_panel.refresh();
-            let net_win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut net_cmds = devtools::network_panel::build_network_panel(
-                &self.network_panel,
-                net_win_size,
-            );
-            overlay_buf.append(&mut net_cmds);
-        }
+        // DevTools network panel: `#networkPanel` in the engine chrome
+        // (`bind_network`), toggled by Ctrl+Shift+E.
 
         // Privacy network panel (V5): right-docked overlay, Ctrl+Shift+Y.
         if self.privacy.visible {
