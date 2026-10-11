@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-11",
  "counts": {
-  "open": 400,
+  "open": 408,
   "fixed": 1131,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1534,
+ "total_bugs": 1542,
  "phases": [
   {
    "id": "P0",
@@ -6077,9 +6077,9 @@
       {
        "id": "WPT-RUN-14",
        "title": "WPT-RUN-14: полный прогон css и кластеры для P1/P4",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "Полный прогон категории `css` и разбор провалов на кластеры для P1 (layout/paint) и P4 (CSS-свойства). Заведено 2026-10-01 решением пользователя по плану развития: `css` — 34 607 id, около половины автоматизируемого корпуса, а рефтесты дают 64 % балла цифры (`docs/wpt/pass-rate.md` срез 33), но категория прогнана выборочно — 382 id (`docs/wpt-status.md` §Охват), поэтому очереди P1/P4 сейчас не знают, какие layout/CSS-дефекты стоят больше всего тестов. Объём: (1) прогнать `css` целиком на текущей сборке (`run_corpus.py`/`run_report.py --root css --recursive`, чанками с `--resume`, после или вместе с WPT-RUN-9); (2) `score_audit.py`/`type_audit.py` — разложить FAIL/TIMEOUT по подкаталогам `css/<модуль>/` и по первопричине; (3) на каждый кластер с наибольшим числом id — один BUG-NNN (дефект) либо строка ROADMAP (нереализованная функциональность), с указателем в `STATUS-P1.md` (layout/paint) или `STATUS-P4.md` (свойство разобрано, но не подключено); (4) итог — таблица «кластер → id → владелец» в `docs/wpt-vendor-notes/css.md`. Критерий готовности: весь `css` имеет вердикт, топ-10 кластеров по числу id разнесены по очередям."
+       "note": "Полный прогон категории `css` и разбор провалов на кластеры для P1 (layout/paint) и P4 (CSS-свойства). Заведено 2026-10-01 решением пользователя по плану развития: `css` — 34 607 id, около половины автоматизируемого корпуса, а рефтесты дают 64 % балла цифры (`docs/wpt/pass-rate.md` срез 33), но категория прогнана выборочно — 382 id (`docs/wpt-status.md` §Охват), поэтому очереди P1/P4 сейчас не знают, какие layout/CSS-дефекты стоят больше всего тестов. Объём: (1) прогнать `css` целиком на текущей сборке (`run_corpus.py`/`run_report.py --root css --recursive`, чанками с `--resume`, после или вместе с WPT-RUN-9); (2) `score_audit.py`/`type_audit.py` — разложить FAIL/TIMEOUT по подкаталогам `css/<модуль>/` и по первопричине; (3) на каждый кластер с наибольшим числом id — один BUG-NNN (дефект) либо строка ROADMAP (нереализованная функциональность), с указателем в `STATUS-P1.md` (layout/paint) или `STATUS-P4.md` (свойство разобрано, но не подключено); (4) итог — таблица «кластер → id → владелец» в `docs/wpt-vendor-notes/css.md`. Критерий готовности: весь `css` имеет вердикт, топ-10 кластеров по числу id разнесены по очередям. СДЕЛАНО 2026-10-11 (ветка `p2-wpt-run14-agg`): срезы S1…S28 закрыты, сводка по всему `css` — `docs/wpt-vendor-notes/css.md` §«Сводка по всему `css`». 33 496 automatable id, 11 922.38 = 35.59 % (сумма по срезам, не единый снимок: срезы сняты с 2026-10-03 по 2026-10-11 на разных сборках, S28 — на бинаре от 2026-10-08 из-за BUG-1597). Топ-10 открытых кластеров (GRID-LANES 760, BUG-1337 747, BUG-1366 577, MULTICOL-FRAG 464, WPT-RUN-15 423, LINEBREAK-UAX14 335, BUG-1306 334, FLEX-FRAG 278, BUG-1563 263, BUG-779 236) стоят в очередях; три записи из топ-30 без указателя (BUG-779, BUG-1385, BUG-1234) получили его в STATUS-P1/P3. Единый пересчёт `css` целиком — после починки BUG-1597."
       },
       {
        "id": "WPT-RUN-8-S1",
@@ -6322,9 +6322,9 @@
       {
        "id": "WPT-RUN-14-S28",
        "title": "WPT-RUN-14-S28: малые модули css",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Прогон остальных 30 малых модулей `css` (около 794 automatable id): css-logical, compositing, css-scroll-anchoring, css-content, css-scrollbars, css-will-change, css-syntax, css-color-adjust, css-rhythm, geometry, css-font-loading, printing, css-forms, css-image-animation, css-style-attr, css-easing, css-exclusions, css-overscroll-behavior, fill-stroke, css-env, css-device-adapt, css-size-adjust, css-link-params, css-forced-color-adjust, css-color-hdr, reference, css-zoom, css-motion-path, fetching, css-parser-api; кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md)"
+       "note": "Прогон остальных 30 малых модулей `css` (около 794 automatable id): css-logical, compositing, css-scroll-anchoring, css-content, css-scrollbars, css-will-change, css-syntax, css-color-adjust, css-rhythm, geometry, css-font-loading, printing, css-forms, css-image-animation, css-style-attr, css-easing, css-exclusions, css-overscroll-behavior, fill-stroke, css-env, css-device-adapt, css-size-adjust, css-link-params, css-forced-color-adjust, css-color-hdr, reference, css-zoom, css-motion-path, fetching, css-parser-api; кластеры провалов. Зависит от S1. Бриф [docs/tasks/WPT-RUN-14-slices.md](docs/tasks/WPT-RUN-14-slices.md) СДЕЛАНО 2026-10-11 (ветка `p2-wpt-run14-s28`): 794 automatable id, 329.18 = 41.46 % (reftest 113/319, testharness 194.18/423 при 2 510 из 5 897 сабтестов, crashtest 22/26, print-reftest 0/26 без исполнителя); «no leak», повторный прогон — 0 расхождений из 768. **Прогон снят на бинаре от 2026-10-08, не на `main`**: после UX-LOADING (`6d4ae2719`) `--bidi-port` не отвечает на `script.evaluate`/`navigate` — [BUG-1597](bugs/BUG-1597-OPEN.md), найдено бисекцией; на свежем `main` тот же срез 34.97 % с недетерминированными TIMEOUT. 519 не зелёных id (493 с вердиктом + 26 без исполнителя) разнесены на 31 кластеров: `<q>` без кавычек — 45 reftest (BUG-1598); `mix-blend-mode` не изолирует группу — 40 (BUG-1599); `css-logical` — 72 (BUG-1600); `css-syntax` `An+B` — 23 (BUG-1601); `will-change` containing block — 26 (BUG-1602); `color-scheme: dark` не красит холст — 24 (BUG-1603); `DOMMatrix` — 19 (BUG-1604); якорение прокрутки — 64 (BUG-524, ДОРАБОТКА). Заведены BUG-1597…1604 (8 записей); повторные замеры в BUG-524/467/507/521. Движок (`layout`/`css-parser`/`paint`) не менялся."
       },
       {
        "id": "WPT-RUN-15",
@@ -11277,6 +11277,62 @@
    "status": "open",
    "title": "`no_persistent_state` (`--mcp*`/`--bidi-port`/`--tor`) не соблюдается хранилищами окна: `history.db`, `history_fts.db`, `permissions.db`, `bookmarks.db`, `downl…",
    "component": "shell (`window_mode.rs`: `open_persistent` и прямые открытия хранилищ; `page_load.rs` запись визита)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1597": {
+   "status": "open",
+   "title": "`lumen --bidi-port N` после UX-LOADING не отвечает на `script.evaluate`/`navigate` — все тесты WPT на `main` TIMEOUT; бисекция: `6d4ae2719`, `loading: false` во…",
+   "component": "shell (`chrome_ui.rs:365` `loading: …nav_start.is_some()` + спиннер вкладки, UX-LOADING)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1598": {
+   "status": "open",
+   "title": "`<q>` без кавычек: `A x` вместо `A “x”`; страничное правило `q::before{content:open-quote}` даёт верный результат. WPT-RUN-14 S28: 45 reftest `css-content/quote…",
+   "component": "layout (`style/ua.rs`, `style/pseudo.rs`: нет UA-правила `q::before/::after`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1599": {
+   "status": "open",
+   "title": "`mix-blend-mode` смешивает вылезшую за родителя-стекинг-контекст часть с фоном страницы вместо изоляции группы: (125,60) красный вместо `#0FF`. WPT-RUN-14 S28:…",
+   "component": "paint (`display_list/` — группа `mix-blend-mode`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1600": {
+   "status": "open",
+   "title": "Логические свойства: `margin-left:1px;margin-inline-start:5px` → 1px (порядок каскада теряется), `CSS.supports` ложно для `border-block-start-width`/`min-block-…",
+   "component": "layout (`style/logical.rs::resolve_logical_properties`, `selector_query.rs`, `_lumen_css_supports_prop`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1601": {
+   "status": "open",
+   "title": "`li:nth-child(n)` → `selectorText` `1n`, `-n+3` → `-1n+3`; `urange`, `inclusive-ranges`, `serialize-consecutive-tokens`. WPT-RUN-14 S28: `css-syntax` 23 id (281…",
+   "component": "css-parser (`:nth-*()` сериализация, токенизатор CSS Syntax)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1602": {
+   "status": "open",
+   "title": "`will-change: translate",
+   "component": "layout (`stacking.rs:244-255` `is_stacking_will_change`; containing block fixed/abspos)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1603": {
+   "status": "open",
+   "title": "`color-scheme: dark` не делает холст тёмным: (90,50) белый, `color` чёрный. WPT-RUN-14 S28: `css-color-adjust` 24 id (19 `rendering/dark-color-scheme`, 5 CSSOM)",
+   "component": "layout/paint (`color-scheme`: холст и `color: initial`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1604": {
+   "status": "open",
+   "title": "`new DOMMatrix(\"NONE\")`/`\"none/**/\"` не разбираются; в воркере нет `DOMMatrix`. WPT-RUN-14 S28: `css/geometry` 19 id (802 из 1 392 подтестов)",
+   "component": "js (`DOMMatrix`/`DOMMatrixReadOnly`/`DOMQuad`; воркерный глобал)",
    "date": null,
    "debtor": false
   },
@@ -19264,6 +19320,9 @@
    "BUG-115",
    "BUG-217"
   ],
+  "css-parser (`:nth-*()` сериализация, токенизатор CSS Syntax)": [
+   "BUG-1601"
+  ],
   "css-parser (`crates/engine/css-parser/src/lib.rs:36` `SUPPORTED_PROPERTIES`)": [
    "BUG-561"
   ],
@@ -19652,6 +19711,9 @@
   ],
   "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)": [
    "BUG-326"
+  ],
+  "js (`DOMMatrix`/`DOMMatrixReadOnly`/`DOMQuad`; воркерный глобал)": [
+   "BUG-1604"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
@@ -21226,6 +21288,9 @@
   "layout (`property_trees`/`resolve_motion_transform`: база `offset-distance: N%`)": [
    "BUG-1587"
   ],
+  "layout (`stacking.rs:244-255` `is_stacking_will_change`; containing block fixed/abspos)": [
+   "BUG-1602"
+  ],
   "layout (`style.rs::parse_linear_gradient_angle`) — shared by all 3 paint backends": [
    "BUG-647"
   ],
@@ -21234,6 +21299,12 @@
   ],
   "layout (`style/apply/text.rs`, `style/parse/font_size.rs`; `selector_query.rs`)": [
    "BUG-1410"
+  ],
+  "layout (`style/logical.rs::resolve_logical_properties`, `selector_query.rs`, `_lumen_css_supports_prop`)": [
+   "BUG-1600"
+  ],
+  "layout (`style/ua.rs`, `style/pseudo.rs`: нет UA-правила `q::before/::after`)": [
+   "BUG-1598"
   ],
   "layout (float positioning, CSS2.1 §9.5.1)": [
    "BUG-469"
@@ -21358,6 +21429,9 @@
   ],
   "layout/paint (`<canvas>` как replaced-элемент, `object-fit`/`object-position`)": [
    "BUG-1421"
+  ],
+  "layout/paint (`color-scheme`: холст и `color: initial`)": [
+   "BUG-1603"
   ],
   "layout/paint (`crates/engine/layout/src/box_tree/` — распространение `text-decoration` на потомков; `crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration`)": [
    "BUG-1523"
@@ -21696,6 +21770,9 @@
   "paint (`display_list.rs`)": [
    "BUG-431"
   ],
+  "paint (`display_list/` — группа `mix-blend-mode`)": [
+   "BUG-1599"
+  ],
   "paint (`emit_scrollbars`) / test-triage": [
    "BUG-288"
   ],
@@ -21796,6 +21873,9 @@
   ],
   "shell (90 файлов под `crates/shell/`)": [
    "BUG-942"
+  ],
+  "shell (`chrome_ui.rs:365` `loading: …nav_start.is_some()` + спиннер вкладки, UX-LOADING)": [
+   "BUG-1597"
   ],
   "shell (`crates/shell/build.rs`, `src/main.rs`, `src/app/user_event.rs`, `src/window_mode.rs`) + js (`crates/js/src/v8_runtime/runtime.rs`) + core (`crates/core/src/deep_stack.rs`)": [
    "BUG-1027"
