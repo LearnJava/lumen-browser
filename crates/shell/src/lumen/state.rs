@@ -1244,7 +1244,7 @@ pub(crate) struct Lumen {
     /// [`super::text_drag_select::Lumen::update_text_drag_select`] on every
     /// `CursorMoved` while held, and disarmed on `ElementState::Released`
     /// (`mouse_input.rs`) — the button-release path every other drag field on
-    /// this struct (`scroll_drag`, `panel_resize`, `dnd_state`) already
+    /// this struct (`scroll_drag`, `dnd_state`) already
     /// follows.
     pub(crate) text_drag: Option<super::text_drag_select::TextDragTarget>,
     /// Mouse-drag selection over ordinary page text in progress — armed by
@@ -1420,12 +1420,6 @@ pub(crate) struct Lumen {
     /// When visible, `page_content_width_css()` subtracts
     /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     pub(crate) sidebar: panels::sidebar_panel::SidebarPanel,
-    /// Re-layoutable source of the web sidebar page (parsed DOM + stylesheet).
-    ///
-    /// Kept so a drag-resize of the sidebar can reflow its content to the new
-    /// width instead of stretching a frozen display list. `None` until a page
-    /// is opened via [`Self::open_sidebar_page`].
-    pub(crate) sidebar_source: Option<LayoutSource>,
     /// AI assistant sidebar panel (§12.8, GG-1).
     ///
     /// Right-docked 200 CSS px panel with a prompt input field and response area.
@@ -1435,14 +1429,6 @@ pub(crate) struct Lumen {
     pub(crate) ai_panel: panels::ai_panel::AiPanel,
     /// Persisted, drag-resizable widths of the docked sidebars (F2-6).
     ///
-    /// Replaces the panels' compiled `PANEL_WIDTH` constants: `width_for(id,
-    /// default)` supplies the active width, dragging a panel's inner edge calls
-    /// `set_width` + `relayout` + `save`. Loaded at startup, so the layout
-    /// survives a restart.
-    pub(crate) panel_layout: panel_layout::PanelLayout,
-    /// In-flight docked-panel resize drag: `(dock side, panel id)` of the edge
-    /// currently being dragged, or `None` when no resize is active.
-    pub(crate) panel_resize: Option<(panel_layout::Dock, &'static str)>,
     /// Floating overlay showing a single user annotation (§12.2, GG-2).
     ///
     /// Opened when the user selects a `@notes`-search result from the omnibox

@@ -144,7 +144,6 @@ mod momentum_anim;
 mod nav_timing;
 mod notification;
 mod omnibox;
-mod panel_layout;
 mod page_context_menu;
 mod page_load;
 mod page_pipeline;

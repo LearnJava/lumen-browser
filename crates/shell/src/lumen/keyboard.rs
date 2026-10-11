@@ -810,13 +810,6 @@ impl Lumen {
                 self.relayout_chrome();
                 self.request_redraw();
             }
-            KeyCommand::FlipActiveDock => {
-                // Cross-dock the active sidebar (tabs, AI, or web);
-                // flip_active_sidebar_dock relayouts internally on success.
-                if self.flip_active_sidebar_dock() {
-                    self.request_redraw();
-                }
-            }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
                 // Viewport height changes — re-layout so content doesn't hide

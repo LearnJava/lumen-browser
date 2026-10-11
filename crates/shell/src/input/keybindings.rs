@@ -81,8 +81,6 @@ pub(crate) enum KeyCommand {
     ToggleVerticalTabs,
     /// Показать/скрыть tree-style панель вкладок (Ctrl+Shift+B).
     ToggleTreeTabs,
-    /// Перенести активный сайдбар вкладок к противоположному краю окна (Ctrl+Alt+B).
-    FlipActiveDock,
     /// Показать/скрыть панель воркспейсов (Ctrl+Shift+W).
     ToggleWorkspaces,
     /// Показать/скрыть панель Shields (Ctrl+Shift+S).
@@ -207,10 +205,6 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
         // Ctrl+Shift+B — toggle tree-style tab sidebar
         KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleTreeTabs)
-        }
-        // Ctrl+Alt+B — move the active tab sidebar to the opposite edge (cross-dock)
-        KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::ALT) => {
-            Some(KeyCommand::FlipActiveDock)
         }
         // Ctrl+Shift+W — toggle workspace switcher bar
         KeyCode::KeyW if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {

@@ -115,7 +115,6 @@ impl Lumen {
     /// ширина вертикальных панелей вкладок (слева) и sidebar (справа), если
     /// они видимы. Используется для клампинга горизонтального скролла.
     pub(crate) fn page_content_width_css(&self) -> f32 {
-        let (left_offset, right_offset) = self.docked_panel_offsets();
-        (self.viewport_width_css() - left_offset - right_offset).max(0.0)
+        self.viewport_width_css().max(0.0)
     }
 }

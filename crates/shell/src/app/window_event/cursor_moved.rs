@@ -12,23 +12,8 @@ use winit::dpi::PhysicalPosition;
 impl Lumen {
     pub(crate) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.cursor_position = Some(position);
-        // F2-6: while resizing a docked panel, the drag owns the cursor —
-        // update its width and relayout, skip page/inspector hover work.
-        if self.panel_resize.is_some() {
-            let dpr = self
-                .renderer
-                .as_ref()
-                .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                .max(1e-6);
-            let x_css = (position.x as f32) / dpr;
-            if self.drag_panel_resize(x_css) {
-                self.request_redraw();
-            }
-            self.update_cursor_icon();
-            return;
-        }
         // CC-18 срез 3: while dragging the floating panel by its header the
-        // drag owns the cursor, exactly like `panel_resize` above — move the
+        // drag owns the cursor, — move the
         // panel and skip page hover / inspector / gesture work. No relayout:
         // the offset is applied when the floating display list is rebuilt.
         if self.chrome_float_drag.is_some() {
@@ -108,10 +93,6 @@ impl Lumen {
             }
             // Collect events to fire while mutating state, then release the
             // mutable borrow before calling self.js_drag_event() (needs &self).
-            // Width of any left-docked sidebar, computed before the
-            // `dnd_state` mutable borrow so page-coord conversion can
-            // subtract it. Cross-dock aware across all four sidebars.
-            let left_dock_w = self.left_dock().map_or(0.0, |(_, w)| w);
             let ev_opt: Option<DndMoveEvents> = if let Some(dnd) = self.dnd_state.as_mut() {
                 let dpr = self
                     .renderer
@@ -121,7 +102,7 @@ impl Lumen {
                 let x_css = (position.x as f32) / dpr;
                 let y_css = (position.y as f32) / dpr;
                 let (page_x, page_y) = (
-                    x_css - left_dock_w + self.scroll_x,
+                    x_css + self.scroll_x,
                     y_css - toolbar::CHROME_H + self.scroll_y,
                 );
                 let target_nid = self.layout_box.as_ref().and_then(|lb| {

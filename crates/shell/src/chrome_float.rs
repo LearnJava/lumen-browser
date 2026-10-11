@@ -341,7 +341,7 @@ impl Lumen {
 
     /// CC-18 срез 3: advances an in-progress header drag to the pointer's new
     /// position. Returns `true` when a drag is live (the caller then owns the
-    /// motion and skips page hover work, mirroring `panel_resize`).
+    /// motion and skips page hover work).
     ///
     /// Only the offset and the floating display list are rebuilt — no
     /// relayout: the panel's position is a paint-time property here, so the

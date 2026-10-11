@@ -127,12 +127,6 @@ impl Lumen {
             if self.page_dialog.is_some() {
                 return;
             }
-            // F2-6: a press on a docked panel's inner edge begins a
-            // resize drag; the click never reaches the page / panels.
-            if let Some(edge) = self.resize_edge_at(x_css, y_css) {
-                self.panel_resize = Some(edge);
-                return;
-            }
             // CC-4: while the tab context menu is open it captures the
             // click — picking a row runs the action, anywhere else just
             // dismisses it. The click never reaches the page / panels.
@@ -585,18 +579,6 @@ impl Lumen {
         } else {
             // Released — завершаем drag (если был) и сбрасываем resize.
             self.resize_active = None;
-            // F2-6: end a docked-panel resize drag and persist the layout.
-            if let Some((_, id)) = self.panel_resize.take() {
-                self.panel_layout.save();
-                // Reflow the web sidebar page to its new width: its content
-                // is a frozen display list, so unlike the AI panel (drawn
-                // procedurally) it does not reflow during the drag itself.
-                if id == panel_layout::ID_SIDEBAR {
-                    self.relayout_sidebar();
-                }
-                self.update_cursor_icon();
-                return;
-            }
             // BUG-480 срез 23: `:active` под-документа снимается на отпускании
             // ровно как страничный ниже.
             if self.active_frame.is_some() {
