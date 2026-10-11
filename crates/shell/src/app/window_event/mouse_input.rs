@@ -366,41 +366,8 @@ impl Lumen {
             // buttons, toolbar buttons) lived here — removed along with
             // the paint/hit-test functions it called, unreachable since
             // CC-4 routed those clicks through `chrome_hit_test` above.
-            // Archive panel: close on click below tab bar when open.
-            if self.archive.visible {
-                let win_w = self.viewport_width_css();
-                match tabs::archive::hit_test_panel(
-                    &self.archive,
-                    x_css,
-                    y_css,
-                    win_w,
-                    toolbar::CHROME_H,
-                ) {
-                    Some(tabs::archive::ArchiveHit::Restore(id)) => {
-                        if let Some(entry) = self.archive.take(id)
-                            && !entry.url.is_empty()
-                        {
-                            self.navigate_to(PageSource::url(entry.url));
-                        }
-                        self.archive.close();
-                        self.request_redraw();
-                        return;
-                    }
-                    Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
-                        self.archive.take(id);
-                        self.request_redraw();
-                        return;
-                    }
-                    Some(tabs::archive::ArchiveHit::Inside) => {
-                        self.request_redraw();
-                        return;
-                    }
-                    Some(tabs::archive::ArchiveHit::Outside) | None => {
-                        self.archive.close();
-                        self.request_redraw();
-                    }
-                }
-            }
+            // Archive panel: `#archivePanel` in the engine chrome
+            // (`toggle-archive` / `archive-restore` / `archive-dismiss`).
 
             // Privacy network panel: `#privacyPanel` in the engine chrome
             // (`bind_privacy`, `toggle-privacy`).
