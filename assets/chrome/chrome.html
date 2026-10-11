@@ -752,6 +752,21 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .page-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
 .tab-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
 
+.pip-card{ position:fixed; display:none; width:320px; height:180px; background:#18181e; border:1px solid var(--stroke); border-radius:var(--radius-lg); overflow:hidden; }
+.pip-card.open{ display:block; }
+.pip-poster{ position:absolute; left:0; top:0; width:320px; height:180px; object-fit:cover; }
+.pip-poster.empty{ display:none; }
+.pip-header{ position:absolute; left:0; top:0; width:100%; height:26px; background:rgba(10,10,14,.7); }
+.pip-title{ position:absolute; left:10px; top:5px; width:270px; height:16px; overflow:hidden; white-space:nowrap; font-size:12px; line-height:16px; color:var(--text-primary); }
+.pip-close{ position:absolute; right:0; top:0; width:26px; height:26px; padding:0; border:none; background:none; font-size:15px; line-height:26px; color:#dc9696; }
+.pip-play{ position:absolute; left:136px; top:66px; width:48px; height:48px; padding:0; border:none; border-radius:24px; background:rgba(0,0,0,.43); }
+.pip-bar{ position:absolute; top:13px; width:5px; height:22px; background:#f0f0f4; }
+.pip-bar.a{ left:13px; }
+.pip-bar.b{ left:23px; }
+.pip-tri{ position:absolute; left:19px; top:12px; width:0; height:0; border-top:12px solid transparent; border-bottom:12px solid transparent; border-left:20px solid #f0f0f4; }
+.pip-card.playing .pip-tri{ display:none; }
+.pip-card:not(.playing) .pip-bar{ display:none; }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1710,6 +1725,20 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 
           <!-- Page spell / autofill menu (UX-CHROME-PANELS); rows are bound -->
           <div class="page-ctx" id="pageCtxMenu"></div>
+
+          <!-- Picture-in-picture card (UX-CHROME-PANELS) -->
+          <div class="pip-card" id="pipCard" data-pip="body">
+            <img class="pip-poster" id="pipPoster">
+            <div class="pip-header" id="pipHeader" data-pip="header">
+              <div class="pip-title" id="pipTitle"></div>
+              <button class="pip-close" id="pipClose" data-pip="close">×</button>
+            </div>
+            <button class="pip-play" id="pipPlay" data-pip="play">
+              <div class="pip-bar a"></div>
+              <div class="pip-bar b"></div>
+              <div class="pip-tri"></div>
+            </button>
+          </div>
 
           <!-- Note viewer modal (UX-CHROME-PANELS) -->
           <div class="modal-overlay" id="noteOverlay">

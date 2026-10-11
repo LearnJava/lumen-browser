@@ -20,6 +20,7 @@ impl Lumen {
     pub(crate) fn toggle_pip(&mut self) {
         if self.pip.active {
             self.pip.close();
+            self.relayout_chrome_host();
             return;
         }
         let win_w = self.viewport_width_css();
@@ -31,6 +32,7 @@ impl Lumen {
             .unwrap_or_default();
         let title = self.title.clone().unwrap_or_default();
         self.pip.open(src, poster, title, win_w, win_h);
+        self.relayout_chrome_host();
     }
 
     /// Open the in-window overlay PiP card (the [`Self::pip`] panel) from current
@@ -46,6 +48,7 @@ impl Lumen {
             .unwrap_or_default();
         let title = self.title.clone().unwrap_or_default();
         self.pip.open(src, poster, title, win_w, win_h);
+        self.relayout_chrome_host();
     }
 
     /// CC-7: open (or re-target) the real OS-level PiP window for `<video>` node
@@ -175,6 +178,7 @@ impl Lumen {
     pub(crate) fn close_pip_os(&mut self) {
         self.pip_os = None;
         self.pip.close();
+        self.relayout_chrome_host();
     }
 
     /// CC-7: redraw the OS PiP window with the forwarded `<video>` content —
