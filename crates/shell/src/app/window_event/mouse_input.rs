@@ -30,6 +30,7 @@ impl Lumen {
             // menu before deciding whether to reopen it.
             if state == ElementState::Pressed && self.page_context_menu.is_open() {
                 self.page_context_menu.close();
+                self.relayout_chrome_host();
             }
             // CC-4: right-click on a tab opens the tab context menu
             // instead of starting a mouse gesture.
@@ -154,13 +155,17 @@ impl Lumen {
             // captures the click — picking a row applies the correction /
             // dictionary action, anywhere else just dismisses it.
             if self.page_context_menu.is_open() {
-                let win_w = self.viewport_width_css();
-                let win_h = self.window_height_css();
-                let action = self.page_context_menu.action_at(x_css, y_css, win_w, win_h);
+                let action = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                    hit.path.iter().find_map(|&nid| {
+                        self.chrome_data_attr(nid, "data-page-ctx")
+                            .and_then(|v| self.page_context_menu.action_from_attr(&v))
+                    })
+                });
                 if let Some(action) = action {
                     self.exec_spell_menu_action(action);
                 }
                 self.page_context_menu.close();
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }

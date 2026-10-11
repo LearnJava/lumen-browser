@@ -1081,14 +1081,8 @@ impl Lumen {
 
         // Tab context menu: `#tabCtxMenu` in the engine chrome (`bind_tab_ctx`).
 
-        // P3-spell срез 3: page spell suggestion menu — drawn above the
-        // page and tab strip like the tab context menu.
-        if self.page_context_menu.is_open() {
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            let mut menu_cmds = self.page_context_menu.build_overlay(win_w, win_h);
-            overlay_buf.append(&mut menu_cmds);
-        }
+        // P3-spell срез 3: page spell suggestion menu.
+        // Now `#pageCtxMenu` in the engine chrome (`bind_page_ctx`).
 
         // Focus mode pill: `.focus-timer` in the engine chrome (`bind_focus`).
 

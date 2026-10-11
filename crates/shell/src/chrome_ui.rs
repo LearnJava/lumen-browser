@@ -265,6 +265,7 @@ impl Lumen {
                     lumen_chrome::ids::PRIVACY_PANEL,
                     lumen_chrome::ids::NOTE_OVERLAY,
                     lumen_chrome::ids::TAB_CTX_MENU,
+                    lumen_chrome::ids::PAGE_CTX_MENU,
                     lumen_chrome::ids::WORKSPACE_BAR,
                 ],
                 doc,
@@ -884,6 +885,9 @@ impl Lumen {
             note: self.note_viewer.chrome_model(),
             tab_ctx: self
                 .tab_context_menu
+                .chrome_model(self.viewport_width_css(), self.window_height_css()),
+            page_ctx: self
+                .page_context_menu
                 .chrome_model(self.viewport_width_css(), self.window_height_css()),
             workspace_bar_open: self.workspace_panel.visible,
             access,
