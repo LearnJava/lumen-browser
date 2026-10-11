@@ -91,3 +91,5 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/run_corpus.py --selftest
 ```
 
 У S2…S15 кода нет; гейт — п. «Готово, когда».
+
+**S28 (2026-10-11):** 803 id в манифесте, 794 automatable, 768 выполнено (26 `print-reftest` без исполнителя). Прогон снят на бинаре от 2026-10-08: на `main` после UX-LOADING `--bidi-port` не отвечает на `script.evaluate`/`navigate` ([BUG-1597](../../bugs/BUG-1597-OPEN.md)). Модули `css-gcpm`, `css-round-display`, `css-speech`, `CSS1` в срезы не входят: в манифесте у них только `manual`/`visual`/`support`, automatable id нет. Агрегирующий срез (сводка «кластер → id → владелец» по всему `css`) заводить после починки BUG-1597.
