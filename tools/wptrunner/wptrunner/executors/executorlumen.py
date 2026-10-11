@@ -61,8 +61,11 @@ import asyncio
 import base64
 import json
 import os
+import re
 import socket
 import struct
+import subprocess
+import tempfile
 import traceback
 from urllib.parse import unquote
 
@@ -72,7 +75,7 @@ from webdriver.bidi.modules.input import Actions
 from webdriver.bidi.modules.script import ContextTarget
 
 from .base import (CrashtestExecutor, ExecutorException, RefTestExecutor,
-                   RefTestImplementation, TestharnessExecutor)
+                   RefTestImplementation, TestharnessExecutor, get_pages)
 from .protocol import Protocol
 
 #: Global `tests/wpt/resources/testharnessreport.js` stashes the JSON-encoded
@@ -1076,3 +1079,127 @@ class LumenCrashtestExecutor(CrashtestExecutor):
                 raise ExecutorException(
                     "TIMEOUT", f"Timed out waiting for test-wait to clear: {url}")
             await asyncio.sleep(POLL_INTERVAL_S)
+
+
+# ── print-reftest support (WPT-RUN-8-S2) ───────────────────────────────────
+#
+# `lumen --print-to-pdf <out.pdf> <url>` is a one-shot headless process
+# (`crates/shell/src/dump_mode.rs::do_print_to_pdf`): load, layout under
+# `@media print`, paginate, rasterize each page with the CPU path, wrap the
+# rasters in a PDF. It is deterministic (same tiny-skia path as `--ipc-server`),
+# so the executor needs no live browser connection at all — `LumenBrowser`
+# still launches `--ipc-server` for it (the runner needs a browser object to
+# start/stop), and the page is rendered by a fresh child per call.
+#
+# Two limits, both of the CLI and not of the executor: the page is fixed at A4
+# with 48 px margins (upstream asks for 5in x 3in with 0.5in margins, so
+# `test.viewport_size` is ignored; a test and its reference are still printed
+# the same way, which is all a `==`/`!=` comparison needs), and the PDF holds
+# one raw DeviceRGB image per page rather than vector content, so the pixels
+# are read straight out of it instead of going through a PDF renderer.
+
+#: Wall-clock for the child beyond the test's own timeout (process start,
+#: font load, PDF write — measured ~1 s for an empty page).
+PRINT_EXTRA_TIMEOUT_S = 15
+
+_PDF_IMAGE_DICT = re.compile(
+    rb"<<(?:(?!>>).)*?/Subtype\s*/Image(?:(?!>>).)*?>>\s*stream\r?\n", re.S)
+
+
+def pdf_pages_to_png_b64(pdf):
+    """Pages of a `--print-to-pdf` file as base64 PNGs, in page order.
+
+    Reads only what `dump_mode.rs::encode_images_as_pdf` writes: one
+    uncompressed 8-bit DeviceRGB image XObject per page. Anything else (a
+    filter, another colour space) raises `ValueError` — silently decoding it
+    wrong would turn into a wrong verdict, not an error.
+    """
+    from io import BytesIO
+    from PIL import Image
+
+    pages = []
+    for m in _PDF_IMAGE_DICT.finditer(pdf):
+        head = m.group(0)
+
+        def field(name):
+            f = re.search(rb"/" + name + rb"\s+(\d+)", head)
+            if not f:
+                raise ValueError(f"image XObject without /{name.decode()}")
+            return int(f.group(1))
+
+        if b"/Filter" in head or b"/DeviceRGB" not in head or field(b"BitsPerComponent") != 8:
+            raise ValueError("unsupported image XObject (expected raw 8-bit DeviceRGB)")
+        width, height, length = field(b"Width"), field(b"Height"), field(b"Length")
+        raw = pdf[m.end():m.end() + length]
+        if len(raw) != length or length != width * height * 3:
+            raise ValueError(f"image XObject {width}x{height} has {len(raw)} of {length} bytes")
+        out = BytesIO()
+        Image.frombytes("RGB", (width, height), raw).save(out, format="PNG")
+        pages.append(base64.b64encode(out.getvalue()).decode("ascii"))
+    if not pages:
+        raise ValueError("PDF has no page images")
+    return pages
+
+
+class LumenPrintRefTestExecutor(RefTestExecutor):
+    """print-reftest executor for Lumen: one `--print-to-pdf` child per page set.
+
+    Derives from `RefTestExecutor`, not `base.PrintRefTestExecutor`: that one
+    is a bare `TestExecutor` (upstream's real print executors inherit their
+    webdriver `RefTestExecutor` instead) and has no `screenshot_cache`.
+    """
+
+    is_print = True
+
+    def __init__(self, logger, browser, server_config, timeout_multiplier=1,
+                 screenshot_cache=None, debug_info=None, **kwargs):
+        RefTestExecutor.__init__(self, logger, browser, server_config,
+                                 screenshot_cache=screenshot_cache,
+                                 timeout_multiplier=timeout_multiplier,
+                                 debug_info=debug_info)
+        self.binary = browser.binary
+        self.env = browser.env
+        self.protocol = Protocol(self, browser)
+        self.implementation = RefTestImplementation(self)
+
+    def reset(self):
+        self.implementation.reset()
+
+    def is_alive(self):
+        return True
+
+    def do_test(self, test):
+        result = self.implementation.run_test(test)
+        return self.convert_result(test, result)
+
+    def screenshot(self, test, viewport_size, dpi, page_ranges):
+        # https://github.com/web-platform-tests/wpt/issues/7140
+        assert dpi is None
+        url = self.test_url(test)
+        timeout = test.timeout * self.timeout_multiplier + self.extra_timeout
+        fd, pdf_path = tempfile.mkstemp(suffix=".pdf", prefix="lumen-wpt-print-")
+        os.close(fd)
+        try:
+            try:
+                proc = subprocess.run(
+                    [self.binary, "--print-to-pdf", pdf_path, url], env=self.env,
+                    capture_output=True, timeout=timeout + PRINT_EXTRA_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                return False, ("TIMEOUT", f"Timed out printing {url}")
+            if proc.returncode != 0:
+                # The child died, or rejected the page: either way the page
+                # was not printed, and the next test gets a fresh child.
+                err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+                return False, ("CRASH", f"--print-to-pdf {url} exited {proc.returncode}: "
+                                        f"{err[-1] if err else ''}")
+            with open(pdf_path, "rb") as f:
+                pages = pdf_pages_to_png_b64(f.read())
+        except (OSError, ValueError) as e:
+            return False, ("ERROR", f"--print-to-pdf {url}: {e}")
+        finally:
+            try:
+                os.unlink(pdf_path)
+            except OSError:
+                pass
+        wanted = get_pages(page_ranges.get(test.url), len(pages))
+        return True, [p for i, p in enumerate(pages) if i + 1 in wanted]
