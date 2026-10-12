@@ -115,8 +115,8 @@ fn unprefixed_clamp_wins_over_an_earlier_prefixed_one() {
 #[test]
 fn float_below_the_clamp_line_is_hidden_with_its_line() {
     let html = format!(
-        r#"<div id="c">{}<div id="f" style="float:left;width:10px;height:10px"></div>{}</div>"#,
-        format!("{}<br>", rows(2)),
+        r#"<div id="c">{}<br><div id="f" style="float:left;width:10px;height:10px"></div>{}</div>"#,
+        rows(2),
         rows(2)
     );
     let doc = lumen_html_parser::parse(&html);

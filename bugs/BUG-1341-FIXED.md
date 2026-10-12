@@ -1,6 +1,6 @@
 # BUG-1341 — `display: inline-block` без явной ширины и с блочными детьми без ширины получает ширину контейнера
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/box_tree/` — shrink-to-fit для `inline-block`; тот же приём, что у BUG-1335)
 
@@ -27,3 +27,7 @@ WPT-RUN-14 срез 11: `borders/border-right-applies-to-012.xht`, `border-right
 ## Как проверить
 
 `css/CSS2/borders/border-right-applies-to-012.xht`.
+
+## Исправление (2026-10-12, P6)
+
+`preferred_inline_block_width` (`intrinsic.rs`) возвращал `None` при нулевом max-content, и shrink-to-fit пропускался. Теперь для блока без текста, replaced-содержимого и явных ширин (`is_content_free`) возвращается ширина рамок и полей. Тесты: `inline_block_with_empty_block_child_shrinks_to_border`, `inline_block_with_fixed_width_block_child_unchanged`. WPT-перепрогон не делался.

@@ -1193,3 +1193,4 @@
 | [BUG-1338](bugs/BUG-1338-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | Float, идущий после строчного содержимого на той же строке, ставится под строку, а не к её верху |
 | [BUG-1339](bugs/BUG-1339-FIXED.md) | FIXED 2026-10-12 | paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`) | `word-spacing` / `letter-spacing` измеряются в раскладке, но не рисуются, если слова в одном `DrawText` |
 | [BUG-1340](bugs/BUG-1340-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/style/values/length.rs:171`) | Единицы `ex` и `ch` — константы 0,546 em / 0,631 em, а не метрики шрифта |
+| [BUG-1341](bugs/BUG-1341-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | `display: inline-block` без явной ширины и с блочными детьми без ширины получает ширину контейнера |
