@@ -1190,3 +1190,4 @@
 | [BUG-1335](bugs/BUG-1335-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/table.rs:616` `table_intrinsic_content_width`, `layout_dispatch.rs:1778`) | `<table>` / `display: table` без `width` занимает всю ширину контейнера, если ширина колонок задана не явно |
 | [BUG-1336](bugs/BUG-1336-FIXED.md) | FIXED 2026-10-12 | layout/paint (`crates/engine/layout/src/box_tree/table.rs`) | `display: table-column` / `table-column-group` (и `<col>`, `<colgroup>`): фон и рамка не рисуются — бокс 0×0 |
 | [BUG-1337](bugs/BUG-1337-FIXED.md) | FIXED 2026-10-12 | paint (`crates/engine/paint/src/cpu_raster.rs`) | `DrawImage` на дробной позиции не привязан к пикселям: у картинки 1-px полупрозрачная кромка, у блока рядом — нет |
+| [BUG-1338](bugs/BUG-1338-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | Float, идущий после строчного содержимого на той же строке, ставится под строку, а не к её верху |

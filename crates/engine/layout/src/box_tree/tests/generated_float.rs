@@ -579,3 +579,27 @@ fn bug469_full_width_float_squeezed_between_floats_still_clears_below_it() {
     );
 }
 
+
+/// BUG-1338: CSS 2.1 §9.5.1 rule 6 — a float after inline content on the same
+/// line starts at that line's top, not below the line.
+#[test]
+fn float_after_inline_content_sits_at_line_top() {
+    fn find_float(b: &super::super::LayoutBox) -> Option<f32> {
+        if b.style.float_side != crate::style::FloatSide::None {
+            return Some(b.rect.y);
+        }
+        b.children.iter().find_map(find_float)
+    }
+    for html in [
+        "<div id=c>text <div id=f></div> more</div>",
+        "<div id=c><span style=\"display:inline-block;height:20px\"></span> <span id=f></span></div>",
+    ] {
+        let root = super::super::layout(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse("body{margin:0}#c{width:300px}#f{float:right;width:10px;height:50px}"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let y = find_float(&root).expect("float box");
+        assert!(y.abs() < 0.5, "float must sit at line top, got y={y} for {html}");
+    }
+}
