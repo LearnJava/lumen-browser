@@ -1046,6 +1046,7 @@ pub(crate) fn collect_inline_segments(
             {
                 push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::Before, viewport, counters, registry, out);
             }
+            let esc_start = escapes.len();
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
                 collect_inline_segments(doc, sheet, child_id, &s, viewport, out, escapes, flat, counters, registry, need_first_letter, dark_mode);
@@ -1069,12 +1070,84 @@ pub(crate) fn collect_inline_segments(
             for seg in &mut out[start..start + added] {
                 seg.is_element_box = true;
             }
-            if added > 0 && (pre > 0.0 || post > 0.0) {
+            // CSS 2.1 §9.2.1.1: a block inside this element cut it into pieces;
+            // `box-decoration-break: slice` — only the first piece keeps the
+            // start edge and only the last one keeps the end edge.
+            let cuts: Vec<usize> = escapes[esc_start..].iter().map(|e| e.at).collect();
+            if let (Some(&first_cut), Some(&last_cut)) = (cuts.first(), cuts.last()) {
+                // A piece without text of its own still has its edge: an empty segment carries it.
+                let edge = |pre_space: f32, post_space: f32| InlineSegment {
+                    text: String::new(),
+                    style: s.clone(),
+                    pre_space,
+                    post_space,
+                    is_element_box: true,
+                    img_src: None,
+                    img_is_lazy: false,
+                    img_width: 0.0,
+                    forced_break: false,
+                    pseudo_kind: PseudoKind::None,
+                    source_node: id,
+                    source_char_offset: 0,
+                    bidi_level: 0,
+                };
+                let mut first_cut = first_cut;
+                let mut last_cut = last_cut;
+                let mut end = start + added;
+                if (first_cut == start || !Arc::ptr_eq(&out[start].style, &s)) && pre > 0.0 {
+                    out.insert(start, edge(pre, 0.0));
+                    for e in &mut escapes[esc_start..] {
+                        e.at += 1;
+                    }
+                    first_cut += 1;
+                    last_cut += 1;
+                    end += 1;
+                } else if first_cut > start {
+                    out[start].pre_space += pre;
+                }
+                if (last_cut == out.len() || !Arc::ptr_eq(&out[end - 1].style, &s)) && post > 0.0 {
+                    out.push(edge(0.0, post));
+                    end += 1;
+                } else if last_cut < end {
+                    out[end - 1].post_space += post;
+                }
+                slice_cut_inline_box(&s, &mut out[start..end], start, first_cut, last_cut);
+            } else if added > 0 && (pre > 0.0 || post > 0.0) {
                 out[start].pre_space += pre;
                 out[start + added - 1].post_space += post;
             }
         }
         _ => {}
+    }
+}
+
+/// Strips the edge decoration the `slice` rule takes away from the pieces of an inline box cut by
+/// blocks. `segs` are the element's own segments, `base` is the index of `segs[0]` in the output
+/// vector, `first_cut`/`last_cut` — the first and the last escape position (output indices).
+/// Segments before `last_cut` lose the end edge, from `first_cut` on — the start edge, the ones
+/// between lose both. Only segments carrying the element's own style (`own`) are touched.
+fn slice_cut_inline_box(own: &Arc<ComputedStyle>, segs: &mut [InlineSegment], base: usize, first_cut: usize, last_cut: usize) {
+    for (i, seg) in segs.iter_mut().enumerate() {
+        if !Arc::ptr_eq(&seg.style, own) {
+            continue;
+        }
+        let idx = base + i;
+        let drop_end = idx < last_cut;
+        let drop_start = idx >= first_cut;
+        if !drop_start && !drop_end {
+            continue;
+        }
+        let st = Arc::make_mut(&mut seg.style);
+        if drop_start {
+            st.border_left_width = 0.0;
+            st.border_left_style = crate::BorderStyle::None;
+            st.padding_left = Length::Px(0.0);
+        }
+        if drop_end {
+            st.border_right_width = 0.0;
+            st.border_right_style = crate::BorderStyle::None;
+            st.padding_right = Length::Px(0.0);
+        }
     }
 }
 
