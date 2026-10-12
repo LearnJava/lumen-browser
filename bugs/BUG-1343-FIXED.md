@@ -1,6 +1,6 @@
 # BUG-1343 — Плитка `background-image` на полупиксельной позиции (`center`, `bottom` при нечётной разности) рисуется со швами по 1 px между плитками
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, повтор плитки; позиция плитки не привязана к целым пикселям)
 
@@ -27,3 +27,7 @@ WPT-RUN-14 срез 11: 30 id `backgrounds/background-{043,048,055,…,196}.xht`
 ## Как проверить
 
 `css/CSS2/backgrounds/background-043.xht`.
+
+## Исправление
+
+В `rasterize_background_image` (`cpu_raster.rs`) края плитки и видимой части округляются до device-пикселей: соседние плитки делят общий целый край, шва нет. Тест `background_tiles_at_fractional_position_have_no_seams`; CPU-снимок `59-image-set-cross-fade.png` перегенерирован.
