@@ -1441,6 +1441,25 @@ pub(super) fn dispatch_box(
             // line — the original fixed-size, index-addressed `b.children`
             // cannot grow while this loop walks it.
             let orig_children = std::mem::take(&mut b.children);
+            // CSS Text L3 §7.1: `text-align` shifts the whole line box, atomic
+            // inlines included. When the row holds an atomic inline, its text
+            // runs are laid out start-aligned and the row is shifted as a unit
+            // in phase 2 (`align_lines` alone sees only the run's own width).
+            let row_align = match (b.style.text_align, b.style.direction == Direction::Rtl) {
+                (TextAlign::Center, _) => Some(TextAlign::Center),
+                (TextAlign::Right, _) | (TextAlign::End, false) | (TextAlign::Start, true) => {
+                    Some(TextAlign::Right)
+                }
+                _ => None,
+            }
+            .filter(|_| {
+                orig_children.iter().any(|c| {
+                    !matches!(
+                        c.kind,
+                        BoxKind::InlineRun { .. } | BoxKind::InlineSpace | BoxKind::Skip
+                    )
+                })
+            });
             let mut children: Vec<LayoutBox> = Vec::with_capacity(orig_children.len());
             let mut metrics: Vec<(f32, f32)> = Vec::with_capacity(orig_children.len());
             // rows: (row_y, above, below, Vec<child_index>)
@@ -1508,6 +1527,11 @@ pub(super) fn dispatch_box(
                     continue;
                 }
                 let is_run = matches!(child.kind, BoxKind::InlineRun { .. });
+                if is_run && row_align.is_some() {
+                    let st = Arc::make_mut(&mut child.style);
+                    st.text_align = TextAlign::Left;
+                    st.text_align_last = TextAlignLast::Auto;
+                }
                 // Схлопнутый пробел в начале текста существует только пока текст
                 // не первый на строке: `wrap_inline_run` срезает его как пробел в
                 // начале строки, поэтому зазор после atomic inline даёт этот сдвиг.
@@ -1741,6 +1765,35 @@ pub(super) fn dispatch_box(
                     let dy = row_top + margin_top_y + mt - b.children[idx].rect.y;
                     if dy.abs() > 0.001 {
                         adjustments.push((idx, dy));
+                    }
+                }
+            }
+            if let Some(align) = row_align {
+                for (_, _, _, child_idxs) in &rows {
+                    let mut left = f32::MAX;
+                    let mut right = f32::MIN;
+                    for &idx in child_idxs {
+                        let c = &b.children[idx];
+                        let c_em = c.style.font_size;
+                        let ml = c.style.margin_left.resolve_or_zero(c_em, content_width, viewport);
+                        let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+                        let adv = if matches!(c.kind, BoxKind::InlineRun { .. }) {
+                            inline_run_advance(c, measurer)
+                        } else {
+                            c.rect.width
+                        };
+                        left = left.min(c.rect.x - ml);
+                        right = right.max(c.rect.x + adv + mr);
+                    }
+                    if left > right {
+                        continue;
+                    }
+                    let free = (content_width - (right - left)).max(0.0);
+                    let dx = if align == TextAlign::Center { free / 2.0 } else { free };
+                    if dx > 0.0 {
+                        for &idx in child_idxs {
+                            shift_tree(&mut b.children[idx], dx, 0.0);
+                        }
                     }
                 }
             }
