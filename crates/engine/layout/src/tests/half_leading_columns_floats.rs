@@ -756,6 +756,23 @@ fn table_bottom_margin_collapses_with_next_sibling() {
     );
 }
 
+/// BUG-1336: `<col>`/`<colgroup>` получают прямоугольник «колонки × высота строк» (CSS 2.1 §17.5.1),
+/// иначе их фон и рамка не рисуются (бокс 0×0).
+#[test]
+fn table_column_boxes_cover_column_by_row_height() {
+    let root = lay(
+        "<table class='t'><colgroup class='g'><col class='a'><col class='b' span='2'></colgroup>         <tr><td>x</td><td>y</td><td>z</td></tr><tr><td>x</td><td>y</td><td>z</td></tr></table>",
+        ".t { border-spacing: 0; } td { width: 20px; height: 30px; padding: 0; }          .g { background: black; } .a { background: red; } .b { background: blue; }",
+    );
+    let table = root.children.iter().find(|c| matches!(c.kind, BoxKind::Table)).expect("table");
+    let group = table.children.iter().find(|c| c.style.display == Display::TableColumnGroup).expect("colgroup");
+    assert!((group.rect.width - 60.0).abs() < 0.5 && (group.rect.height - 60.0).abs() < 0.5, "group={:?}", group.rect);
+    let a = &group.children[0];
+    let b = &group.children[1];
+    assert!((a.rect.width - 20.0).abs() < 0.5 && (a.rect.height - 60.0).abs() < 0.5, "a={:?}", a.rect);
+    assert!((b.rect.x - a.rect.x - 20.0).abs() < 0.5 && (b.rect.width - 40.0).abs() < 0.5, "b={:?}", b.rect);
+}
+
 // ── CSS Intrinsic Sizing L3 — min-content / max-content / fit-content ────
 
 /// `width: fit-content` на block-элементе с явной шириной потомка: бокс

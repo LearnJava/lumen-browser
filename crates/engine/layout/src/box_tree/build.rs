@@ -1459,7 +1459,11 @@ fn build_box_inner(
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
-    let (col_span, row_span) = if style.display == Display::TableCell {
+    let (col_span, row_span) = if matches!(style.display, Display::TableColumn | Display::TableColumnGroup) {
+        // HTML `span` на `<col>`/`<colgroup>`: число колонок таблицы, которое покрывает бокс.
+        let sp = doc.get(id).get_attr("span").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
+        (sp, 1)
+    } else if style.display == Display::TableCell {
         let cs = doc
             .get(id)
             .get_attr("colspan")

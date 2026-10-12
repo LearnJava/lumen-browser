@@ -532,6 +532,8 @@ fn finish_table(
         frame.b.rect.width = frame.init.collapse_width;
     }
 
+    place_column_boxes(frame);
+
     // Естественная высота (border box) — по строкам и подписям; `height`/`min-height` её
     // только поднимают (CSS 2.1 §17.5.3), а излишек делится между строками.
     let chrome = frame.init.padding_top + frame.init.padding_bottom + s.border_top_width + s.border_bottom_width;
@@ -550,5 +552,70 @@ fn finish_table(
     frame.b.rect.height = target;
     if target - natural > 0.01 {
         super::table_height::distribute(&mut frame.b, &frame.init, target - natural);
+    }
+}
+
+/// CSS 2.1 §17.5.1 — `display: table-column(-group)` не раскладываются как блоки: их прямоугольник —
+/// «покрытые колонки × высота всех строк». Нужен только для фона и рамки, которые рисуются под
+/// группами строк и ячейками (колонки идут в дереве раньше строк).
+fn place_column_boxes(frame: &mut Frame) {
+    let n_cols = frame.init.col_widths.len();
+    let (Some(top), Some(bottom)) = (
+        frame.init.flat_row_rects.iter().map(|&(y, _)| y).reduce(f32::min),
+        frame.init.flat_row_rects.iter().map(|&(y, h)| y + h).reduce(f32::max),
+    ) else {
+        return;
+    };
+    let init = &frame.init;
+    let col_x = |k: usize| -> f32 {
+        if let Some(cx) = &init.collapse_col_x {
+            cx.get(k).copied().unwrap_or(init.content_x)
+        } else {
+            init.content_x + (k + 1) as f32 * init.h_spacing + init.col_widths[..k.min(n_cols)].iter().sum::<f32>()
+        }
+    };
+    // Прямоугольник по полуинтервалу колонок [a, b).
+    let span_rect = |a: usize, b: usize| -> Option<Rect> {
+        let (a, b) = (a.min(n_cols), b.min(n_cols));
+        if a >= b {
+            return None;
+        }
+        let x = col_x(a);
+        let right = col_x(b - 1) + init.col_widths[b - 1];
+        Some(Rect { x, y: top, width: (right - x).max(0.0), height: (bottom - top).max(0.0) })
+    };
+    let mut next = 0usize;
+    for child in &mut frame.b.children {
+        match child.style.display {
+            Display::TableColumn => {
+                let end = next + child.col_span as usize;
+                if let Some(r) = span_rect(next, end) {
+                    child.rect = r;
+                }
+                next = end;
+            }
+            Display::TableColumnGroup => {
+                let start = next;
+                let has_cols = child.children.iter().any(|c| c.style.display == Display::TableColumn);
+                if has_cols {
+                    for col in &mut child.children {
+                        if col.style.display != Display::TableColumn {
+                            continue;
+                        }
+                        let end = next + col.col_span as usize;
+                        if let Some(r) = span_rect(next, end) {
+                            col.rect = r;
+                        }
+                        next = end;
+                    }
+                } else {
+                    next += child.col_span as usize;
+                }
+                if let Some(r) = span_rect(start, next) {
+                    child.rect = r;
+                }
+            }
+            _ => {}
+        }
     }
 }
