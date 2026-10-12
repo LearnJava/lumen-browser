@@ -292,6 +292,11 @@ impl FingerprintProfile {
     #[cfg(feature = "v8")]
     pub fn install_navigator(&self) {
         lumen_js::set_navigator_profile(self.navigator_profile());
+        // BUG-1614: the JS-visible name of the browser comes from the very
+        // User-Agent the HTTP profile sends, so the layers cannot disagree.
+        lumen_js::set_identity(lumen_core::Identity::from_user_agent(
+            lumen_network::http::profile_user_agent(self.http_profile),
+        ));
         lumen_js::set_global_privacy_control(lumen_network::sends_global_privacy_control(
             self.http_profile,
         ));

@@ -88,6 +88,38 @@ pub fn set_navigator_profile(profile: NavigatorProfile) {
     }
 }
 
+static GLOBAL_IDENTITY: OnceLock<RwLock<Option<lumen_core::Identity>>> = OnceLock::new();
+
+fn identity_slot() -> &'static RwLock<Option<lumen_core::Identity>> {
+    GLOBAL_IDENTITY.get_or_init(|| RwLock::new(None))
+}
+
+/// Install the process-wide browser identity (BUG-1614). The shell derives it
+/// from the same User-Agent the HTTP profile sends, so `navigator.userAgent` /
+/// `appVersion` / `vendor` / `productSub` / `userAgentData` (window, workers,
+/// iframes) can never contradict the request headers. Call once at startup,
+/// before any page loads.
+pub fn set_identity(identity: lumen_core::Identity) {
+    if let Ok(mut slot) = identity_slot().write() {
+        *slot = Some(identity);
+    }
+}
+
+/// The identity pages observe: a session `navigator.userAgent` override
+/// (BiDi `emulation.setUserAgentOverride`) wins; otherwise the identity the
+/// shell configured; otherwise the default Chrome one (the default HTTP profile).
+pub fn current_identity() -> lumen_core::Identity {
+    #[cfg(feature = "v8-backend")]
+    if let Some(ua) = crate::v8_runtime::global_user_agent_override() {
+        return lumen_core::Identity::from_user_agent(&ua);
+    }
+    identity_slot()
+        .read()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_else(|| lumen_core::Identity::from_user_agent(lumen_core::CHROME_USER_AGENT))
+}
+
 /// Return the currently configured profile, or the default if none was set.
 pub fn current_navigator_profile() -> NavigatorProfile {
     global_slot()
@@ -124,9 +156,27 @@ pub(crate) fn install_navigator_bindings_v8_with(
     rt: &crate::v8_runtime::V8JsRuntime,
     profile: &NavigatorProfile,
 ) -> lumen_core::JsResult<()> {
+    install_navigator_bindings_v8_with_identity(rt, profile, &current_identity())
+}
+
+/// [`install_navigator_bindings_v8_with`] against an explicit identity too.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_navigator_bindings_v8_with_identity(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    profile: &NavigatorProfile,
+    id: &lumen_core::Identity,
+) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
-    rt.eval(&build_navigator_shim(profile))?;
+    rt.eval(&build_navigator_shim(profile, id))?;
     Ok(())
+}
+
+/// `navigator.platform` for the page: the profile's value, except that the
+/// default profile's `Win32` follows the identity (a Firefox/Linux or
+/// Safari/macOS UA must not sit next to `Win32`).
+#[cfg(feature = "v8-backend")]
+fn effective_platform<'a>(p: &'a NavigatorProfile, id: &'a lumen_core::Identity) -> &'a str {
+    if p.platform == NavigatorProfile::default().platform { &id.platform } else { &p.platform }
 }
 
 /// Move every member of the `navigator` singleton onto `Navigator.prototype`
@@ -215,7 +265,7 @@ fn languages_literal(languages: &[String]) -> String {
 
 /// Escape a string for safe embedding as a JS/JSON string literal (with quotes).
 #[cfg(feature = "v8-backend")]
-fn json_string(s: &str) -> String {
+pub(crate) fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {
@@ -241,9 +291,9 @@ fn json_string(s: &str) -> String {
 ///
 /// The rest of `NavigatorID` (HTML LS §8.9.1.1) is fixed, and the values are
 /// the ones the *page* ends up reporting once its own layers have run:
-/// `appCodeName`/`appName`/`appVersion`/`product` from
-/// [`crate::surface_api`]'s antidetect patch, `userAgent` from the page shim
-/// (`crate::dom`). They are spelled out a second time here because a worker
+/// `appCodeName`/`appName`/`product` from [`crate::surface_api`]'s antidetect
+/// patch, `userAgent`/`appVersion` from [`lumen_core::Identity`] (the same
+/// source the page shim in this module uses). They are spelled out a second time here because a worker
 /// runs in its own isolate and neither of those layers is installed in it —
 /// `worker_navigator_matches_the_page_navigator` compares the two live scopes
 /// member by member so the copies cannot drift apart unnoticed.
@@ -261,19 +311,31 @@ pub(crate) fn worker_navigator_id_shim() -> String {
 /// race `set_and_read_global_profile`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn worker_navigator_id_shim_with(p: &NavigatorProfile) -> String {
+    worker_navigator_id_shim_for(p, &current_identity())
+}
+
+/// [`worker_navigator_id_shim_with`] against an explicit identity.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn worker_navigator_id_shim_for(p: &NavigatorProfile, id: &lumen_core::Identity) -> String {
+    let user_agent_data = id.ua_data.as_ref().map_or_else(String::new, |d| {
+        format!(", userAgentData: {}", crate::ua_client_hints::ua_data_instance_expr(d))
+    });
     format!(
         "var _lumen_navigator_id = {{\
            appCodeName: 'Mozilla',\
            appName: 'Netscape',\
-           appVersion: '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',\
+           appVersion: {app_version},\
            product: 'Gecko',\
-           userAgent: 'Lumen/0.5.0',\
+           userAgent: {user_agent},\
            onLine: false,\
            platform: {platform},\
            language: {primary_language},\
-           languages: {languages}\
+           languages: {languages}{user_agent_data}\
          }}; undefined;",
-        platform = json_string(&p.platform),
+        app_version = json_string(&id.app_version),
+        user_agent = json_string(&id.user_agent),
+        user_agent_data = user_agent_data,
+        platform = json_string(effective_platform(p, id)),
         primary_language = json_string(p.languages.first().map_or("en-US", String::as_str)),
         languages = languages_literal(&p.languages),
     )
@@ -281,14 +343,33 @@ pub(crate) fn worker_navigator_id_shim_with(p: &NavigatorProfile) -> String {
 
 /// Build the navigator/screen/timezone shim source for the given profile.
 #[cfg(feature = "v8-backend")]
-fn build_navigator_shim(p: &NavigatorProfile) -> String {
+fn build_navigator_shim(p: &NavigatorProfile, id: &lumen_core::Identity) -> String {
     let languages = languages_literal(&p.languages);
     let primary_language = json_string(p.languages.first().map_or("en-US", String::as_str));
-    let platform = json_string(&p.platform);
+    let platform = json_string(effective_platform(p, id));
+    let user_agent = json_string(&id.user_agent);
+    let app_version = json_string(&id.app_version);
+    let vendor = json_string(&id.vendor);
+    let product_sub = json_string(&id.product_sub);
     format!(
         r#"(function() {{
   // ── navigator properties ────────────────────────────────────────────────────
   if (typeof navigator !== 'undefined') {{
+    // Name of the browser (BUG-1614): every field comes from the one
+    // lumen_core::Identity the HTTP layer's headers are derived from.
+    try {{ navigator.userAgent = {user_agent}; }} catch(_) {{}}
+    try {{
+      Object.defineProperty(navigator, 'appVersion', {{
+        value: {app_version}, writable: false, configurable: true, enumerable: true
+      }});
+      Object.defineProperty(navigator, 'vendor', {{
+        value: {vendor}, writable: false, configurable: true, enumerable: true
+      }});
+      Object.defineProperty(navigator, 'productSub', {{
+        value: {product_sub}, writable: false, configurable: true, enumerable: true
+      }});
+    }} catch(_) {{}}
+
     // hardwareConcurrency: report a fixed logical core count.
     try {{
       Object.defineProperty(navigator, 'hardwareConcurrency', {{
@@ -627,7 +708,17 @@ mod tests {
         let worker = V8JsRuntime::new().unwrap();
         crate::worker::install_worker_scope_globals_v8(&worker, None).unwrap();
 
-        for name in ["appCodeName", "appName", "appVersion", "product", "userAgent", "onLine"] {
+        for name in [
+            "appCodeName",
+            "appName",
+            "appVersion",
+            "product",
+            "userAgent",
+            "onLine",
+            "userAgentData",
+            "userAgentData.brands.map(function(b) { return b.brand + '/' + b.version; })",
+            "userAgentData.platform",
+        ] {
             let expr = format!("String(navigator.{name})");
             assert_eq!(
                 page.eval(&expr).unwrap(),
@@ -656,6 +747,76 @@ mod tests {
         assert_eq!(
             rt.eval("_lumen_navigator_id.languages.join(',')").unwrap(),
             JsValue::String("de-DE,de,en".to_string())
+        );
+    }
+
+    /// BUG-1614 gate (ICR): the page, a worker scope and the HTTP `Sec-CH-UA*`
+    /// headers all name the same browser — every value is derived from one
+    /// `lumen_core::Identity`.
+    #[test]
+    fn chrome_identity_is_the_same_in_page_worker_and_client_hints() {
+        use std::sync::{Arc, Mutex};
+
+        let id = lumen_core::Identity::from_user_agent(lumen_core::CHROME_USER_AGENT);
+        let hints = id.low_entropy_client_hints();
+
+        let page = V8JsRuntime::new().unwrap();
+        page.install_dom(
+            Arc::new(Mutex::new(lumen_dom::Document::new())),
+            "https://example.test/",
+            None, None, None, None, None, None, None, None, None, false, None,
+        )
+        .unwrap();
+        let worker = V8JsRuntime::new().unwrap();
+        crate::worker::install_worker_scope_globals_v8(&worker, None).unwrap();
+
+        // Re-serialise navigator.userAgentData.brands as a Sec-CH-UA header.
+        let sec_ch_ua = "navigator.userAgentData.brands.map(function(b) {             return '\"' + b.brand + '\";v=\"' + b.version + '\"'; }).join(', ')";
+        for (ctx, rt) in [("page", &page), ("worker", &worker)] {
+            assert_eq!(
+                rt.eval("navigator.userAgent").unwrap(),
+                JsValue::String(id.user_agent.clone()),
+                "{ctx}: userAgent"
+            );
+            assert_eq!(
+                rt.eval("navigator.appVersion").unwrap(),
+                JsValue::String(id.app_version.clone()),
+                "{ctx}: appVersion"
+            );
+            assert_eq!(
+                rt.eval(sec_ch_ua).unwrap(),
+                JsValue::String(hints[0].1.clone()),
+                "{ctx}: userAgentData.brands vs Sec-CH-UA"
+            );
+            assert_eq!(
+                rt.eval("'\"' + navigator.userAgentData.platform + '\"'").unwrap(),
+                JsValue::String(hints[2].1.clone()),
+                "{ctx}: userAgentData.platform vs Sec-CH-UA-Platform"
+            );
+        }
+        assert_eq!(
+            page.eval("navigator.vendor + '|' + navigator.productSub").unwrap(),
+            JsValue::String("Google Inc.|20030107".to_string())
+        );
+        assert!(id.app_version.contains(&format!("Chrome/{}", lumen_core::CHROME_MAJOR)));
+    }
+
+    /// Non-Chromium identities have no `userAgentData` and Gecko's `vendor`.
+    #[test]
+    fn firefox_identity_has_no_user_agent_data() {
+        let id = lumen_core::Identity::from_user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0",
+        );
+        let rt = make_rt();
+        install_navigator_bindings_v8_with_identity(&rt, &NavigatorProfile::default(), &id).unwrap();
+        crate::ua_client_hints::install_ua_client_hints_bindings_v8_with(&rt, &id).unwrap();
+        assert_eq!(
+            rt.eval("typeof navigator.userAgentData + '|' + typeof NavigatorUAData").unwrap(),
+            JsValue::String("undefined|undefined".to_string())
+        );
+        assert_eq!(
+            rt.eval("navigator.userAgent + '|' + navigator.vendor + '|' + navigator.productSub").unwrap(),
+            JsValue::String(format!("{}||20100101", id.user_agent))
         );
     }
 

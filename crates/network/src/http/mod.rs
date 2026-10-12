@@ -24,7 +24,7 @@ pub use headers::{
     sends_global_privacy_control,
 };
 pub use h2_settings::{H2Settings, H2StreamPriority};
-pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers};
+pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers, low_entropy_client_hints};
 
 /// HTTP/1.1 User-Agent value for Lumen-native profile.
 ///
@@ -33,39 +33,34 @@ pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hint
 pub const DEFAULT_USER_AGENT: &str = concat!("Lumen/", env!("CARGO_PKG_VERSION"));
 
 /// Major version of the stable Chrome the `Chrome`/`Edge`/`Strict` profiles
-/// impersonate — the single source for every Chromium UA string below.
-///
-/// Must track current stable Chrome: a UA many majors behind is itself an
-/// anti-bot signal (BUG-1113 — `Chrome/130` against stable 153 got 403/401 from
-/// zillow and reuters and the "unsupported browser" page from khanacademy).
-/// Checked against the machine's Chrome before every site audit
-/// (`.claude/skills/lumen-perf-audit/SKILL.md` step 1).
-macro_rules! chrome_major {
-    () => {
-        "153"
-    };
+/// impersonate. The single source lives in `lumen_core` (BUG-1614) so the JS
+/// layer and Client Hints read the same number.
+pub use lumen_core::CHROME_MAJOR;
+
+/// Chrome / Edge User-Agent strings — defined in `lumen_core::identity` so the
+/// JS layer derives `navigator.*` from the very same literals (BUG-1614).
+pub use lumen_core::{CHROME_USER_AGENT, EDGE_USER_AGENT};
+
+/// Firefox profile User-Agent (Linux X11).
+pub const FIREFOX_USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0";
+
+/// Safari profile User-Agent (macOS).
+pub const SAFARI_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+
+/// The `User-Agent` a profile sends — the one string the JS layer
+/// (`navigator.userAgent`, `userAgentData`) and Client Hints must agree with.
+#[must_use]
+pub fn profile_user_agent(profile: HttpProfile) -> &'static str {
+    match profile {
+        HttpProfile::Chrome | HttpProfile::Strict => CHROME_USER_AGENT,
+        HttpProfile::Edge => EDGE_USER_AGENT,
+        HttpProfile::Firefox => FIREFOX_USER_AGENT,
+        HttpProfile::Safari => SAFARI_USER_AGENT,
+        HttpProfile::TorBrowser => TOR_BROWSER_USER_AGENT,
+        HttpProfile::Lumen => DEFAULT_USER_AGENT,
+    }
 }
-
-/// [`chrome_major!`] as a value, for code that compares against it.
-pub const CHROME_MAJOR: &str = chrome_major!();
-
-/// Chrome User-Agent — used by `HttpProfile::Chrome` and `HttpProfile::Strict`
-/// to match current stable Chrome on Windows so sites that block unknown clients
-/// (e.g., redirect-loop on unrecognised UA) treat Lumen as a standard browser.
-pub const CHROME_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
-    chrome_major!(),
-    ".0.0.0 Safari/537.36"
-);
-
-/// Edge User-Agent — the Chromium UA of the same major plus the `Edg/` token.
-pub const EDGE_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
-    chrome_major!(),
-    ".0.0.0 Safari/537.36 Edg/",
-    chrome_major!(),
-    ".0.0.0"
-);
 
 /// Default Accept-Language header (does not leak real locale).
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";

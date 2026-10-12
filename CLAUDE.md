@@ -8,7 +8,7 @@ Loaded in full at the start of every session, so it holds **routing and invarian
 
 - **Layering:** `lumen-core` → dom/font/parsers → layout → paint → shell. No cycles. All architectural invariants — [`docs/invariants.md`](docs/invariants.md).
 - **V8 (`rusty_v8`) is the only JS engine**; `rquickjs` is gone from the workspace — never target it.
-- **Never hardcode a version** — derive it from `CARGO_PKG_VERSION` (the one manual site: the `navigator.userAgent` literal in `crates/js/src/shim/web_api_shim_mid_b.js`).
+- **Never hardcode a version** — derive it from `CARGO_PKG_VERSION`. The browser's name in every layer comes from one `lumen_core::Identity`; the Chrome major is `chrome_major!` (`crates/core/src/identity.rs`).
 
 ## Where to look
 

@@ -743,7 +743,9 @@ var _sw_container = Object.assign({
 // brand-checked accessors/operations once every module has run.
 function Navigator() { throw new TypeError('Illegal constructor'); }
 var navigator = Object.assign(Object.create(Navigator.prototype), {
-    userAgent: 'Lumen/0.5.0',
+    // Placeholder: `navigator_bindings.rs` (build_navigator_shim) overwrites it from
+    // lumen_core::Identity — the one source shared with the HTTP headers (BUG-1614).
+    userAgent: '',
     language: 'en-US',
     onLine: false,
     // Beacon API (W3C Beacon §3.1): fire-and-forget POST to url.

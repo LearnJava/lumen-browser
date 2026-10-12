@@ -345,7 +345,15 @@ impl BrowserSession for LiveWindowSession {
     }
 
     fn user_agent(&self) -> String {
-        format!("Lumen/{}", env!("CARGO_PKG_VERSION"))
+        // BUG-1614: report what pages and the network see, not a Lumen token.
+        #[cfg(feature = "v8")]
+        {
+            lumen_js::current_identity().user_agent
+        }
+        #[cfg(not(feature = "v8"))]
+        {
+            lumen_core::CHROME_USER_AGENT.to_string()
+        }
     }
 
     /// BUG-295: round-trips to the live window, which threads the override

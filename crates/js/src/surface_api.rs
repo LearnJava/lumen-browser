@@ -151,39 +151,14 @@ const SURFACE_API_SHIM: &str = r#"(function() {
       }
     } catch(_) {}
 
-    // navigator.appVersion — Chrome-style version string.
-    try {
-      if (typeof navigator.appVersion === 'undefined') {
-        Object.defineProperty(navigator, 'appVersion', {
-          value: '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          writable: false, configurable: true, enumerable: true
-        });
-      }
-    } catch(_) {}
-
-    // navigator.vendor — "Google Inc." matches Chrome (most common desktop).
-    try {
-      if (typeof navigator.vendor === 'undefined') {
-        Object.defineProperty(navigator, 'vendor', {
-          value: 'Google Inc.', writable: false, configurable: true, enumerable: true
-        });
-      }
-    } catch(_) {}
+    // navigator.appVersion / vendor / productSub come from lumen_core::Identity
+    // (navigator_bindings.rs), the same source as the HTTP User-Agent (BUG-1614).
 
     // navigator.product — "Gecko" per HTML spec §8.4.
     try {
       if (typeof navigator.product === 'undefined') {
         Object.defineProperty(navigator, 'product', {
           value: 'Gecko', writable: false, configurable: true, enumerable: true
-        });
-      }
-    } catch(_) {}
-
-    // navigator.productSub — "20030107" matches Chrome + Firefox.
-    try {
-      if (typeof navigator.productSub === 'undefined') {
-        Object.defineProperty(navigator, 'productSub', {
-          value: '20030107', writable: false, configurable: true, enumerable: true
         });
       }
     } catch(_) {}
@@ -328,14 +303,6 @@ mod tests {
         with_surface_api(|rt| {
             let v = rt.eval("navigator.appName").unwrap();
             assert_eq!(v, JsValue::String("Netscape".to_string()));
-        });
-    }
-
-    #[test]
-    fn vendor_is_google_inc() {
-        with_surface_api(|rt| {
-            let v = rt.eval("navigator.vendor").unwrap();
-            assert_eq!(v, JsValue::String("Google Inc.".to_string()));
         });
     }
 

@@ -138,6 +138,15 @@ pub fn sends_global_privacy_control(profile: HttpProfile) -> bool {
     matches!(profile, HttpProfile::Lumen | HttpProfile::Strict)
 }
 
+/// Append the low-entropy Client Hints (`Sec-CH-UA`, `-Mobile`, `-Platform`)
+/// that Chromium sends on every request. Their absence next to a Chrome UA is
+/// an Akamai signal (BUG-1113 bisect, BUG-1614).
+fn add_low_entropy_hints(headers: &mut HeaderOrder, profile: HttpProfile) {
+    for (name, value) in super::client_hints::low_entropy_client_hints(profile) {
+        headers.add(name, value);
+    }
+}
+
 /// Build HTTP/1.1 request headers for the given profile.
 ///
 /// Each profile constructs headers in a specific order and set matching a real browser.
@@ -163,6 +172,7 @@ pub fn build_request_headers(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
+            add_low_entropy_hints(&mut headers, profile);
             headers.add("User-Agent", super::CHROME_USER_AGENT);
             // Real Chrome sends the full document `Accept` on a navigation,
             // not `*/*` (RP-7: `*/*` is a cheap anti-bot tell).
@@ -197,7 +207,7 @@ pub fn build_request_headers(
         HttpProfile::Firefox => {
             // Firefox 130+ HTTP/1.1 header order (minimal, no Sec-Fetch-*, no DNT)
             headers.add("Host", host);
-            headers.add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0");
+            headers.add("User-Agent", super::FIREFOX_USER_AGENT);
             headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
 
             if !accept_encoding.is_empty() {
@@ -211,7 +221,7 @@ pub fn build_request_headers(
         HttpProfile::Safari => {
             // Safari 18+ HTTP/1.1 header order (very minimal)
             headers.add("Host", host);
-            headers.add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15");
+            headers.add("User-Agent", super::SAFARI_USER_AGENT);
             headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
 
             if !accept_encoding.is_empty() {
@@ -226,6 +236,7 @@ pub fn build_request_headers(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
+            add_low_entropy_hints(&mut headers, profile);
             headers.add("User-Agent", super::EDGE_USER_AGENT);
             // Edge (Chromium) sends the same document `Accept` as Chrome (RP-7).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
@@ -428,6 +439,24 @@ mod tests {
         assert!(super::super::EDGE_USER_AGENT.ends_with(&format!("Edg/{}.0.0.0", super::super::CHROME_MAJOR)));
         let edge = build_request_headers("example.com", "", "", HttpProfile::Edge);
         assert!(edge.contains(&format!("User-Agent: {}\r\n", super::super::EDGE_USER_AGENT)));
+    }
+
+    #[test]
+    fn test_chrome_sends_sec_ch_ua_on_h1_and_h2() {
+        // BUG-1614: Chrome UA without Sec-CH-UA is an Akamai signal.
+        for profile in [HttpProfile::Chrome, HttpProfile::Strict, HttpProfile::Edge] {
+            let h1 = build_request_headers("example.com", "", "", profile);
+            assert!(h1.contains("Sec-CH-UA: "), "{profile:?}");
+            assert!(h1.contains("Sec-CH-UA-Mobile: ?0"), "{profile:?}");
+            assert!(h1.contains("Sec-CH-UA-Platform: \"Windows\""), "{profile:?}");
+            assert!(!h1.contains("Lumen"), "{profile:?}");
+            let h2 = h2_fingerprint_headers(profile, "");
+            assert!(h2.iter().any(|(k, _)| k == "sec-ch-ua"), "{profile:?}");
+        }
+        for profile in [HttpProfile::Firefox, HttpProfile::Safari, HttpProfile::TorBrowser, HttpProfile::Lumen] {
+            let h1 = build_request_headers("example.com", "", "", profile);
+            assert!(!h1.contains("Sec-CH-UA"), "{profile:?}");
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 ## Политика версий и фаз
 
-**Единственный источник версии — `[workspace.package] version` в `Cargo.toml`.** Все машиночитаемые строки версии (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, заголовок окна, стартовый баннер) выводятся из `CARGO_PKG_VERSION` — **номер версии в коде не хардкодить**. Единственное место ручного бампа — литерал `navigator.userAgent` в `crates/js/src/shim/web_api_shim_mid_b.js` (до SPLIT-JS3, 2026-08-28, он лежал в `crates/js/src/dom.rs`).
+**Единственный источник версии — `[workspace.package] version` в `Cargo.toml`.** Все машиночитаемые строки версии (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, заголовок окна, стартовый баннер) выводятся из `CARGO_PKG_VERSION` — **номер версии в коде не хардкодить**. Ручных мест бампа версии Lumen не осталось: UA по умолчанию — грамматика Chrome без токена Lumen (ADR-034 п.1), мажор Chrome — единственный макрос `chrome_major!` в `crates/core/src/identity.rs`, из `lumen_core::Identity` выводятся и HTTP-заголовки, и `navigator.*` (BUG-1614).
 
 Соответствие версия↔фаза: фаза 1 → v0.1, **фаза 2 → v0.5** (цель на момент завершения фазы), фаза 3 → v1.0. Внутри фазы версия растёт к целевой; выход на фазу 3 → 1.0.0. Метку фазы держать синхронной в `README.md`, этом файле, `CLAUDE.md` и стартовом баннере шелла.
 

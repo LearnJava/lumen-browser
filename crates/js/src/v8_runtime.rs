@@ -112,7 +112,8 @@ pub use sheet_sync::CascadeSource;
 pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
-use overrides::{global_timezone_override, global_user_agent_override};
+use overrides::global_timezone_override;
+pub(crate) use overrides::global_user_agent_override;
 pub(crate) use overrides::global_permission_overrides;
 use runtime::pairs_from_flat;
 
