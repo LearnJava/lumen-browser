@@ -1,6 +1,6 @@
 # BUG-1344 — В сокращении `background` длины в `in`/`cm`/`mm`/`pt`/`pc`/`ex`/`ch`/`calc()` сбрасывают позицию в `0% 0%`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** css-parser/layout (`crates/engine/layout/src/style/parse/` — разбор `<position>` внутри `background`; longhand `background-position` те же единицы разбирает)
 
@@ -25,3 +25,7 @@ WPT-RUN-14 срез 11: `backgrounds/background-329.xht` (`background: black url
 ## Как проверить
 
 `css/CSS2/backgrounds/background-329.xht`.
+
+## Исправление
+
+`is_bg_position_token` (`parse/image.rs`) распознавал только px/em/rem/vw/vh/vmin/vmax/%/0; теперь принимает любую `<number><unit>` и `calc()/min()/max()/clamp()` — сокращение и longhand используют один `ObjectPosition::parse`. Тест `background_shorthand_position_accepts_all_length_units`.
