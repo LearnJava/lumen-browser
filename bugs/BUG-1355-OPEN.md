@@ -28,3 +28,10 @@ id: `rss-cap-kills.jsonl` — `4.08 GB` (убит тест `object-fit-none-svg-
 концу последовательности и вышибает случайную страницу, а не одну конкретную. Одиночный `--screenshot` обоих файлов — 3,5 с без роста памяти.
 Общее с этим багом: рост RSS `lumen --ipc-server` под `wptrunner`, воспроизводится только в многотестовом шарде. Измерить пик RSS по ходу шарда
 не удалось (`Get-CimInstance Win32_Process` через PowerShell видит `WorkingSetSize` 0 у большинства процессов).
+
+## Повторная проверка P6 (2026-10-12, main 4e0c2127f+)
+
+Сборка `target/dev-release/lumen.exe` от 2026-10-12, интерпретатор `tests/wpt/.venv` (системный Python даёт ложный `Servers failed to start: wss`).
+- `run_corpus.py --prefixes css/CSS2/normal-flow/crashtests --skip-https` — 2/2 PASS за 24 с, `rss-cap-kills.jsonl` не создан.
+- `run_corpus.py --prefixes css/css-images --skip-https` (лимит 4.0 ГБ) — 504 id за 240 с, CRASH нет, `rss-cap-kills.jsonl` не создан.
+Ни один из двух симптомов на текущем main не воспроизводится; причина не установлена, код не менялся.
