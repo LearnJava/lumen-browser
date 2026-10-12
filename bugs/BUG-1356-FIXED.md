@@ -1,6 +1,6 @@
 # BUG-1356 — `text-align: right|center` не сдвигает atomic inline (`<img>`, `inline-block`) в строке: выравнивается только текст
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (ветка p6-bug-1356: в ряду с atomic inline текст раскладывается start-выровненным, ряд сдвигается целиком; `layout_dispatch.rs`, тесты `atomic_text_align.rs`)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — ветка `BoxKind::InlineBlockRow`; `align_lines` применяется к `InlineRun`)
 
