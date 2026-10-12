@@ -563,7 +563,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | background-image с лишним токеном (`url() repeat`) принимается вместо отбрасывания | 1 | 1 thick | `backgrounds/background-image-005.xht` | `p { background-image: url(…) repeat }` принимается, картинка рисуется; объявление недопустимо | P3 | [BUG-1347](../../bugs/BUG-1347-OPEN.md) |
 | background: <длина> в in/cm/pt/pc/ex/ch/calc() сбрасывается в 0% 0% | 1 | 1 thick | `backgrounds/background-329.xht` | `background: black url(…) repeat-x 0.5in 0.5in` → позиция `0% 0%` (`pos=(Percent(0.0),Percent(0.0))`); `10px`, `1em`, `1vw`, `10%` разбираются | P3 | [BUG-1344](../../bugs/BUG-1344-OPEN.md) |
 | testharness: CSS Transitions allow-discrete | 1 | 1 testharness | `borders/discrete-no-interpolation.html` | `border-*-style` с `transition-behavior: allow-discrete`: 40 из 168 сабтестов (`expected "none " but got "dotted "` и наоборот); `.ini` под `tests/wpt/metadata/css/CSS2/borders` нет | — | остаток [BUG-553](../../bugs/BUG-553-OPEN.md) (`allow-discrete`, 24+) |
-| padding в em/%/rem у <img> растягивает картинку на область padding | 1 | 1 thick | `borders/border-color-005.xht` | `<img style="padding-left:9.6em">` — `DrawImage` растянут на область padding (`30 px` вместо 10 при `padding-left: 2em`); `px` — верно | P3 | [BUG-1345](../../bugs/BUG-1345-OPEN.md) |
+| padding в em/%/rem у <img> растягивает картинку на область padding | 1 | 1 thick | `borders/border-color-005.xht` | `<img style="padding-left:9.6em">` — `DrawImage` растянут на область padding (`30 px` вместо 10 при `padding-left: 2em`); `px` — верно | P3 | [BUG-1345](../../bugs/BUG-1345-FIXED.md) |
 
 Сумма по таблице: 485 id.
 

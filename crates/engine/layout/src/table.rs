@@ -615,7 +615,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: lumen_dom::NodeId::from_index(0),
             rect: lumen_core::geom::Rect::ZERO,
-            used_line_height: 16.0 * 1.2,
+            used_padding: None, used_line_height: 16.0 * 1.2,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

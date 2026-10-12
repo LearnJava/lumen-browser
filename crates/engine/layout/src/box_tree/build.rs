@@ -157,7 +157,7 @@ fn build_ruby_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -245,7 +245,7 @@ fn build_ruby_group_box(
     LayoutBox {
         node: owner_id,
         rect: Rect::ZERO,
-        used_line_height: bstyle.font_size * bstyle.line_height,
+        used_padding: None, used_line_height: bstyle.font_size * bstyle.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -323,7 +323,7 @@ fn build_base_select_box(
     let trigger = LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: trigger_style.font_size * trigger_style.line_height,
+        used_padding: None, used_line_height: trigger_style.font_size * trigger_style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -344,7 +344,7 @@ fn build_base_select_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -940,7 +940,7 @@ fn build_box_inner(
         return LayoutBox {
             node: id,
             rect: Rect::ZERO,
-            used_line_height: style.font_size * style.line_height,
+            used_padding: None, used_line_height: style.font_size * style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -1309,7 +1309,7 @@ fn build_box_inner(
                             row_items.push(LayoutBox {
                                 node: id,
                                 rect: Rect::ZERO,
-                                used_line_height: gap_style.font_size * gap_style.line_height,
+                                used_padding: None, used_line_height: gap_style.font_size * gap_style.line_height,
                                 grid_baselines: None,
                                 fieldset_legend: None,
                                 subgrid_tracks: None,
@@ -1497,7 +1497,7 @@ fn build_box_inner(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend,
         subgrid_tracks: None,

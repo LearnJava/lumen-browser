@@ -819,7 +819,7 @@ fn bug341_s4_incremental_box_build_share() {
     let mut unused_placeholder = lumen_layout::LayoutBox {
         node: doc.root(),
         rect: Rect::ZERO,
-        used_line_height: root_style.font_size * root_style.line_height,
+        used_padding: None, used_line_height: root_style.font_size * root_style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,

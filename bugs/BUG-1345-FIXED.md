@@ -1,6 +1,6 @@
 # BUG-1345 — У `<img>` отступ `padding` в `em`/`rem`/`%` растягивает картинку на область padding; в `px` — верно
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/box_tree/` — размер replaced-бокса при `padding` без `px`)
 
@@ -26,3 +26,7 @@ WPT-RUN-14 срез 11: `borders/border-color-005.xht` (1 id; эталон `img 
 ## Как проверить
 
 `css/CSS2/borders/border-color-005.xht`.
+
+## Исправление
+
+`LayoutBox::used_padding` (`Option<[f32; 4]>`): раскладка пишет использованный padding replaced-бокса, если хоть одна сторона не в `px`; `content_box_rect` (paint) читает его вместо `Length::px()`, который для `em`/`rem`/`%` отдавал 0. Тест — `img_bitmap_content_box_with_relative_padding_units`.

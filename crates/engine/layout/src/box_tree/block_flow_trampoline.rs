@@ -124,7 +124,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         node: slot.node,
         rect: Rect::ZERO,
         style: Arc::clone(&slot.style),
-        used_line_height: 0.0,
+        used_padding: None, used_line_height: 0.0,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,

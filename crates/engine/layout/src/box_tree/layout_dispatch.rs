@@ -541,6 +541,13 @@ pub(super) fn dispatch_box(
     let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. })
         || (matches!(b.kind, BoxKind::FormControl { .. })
             && !matches!(s.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
+    // BUG-1345: paint reads the replaced content box from `used_padding`; `em`/`rem`/`%` sides
+    // are unresolvable there.
+    b.used_padding = (is_replaced
+        && [&s.padding_top, &s.padding_right, &s.padding_bottom, &s.padding_left]
+            .iter()
+            .any(|l| !matches!(l, Length::Px(_))))
+    .then_some([padding_top, padding_right, padding_bottom, padding_left]);
     // CSS Basic UI L4 §4.4 — field-sizing: content.
     // Pre-compute intrinsic (padding-box width, padding-box height) from text content.
     // Only applies to text-entry FormControls when UA did not supply explicit dimensions.
@@ -1597,6 +1604,7 @@ pub(super) fn dispatch_box(
                         let cont_box = LayoutBox {
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
+                            used_padding: None,
                             used_line_height,
                             grid_baselines: None,
                             fieldset_legend: None,

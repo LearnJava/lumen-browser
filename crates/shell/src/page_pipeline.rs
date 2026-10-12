@@ -396,7 +396,7 @@ impl LoadedPage {
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
-                used_line_height: 16.0 * 1.2,
+                used_padding: None, used_line_height: 16.0 * 1.2,
                 grid_baselines: None,
                 fieldset_legend: None,
                 subgrid_tracks: None,

@@ -1197,3 +1197,4 @@
 | [BUG-1342](bugs/BUG-1342-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`) | Сокращение `border` не сбрасывает `border-color` в `currentcolor`, если цвет не указан |
 | [BUG-1343](bugs/BUG-1343-FIXED.md) | FIXED 2026-10-12 | paint (`crates/engine/paint/src/cpu_raster.rs`) | Плитка `background-image` на полупиксельной позиции (`center`, `bottom` при нечётной разности) рисуется со швами по 1 px между плитками |
 | [BUG-1344](bugs/BUG-1344-FIXED.md) | FIXED 2026-10-12 | css-parser/layout (`crates/engine/layout/src/style/parse/`) | В сокращении `background` длины в `in`/`cm`/`mm`/`pt`/`pc`/`ex`/`ch`/`calc()` сбрасывают позицию в `0% 0%` |
+| [BUG-1345](bugs/BUG-1345-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | У `<img>` отступ `padding` в `em`/`rem`/`%` растягивает картинку на область padding; в `px` — верно |

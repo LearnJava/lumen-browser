@@ -241,21 +241,14 @@ fn background_clip_rect_exact(b: &LayoutBox, clip: BackgroundClip) -> Rect {
 /// the `content-box` arm of [`background_clip_rect`].
 pub(crate) fn content_box_rect(b: &LayoutBox) -> Rect {
     let s = &b.style;
+    let [pt, pr, pb, pl] = b.used_padding.unwrap_or_else(|| {
+        [s.padding_top.px(), s.padding_right.px(), s.padding_bottom.px(), s.padding_left.px()]
+    });
     Rect::new(
-        b.rect.x + s.border_left_width + s.padding_left.px(),
-        b.rect.y + s.border_top_width + s.padding_top.px(),
-        (b.rect.width
-            - s.border_left_width
-            - s.border_right_width
-            - s.padding_left.px()
-            - s.padding_right.px())
-        .max(0.0),
-        (b.rect.height
-            - s.border_top_width
-            - s.border_bottom_width
-            - s.padding_top.px()
-            - s.padding_bottom.px())
-        .max(0.0),
+        b.rect.x + s.border_left_width + pl,
+        b.rect.y + s.border_top_width + pt,
+        (b.rect.width - s.border_left_width - s.border_right_width - pl - pr).max(0.0),
+        (b.rect.height - s.border_top_width - s.border_bottom_width - pt - pb).max(0.0),
     )
 }
 
