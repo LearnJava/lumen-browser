@@ -1,6 +1,6 @@
 # BUG-1357 — `float` / `position:absolute` на `table-row-group|row|cell` не блокифицируются: бокс остаётся табличным (CSS 2.1 §9.7)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6): блокификация float/abspos для table-* в `style/cascade.rs`; abspos-ребёнок table раскладывается в конце `table_trampoline::finish_table`. Тесты — `box_tree/tests/table_blockify.rs`
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/` — вычисление `display` при `float`/`position:absolute|fixed`; `table.rs`)
 

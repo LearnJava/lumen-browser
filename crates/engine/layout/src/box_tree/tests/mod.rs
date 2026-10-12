@@ -492,6 +492,7 @@ mod table_height;
 mod table_shrink_to_fit;
 mod table_valign;
 mod atomic_text_align;
+mod table_blockify;
 mod baseline_containers;
 mod grid_baseline2;
 mod grid_replaced_stretch;
