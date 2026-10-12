@@ -1,6 +1,6 @@
 # BUG-1355 — Краштест `block-in-inline-ax-crash.html` под `wptrunner` растит память `lumen.exe` до 5 ГБ и убивается лимитом `--max-browser-gb 4.0` (CRASH)
 
-**Статус:** OPEN
+**Статус:** CLOSED 2026-10-12 (не воспроизводится на main 4e0c2127f+; решение пользователя)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)
 
