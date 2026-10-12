@@ -1,6 +1,6 @@
 # BUG-1347 — `background-image: url(…) repeat` (лишний токен) принимается; недопустимое объявление должно отбрасываться
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6): `image_has_trailing_tokens` в `style/apply/paint.rs` отбрасывает объявление с хвостом после `<image>`
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** css-parser/layout (`crates/engine/layout/src/style/apply/` — `background-image` берёт первое значение и игнорирует хвост)
 
