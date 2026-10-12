@@ -1194,3 +1194,4 @@
 | [BUG-1339](bugs/BUG-1339-FIXED.md) | FIXED 2026-10-12 | paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`) | `word-spacing` / `letter-spacing` измеряются в раскладке, но не рисуются, если слова в одном `DrawText` |
 | [BUG-1340](bugs/BUG-1340-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/style/values/length.rs:171`) | Единицы `ex` и `ch` — константы 0,546 em / 0,631 em, а не метрики шрифта |
 | [BUG-1341](bugs/BUG-1341-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | `display: inline-block` без явной ширины и с блочными детьми без ширины получает ширину контейнера |
+| [BUG-1342](bugs/BUG-1342-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`) | Сокращение `border` не сбрасывает `border-color` в `currentcolor`, если цвет не указан |

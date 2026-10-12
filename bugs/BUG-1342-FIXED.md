@@ -1,6 +1,6 @@
 # BUG-1342 — Сокращение `border` не сбрасывает `border-color` в `currentcolor`, если цвет не указан
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 11: `borders/border-shorthands-002.xht` и `-003.xht` (по 
 ## Как проверить
 
 `css/CSS2/borders/border-shorthands-002.xht`.
+
+## Исправление (2026-10-12, P6)
+
+`apply_border_shorthand` и `apply_border_side_shorthand` (`box_sides.rs`) перед разбором токенов сбрасывают ширину/стиль/цвет в `medium`/`none`/`currentcolor`; без стиля итоговая ширина 0. Тест: `border_shorthand_resets_unlisted_color`. dump_golden 12/12; WPT-перепрогон не делался.
