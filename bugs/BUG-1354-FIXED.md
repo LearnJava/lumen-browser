@@ -1,6 +1,6 @@
 # BUG-1354 — Встроенный `<svg>` внутри блока раскладывается как блок, а не как строчный replaced: нет строки и зазора под базовой линией
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** layout (`crates/engine/layout/src/box_tree/svg.rs`, `inline_build.rs` — встроенный `<svg>` в потоке)
 
@@ -23,3 +23,7 @@ WPT-RUN-14 срез 12: 13 id `normal-flow/{block-replaced-height-006,inline-blo
 ## Срез 13 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` tables/positioning/floats/floats-clear/abspos…)
 
 15 id в `floats-clear/float-replaced-height-006.xht`, `float-replaced-width-007.xht`, `-008.xht` и `positioning/absolute-replaced-*` — `<svg>`/`<object>` как replaced-элемент (float/abspos). По правилу отнесения (`<svg|<object` в тесте, thick), пробой не разделено с BUG-1337/1356.
+
+## Исправление (2026-10-12, P6)
+
+`<svg>` получил UA `display: inline` (`style/ua.rs`) и вошёл в `is_inline_replaced_media_element` (`box_tree/predicates.rs`): теперь он atomic inline в `InlineBlockRow`, с зазором под базовой линией, как `<img>`. Тесты — `box_tree/tests/svg_inline_replaced.rs`. `<object>` и float/abspos (срез 13) не затронуты.
