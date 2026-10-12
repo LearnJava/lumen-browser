@@ -1,6 +1,6 @@
 # BUG-1348 — `html { height: 100% }` не разрешается против вьюпорта: высота корня — по содержимому
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — процентная `height` корневого элемента, начальный содержащий блок = вьюпорт, CSS 2.1 §10.5)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 11: `backgrounds/background-bg-pos-204.xht`, `-206.xht` — 
 ## Как проверить
 
 `css/CSS2/backgrounds/background-bg-pos-204.xht`.
+
+## Исправление
+
+Первый потомок корня документа (`<html>`) получает высоту вьюпорта как базу для `%` height (`layout_dispatch.rs`, `children_available_height`). Тест: `tests/cases/root_height.rs`.

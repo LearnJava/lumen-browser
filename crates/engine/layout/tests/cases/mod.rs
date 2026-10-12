@@ -9,5 +9,6 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod root_height;
 mod snapshot_tests;
 mod svg_layout;
