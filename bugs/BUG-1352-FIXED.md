@@ -1,6 +1,6 @@
 # BUG-1352 — `margin` и `padding` на внутренних табличных боксах (`table-row-group`/`header-group`/`footer-group`/`row`) применяются при раскладке, а CSS 2.1 §17 их не применяет
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** layout (`crates/engine/layout/src/box_tree/table.rs` — внутренние табличные боксы)
 

@@ -138,3 +138,18 @@ fn fixed_layout_with_auto_width_falls_back_to_auto() {
     let w = cell_widths(table(&fixed));
     assert!((w[0] - 50.0).abs() < 0.5 && (w[1] - 70.0).abs() < 0.5, "{w:?}");
 }
+
+/// BUG-1352: CSS 2.1 §17 — `margin`/`padding` don't apply to row groups and rows.
+#[test]
+fn row_group_and_row_ignore_margin_and_padding() {
+    let root = lay(
+        "<div style=\"display:table\"><div style=\"display:table-row-group;margin:7px;padding:9px\">\
+         <div style=\"display:table-row;margin:7px;padding:9px\">\
+         <div style=\"display:table-cell;height:30px\">a</div></div></div></div>",
+        "body{margin:0}",
+    );
+    let t = table(&root);
+    assert!((t.rect.height - 30.0).abs() < 0.5, "table {:?}", t.rect);
+    let row = first_row(t);
+    assert!((row.rect.y - t.rect.y).abs() < 0.5, "row {:?} table {:?}", row.rect, t.rect);
+}

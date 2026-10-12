@@ -14,7 +14,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 24: `css-tables/row-group-order.html`. Не путать с [BUG-1352](BUG-1352-OPEN.md) (margin/padding на внутренних табличных боксах).
+WPT-RUN-14 срез 24: `css-tables/row-group-order.html`. Не путать с [BUG-1352](BUG-1352-FIXED.md) (margin/padding на внутренних табличных боксах).
 
 ## Что делать
 

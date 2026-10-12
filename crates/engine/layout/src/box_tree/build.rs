@@ -930,6 +930,20 @@ fn build_box_inner(
         }
     };
 
+    // CSS 2.1 §17: `margin` and `padding` do not apply to row groups and rows.
+    // BUG-1352
+    if matches!(kind, BoxKind::TableRow | BoxKind::TableRowGroup) {
+        let st = Arc::make_mut(&mut style);
+        st.margin_top = LengthOrAuto::ZERO;
+        st.margin_right = LengthOrAuto::ZERO;
+        st.margin_bottom = LengthOrAuto::ZERO;
+        st.margin_left = LengthOrAuto::ZERO;
+        st.padding_top = Length::Px(0.0);
+        st.padding_right = Length::Px(0.0);
+        st.padding_bottom = Length::Px(0.0);
+        st.padding_left = Length::Px(0.0);
+    }
+
     // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree.
     // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
     // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
