@@ -2753,9 +2753,18 @@ fn rasterize_background_image(
                     let vx1 = (tx + tile_w).min(x_end);
                     let vy1 = (ty + tile_h).min(y_end);
                     if vx1 > vx0 && vy1 > vy0 {
-                        let placed = Rect::new(tx, ty, tile_w, tile_h);
-                        let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
-                        blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                        // Snap tile edges to device pixels (CSS Backgrounds §3.9):
+                        // neighbours share the same rounded edge, so a fractional
+                        // position (`center`) leaves no 1px AA seam between tiles.
+                        let (sx0, sx1) = (tx.round(), (tx + tile_w).round().max(tx.round() + 1.0));
+                        let (sy0, sy1) = (ty.round(), (ty + tile_h).round().max(ty.round() + 1.0));
+                        let placed = Rect::new(sx0, sy0, sx1 - sx0, sy1 - sy0);
+                        let (vx0, vx1) = (vx0.round().max(sx0), vx1.round().min(sx1));
+                        let (vy0, vy1) = (vy0.round().max(sy0), vy1.round().min(sy1));
+                        if vx1 > vx0 && vy1 > vy0 {
+                            let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
+                            blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                        }
                     }
                 }
                 if !repeat_x {
@@ -5559,6 +5568,27 @@ mod tests {
         for (x, y) in [(3u32, 3u32), (60, 60)] {
             let (r, g, b, _) = px(&img, x, y);
             assert!(g > 150 && r < 60 && b < 60, "tile at ({x},{y}) green, got ({r},{g},{b})");
+        }
+    }
+
+    /// BUG-1343: tiles at a half-pixel offset must not leave AA seams.
+    #[test]
+    fn background_tiles_at_fractional_position_have_no_seams() {
+        let images = vec![("b.png".to_string(), std::sync::Arc::new(solid_2x2([0, 0, 255, 255])))];
+        let area = rect(0.0, 0.0, 64.0, 8.0);
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: area,
+            origin_rect: area,
+            src: "b.png".to_string(),
+            size: BackgroundSize::Length(lumen_layout::BgSizeAxis::Px(15.0), lumen_layout::BgSizeAxis::Px(8.0)),
+            position: ObjectPosition { x: lumen_layout::PositionComponent::Px(2.5), y: lumen_layout::PositionComponent::Px(0.0) },
+            repeat: BackgroundRepeat::RepeatX,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 8, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        for x in 4..60 {
+            let (r, g, b, _) = px(&img, x, 4);
+            assert!(b > 250 && r < 5 && g < 5, "seam at x={x}: ({r},{g},{b})");
         }
     }
 
