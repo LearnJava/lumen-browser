@@ -1,6 +1,6 @@
 # BUG-1350 — Пустой блок (`height: 0`, без содержимого) не схлопывает свои верхнее и нижнее поля друг с другом («collapse through», CSS 2.1 §8.3.1) — соседние поля складываются, а не сводятся к наибольшему
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** layout (`crates/engine/layout/src/box_tree/bfc.rs`, `block_flow_trampoline.rs` — схлопывание полей пустого блока)
 
@@ -21,3 +21,9 @@ WPT-RUN-14 срез 12: `margin-padding-clear/margin-collapse-{016,019,026,110,1
 ## Как проверить
 
 `css/CSS2/margin-padding-clear/margin-collapse-016.xht`, `margin-collapse-137.xht`.
+
+## Исправление
+
+`post_child_bookkeeping` (`block_flow_trampoline.rs`) для самосхлопывающегося блока прибавлял к `child_y` всё слитое поле, хотя `child_y` уже включал `prev_block_mb` предыдущего соседа, — поле считалось дважды. Теперь прибавляется `merged - prev_block_mb`. Тесты: `tests/empty_block_collapse.rs`.
+
+Не исправлено (отдельный случай `margin-collapse-137/138`: абсолютный потомок `position:relative` бокса со схлопнутым нижним полем) — не проверялось, в рамках этого пункта не трогалось.
