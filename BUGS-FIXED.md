@@ -1200,3 +1200,4 @@
 | [BUG-1345](bugs/BUG-1345-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | У `<img>` отступ `padding` в `em`/`rem`/`%` растягивает картинку на область padding; в `px` — верно |
 | [BUG-1346](bugs/BUG-1346-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/table.rs`) | `border-collapse: collapse` с `width: 100px` и рамкой 4 px у строки/группы: внешняя ширина 100, а не 104 |
 | [BUG-1347](bugs/BUG-1347-FIXED.md) | FIXED 2026-10-12 | css-parser/layout (`crates/engine/layout/src/style/apply/`) | `background-image: url(…) repeat` (лишний токен) принимается; недопустимое объявление должно отбрасываться |
+| [BUG-1348](bugs/BUG-1348-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`) | `html { height: 100% }` не разрешается против вьюпорта: высота корня — по содержимому |

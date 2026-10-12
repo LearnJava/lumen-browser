@@ -1273,6 +1273,10 @@ pub(super) fn dispatch_box(
                 // box's own border-box height is unchanged, only the content area seen
                 // by children shrinks.
                 Some((content_h - scrollbar_gutter_block(&s)).max(0.0))
+            } else if b.node.index() == 0 && s.height.is_none() {
+                // CSS 2.1 §10.5: the document root's child (`<html>`) resolves a
+                // percentage `height` against the initial containing block (viewport).
+                available_height
             } else {
                 None
             };
