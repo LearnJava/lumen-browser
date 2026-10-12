@@ -1,6 +1,6 @@
 # BUG-1346 — `border-collapse: collapse` с `width: 100px` и рамкой 4 px у строки/группы: внешняя ширина 100, а не 104
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 — в collapsed-режиме рамка строки/группы выступает на половину сверх `width` (`widen_for_outer_group_borders`, table_trampoline.rs)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout (`crates/engine/layout/src/box_tree/table.rs` — геометрия collapsed-границ: половина внешней рамки сверх `width`)
 

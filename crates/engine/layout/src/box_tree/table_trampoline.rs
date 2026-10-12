@@ -472,6 +472,22 @@ fn finish_entry(frame: &mut Frame, viewport: Size) {
     frame.init.cur_y = group.rect.y + group.rect.height + g_mb;
 }
 
+/// CSS 2.1 §17.6.2 — в collapsed-режиме рамка строки/группы строк лежит на линии сетки, и
+/// `width` таблицы задаёт ширину сетки, а не рамки: внешняя рамка выступает за неё. Здесь
+/// строки и группы получают border-box `сетка + половина своих левой и правой рамок`, а
+/// таблица — на наибольшую из таких надбавок шире. Рамки ячеек уже учтены привязкой крайних ячеек.
+fn widen_for_outer_group_borders(frame: &mut Frame) {
+    let mut extra = 0.0_f32;
+    for child in &mut frame.b.children {
+        if matches!(child.kind, BoxKind::TableRow | BoxKind::TableRowGroup) {
+            let bw = (child.style.border_left_width + child.style.border_right_width) / 2.0;
+            child.rect.width += bw;
+            extra = extra.max(bw);
+        }
+    }
+    frame.b.rect.width += extra;
+}
+
 /// Runs once every top-level entry is placed — CSS 2.1 §17.5 Pass 2 (extend
 /// each rowspan cell's height to its last spanned row's bottom edge), then
 /// (moved in from `layout_dispatch.rs`'s former post-`lay_out_table` code)
@@ -530,6 +546,10 @@ fn finish_table(
 
     if frame.init.collapse && s.width.is_none() && frame.init.n_cols > 0 {
         frame.b.rect.width = frame.init.collapse_width;
+    }
+
+    if frame.init.collapse && frame.init.n_cols > 0 {
+        widen_for_outer_group_borders(frame);
     }
 
     place_column_boxes(frame);
