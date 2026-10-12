@@ -116,7 +116,7 @@ impl FontContext {
             let fs = b.style.font_size.max(0.0);
             (
                 m.char_width_with_families('0', fs, &b.style.font_family),
-                m.x_height_px(fs),
+                m.x_height_px_with_families(fs, &b.style.font_family),
             )
         });
         // `lh`: `used_line_height` is the measurer-resolved value; fall back to
@@ -161,7 +161,7 @@ impl RootFontGuard {
                 Some(crate::style::push_root_font_metrics(Some((
                     lh,
                     m.char_width_with_families('0', fs, &src.style.font_family),
-                    m.x_height_px(fs),
+                    m.x_height_px_with_families(fs, &src.style.font_family),
                 ))))
             }
             _ => None,
