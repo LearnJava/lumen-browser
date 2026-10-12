@@ -1,6 +1,6 @@
 # BUG-1353 — Строчный бокс, разрезанный блоком («block-in-inline», CSS 2.1 §9.2.1.1): рамка у фрагментов не по правилу `slice`, а первый фрагмент пропадает, если элемент начинается с блока
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** layout/paint (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs` — строчный бокс, разрезанный блоком)
 
@@ -23,3 +23,7 @@ WPT-RUN-14 срез 12: 21 id `normal-flow/block-in-inline-*` (+ `margin-right-1
 ## Срез 15 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` остальное)
 
 `css/CSS2/box-display/block-in-inline-001/002/007.xht`, `block-in-inline-relpos-001/002.xht`, `block-in-inline-self-collapsing-only-child.html` — 9 id `thick` с `<span class="inline">…<span class="block">…</span>…</span>` (`display:block` внутри `display:inline`). Проба на этих id не выполнялась; единственное, что проверено: `<span class=inline>Line 1<span class=block>Line 2</span>Line 3</span>` (`--dump-layout`) даёт `InlineRun "Line 1"` + `Block` (зелёный, `Line 2`) + продолжение — деление на блоки есть, что с фоном/рамкой у фрагментов `inline` — не смотрели. Привязка к BUG-1353 — по сходству разметки.
+
+## Исправление (2026-10-12, P6)
+
+`collect_inline_segments` (`inline_build.rs`): если внутри строчного элемента нашлись escape-ы (блоки), его сегменты режутся по `slice` — `slice_cut_inline_box` обнуляет рамку/padding с «чужой» стороны, `pre_space` остаётся только у первого куска, `post_space` — у последнего. Кусок без собственного текста получает пустой сегмент-грань; `wrap_inline_run` превращает его в нулевой фрагмент с рамкой, paint не рисует для него текст. Тесты: `box_tree/tests/block_in_inline_slice.rs`. Остаток: перенос по строкам внутри одного куска по-прежнему рисует рамку на каждом фрагменте (не в объёме этого бага); `block-in-inline-{insert,remove}-*` с JS не проверялись.

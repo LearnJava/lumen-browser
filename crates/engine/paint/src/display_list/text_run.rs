@@ -102,6 +102,10 @@ fn emit_text_frags(
         if !matches!(frag.style.visibility, Visibility::Visible) {
             continue;
         }
+        // Empty piece of an inline box cut by a block: box edge only, no glyphs.
+        if frag.text.is_empty() && frag.img_src.is_none() {
+            continue;
+        }
         let frag_y = line_y + frag.y_offset;
         // Inline-replaced image: emit LazyImageSlot or DrawImage, skip text rendering.
         if let Some(src) = &frag.img_src {

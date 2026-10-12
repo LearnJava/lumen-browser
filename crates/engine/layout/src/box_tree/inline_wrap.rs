@@ -863,6 +863,34 @@ pub(crate) fn wrap_inline_run_indented(
             continue;
         }
 
+        // An empty piece of an inline box cut by a block (CSS 2.1 §9.2.1.1): no text, but
+        // its border/padding still occupy a (zero-width) fragment of the line.
+        if seg.text.is_empty() && seg.is_element_box && (seg.pre_space > 0.0 || seg.post_space > 0.0) {
+            let style = &seg.style;
+            let em = style.font_size;
+            current_x += seg.pre_space;
+            current_line.push(InlineFrag {
+                x: current_x,
+                y_offset: 0.0,
+                width: 0.0,
+                text: String::new(),
+                style: style.clone(),
+                padding_left: style.padding_left.resolve_or_zero(em, max_width, viewport),
+                padding_right: style.padding_right.resolve_or_zero(em, max_width, viewport),
+                is_element_box: true,
+                img_src: None,
+                img_is_lazy: false,
+                is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
+                merged_sources: Vec::new(),
+            });
+            current_x += seg.post_space;
+            prev_trailing_ws = false;
+            continue;
+        }
+
         // Collect words; split_css_whitespace preserves U+00AD within tokens.
         let raw_words: Vec<&str> = split_css_whitespace(&seg.text).collect();
         if raw_words.is_empty() {
