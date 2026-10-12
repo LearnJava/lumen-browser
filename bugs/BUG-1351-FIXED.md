@@ -1,6 +1,6 @@
 # BUG-1351 — Ширина по содержимому (shrink-to-fit) не учитывает горизонтальные `margin` блочных детей: внешний бокс получается уже, чем ребёнок вместе с его полями
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** layout (`crates/engine/layout/src/box_tree/intrinsic.rs`, `layout_dispatch.rs` — shrink-to-fit ширина `position:absolute`/`float`/`inline-block`)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 12: `margin-padding-clear/margin-{001…009,collapse-102…1
 ## Как проверить
 
 `css/CSS2/margin-padding-clear/margin-001.xht`.
+
+## Исправление
+
+В `preferred_inline_block_width` и `max_content_outer_width` (`intrinsic.rs`) вклад блока в потоке считался по его border-box, без горизонтальных margin; теперь `cw + margin_left + margin_right` (floats и так суммировались с полями). Тесты: `tests/shrink_to_fit_margins.rs`. Графические тесты — без сдвига относительно main (TEST-83/134/56 и др. красные одинаково на main).
