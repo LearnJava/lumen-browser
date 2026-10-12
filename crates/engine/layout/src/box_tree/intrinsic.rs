@@ -480,6 +480,15 @@ fn flex_row_intrinsic_sum(
     sum + gap * n_items.saturating_sub(1) as f32
 }
 
+/// Блок, в поддереве которого нет ни текста, ни replaced-содержимого, ни явных
+/// ширин: его max-content строго нулевой (а не «неизвестный»).
+fn is_content_free(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Block)
+        && b.style.width.is_none()
+        && b.style.float_side == FloatSide::None
+        && b.children.iter().all(is_content_free)
+}
+
 /// Phase 0 shrink-to-fit: возвращает «предпочтительную» ширину inline-block-бокса
 /// (включая padding+border самого бокса). Алгоритм: если у бокса явная CSS `width` —
 /// берём её; иначе рекурсивно ищем максимальную preferred_width среди потомков
@@ -615,6 +624,10 @@ pub(crate) fn preferred_inline_block_width(
                 + s.border_left_width + s.border_right_width)
                 .max(0.0),
         )
+    } else if is_content_free(b) {
+        // BUG-1341: пустые блоки дают нулевой max-content, и shrink-to-fit
+        // сводится к рамкам и полям самого бокса, а не к доступной ширине.
+        Some((pl + pr + s.border_left_width + s.border_right_width).max(0.0))
     } else {
         None
     }

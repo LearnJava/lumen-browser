@@ -36,3 +36,22 @@ fn explicit_and_auto_columns_add_up() {
     let html = r#"<table id="t"><tr><td style="width:40px"></td><td><div style="width:30px;height:5px"></div></td></tr></table>"#;
     assert_eq!(rect_of(html, "t").width, 70.0);
 }
+
+// BUG-1341: inline-block с пустыми блочными детьми сжимается до своих рамок.
+#[test]
+fn inline_block_with_empty_block_child_shrinks_to_border() {
+    let r = rect_of(
+        "<div id=a style='display:inline-block;border-right:3px solid green'><div style='height:20px'></div></div>",
+        "a",
+    );
+    assert!((r.width - 3.0).abs() < 0.01, "ширина {}", r.width);
+}
+
+#[test]
+fn inline_block_with_fixed_width_block_child_unchanged() {
+    let r = rect_of(
+        "<div id=a style='display:inline-block;border-right:3px solid green'><div style='height:20px;width:30px'></div></div>",
+        "a",
+    );
+    assert!((r.width - 33.0).abs() < 0.01, "ширина {}", r.width);
+}
