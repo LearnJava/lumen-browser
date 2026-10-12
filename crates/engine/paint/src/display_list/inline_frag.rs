@@ -168,6 +168,8 @@ pub(crate) fn emit_text_shadows(
                 axes
             },
             tab_size: frag.style.tab_size,
+            letter_spacing: super::spacing_to_fixed(frag.style.letter_spacing),
+            word_spacing: super::spacing_to_fixed(frag.style.word_spacing + frag.style.word_spacing_pct * 0.25 * frag.style.font_size),
             highlight_name: None,
             text_orientation: if frag.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                 Some(frag.style.text_orientation)

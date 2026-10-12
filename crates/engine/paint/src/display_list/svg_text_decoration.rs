@@ -605,6 +605,8 @@ pub(crate) fn emit_svg_text(
             font_features: Vec::new(),
             font_palette: None,
             tab_size: b.style.tab_size,
+            letter_spacing: super::spacing_to_fixed(b.style.letter_spacing),
+            word_spacing: super::spacing_to_fixed(b.style.word_spacing + b.style.word_spacing_pct * 0.25 * b.style.font_size),
             highlight_name: None,
             text_orientation: if b.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                 Some(b.style.text_orientation)

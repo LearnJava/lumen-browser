@@ -58,7 +58,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
-                font_stretch, font_variation_axes, font_features, font_palette, tab_size: _,
+                font_stretch, font_variation_axes, font_features, font_palette, tab_size: _, letter_spacing: _, word_spacing: _,
                 highlight_name: _, text_orientation: _,
             } => {
                 out.push_str(&format!(

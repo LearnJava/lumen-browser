@@ -1667,6 +1667,8 @@ impl Renderer {
                     font_features: _,
                     font_palette,
                     tab_size,
+                    letter_spacing,
+                    word_spacing,
                     highlight_name: _,
                     text_orientation,
                 } => {
@@ -1741,6 +1743,7 @@ impl Renderer {
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
+                                (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
                             );
                             rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
@@ -1778,6 +1781,7 @@ impl Renderer {
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
+                                (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
                             );
                         }
@@ -1966,6 +1970,7 @@ impl Renderer {
                                 self.text_run_cache_enabled,
                                 &[],
                                 0.0,
+                                (0.0, 0.0),
                                 None,
                             );
                             if let Some(m) = transform_stack.last() {

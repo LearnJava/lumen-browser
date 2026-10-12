@@ -1,6 +1,6 @@
 # BUG-1339 — `word-spacing` / `letter-spacing` измеряются в раскладке, но не рисуются, если слова в одном `DrawText`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6: `letter_spacing`/`word_spacing` в `DrawText` (1/64 px, `i16`), учёт в CPU-растре и wgpu; femtovg-путь поля игнорирует)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** paint/layout (`crates/engine/paint/src/display_list/commands.rs:54` — у `DrawText` нет поля интервала; `crates/engine/layout/src/box_tree/inline_wrap.rs:26` `measure_text_w` учитывает `letter_spacing`)
 

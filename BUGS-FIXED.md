@@ -1191,3 +1191,4 @@
 | [BUG-1336](bugs/BUG-1336-FIXED.md) | FIXED 2026-10-12 | layout/paint (`crates/engine/layout/src/box_tree/table.rs`) | `display: table-column` / `table-column-group` (и `<col>`, `<colgroup>`): фон и рамка не рисуются — бокс 0×0 |
 | [BUG-1337](bugs/BUG-1337-FIXED.md) | FIXED 2026-10-12 | paint (`crates/engine/paint/src/cpu_raster.rs`) | `DrawImage` на дробной позиции не привязан к пикселям: у картинки 1-px полупрозрачная кромка, у блока рядом — нет |
 | [BUG-1338](bugs/BUG-1338-FIXED.md) | FIXED 2026-10-12 | layout (`crates/engine/layout/src/box_tree/`) | Float, идущий после строчного содержимого на той же строке, ставится под строку, а не к её верху |
+| [BUG-1339](bugs/BUG-1339-FIXED.md) | FIXED 2026-10-12 | paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`) | `word-spacing` / `letter-spacing` измеряются в раскладке, но не рисуются, если слова в одном `DrawText` |

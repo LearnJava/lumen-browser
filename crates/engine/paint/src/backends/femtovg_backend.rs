@@ -3990,7 +3990,7 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_stretch, font_variation_axes, font_features, font_palette: _, tab_size, highlight_name: _, text_orientation } => {
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_stretch, font_variation_axes, font_features, font_palette: _, tab_size, letter_spacing: _, word_spacing: _, highlight_name: _, text_orientation } => {
                 let style = text::TextRunStyle {
                     font_size: *font_size,
                     color: *color,
